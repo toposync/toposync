@@ -32,8 +32,8 @@ export async function loadRemoteActivate(
   scope: string,
   module: string,
 ): Promise<(host: TopoSyncHost) => void | Promise<void>> {
-  await loadRemoteEntry(remoteEntryUrl);
   await __webpack_init_sharing__("default");
+  await loadRemoteEntry(remoteEntryUrl);
 
   const container = (window as any)[scope] as Container | undefined;
   if (!container) throw new Error(`Remote container "${scope}" not found on window`);

@@ -1,14 +1,10 @@
-import React from "react";
-import { createRoot } from "react-dom/client";
+declare const __webpack_init_sharing__: (scope: string) => Promise<void>;
 
-import { App } from "./ui/App";
-import "./ui/styles.css";
+async function start(): Promise<void> {
+  await __webpack_init_sharing__("default");
+  await import("./bootstrap");
+}
 
-const rootEl = document.getElementById("root");
-if (!rootEl) throw new Error("Missing #root");
-
-createRoot(rootEl).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-);
+start().catch((err) => {
+  console.error(err);
+});

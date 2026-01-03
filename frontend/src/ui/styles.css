@@ -1,0 +1,136 @@
+:root {
+  --bg: #070a14;
+  --panel: #0c1225;
+  --panel2: #0f1730;
+  --text: #e6e8f2;
+  --muted: #a0a7bd;
+  --accent: #fbbf24;
+  --border: #202a44;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+}
+
+.appRoot {
+  height: 100vh;
+  display: flex;
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.topBar {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  background: linear-gradient(180deg, rgba(18, 26, 50, 0.9), rgba(11, 16, 32, 0.5));
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.badge {
+  font-size: 12px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 999px;
+  color: var(--muted);
+}
+
+.viewport {
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar {
+  width: 340px;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  padding: 12px;
+  overflow: auto;
+}
+
+.sectionTitle {
+  margin: 12px 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.toolList {
+  display: grid;
+  gap: 8px;
+}
+
+.toolButton {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.toolButton:hover {
+  border-color: rgba(251, 191, 36, 0.5);
+}
+
+.panelList {
+  display: grid;
+  gap: 10px;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.panelTitle {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.panelBody {
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.errorList {
+  margin: 0;
+  padding-left: 16px;
+  color: #fca5a5;
+  font-size: 12px;
+}
+
+.errorItem {
+  margin: 6px 0;
+}

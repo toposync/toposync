@@ -1,0 +1,31 @@
+[project]
+name = "toposync"
+version = "0.1.0"
+description = "TopoSync core runtime (Python backend + extension host)."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "pydantic>=2.8",
+  "uvicorn>=0.30",
+]
+
+[project.scripts]
+toposync = "toposync.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/toposync"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

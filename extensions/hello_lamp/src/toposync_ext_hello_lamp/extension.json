@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "id": "com.toposync.hello_lamp",
+  "name": "Hello Lamp",
+  "version": "0.1.0",
+  "frontend": {
+    "kind": "module-federation",
+    "remote_entry": "remoteEntry.js",
+    "scope": "hello_lamp",
+    "module": "./activate"
+  }
+}

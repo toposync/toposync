@@ -23,11 +23,12 @@ export function LampViewport({ overlays, lampOn, onLampClicked }: Props): React.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    const containerEl: HTMLDivElement = container;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.setClearColor(0x0b1020, 1);
-    container.appendChild(renderer.domElement);
+    containerEl.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
     scene.add(new THREE.AmbientLight(0xffffff, 0.55));
@@ -58,8 +59,8 @@ export function LampViewport({ overlays, lampOn, onLampClicked }: Props): React.
     lampRef.current = lamp;
 
     function resize() {
-      const w = container.clientWidth;
-      const h = container.clientHeight;
+      const w = containerEl.clientWidth;
+      const h = containerEl.clientHeight;
       renderer.setSize(w, h);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
@@ -67,7 +68,7 @@ export function LampViewport({ overlays, lampOn, onLampClicked }: Props): React.
 
     resize();
     const ro = new ResizeObserver(resize);
-    ro.observe(container);
+    ro.observe(containerEl);
 
     let raf = 0;
     const clock = new THREE.Clock();
@@ -105,7 +106,7 @@ export function LampViewport({ overlays, lampOn, onLampClicked }: Props): React.
       floorMat.dispose();
       lampGeo.dispose();
       lampMat.dispose();
-      container.removeChild(renderer.domElement);
+      containerEl.removeChild(renderer.domElement);
       rendererRef.current = null;
       cameraRef.current = null;
       sceneRef.current = null;

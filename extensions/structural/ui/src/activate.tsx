@@ -165,7 +165,9 @@ function wallElementType(i18n: HostI18n): ElementType {
         const color = readString(el.props.color, DEFAULT_WALL_COLOR);
 
         mesh.position.set(center.x - el.position.x, GROUND_Y + height / 2, center.z - el.position.z);
-        mesh.scale.set(length, height, thicknessWorld);
+        // Extend the wall a bit on both ends (half thickness each side) so corners "close" when
+        // two segments meet at an angle (butt join approximation).
+        mesh.scale.set(length + thicknessWorld, height, thicknessWorld);
 
         dir.set(dx, 0, dz);
         if (dir.lengthSq() > 1e-6) {

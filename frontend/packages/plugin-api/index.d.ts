@@ -101,6 +101,8 @@ export type ElementType = {
     element: CompositionElement;
     viewport: Viewport2DContext;
   }) => void;
+  hitTest2D?: (args: { element: CompositionElement; world: PlanePoint; viewport: Viewport2DContext }) => boolean;
+  translate2D?: (args: { element: CompositionElement; delta: PlanePoint }) => CompositionElementPatch;
   renderActionModal?: (args: {
     element: CompositionElement;
     update: (patch: CompositionElementPatch) => void;

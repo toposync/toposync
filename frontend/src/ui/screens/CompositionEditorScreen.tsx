@@ -61,6 +61,7 @@ export function CompositionEditorScreen({
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
+  const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
   const [activeToolSession, setActiveToolSession] = useState<EditorToolSession | null>(null);
   const [isWallsOpen, setIsWallsOpen] = useState(true);
@@ -139,6 +140,23 @@ export function CompositionEditorScreen({
   );
   const editingType = editingElement ? elementTypesById[editingElement.type] ?? null : null;
 
+  useEffect(() => {
+    if (!selectedElementId) return;
+    const el = elements.find((e) => e.id === selectedElementId);
+    if (!el) {
+      setSelectedElementId(null);
+      return;
+    }
+    const group = elementTypesById[el.type]?.layerGroup ?? "";
+    if (group === "walls") setIsWallsOpen(true);
+    if (group === "areas") setIsAreasOpen(true);
+  }, [elements, elementTypesById, selectedElementId]);
+
+  useEffect(() => {
+    if (!editingElementId) return;
+    setSelectedElementId(editingElementId);
+  }, [editingElementId]);
+
   const layerGroups = useMemo(() => {
     const ungrouped: Array<{ el: CompositionElement; idx: number }> = [];
     const walls: Array<{ el: CompositionElement; idx: number }> = [];
@@ -166,7 +184,18 @@ export function CompositionEditorScreen({
 
   return (
     <div className="screenRoot">
-      <Viewport2D elements={elements} elementTypesById={elementTypesById} activeToolSession={activeToolSession} />
+      <Viewport2D
+        elements={elements}
+        elementTypesById={elementTypesById}
+        activeToolSession={activeToolSession}
+        selectedElementId={selectedElementId}
+        onSelectElement={setSelectedElementId}
+        onOpenEditor={(id) => {
+          setSelectedElementId(id);
+          setEditingElementId(id);
+        }}
+        updateElement={updateElement}
+      />
 
       <div className="overlayTopRight">
         <button className="chipButton" type="button" onClick={() => setIsRenderModalOpen(true)}>
@@ -225,9 +254,15 @@ export function CompositionEditorScreen({
               const type = elementTypesById[el.type];
               const typeName = type ? resolveLocalizedString(type.name) : el.type;
               const title = el.name || typeName || el.type;
+              const selected = selectedElementId === el.id;
               return (
                 <div className="layerRow" key={el.id}>
-                  <button className="layerMainButton" type="button" onClick={() => setEditingElementId(el.id)}>
+                  <button
+                    className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
+                    type="button"
+                    onClick={() => setSelectedElementId(el.id)}
+                    onDoubleClick={() => setEditingElementId(el.id)}
+                  >
                     <div className="layerMainTitle">{title}</div>
                     <div className="layerMainMeta">{typeName}</div>
                   </button>
@@ -253,12 +288,14 @@ export function CompositionEditorScreen({
                       const type = elementTypesById[el.type];
                       const typeName = type ? resolveLocalizedString(type.name) : el.type;
                       const title = el.name || typeName || el.type;
+                      const selected = selectedElementId === el.id;
                       return (
                         <div className="layerRow layerRowGrouped" key={el.id}>
                           <button
-                            className="layerMainButton"
+                            className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
                             type="button"
-                            onClick={() => setEditingElementId(el.id)}
+                            onClick={() => setSelectedElementId(el.id)}
+                            onDoubleClick={() => setEditingElementId(el.id)}
                           >
                             <div className="layerMainTitle">{title}</div>
                             <div className="layerMainMeta">{typeName}</div>
@@ -289,12 +326,14 @@ export function CompositionEditorScreen({
                       const type = elementTypesById[el.type];
                       const typeName = type ? resolveLocalizedString(type.name) : el.type;
                       const title = el.name || typeName || el.type;
+                      const selected = selectedElementId === el.id;
                       return (
                         <div className="layerRow layerRowGrouped" key={el.id}>
                           <button
-                            className="layerMainButton"
+                            className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
                             type="button"
-                            onClick={() => setEditingElementId(el.id)}
+                            onClick={() => setSelectedElementId(el.id)}
+                            onDoubleClick={() => setEditingElementId(el.id)}
                           >
                             <div className="layerMainTitle">{title}</div>
                             <div className="layerMainMeta">{typeName}</div>

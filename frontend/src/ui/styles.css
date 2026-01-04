@@ -673,6 +673,17 @@ body {
   border-color: var(--borderStrong);
 }
 
+.layerMainButton.isSelected {
+  border-color: rgba(251, 191, 36, 0.60);
+  background:
+    linear-gradient(180deg, rgba(251, 191, 36, 0.14), rgba(255, 255, 255, 0.02)),
+    rgba(12, 18, 37, 0.46);
+  box-shadow:
+    0 16px 44px rgba(0, 0, 0, 0.32),
+    0 0 0 1px rgba(251, 191, 36, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
 .layerMainTitle {
   font-weight: 700;
   font-size: 13px;

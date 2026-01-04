@@ -6,6 +6,7 @@ import type {
   EditorTool,
   EditorToolSession,
   ElementType,
+  PlanePoint,
 } from "@toposync/plugin-api";
 
 import type { Composition, CompositionSummary } from "../../util/api";
@@ -41,6 +42,44 @@ function radians(deg: number): number {
   return (deg * Math.PI) / 180;
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return Boolean(v) && typeof v === "object" && !Array.isArray(v);
+}
+
+function readPlanePoint(v: unknown): PlanePoint | null {
+  if (!isRecord(v)) return null;
+  const x = v.x;
+  const z = v.z;
+  if (typeof x !== "number" || typeof z !== "number") return null;
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  return { x, z };
+}
+
+function readVertices(v: unknown): PlanePoint[] {
+  if (!Array.isArray(v)) return [];
+  const out: PlanePoint[] = [];
+  for (const item of v) {
+    const p = readPlanePoint(item);
+    if (p) out.push(p);
+  }
+  return out;
+}
+
+function distance(a: PlanePoint, b: PlanePoint): number {
+  return Math.hypot(a.x - b.x, a.z - b.z);
+}
+
+function polygonArea(vertices: PlanePoint[]): number {
+  if (vertices.length < 3) return 0;
+  let sum = 0;
+  for (let i = 0; i < vertices.length; i++) {
+    const a = vertices[i];
+    const b = vertices[(i + 1) % vertices.length];
+    sum += a.x * b.z - b.x * a.z;
+  }
+  return Math.abs(sum) / 2;
+}
+
 export function CompositionEditorScreen({
   compositionName,
   compositions,
@@ -66,6 +105,27 @@ export function CompositionEditorScreen({
   const [activeToolSession, setActiveToolSession] = useState<EditorToolSession | null>(null);
   const [isWallsOpen, setIsWallsOpen] = useState(true);
   const [isAreasOpen, setIsAreasOpen] = useState(true);
+
+  const numberFmt = useMemo(
+    () => new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    [locale],
+  );
+
+  function measurementFor(el: CompositionElement): string | null {
+    const group = elementTypesById[el.type]?.layerGroup ?? "";
+    if (group === "walls") {
+      const a = readPlanePoint(el.props.a);
+      const b = readPlanePoint(el.props.b);
+      if (!a || !b) return null;
+      return `${numberFmt.format(distance(a, b))} m`;
+    }
+    if (group === "areas") {
+      const vertices = readVertices(el.props.vertices);
+      if (vertices.length < 3) return null;
+      return `${numberFmt.format(polygonArea(vertices))} m²`;
+    }
+    return null;
+  }
 
   const elementTypes = useMemo(
     () =>
@@ -255,6 +315,7 @@ export function CompositionEditorScreen({
               const typeName = type ? resolveLocalizedString(type.name) : el.type;
               const title = el.name || typeName || el.type;
               const selected = selectedElementId === el.id;
+              const measurement = measurementFor(el);
               return (
                 <div className="layerRow" key={el.id}>
                   <button
@@ -264,7 +325,10 @@ export function CompositionEditorScreen({
                     onDoubleClick={() => setEditingElementId(el.id)}
                   >
                     <div className="layerMainTitle">{title}</div>
-                    <div className="layerMainMeta">{typeName}</div>
+                    <div className="layerMainMeta">
+                      {typeName}
+                      {measurement ? ` • ${measurement}` : ""}
+                    </div>
                   </button>
                   <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
                     {t("core.actions.delete")}
@@ -289,6 +353,7 @@ export function CompositionEditorScreen({
                       const typeName = type ? resolveLocalizedString(type.name) : el.type;
                       const title = el.name || typeName || el.type;
                       const selected = selectedElementId === el.id;
+                      const measurement = measurementFor(el);
                       return (
                         <div className="layerRow layerRowGrouped" key={el.id}>
                           <button
@@ -298,7 +363,10 @@ export function CompositionEditorScreen({
                             onDoubleClick={() => setEditingElementId(el.id)}
                           >
                             <div className="layerMainTitle">{title}</div>
-                            <div className="layerMainMeta">{typeName}</div>
+                            <div className="layerMainMeta">
+                              {typeName}
+                              {measurement ? ` • ${measurement}` : ""}
+                            </div>
                           </button>
                           <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
                             {t("core.actions.delete")}
@@ -327,6 +395,7 @@ export function CompositionEditorScreen({
                       const typeName = type ? resolveLocalizedString(type.name) : el.type;
                       const title = el.name || typeName || el.type;
                       const selected = selectedElementId === el.id;
+                      const measurement = measurementFor(el);
                       return (
                         <div className="layerRow layerRowGrouped" key={el.id}>
                           <button
@@ -336,7 +405,10 @@ export function CompositionEditorScreen({
                             onDoubleClick={() => setEditingElementId(el.id)}
                           >
                             <div className="layerMainTitle">{title}</div>
-                            <div className="layerMainMeta">{typeName}</div>
+                            <div className="layerMainMeta">
+                              {typeName}
+                              {measurement ? ` • ${measurement}` : ""}
+                            </div>
                           </button>
                           <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
                             {t("core.actions.delete")}

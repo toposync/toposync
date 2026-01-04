@@ -10,6 +10,8 @@ import type {
   Viewport2DContext,
 } from "@toposync/plugin-api";
 
+import { i18n } from "../util/i18n";
+
 type Props = {
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
@@ -100,6 +102,64 @@ function pointInPolygon(p: PlanePoint, vertices: PlanePoint[]): boolean {
   return inside;
 }
 
+function polygonArea(vertices: PlanePoint[]): number {
+  if (vertices.length < 3) return 0;
+  let sum = 0;
+  for (let i = 0; i < vertices.length; i++) {
+    const a = vertices[i];
+    const b = vertices[(i + 1) % vertices.length];
+    sum += a.x * b.z - b.x * a.z;
+  }
+  return Math.abs(sum) / 2;
+}
+
+function polygonCentroid(vertices: PlanePoint[]): PlanePoint {
+  if (vertices.length === 0) return { x: 0, z: 0 };
+  if (vertices.length < 3) {
+    const sum = vertices.reduce((acc, p) => ({ x: acc.x + p.x, z: acc.z + p.z }), { x: 0, z: 0 });
+    return { x: sum.x / vertices.length, z: sum.z / vertices.length };
+  }
+
+  let area2 = 0;
+  let cx = 0;
+  let cz = 0;
+  for (let i = 0; i < vertices.length; i++) {
+    const a = vertices[i];
+    const b = vertices[(i + 1) % vertices.length];
+    const cross = a.x * b.z - b.x * a.z;
+    area2 += cross;
+    cx += (a.x + b.x) * cross;
+    cz += (a.z + b.z) * cross;
+  }
+
+  if (Math.abs(area2) < 1e-9) {
+    const sum = vertices.reduce((acc, p) => ({ x: acc.x + p.x, z: acc.z + p.z }), { x: 0, z: 0 });
+    return { x: sum.x / vertices.length, z: sum.z / vertices.length };
+  }
+
+  const denom = 3 * area2;
+  return { x: cx / denom, z: cz / denom };
+}
+
+function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  const anyCtx = ctx as unknown as { roundRect?: (x: number, y: number, w: number, h: number, r: number) => void };
+  if (typeof anyCtx.roundRect === "function") {
+    anyCtx.roundRect(x, y, w, h, r);
+    return;
+  }
+
+  const radius = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + w - radius, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+  ctx.lineTo(x + w, y + h - radius);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+  ctx.lineTo(x + radius, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+}
+
 type Camera2D = { cx: number; cz: number; scale: number };
 
 type Interaction =
@@ -132,8 +192,14 @@ export function Viewport2D({
   onOpenEditor,
   updateElement,
 }: Props): React.ReactElement {
+  const { locale } = i18n.useI18n();
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawRef = useRef<(() => void) | null>(null);
+
+  const numberFmtRef = useRef<Intl.NumberFormat>(
+    new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+  );
 
   const elementsRef = useRef<CompositionElement[]>(elements);
   const elementTypesRef = useRef<Record<string, ElementType>>(elementTypesById);
@@ -184,6 +250,11 @@ export function Viewport2D({
   useEffect(() => {
     updateElementRef.current = updateElement;
   }, [updateElement]);
+
+  useEffect(() => {
+    numberFmtRef.current = new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    drawRef.current?.();
+  }, [locale]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -353,6 +424,7 @@ export function Viewport2D({
       if (selectedId) {
         const selectedEl = elementsRef.current.find((e) => e.id === selectedId) ?? null;
         if (selectedEl) {
+          const group = elementTypesRef.current[selectedEl.type]?.layerGroup ?? "";
           const verts = readVertices(selectedEl.props.vertices);
           const a = readPlanePoint(selectedEl.props.a);
           const b = readPlanePoint(selectedEl.props.b);
@@ -384,6 +456,50 @@ export function Viewport2D({
             ctx2d.stroke();
           }
           ctx2d.restore();
+
+          let label: string | null = null;
+          let anchorWorld: PlanePoint | null = null;
+          if (group === "walls" && a && b) {
+            label = `${numberFmtRef.current.format(Math.hypot(a.x - b.x, a.z - b.z))} m`;
+            anchorWorld = { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 };
+          } else if (group === "areas" && verts.length >= 3) {
+            label = `${numberFmtRef.current.format(polygonArea(verts))} m²`;
+            anchorWorld = polygonCentroid(verts);
+          }
+
+          if (label && anchorWorld) {
+            const anchor = worldToScreen(anchorWorld);
+            const anchorX = anchor.x;
+            const anchorY = anchor.y - 18;
+
+            ctx2d.save();
+            ctx2d.font = "12px ui-sans-serif, system-ui";
+            ctx2d.textAlign = "center";
+            ctx2d.textBaseline = "middle";
+
+            const metrics = ctx2d.measureText(label);
+            const padX = 10;
+            const padY = 6;
+            const boxW = metrics.width + padX * 2;
+            const boxH = 24;
+            const x0 = anchorX - boxW / 2;
+            const y0 = anchorY - boxH / 2;
+
+            ctx2d.shadowColor = "rgba(0,0,0,0.38)";
+            ctx2d.shadowBlur = 14;
+            ctx2d.fillStyle = "rgba(8,12,26,0.78)";
+            ctx2d.strokeStyle = "rgba(255,255,255,0.14)";
+            ctx2d.lineWidth = 1;
+            ctx2d.beginPath();
+            roundRectPath(ctx2d, x0, y0, boxW, boxH, 999);
+            ctx2d.fill();
+            ctx2d.shadowBlur = 0;
+            ctx2d.stroke();
+
+            ctx2d.fillStyle = "rgba(230,232,242,0.92)";
+            ctx2d.fillText(label, anchorX, anchorY);
+            ctx2d.restore();
+          }
         }
       }
 

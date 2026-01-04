@@ -479,8 +479,13 @@ type EditorProps = {
 };
 
 function WallEditor({ element, update, remove, close, i18n }: EditorProps): React.ReactElement {
-  const { t } = i18n.useI18n();
+  const { t, locale } = i18n.useI18n();
   const color = readString(element.props.color, DEFAULT_WALL_COLOR);
+
+  const numberFmt = useMemo(
+    () => new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    [locale],
+  );
 
   const length = useMemo(() => {
     const a = asPoint(element.props.a, { x: element.position.x, z: element.position.z });
@@ -493,7 +498,7 @@ function WallEditor({ element, update, remove, close, i18n }: EditorProps): Reac
       <div className="card">
         <div className="cardHeaderRow">
           <div className="cardTitle">{t("ext.structural.wall.name")}</div>
-          <div className="cardMeta">{length.toFixed(2)} m</div>
+          <div className="cardMeta">{numberFmt.format(length)} m</div>
         </div>
         <div className="cardBody">{t("ext.structural.editor.preview")}</div>
       </div>

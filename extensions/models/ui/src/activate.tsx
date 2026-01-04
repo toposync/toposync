@@ -16,7 +16,22 @@ const MODEL_TYPE = "com.toposync.models.gltf";
 
 const DEFAULT_COLOR = "#38bdf8";
 
+const MIN_SCALE = 0.001;
+const MAX_SCALE = 1000;
+
 type Vector3 = { x: number; y: number; z: number };
+
+const DEBUG_MODELS = (() => {
+  try {
+    return localStorage.getItem("toposync.debug.models") === "1";
+  } catch {
+    return false;
+  }
+})();
+
+function dbg(...args: unknown[]): void {
+  if (DEBUG_MODELS) console.log(...args);
+}
 
 type UploadFileResponse = {
   dir: string;
@@ -51,6 +66,7 @@ const translations = {
     "ext.models.editor.file": "File",
     "ext.models.editor.size": "Size",
     "ext.models.editor.preview": "Preview",
+    "ext.models.editor.scale": "Scale",
     "ext.models.editor.tint": "Tint",
     "ext.models.editor.uploading": "Uploading…",
     "ext.models.editor.processing": "Processing preview…",
@@ -65,6 +81,7 @@ const translations = {
     "ext.models.editor.file": "Arquivo",
     "ext.models.editor.size": "Tamanho",
     "ext.models.editor.preview": "Prévia",
+    "ext.models.editor.scale": "Escala",
     "ext.models.editor.tint": "Cor",
     "ext.models.editor.uploading": "Enviando...",
     "ext.models.editor.processing": "Processando prévia...",
@@ -95,15 +112,32 @@ function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
 
+function readScale(v: unknown, fallback = 1): number {
+  return clamp(readNumber(v, fallback), MIN_SCALE, MAX_SCALE);
+}
+
+function suggestInitialScale(size: Vector3): number {
+  const maxDim = Math.max(Math.abs(size.x), Math.abs(size.y), Math.abs(size.z));
+  if (!Number.isFinite(maxDim) || maxDim <= 1e-6) return 1;
+
+  // Only normalize obviously-wrong sizes; keep realistic ones untouched.
+  const minTarget = 0.25; // 25cm
+  const maxTarget = 4; // 4m
+
+  if (maxDim < minTarget) return clamp(minTarget / maxDim, MIN_SCALE, MAX_SCALE);
+  if (maxDim > maxTarget) return clamp(maxTarget / maxDim, MIN_SCALE, MAX_SCALE);
+  return 1;
+}
+
 async function uploadToFilesDir(file: Blob, opts: { dir?: string; filename: string }): Promise<UploadFileResponse> {
   const form = new FormData();
   form.append("file", file, opts.filename);
   if (opts.dir) form.append("dir", opts.dir);
   form.append("filename", opts.filename);
 
-  console.log("[models:tool] POST /api/files/upload", { dir: opts.dir ?? null, filename: opts.filename, size: file.size });
+  dbg("[models:tool] POST /api/files/upload", { dir: opts.dir ?? null, filename: opts.filename, size: file.size });
   const res = await fetch("/api/files/upload", { method: "POST", body: form });
-  console.log("[models:tool] upload response", { status: res.status, ok: res.ok });
+  dbg("[models:tool] upload response", { status: res.status, ok: res.ok });
   if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
   return res.json();
 }
@@ -250,22 +284,11 @@ function modelElementType(i18n: HostI18n): ElementType {
       size: { x: 1, y: 1, z: 1 },
       center: { x: 0, y: 0, z: 0 },
       min_y: 0,
+      scale: 1,
       tint: DEFAULT_COLOR,
     },
     create3D: ({ THREE }, element) => {
       const group = new THREE.Group();
-
-      const placeholderMat = new THREE.MeshStandardMaterial({
-        color: DEFAULT_COLOR,
-        roughness: 0.85,
-        metalness: 0.05,
-        transparent: true,
-        opacity: 0.18,
-      });
-      const placeholderGeom = new THREE.BoxGeometry(1, 0.45, 1);
-      const placeholder = new THREE.Mesh(placeholderGeom, placeholderMat);
-      placeholder.position.y = 0.225;
-      group.add(placeholder);
 
       const loader = new GLTFLoader();
       let disposed = false;
@@ -281,15 +304,6 @@ function modelElementType(i18n: HostI18n): ElementType {
           if (Array.isArray(mat)) mat.forEach((m) => m?.dispose?.());
           else mat?.dispose?.();
         });
-      }
-
-      function updatePlaceholder(size: Vector3) {
-        const sx = Math.max(0.1, size.x);
-        const sz = Math.max(0.1, size.z);
-        const sy = Math.max(0.1, Math.min(2.2, size.y));
-        (placeholder.geometry as THREEStandalone.BufferGeometry).dispose();
-        placeholder.geometry = new THREE.BoxGeometry(sx, sy, sz);
-        placeholder.position.y = sy / 2;
       }
 
       async function load(url: string, meta: { center: Vector3; minY: number } | null) {
@@ -333,12 +347,13 @@ function modelElementType(i18n: HostI18n): ElementType {
         const dir = readString((el.props as any).dir, "");
         const model = readString((el.props as any).model, "");
         const tint = readString((el.props as any).tint, DEFAULT_COLOR);
-        const size = readVector3((el.props as any).size, { x: 1, y: 1, z: 1 });
+        const scale = readScale((el.props as any).scale, 1);
         const center = readVector3((el.props as any).center, { x: 0, y: 0, z: 0 });
         const minY = readNumber((el.props as any).min_y, 0);
 
-        placeholderMat.color.set(tint);
-        updatePlaceholder(size);
+        // We currently only use tint in 2D. Keep it read to avoid stale props bugs.
+        void tint;
+        group.scale.setScalar(scale);
 
         const url = dir && model ? `/files/${encodeURIComponent(dir)}/${encodeURIComponent(model)}` : "";
         if (url && url !== lastUrl) {
@@ -355,19 +370,18 @@ function modelElementType(i18n: HostI18n): ElementType {
         dispose: () => {
           disposed = true;
           if (current) disposeObject(current);
-          (placeholder.geometry as THREEStandalone.BufferGeometry).dispose();
-          placeholderMat.dispose();
         },
       };
     },
     render2D: ({ ctx, element, viewport }) => {
       const size = readVector3((element.props as any).size, { x: 1, y: 1, z: 1 });
+      const scale = readScale((element.props as any).scale, 1);
       const previewUrl = getPreviewUrl(element);
       const rotationY = readNumber((element.rotation as any)?.y, 0);
 
       const center = viewport.worldToScreen({ x: element.position.x, z: element.position.z });
-      const w = Math.max(20, size.x * viewport.scale);
-      const h = Math.max(20, size.z * viewport.scale);
+      const w = Math.max(20, size.x * scale * viewport.scale);
+      const h = Math.max(20, size.z * scale * viewport.scale);
 
       ctx.save();
       ctx.translate(center.x, center.y);
@@ -404,6 +418,7 @@ function modelElementType(i18n: HostI18n): ElementType {
     },
     hitTest2D: ({ element, world }) => {
       const size = readVector3((element.props as any).size, { x: 1, y: 1, z: 1 });
+      const scale = readScale((element.props as any).scale, 1);
       const angle = readNumber((element.rotation as any)?.y, 0);
       const dx = world.x - element.position.x;
       const dz = world.z - element.position.z;
@@ -411,7 +426,7 @@ function modelElementType(i18n: HostI18n): ElementType {
       const sin = Math.sin(angle);
       const localX = dx * cos - dz * sin;
       const localZ = dx * sin + dz * cos;
-      return Math.abs(localX) <= size.x / 2 && Math.abs(localZ) <= size.z / 2;
+      return Math.abs(localX) <= (size.x * scale) / 2 && Math.abs(localZ) <= (size.z * scale) / 2;
     },
     renderEditorModal: ({ element, update, remove, close }) => (
       <ModelEditor element={element} update={update} remove={remove} close={close} i18n={i18n} />
@@ -438,9 +453,14 @@ function ModelEditor({ element, update, remove, close, i18n }: EditorProps): Rea
   const model = readString((element.props as any).model, "");
   const preview = readString((element.props as any).preview, "");
   const size = readVector3((element.props as any).size, { x: 1, y: 1, z: 1 });
+  const scale = readScale((element.props as any).scale, 1);
   const tint = readString((element.props as any).tint, DEFAULT_COLOR);
 
   const previewUrl = dir && preview ? `/files/${encodeURIComponent(dir)}/${encodeURIComponent(preview)}` : "";
+  const finalSize = useMemo(
+    () => ({ x: size.x * scale, y: size.y * scale, z: size.z * scale }),
+    [scale, size.x, size.y, size.z],
+  );
 
   return (
     <div>
@@ -458,13 +478,30 @@ function ModelEditor({ element, update, remove, close, i18n }: EditorProps): Rea
           <div className="label">{t("ext.models.editor.size")}</div>
           <input
             className="input"
-            value={`${numberFmt.format(size.x)} × ${numberFmt.format(size.y)} × ${numberFmt.format(size.z)} m`}
+            value={`${numberFmt.format(finalSize.x)} × ${numberFmt.format(finalSize.y)} × ${numberFmt.format(finalSize.z)} m`}
             readOnly
           />
         </div>
       </div>
 
       <div className="rowWrap">
+        <div className="field" style={{ flex: 1, minWidth: 180 }}>
+          <div className="label">{t("ext.models.editor.scale")}</div>
+          <input
+            className="input"
+            type="number"
+            inputMode="decimal"
+            min={MIN_SCALE}
+            max={MAX_SCALE}
+            step={0.01}
+            value={scale}
+            onChange={(e) => {
+              const next = Number.parseFloat(e.target.value);
+              if (!Number.isFinite(next)) return;
+              update({ props: { scale: clamp(next, MIN_SCALE, MAX_SCALE) } });
+            }}
+          />
+        </div>
         <div className="field" style={{ flex: 1, minWidth: 180 }}>
           <div className="label">{t("ext.models.editor.tint")}</div>
           <input
@@ -538,7 +575,7 @@ function importModelTool(i18n: HostI18n): EditorTool {
         lastCanvas?.dispatchEvent(new Event("toposync:invalidate"));
       }
 
-      console.log("[models:tool] session created");
+      dbg("[models:tool] session created");
 
       function drawPill(canvas: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
         const r = Math.min(999, Math.min(w, h) / 2);
@@ -564,7 +601,7 @@ function importModelTool(i18n: HostI18n): EditorTool {
         if (!entry) throw new Error(t("ext.models.error.pick_entry"));
         if (!pendingAt) throw new Error("No placement point selected");
 
-        console.log(
+        dbg(
           "[models:tool] handleFiles",
           list.map((f) => ({ name: f.name, size: f.size, type: f.type })),
         );
@@ -573,14 +610,14 @@ function importModelTool(i18n: HostI18n): EditorTool {
         lastError = null;
         invalidate();
 
-        console.log("[models:tool] uploading entry", { name: entry.name });
+        dbg("[models:tool] uploading entry", { name: entry.name });
         const entryUpload = await uploadToFilesDir(entry, { filename: entry.name });
         const dir = entryUpload.dir;
         const entryName = entryUpload.filename;
 
         for (const f of list) {
           if (f === entry) continue;
-          console.log("[models:tool] uploading asset", { dir, name: f.name });
+          dbg("[models:tool] uploading asset", { dir, name: f.name });
           await uploadToFilesDir(f, { dir, filename: f.name });
         }
 
@@ -588,11 +625,11 @@ function importModelTool(i18n: HostI18n): EditorTool {
 
         busyState = "processing";
         invalidate();
-        console.log("[models:tool] generating preview", { modelUrl });
+        dbg("[models:tool] generating preview", { modelUrl });
         const preview = await generateModelTopDownPreview(modelUrl);
         const previewBlob = await (await fetch(preview.dataUrl)).blob();
         const previewUpload = await uploadToFilesDir(previewBlob, { dir, filename: "preview.png" });
-        console.log("[models:tool] preview uploaded", { url: previewUpload.url });
+        dbg("[models:tool] preview uploaded", { url: previewUpload.url });
         const id = ctx.createElement(MODEL_TYPE, {
           name: entryName,
           position: { x: pendingAt.x, y: 0, z: pendingAt.z },
@@ -603,17 +640,18 @@ function importModelTool(i18n: HostI18n): EditorTool {
             size: preview.size,
             center: preview.center,
             min_y: preview.minY,
+            scale: suggestInitialScale(preview.size),
             tint: DEFAULT_COLOR,
           },
         });
         if (id) ctx.openEditor(id);
-        console.log("[models:tool] element created", { id });
+        dbg("[models:tool] element created", { id });
       }
 
       input.addEventListener("change", () => {
         const list = input.files ? Array.from(input.files) : [];
         input.value = "";
-        console.log("[models:tool] input change", { count: list.length, pendingAt });
+        dbg("[models:tool] input change", { count: list.length, pendingAt });
         if (list.length === 0) {
           busyState = "idle";
           pendingAt = null;
@@ -640,7 +678,7 @@ function importModelTool(i18n: HostI18n): EditorTool {
           if (evt.kind === "cancel") {
             armed = false;
             downScreen = null;
-            console.log("[models:tool] pointer cancel");
+            dbg("[models:tool] pointer cancel");
             return;
           }
           if (evt.kind === "down") {
@@ -649,7 +687,7 @@ function importModelTool(i18n: HostI18n): EditorTool {
             pendingAt = evt.world;
             armed = true;
             downScreen = { x: evt.screen.x, y: evt.screen.y };
-            console.log("[models:tool] pointer down", { world: evt.world, screen: evt.screen });
+            dbg("[models:tool] pointer down", { world: evt.world, screen: evt.screen });
             return;
           }
           if (evt.kind === "move") {
@@ -669,7 +707,7 @@ function importModelTool(i18n: HostI18n): EditorTool {
             if (evt.button !== 0) return;
             if (busyState !== "idle") return;
             if (!pendingAt) return;
-            console.log("[models:tool] pointer up -> open picker", { pendingAt });
+            dbg("[models:tool] pointer up -> open picker", { pendingAt });
             input.click();
           }
         },
@@ -722,7 +760,7 @@ function importModelTool(i18n: HostI18n): EditorTool {
         },
         getCursor: () => (busyState === "idle" ? "copy" : "wait"),
         dispose: () => {
-          console.log("[models:tool] session disposed");
+          dbg("[models:tool] session disposed");
           input.remove();
         },
       };

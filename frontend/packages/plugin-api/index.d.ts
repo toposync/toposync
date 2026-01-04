@@ -109,6 +109,11 @@ export type ElementType = {
   layerGroup?: string;
   placeable?: boolean;
   defaultProps?: Record<string, unknown>;
+  primaryAction?: (args: {
+    element: CompositionElement;
+    api: HostApi;
+    update: (patch: CompositionElementPatch) => void;
+  }) => Promise<boolean> | boolean;
   create3D?: (ctx: Scene3DContext, element: CompositionElement) => Element3DInstance;
   render2D?: (args: {
     ctx: CanvasRenderingContext2D;

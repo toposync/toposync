@@ -299,6 +299,32 @@ body {
   background: rgba(248, 113, 113, 0.10);
 }
 
+.sceneIconButton {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.03));
+  color: rgba(230, 232, 242, 0.92);
+  backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+  -webkit-backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.35);
+}
+
+.sceneIconButton.isOn {
+  border-color: rgba(251, 191, 36, 0.55);
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.22), rgba(255, 255, 255, 0.04));
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.sceneIconButton i {
+  font-size: 14px;
+}
+
 .modalBody {
   padding: 12px 12px;
   overflow: auto;

@@ -85,7 +85,31 @@ export function MainScreen({
       <Viewport3D
         elements={elements}
         elementTypesById={elementTypesById}
-        onElementActivated={setActiveElementId}
+        onElementActivated={(elementId, intent) => {
+          const el = elements.find((e) => e.id === elementId) ?? null;
+          const def = el ? elementTypesById[el.type] ?? null : null;
+
+          if (!el || !def) return;
+
+          if (intent === "dblclick" || intent === "longpress") {
+            setActiveElementId(elementId);
+            return;
+          }
+
+          if (intent === "click" && def.primaryAction) {
+            Promise.resolve(def.primaryAction({ element: el, api, update: (patch) => updateElement(el.id, patch) }))
+              .then((handled) => {
+                if (!handled) setActiveElementId(elementId);
+              })
+              .catch((err) => {
+                console.error(`[primaryAction:${el.type}]`, err);
+                setActiveElementId(elementId);
+              });
+            return;
+          }
+
+          setActiveElementId(elementId);
+        }}
         viewSettings={viewSettings}
       />
 

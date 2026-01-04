@@ -1,14 +1,83 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-import type { SettingsPanel, TopoSyncHost } from "@toposync/plugin-api";
+import Select from "react-select";
+import type { GroupBase, StylesConfig } from "react-select";
+
+import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
+
+import type {
+  CompositionElement,
+  CompositionElementPatch,
+  EditorTool,
+  ElementType,
+  HostI18n,
+  PlanePoint,
+  SettingsPanel,
+  TopoSyncHost,
+} from "@toposync/plugin-api";
 
 const EXTENSION_ID = "com.toposync.home_assistant";
+const ELEMENT_TYPE_ID = "com.toposync.home_assistant.item";
+const TOOL_ID_ADD = "com.toposync.home_assistant.tool.add";
+
+const PRIMARY_TOGGLE_DOMAINS = new Set([
+  "light",
+  "switch",
+  "fan",
+  "input_boolean",
+  "lock",
+  "cover",
+  "climate",
+  "humidifier",
+]);
 
 type HaServer = {
   id: string;
   name: string;
   host: string;
   apiKey: string;
+};
+
+type HaServerPublic = {
+  id: string;
+  name: string;
+  host: string;
+};
+
+type RegistryEntity = {
+  entity_id: string;
+  name: string;
+  icon?: string;
+  domain?: string;
+  device_id?: string;
+};
+
+type RegistryDevice = {
+  id: string;
+  name: string;
+};
+
+type RegistryResponse = {
+  entities: RegistryEntity[];
+  devices: RegistryDevice[];
+  device_entities: Record<string, string[]>;
+};
+
+type HaItemRef = {
+  kind: "entity" | "device";
+  id: string;
+  name?: string;
+  domain?: string;
+  icon?: string;
+  device_id?: string;
+};
+
+type HaItemOption = {
+  value: string;
+  label: string;
+  kind: "entity" | "device";
+  id: string;
+  meta?: { subLabel?: string; icon?: string; domain?: string; deviceId?: string };
 };
 
 function asString(v: unknown, fallback = ""): string {
@@ -52,13 +121,101 @@ function isValidUrl(value: string): boolean {
   }
 }
 
+function readItemRefs(v: unknown): HaItemRef[] {
+  if (!Array.isArray(v)) return [];
+  const out: HaItemRef[] = [];
+  for (const item of v) {
+    const rec = asRecord(item);
+    const kind = asString(rec.kind);
+    const id = asString(rec.id).trim();
+    if ((kind !== "entity" && kind !== "device") || !id) continue;
+    out.push({
+      kind,
+      id,
+      name: asString(rec.name).trim(),
+      domain: asString(rec.domain).trim(),
+      icon: asString(rec.icon).trim(),
+      device_id: asString(rec.device_id).trim(),
+    });
+  }
+  return out;
+}
+
+function sanitizeFaIconName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^fa-/, "")
+    .replace(/[^a-z0-9-]/g, "")
+    .slice(0, 64);
+}
+
+function domainFromEntityId(entityId: string): string {
+  const idx = entityId.indexOf(".");
+  if (idx <= 0) return "";
+  return entityId.slice(0, idx);
+}
+
+function suggestIconForDomain(domain: string): string {
+  const d = domain.toLowerCase();
+  if (d === "light") return "lightbulb";
+  if (d === "switch") return "toggle-on";
+  if (d === "fan") return "fan";
+  if (d === "climate") return "thermometer-half";
+  if (d === "lock") return "lock";
+  if (d === "cover") return "window-maximize";
+  if (d === "camera") return "video";
+  if (d === "media_player") return "tv";
+  return "house";
+}
+
+function isToggleDomain(domain: string): boolean {
+  return PRIMARY_TOGGLE_DOMAINS.has(domain.toLowerCase());
+}
+
+async function fetchHaServers(): Promise<HaServerPublic[]> {
+  const res = await fetch("/api/home_assistant/servers");
+  if (!res.ok) throw new Error(`Failed to list Home Assistant servers: ${res.status}`);
+  const data = await res.json();
+  return Array.isArray(data) ? (data as HaServerPublic[]) : [];
+}
+
+async function fetchRegistry(serverId: string): Promise<RegistryResponse> {
+  const res = await fetch(`/api/home_assistant/${encodeURIComponent(serverId)}/registry`);
+  if (!res.ok) throw new Error(`Failed to load Home Assistant registry: ${res.status}`);
+  return res.json();
+}
+
+async function fetchStates(serverId: string, entityIds: string[]): Promise<Record<string, any>> {
+  const ids = entityIds.map((s) => s.trim()).filter(Boolean);
+  if (ids.length === 0) return {};
+  const res = await fetch(`/api/home_assistant/${encodeURIComponent(serverId)}/states`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ entity_ids: ids }),
+  });
+  if (!res.ok) throw new Error(`Failed to fetch entity states: ${res.status}`);
+  const data = await res.json();
+  return data && typeof data === "object" ? (data as Record<string, any>) : {};
+}
+
+function itemValue(kind: "entity" | "device", id: string): string {
+  return `${kind}:${id}`;
+}
+
 export function activate(host: TopoSyncHost): void {
   host.i18n.registerTranslations(translations);
   host.registerSettingsPanel(settingsPanel());
+  host.registerElementType(homeAssistantElementType(host.i18n));
+  host.registerEditorTool(addHomeAssistantTool(host.i18n));
 }
 
 const translations = {
   en: {
+    "ext.home_assistant.element.name": "Home Assistant item",
+    "ext.home_assistant.element.desc": "Place one or more entities/devices from Home Assistant on the scene.",
+    "ext.home_assistant.tool.add": "Home Assistant",
+    "ext.home_assistant.tool.add_desc": "Click to place a Home Assistant item and configure it.",
     "ext.home_assistant.settings.name": "Home Assistant",
     "ext.home_assistant.settings.desc": "Configure one or more Home Assistant servers to connect and integrate.",
     "ext.home_assistant.settings.notice":
@@ -73,8 +230,23 @@ const translations = {
     "ext.home_assistant.settings.hide_key": "Hide token",
     "ext.home_assistant.settings.invalid_host": "Use a full URL (http:// or https://).",
     "ext.home_assistant.settings.unsaved": "Unsaved changes",
+    "ext.home_assistant.editor.no_servers": "Add a Home Assistant server in Settings first.",
+    "ext.home_assistant.editor.server": "Server",
+    "ext.home_assistant.editor.items": "Entities / devices",
+    "ext.home_assistant.editor.items_placeholder": "Select entities and/or devices…",
+    "ext.home_assistant.editor.group_entities": "Entities",
+    "ext.home_assistant.editor.group_devices": "Devices",
+    "ext.home_assistant.editor.icon": "Icon",
+    "ext.home_assistant.editor.icon_hint": "Font Awesome (solid) icon name, e.g. lightbulb, toggle-on, thermostat.",
+    "ext.home_assistant.action.toggle": "Toggle",
+    "ext.home_assistant.action.loading": "Loading…",
+    "ext.home_assistant.action.no_items": "No entities/devices selected.",
   },
   "pt-BR": {
+    "ext.home_assistant.element.name": "Item Home Assistant",
+    "ext.home_assistant.element.desc": "Coloque uma ou mais entidades/dispositivos do Home Assistant na cena.",
+    "ext.home_assistant.tool.add": "Home Assistant",
+    "ext.home_assistant.tool.add_desc": "Clique para posicionar um item do Home Assistant e configurá-lo.",
     "ext.home_assistant.settings.name": "Home Assistant",
     "ext.home_assistant.settings.desc":
       "Configure um ou mais servidores do Home Assistant para conectar e integrar.",
@@ -90,6 +262,18 @@ const translations = {
     "ext.home_assistant.settings.hide_key": "Ocultar token",
     "ext.home_assistant.settings.invalid_host": "Use uma URL completa (http:// ou https://).",
     "ext.home_assistant.settings.unsaved": "Alterações não salvas",
+    "ext.home_assistant.editor.no_servers": "Adicione um servidor do Home Assistant nas Configurações primeiro.",
+    "ext.home_assistant.editor.server": "Servidor",
+    "ext.home_assistant.editor.items": "Entidades / dispositivos",
+    "ext.home_assistant.editor.items_placeholder": "Selecione entidades e/ou dispositivos…",
+    "ext.home_assistant.editor.group_entities": "Entidades",
+    "ext.home_assistant.editor.group_devices": "Dispositivos",
+    "ext.home_assistant.editor.icon": "Ícone",
+    "ext.home_assistant.editor.icon_hint":
+      "Nome do ícone Font Awesome (solid), ex.: lightbulb, toggle-on, thermostat.",
+    "ext.home_assistant.action.toggle": "Alternar",
+    "ext.home_assistant.action.loading": "Carregando...",
+    "ext.home_assistant.action.no_items": "Nenhuma entidade/dispositivo selecionado.",
   },
 } as const;
 
@@ -304,3 +488,593 @@ function HomeAssistantSettings({
   );
 }
 
+function homeAssistantElementType(i18n: HostI18n): ElementType {
+  return {
+    type: ELEMENT_TYPE_ID,
+    name: { key: "ext.home_assistant.element.name", fallback: "Home Assistant item" },
+    description: { key: "ext.home_assistant.element.desc" },
+    placeable: false,
+    defaultProps: {
+      server_id: "",
+      items: [],
+      icon: "house",
+      primary_entity_id: "",
+      primary_state: "",
+    },
+    primaryAction: async ({ element, api, update }) => {
+      const props = asRecord(element.props);
+      const serverId = asString(props.server_id).trim();
+      const entityId = asString(props.primary_entity_id).trim();
+      if (!serverId || !entityId) return false;
+      const domain = domainFromEntityId(entityId);
+      if (!isToggleDomain(domain)) return false;
+
+      const res = await api.emitEvent("home_assistant.primary_action_requested", {
+        server_id: serverId,
+        entity_id: entityId,
+      });
+      const state = (res as any)?.result?.state;
+      if (typeof state === "string") update({ props: { primary_state: state } });
+      return true;
+    },
+    create3D: ({ THREE }, element) => {
+      const group = new THREE.Group();
+
+      const baseGeom = new THREE.CylinderGeometry(0.18, 0.18, 0.05, 32);
+      const baseMat = new THREE.MeshStandardMaterial({
+        color: 0x334155,
+        roughness: 0.85,
+        metalness: 0.12,
+      });
+      const base = new THREE.Mesh(baseGeom, baseMat);
+      base.position.set(0, 0.025, 0);
+      group.add(base);
+
+      const ringGeom = new THREE.RingGeometry(0.11, 0.18, 36);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.65,
+        depthWrite: false,
+      });
+      const ring = new THREE.Mesh(ringGeom, ringMat);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(0, 0.052, 0);
+      group.add(ring);
+
+      const labelEl = document.createElement("div");
+      labelEl.className = "sceneIconButton";
+      const iconEl = document.createElement("i");
+      iconEl.setAttribute("aria-hidden", "true");
+      labelEl.appendChild(iconEl);
+
+      const cssLabel = new CSS2DObject(labelEl);
+      cssLabel.position.set(0, 0.16, 0);
+      group.add(cssLabel);
+
+      function apply(el: CompositionElement) {
+        const p = asRecord(el.props);
+        const icon = sanitizeFaIconName(asString(p.icon, "house")) || "house";
+        const primaryState = asString(p.primary_state).trim().toLowerCase();
+        const isOn = primaryState === "on";
+
+        iconEl.className = `fa-solid fa-${icon}`;
+        labelEl.classList.toggle("isOn", isOn);
+
+        ringMat.color.set(isOn ? 0xfbbf24 : 0x38bdf8);
+        ringMat.opacity = isOn ? 0.88 : 0.58;
+        baseMat.color.set(isOn ? 0x1f2937 : 0x334155);
+      }
+
+      apply(element);
+
+      return {
+        object: group,
+        update: apply,
+        dispose: () => {
+          baseGeom.dispose();
+          baseMat.dispose();
+          ringGeom.dispose();
+          ringMat.dispose();
+        },
+      };
+    },
+    render2D: ({ ctx, element, viewport }) => {
+      const p = asRecord(element.props);
+      const primaryState = asString(p.primary_state).trim().toLowerCase();
+      const isOn = primaryState === "on";
+
+      const center = viewport.worldToScreen({ x: element.position.x, z: element.position.z });
+      const r = 11;
+
+      ctx.save();
+      ctx.translate(center.x, center.y);
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fillStyle = isOn ? "rgba(251,191,36,0.22)" : "rgba(56,189,248,0.14)";
+      ctx.fill();
+      ctx.strokeStyle = isOn ? "rgba(251,191,36,0.70)" : "rgba(230,232,242,0.24)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = "rgba(230,232,242,0.92)";
+      ctx.font = "700 11px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("HA", 0, 0);
+      ctx.restore();
+    },
+    hitTest2D: ({ element, world }) => {
+      const dx = world.x - element.position.x;
+      const dz = world.z - element.position.z;
+      return dx * dx + dz * dz <= 0.25 * 0.25;
+    },
+    renderActionModal: ({ element, update, close, api }) => (
+      <HomeAssistantAction element={element} update={update} close={close} api={api} i18n={i18n} />
+    ),
+    renderEditorModal: ({ element, update, remove, close }) => (
+      <HomeAssistantEditor element={element} update={update} remove={remove} close={close} i18n={i18n} />
+    ),
+  };
+}
+
+function addHomeAssistantTool(i18n: HostI18n): EditorTool {
+  return {
+    id: TOOL_ID_ADD,
+    name: { key: "ext.home_assistant.tool.add", fallback: "Home Assistant" },
+    description: { key: "ext.home_assistant.tool.add_desc" },
+    icon: "house",
+    createSession: ({ createElement, openEditor }) => ({
+      onPointerEvent: (evt) => {
+        if (evt.kind !== "down") return;
+        if (evt.button !== 0) return;
+        const id = createElement(ELEMENT_TYPE_ID, {
+          name: "",
+          position: { x: evt.world.x, y: 0, z: evt.world.z },
+          props: { server_id: "", items: [], icon: "house", primary_entity_id: "", primary_state: "" },
+        });
+        if (id) openEditor(id);
+      },
+    }),
+  };
+}
+
+type ActionProps = {
+  element: CompositionElement;
+  update: (patch: CompositionElementPatch) => void;
+  close: () => void;
+  api: TopoSyncHost["api"];
+  i18n: HostI18n;
+};
+
+function HomeAssistantAction({ element, update, close, api, i18n }: ActionProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const props = asRecord(element.props);
+  const serverId = asString(props.server_id).trim();
+  const items = useMemo(() => readItemRefs(props.items), [props.items]);
+  const primaryEntityId = asString(props.primary_entity_id).trim();
+
+  const [registry, setRegistry] = useState<RegistryResponse | null>(null);
+  const [states, setStates] = useState<Record<string, any>>({});
+  const [busyEntity, setBusyEntity] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const selectedEntityIds = useMemo(() => {
+    const out = new Set<string>();
+    for (const it of items) {
+      if (it.kind === "entity") out.add(it.id);
+      if (it.kind === "device" && registry?.device_entities?.[it.id]) {
+        for (const eid of registry.device_entities[it.id] ?? []) out.add(eid);
+      }
+    }
+    return [...out];
+  }, [items, registry]);
+
+  useEffect(() => {
+    if (!serverId) return;
+    const hasDevices = items.some((i) => i.kind === "device");
+    if (!hasDevices) {
+      setRegistry(null);
+      return;
+    }
+    let cancelled = false;
+    fetchRegistry(serverId)
+      .then((data) => {
+        if (!cancelled) setRegistry(data);
+      })
+      .catch((e) => {
+        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [items, serverId]);
+
+  useEffect(() => {
+    if (!serverId) return;
+    let cancelled = false;
+    setErr(null);
+    fetchStates(serverId, selectedEntityIds)
+      .then((data) => {
+        if (!cancelled) setStates(data);
+      })
+      .catch((e) => {
+        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [serverId, selectedEntityIds.join("|")]);
+
+  async function toggle(entityId: string) {
+    if (!serverId) return;
+    setBusyEntity(entityId);
+    setErr(null);
+    try {
+      const res = await api.emitEvent("home_assistant.primary_action_requested", {
+        server_id: serverId,
+        entity_id: entityId,
+      });
+      const state = (res as any)?.result?.state;
+      if (typeof state === "string") {
+        setStates((prev) => ({
+          ...prev,
+          [entityId]: { ...(prev[entityId] ?? {}), entity_id: entityId, state },
+        }));
+        if (entityId === primaryEntityId) update({ props: { primary_state: state } });
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyEntity(null);
+    }
+  }
+
+  const entityRows = useMemo(() => {
+    return selectedEntityIds.map((entityId) => {
+      const st = states[entityId] ?? null;
+      const state = typeof st?.state === "string" ? st.state : null;
+      const domain = domainFromEntityId(entityId);
+      const canToggle = isToggleDomain(domain);
+      const label =
+        asString(st?.attributes?.friendly_name).trim() ||
+        items.find((i) => i.kind === "entity" && i.id === entityId)?.name ||
+        entityId;
+
+      return { entityId, label, state, canToggle };
+    });
+  }, [items, selectedEntityIds, states]);
+
+  return (
+    <div>
+      {!serverId ? (
+        <div className="card">
+          <div className="cardBody">{t("ext.home_assistant.editor.no_servers")}</div>
+        </div>
+      ) : null}
+
+      {items.length === 0 ? (
+        <div className="card">
+          <div className="cardBody">{t("ext.home_assistant.action.no_items")}</div>
+        </div>
+      ) : (
+        <div className="choiceList">
+          {entityRows.map((row) => (
+            <div className="card" key={row.entityId}>
+              <div className="cardHeaderRow">
+                <div style={{ minWidth: 0 }}>
+                  <div className="cardTitle" style={{ marginBottom: 2 }}>
+                    {row.label}
+                  </div>
+                  <div className="cardMeta" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {row.entityId}
+                    {row.state ? ` • ${row.state}` : ""}
+                  </div>
+                </div>
+                <button
+                  className="iconButton iconButtonPrimary"
+                  type="button"
+                  disabled={!row.canToggle || busyEntity === row.entityId}
+                  aria-label={t("ext.home_assistant.action.toggle")}
+                  onClick={() => toggle(row.entityId)}
+                >
+                  <i className={["fa-solid", busyEntity === row.entityId ? "fa-spinner" : "fa-power-off"].join(" ")} aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {err ? (
+        <>
+          <div className="sectionDivider" />
+          <div className="cardBody" style={{ color: "rgba(252,165,165,0.92)" }}>
+            {err}
+          </div>
+        </>
+      ) : null}
+
+      <div className="sectionDivider" />
+      <div className="rowWrap">
+        <button className="chipButton" type="button" onClick={close}>
+          {t("core.actions.close")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+type EditorProps = {
+  element: CompositionElement;
+  update: (patch: CompositionElementPatch) => void;
+  remove: () => void;
+  close: () => void;
+  i18n: HostI18n;
+};
+
+function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+
+  const props = asRecord(element.props);
+  const serverId = asString(props.server_id).trim();
+  const icon = sanitizeFaIconName(asString(props.icon, "house")) || "house";
+  const items = useMemo(() => readItemRefs(props.items), [props.items]);
+
+  const [servers, setServers] = useState<HaServerPublic[]>([]);
+  const [registry, setRegistry] = useState<RegistryResponse | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchHaServers()
+      .then((data) => {
+        if (!cancelled) setServers(data);
+      })
+      .catch((e) => {
+        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (serverId) return;
+    if (servers.length === 1) update({ props: { server_id: servers[0].id } });
+  }, [serverId, servers, update]);
+
+  useEffect(() => {
+    if (!serverId) {
+      setRegistry(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setErr(null);
+    fetchRegistry(serverId)
+      .then((data) => {
+        if (!cancelled) setRegistry(data);
+      })
+      .catch((e) => {
+        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [serverId]);
+
+  const options = useMemo(() => {
+    const entities: HaItemOption[] = (registry?.entities ?? []).map((e) => ({
+      value: itemValue("entity", e.entity_id),
+      label: e.name || e.entity_id,
+      kind: "entity",
+      id: e.entity_id,
+      meta: { subLabel: e.entity_id, icon: e.icon, domain: e.domain, deviceId: e.device_id },
+    }));
+    const devices: HaItemOption[] = (registry?.devices ?? []).map((d) => ({
+      value: itemValue("device", d.id),
+      label: d.name || d.id,
+      kind: "device",
+      id: d.id,
+      meta: { subLabel: d.id },
+    }));
+    const groups: Array<GroupBase<HaItemOption>> = [];
+    if (entities.length > 0) groups.push({ label: t("ext.home_assistant.editor.group_entities"), options: entities });
+    if (devices.length > 0) groups.push({ label: t("ext.home_assistant.editor.group_devices"), options: devices });
+    return groups;
+  }, [registry, t]);
+
+  const optionByValue = useMemo(() => {
+    const out: Record<string, HaItemOption> = {};
+    for (const group of options) for (const opt of group.options) out[opt.value] = opt;
+    return out;
+  }, [options]);
+
+  const selectedOptions = useMemo(() => {
+    return items.map((ref) => optionByValue[itemValue(ref.kind, ref.id)] ?? { value: itemValue(ref.kind, ref.id), label: ref.name || ref.id, kind: ref.kind, id: ref.id });
+  }, [items, optionByValue]);
+
+  const selectStyles: StylesConfig<HaItemOption, true, GroupBase<HaItemOption>> = useMemo(
+    () => ({
+      control: (base, state) => ({
+        ...base,
+        minHeight: 36,
+        borderRadius: 12,
+        borderColor: state.isFocused ? "rgba(251,191,36,0.45)" : "rgba(255,255,255,0.10)",
+        backgroundColor: "rgba(0,0,0,0.20)",
+        boxShadow: "none",
+      }),
+      input: (base) => ({ ...base, color: "rgba(230,232,242,0.92)" }),
+      multiValue: (base) => ({
+        ...base,
+        borderRadius: 999,
+        backgroundColor: "rgba(255,255,255,0.08)",
+        border: "1px solid rgba(255,255,255,0.10)",
+      }),
+      multiValueLabel: (base) => ({ ...base, color: "rgba(230,232,242,0.92)", fontWeight: 650 }),
+      multiValueRemove: (base) => ({ ...base, color: "rgba(230,232,242,0.78)" }),
+      menu: (base) => ({
+        ...base,
+        backgroundColor: "rgba(14,18,30,0.96)",
+        border: "1px solid rgba(255,255,255,0.10)",
+        borderRadius: 12,
+        overflow: "hidden",
+      }),
+      option: (base, state) => ({
+        ...base,
+        backgroundColor: state.isFocused ? "rgba(255,255,255,0.08)" : "transparent",
+        color: "rgba(230,232,242,0.92)",
+      }),
+      groupHeading: (base) => ({
+        ...base,
+        color: "rgba(230,232,242,0.70)",
+        fontSize: 12,
+        letterSpacing: "0.12em",
+        textTransform: "uppercase",
+      }),
+      singleValue: (base) => ({ ...base, color: "rgba(230,232,242,0.92)" }),
+      placeholder: (base) => ({ ...base, color: "rgba(230,232,242,0.55)" }),
+      menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+    }),
+    [],
+  );
+
+  const portalTarget = typeof document !== "undefined" ? document.body : undefined;
+
+  function setItemsFromOptions(next: readonly HaItemOption[]) {
+    const refs: HaItemRef[] = next.map((opt) => ({
+      kind: opt.kind,
+      id: opt.id,
+      name: opt.label,
+      domain: opt.meta?.domain,
+      icon: opt.meta?.icon,
+      device_id: opt.meta?.deviceId,
+    }));
+
+    let primaryEntityId = "";
+    if (refs.length === 1) {
+      const one = refs[0];
+      if (one.kind === "entity") {
+        const domain = one.domain || domainFromEntityId(one.id);
+        if (isToggleDomain(domain)) primaryEntityId = one.id;
+      } else if (one.kind === "device" && registry?.device_entities?.[one.id]) {
+        const candidates = registry.device_entities[one.id] ?? [];
+        const best = candidates.find((eid) => isToggleDomain(domainFromEntityId(eid))) ?? "";
+        if (best) primaryEntityId = best;
+      }
+    }
+
+    const suggestedName =
+      refs.length === 1 ? refs[0].name || refs[0].id : refs.length > 1 ? `Home Assistant (${refs.length})` : "";
+    const suggestedIcon =
+      refs.length === 1
+        ? sanitizeFaIconName(suggestIconForDomain(refs[0].domain || domainFromEntityId(refs[0].id)))
+        : "";
+
+    const patch: CompositionElementPatch = {
+      props: { items: refs, primary_entity_id: primaryEntityId, primary_state: "" },
+    };
+
+    update(patch);
+
+    if (!element.name && suggestedName) update({ name: suggestedName });
+    const currentIcon = sanitizeFaIconName(asString(asRecord(element.props).icon, "")) || "";
+    if (!currentIcon && suggestedIcon) update({ props: { icon: suggestedIcon } });
+  }
+
+  return (
+    <div>
+      {err ? (
+        <div className="card">
+          <div className="cardBody" style={{ color: "rgba(252,165,165,0.92)" }}>
+            {err}
+          </div>
+        </div>
+      ) : null}
+
+      {servers.length === 0 ? (
+        <div className="card">
+          <div className="cardBody">{t("ext.home_assistant.editor.no_servers")}</div>
+        </div>
+      ) : (
+        <>
+          <div className="field">
+            <div className="label">{t("core.element_editor.name")}</div>
+            <input className="input" value={element.name} onChange={(e) => update({ name: e.target.value })} />
+          </div>
+
+          <div className="field">
+            <div className="label">{t("ext.home_assistant.editor.server")}</div>
+            <select
+              className="input"
+              value={serverId}
+              onChange={(e) => update({ props: { server_id: e.target.value } })}
+            >
+              <option value="" />
+              {servers.map((s) => (
+                <option value={s.id} key={s.id}>
+                  {s.name ? `${s.name} (${s.host})` : s.host}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="field">
+            <div className="label">{t("ext.home_assistant.editor.items")}</div>
+            <Select<HaItemOption, true, GroupBase<HaItemOption>>
+              isMulti
+              isDisabled={!serverId || loading}
+              options={options}
+              value={selectedOptions}
+              placeholder={t("ext.home_assistant.editor.items_placeholder")}
+              styles={selectStyles}
+              menuPortalTarget={portalTarget}
+              menuPosition="fixed"
+              onChange={(next) => setItemsFromOptions(next ?? [])}
+              formatOptionLabel={(opt) => (
+                <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+                  <div style={{ fontWeight: 650, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {opt.label}
+                  </div>
+                  {opt.meta?.subLabel ? (
+                    <div style={{ opacity: 0.7, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {opt.meta.subLabel}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            />
+          </div>
+
+          <div className="field">
+            <div className="label">{t("ext.home_assistant.editor.icon")}</div>
+            <input
+              className="input"
+              value={icon}
+              onChange={(e) => update({ props: { icon: sanitizeFaIconName(e.target.value) } })}
+              placeholder="lightbulb"
+            />
+            <div className="label" style={{ marginTop: 6 }}>
+              {t("ext.home_assistant.editor.icon_hint")}
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="sectionDivider" />
+      <div className="rowWrap">
+        <button className="dangerButton" type="button" onClick={remove}>
+          {t("core.actions.delete")}
+        </button>
+        <button className="chipButton" type="button" onClick={close}>
+          {t("core.actions.close")}
+        </button>
+      </div>
+    </div>
+  );
+}

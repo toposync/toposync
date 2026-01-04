@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 
 import type { CompositionElement, Element3DInstance, ElementType, ViewSettings } from "@toposync/plugin-api";
 
 type Props = {
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
-  onElementActivated?: (elementId: string) => void;
+  onElementActivated?: (elementId: string, intent?: "click" | "dblclick" | "longpress") => void;
   viewSettings: ViewSettings;
 };
 
@@ -80,6 +81,13 @@ export function Viewport3D({
     renderer.domElement.style.touchAction = "none";
     containerEl.appendChild(renderer.domElement);
 
+    const labelRenderer = new CSS2DRenderer();
+    labelRenderer.domElement.style.position = "absolute";
+    labelRenderer.domElement.style.top = "0";
+    labelRenderer.domElement.style.left = "0";
+    labelRenderer.domElement.style.pointerEvents = "none";
+    containerEl.appendChild(labelRenderer.domElement);
+
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(65, 1, 0.1, 200);
     camera.position.set(0, 1.6, 4.2);
@@ -113,6 +121,7 @@ export function Viewport3D({
       const w = containerEl.clientWidth;
       const h = containerEl.clientHeight;
       renderer.setSize(w, h);
+      labelRenderer.setSize(w, h);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
     }
@@ -127,6 +136,7 @@ export function Viewport3D({
       raf = requestAnimationFrame(animate);
       controls.update();
       renderer.render(scene, camera);
+      labelRenderer.render(scene, camera);
     }
 
     animate();
@@ -134,37 +144,101 @@ export function Viewport3D({
     let downAt: { x: number; y: number } | null = null;
     let dragged = false;
     const DRAG_THRESHOLD_PX = 6;
+    const LONG_PRESS_MS = 520;
+    const DOUBLE_CLICK_MS = 320;
+    const CLICK_DELAY_MS = 240;
+
+    let downElementId: string | null = null;
+    let longPressTimer: number | null = null;
+    let longPressFired = false;
+    let pendingClick: { id: string; at: number; timer: number } | null = null;
+
+    function pickElementId(clientX: number, clientY: number): string | null {
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -(((clientY - rect.top) / rect.height) * 2 - 1);
+      raycaster.setFromCamera(mouse, camera);
+
+      const hits = raycaster.intersectObjects(scene.children, true);
+      for (const hit of hits) {
+        const id = findElementId(hit.object);
+        if (id) return id;
+      }
+      return null;
+    }
 
     function handlePointerDown(e: PointerEvent) {
       downAt = { x: e.clientX, y: e.clientY };
       dragged = false;
+      longPressFired = false;
+      downElementId = onElementActivated ? pickElementId(e.clientX, e.clientY) : null;
+
+      if (longPressTimer) window.clearTimeout(longPressTimer);
+      longPressTimer = null;
+
+      if (onElementActivated && downElementId && e.pointerType === "touch") {
+        longPressTimer = window.setTimeout(() => {
+          if (dragged) return;
+          if (!downElementId) return;
+          longPressFired = true;
+          if (pendingClick) {
+            window.clearTimeout(pendingClick.timer);
+            pendingClick = null;
+          }
+          onElementActivated(downElementId, "longpress");
+        }, LONG_PRESS_MS);
+      }
     }
 
     function handlePointerMove(e: PointerEvent) {
       if (!downAt) return;
       const dx = e.clientX - downAt.x;
       const dy = e.clientY - downAt.y;
-      if (dx * dx + dy * dy >= DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) dragged = true;
+      if (dx * dx + dy * dy >= DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) {
+        dragged = true;
+        if (longPressTimer) window.clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
     }
 
     function handlePointerUp(e: PointerEvent) {
-      if (!onElementActivated) return;
+      if (longPressTimer) window.clearTimeout(longPressTimer);
+      longPressTimer = null;
+
       if (!downAt) return;
       downAt = null;
       if (dragged) return;
-      const rect = renderer.domElement.getBoundingClientRect();
-      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
-      raycaster.setFromCamera(mouse, camera);
+      if (!onElementActivated) return;
+      if (longPressFired) return;
 
-      const hits = raycaster.intersectObjects(scene.children, true);
-      for (const hit of hits) {
-        const id = findElementId(hit.object);
-        if (id) {
-          onElementActivated(id);
-          return;
-        }
+      const id = pickElementId(e.clientX, e.clientY);
+      if (!id) return;
+
+      const now = Date.now();
+
+      if (pendingClick && pendingClick.id === id && now - pendingClick.at <= DOUBLE_CLICK_MS) {
+        window.clearTimeout(pendingClick.timer);
+        pendingClick = null;
+        onElementActivated(id, "dblclick");
+        return;
       }
+
+      if (pendingClick && pendingClick.id !== id) {
+        window.clearTimeout(pendingClick.timer);
+        const prevId = pendingClick.id;
+        pendingClick = null;
+        onElementActivated(prevId, "click");
+      }
+
+      pendingClick = {
+        id,
+        at: now,
+        timer: window.setTimeout(() => {
+          if (!pendingClick || pendingClick.id !== id) return;
+          pendingClick = null;
+          onElementActivated(id, "click");
+        }, CLICK_DELAY_MS),
+      };
     }
 
     function handleContextMenu(e: MouseEvent) {
@@ -178,6 +252,11 @@ export function Viewport3D({
     renderer.domElement.addEventListener("contextmenu", handleContextMenu);
 
     return () => {
+      if (longPressTimer) window.clearTimeout(longPressTimer);
+      longPressTimer = null;
+      if (pendingClick) window.clearTimeout(pendingClick.timer);
+      pendingClick = null;
+
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
       renderer.domElement.removeEventListener("pointermove", handlePointerMove);
       renderer.domElement.removeEventListener("pointerup", handlePointerUp);
@@ -193,6 +272,7 @@ export function Viewport3D({
 
       renderer.dispose();
       containerEl.removeChild(renderer.domElement);
+      containerEl.removeChild(labelRenderer.domElement);
       rendererRef.current = null;
       cameraRef.current = null;
       sceneRef.current = null;

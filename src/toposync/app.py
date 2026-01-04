@@ -131,14 +131,14 @@ async def _lifespan(app: FastAPI):
 
     bus.set_default_handler("device.action_requested", _default_device_action)
 
-    ext_manager = ExtensionManager(group="toposync.extensions")
-    await ext_manager.load(app=app, bus=bus, services=services)
-
     app.state.store = store
     app.state.bus = bus
     app.state.services = services
-    app.state.extensions = ext_manager
     app.state.config_store = config_store
+
+    ext_manager = ExtensionManager(group="toposync.extensions")
+    await ext_manager.load(app=app, bus=bus, services=services)
+    app.state.extensions = ext_manager
 
     yield
 

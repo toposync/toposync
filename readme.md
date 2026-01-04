@@ -172,6 +172,50 @@ O modelo base de instância em uma composição é `CompositionElement`:
 - `position`/`rotation` (Vector3)
 - `props` (objeto livre da extensão)
 
+## i18n (en + pt-BR)
+
+O core suporta i18n no frontend (e extensões) com um dicionário simples por chaves.
+
+- Idiomas suportados: `en` e `pt-BR`
+- Como o idioma é escolhido:
+  - se existir `localStorage["toposync.locale"]`, ele é usado
+  - senão: `navigator.language` (`pt*` vira `pt-BR`, o resto vira `en`)
+- Para trocar rápido (dev): `localStorage.setItem("toposync.locale", "en"); location.reload()`
+
+### Como uma extensão usa
+
+No `activate(host)`:
+
+1) Registre as traduções:
+
+```ts
+host.i18n.registerTranslations({
+  en: { "ext.minha_ext.element.name": "Camera" },
+  "pt-BR": { "ext.minha_ext.element.name": "Câmera" },
+})
+```
+
+2) Use `LocalizedString` em `ElementType.name/description` para o host renderizar corretamente:
+
+```ts
+host.registerElementType({
+  type: "com.exemplo.camera",
+  name: { key: "ext.minha_ext.element.name", fallback: "Camera" },
+  // ...
+})
+```
+
+3) Dentro de componentes React da extensão, use `host.i18n.useI18n()` para re-renderizar quando o idioma mudar:
+
+```ts
+function MyAction({ i18n }: { i18n: HostI18n }) {
+  const { t } = i18n.useI18n()
+  return <button>{t("core.actions.close")}</button>
+}
+```
+
+Dica: o core já fornece chaves comuns em `core.actions.*` (ex.: `close`, `delete`, `edit`).
+
 ## Persistência (local-first)
 
 - O backend salva a configuração em um único arquivo: `<data_dir>/config.json`

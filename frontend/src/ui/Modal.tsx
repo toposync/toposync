@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 
+import { i18n } from "../util/i18n";
 import { Icon } from "./Icon";
 
 type Props = {
@@ -10,6 +11,8 @@ type Props = {
 };
 
 export function Modal({ open, title, children, onClose }: Props): React.ReactElement | null {
+  const { t } = i18n.useI18n();
+
   useEffect(() => {
     if (!open) return;
 
@@ -34,7 +37,7 @@ export function Modal({ open, title, children, onClose }: Props): React.ReactEle
       <div className="modalPanel" role="dialog" aria-modal="true" aria-label={title}>
         <div className="modalHeader">
           <div className="modalTitle">{title}</div>
-          <button className="iconButton" type="button" onClick={onClose} aria-label="Close">
+          <button className="iconButton" type="button" onClick={onClose} aria-label={t("core.modal.aria.close")}>
             <Icon name="xmark" />
           </button>
         </div>

@@ -22,6 +22,7 @@ import {
   putComposition,
   renameComposition,
 } from "../util/api";
+import { i18n, resolveLocalizedString } from "../util/i18n";
 import { loadRemoteActivate } from "../util/moduleFederation";
 import { CompositionEditorScreen } from "./screens/CompositionEditorScreen";
 import { MainScreen } from "./screens/MainScreen";
@@ -150,6 +151,7 @@ export function App(): React.ReactElement {
         emitEvent,
         getDevice,
       },
+      i18n,
     }),
     [],
   );
@@ -283,7 +285,7 @@ export function App(): React.ReactElement {
         const element: CompositionElement = {
           id,
           type: typeId,
-          name: def.name,
+          name: resolveLocalizedString(def.name),
           position: { x: (col - 1.5) * 1.3, y: 0, z: (row - 1.5) * 1.3 },
           rotation: { x: 0, y: 0, z: 0 },
           props: { ...(def.defaultProps ?? {}) },

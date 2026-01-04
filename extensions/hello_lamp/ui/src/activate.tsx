@@ -1,9 +1,43 @@
 import React, { useState } from "react";
 
-import type { CompositionElement, CompositionElementPatch, ElementType, TopoSyncHost } from "@toposync/plugin-api";
+import type {
+  CompositionElement,
+  CompositionElementPatch,
+  ElementType,
+  HostI18n,
+  TopoSyncHost,
+} from "@toposync/plugin-api";
 
 export function activate(host: TopoSyncHost): void {
-  host.registerElementType(helloLampElementType());
+  host.i18n.registerTranslations({
+    en: {
+      "ext.hello_lamp.element.name": "Lamp (Hello Lamp)",
+      "ext.hello_lamp.element.desc": "Example element: 3D object + action modal + editor modal.",
+      "ext.hello_lamp.action.card_title": "Action",
+      "ext.hello_lamp.action.state": "State",
+      "ext.hello_lamp.action.on": "On",
+      "ext.hello_lamp.action.off": "Off",
+      "ext.hello_lamp.action.toggling": "Toggling…",
+      "ext.hello_lamp.action.toggle": "Toggle",
+      "ext.hello_lamp.editor.device_id": "Device ID",
+      "ext.hello_lamp.editor.color_on": "Color (on)",
+      "ext.hello_lamp.editor.color_off": "Color (off)",
+    },
+    "pt-BR": {
+      "ext.hello_lamp.element.name": "Lâmpada (Hello Lamp)",
+      "ext.hello_lamp.element.desc": "Exemplo de elemento: objeto 3D + modal de ação + modal de edição.",
+      "ext.hello_lamp.action.card_title": "Ação",
+      "ext.hello_lamp.action.state": "Estado",
+      "ext.hello_lamp.action.on": "Ligada",
+      "ext.hello_lamp.action.off": "Desligada",
+      "ext.hello_lamp.action.toggling": "Alternando...",
+      "ext.hello_lamp.action.toggle": "Alternar",
+      "ext.hello_lamp.editor.device_id": "Device ID",
+      "ext.hello_lamp.editor.color_on": "Cor (ligada)",
+      "ext.hello_lamp.editor.color_off": "Cor (desligada)",
+    },
+  });
+  host.registerElementType(helloLampElementType(host.i18n));
 }
 
 function readString(v: unknown, fallback: string): string {
@@ -14,11 +48,14 @@ function readBool(v: unknown, fallback: boolean): boolean {
   return typeof v === "boolean" ? v : fallback;
 }
 
-function helloLampElementType(): ElementType {
+function helloLampElementType(i18n: HostI18n): ElementType {
   return {
     type: "com.toposync.hello_lamp.lamp",
-    name: "Lâmpada (Hello Lamp)",
-    description: "Exemplo de elemento: objeto 3D + modal de ação + modal de edição.",
+    name: { key: "ext.hello_lamp.element.name", fallback: "Lamp (Hello Lamp)" },
+    description: {
+      key: "ext.hello_lamp.element.desc",
+      fallback: "Example element: 3D object + action modal + editor modal.",
+    },
     defaultProps: {
       device_id: "lamp1",
       state: false,
@@ -68,9 +105,11 @@ function helloLampElementType(): ElementType {
         },
       };
     },
-    renderActionModal: ({ element, update, close, api }) => <HelloLampAction element={element} update={update} close={close} api={api} />,
+    renderActionModal: ({ element, update, close, api }) => (
+      <HelloLampAction element={element} update={update} close={close} api={api} i18n={i18n} />
+    ),
     renderEditorModal: ({ element, update, remove, close }) => (
-      <HelloLampEditor element={element} update={update} remove={remove} close={close} />
+      <HelloLampEditor element={element} update={update} remove={remove} close={close} i18n={i18n} />
     ),
   };
 }
@@ -80,9 +119,11 @@ type ActionProps = {
   update: (patch: CompositionElementPatch) => void;
   close: () => void;
   api: { emitEvent: TopoSyncHost["api"]["emitEvent"] };
+  i18n: HostI18n;
 };
 
-function HelloLampAction({ element, update, close, api }: ActionProps): React.ReactElement {
+function HelloLampAction({ element, update, close, api, i18n }: ActionProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -94,12 +135,14 @@ function HelloLampAction({ element, update, close, api }: ActionProps): React.Re
     <div>
       <div className="card">
         <div className="cardHeaderRow">
-          <div className="cardTitle">Ação</div>
+          <div className="cardTitle">{t("ext.hello_lamp.action.card_title")}</div>
           <div className="cardMeta">{deviceId}</div>
         </div>
         <div className="cardBody">
-          Estado:{" "}
-          <b style={{ color: isOn ? onColor : "rgba(230,232,242,0.65)" }}>{isOn ? "Ligada" : "Desligada"}</b>
+          {t("ext.hello_lamp.action.state")}:{" "}
+          <b style={{ color: isOn ? onColor : "rgba(230,232,242,0.65)" }}>
+            {isOn ? t("ext.hello_lamp.action.on") : t("ext.hello_lamp.action.off")}
+          </b>
         </div>
       </div>
 
@@ -125,10 +168,10 @@ function HelloLampAction({ element, update, close, api }: ActionProps): React.Re
             }
           }}
         >
-          {busy ? "Alternando..." : "Alternar"}
+          {busy ? t("ext.hello_lamp.action.toggling") : t("ext.hello_lamp.action.toggle")}
         </button>
         <button className="chipButton" type="button" onClick={close}>
-          Fechar
+          {t("core.actions.close")}
         </button>
       </div>
 
@@ -149,9 +192,11 @@ type EditorProps = {
   update: (patch: CompositionElementPatch) => void;
   remove: () => void;
   close: () => void;
+  i18n: HostI18n;
 };
 
-function HelloLampEditor({ element, update, remove, close }: EditorProps): React.ReactElement {
+function HelloLampEditor({ element, update, remove, close, i18n }: EditorProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const deviceId = readString(element.props.device_id, "lamp1");
   const onColor = readString(element.props.color_on, "#fbbf24");
   const offColor = readString(element.props.color_off, "#334155");
@@ -159,13 +204,13 @@ function HelloLampEditor({ element, update, remove, close }: EditorProps): React
   return (
     <div>
       <div className="field">
-        <div className="label">Nome</div>
+        <div className="label">{t("core.element_editor.name")}</div>
         <input className="input" value={element.name} onChange={(e) => update({ name: e.target.value })} />
       </div>
 
       <div className="rowWrap">
         <div className="field" style={{ flex: 1, minWidth: 160 }}>
-          <div className="label">Device ID</div>
+          <div className="label">{t("ext.hello_lamp.editor.device_id")}</div>
           <input
             className="input"
             value={deviceId}
@@ -173,7 +218,7 @@ function HelloLampEditor({ element, update, remove, close }: EditorProps): React
           />
         </div>
         <div className="field" style={{ flex: 1, minWidth: 160 }}>
-          <div className="label">Cor (ligada)</div>
+          <div className="label">{t("ext.hello_lamp.editor.color_on")}</div>
           <input
             className="input"
             value={onColor}
@@ -181,7 +226,7 @@ function HelloLampEditor({ element, update, remove, close }: EditorProps): React
           />
         </div>
         <div className="field" style={{ flex: 1, minWidth: 160 }}>
-          <div className="label">Cor (desligada)</div>
+          <div className="label">{t("ext.hello_lamp.editor.color_off")}</div>
           <input
             className="input"
             value={offColor}
@@ -194,10 +239,10 @@ function HelloLampEditor({ element, update, remove, close }: EditorProps): React
 
       <div className="rowWrap">
         <button className="dangerButton" type="button" onClick={remove}>
-          Excluir
+          {t("core.actions.delete")}
         </button>
         <button className="chipButton" type="button" onClick={close}>
-          Fechar
+          {t("core.actions.close")}
         </button>
       </div>
     </div>

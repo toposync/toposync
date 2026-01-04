@@ -10,6 +10,7 @@ import type {
 } from "@toposync/plugin-api";
 
 import type { Composition, CompositionSummary } from "../../util/api";
+import { i18n } from "../../util/i18n";
 
 import { Modal } from "../Modal";
 import { CompositionSelectorModal } from "../CompositionSelectorModal";
@@ -55,6 +56,7 @@ export function MainScreen({
   onRenameComposition,
   onDeleteComposition,
 }: Props): React.ReactElement {
+  const { t } = i18n.useI18n();
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
@@ -65,7 +67,7 @@ export function MainScreen({
   );
   const activeType = activeElement ? elementTypesById[activeElement.type] ?? null : null;
 
-  const actionTitle = activeElement ? activeElement.name : "Ação";
+  const actionTitle = activeElement ? activeElement.name : t("core.ui.action");
   const isActionModalOpen = Boolean(activeElement);
 
   return (
@@ -74,23 +76,23 @@ export function MainScreen({
 
       <div className="overlayTopRight">
         <button className="chipButton" type="button" onClick={() => setIsRenderModalOpen(true)}>
-          Renderização: 3D
+          {t("core.ui.rendering")}: 3D
         </button>
         <button className="chipButton" type="button" onClick={() => setIsCompositionModalOpen(true)}>
-          Composição: {compositionName}
+          {t("core.ui.composition")}: {compositionName}
         </button>
         <button className="primaryButton" type="button" onClick={onEditComposition}>
-          Editar
+          {t("core.actions.edit")}
         </button>
       </div>
 
       <div className="overlayLeft">
         <div className="rail">
-          <div className="railTitle">Notificações</div>
+          <div className="railTitle">{t("core.ui.notifications")}</div>
           <div className="railScroll">
             {notifications.length === 0 ? (
               <div className="card">
-                <div className="cardBody">Nenhuma notificação por enquanto.</div>
+                <div className="cardBody">{t("core.ui.notifications_empty")}</div>
               </div>
             ) : null}
             {notifications.map((n) => {
@@ -113,13 +115,17 @@ export function MainScreen({
       {elements.length === 0 ? (
         <div className="emptyHint">
           <div className="card">
-            <div className="cardTitle">Nada configurado ainda</div>
-            <div className="cardBody">Clique em “Editar” para adicionar elementos na composição.</div>
+            <div className="cardTitle">{t("core.ui.empty_title")}</div>
+            <div className="cardBody">{t("core.ui.empty_desc")}</div>
           </div>
         </div>
       ) : null}
 
-      <Modal open={isRenderModalOpen} title="Renderização" onClose={() => setIsRenderModalOpen(false)}>
+      <Modal
+        open={isRenderModalOpen}
+        title={t("core.ui.render_modal.title")}
+        onClose={() => setIsRenderModalOpen(false)}
+      >
         <div className="choiceList">
           <div
             className="choiceItem"
@@ -130,8 +136,8 @@ export function MainScreen({
               if (e.key === "Enter" || e.key === " ") setIsRenderModalOpen(false);
             }}
           >
-            <div className="choiceTitle">3D (ThreeJS)</div>
-            <div className="choiceDesc">Modo atual. Em breve: 2D e outros modos.</div>
+            <div className="choiceTitle">{t("core.ui.render_modal.option_3d.title")}</div>
+            <div className="choiceDesc">{t("core.ui.render_modal.option_3d.desc")}</div>
           </div>
         </div>
       </Modal>
@@ -163,7 +169,7 @@ export function MainScreen({
               api,
             })
           ) : (
-            <div className="cardBody">Sem ações disponíveis para este elemento.</div>
+            <div className="cardBody">{t("core.ui.action_unavailable")}</div>
           )
         ) : null}
       </Modal>

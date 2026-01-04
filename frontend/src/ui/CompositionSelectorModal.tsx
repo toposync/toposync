@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 import type { Composition, CompositionSummary } from "../util/api";
+import { i18n } from "../util/i18n";
 import { Modal } from "./Modal";
 import { Icon } from "./Icon";
 
@@ -25,6 +26,7 @@ export function CompositionSelectorModal({
   onRename,
   onDelete,
 }: Props): React.ReactElement | null {
+  const { t } = i18n.useI18n();
   const [newName, setNewName] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
@@ -57,7 +59,7 @@ export function CompositionSelectorModal({
       setNewName("");
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao criar composição");
+      setError(err instanceof Error ? err.message : t("core.compositions.error.create"));
     } finally {
       setBusy(false);
     }
@@ -75,7 +77,7 @@ export function CompositionSelectorModal({
       await onActivate(compositionId);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao trocar composição");
+      setError(err instanceof Error ? err.message : t("core.compositions.error.activate"));
     } finally {
       setBusy(false);
     }
@@ -91,7 +93,7 @@ export function CompositionSelectorModal({
       setEditingId(null);
       setEditingName("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao renomear composição");
+      setError(err instanceof Error ? err.message : t("core.compositions.error.rename"));
     } finally {
       setBusy(false);
     }
@@ -107,7 +109,7 @@ export function CompositionSelectorModal({
       setEditingId(null);
       setEditingName("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao excluir composição");
+      setError(err instanceof Error ? err.message : t("core.compositions.error.delete"));
     } finally {
       setBusy(false);
     }
@@ -116,13 +118,13 @@ export function CompositionSelectorModal({
   if (!open) return null;
 
   return (
-    <Modal open={open} title="Composições" onClose={onClose}>
-      <div className="modalSectionTitle">Nova composição</div>
+    <Modal open={open} title={t("core.compositions.modal.title")} onClose={onClose}>
+      <div className="modalSectionTitle">{t("core.compositions.section.new")}</div>
       <div className="compositionCreateRow">
         <input
           className="input"
           value={newName}
-          placeholder="Nome (ex: Térreo, Superior...)"
+          placeholder={t("core.compositions.new.placeholder")}
           onChange={(e) => setNewName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") void handleCreate();
@@ -133,7 +135,7 @@ export function CompositionSelectorModal({
           className="iconButton iconButtonPrimary"
           type="button"
           onClick={() => void handleCreate()}
-          aria-label="Criar composição"
+          aria-label={t("core.compositions.aria.create")}
           disabled={busy || !newName.trim()}
         >
           <Icon name="plus" />
@@ -142,7 +144,7 @@ export function CompositionSelectorModal({
 
       <div className="sectionDivider" />
 
-      <div className="modalSectionTitle">Suas composições</div>
+      <div className="modalSectionTitle">{t("core.compositions.section.list")}</div>
       <div className="compositionList">
         {sorted.map((c) => {
           const isActive = c.id === activeCompositionId;
@@ -173,7 +175,7 @@ export function CompositionSelectorModal({
                     className="iconButton iconButtonPrimary"
                     type="button"
                     onClick={() => void handleRename(c.id)}
-                    aria-label="Salvar nome"
+                    aria-label={t("core.compositions.aria.save_name")}
                     disabled={busy || !editingName.trim()}
                   >
                     <Icon name="check" />
@@ -185,7 +187,7 @@ export function CompositionSelectorModal({
                       setEditingId(null);
                       setEditingName("");
                     }}
-                    aria-label="Cancelar"
+                    aria-label={t("core.compositions.aria.cancel")}
                     disabled={busy}
                   >
                     <Icon name="xmark" />
@@ -195,7 +197,7 @@ export function CompositionSelectorModal({
             );
           }
 
-          const mainLabel = isConfirmingDelete ? `Excluir “${c.name}”?` : c.name;
+          const mainLabel = isConfirmingDelete ? t("core.compositions.delete_confirm", { name: c.name }) : c.name;
 
           return (
             <div className="compositionRow" key={c.id}>
@@ -222,7 +224,7 @@ export function CompositionSelectorModal({
                       className="iconButton"
                       type="button"
                       onClick={() => setConfirmDeleteId(null)}
-                      aria-label="Cancelar exclusão"
+                      aria-label={t("core.compositions.aria.cancel_delete")}
                       disabled={busy}
                     >
                       <Icon name="xmark" />
@@ -231,7 +233,7 @@ export function CompositionSelectorModal({
                       className="iconButton iconButtonDanger"
                       type="button"
                       onClick={() => void handleDelete(c.id)}
-                      aria-label="Confirmar exclusão"
+                      aria-label={t("core.compositions.aria.confirm_delete")}
                       disabled={busy}
                     >
                       <Icon name="trash" />
@@ -248,7 +250,7 @@ export function CompositionSelectorModal({
                         setConfirmDeleteId(null);
                         setError(null);
                       }}
-                      aria-label="Renomear composição"
+                      aria-label={t("core.compositions.aria.rename")}
                       disabled={busy}
                     >
                       <Icon name="pen-to-square" />
@@ -263,9 +265,9 @@ export function CompositionSelectorModal({
                         setEditingName("");
                         setError(null);
                       }}
-                      aria-label="Excluir composição"
+                      aria-label={t("core.compositions.aria.delete")}
                       disabled={busy || !canDelete}
-                      title={!canDelete ? "Não é possível excluir a última composição" : undefined}
+                      title={!canDelete ? t("core.compositions.cannot_delete_last") : undefined}
                     >
                       <Icon name="trash" />
                     </button>
@@ -285,4 +287,3 @@ export function CompositionSelectorModal({
     </Modal>
   );
 }
-

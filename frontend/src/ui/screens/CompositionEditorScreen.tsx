@@ -3,6 +3,7 @@ import React, { useMemo, useState } from "react";
 import type { CompositionElement, CompositionElementPatch, ElementType } from "@toposync/plugin-api";
 
 import type { Composition, CompositionSummary } from "../../util/api";
+import { i18n, resolveLocalizedString } from "../../util/i18n";
 
 import { Modal } from "../Modal";
 import { CompositionSelectorModal } from "../CompositionSelectorModal";
@@ -47,13 +48,17 @@ export function CompositionEditorScreen({
   onRenameComposition,
   onDeleteComposition,
 }: Props): React.ReactElement {
+  const { locale, t } = i18n.useI18n();
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
 
   const elementTypes = useMemo(
-    () => Object.values(elementTypesById).sort((a, b) => a.name.localeCompare(b.name)),
-    [elementTypesById],
+    () =>
+      Object.values(elementTypesById).sort((a, b) =>
+        resolveLocalizedString(a.name).localeCompare(resolveLocalizedString(b.name)),
+      ),
+    [elementTypesById, locale],
   );
 
   const editingElement = useMemo(
@@ -68,36 +73,36 @@ export function CompositionEditorScreen({
 
       <div className="overlayTopRight">
         <button className="chipButton" type="button" onClick={() => setIsRenderModalOpen(true)}>
-          Renderização: 2D
+          {t("core.ui.rendering")}: 2D
         </button>
         <button className="chipButton" type="button" onClick={() => setIsCompositionModalOpen(true)}>
-          Composição: {compositionName}
+          {t("core.ui.composition")}: {compositionName}
         </button>
         <button className="primaryButton" type="button" onClick={onExit}>
-          Voltar
+          {t("core.actions.back")}
         </button>
       </div>
 
       <div className="overlayLeft">
         <div className="rail">
-          <div className="railTitle">Adicionar</div>
+          <div className="railTitle">{t("core.ui.add")}</div>
           {elementTypes.length === 0 ? (
             <div className="card">
-              <div className="cardBody">Nenhuma extensão registrou elementos ainda.</div>
+              <div className="cardBody">{t("core.ui.element_types_empty")}</div>
             </div>
           ) : (
             <div className="elementButtonGrid">
-              {elementTypes.map((t) => (
+              {elementTypes.map((elementType) => (
                 <button
                   className="elementTypeButton"
-                  key={t.type}
+                  key={elementType.type}
                   type="button"
                   onClick={() => {
-                    const id = addElement(t.type);
+                    const id = addElement(elementType.type);
                     if (id) setEditingElementId(id);
                   }}
                 >
-                  <span>{t.name}</span>
+                  <span>{resolveLocalizedString(elementType.name)}</span>
                   <span className="elementTypeButtonHint">+</span>
                 </button>
               ))}
@@ -106,24 +111,25 @@ export function CompositionEditorScreen({
 
           <div className="sectionDivider" />
 
-          <div className="railTitle">Camadas</div>
+          <div className="railTitle">{t("core.ui.layers")}</div>
           <div className="railScroll">
             {elements.length === 0 ? (
               <div className="card">
-                <div className="cardBody">Nenhum elemento adicionado ainda.</div>
+                <div className="cardBody">{t("core.ui.layers_empty")}</div>
               </div>
             ) : null}
             {elements.map((el) => {
               const type = elementTypesById[el.type];
-              const title = el.name || type?.name || el.type;
+              const typeName = type ? resolveLocalizedString(type.name) : el.type;
+              const title = el.name || typeName || el.type;
               return (
                 <div className="layerRow" key={el.id}>
                   <button className="layerMainButton" type="button" onClick={() => setEditingElementId(el.id)}>
                     <div className="layerMainTitle">{title}</div>
-                    <div className="layerMainMeta">{type ? type.name : el.type}</div>
+                    <div className="layerMainMeta">{typeName}</div>
                   </button>
                   <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
-                    Excluir
+                    {t("core.actions.delete")}
                   </button>
                 </div>
               );
@@ -134,7 +140,7 @@ export function CompositionEditorScreen({
 
       <Modal
         open={isRenderModalOpen}
-        title="Renderização"
+        title={t("core.ui.render_modal.title")}
         onClose={() => {
           setIsRenderModalOpen(false);
         }}
@@ -149,8 +155,8 @@ export function CompositionEditorScreen({
               if (e.key === "Enter" || e.key === " ") setIsRenderModalOpen(false);
             }}
           >
-            <div className="choiceTitle">2D (Canvas)</div>
-            <div className="choiceDesc">Modo atual de edição. Em breve: 3D e ferramentas de desenho.</div>
+            <div className="choiceTitle">{t("core.ui.render_modal.option_2d.title")}</div>
+            <div className="choiceDesc">{t("core.ui.render_modal.option_2d.desc")}</div>
           </div>
         </div>
       </Modal>
@@ -168,7 +174,7 @@ export function CompositionEditorScreen({
 
       <Modal
         open={Boolean(editingElement)}
-        title={editingElement ? `Editar: ${editingElement.name}` : "Editar elemento"}
+        title={editingElement ? `${t("core.actions.edit")}: ${editingElement.name}` : t("core.element_editor.title")}
         onClose={() => setEditingElementId(null)}
       >
         {editingElement ? (
@@ -185,7 +191,7 @@ export function CompositionEditorScreen({
           ) : (
             <>
               <div className="field">
-                <div className="label">Nome</div>
+                <div className="label">{t("core.element_editor.name")}</div>
                 <input
                   className="input"
                   value={editingElement.name}
@@ -197,7 +203,7 @@ export function CompositionEditorScreen({
 
               <div className="rowWrap">
                 <div className="field" style={{ flex: 1, minWidth: 140 }}>
-                  <div className="label">Posição X</div>
+                  <div className="label">{t("core.element_editor.pos_x")}</div>
                   <input
                     className="input"
                     type="number"
@@ -207,7 +213,7 @@ export function CompositionEditorScreen({
                   />
                 </div>
                 <div className="field" style={{ flex: 1, minWidth: 140 }}>
-                  <div className="label">Posição Y</div>
+                  <div className="label">{t("core.element_editor.pos_y")}</div>
                   <input
                     className="input"
                     type="number"
@@ -217,7 +223,7 @@ export function CompositionEditorScreen({
                   />
                 </div>
                 <div className="field" style={{ flex: 1, minWidth: 140 }}>
-                  <div className="label">Posição Z</div>
+                  <div className="label">{t("core.element_editor.pos_z")}</div>
                   <input
                     className="input"
                     type="number"
@@ -230,7 +236,7 @@ export function CompositionEditorScreen({
 
               <div className="rowWrap">
                 <div className="field" style={{ flex: 1, minWidth: 140 }}>
-                  <div className="label">Rotação X (graus)</div>
+                  <div className="label">{t("core.element_editor.rot_x")}</div>
                   <input
                     className="input"
                     type="number"
@@ -240,7 +246,7 @@ export function CompositionEditorScreen({
                   />
                 </div>
                 <div className="field" style={{ flex: 1, minWidth: 140 }}>
-                  <div className="label">Rotação Y (graus)</div>
+                  <div className="label">{t("core.element_editor.rot_y")}</div>
                   <input
                     className="input"
                     type="number"
@@ -250,7 +256,7 @@ export function CompositionEditorScreen({
                   />
                 </div>
                 <div className="field" style={{ flex: 1, minWidth: 140 }}>
-                  <div className="label">Rotação Z (graus)</div>
+                  <div className="label">{t("core.element_editor.rot_z")}</div>
                   <input
                     className="input"
                     type="number"
@@ -270,7 +276,7 @@ export function CompositionEditorScreen({
                   setEditingElementId(null);
                 }}
               >
-                Excluir elemento
+                {t("core.element_editor.delete")}
               </button>
             </>
           )

@@ -1,5 +1,30 @@
 export type Vector3 = { x: number; y: number; z: number };
 
+export type Locale = "en" | "pt-BR";
+
+export type LocalizedString =
+  | string
+  | {
+      key: string;
+      params?: Record<string, unknown>;
+      fallback?: string;
+    };
+
+export type TranslationBundle = Partial<Record<Locale, Record<string, string>>>;
+
+export type HostI18n = {
+  getLocale: () => Locale;
+  setLocale: (locale: Locale) => void;
+  t: (key: string, params?: Record<string, unknown>, fallback?: string) => string;
+  registerTranslations: (bundle: TranslationBundle) => void;
+  subscribe: (listener: () => void) => () => void;
+  useI18n: () => {
+    locale: Locale;
+    t: (key: string, params?: Record<string, unknown>, fallback?: string) => string;
+    setLocale: (locale: Locale) => void;
+  };
+};
+
 export type CompositionElement = {
   id: string;
   type: string;
@@ -56,8 +81,8 @@ export type Element3DInstance = {
 
 export type ElementType = {
   type: string;
-  name: string;
-  description?: string;
+  name: LocalizedString;
+  description?: LocalizedString;
   defaultProps?: Record<string, unknown>;
   create3D?: (ctx: Scene3DContext, element: CompositionElement) => Element3DInstance;
   renderActionModal?: (args: {
@@ -78,4 +103,5 @@ export type TopoSyncHost = {
   registerElementType: (elementType: ElementType) => void;
   registerNotificationRenderer: (renderer: NotificationRenderer) => void;
   api: HostApi;
+  i18n: HostI18n;
 };

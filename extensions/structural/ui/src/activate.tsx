@@ -384,8 +384,8 @@ function areaElementType(i18n: HostI18n): ElementType {
 
         const local = vertices.map((p) => ({ x: p.x - el.position.x, z: p.z - el.position.z }));
         const shape = new THREE.Shape();
-        shape.moveTo(local[0].x, local[0].z);
-        for (let i = 1; i < local.length; i++) shape.lineTo(local[i].x, local[i].z);
+        shape.moveTo(local[0].x, -local[0].z);
+        for (let i = 1; i < local.length; i++) shape.lineTo(local[i].x, -local[i].z);
         shape.closePath();
 
         const geom = new THREE.ShapeGeometry(shape);

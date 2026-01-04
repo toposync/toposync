@@ -14,3 +14,5 @@ build/
 .toposync-data/
 
 *.log
+
+*.ignore.md

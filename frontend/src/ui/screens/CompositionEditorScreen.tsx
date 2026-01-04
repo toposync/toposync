@@ -65,35 +65,34 @@ export function CompositionEditorScreen({
 
       <div className="overlayLeft">
         <div className="rail">
-          <div className="railTitle">Elementos disponíveis</div>
+          <div className="railTitle">Adicionar</div>
+          {elementTypes.length === 0 ? (
+            <div className="card">
+              <div className="cardBody">Nenhuma extensão registrou elementos ainda.</div>
+            </div>
+          ) : (
+            <div className="elementButtonGrid">
+              {elementTypes.map((t) => (
+                <button
+                  className="elementTypeButton"
+                  key={t.type}
+                  type="button"
+                  onClick={() => {
+                    const id = addElement(t.type);
+                    if (id) setEditingElementId(id);
+                  }}
+                >
+                  <span>{t.name}</span>
+                  <span className="elementTypeButtonHint">+</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="sectionDivider" />
+
+          <div className="railTitle">Camadas</div>
           <div className="railScroll">
-            {elementTypes.length === 0 ? (
-              <div className="card">
-                <div className="cardBody">Nenhuma extensão registrou elementos ainda.</div>
-              </div>
-            ) : null}
-            {elementTypes.map((t) => (
-              <div className="card" key={t.type}>
-                <div className="cardHeaderRow">
-                  <div className="cardTitle">{t.name}</div>
-                  <button
-                    className="chipButton"
-                    type="button"
-                    onClick={() => {
-                      const id = addElement(t.type);
-                      if (id) setEditingElementId(id);
-                    }}
-                  >
-                    Adicionar
-                  </button>
-                </div>
-                {t.description ? <div className="cardBody">{t.description}</div> : null}
-              </div>
-            ))}
-
-            <div className="sectionDivider" />
-
-            <div className="railTitle">Camadas</div>
             {elements.length === 0 ? (
               <div className="card">
                 <div className="cardBody">Nenhum elemento adicionado ainda.</div>
@@ -101,20 +100,16 @@ export function CompositionEditorScreen({
             ) : null}
             {elements.map((el) => {
               const type = elementTypesById[el.type];
+              const title = el.name || type?.name || el.type;
               return (
-                <div className="card" key={el.id}>
-                  <div className="cardHeaderRow">
-                    <div className="cardTitle">{el.name}</div>
-                    <div className="rowWrap">
-                      <button className="chipButton" type="button" onClick={() => setEditingElementId(el.id)}>
-                        Editar
-                      </button>
-                      <button className="dangerButton" type="button" onClick={() => removeElement(el.id)}>
-                        Excluir
-                      </button>
-                    </div>
-                  </div>
-                  <div className="cardBody">{type ? type.name : el.type}</div>
+                <div className="layerRow" key={el.id}>
+                  <button className="layerMainButton" type="button" onClick={() => setEditingElementId(el.id)}>
+                    <div className="layerMainTitle">{title}</div>
+                    <div className="layerMainMeta">{type ? type.name : el.type}</div>
+                  </button>
+                  <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
+                    Excluir
+                  </button>
                 </div>
               );
             })}

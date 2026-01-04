@@ -32,6 +32,7 @@ type Props = {
   api: HostApi;
   updateElement: (elementId: string, patch: CompositionElementPatch) => void;
   onEditComposition: () => void;
+  onOpenSettings: () => void;
   onActivateComposition: (compositionId: string) => Promise<Composition>;
   onCreateComposition: (name: string) => Promise<Composition>;
   onRenameComposition: (compositionId: string, name: string) => Promise<Composition>;
@@ -58,6 +59,7 @@ export function MainScreen({
   api,
   updateElement,
   onEditComposition,
+  onOpenSettings,
   onActivateComposition,
   onCreateComposition,
   onRenameComposition,
@@ -101,6 +103,14 @@ export function MainScreen({
           onClick={() => setIsViewSettingsOpen(true)}
         >
           <Icon name="sliders" />
+        </button>
+        <button
+          className="iconButton"
+          type="button"
+          aria-label={t("core.ui.settings.aria")}
+          onClick={onOpenSettings}
+        >
+          <Icon name="gear" />
         </button>
         <button className="primaryButton" type="button" onClick={onEditComposition}>
           {t("core.actions.edit")}

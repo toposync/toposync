@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "com.toposync.home_assistant",
+  "name": "Home Assistant",
+  "version": "0.1.0",
+  "frontend": {
+    "kind": "module-federation",
+    "remote_entry": "remoteEntry.js",
+    "scope": "home_assistant",
+    "module": "./activate"
+  }
+}
+

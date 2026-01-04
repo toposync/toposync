@@ -35,10 +35,16 @@ class Composition(BaseModel):
     elements: list[CompositionElement] = Field(default_factory=list)
 
 
+class AppSettings(BaseModel):
+    core: dict[str, Any] = Field(default_factory=dict)
+    extensions: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
 class AppConfig(BaseModel):
     schema_version: int = Field(default=1, ge=1)
     compositions: list[Composition] = Field(default_factory=list)
     active_composition_id: str = "ground"
+    settings: AppSettings = Field(default_factory=AppSettings)
 
 
 def _default_data_dir() -> Path:
@@ -97,6 +103,7 @@ def _normalize_config(config: AppConfig) -> AppConfig:
         schema_version=config.schema_version,
         compositions=config.compositions,
         active_composition_id=active_id,
+        settings=config.settings,
     )
 
 
@@ -187,6 +194,45 @@ class ConfigStore:
                 return c
         return cfg.compositions[0]
 
+    async def get_settings(self) -> AppSettings:
+        cfg = await self.get_config()
+        return cfg.settings
+
+    async def replace_settings(self, settings: AppSettings) -> AppSettings:
+        await self.load()
+        async with self._lock:
+            cfg = self._config or _default_config()
+            cfg2 = AppConfig(
+                schema_version=cfg.schema_version,
+                compositions=cfg.compositions,
+                active_composition_id=cfg.active_composition_id,
+                settings=settings,
+            )
+            cfg2 = _normalize_config(cfg2)
+            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
+            self._config = cfg2
+            return cfg2.settings
+
+    async def patch_extension_settings(self, extension_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+        await self.load()
+        async with self._lock:
+            cfg = self._config or _default_config()
+            current = dict(cfg.settings.extensions.get(extension_id, {}))
+            current.update(patch)
+            extensions = dict(cfg.settings.extensions)
+            extensions[extension_id] = current
+            settings = AppSettings(core=dict(cfg.settings.core), extensions=extensions)
+            cfg2 = AppConfig(
+                schema_version=cfg.schema_version,
+                compositions=cfg.compositions,
+                active_composition_id=cfg.active_composition_id,
+                settings=settings,
+            )
+            cfg2 = _normalize_config(cfg2)
+            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
+            self._config = cfg2
+            return current
+
     async def set_active_composition(self, composition: Composition) -> Composition:
         await self.load()
         async with self._lock:
@@ -205,6 +251,7 @@ class ConfigStore:
                 schema_version=cfg.schema_version,
                 compositions=compositions,
                 active_composition_id=composition.id,
+                settings=cfg.settings,
             )
             cfg2 = _normalize_config(cfg2)
             await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
@@ -227,6 +274,7 @@ class ConfigStore:
                 schema_version=cfg.schema_version,
                 compositions=cfg.compositions,
                 active_composition_id=composition_id,
+                settings=cfg.settings,
             )
             cfg2 = _normalize_config(cfg2)
             await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
@@ -247,6 +295,7 @@ class ConfigStore:
                 schema_version=cfg.schema_version,
                 compositions=[*cfg.compositions, composition],
                 active_composition_id=cid,
+                settings=cfg.settings,
             )
             cfg2 = _normalize_config(cfg2)
             await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
@@ -273,6 +322,7 @@ class ConfigStore:
                 schema_version=cfg.schema_version,
                 compositions=compositions,
                 active_composition_id=cfg.active_composition_id,
+                settings=cfg.settings,
             )
             cfg2 = _normalize_config(cfg2)
             await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
@@ -298,6 +348,7 @@ class ConfigStore:
                 schema_version=cfg.schema_version,
                 compositions=compositions,
                 active_composition_id=active_id,
+                settings=cfg.settings,
             )
             cfg2 = _normalize_config(cfg2)
             await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())

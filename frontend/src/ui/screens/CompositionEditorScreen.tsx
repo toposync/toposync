@@ -28,6 +28,7 @@ type Props = {
   updateElement: (elementId: string, patch: CompositionElementPatch) => void;
   removeElement: (elementId: string) => void;
   onExit: () => void;
+  onOpenSettings: () => void;
   onActivateComposition: (compositionId: string) => Promise<Composition>;
   onCreateComposition: (name: string) => Promise<Composition>;
   onRenameComposition: (compositionId: string, name: string) => Promise<Composition>;
@@ -91,6 +92,7 @@ export function CompositionEditorScreen({
   updateElement,
   removeElement,
   onExit,
+  onOpenSettings,
   onActivateComposition,
   onCreateComposition,
   onRenameComposition,
@@ -265,6 +267,9 @@ export function CompositionEditorScreen({
         </button>
         <button className="chipButton" type="button" onClick={() => setIsCompositionModalOpen(true)}>
           {t("core.ui.composition")}: {compositionName}
+        </button>
+        <button className="iconButton" type="button" aria-label={t("core.ui.settings.aria")} onClick={onOpenSettings}>
+          <Icon name="gear" />
         </button>
         <button className="primaryButton" type="button" onClick={onExit}>
           {t("core.actions.back")}

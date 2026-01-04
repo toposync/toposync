@@ -29,10 +29,35 @@ export type DeleteCompositionResponse = {
   active_composition: Composition;
 };
 
+export type AppSettings = {
+  core: Record<string, unknown>;
+  extensions: Record<string, Record<string, unknown>>;
+};
+
 export async function fetchExtensions(): Promise<any[]> {
   const res = await fetch("/api/extensions");
   if (!res.ok) throw new Error(`Failed to list extensions: ${res.status}`);
   return res.json();
+}
+
+export async function getSettings(): Promise<AppSettings> {
+  const res = await fetch("/api/settings");
+  if (!res.ok) throw new Error(`Failed to fetch settings: ${res.status}`);
+  return res.json();
+}
+
+export async function patchExtensionSettings(
+  extensionId: string,
+  patch: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`/api/settings/extensions/${encodeURIComponent(extensionId)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch ?? {}),
+  });
+  if (!res.ok) throw new Error(`Failed to update settings for ${extensionId}: ${res.status}`);
+  const body = await res.json();
+  return body?.settings ?? {};
 }
 
 export async function emitEvent(eventName: string, payload: unknown, context: Record<string, unknown> = {}): Promise<EmitEventResponse> {

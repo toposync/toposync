@@ -18,6 +18,7 @@ O objetivo dessa base é resolver o “maior nó”: **extensões com backend Py
 - `extensions/hello_lamp`: extensão exemplo (Python + UI prebuilt)
 - `extensions/structural`: extensão “first-party” (paredes/áreas: ferramentas 2D + render 3D)
 - `extensions/models`: extensão “first-party” (importar GLB/GLTF + prévia 2D + render 3D)
+- `extensions/home_assistant`: extensão “first-party” (scaffold: configurar servidores Home Assistant)
 
 ## Rodar (dev)
 
@@ -38,7 +39,7 @@ npm install
 3) Instale a extensão exemplo (editable, para o backend descobrir via entry point):
 
 ```bash
-uv pip install -e extensions/hello_lamp -e extensions/structural -e extensions/models
+uv pip install -e extensions/hello_lamp -e extensions/structural -e extensions/models -e extensions/home_assistant
 ```
 
 4) Build do frontend das extensões (gera `static/remoteEntry.js` dentro do pacote Python):
@@ -47,6 +48,7 @@ uv pip install -e extensions/hello_lamp -e extensions/structural -e extensions/m
 npm --workspace @toposync/extension-hello-lamp-ui run build
 npm --workspace @toposync/extension-structural-ui run build
 npm --workspace @toposync/extension-models-ui run build
+npm --workspace @toposync/extension-home-assistant-ui run build
 ```
 
 5) Backend:
@@ -95,6 +97,7 @@ npm --workspace @toposync/frontend run build
 npm --workspace @toposync/extension-hello-lamp-ui run build
 npm --workspace @toposync/extension-structural-ui run build
 npm --workspace @toposync/extension-models-ui run build
+npm --workspace @toposync/extension-home-assistant-ui run build
 ```
 
 2) Build do wheel da extensão:
@@ -102,6 +105,7 @@ npm --workspace @toposync/extension-models-ui run build
 ```bash
 uv build extensions/hello_lamp
 uv build extensions/models
+uv build extensions/home_assistant
 ```
 
 Isso gera `extensions/hello_lamp/dist/*.whl`. Usuário final instala só o wheel (sem Node) e o app carrega o frontend prebuilt.
@@ -175,6 +179,7 @@ Hoje, o host suporta:
   - agrupamento no painel de camadas (`layerGroup`, ex.: `walls` e `areas`)
 - **Editor tools**: ferramentas selecionáveis na edição de composição (cada uma controla a interação no canvas)
 - **Notification renderers**: como renderizar um tipo de notificação em card
+- **Settings panels**: UI de configurações dentro do modal global (persistidas no backend em `settings.extensions[extension_id]`)
 
 O modelo base de instância em uma composição é `CompositionElement`:
 
@@ -203,6 +208,27 @@ host.registerEditorTool({
   }),
 })
 ```
+
+### Settings panels (rápido)
+
+Extensões podem adicionar UI no modal global de configurações e persistir um blob JSON por extensão:
+
+```ts
+host.registerSettingsPanel({
+  id: "com.exemplo.minha_ext",
+  icon: "gear",
+  name: { key: "ext.minha_ext.settings.name", fallback: "Minha Extensão" },
+  render: ({ i18n, settings, updateSettings }) => (
+    <button
+      onClick={() => updateSettings({ enabled: true })}
+    >
+      {i18n.t("core.actions.save")}
+    </button>
+  ),
+})
+```
+
+O backend salva em `config.json` em `settings.extensions["<id>"]`.
 
 ## i18n (en + pt-BR)
 

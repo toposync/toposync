@@ -7,6 +7,7 @@ import type {
   ElementType,
   Notification,
   NotificationRenderer,
+  SettingsPanel,
   TopoSyncHost,
   Vector3,
   ViewSettings,
@@ -20,13 +21,17 @@ import {
   fetchExtensions,
   getComposition,
   getDevice,
+  getSettings,
   listCompositions,
   emitEvent,
+  patchExtensionSettings,
   putComposition,
   renameComposition,
 } from "../util/api";
+import type { AppSettings } from "../util/api";
 import { i18n, resolveLocalizedString } from "../util/i18n";
 import { loadRemoteActivate } from "../util/moduleFederation";
+import { SettingsModal } from "./SettingsModal";
 import { CompositionEditorScreen } from "./screens/CompositionEditorScreen";
 import { MainScreen } from "./screens/MainScreen";
 
@@ -161,6 +166,7 @@ export function App(): React.ReactElement {
   const [elementTypesById, setElementTypesById] = useState<Record<string, ElementType>>({});
   const [notificationRenderersById, setNotificationRenderersById] = useState<Record<string, NotificationRenderer>>({});
   const [editorToolsById, setEditorToolsById] = useState<Record<string, EditorTool>>({});
+  const [settingsPanelsById, setSettingsPanelsById] = useState<Record<string, SettingsPanel>>({});
   const [notifications] = useState<Notification[]>([]);
   const [composition, setComposition] = useState<Composition>(() => defaultComposition());
   const [compositions, setCompositions] = useState<Array<{ id: string; name: string }>>([]);
@@ -168,6 +174,8 @@ export function App(): React.ReactElement {
   const [compositionLoaded, setCompositionLoaded] = useState(false);
   const [backendAvailable, setBackendAvailable] = useState(false);
   const [wallHeightPreset, setWallHeightPreset] = useState<WallHeightPreset>(() => loadWallHeightPreset());
+  const [settings, setSettings] = useState<AppSettings>({ core: {}, extensions: {} });
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const [compositionRevision, setCompositionRevision] = useState(0);
 
@@ -198,6 +206,9 @@ export function App(): React.ReactElement {
       },
       registerEditorTool(tool) {
         setEditorToolsById((prev) => ({ ...prev, [tool.id]: tool }));
+      },
+      registerSettingsPanel(panel) {
+        setSettingsPanelsById((prev) => ({ ...prev, [panel.id]: panel }));
       },
       api: {
         emitEvent,
@@ -232,6 +243,12 @@ export function App(): React.ReactElement {
           });
           setBackendAvailable(true);
           try {
+            const loaded = await getSettings();
+            if (!cancelled) setSettings(loaded);
+          } catch (err) {
+            console.error("Failed to load settings from backend", err);
+          }
+          try {
             localStorage.removeItem(LEGACY_STORAGE_KEY);
           } catch {
             // ignore
@@ -247,6 +264,12 @@ export function App(): React.ReactElement {
             return next;
           });
           setBackendAvailable(true);
+          try {
+            const loaded = await getSettings();
+            if (!cancelled) setSettings(loaded);
+          } catch (err) {
+            console.error("Failed to load settings from backend", err);
+          }
           if (legacy) {
             try {
               localStorage.removeItem(LEGACY_STORAGE_KEY);
@@ -295,6 +318,26 @@ export function App(): React.ReactElement {
       console.error("Failed to save composition to backend", err);
     }
   }, [backendAvailable, composition, compositionLoaded]);
+
+  const updateExtensionSettings = useCallback(
+    async (extensionId: string, patch: Record<string, unknown>) => {
+      if (!backendAvailable) {
+        setSettings((prev) => {
+          const current = prev.extensions[extensionId] ?? {};
+          return { ...prev, extensions: { ...prev.extensions, [extensionId]: { ...current, ...patch } } };
+        });
+        return;
+      }
+
+      try {
+        const next = await patchExtensionSettings(extensionId, patch);
+        setSettings((prev) => ({ ...prev, extensions: { ...prev.extensions, [extensionId]: next } }));
+      } catch (err) {
+        console.error("Failed to save extension settings", err);
+      }
+    },
+    [backendAvailable],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -428,6 +471,7 @@ export function App(): React.ReactElement {
           api={host.api}
           updateElement={updateElement}
           onEditComposition={() => setScreen("editor")}
+          onOpenSettings={() => setIsSettingsOpen(true)}
           onActivateComposition={activateCompositionById}
           onCreateComposition={createNewComposition}
           onRenameComposition={renameExistingComposition}
@@ -445,12 +489,23 @@ export function App(): React.ReactElement {
           updateElement={updateElement}
           removeElement={removeElement}
           onExit={() => setScreen("main")}
+          onOpenSettings={() => setIsSettingsOpen(true)}
           onActivateComposition={activateCompositionById}
           onCreateComposition={createNewComposition}
           onRenameComposition={renameExistingComposition}
           onDeleteComposition={deleteExistingComposition}
         />
       )}
+
+      <SettingsModal
+        open={isSettingsOpen}
+        backendAvailable={backendAvailable}
+        api={host.api}
+        panels={Object.values(settingsPanelsById)}
+        settings={settings}
+        onPatchExtensionSettings={updateExtensionSettings}
+        onClose={() => setIsSettingsOpen(false)}
+      />
     </div>
   );
 }

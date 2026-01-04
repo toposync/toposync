@@ -63,6 +63,19 @@ export type NotificationRenderer = {
   render: (notification: Notification) => import("react").ReactNode;
 };
 
+export type SettingsPanel = {
+  id: string;
+  name: LocalizedString;
+  description?: LocalizedString;
+  icon?: string;
+  render: (args: {
+    i18n: HostI18n;
+    api: HostApi;
+    settings: Record<string, unknown>;
+    updateSettings: (patch: Record<string, unknown>) => void;
+  }) => import("react").ReactNode;
+};
+
 export type EmitEventResponse = {
   payload: unknown;
   result: any;
@@ -173,6 +186,7 @@ export type TopoSyncHost = {
   registerElementType: (elementType: ElementType) => void;
   registerNotificationRenderer: (renderer: NotificationRenderer) => void;
   registerEditorTool: (tool: EditorTool) => void;
+  registerSettingsPanel: (panel: SettingsPanel) => void;
   api: HostApi;
   i18n: HostI18n;
 };

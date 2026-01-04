@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from toposync.extensions.manager import ExtensionManager
 from toposync.runtime.device_store import DeviceStore
 from toposync.runtime.event_bus import EventBus, EventOutcome
-from toposync.runtime.config_store import AppConfig, Composition, ConfigStore, UserDataPaths
+from toposync.runtime.config_store import AppConfig, AppSettings, Composition, ConfigStore, UserDataPaths
 from toposync.runtime.services import ServiceRegistry
 
 logger = logging.getLogger("toposync")
@@ -65,6 +65,11 @@ class UploadFileResponse(BaseModel):
     filename: str
     content_type: str | None = None
     size_bytes: int
+
+
+class ExtensionSettingsResponse(BaseModel):
+    extension_id: str
+    settings: dict[str, Any] = Field(default_factory=dict)
 
 
 def _guess_media_type(path: str) -> str:
@@ -159,6 +164,26 @@ def create_app() -> FastAPI:
     async def list_extensions(request: Request) -> JSONResponse:
         ext_manager: ExtensionManager = request.app.state.extensions
         return JSONResponse(ext_manager.public_extensions())
+
+    @app.get("/api/settings", response_model=AppSettings)
+    async def get_settings(request: Request) -> AppSettings:
+        config_store: ConfigStore = request.app.state.config_store
+        return await config_store.get_settings()
+
+    @app.put("/api/settings", response_model=AppSettings)
+    async def put_settings(request: Request, settings: AppSettings) -> AppSettings:
+        config_store: ConfigStore = request.app.state.config_store
+        return await config_store.replace_settings(settings)
+
+    @app.patch("/api/settings/extensions/{extension_id}", response_model=ExtensionSettingsResponse)
+    async def patch_extension_settings(
+        request: Request,
+        extension_id: str,
+        patch: dict[str, Any],
+    ) -> ExtensionSettingsResponse:
+        config_store: ConfigStore = request.app.state.config_store
+        settings = await config_store.patch_extension_settings(extension_id, patch)
+        return ExtensionSettingsResponse(extension_id=extension_id, settings=settings)
 
     @app.get("/api/composition", response_model=Composition)
     async def get_composition(request: Request) -> Composition:

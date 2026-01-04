@@ -26,6 +26,15 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+input,
+textarea {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 #root {
@@ -144,6 +153,19 @@ body {
   flex-direction: column;
   gap: 12px;
   min-height: 0;
+  pointer-events: auto;
+}
+
+.railNotifications {
+  pointer-events: none;
+}
+
+.railNotifications .railTitle,
+.railNotifications .railScroll {
+  pointer-events: none;
+}
+
+.railNotifications .card {
   pointer-events: auto;
 }
 

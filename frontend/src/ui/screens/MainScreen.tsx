@@ -142,7 +142,7 @@ export function MainScreen({
       </div>
 
       <div className="overlayLeft">
-        <div className="rail">
+        <div className="rail railNotifications">
           <div className="railTitle">{t("core.ui.notifications")}</div>
           <div className="railScroll">
             {notifications.length === 0 ? (

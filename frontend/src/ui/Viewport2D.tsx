@@ -20,6 +20,7 @@ type Props = {
   onSelectElement?: (elementId: string | null) => void;
   onOpenEditor?: (elementId: string) => void;
   updateElement?: (elementId: string, patch: CompositionElementPatch) => void;
+  removeElement?: (elementId: string) => void;
 };
 
 function toVector2(x: number, y: number): Vector2 {
@@ -59,6 +60,17 @@ function readVertices(v: unknown): PlanePoint[] {
 
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
+}
+
+const SNAP_STEP = 0.1; // meters
+
+function snapScalar(v: number, step: number): number {
+  const inv = 1 / step;
+  return Math.round(v * inv) / inv;
+}
+
+function snapPoint(p: PlanePoint, step: number): PlanePoint {
+  return { x: snapScalar(p.x, step), z: snapScalar(p.z, step) };
 }
 
 function dot(a: PlanePoint, b: PlanePoint): number {
@@ -173,15 +185,16 @@ type Interaction =
       startedByLeft: boolean;
       moved: boolean;
     }
-  | {
-      kind: "drag";
-      pointerId: number;
-      elementId: string;
-      startScreen: Vector2;
-      startWorld: PlanePoint;
-      startElement: CompositionElement;
-      moved: boolean;
-    };
+	  | {
+	      kind: "drag";
+	      pointerId: number;
+	      elementId: string;
+	      startScreen: Vector2;
+	      startWorld: PlanePoint;
+	      startWorldSnapped: PlanePoint;
+	      startElement: CompositionElement;
+	      moved: boolean;
+	    };
 
 export function Viewport2D({
   elements,
@@ -191,6 +204,7 @@ export function Viewport2D({
   onSelectElement,
   onOpenEditor,
   updateElement,
+  removeElement,
 }: Props): React.ReactElement {
   const { locale } = i18n.useI18n();
 
@@ -209,6 +223,7 @@ export function Viewport2D({
   const onSelectRef = useRef<Props["onSelectElement"]>(onSelectElement);
   const onOpenEditorRef = useRef<Props["onOpenEditor"]>(onOpenEditor);
   const updateElementRef = useRef<Props["updateElement"]>(updateElement);
+  const removeElementRef = useRef<Props["removeElement"]>(removeElement);
 
   const cameraRef = useRef<Camera2D>({ cx: 0, cz: 0, scale: 52 });
   const interactionRef = useRef<Interaction>({ kind: "none" });
@@ -250,6 +265,10 @@ export function Viewport2D({
   useEffect(() => {
     updateElementRef.current = updateElement;
   }, [updateElement]);
+
+  useEffect(() => {
+    removeElementRef.current = removeElement;
+  }, [removeElement]);
 
   useEffect(() => {
     numberFmtRef.current = new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -347,27 +366,42 @@ export function Viewport2D({
       const base = Math.pow(10, exp);
       const frac = raw / base;
       const niceFrac = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 5 ? 5 : 10;
-      const gridWorld = niceFrac * base;
+      const majorStep = niceFrac * base;
 
-      const firstX = Math.floor(minX / gridWorld) * gridWorld;
-      const firstZ = Math.floor(minZ / gridWorld) * gridWorld;
+      function drawGrid(stepWorld: number, style: { stroke: string; width: number }) {
+        const inv = 1 / stepWorld;
+        const startX = Math.floor(minX * inv);
+        const endX = Math.ceil(maxX * inv);
+        const startZ = Math.floor(minZ * inv);
+        const endZ = Math.ceil(maxZ * inv);
 
-      ctx2d.strokeStyle = "rgba(255,255,255,0.055)";
-      ctx2d.lineWidth = 1;
-      for (let x = firstX; x <= maxX; x += gridWorld) {
-        const sx = Math.round(worldToScreen(toPlanePoint(x, cz)).x) + 0.5;
-        ctx2d.beginPath();
-        ctx2d.moveTo(sx, 0);
-        ctx2d.lineTo(sx, h);
-        ctx2d.stroke();
+        ctx2d.strokeStyle = style.stroke;
+        ctx2d.lineWidth = style.width;
+
+        for (let ix = startX; ix <= endX; ix++) {
+          const x = ix / inv;
+          const sx = Math.round(worldToScreen(toPlanePoint(x, cz)).x) + 0.5;
+          ctx2d.beginPath();
+          ctx2d.moveTo(sx, 0);
+          ctx2d.lineTo(sx, h);
+          ctx2d.stroke();
+        }
+
+        for (let iz = startZ; iz <= endZ; iz++) {
+          const z = iz / inv;
+          const sy = Math.round(worldToScreen(toPlanePoint(cx, z)).y) + 0.5;
+          ctx2d.beginPath();
+          ctx2d.moveTo(0, sy);
+          ctx2d.lineTo(w, sy);
+          ctx2d.stroke();
+        }
       }
-      for (let z = firstZ; z <= maxZ; z += gridWorld) {
-        const sy = Math.round(worldToScreen(toPlanePoint(cx, z)).y) + 0.5;
-        ctx2d.beginPath();
-        ctx2d.moveTo(0, sy);
-        ctx2d.lineTo(w, sy);
-        ctx2d.stroke();
+
+      const minorPx = SNAP_STEP * scale;
+      if (minorPx >= 8) {
+        drawGrid(SNAP_STEP, { stroke: "rgba(255,255,255,0.028)", width: 1 });
       }
+      drawGrid(majorStep, { stroke: "rgba(255,255,255,0.055)", width: 1 });
 
       ctx2d.strokeStyle = "rgba(251,191,36,0.20)";
       ctx2d.lineWidth = 1.25;
@@ -577,7 +611,8 @@ export function Viewport2D({
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       const screen = toVector2(x, y);
-      const world = screenToWorld(screen);
+      const worldRaw = screenToWorld(screen);
+      const world = e.altKey ? worldRaw : snapPoint(worldRaw, SNAP_STEP);
 
       session.onPointerEvent({
         kind,
@@ -720,6 +755,7 @@ export function Viewport2D({
             elementId: hitId,
             startScreen: screen,
             startWorld: world,
+            startWorldSnapped: snapPoint(world, SNAP_STEP),
             startElement,
             moved: false,
           };
@@ -777,8 +813,10 @@ export function Viewport2D({
         if (!interaction.moved && dx * dx + dy * dy >= 9) interaction.moved = true;
         if (!interaction.moved) return;
 
-        const world = screenToWorld(screen);
-        const delta = sub(world, interaction.startWorld);
+        const worldRaw = screenToWorld(screen);
+        const world = e.altKey ? worldRaw : snapPoint(worldRaw, SNAP_STEP);
+        const startWorld = e.altKey ? interaction.startWorld : interaction.startWorldSnapped;
+        const delta = sub(world, startWorld);
         const patch = translateElement(interaction.startElement, delta);
         pendingDragPatch = { id: interaction.elementId, patch };
         if (!dragRaf) {
@@ -920,6 +958,34 @@ export function Viewport2D({
         e.preventDefault();
         spacePressedRef.current = true;
         requestDraw();
+      }
+
+      const selectedId = selectedRef.current;
+      if (selectedId) {
+        if ((e.key === "Delete" || e.key === "Backspace") && removeElementRef.current) {
+          e.preventDefault();
+          removeElementRef.current(selectedId);
+          selectedRef.current = null;
+          onSelectRef.current?.(null);
+          requestDraw();
+          return;
+        }
+
+        const step = (e.shiftKey ? 10 : 1) * SNAP_STEP;
+        let delta: PlanePoint | null = null;
+        if (e.key === "ArrowLeft") delta = toPlanePoint(-step, 0);
+        if (e.key === "ArrowRight") delta = toPlanePoint(step, 0);
+        if (e.key === "ArrowUp") delta = toPlanePoint(0, -step);
+        if (e.key === "ArrowDown") delta = toPlanePoint(0, step);
+        if (delta && updateElementRef.current) {
+          e.preventDefault();
+          const el = elementsRef.current.find((it) => it.id === selectedId) ?? null;
+          if (!el) return;
+          const patch = translateElement(el, delta);
+          updateElementRef.current(selectedId, patch);
+          requestDraw();
+          return;
+        }
       }
 
       const handler = toolSessionRef.current?.onKeyDown;

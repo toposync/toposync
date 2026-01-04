@@ -256,6 +256,7 @@ export function CompositionEditorScreen({
           setEditingElementId(id);
         }}
         updateElement={updateElement}
+        removeElement={removeElement}
       />
 
       <div className="overlayTopRight">

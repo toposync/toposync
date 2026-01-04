@@ -947,6 +947,7 @@ export function Viewport2D({
     canvasEl.addEventListener("dblclick", handleDoubleClick);
     canvasEl.addEventListener("wheel", handleWheel, { passive: false });
     canvasEl.addEventListener("contextmenu", handleContextMenu);
+    canvasEl.addEventListener("toposync:invalidate", requestDraw as unknown as EventListener);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
 
@@ -958,6 +959,7 @@ export function Viewport2D({
       canvasEl.removeEventListener("dblclick", handleDoubleClick);
       canvasEl.removeEventListener("wheel", handleWheel);
       canvasEl.removeEventListener("contextmenu", handleContextMenu);
+      canvasEl.removeEventListener("toposync:invalidate", requestDraw as unknown as EventListener);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
       ro.disconnect();

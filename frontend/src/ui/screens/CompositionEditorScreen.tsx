@@ -142,6 +142,7 @@ export function CompositionEditorScreen({
 
     const placementTools: EditorTool[] = elementTypes
       .filter((elType) => elType.layerGroup !== "walls" && elType.layerGroup !== "areas")
+      .filter((elType) => elType.placeable !== false)
       .map((elType) => ({
         id: `core.place:${elType.type}`,
         name: elType.name,

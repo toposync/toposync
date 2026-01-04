@@ -17,6 +17,7 @@ O objetivo dessa base é resolver o “maior nó”: **extensões com backend Py
 - `frontend`: app host (React/Three + webpack)
 - `extensions/hello_lamp`: extensão exemplo (Python + UI prebuilt)
 - `extensions/structural`: extensão “first-party” (paredes/áreas: ferramentas 2D + render 3D)
+- `extensions/models`: extensão “first-party” (importar GLB/GLTF + prévia 2D + render 3D)
 
 ## Rodar (dev)
 
@@ -37,7 +38,7 @@ npm install
 3) Instale a extensão exemplo (editable, para o backend descobrir via entry point):
 
 ```bash
-uv pip install -e extensions/hello_lamp -e extensions/structural
+uv pip install -e extensions/hello_lamp -e extensions/structural -e extensions/models
 ```
 
 4) Build do frontend das extensões (gera `static/remoteEntry.js` dentro do pacote Python):
@@ -45,6 +46,7 @@ uv pip install -e extensions/hello_lamp -e extensions/structural
 ```bash
 npm --workspace @toposync/extension-hello-lamp-ui run build
 npm --workspace @toposync/extension-structural-ui run build
+npm --workspace @toposync/extension-models-ui run build
 ```
 
 5) Backend:
@@ -92,12 +94,14 @@ npm --workspace @toposync/frontend run build
 ```bash
 npm --workspace @toposync/extension-hello-lamp-ui run build
 npm --workspace @toposync/extension-structural-ui run build
+npm --workspace @toposync/extension-models-ui run build
 ```
 
 2) Build do wheel da extensão:
 
 ```bash
 uv build extensions/hello_lamp
+uv build extensions/models
 ```
 
 Isso gera `extensions/hello_lamp/dist/*.whl`. Usuário final instala só o wheel (sem Node) e o app carrega o frontend prebuilt.
@@ -182,7 +186,7 @@ O modelo base de instância em uma composição é `CompositionElement`:
 
 - O editor 2D envia eventos de ponteiro em coordenadas do “mundo” (plano X/Z).
 - A ferramenta cria uma sessão (`createSession`) e recebe callbacks (`createElement`, `openEditor`, etc).
-- Exemplos reais: `extensions/structural` (paredes/áreas).
+- Exemplos reais: `extensions/structural` (paredes/áreas) e `extensions/models` (importar GLB/GLTF).
 
 Exemplo mínimo de ferramenta “clique para adicionar”:
 
@@ -258,6 +262,14 @@ Dica: o core já fornece chaves comuns em `core.actions.*` (ex.: `close`, `delet
 Se bater dúvida sobre *qual* diretório está em uso, chame `GET /api/system/paths`.
 
 O frontend lê/salva a composição via `GET/PUT /api/composition`. Versões antigas usavam `localStorage` (`toposync.composition.v1`) e o app tenta migrar automaticamente quando o backend está vazio.
+
+## Modelos 3D (GLB/GLTF)
+
+A extensão `extensions/models` adiciona uma ferramenta no editor 2D para importar modelos:
+
+- Faz upload para o backend via `POST /api/files/upload` (salva em `<data_dir>/files/<dir>/...`)
+- Gera uma prévia PNG top‑down no browser (WebGL) e também salva em `/files`
+- Cria um elemento `com.toposync.models.gltf` com metadados de escala (para 2D ↔ 3D baterem)
 
 ## Guia rápido: criando uma extensão nova
 

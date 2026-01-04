@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import os
+import re
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from toposync.extensions.manager import ExtensionManager
@@ -55,9 +58,42 @@ class DeleteCompositionResponse(BaseModel):
     active_composition: Composition
 
 
+class UploadFileResponse(BaseModel):
+    dir: str
+    path: str
+    url: str
+    filename: str
+    content_type: str | None = None
+    size_bytes: int
+
+
 def _guess_media_type(path: str) -> str:
+    lower = path.lower()
+    if lower.endswith(".glb"):
+        return "model/gltf-binary"
+    if lower.endswith(".gltf"):
+        return "model/gltf+json"
     media_type, _ = mimetypes.guess_type(path)
     return media_type or "application/octet-stream"
+
+
+_SAFE_DIR_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
+
+
+def _safe_dir_id(value: str | None) -> str:
+    if not value:
+        return uuid.uuid4().hex[:12]
+    if not _SAFE_DIR_RE.match(value):
+        raise HTTPException(status_code=400, detail="Invalid dir")
+    return value
+
+
+def _safe_filename(value: str | None, *, fallback: str) -> str:
+    name = (value or "").strip()
+    name = os.path.basename(name).replace("\x00", "")
+    if name in {"", ".", ".."}:
+        return fallback
+    return name[:255]
 
 
 @asynccontextmanager
@@ -203,7 +239,63 @@ def create_app() -> FastAPI:
         if blob is None:
             raise HTTPException(status_code=404, detail="Asset not found")
 
-        return Response(content=blob, media_type=_guess_media_type(path))
+        return Response(
+            content=blob,
+            media_type=_guess_media_type(path),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/files/upload", response_model=UploadFileResponse)
+    async def upload_file(
+        request: Request,
+        file: UploadFile = File(...),
+        dir: str | None = Form(default=None),
+        filename: str | None = Form(default=None),
+    ) -> UploadFileResponse:
+        config_store: ConfigStore = request.app.state.config_store
+        dir_id = _safe_dir_id(dir)
+        target_dir = config_store.paths.files_dir / dir_id
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        safe_name = _safe_filename(filename or file.filename, fallback="upload.bin")
+        target_path = target_dir / safe_name
+
+        size = 0
+        with target_path.open("wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                f.write(chunk)
+        await file.close()
+
+        rel_path = f"{dir_id}/{safe_name}"
+        return UploadFileResponse(
+            dir=dir_id,
+            path=rel_path,
+            url=f"/files/{rel_path}",
+            filename=safe_name,
+            content_type=file.content_type,
+            size_bytes=size,
+        )
+
+    @app.get("/files/{path:path}")
+    async def get_user_file(request: Request, path: str) -> Response:
+        config_store: ConfigStore = request.app.state.config_store
+        base_dir = config_store.paths.files_dir.resolve()
+        candidate = (base_dir / path).resolve()
+
+        if not candidate.is_relative_to(base_dir):
+            raise HTTPException(status_code=404, detail="File not found")
+        if not candidate.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+
+        return FileResponse(
+            path=candidate,
+            media_type=_guess_media_type(candidate.name),
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.post("/api/events/{event_name}", response_model=EmitEventResponse)
     async def emit_event(request: Request, event_name: str, body: EmitEventRequest) -> EmitEventResponse:

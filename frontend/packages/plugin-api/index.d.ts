@@ -94,6 +94,7 @@ export type ElementType = {
   name: LocalizedString;
   description?: LocalizedString;
   layerGroup?: string;
+  placeable?: boolean;
   defaultProps?: Record<string, unknown>;
   create3D?: (ctx: Scene3DContext, element: CompositionElement) => Element3DInstance;
   render2D?: (args: {

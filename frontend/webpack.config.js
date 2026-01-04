@@ -51,7 +51,7 @@ module.exports = {
     historyApiFallback: true,
     proxy: [
       {
-        context: ["/api", "/extensions"],
+        context: ["/api", "/extensions", "/files"],
         target: "http://127.0.0.1:8000",
         changeOrigin: true
       }

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 import type { CompositionElement, Element3DInstance, ElementType } from "@toposync/plugin-api";
 
@@ -76,6 +77,18 @@ export function Viewport3D({ elements, elementTypesById, onElementActivated }: P
     grid.position.y = -0.75;
     scene.add(grid);
 
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.rotateSpeed = 0.7;
+    controls.zoomSpeed = 0.9;
+    controls.panSpeed = 0.8;
+    controls.target.set(0, 0.2, 0);
+    controls.minDistance = 1.2;
+    controls.maxDistance = 40;
+    controls.maxPolarAngle = Math.PI / 2 - 0.02;
+    controls.update();
+
     rendererRef.current = renderer;
     cameraRef.current = camera;
     sceneRef.current = scene;
@@ -93,19 +106,36 @@ export function Viewport3D({ elements, elementTypesById, onElementActivated }: P
     ro.observe(containerEl);
 
     let raf = 0;
-    const clock = new THREE.Clock();
 
     function animate() {
       raf = requestAnimationFrame(animate);
-      const t = clock.getElapsedTime();
-      grid.rotation.y = t * 0.02;
+      controls.update();
       renderer.render(scene, camera);
     }
 
     animate();
 
+    let downAt: { x: number; y: number } | null = null;
+    let dragged = false;
+    const DRAG_THRESHOLD_PX = 6;
+
     function handlePointerDown(e: PointerEvent) {
+      downAt = { x: e.clientX, y: e.clientY };
+      dragged = false;
+    }
+
+    function handlePointerMove(e: PointerEvent) {
+      if (!downAt) return;
+      const dx = e.clientX - downAt.x;
+      const dy = e.clientY - downAt.y;
+      if (dx * dx + dy * dy >= DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) dragged = true;
+    }
+
+    function handlePointerUp(e: PointerEvent) {
       if (!onElementActivated) return;
+      if (!downAt) return;
+      downAt = null;
+      if (dragged) return;
       const rect = renderer.domElement.getBoundingClientRect();
       mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
@@ -121,12 +151,26 @@ export function Viewport3D({ elements, elementTypesById, onElementActivated }: P
       }
     }
 
+    function handleContextMenu(e: MouseEvent) {
+      e.preventDefault();
+    }
+
     renderer.domElement.addEventListener("pointerdown", handlePointerDown);
+    renderer.domElement.addEventListener("pointermove", handlePointerMove);
+    renderer.domElement.addEventListener("pointerup", handlePointerUp);
+    renderer.domElement.addEventListener("pointercancel", handlePointerUp);
+    renderer.domElement.addEventListener("contextmenu", handleContextMenu);
 
     return () => {
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
+      renderer.domElement.removeEventListener("pointermove", handlePointerMove);
+      renderer.domElement.removeEventListener("pointerup", handlePointerUp);
+      renderer.domElement.removeEventListener("pointercancel", handlePointerUp);
+      renderer.domElement.removeEventListener("contextmenu", handleContextMenu);
       ro.disconnect();
       cancelAnimationFrame(raf);
+
+      controls.dispose();
 
       for (const tracked of trackedRef.current.values()) tracked.instance.dispose?.();
       trackedRef.current.clear();

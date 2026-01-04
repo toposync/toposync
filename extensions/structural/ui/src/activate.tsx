@@ -1,4 +1,5 @@
 import React, { useMemo } from "react";
+import type * as ThreeTypes from "three";
 
 import type {
   CompositionElement,
@@ -18,6 +19,9 @@ const AREA_TYPE = "com.toposync.structural.area";
 const DEFAULT_WALL_COLOR = "#94a3b8";
 const DEFAULT_AREA_COLOR = "#6366f1";
 const DEFAULT_AREA_OPACITY = 0.22;
+
+const GROUND_Y = 0;
+const FLOOR_EPSILON = 0.01;
 
 export function activate(host: TopoSyncHost): void {
   host.i18n.registerTranslations(translations);
@@ -130,6 +134,60 @@ function wallElementType(i18n: HostI18n): ElementType {
       a: { x: 0, z: 0 },
       b: { x: 1, z: 0 },
     },
+    create3D: ({ THREE, view }, element) => {
+      const group = new THREE.Group();
+      const geom = new THREE.BoxGeometry(1, 1, 1);
+      const mat = new THREE.MeshStandardMaterial({
+        color: DEFAULT_WALL_COLOR,
+        roughness: 0.82,
+        metalness: 0.05,
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+
+      const dir = new THREE.Vector3();
+      const unitX = new THREE.Vector3(1, 0, 0);
+
+      function apply(el: CompositionElement) {
+        const a = asPoint(el.props.a, { x: el.position.x - 0.5, z: el.position.z });
+        const b = asPoint(el.props.b, { x: el.position.x + 0.5, z: el.position.z });
+
+        const center = { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 };
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        const length = Math.max(0.001, Math.hypot(dx, dz));
+
+        const thicknessWorld = Math.max(0.04, readNumber(el.props.width, 0.12));
+        const height = Math.max(0.15, view.wallHeight);
+
+        const color = readString(el.props.color, DEFAULT_WALL_COLOR);
+
+        mesh.position.set(center.x - el.position.x, GROUND_Y + height / 2, center.z - el.position.z);
+        mesh.scale.set(length, height, thicknessWorld);
+
+        dir.set(dx, 0, dz);
+        if (dir.lengthSq() > 1e-6) {
+          dir.normalize();
+          (mesh.quaternion as ThreeTypes.Quaternion).setFromUnitVectors(unitX, dir);
+        } else {
+          mesh.quaternion.identity();
+        }
+
+        mat.color.set(color);
+      }
+
+      apply(element);
+      return {
+        object: group,
+        update: apply,
+        dispose: () => {
+          geom.dispose();
+          mat.dispose();
+        },
+      };
+    },
     render2D: ({ ctx, element, viewport }) => {
       const a = asPoint(element.props.a, { x: element.position.x, z: element.position.z });
       const b = asPoint(element.props.b, { x: element.position.x + 1, z: element.position.z });
@@ -179,6 +237,87 @@ function areaElementType(i18n: HostI18n): ElementType {
         { x: 1, z: 1 },
         { x: -1, z: 1 },
       ],
+    },
+    create3D: ({ THREE }, element) => {
+      const group = new THREE.Group();
+
+      const mat = new THREE.MeshStandardMaterial({
+        color: DEFAULT_AREA_COLOR,
+        roughness: 0.95,
+        metalness: 0.0,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: DEFAULT_AREA_OPACITY,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
+      });
+
+      let mesh: ThreeTypes.Mesh | null = null;
+      let lastKey = "";
+
+      function buildGeometry(el: CompositionElement): ThreeTypes.BufferGeometry | null {
+        const vertices = asVertices(el.props.vertices);
+        if (vertices.length < 3) return null;
+
+        const local = vertices.map((p) => ({ x: p.x - el.position.x, z: p.z - el.position.z }));
+        const shape = new THREE.Shape();
+        shape.moveTo(local[0].x, local[0].z);
+        for (let i = 1; i < local.length; i++) shape.lineTo(local[i].x, local[i].z);
+        shape.closePath();
+
+        const geom = new THREE.ShapeGeometry(shape);
+        geom.rotateX(-Math.PI / 2);
+        return geom;
+      }
+
+      function apply(el: CompositionElement) {
+        const vertices = asVertices(el.props.vertices);
+        const localKey = JSON.stringify(
+          vertices.map((p) => ({
+            x: Math.round((p.x - el.position.x) * 1000) / 1000,
+            z: Math.round((p.z - el.position.z) * 1000) / 1000,
+          })),
+        );
+
+        if (localKey !== lastKey) {
+          lastKey = localKey;
+          const geom = buildGeometry(el);
+          if (geom) {
+            if (!mesh) {
+              mesh = new THREE.Mesh(geom, mat);
+              mesh.receiveShadow = true;
+              group.add(mesh);
+            } else {
+              (mesh.geometry as ThreeTypes.BufferGeometry).dispose();
+              mesh.geometry = geom;
+            }
+          } else if (mesh) {
+            group.remove(mesh);
+            (mesh.geometry as ThreeTypes.BufferGeometry).dispose();
+            mesh = null;
+          }
+        }
+
+        const fill = readString(el.props.fill, DEFAULT_AREA_COLOR);
+        const opacity = Math.max(0, Math.min(1, readNumber(el.props.opacity, DEFAULT_AREA_OPACITY)));
+        mat.color.set(fill);
+        mat.opacity = opacity;
+        mat.transparent = opacity < 0.999;
+        mat.depthWrite = opacity >= 0.999;
+
+        if (mesh) mesh.position.y = GROUND_Y + FLOOR_EPSILON;
+      }
+
+      apply(element);
+      return {
+        object: group,
+        update: apply,
+        dispose: () => {
+          if (mesh) (mesh.geometry as ThreeTypes.BufferGeometry).dispose();
+          mat.dispose();
+        },
+      };
     },
     render2D: ({ ctx, element, viewport }) => {
       const vertices = asVertices(element.props.vertices);
@@ -629,4 +768,3 @@ function areaPolygonTool(i18n: HostI18n, opts: { withWalls: boolean }): EditorTo
     },
   };
 }
-

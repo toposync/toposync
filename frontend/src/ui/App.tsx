@@ -9,6 +9,8 @@ import type {
   NotificationRenderer,
   TopoSyncHost,
   Vector3,
+  ViewSettings,
+  WallHeightPreset,
 } from "@toposync/plugin-api";
 
 import {
@@ -50,6 +52,38 @@ type Composition = {
 
 const LEGACY_STORAGE_KEY = "toposync.composition.v1";
 const SAVE_DEBOUNCE_MS = 400;
+const VIEW_SETTINGS_STORAGE_KEY = "toposync.view.v1";
+
+function isWallHeightPreset(value: unknown): value is WallHeightPreset {
+  return value === "low" || value === "medium" || value === "high";
+}
+
+function wallHeightForPreset(preset: WallHeightPreset): number {
+  if (preset === "low") return 0.6;
+  if (preset === "medium") return 1.4;
+  return 2.7;
+}
+
+function loadWallHeightPreset(): WallHeightPreset {
+  try {
+    const raw = localStorage.getItem(VIEW_SETTINGS_STORAGE_KEY);
+    if (!raw) return "high";
+    const obj = JSON.parse(raw);
+    const rec = asRecord(obj);
+    const preset = rec.wall_height_preset;
+    return isWallHeightPreset(preset) ? preset : "high";
+  } catch {
+    return "high";
+  }
+}
+
+function saveWallHeightPreset(preset: WallHeightPreset): void {
+  try {
+    localStorage.setItem(VIEW_SETTINGS_STORAGE_KEY, JSON.stringify({ wall_height_preset: preset }));
+  } catch {
+    // ignore
+  }
+}
 
 function asNumber(v: unknown, fallback: number): number {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
@@ -133,6 +167,7 @@ export function App(): React.ReactElement {
   const [activeCompositionId, setActiveCompositionId] = useState<string>("ground");
   const [compositionLoaded, setCompositionLoaded] = useState(false);
   const [backendAvailable, setBackendAvailable] = useState(false);
+  const [wallHeightPreset, setWallHeightPreset] = useState<WallHeightPreset>(() => loadWallHeightPreset());
 
   const [compositionRevision, setCompositionRevision] = useState(0);
 
@@ -140,6 +175,18 @@ export function App(): React.ReactElement {
     () => Object.values(notificationRenderersById),
     [notificationRenderersById],
   );
+
+  const viewSettings: ViewSettings = useMemo(
+    () => ({
+      wallHeightPreset,
+      wallHeight: wallHeightForPreset(wallHeightPreset),
+    }),
+    [wallHeightPreset],
+  );
+
+  useEffect(() => {
+    saveWallHeightPreset(wallHeightPreset);
+  }, [wallHeightPreset]);
 
   const host: TopoSyncHost = useMemo(
     () => ({
@@ -374,6 +421,8 @@ export function App(): React.ReactElement {
           activeCompositionId={activeCompositionId}
           elements={composition.elements}
           elementTypesById={elementTypesById}
+          viewSettings={viewSettings}
+          onSetWallHeightPreset={setWallHeightPreset}
           notificationRenderers={notificationRenderers}
           notifications={notifications}
           api={host.api}

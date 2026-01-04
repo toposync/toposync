@@ -2,12 +2,13 @@ import React, { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
-import type { CompositionElement, Element3DInstance, ElementType } from "@toposync/plugin-api";
+import type { CompositionElement, Element3DInstance, ElementType, ViewSettings } from "@toposync/plugin-api";
 
 type Props = {
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
   onElementActivated?: (elementId: string) => void;
+  viewSettings: ViewSettings;
 };
 
 type Tracked = {
@@ -42,15 +43,30 @@ function elementsEqual(a: CompositionElement, b: CompositionElement): boolean {
   );
 }
 
-export function Viewport3D({ elements, elementTypesById, onElementActivated }: Props): React.ReactElement {
+export function Viewport3D({
+  elements,
+  elementTypesById,
+  onElementActivated,
+  viewSettings,
+}: Props): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const trackedRef = useRef<Map<string, Tracked>>(new Map());
+  const viewRef = useRef<ViewSettings>({
+    wallHeightPreset: "high",
+    wallHeight: 2.7,
+  });
+  const viewKeyRef = useRef<string>("");
 
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
   const mouse = useMemo(() => new THREE.Vector2(), []);
+
+  useEffect(() => {
+    viewRef.current.wallHeightPreset = viewSettings.wallHeightPreset;
+    viewRef.current.wallHeight = viewSettings.wallHeight;
+  }, [viewSettings.wallHeight, viewSettings.wallHeightPreset]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -74,7 +90,7 @@ export function Viewport3D({ elements, elementTypesById, onElementActivated }: P
     scene.add(dirLight);
 
     const grid = new THREE.GridHelper(12, 24, 0x23304d, 0x162040);
-    grid.position.y = -0.75;
+    grid.position.y = 0;
     scene.add(grid);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -189,6 +205,10 @@ export function Viewport3D({ elements, elementTypesById, onElementActivated }: P
     const camera = cameraRef.current;
     if (!scene || !renderer || !camera) return;
 
+    const viewKey = `${viewSettings.wallHeightPreset}:${viewSettings.wallHeight}`;
+    const viewChanged = viewKeyRef.current !== viewKey;
+    viewKeyRef.current = viewKey;
+
     const tracked = trackedRef.current;
     const elementsById = new Map(elements.map((e) => [e.id, e]));
 
@@ -214,7 +234,7 @@ export function Viewport3D({ elements, elementTypesById, onElementActivated }: P
           tracked.delete(element.id);
         }
 
-        const instance = def.create3D({ THREE, scene, camera, renderer }, element);
+        const instance = def.create3D({ THREE, scene, camera, renderer, view: viewRef.current }, element);
         (instance.object.userData as any)[ELEMENT_ID] = element.id;
         scene.add(instance.object);
         tracked.set(element.id, { type: element.type, instance, last: element });
@@ -226,12 +246,12 @@ export function Viewport3D({ elements, elementTypesById, onElementActivated }: P
       entry.instance.object.position.set(element.position.x, element.position.y, element.position.z);
       entry.instance.object.rotation.set(element.rotation.x, element.rotation.y, element.rotation.z);
 
-      if (!elementsEqual(entry.last, element)) {
+      if (viewChanged || !elementsEqual(entry.last, element)) {
         entry.instance.update?.(element);
         entry.last = element;
       }
     }
-  }, [elements, elementTypesById]);
+  }, [elements, elementTypesById, viewSettings.wallHeight, viewSettings.wallHeightPreset]);
 
   return <div className="viewportRoot" ref={containerRef} />;
 }

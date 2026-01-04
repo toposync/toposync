@@ -7,6 +7,8 @@ import type {
   HostApi,
   Notification,
   NotificationRenderer,
+  ViewSettings,
+  WallHeightPreset,
 } from "@toposync/plugin-api";
 
 import type { Composition, CompositionSummary } from "../../util/api";
@@ -14,6 +16,7 @@ import { i18n } from "../../util/i18n";
 
 import { Modal } from "../Modal";
 import { CompositionSelectorModal } from "../CompositionSelectorModal";
+import { Icon } from "../Icon";
 import { Viewport3D } from "../Viewport3D";
 
 type Props = {
@@ -22,6 +25,8 @@ type Props = {
   activeCompositionId: string;
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
+  viewSettings: ViewSettings;
+  onSetWallHeightPreset: (preset: WallHeightPreset) => void;
   notificationRenderers: NotificationRenderer[];
   notifications: Notification[];
   api: HostApi;
@@ -46,6 +51,8 @@ export function MainScreen({
   activeCompositionId,
   elements,
   elementTypesById,
+  viewSettings,
+  onSetWallHeightPreset,
   notificationRenderers,
   notifications,
   api,
@@ -59,6 +66,7 @@ export function MainScreen({
   const { t } = i18n.useI18n();
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
+  const [isViewSettingsOpen, setIsViewSettingsOpen] = useState(false);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
 
   const activeElement = useMemo(
@@ -72,7 +80,12 @@ export function MainScreen({
 
   return (
     <div className="screenRoot">
-      <Viewport3D elements={elements} elementTypesById={elementTypesById} onElementActivated={setActiveElementId} />
+      <Viewport3D
+        elements={elements}
+        elementTypesById={elementTypesById}
+        onElementActivated={setActiveElementId}
+        viewSettings={viewSettings}
+      />
 
       <div className="overlayTopRight">
         <button className="chipButton" type="button" onClick={() => setIsRenderModalOpen(true)}>
@@ -80,6 +93,14 @@ export function MainScreen({
         </button>
         <button className="chipButton" type="button" onClick={() => setIsCompositionModalOpen(true)}>
           {t("core.ui.composition")}: {compositionName}
+        </button>
+        <button
+          className="iconButton"
+          type="button"
+          aria-label={t("core.ui.view_settings.aria")}
+          onClick={() => setIsViewSettingsOpen(true)}
+        >
+          <Icon name="sliders" />
         </button>
         <button className="primaryButton" type="button" onClick={onEditComposition}>
           {t("core.actions.edit")}
@@ -139,6 +160,46 @@ export function MainScreen({
             <div className="choiceTitle">{t("core.ui.render_modal.option_3d.title")}</div>
             <div className="choiceDesc">{t("core.ui.render_modal.option_3d.desc")}</div>
           </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={isViewSettingsOpen}
+        title={t("core.ui.view_settings.title")}
+        onClose={() => setIsViewSettingsOpen(false)}
+      >
+        <div className="modalSectionTitle">{t("core.ui.view_settings.wall_height")}</div>
+        <div className="choiceList">
+          {(
+            [
+              { id: "low", title: t("core.ui.wall_height.low"), desc: t("core.ui.wall_height.low_desc") },
+              { id: "medium", title: t("core.ui.wall_height.medium"), desc: t("core.ui.wall_height.medium_desc") },
+              { id: "high", title: t("core.ui.wall_height.high"), desc: t("core.ui.wall_height.high_desc") },
+            ] as const
+          ).map((opt) => {
+            const selected = viewSettings.wallHeightPreset === opt.id;
+            return (
+              <div
+                key={opt.id}
+                className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  onSetWallHeightPreset(opt.id);
+                  setIsViewSettingsOpen(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    onSetWallHeightPreset(opt.id);
+                    setIsViewSettingsOpen(false);
+                  }
+                }}
+              >
+                <div className="choiceTitle">{opt.title}</div>
+                <div className="choiceDesc">{opt.desc}</div>
+              </div>
+            );
+          })}
         </div>
       </Modal>
 

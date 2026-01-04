@@ -2,6 +2,13 @@ export type Vector3 = { x: number; y: number; z: number };
 export type Vector2 = { x: number; y: number };
 export type PlanePoint = { x: number; z: number };
 
+export type WallHeightPreset = "low" | "medium" | "high";
+
+export type ViewSettings = {
+  wallHeightPreset: WallHeightPreset;
+  wallHeight: number;
+};
+
 export type Locale = "en" | "pt-BR";
 
 export type LocalizedString =
@@ -73,6 +80,7 @@ export type Scene3DContext = {
   scene: import("three").Scene;
   camera: import("three").Camera;
   renderer: import("three").WebGLRenderer;
+  view: ViewSettings;
 };
 
 export type Element3DInstance = {

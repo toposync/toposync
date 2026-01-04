@@ -428,6 +428,11 @@ body {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.03));
 }
 
+.choiceItem.isSelected {
+  border-color: rgba(251, 191, 36, 0.55);
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.18), rgba(255, 255, 255, 0.03));
+}
+
 .choiceTitle {
   font-weight: 700;
 }

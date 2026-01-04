@@ -42,6 +42,16 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.add": "Add",
     "core.ui.tools": "Tools",
     "core.ui.action": "Action",
+    "core.ui.view_settings.title": "View",
+    "core.ui.view_settings.aria": "View settings",
+    "core.ui.view_settings.wall_height": "Wall height",
+
+    "core.ui.wall_height.low": "Low",
+    "core.ui.wall_height.low_desc": "Low walls for quick overview.",
+    "core.ui.wall_height.medium": "Medium",
+    "core.ui.wall_height.medium_desc": "Medium height for planning.",
+    "core.ui.wall_height.high": "High",
+    "core.ui.wall_height.high_desc": "Full height (typical wall).",
 
     "core.ui.layers_group_walls": "Walls",
     "core.ui.layers_group_areas": "Areas",
@@ -107,6 +117,16 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.add": "Adicionar",
     "core.ui.tools": "Ferramentas",
     "core.ui.action": "Ação",
+    "core.ui.view_settings.title": "Visualização",
+    "core.ui.view_settings.aria": "Configurações de visualização",
+    "core.ui.view_settings.wall_height": "Altura da parede",
+
+    "core.ui.wall_height.low": "Baixa",
+    "core.ui.wall_height.low_desc": "Baixa para facilitar a visualização.",
+    "core.ui.wall_height.medium": "Média",
+    "core.ui.wall_height.medium_desc": "Média para planejar.",
+    "core.ui.wall_height.high": "Alta",
+    "core.ui.wall_height.high_desc": "Alta (altura normal de parede).",
 
     "core.ui.layers_group_walls": "Paredes",
     "core.ui.layers_group_areas": "Áreas",

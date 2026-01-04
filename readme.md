@@ -16,7 +16,7 @@ O objetivo dessa base é resolver o “maior nó”: **extensões com backend Py
 - `src/toposync`: backend core (FastAPI) + runtime de extensões
 - `frontend`: app host (React/Three + webpack)
 - `extensions/hello_lamp`: extensão exemplo (Python + UI prebuilt)
-- `extensions/structural`: extensão “first-party” (ferramentas 2D: paredes/áreas)
+- `extensions/structural`: extensão “first-party” (paredes/áreas: ferramentas 2D + render 3D)
 
 ## Rodar (dev)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import mimetypes
 from contextlib import asynccontextmanager
 from typing import Any
@@ -11,7 +12,10 @@ from pydantic import BaseModel, Field
 from toposync.extensions.manager import ExtensionManager
 from toposync.runtime.device_store import DeviceStore
 from toposync.runtime.event_bus import EventBus, EventOutcome
+from toposync.runtime.config_store import Composition, ConfigStore, UserDataPaths
 from toposync.runtime.services import ServiceRegistry
+
+logger = logging.getLogger("toposync")
 
 
 class EmitEventRequest(BaseModel):
@@ -36,6 +40,14 @@ async def _lifespan(app: FastAPI):
     store = DeviceStore()
     bus = EventBus()
     services = ServiceRegistry()
+    config_store = ConfigStore(paths=UserDataPaths.resolve())
+    await config_store.load()
+    logger.info(
+        "Using data dir=%s config=%s files=%s",
+        config_store.paths.data_dir,
+        config_store.paths.config_path,
+        config_store.paths.files_dir,
+    )
 
     services.register("devices.get_state", store.get_state)
     services.register("devices.set_state", store.set_state)
@@ -60,6 +72,7 @@ async def _lifespan(app: FastAPI):
     app.state.bus = bus
     app.state.services = services
     app.state.extensions = ext_manager
+    app.state.config_store = config_store
 
     yield
 
@@ -71,10 +84,30 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/api/system/paths")
+    async def system_paths(request: Request) -> dict[str, str]:
+        config_store: ConfigStore = request.app.state.config_store
+        paths = config_store.paths
+        return {
+            "data_dir": str(paths.data_dir),
+            "config_path": str(paths.config_path),
+            "files_dir": str(paths.files_dir),
+        }
+
     @app.get("/api/extensions")
     async def list_extensions(request: Request) -> JSONResponse:
         ext_manager: ExtensionManager = request.app.state.extensions
         return JSONResponse(ext_manager.public_extensions())
+
+    @app.get("/api/composition", response_model=Composition)
+    async def get_composition(request: Request) -> Composition:
+        config_store: ConfigStore = request.app.state.config_store
+        return await config_store.get_active_composition()
+
+    @app.put("/api/composition", response_model=Composition)
+    async def put_composition(request: Request, composition: Composition) -> Composition:
+        config_store: ConfigStore = request.app.state.config_store
+        return await config_store.set_active_composition(composition)
 
     @app.get("/extensions/{extension_id}/{path:path}")
     async def get_extension_asset(request: Request, extension_id: str, path: str) -> Response:

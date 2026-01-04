@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 import uvicorn
 
@@ -13,10 +14,17 @@ def main(argv: list[str] | None = None) -> None:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--log-level", default="info")
+    serve.add_argument(
+        "--data-dir",
+        default=None,
+        help="Override TOPOSYNC_DATA_DIR (where config.json and user files live).",
+    )
 
     args = parser.parse_args(argv)
 
     if args.command == "serve":
+        if args.data_dir:
+            os.environ["TOPOSYNC_DATA_DIR"] = args.data_dir
         uvicorn.run(
             "toposync.app:create_app",
             factory=True,

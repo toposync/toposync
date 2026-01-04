@@ -10,7 +10,7 @@ import type {
   Vector3,
 } from "@toposync/plugin-api";
 
-import { fetchExtensions, getDevice, emitEvent } from "../util/api";
+import { fetchExtensions, getComposition, getDevice, emitEvent, putComposition } from "../util/api";
 import { loadRemoteActivate } from "../util/moduleFederation";
 import { CompositionEditorScreen } from "./screens/CompositionEditorScreen";
 import { MainScreen } from "./screens/MainScreen";
@@ -35,7 +35,8 @@ type Composition = {
   elements: CompositionElement[];
 };
 
-const STORAGE_KEY = "toposync.composition.v1";
+const LEGACY_STORAGE_KEY = "toposync.composition.v1";
+const SAVE_DEBOUNCE_MS = 400;
 
 function asNumber(v: unknown, fallback: number): number {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
@@ -63,10 +64,10 @@ function defaultComposition(): Composition {
   return { id: "ground", name: "Térreo", elements: [] };
 }
 
-function loadComposition(): Composition {
+function loadLegacyComposition(): Composition | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultComposition();
+    const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (!raw) return null;
     const obj = JSON.parse(raw);
     const rec = asRecord(obj);
     const elementsRaw = Array.isArray(rec.elements) ? rec.elements : [];
@@ -89,7 +90,7 @@ function loadComposition(): Composition {
       elements,
     };
   } catch {
-    return defaultComposition();
+    return null;
   }
 }
 
@@ -113,7 +114,9 @@ export function App(): React.ReactElement {
   const [elementTypesById, setElementTypesById] = useState<Record<string, ElementType>>({});
   const [notificationRenderersById, setNotificationRenderersById] = useState<Record<string, NotificationRenderer>>({});
   const [notifications] = useState<Notification[]>([]);
-  const [composition, setComposition] = useState<Composition>(() => loadComposition());
+  const [composition, setComposition] = useState<Composition>(() => defaultComposition());
+  const [compositionLoaded, setCompositionLoaded] = useState(false);
+  const [backendAvailable, setBackendAvailable] = useState(false);
 
   const notificationRenderers = useMemo(
     () => Object.values(notificationRenderersById),
@@ -137,12 +140,63 @@ export function App(): React.ReactElement {
   );
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(composition));
-    } catch {
-      // ignore
+    let cancelled = false;
+
+    async function hydrate() {
+      try {
+        const fromBackend = await getComposition();
+        if (cancelled) return;
+
+        const legacy = loadLegacyComposition();
+        if (fromBackend.elements.length === 0 && legacy && legacy.elements.length > 0) {
+          const saved = await putComposition(legacy);
+          if (cancelled) return;
+          setComposition(saved);
+          setBackendAvailable(true);
+          try {
+            localStorage.removeItem(LEGACY_STORAGE_KEY);
+          } catch {
+            // ignore
+          }
+        } else {
+          setComposition(fromBackend);
+          setBackendAvailable(true);
+          if (legacy) {
+            try {
+              localStorage.removeItem(LEGACY_STORAGE_KEY);
+            } catch {
+              // ignore
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load composition from backend", err);
+        const legacy = loadLegacyComposition();
+        if (legacy) setComposition(legacy);
+        setBackendAvailable(false);
+      } finally {
+        if (!cancelled) setCompositionLoaded(true);
+      }
     }
-  }, [composition]);
+
+    void hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!compositionLoaded) return;
+    if (!backendAvailable) return;
+
+    const handle = window.setTimeout(() => {
+      void putComposition(composition).catch((err) => {
+        console.error("Failed to save composition to backend", err);
+      });
+    }, SAVE_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(handle);
+  }, [backendAvailable, composition, compositionLoaded]);
 
   useEffect(() => {
     let cancelled = false;

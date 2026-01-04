@@ -48,7 +48,7 @@ npm --workspace @toposync/extension-hello-lamp-ui run build
 5) Backend:
 
 ```bash
-uv run toposync serve
+uv run toposync serve --data-dir $(pwd)/.toposync-data
 ```
 
 6) Frontend host (dev server com proxy para o backend):
@@ -61,7 +61,7 @@ Abra `http://localhost:5173`, clique em **Editar**, adicione a **Lâmpada (Hello
 
 ### Quando rodar o quê (atalho mental)
 
-- Alterou código Python do core ou da extensão → reinicie `uv run toposync serve`
+- Alterou código Python do core ou da extensão → reinicie `uv run toposync serve` (use o mesmo `--data-dir`, se estiver usando)
 - Alterou UI do host → o `webpack-dev-server` recarrega (HMR)
 - Alterou UI de uma extensão → rode `npm --workspace <ext-ui> run build` (ou use `--watch`) e dê refresh
 
@@ -172,7 +172,20 @@ O modelo base de instância em uma composição é `CompositionElement`:
 - `position`/`rotation` (Vector3)
 - `props` (objeto livre da extensão)
 
-Por enquanto, a composição é salva no `localStorage` (key: `toposync.composition.v1`). Em breve isso migra para backend.
+## Persistência (local-first)
+
+- O backend salva a configuração em um único arquivo: `<data_dir>/config.json`
+- Arquivos auxiliares do usuário ficam em: `<data_dir>/files/`
+- Para definir o diretório explicitamente use `TOPOSYNC_DATA_DIR=/caminho/para/dados` (ou `toposync serve --data-dir ...`)
+- Dica (dev): `uv run toposync serve --data-dir $(pwd)/.toposync-data` (pasta ignorada pelo git)
+- Default por SO:
+  - Linux: `$XDG_DATA_HOME/toposync` ou `~/.local/share/toposync`
+  - macOS: `~/Library/Application Support/TopoSync`
+  - Windows: `%APPDATA%/TopoSync`
+
+Se bater dúvida sobre *qual* diretório está em uso, chame `GET /api/system/paths`.
+
+O frontend lê/salva a composição via `GET/PUT /api/composition`. Versões antigas usavam `localStorage` (`toposync.composition.v1`) e o app tenta migrar automaticamente quando o backend está vazio.
 
 ## Guia rápido: criando uma extensão nova
 
@@ -312,7 +325,7 @@ uv pip install -e extensions/hello_lamp
 4) Backend:
 
 ```bash
-uv run toposync serve
+uv run toposync serve --data-dir $(pwd)/.toposync-data
 ```
 
 5) Frontend host:

@@ -94,10 +94,74 @@ function asVertices(v: unknown): PlanePoint[] {
     .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.z));
 }
 
+function readOptionalPoint(v: unknown): PlanePoint | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const rec = v as Record<string, unknown>;
+  const x = rec.x;
+  const z = rec.z;
+  if (typeof x !== "number" || typeof z !== "number") return null;
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  return { x, z };
+}
+
 function distance(a: PlanePoint, b: PlanePoint): number {
   const dx = a.x - b.x;
   const dz = a.z - b.z;
   return Math.hypot(dx, dz);
+}
+
+function add(a: PlanePoint, b: PlanePoint): PlanePoint {
+  return { x: a.x + b.x, z: a.z + b.z };
+}
+
+function sub(a: PlanePoint, b: PlanePoint): PlanePoint {
+  return { x: a.x - b.x, z: a.z - b.z };
+}
+
+function mul(v: PlanePoint, s: number): PlanePoint {
+  return { x: v.x * s, z: v.z * s };
+}
+
+function normalize(v: PlanePoint): PlanePoint {
+  const len = Math.hypot(v.x, v.z);
+  if (len <= 1e-9) return { x: 1, z: 0 };
+  return { x: v.x / len, z: v.z / len };
+}
+
+function perp(v: PlanePoint): PlanePoint {
+  return { x: -v.z, z: v.x };
+}
+
+function cross(a: PlanePoint, b: PlanePoint): number {
+  return a.x * b.z - a.z * b.x;
+}
+
+function lineIntersection(p0: PlanePoint, d0: PlanePoint, p1: PlanePoint, d1: PlanePoint): PlanePoint | null {
+  const denom = cross(d0, d1);
+  if (Math.abs(denom) < 1e-9) return null;
+  const t = cross(sub(p1, p0), d1) / denom;
+  return add(p0, mul(d0, t));
+}
+
+function computeMiter(
+  vertex: PlanePoint,
+  dirIn: PlanePoint,
+  dirOut: PlanePoint,
+  normalSign: number,
+  halfThickness: number,
+  miterLimit: number,
+  fallbackDir: PlanePoint,
+): PlanePoint {
+  const nIn = mul(perp(dirIn), normalSign * halfThickness);
+  const nOut = mul(perp(dirOut), normalSign * halfThickness);
+  const pIn = add(vertex, nIn);
+  const pOut = add(vertex, nOut);
+  const hit = lineIntersection(pIn, dirIn, pOut, dirOut);
+  if (!hit) return add(vertex, mul(perp(fallbackDir), normalSign * halfThickness));
+  if (distance(hit, vertex) > halfThickness * miterLimit) {
+    return add(vertex, mul(perp(fallbackDir), normalSign * halfThickness));
+  }
+  return hit;
 }
 
 function centerOf(points: PlanePoint[]): PlanePoint {
@@ -136,45 +200,101 @@ function wallElementType(i18n: HostI18n): ElementType {
     },
     create3D: ({ THREE, view }, element) => {
       const group = new THREE.Group();
-      const geom = new THREE.BoxGeometry(1, 1, 1);
       const mat = new THREE.MeshStandardMaterial({
         color: DEFAULT_WALL_COLOR,
         roughness: 0.82,
         metalness: 0.05,
+        flatShading: true,
       });
-      const mesh = new THREE.Mesh(geom, mat);
+      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       group.add(mesh);
 
-      const dir = new THREE.Vector3();
-      const unitX = new THREE.Vector3(1, 0, 0);
+      let lastKey = "";
 
       function apply(el: CompositionElement) {
         const a = asPoint(el.props.a, { x: el.position.x - 0.5, z: el.position.z });
         const b = asPoint(el.props.b, { x: el.position.x + 0.5, z: el.position.z });
-
-        const center = { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 };
-        const dx = b.x - a.x;
-        const dz = b.z - a.z;
-        const length = Math.max(0.001, Math.hypot(dx, dz));
 
         const thicknessWorld = Math.max(0.04, readNumber(el.props.width, 0.12));
         const height = Math.max(0.15, view.wallHeight);
 
         const color = readString(el.props.color, DEFAULT_WALL_COLOR);
 
-        mesh.position.set(center.x - el.position.x, GROUND_Y + height / 2, center.z - el.position.z);
-        // Extend the wall a bit on both ends (half thickness each side) so corners "close" when
-        // two segments meet at an angle (butt join approximation).
-        mesh.scale.set(length + thicknessWorld, height, thicknessWorld);
+        const half = thicknessWorld / 2;
+        const u = normalize(sub(b, a));
+        const n = perp(u);
 
-        dir.set(dx, 0, dz);
-        if (dir.lengthSq() > 1e-6) {
-          dir.normalize();
-          (mesh.quaternion as ThreeTypes.Quaternion).setFromUnitVectors(unitX, dir);
-        } else {
-          mesh.quaternion.identity();
+        const aPrev = readOptionalPoint((el.props as any).a_prev);
+        const bNext = readOptionalPoint((el.props as any).b_next);
+
+        const miterLimit = 6;
+
+        const aBase = aPrev ? a : sub(a, mul(u, half));
+        const bBase = bNext ? b : add(b, mul(u, half));
+
+        const startPlus = aPrev
+          ? computeMiter(a, normalize(sub(a, aPrev)), u, +1, half, miterLimit, u)
+          : add(aBase, mul(n, +half));
+        const startMinus = aPrev
+          ? computeMiter(a, normalize(sub(a, aPrev)), u, -1, half, miterLimit, u)
+          : add(aBase, mul(n, -half));
+
+        const endPlus = bNext
+          ? computeMiter(b, u, normalize(sub(bNext, b)), +1, half, miterLimit, u)
+          : add(bBase, mul(n, +half));
+        const endMinus = bNext
+          ? computeMiter(b, u, normalize(sub(bNext, b)), -1, half, miterLimit, u)
+          : add(bBase, mul(n, -half));
+
+        const origin = { x: el.position.x, z: el.position.z };
+        const fp = [startPlus, endPlus, endMinus, startMinus].map((p) => sub(p, origin));
+        const geomKey = JSON.stringify({
+          fp: fp.map((p) => ({ x: Math.round(p.x * 1000) / 1000, z: Math.round(p.z * 1000) / 1000 })),
+          h: Math.round(height * 1000) / 1000,
+        });
+
+        if (geomKey !== lastKey) {
+          lastKey = geomKey;
+          const y0 = GROUND_Y;
+          const y1 = GROUND_Y + height;
+
+          const positions = new Float32Array(8 * 3);
+          for (let i = 0; i < 4; i++) {
+            const p = fp[i];
+            positions[i * 3 + 0] = p.x;
+            positions[i * 3 + 1] = y0;
+            positions[i * 3 + 2] = p.z;
+          }
+          for (let i = 0; i < 4; i++) {
+            const p = fp[i];
+            const base = (4 + i) * 3;
+            positions[base + 0] = p.x;
+            positions[base + 1] = y1;
+            positions[base + 2] = p.z;
+          }
+
+          const indices = [
+            // top (clockwise in XZ => +Y)
+            4, 5, 6, 4, 6, 7,
+            // bottom (reverse)
+            0, 2, 1, 0, 3, 2,
+            // sides
+            0, 1, 5, 0, 5, 4,
+            1, 2, 6, 1, 6, 5,
+            2, 3, 7, 2, 7, 6,
+            3, 0, 4, 3, 4, 7,
+          ];
+
+          const nextGeom = new THREE.BufferGeometry();
+          nextGeom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+          nextGeom.setIndex(indices);
+          nextGeom.computeVertexNormals();
+
+          const old = mesh.geometry as ThreeTypes.BufferGeometry;
+          mesh.geometry = nextGeom;
+          old.dispose();
         }
 
         mat.color.set(color);
@@ -185,7 +305,7 @@ function wallElementType(i18n: HostI18n): ElementType {
         object: group,
         update: apply,
         dispose: () => {
-          geom.dispose();
+          (mesh.geometry as ThreeTypes.BufferGeometry).dispose();
           mat.dispose();
         },
       };
@@ -471,12 +591,20 @@ function structuralTools(i18n: HostI18n): EditorTool[] {
   ];
 }
 
-function createWall(ctx: EditorToolContext, a: PlanePoint, b: PlanePoint): string | null {
+function createWall(
+  ctx: EditorToolContext,
+  a: PlanePoint,
+  b: PlanePoint,
+  join?: { aPrev?: PlanePoint; bNext?: PlanePoint },
+): string | null {
   const c = { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 };
+  const joinProps: Record<string, unknown> = {};
+  if (join?.aPrev) joinProps.a_prev = join.aPrev;
+  if (join?.bNext) joinProps.b_next = join.bNext;
   return ctx.createElement(WALL_TYPE, {
     name: "",
     position: { x: c.x, y: 0, z: c.z },
-    props: { a, b, color: DEFAULT_WALL_COLOR, width: 0.12 },
+    props: { a, b, color: DEFAULT_WALL_COLOR, width: 0.12, ...joinProps },
   });
 }
 
@@ -498,6 +626,18 @@ function edges(vertices: PlanePoint[]): Array<{ a: PlanePoint; b: PlanePoint }> 
     out.push({ a, b });
   }
   return out;
+}
+
+function createWallsForPolygon(ctx: EditorToolContext, vertices: PlanePoint[]): void {
+  const n = vertices.length;
+  if (n < 2) return;
+  for (let i = 0; i < n; i++) {
+    const a = vertices[i];
+    const b = vertices[(i + 1) % n];
+    const aPrev = vertices[(i - 1 + n) % n];
+    const bNext = vertices[(i + 2) % n];
+    createWall(ctx, a, b, { aPrev, bNext });
+  }
 }
 
 function wallTool(i18n: HostI18n): EditorTool {
@@ -609,7 +749,7 @@ function areaSquareTool(i18n: HostI18n, opts: { withWalls: boolean }): EditorToo
         }
         const areaId = createArea(ctx, verts);
         if (opts.withWalls) {
-          for (const e of edges(verts)) createWall(ctx, e.a, e.b);
+          createWallsForPolygon(ctx, verts);
         }
         if (areaId) ctx.openEditor(areaId);
         reset();
@@ -691,7 +831,7 @@ function areaPolygonTool(i18n: HostI18n, opts: { withWalls: boolean }): EditorTo
         }
         const areaId = createArea(ctx, [...vertices]);
         if (opts.withWalls) {
-          for (const e of edges(vertices)) createWall(ctx, e.a, e.b);
+          createWallsForPolygon(ctx, vertices);
         }
         if (areaId) ctx.openEditor(areaId);
         reset();

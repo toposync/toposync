@@ -1,5 +1,7 @@
 import React, { useEffect } from "react";
 
+import { Icon } from "./Icon";
+
 type Props = {
   open: boolean;
   title: string;
@@ -33,7 +35,7 @@ export function Modal({ open, title, children, onClose }: Props): React.ReactEle
         <div className="modalHeader">
           <div className="modalTitle">{title}</div>
           <button className="iconButton" type="button" onClick={onClose} aria-label="Close">
-            ✕
+            <Icon name="xmark" />
           </button>
         </div>
         <div className="modalBody">{children}</div>
@@ -41,4 +43,3 @@ export function Modal({ open, title, children, onClose }: Props): React.ReactEle
     </div>
   );
 }
-

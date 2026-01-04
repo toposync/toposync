@@ -13,6 +13,22 @@ export type Composition = {
   elements: CompositionElement[];
 };
 
+export type CompositionSummary = {
+  id: string;
+  name: string;
+};
+
+export type CompositionsIndex = {
+  active_composition_id: string;
+  compositions: CompositionSummary[];
+};
+
+export type DeleteCompositionResponse = {
+  active_composition_id: string;
+  compositions: CompositionSummary[];
+  active_composition: Composition;
+};
+
 export async function fetchExtensions(): Promise<any[]> {
   const res = await fetch("/api/extensions");
   if (!res.ok) throw new Error(`Failed to list extensions: ${res.status}`);
@@ -48,5 +64,43 @@ export async function putComposition(composition: Composition): Promise<Composit
     body: JSON.stringify(composition),
   });
   if (!res.ok) throw new Error(`Failed to save composition: ${res.status}`);
+  return res.json();
+}
+
+export async function listCompositions(): Promise<CompositionsIndex> {
+  const res = await fetch("/api/compositions");
+  if (!res.ok) throw new Error(`Failed to list compositions: ${res.status}`);
+  return res.json();
+}
+
+export async function createComposition(name: string): Promise<Composition> {
+  const res = await fetch("/api/compositions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`Failed to create composition: ${res.status}`);
+  return res.json();
+}
+
+export async function activateComposition(compositionId: string): Promise<Composition> {
+  const res = await fetch(`/api/compositions/${encodeURIComponent(compositionId)}/activate`, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to activate composition: ${res.status}`);
+  return res.json();
+}
+
+export async function renameComposition(compositionId: string, name: string): Promise<Composition> {
+  const res = await fetch(`/api/compositions/${encodeURIComponent(compositionId)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`Failed to rename composition: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteComposition(compositionId: string): Promise<DeleteCompositionResponse> {
+  const res = await fetch(`/api/compositions/${encodeURIComponent(compositionId)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Failed to delete composition: ${res.status}`);
   return res.json();
 }

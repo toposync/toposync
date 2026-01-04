@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -121,6 +122,13 @@ def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _new_id(existing: set[str]) -> str:
+    while True:
+        candidate = uuid.uuid4().hex[:12]
+        if candidate not in existing:
+            return candidate
+
+
 class ConfigStore:
     def __init__(self, *, paths: UserDataPaths):
         self._paths = paths
@@ -202,3 +210,96 @@ class ConfigStore:
             await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
             self._config = cfg2
             return composition
+
+    async def list_compositions(self) -> tuple[str, list[Composition]]:
+        cfg = await self.get_config()
+        return cfg.active_composition_id, list(cfg.compositions)
+
+    async def activate_composition(self, composition_id: str) -> Composition:
+        await self.load()
+        async with self._lock:
+            cfg = self._config or _default_config()
+            composition = next((c for c in cfg.compositions if c.id == composition_id), None)
+            if composition is None:
+                raise KeyError(composition_id)
+
+            cfg2 = AppConfig(
+                schema_version=cfg.schema_version,
+                compositions=cfg.compositions,
+                active_composition_id=composition_id,
+            )
+            cfg2 = _normalize_config(cfg2)
+            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
+            self._config = cfg2
+            return composition
+
+    async def create_composition(self, *, name: str, composition_id: str | None = None) -> Composition:
+        await self.load()
+        async with self._lock:
+            cfg = self._config or _default_config()
+            existing = {c.id for c in cfg.compositions}
+            cid = composition_id or _new_id(existing)
+            if cid in existing:
+                raise ValueError(f"Composition id already exists: {cid}")
+
+            composition = Composition(id=cid, name=name, elements=[])
+            cfg2 = AppConfig(
+                schema_version=cfg.schema_version,
+                compositions=[*cfg.compositions, composition],
+                active_composition_id=cid,
+            )
+            cfg2 = _normalize_config(cfg2)
+            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
+            self._config = cfg2
+            return composition
+
+    async def rename_composition(self, composition_id: str, *, name: str) -> Composition:
+        await self.load()
+        async with self._lock:
+            cfg = self._config or _default_config()
+            compositions: list[Composition] = []
+            updated: Composition | None = None
+            for c in cfg.compositions:
+                if c.id == composition_id:
+                    updated = Composition(id=c.id, name=name, elements=c.elements)
+                    compositions.append(updated)
+                else:
+                    compositions.append(c)
+
+            if updated is None:
+                raise KeyError(composition_id)
+
+            cfg2 = AppConfig(
+                schema_version=cfg.schema_version,
+                compositions=compositions,
+                active_composition_id=cfg.active_composition_id,
+            )
+            cfg2 = _normalize_config(cfg2)
+            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
+            self._config = cfg2
+            return updated
+
+    async def delete_composition(self, composition_id: str) -> AppConfig:
+        await self.load()
+        async with self._lock:
+            cfg = self._config or _default_config()
+            if len(cfg.compositions) <= 1:
+                raise ValueError("Cannot delete the last composition")
+
+            compositions = [c for c in cfg.compositions if c.id != composition_id]
+            if len(compositions) == len(cfg.compositions):
+                raise KeyError(composition_id)
+
+            active_id = cfg.active_composition_id
+            if active_id == composition_id:
+                active_id = compositions[0].id
+
+            cfg2 = AppConfig(
+                schema_version=cfg.schema_version,
+                compositions=compositions,
+                active_composition_id=active_id,
+            )
+            cfg2 = _normalize_config(cfg2)
+            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
+            self._config = cfg2
+            return cfg2

@@ -10,7 +10,18 @@ import type {
   Vector3,
 } from "@toposync/plugin-api";
 
-import { fetchExtensions, getComposition, getDevice, emitEvent, putComposition } from "../util/api";
+import {
+  activateComposition,
+  createComposition,
+  deleteComposition,
+  fetchExtensions,
+  getComposition,
+  getDevice,
+  listCompositions,
+  emitEvent,
+  putComposition,
+  renameComposition,
+} from "../util/api";
 import { loadRemoteActivate } from "../util/moduleFederation";
 import { CompositionEditorScreen } from "./screens/CompositionEditorScreen";
 import { MainScreen } from "./screens/MainScreen";
@@ -115,8 +126,12 @@ export function App(): React.ReactElement {
   const [notificationRenderersById, setNotificationRenderersById] = useState<Record<string, NotificationRenderer>>({});
   const [notifications] = useState<Notification[]>([]);
   const [composition, setComposition] = useState<Composition>(() => defaultComposition());
+  const [compositions, setCompositions] = useState<Array<{ id: string; name: string }>>([]);
+  const [activeCompositionId, setActiveCompositionId] = useState<string>("ground");
   const [compositionLoaded, setCompositionLoaded] = useState(false);
   const [backendAvailable, setBackendAvailable] = useState(false);
+
+  const [compositionRevision, setCompositionRevision] = useState(0);
 
   const notificationRenderers = useMemo(
     () => Object.values(notificationRenderersById),
@@ -144,14 +159,23 @@ export function App(): React.ReactElement {
 
     async function hydrate() {
       try {
-        const fromBackend = await getComposition();
+        const [index, fromBackend] = await Promise.all([listCompositions(), getComposition()]);
         if (cancelled) return;
+
+        setCompositions(index.compositions);
+        setActiveCompositionId(index.active_composition_id);
 
         const legacy = loadLegacyComposition();
         if (fromBackend.elements.length === 0 && legacy && legacy.elements.length > 0) {
           const saved = await putComposition(legacy);
           if (cancelled) return;
           setComposition(saved);
+          setActiveCompositionId(saved.id);
+          setCompositions((prev) => {
+            const exists = prev.some((c) => c.id === saved.id);
+            const next = exists ? prev.map((c) => (c.id === saved.id ? { id: saved.id, name: saved.name } : c)) : [...prev, { id: saved.id, name: saved.name }];
+            return next;
+          });
           setBackendAvailable(true);
           try {
             localStorage.removeItem(LEGACY_STORAGE_KEY);
@@ -160,6 +184,14 @@ export function App(): React.ReactElement {
           }
         } else {
           setComposition(fromBackend);
+          setActiveCompositionId(fromBackend.id);
+          setCompositions((prev) => {
+            const exists = prev.some((c) => c.id === fromBackend.id);
+            const next = exists
+              ? prev.map((c) => (c.id === fromBackend.id ? { id: fromBackend.id, name: fromBackend.name } : c))
+              : [...prev, { id: fromBackend.id, name: fromBackend.name }];
+            return next;
+          });
           setBackendAvailable(true);
           if (legacy) {
             try {
@@ -173,6 +205,8 @@ export function App(): React.ReactElement {
         console.error("Failed to load composition from backend", err);
         const legacy = loadLegacyComposition();
         if (legacy) setComposition(legacy);
+        setCompositions((prev) => (legacy ? [{ id: legacy.id, name: legacy.name }] : prev));
+        setActiveCompositionId(legacy?.id ?? "ground");
         setBackendAvailable(false);
       } finally {
         if (!cancelled) setCompositionLoaded(true);
@@ -196,6 +230,16 @@ export function App(): React.ReactElement {
     }, SAVE_DEBOUNCE_MS);
 
     return () => window.clearTimeout(handle);
+  }, [backendAvailable, composition, compositionLoaded, compositionRevision]);
+
+  const flushSave = useCallback(async (): Promise<void> => {
+    if (!compositionLoaded) return;
+    if (!backendAvailable) return;
+    try {
+      await putComposition(composition);
+    } catch (err) {
+      console.error("Failed to save composition to backend", err);
+    }
   }, [backendAvailable, composition, compositionLoaded]);
 
   useEffect(() => {
@@ -246,6 +290,7 @@ export function App(): React.ReactElement {
         };
         return { ...prev, elements: [...prev.elements, element] };
       });
+      setCompositionRevision((v) => v + 1);
       return id;
     },
     [elementTypesById],
@@ -256,17 +301,61 @@ export function App(): React.ReactElement {
       ...prev,
       elements: prev.elements.map((el) => (el.id === elementId ? mergeElement(el, patch) : el)),
     }));
+    setCompositionRevision((v) => v + 1);
   }, []);
 
   const removeElement = useCallback((elementId: string) => {
     setComposition((prev) => ({ ...prev, elements: prev.elements.filter((el) => el.id !== elementId) }));
+    setCompositionRevision((v) => v + 1);
   }, []);
+
+  const activateCompositionById = useCallback(
+    async (compositionId: string): Promise<Composition> => {
+      await flushSave();
+      const next = await activateComposition(compositionId);
+      setComposition(next);
+      setActiveCompositionId(next.id);
+      return next;
+    },
+    [flushSave],
+  );
+
+  const createNewComposition = useCallback(
+    async (name: string): Promise<Composition> => {
+      await flushSave();
+      const next = await createComposition(name);
+      setComposition(next);
+      setActiveCompositionId(next.id);
+      setCompositions((prev) => [...prev, { id: next.id, name: next.name }]);
+      return next;
+    },
+    [flushSave],
+  );
+
+  const renameExistingComposition = useCallback(async (compositionId: string, name: string): Promise<Composition> => {
+    const updated = await renameComposition(compositionId, name);
+    setCompositions((prev) => prev.map((c) => (c.id === compositionId ? { id: c.id, name: updated.name } : c)));
+    setComposition((prev) => (prev.id === compositionId ? { ...prev, name: updated.name } : prev));
+    return updated;
+  }, []);
+
+  const deleteExistingComposition = useCallback(
+    async (compositionId: string): Promise<void> => {
+      const res = await deleteComposition(compositionId);
+      setCompositions(res.compositions);
+      setActiveCompositionId(res.active_composition_id);
+      setComposition(res.active_composition);
+    },
+    [],
+  );
 
   return (
     <div className="appShell">
       {screen === "main" ? (
         <MainScreen
           compositionName={composition.name}
+          compositions={compositions}
+          activeCompositionId={activeCompositionId}
           elements={composition.elements}
           elementTypesById={elementTypesById}
           notificationRenderers={notificationRenderers}
@@ -274,16 +363,26 @@ export function App(): React.ReactElement {
           api={host.api}
           updateElement={updateElement}
           onEditComposition={() => setScreen("editor")}
+          onActivateComposition={activateCompositionById}
+          onCreateComposition={createNewComposition}
+          onRenameComposition={renameExistingComposition}
+          onDeleteComposition={deleteExistingComposition}
         />
       ) : (
         <CompositionEditorScreen
           compositionName={composition.name}
+          compositions={compositions}
+          activeCompositionId={activeCompositionId}
           elements={composition.elements}
           elementTypesById={elementTypesById}
           addElement={addElement}
           updateElement={updateElement}
           removeElement={removeElement}
           onExit={() => setScreen("main")}
+          onActivateComposition={activateCompositionById}
+          onCreateComposition={createNewComposition}
+          onRenameComposition={renameExistingComposition}
+          onDeleteComposition={deleteExistingComposition}
         />
       )}
     </div>

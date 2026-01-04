@@ -9,11 +9,16 @@ import type {
   NotificationRenderer,
 } from "@toposync/plugin-api";
 
+import type { Composition, CompositionSummary } from "../../util/api";
+
 import { Modal } from "../Modal";
+import { CompositionSelectorModal } from "../CompositionSelectorModal";
 import { Viewport3D } from "../Viewport3D";
 
 type Props = {
   compositionName: string;
+  compositions: CompositionSummary[];
+  activeCompositionId: string;
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
   notificationRenderers: NotificationRenderer[];
@@ -21,6 +26,10 @@ type Props = {
   api: HostApi;
   updateElement: (elementId: string, patch: CompositionElementPatch) => void;
   onEditComposition: () => void;
+  onActivateComposition: (compositionId: string) => Promise<Composition>;
+  onCreateComposition: (name: string) => Promise<Composition>;
+  onRenameComposition: (compositionId: string, name: string) => Promise<Composition>;
+  onDeleteComposition: (compositionId: string) => Promise<void>;
 };
 
 function formatTime(iso: string | undefined): string | null {
@@ -32,6 +41,8 @@ function formatTime(iso: string | undefined): string | null {
 
 export function MainScreen({
   compositionName,
+  compositions,
+  activeCompositionId,
   elements,
   elementTypesById,
   notificationRenderers,
@@ -39,6 +50,10 @@ export function MainScreen({
   api,
   updateElement,
   onEditComposition,
+  onActivateComposition,
+  onCreateComposition,
+  onRenameComposition,
+  onDeleteComposition,
 }: Props): React.ReactElement {
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
@@ -121,22 +136,16 @@ export function MainScreen({
         </div>
       </Modal>
 
-      <Modal open={isCompositionModalOpen} title="Composição" onClose={() => setIsCompositionModalOpen(false)}>
-        <div className="choiceList">
-          <div
-            className="choiceItem"
-            role="button"
-            tabIndex={0}
-            onClick={() => setIsCompositionModalOpen(false)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") setIsCompositionModalOpen(false);
-            }}
-          >
-            <div className="choiceTitle">{compositionName}</div>
-            <div className="choiceDesc">Única composição por enquanto. Em breve: múltiplas composições.</div>
-          </div>
-        </div>
-      </Modal>
+      <CompositionSelectorModal
+        open={isCompositionModalOpen}
+        compositions={compositions}
+        activeCompositionId={activeCompositionId}
+        onClose={() => setIsCompositionModalOpen(false)}
+        onActivate={onActivateComposition}
+        onCreate={onCreateComposition}
+        onRename={onRenameComposition}
+        onDelete={onDeleteComposition}
+      />
 
       <Modal
         open={isActionModalOpen}

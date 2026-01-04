@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from toposync.extensions.manager import ExtensionManager
 from toposync.runtime.device_store import DeviceStore
 from toposync.runtime.event_bus import EventBus, EventOutcome
-from toposync.runtime.config_store import Composition, ConfigStore, UserDataPaths
+from toposync.runtime.config_store import AppConfig, Composition, ConfigStore, UserDataPaths
 from toposync.runtime.services import ServiceRegistry
 
 logger = logging.getLogger("toposync")
@@ -28,6 +28,31 @@ class EmitEventResponse(BaseModel):
     result: Any
     prevented_default: bool
     stopped: bool
+
+
+class CompositionSummary(BaseModel):
+    id: str
+    name: str
+
+
+class CompositionsIndexResponse(BaseModel):
+    active_composition_id: str
+    compositions: list[CompositionSummary]
+
+
+class CreateCompositionRequest(BaseModel):
+    name: str
+    id: str | None = None
+
+
+class RenameCompositionRequest(BaseModel):
+    name: str
+
+
+class DeleteCompositionResponse(BaseModel):
+    active_composition_id: str
+    compositions: list[CompositionSummary]
+    active_composition: Composition
 
 
 def _guess_media_type(path: str) -> str:
@@ -108,6 +133,64 @@ def create_app() -> FastAPI:
     async def put_composition(request: Request, composition: Composition) -> Composition:
         config_store: ConfigStore = request.app.state.config_store
         return await config_store.set_active_composition(composition)
+
+    @app.get("/api/compositions", response_model=CompositionsIndexResponse)
+    async def list_compositions(request: Request) -> CompositionsIndexResponse:
+        config_store: ConfigStore = request.app.state.config_store
+        active_id, compositions = await config_store.list_compositions()
+        return CompositionsIndexResponse(
+            active_composition_id=active_id,
+            compositions=[CompositionSummary(id=c.id, name=c.name) for c in compositions],
+        )
+
+    @app.post("/api/compositions", response_model=Composition)
+    async def create_composition(request: Request, body: CreateCompositionRequest) -> Composition:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name is required")
+
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            return await config_store.create_composition(name=name, composition_id=body.id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/compositions/{composition_id}/activate", response_model=Composition)
+    async def activate_composition(request: Request, composition_id: str) -> Composition:
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            return await config_store.activate_composition(composition_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown composition") from exc
+
+    @app.patch("/api/compositions/{composition_id}", response_model=Composition)
+    async def rename_composition(request: Request, composition_id: str, body: RenameCompositionRequest) -> Composition:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name is required")
+
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            return await config_store.rename_composition(composition_id, name=name)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown composition") from exc
+
+    @app.delete("/api/compositions/{composition_id}", response_model=DeleteCompositionResponse)
+    async def delete_composition(request: Request, composition_id: str) -> DeleteCompositionResponse:
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            cfg: AppConfig = await config_store.delete_composition(composition_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown composition") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        active = next((c for c in cfg.compositions if c.id == cfg.active_composition_id), cfg.compositions[0])
+        return DeleteCompositionResponse(
+            active_composition_id=cfg.active_composition_id,
+            compositions=[CompositionSummary(id=c.id, name=c.name) for c in cfg.compositions],
+            active_composition=active,
+        )
 
     @app.get("/extensions/{extension_id}/{path:path}")
     async def get_extension_asset(request: Request, extension_id: str, path: str) -> Response:

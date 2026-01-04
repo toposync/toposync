@@ -263,11 +263,40 @@ body {
   width: 34px;
   border-radius: 10px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
 }
 
 .iconButton:hover {
   border-color: var(--borderStrong);
   background: rgba(255, 255, 255, 0.06);
+}
+
+.iconButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.iconButtonPrimary {
+  border-color: rgba(251, 191, 36, 0.35);
+  color: rgba(255, 244, 210, 0.92);
+}
+
+.iconButtonPrimary:hover {
+  border-color: rgba(251, 191, 36, 0.55);
+  background: rgba(251, 191, 36, 0.10);
+}
+
+.iconButtonDanger {
+  border-color: rgba(248, 113, 113, 0.35);
+  color: rgba(254, 202, 202, 0.92);
+}
+
+.iconButtonDanger:hover {
+  border-color: rgba(248, 113, 113, 0.6);
+  background: rgba(248, 113, 113, 0.10);
 }
 
 .modalBody {
@@ -277,9 +306,109 @@ body {
   scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
 }
 
+.modalSectionTitle {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(230, 232, 242, 0.72);
+  margin-bottom: 8px;
+}
+
 .choiceList {
   display: grid;
   gap: 10px;
+}
+
+.compositionCreateRow {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.compositionCreateRow .input {
+  flex: 1;
+}
+
+.compositionList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.compositionRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.compositionMain {
+  flex: 1;
+}
+
+.compositionActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.compositionSelectButton {
+  flex: 1;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+    rgba(12, 18, 37, 0.46);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+  -webkit-backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.compositionSelectButton:hover {
+  border-color: var(--borderStrong);
+}
+
+.compositionSelectButton.isActive {
+  border-color: rgba(251, 191, 36, 0.48);
+}
+
+.compositionSelectButton.isDanger {
+  border-color: rgba(248, 113, 113, 0.48);
+}
+
+.compositionSelectButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.compositionName {
+  font-weight: 650;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compositionBadge {
+  color: rgba(251, 191, 36, 0.92);
+}
+
+.errorText {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(248, 113, 113, 0.25);
+  background: rgba(248, 113, 113, 0.08);
+  color: rgba(254, 202, 202, 0.92);
+  font-size: 13px;
 }
 
 .choiceItem {

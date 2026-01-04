@@ -1,17 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
+  CompositionElement,
+  CompositionElementPatch,
+  ElementType,
   Notification,
   NotificationRenderer,
-  Overlay3DContribution,
-  PanelContribution,
-  ToolContribution,
   TopoSyncHost,
+  Vector3,
 } from "@toposync/plugin-api";
 
 import { fetchExtensions, getDevice, emitEvent } from "../util/api";
 import { loadRemoteActivate } from "../util/moduleFederation";
-import { LampViewport } from "./LampViewport";
+import { CompositionEditorScreen } from "./screens/CompositionEditorScreen";
+import { MainScreen } from "./screens/MainScreen";
 
 type ExtensionRecord = {
   id: string;
@@ -25,30 +27,106 @@ type ExtensionRecord = {
   };
 };
 
+type Screen = "main" | "editor";
+
+type Composition = {
+  id: string;
+  name: string;
+  elements: CompositionElement[];
+};
+
+const STORAGE_KEY = "toposync.composition.v1";
+
+function asNumber(v: unknown, fallback: number): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
+function asString(v: unknown, fallback: string): string {
+  return typeof v === "string" ? v : fallback;
+}
+
+function asRecord(v: unknown): Record<string, unknown> {
+  if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+  return {};
+}
+
+function asVector3(v: unknown, fallback: Vector3): Vector3 {
+  const obj = asRecord(v);
+  return {
+    x: asNumber(obj.x, fallback.x),
+    y: asNumber(obj.y, fallback.y),
+    z: asNumber(obj.z, fallback.z),
+  };
+}
+
+function defaultComposition(): Composition {
+  return { id: "ground", name: "Térreo", elements: [] };
+}
+
+function loadComposition(): Composition {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return defaultComposition();
+    const obj = JSON.parse(raw);
+    const rec = asRecord(obj);
+    const elementsRaw = Array.isArray(rec.elements) ? rec.elements : [];
+    const elements: CompositionElement[] = elementsRaw
+      .map((e) => {
+        const el = asRecord(e);
+        return {
+          id: asString(el.id, ""),
+          type: asString(el.type, ""),
+          name: asString(el.name, ""),
+          position: asVector3(el.position, { x: 0, y: 0, z: 0 }),
+          rotation: asVector3(el.rotation, { x: 0, y: 0, z: 0 }),
+          props: asRecord(el.props),
+        } satisfies CompositionElement;
+      })
+      .filter((e) => Boolean(e.id) && Boolean(e.type));
+    return {
+      id: asString(rec.id, "ground"),
+      name: asString(rec.name, "Térreo"),
+      elements,
+    };
+  } catch {
+    return defaultComposition();
+  }
+}
+
+function newId(): string {
+  const cryptoAny = crypto as unknown as { randomUUID?: () => string };
+  return cryptoAny.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function mergeElement(el: CompositionElement, patch: CompositionElementPatch): CompositionElement {
+  return {
+    ...el,
+    ...patch,
+    position: { ...el.position, ...patch.position },
+    rotation: { ...el.rotation, ...patch.rotation },
+    props: { ...el.props, ...patch.props },
+  };
+}
+
 export function App(): React.ReactElement {
-  const [tools, setTools] = useState<ToolContribution[]>([]);
-  const [panels, setPanels] = useState<PanelContribution[]>([]);
-  const [overlays3d, setOverlays3d] = useState<Overlay3DContribution[]>([]);
-  const [notificationRenderers, setNotificationRenderers] = useState<NotificationRenderer[]>([]);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [lampState, setLampState] = useState(false);
-  const [errors, setErrors] = useState<string[]>([]);
+  const [screen, setScreen] = useState<Screen>("main");
+  const [elementTypesById, setElementTypesById] = useState<Record<string, ElementType>>({});
+  const [notificationRenderersById, setNotificationRenderersById] = useState<Record<string, NotificationRenderer>>({});
+  const [notifications] = useState<Notification[]>([]);
+  const [composition, setComposition] = useState<Composition>(() => loadComposition());
+
+  const notificationRenderers = useMemo(
+    () => Object.values(notificationRenderersById),
+    [notificationRenderersById],
+  );
 
   const host: TopoSyncHost = useMemo(
     () => ({
-      registerTool(tool) {
-        setTools((prev) => (prev.some((t) => t.id === tool.id) ? prev : [...prev, tool]));
-      },
-      registerPanel(panel) {
-        setPanels((prev) => (prev.some((p) => p.id === panel.id) ? prev : [...prev, panel]));
-      },
-      registerOverlay3D(overlay) {
-        setOverlays3d((prev) => (prev.some((o) => o.id === overlay.id) ? prev : [...prev, overlay]));
+      registerElementType(elementType) {
+        setElementTypesById((prev) => ({ ...prev, [elementType.type]: elementType }));
       },
       registerNotificationRenderer(renderer) {
-        setNotificationRenderers((prev) =>
-          prev.some((r) => r.id === renderer.id) ? prev : [...prev, renderer],
-        );
+        setNotificationRenderersById((prev) => ({ ...prev, [renderer.id]: renderer }));
       },
       api: {
         emitEvent,
@@ -58,32 +136,13 @@ export function App(): React.ReactElement {
     [],
   );
 
-  const refreshLamp = useCallback(async () => {
-    const device = await getDevice("lamp1");
-    setLampState(Boolean(device.state));
-  }, []);
-
-  const onLampClicked = useCallback(async () => {
-    const response = await emitEvent("device.action_requested", { device_id: "lamp1", action: "toggle" });
-    if (response?.result?.state !== undefined) setLampState(Boolean(response.result.state));
-    else await refreshLamp();
-
-    const state = response?.result?.state ?? null;
-    setNotifications((prev) => [
-      {
-        id: `${Date.now()}`,
-        type: "device.state",
-        title: "Lamp toggled",
-        createdAt: new Date().toISOString(),
-        payload: { device_id: "lamp1", state },
-      },
-      ...prev,
-    ].slice(0, 25));
-  }, [refreshLamp]);
-
   useEffect(() => {
-    void refreshLamp();
-  }, [refreshLamp]);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(composition));
+    } catch {
+      // ignore
+    }
+  }, [composition]);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,12 +152,15 @@ export function App(): React.ReactElement {
       for (const ext of exts) {
         if (!ext.frontend || ext.frontend.kind !== "module-federation") continue;
         try {
-          const activate = await loadRemoteActivate(ext.frontend.remote_entry_url, ext.frontend.scope, ext.frontend.module);
+          const activate = await loadRemoteActivate(
+            ext.frontend.remote_entry_url,
+            ext.frontend.scope,
+            ext.frontend.module,
+          );
           await activate(host);
         } catch (err) {
           if (cancelled) return;
-          const msg = err instanceof Error ? err.message : String(err);
-          setErrors((prev) => [...prev, `[${ext.id}] ${msg}`]);
+          console.error(`[extension:${ext.id}]`, err);
         }
       }
     }
@@ -109,76 +171,67 @@ export function App(): React.ReactElement {
     };
   }, [host]);
 
+  const addElement = useCallback(
+    (typeId: string): string | null => {
+      const def = elementTypesById[typeId];
+      if (!def) return null;
+
+      const id = newId();
+      setComposition((prev) => {
+        const idx = prev.elements.length;
+        const col = idx % 4;
+        const row = Math.floor(idx / 4);
+
+        const element: CompositionElement = {
+          id,
+          type: typeId,
+          name: def.name,
+          position: { x: (col - 1.5) * 1.3, y: 0, z: (row - 1.5) * 1.3 },
+          rotation: { x: 0, y: 0, z: 0 },
+          props: { ...(def.defaultProps ?? {}) },
+        };
+        return { ...prev, elements: [...prev.elements, element] };
+      });
+      return id;
+    },
+    [elementTypesById],
+  );
+
+  const updateElement = useCallback((elementId: string, patch: CompositionElementPatch) => {
+    setComposition((prev) => ({
+      ...prev,
+      elements: prev.elements.map((el) => (el.id === elementId ? mergeElement(el, patch) : el)),
+    }));
+  }, []);
+
+  const removeElement = useCallback((elementId: string) => {
+    setComposition((prev) => ({ ...prev, elements: prev.elements.filter((el) => el.id !== elementId) }));
+  }, []);
+
   return (
-    <div className="appRoot">
-      <div className="main">
-        <div className="topBar">
-          <div className="brand">TopoSync</div>
-          <div className="spacer" />
-          <div className="badge">3D</div>
-        </div>
-        <LampViewport overlays={overlays3d} lampOn={lampState} onLampClicked={onLampClicked} />
-      </div>
-      <aside className="sidebar">
-        <div className="sectionTitle">Tools</div>
-        <div className="toolList">
-          <button className="toolButton" onClick={onLampClicked} type="button">
-            Toggle Lamp (core)
-          </button>
-          {tools.map((t) => (
-            <button
-              className="toolButton"
-              key={t.id}
-              onClick={() => void t.onTrigger()}
-              type="button"
-              title={t.id}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="sectionTitle">Panels</div>
-        <div className="panelList">
-          {panels.map((p) => (
-            <div className="panel" key={p.id}>
-              <div className="panelTitle">{p.title}</div>
-              <div className="panelBody">{p.render()}</div>
-            </div>
-          ))}
-        </div>
-
-        <div className="sectionTitle">Notifications</div>
-        <div className="panelList">
-          {notifications.length === 0 ? (
-            <div className="panel">
-              <div className="panelBody">No notifications yet.</div>
-            </div>
-          ) : null}
-          {notifications.map((n) => {
-            const renderer = notificationRenderers.find((r) => r.type === n.type);
-            return (
-              <div className="panel" key={n.id}>
-                <div className="panelTitle">{n.title}</div>
-                <div className="panelBody">{renderer ? renderer.render(n) : JSON.stringify(n.payload)}</div>
-              </div>
-            );
-          })}
-        </div>
-
-        {errors.length > 0 ? (
-          <>
-            <div className="sectionTitle">Extension Errors</div>
-            <ul className="errorList">
-              {errors.map((e, idx) => (
-                <li className="errorItem" key={idx}>
-                  {e}
-                </li>
-              ))}
-            </ul>
-          </>
-        ) : null}
-      </aside>
+    <div className="appShell">
+      {screen === "main" ? (
+        <MainScreen
+          compositionName={composition.name}
+          elements={composition.elements}
+          elementTypesById={elementTypesById}
+          notificationRenderers={notificationRenderers}
+          notifications={notifications}
+          api={host.api}
+          updateElement={updateElement}
+          onEditComposition={() => setScreen("editor")}
+        />
+      ) : (
+        <CompositionEditorScreen
+          compositionName={composition.name}
+          elements={composition.elements}
+          elementTypesById={elementTypesById}
+          addElement={addElement}
+          updateElement={updateElement}
+          removeElement={removeElement}
+          onExit={() => setScreen("main")}
+        />
+      )}
     </div>
   );
 }

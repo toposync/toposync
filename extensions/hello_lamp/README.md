@@ -31,3 +31,11 @@ uv run toposync serve
 ```bash
 npm --workspace @toposync/frontend run dev
 ```
+
+## Como testar no app
+
+1) Abra `http://localhost:5173`
+2) Clique em **Editar**
+3) Em “Elementos disponíveis”, adicione **Lâmpada (Hello Lamp)**
+4) Clique em **Voltar**
+5) Clique no objeto 3D para abrir o modal de ação (toggle)

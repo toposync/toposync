@@ -6,7 +6,7 @@ import asyncio
 class DeviceStore:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._state: dict[str, bool] = {"lamp1": False}
+        self._state: dict[str, bool] = {}
 
     def peek(self, device_id: str) -> bool:
         return bool(self._state.get(device_id, False))

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "com.toposync.structural",
+  "name": "Structural",
+  "version": "0.1.0",
+  "frontend": {
+    "kind": "module-federation",
+    "remote_entry": "remoteEntry.js",
+    "scope": "structural",
+    "module": "./activate"
+  }
+}
+

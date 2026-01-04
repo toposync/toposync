@@ -1,12 +1,19 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
-import type { CompositionElement, CompositionElementPatch, ElementType } from "@toposync/plugin-api";
+import type {
+  CompositionElement,
+  CompositionElementPatch,
+  EditorTool,
+  EditorToolSession,
+  ElementType,
+} from "@toposync/plugin-api";
 
 import type { Composition, CompositionSummary } from "../../util/api";
 import { i18n, resolveLocalizedString } from "../../util/i18n";
 
 import { Modal } from "../Modal";
 import { CompositionSelectorModal } from "../CompositionSelectorModal";
+import { Icon } from "../Icon";
 import { Viewport2D } from "../Viewport2D";
 
 type Props = {
@@ -15,7 +22,8 @@ type Props = {
   activeCompositionId: string;
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
-  addElement: (typeId: string) => string | null;
+  createElement: (typeId: string, init?: Partial<Omit<CompositionElement, "id" | "type">>) => string | null;
+  editorTools: EditorTool[];
   updateElement: (elementId: string, patch: CompositionElementPatch) => void;
   removeElement: (elementId: string) => void;
   onExit: () => void;
@@ -39,7 +47,8 @@ export function CompositionEditorScreen({
   activeCompositionId,
   elements,
   elementTypesById,
-  addElement,
+  createElement,
+  editorTools,
   updateElement,
   removeElement,
   onExit,
@@ -52,6 +61,10 @@ export function CompositionEditorScreen({
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
+  const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
+  const [activeToolSession, setActiveToolSession] = useState<EditorToolSession | null>(null);
+  const [isWallsOpen, setIsWallsOpen] = useState(true);
+  const [isAreasOpen, setIsAreasOpen] = useState(true);
 
   const elementTypes = useMemo(
     () =>
@@ -61,15 +74,99 @@ export function CompositionEditorScreen({
     [elementTypesById, locale],
   );
 
+  const tools = useMemo(() => {
+    const extTools = [...editorTools].sort((a, b) =>
+      resolveLocalizedString(a.name).localeCompare(resolveLocalizedString(b.name)),
+    );
+
+    const placementTools: EditorTool[] = elementTypes
+      .filter((elType) => elType.layerGroup !== "walls" && elType.layerGroup !== "areas")
+      .map((elType) => ({
+        id: `core.place:${elType.type}`,
+        name: elType.name,
+        description: elType.description,
+        icon: "plus",
+        createSession: ({ createElement: create, openEditor }) => ({
+          onPointerEvent: (evt) => {
+            if (evt.kind !== "down") return;
+            if (evt.button !== 0) return;
+            const id = create(elType.type, {
+              position: { x: evt.world.x, y: 0, z: evt.world.z },
+            });
+            if (id) openEditor(id);
+          },
+        }),
+      }));
+
+    return [...extTools, ...placementTools];
+  }, [editorTools, elementTypes, locale]);
+
+  const toolsById = useMemo(() => {
+    const out: Record<string, EditorTool> = {};
+    for (const tool of tools) out[tool.id] = tool;
+    return out;
+  }, [tools]);
+
+  useEffect(() => {
+    if (selectedToolId && !toolsById[selectedToolId]) {
+      setSelectedToolId(null);
+      setActiveToolSession(null);
+      return;
+    }
+
+    const tool = selectedToolId ? toolsById[selectedToolId] : null;
+    if (!tool) {
+      setActiveToolSession(null);
+      return;
+    }
+
+    const session = tool.createSession({
+      i18n,
+      createElement,
+      updateElement,
+      removeElement,
+      openEditor: (elementId) => setEditingElementId(elementId),
+      closeEditor: () => setEditingElementId(null),
+    });
+    setActiveToolSession(session);
+
+    return () => session.dispose?.();
+  }, [createElement, removeElement, selectedToolId, toolsById, updateElement]);
+
   const editingElement = useMemo(
     () => (editingElementId ? elements.find((e) => e.id === editingElementId) ?? null : null),
     [editingElementId, elements],
   );
   const editingType = editingElement ? elementTypesById[editingElement.type] ?? null : null;
 
+  const layerGroups = useMemo(() => {
+    const ungrouped: Array<{ el: CompositionElement; idx: number }> = [];
+    const walls: Array<{ el: CompositionElement; idx: number }> = [];
+    const areas: Array<{ el: CompositionElement; idx: number }> = [];
+
+    elements.forEach((el, idx) => {
+      const group = elementTypesById[el.type]?.layerGroup ?? "";
+      if (group === "walls") walls.push({ el, idx });
+      else if (group === "areas") areas.push({ el, idx });
+      else ungrouped.push({ el, idx });
+    });
+
+    walls.sort((a, b) => b.idx - a.idx);
+    areas.sort((a, b) => b.idx - a.idx);
+
+    return { ungrouped, walls, areas };
+  }, [elements, elementTypesById]);
+
+  const editingTitle = useMemo(() => {
+    if (!editingElement) return t("core.element_editor.title");
+    const typeName = editingType ? resolveLocalizedString(editingType.name) : editingElement.type;
+    const title = editingElement.name || typeName || editingElement.type;
+    return `${t("core.actions.edit")}: ${title}`;
+  }, [editingElement, editingType, t]);
+
   return (
     <div className="screenRoot">
-      <Viewport2D elements={elements} />
+      <Viewport2D elements={elements} elementTypesById={elementTypesById} activeToolSession={activeToolSession} />
 
       <div className="overlayTopRight">
         <button className="chipButton" type="button" onClick={() => setIsRenderModalOpen(true)}>
@@ -85,27 +182,32 @@ export function CompositionEditorScreen({
 
       <div className="overlayLeft">
         <div className="rail">
-          <div className="railTitle">{t("core.ui.add")}</div>
-          {elementTypes.length === 0 ? (
+          <div className="railTitle">{t("core.ui.tools")}</div>
+          {tools.length === 0 ? (
             <div className="card">
               <div className="cardBody">{t("core.ui.element_types_empty")}</div>
             </div>
           ) : (
             <div className="elementButtonGrid">
-              {elementTypes.map((elementType) => (
+              {tools.map((tool) => {
+                const isSelected = selectedToolId === tool.id;
+                return (
                 <button
-                  className="elementTypeButton"
-                  key={elementType.type}
+                  className={["elementTypeButton", isSelected ? "isSelected" : ""].join(" ")}
+                  key={tool.id}
                   type="button"
                   onClick={() => {
-                    const id = addElement(elementType.type);
-                    if (id) setEditingElementId(id);
+                    setSelectedToolId((prev) => (prev === tool.id ? null : tool.id));
                   }}
                 >
-                  <span>{resolveLocalizedString(elementType.name)}</span>
-                  <span className="elementTypeButtonHint">+</span>
+                  <span className="toolLabel">
+                    {tool.icon ? <Icon name={tool.icon} className="toolIcon" /> : null}
+                    <span>{resolveLocalizedString(tool.name)}</span>
+                  </span>
+                  <span className="elementTypeButtonHint">{isSelected ? <Icon name="check" /> : null}</span>
                 </button>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -118,7 +220,8 @@ export function CompositionEditorScreen({
                 <div className="cardBody">{t("core.ui.layers_empty")}</div>
               </div>
             ) : null}
-            {elements.map((el) => {
+
+            {layerGroups.ungrouped.map(({ el }) => {
               const type = elementTypesById[el.type];
               const typeName = type ? resolveLocalizedString(type.name) : el.type;
               const title = el.name || typeName || el.type;
@@ -134,6 +237,78 @@ export function CompositionEditorScreen({
                 </div>
               );
             })}
+
+            {layerGroups.walls.length > 0 ? (
+              <div className="layerGroup">
+                <button className="layerGroupHeader" type="button" onClick={() => setIsWallsOpen((v) => !v)}>
+                  <span className="layerGroupTitle">
+                    <Icon name={isWallsOpen ? "chevron-down" : "chevron-right"} className="layerGroupChevron" />
+                    <span>{t("core.ui.layers_group_walls")}</span>
+                  </span>
+                  <span className="layerGroupCount">{layerGroups.walls.length}</span>
+                </button>
+                {isWallsOpen ? (
+                  <div className="layerGroupItems">
+                    {layerGroups.walls.map(({ el }) => {
+                      const type = elementTypesById[el.type];
+                      const typeName = type ? resolveLocalizedString(type.name) : el.type;
+                      const title = el.name || typeName || el.type;
+                      return (
+                        <div className="layerRow layerRowGrouped" key={el.id}>
+                          <button
+                            className="layerMainButton"
+                            type="button"
+                            onClick={() => setEditingElementId(el.id)}
+                          >
+                            <div className="layerMainTitle">{title}</div>
+                            <div className="layerMainMeta">{typeName}</div>
+                          </button>
+                          <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
+                            {t("core.actions.delete")}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {layerGroups.areas.length > 0 ? (
+              <div className="layerGroup">
+                <button className="layerGroupHeader" type="button" onClick={() => setIsAreasOpen((v) => !v)}>
+                  <span className="layerGroupTitle">
+                    <Icon name={isAreasOpen ? "chevron-down" : "chevron-right"} className="layerGroupChevron" />
+                    <span>{t("core.ui.layers_group_areas")}</span>
+                  </span>
+                  <span className="layerGroupCount">{layerGroups.areas.length}</span>
+                </button>
+                {isAreasOpen ? (
+                  <div className="layerGroupItems">
+                    {layerGroups.areas.map(({ el }) => {
+                      const type = elementTypesById[el.type];
+                      const typeName = type ? resolveLocalizedString(type.name) : el.type;
+                      const title = el.name || typeName || el.type;
+                      return (
+                        <div className="layerRow layerRowGrouped" key={el.id}>
+                          <button
+                            className="layerMainButton"
+                            type="button"
+                            onClick={() => setEditingElementId(el.id)}
+                          >
+                            <div className="layerMainTitle">{title}</div>
+                            <div className="layerMainMeta">{typeName}</div>
+                          </button>
+                          <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
+                            {t("core.actions.delete")}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -174,7 +349,7 @@ export function CompositionEditorScreen({
 
       <Modal
         open={Boolean(editingElement)}
-        title={editingElement ? `${t("core.actions.edit")}: ${editingElement.name}` : t("core.element_editor.title")}
+        title={editingTitle}
         onClose={() => setEditingElementId(null)}
       >
         {editingElement ? (

@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   CompositionElement,
   CompositionElementPatch,
+  EditorTool,
   ElementType,
   Notification,
   NotificationRenderer,
@@ -125,6 +126,7 @@ export function App(): React.ReactElement {
   const [screen, setScreen] = useState<Screen>("main");
   const [elementTypesById, setElementTypesById] = useState<Record<string, ElementType>>({});
   const [notificationRenderersById, setNotificationRenderersById] = useState<Record<string, NotificationRenderer>>({});
+  const [editorToolsById, setEditorToolsById] = useState<Record<string, EditorTool>>({});
   const [notifications] = useState<Notification[]>([]);
   const [composition, setComposition] = useState<Composition>(() => defaultComposition());
   const [compositions, setCompositions] = useState<Array<{ id: string; name: string }>>([]);
@@ -146,6 +148,9 @@ export function App(): React.ReactElement {
       },
       registerNotificationRenderer(renderer) {
         setNotificationRenderersById((prev) => ({ ...prev, [renderer.id]: renderer }));
+      },
+      registerEditorTool(tool) {
+        setEditorToolsById((prev) => ({ ...prev, [tool.id]: tool }));
       },
       api: {
         emitEvent,
@@ -271,8 +276,8 @@ export function App(): React.ReactElement {
     };
   }, [host]);
 
-  const addElement = useCallback(
-    (typeId: string): string | null => {
+  const createElement = useCallback(
+    (typeId: string, init: Partial<Omit<CompositionElement, "id" | "type">> = {}): string | null => {
       const def = elementTypesById[typeId];
       if (!def) return null;
 
@@ -282,7 +287,7 @@ export function App(): React.ReactElement {
         const col = idx % 4;
         const row = Math.floor(idx / 4);
 
-        const element: CompositionElement = {
+        const base: CompositionElement = {
           id,
           type: typeId,
           name: resolveLocalizedString(def.name),
@@ -290,7 +295,16 @@ export function App(): React.ReactElement {
           rotation: { x: 0, y: 0, z: 0 },
           props: { ...(def.defaultProps ?? {}) },
         };
-        return { ...prev, elements: [...prev.elements, element] };
+
+        const next: CompositionElement = {
+          ...base,
+          ...init,
+          position: { ...base.position, ...(init.position ?? {}) },
+          rotation: { ...base.rotation, ...(init.rotation ?? {}) },
+          props: { ...base.props, ...(init.props ?? {}) },
+        };
+
+        return { ...prev, elements: [...prev.elements, next] };
       });
       setCompositionRevision((v) => v + 1);
       return id;
@@ -377,7 +391,8 @@ export function App(): React.ReactElement {
           activeCompositionId={activeCompositionId}
           elements={composition.elements}
           elementTypesById={elementTypesById}
-          addElement={addElement}
+          createElement={createElement}
+          editorTools={Object.values(editorToolsById)}
           updateElement={updateElement}
           removeElement={removeElement}
           onExit={() => setScreen("main")}

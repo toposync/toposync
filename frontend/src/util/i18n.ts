@@ -13,6 +13,15 @@ export type LocalizedString =
       fallback?: string;
     };
 
+type I18nApi = {
+  getLocale: () => Locale;
+  setLocale: (locale: Locale) => void;
+  subscribe: (listener: () => void) => () => void;
+  registerTranslations: (bundle: TranslationBundle) => void;
+  t: (key: string, params?: Record<string, unknown>, fallback?: string) => string;
+  useI18n: () => { locale: Locale; t: I18nApi["t"]; setLocale: I18nApi["setLocale"] };
+};
+
 const STORAGE_KEY = "toposync.locale";
 
 const translationsByLocale: Record<Locale, Translations> = {
@@ -31,7 +40,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.notifications": "Notifications",
     "core.ui.layers": "Layers",
     "core.ui.add": "Add",
+    "core.ui.tools": "Tools",
     "core.ui.action": "Action",
+
+    "core.ui.layers_group_walls": "Walls",
+    "core.ui.layers_group_areas": "Areas",
 
     "core.ui.empty_title": "Nothing configured yet",
     "core.ui.empty_desc": "Click “Edit” to add elements to the composition.",
@@ -43,7 +56,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.render_modal.option_3d.title": "3D (ThreeJS)",
     "core.ui.render_modal.option_3d.desc": "Current mode. Coming soon: 2D and other modes.",
     "core.ui.render_modal.option_2d.title": "2D (Canvas)",
-    "core.ui.render_modal.option_2d.desc": "Current editing mode. Coming soon: 3D and drawing tools.",
+    "core.ui.render_modal.option_2d.desc": "Current editing mode. Coming soon: pan/zoom and more tools.",
 
     "core.ui.action_unavailable": "No actions available for this element.",
 
@@ -92,7 +105,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.notifications": "Notificações",
     "core.ui.layers": "Camadas",
     "core.ui.add": "Adicionar",
+    "core.ui.tools": "Ferramentas",
     "core.ui.action": "Ação",
+
+    "core.ui.layers_group_walls": "Paredes",
+    "core.ui.layers_group_areas": "Áreas",
 
     "core.ui.empty_title": "Nada configurado ainda",
     "core.ui.empty_desc": "Clique em “Editar” para adicionar elementos na composição.",
@@ -104,7 +121,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.render_modal.option_3d.title": "3D (ThreeJS)",
     "core.ui.render_modal.option_3d.desc": "Modo atual. Em breve: 2D e outros modos.",
     "core.ui.render_modal.option_2d.title": "2D (Canvas)",
-    "core.ui.render_modal.option_2d.desc": "Modo atual de edição. Em breve: 3D e ferramentas de desenho.",
+    "core.ui.render_modal.option_2d.desc": "Modo atual de edição. Em breve: pan/zoom e mais ferramentas.",
 
     "core.ui.action_unavailable": "Sem ações disponíveis para este elemento.",
 
@@ -185,7 +202,7 @@ function interpolate(template: string, params: Record<string, unknown>): string 
   });
 }
 
-export const i18n = {
+export const i18n: I18nApi = {
   getLocale(): Locale {
     return locale;
   },
@@ -214,8 +231,8 @@ export const i18n = {
     const base = dict[key] ?? translationsByLocale.en[key] ?? fallback ?? key;
     return Object.keys(params).length ? interpolate(base, params) : base;
   },
-  useI18n(): { locale: Locale; t: typeof i18n.t; setLocale: typeof i18n.setLocale } {
-    const current = useSyncExternalStore(i18n.subscribe, i18n.getLocale, i18n.getLocale);
+  useI18n(): { locale: Locale; t: I18nApi["t"]; setLocale: I18nApi["setLocale"] } {
+    const current = useSyncExternalStore<Locale>(i18n.subscribe, i18n.getLocale, i18n.getLocale);
     return { locale: current, t: i18n.t, setLocale: i18n.setLocale };
   },
 };

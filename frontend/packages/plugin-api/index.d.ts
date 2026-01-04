@@ -1,4 +1,6 @@
 export type Vector3 = { x: number; y: number; z: number };
+export type Vector2 = { x: number; y: number };
+export type PlanePoint = { x: number; z: number };
 
 export type Locale = "en" | "pt-BR";
 
@@ -83,8 +85,14 @@ export type ElementType = {
   type: string;
   name: LocalizedString;
   description?: LocalizedString;
+  layerGroup?: string;
   defaultProps?: Record<string, unknown>;
   create3D?: (ctx: Scene3DContext, element: CompositionElement) => Element3DInstance;
+  render2D?: (args: {
+    ctx: CanvasRenderingContext2D;
+    element: CompositionElement;
+    viewport: Viewport2DContext;
+  }) => void;
   renderActionModal?: (args: {
     element: CompositionElement;
     update: (patch: CompositionElementPatch) => void;
@@ -99,9 +107,61 @@ export type ElementType = {
   }) => import("react").ReactNode;
 };
 
+export type Viewport2DContext = {
+  canvas: HTMLCanvasElement;
+  width: number;
+  height: number;
+  dpr: number;
+  worldToScreen: (p: PlanePoint) => Vector2;
+  screenToWorld: (p: Vector2) => PlanePoint;
+  scale: number;
+};
+
+export type EditorToolPointerEvent = {
+  kind: "down" | "move" | "up" | "cancel" | "dblclick";
+  world: PlanePoint;
+  screen: Vector2;
+  button: number;
+  buttons: number;
+  pointerType: string;
+  shiftKey: boolean;
+  altKey: boolean;
+  metaKey: boolean;
+  ctrlKey: boolean;
+};
+
+export type EditorToolContext = {
+  i18n: HostI18n;
+  createElement: (
+    typeId: string,
+    init?: Partial<Omit<CompositionElement, "id" | "type">>,
+  ) => string | null;
+  updateElement: (elementId: string, patch: CompositionElementPatch) => void;
+  removeElement: (elementId: string) => void;
+  openEditor: (elementId: string) => void;
+  closeEditor: () => void;
+};
+
+export type EditorToolSession = {
+  onPointerEvent?: (event: EditorToolPointerEvent) => void;
+  onKeyDown?: (event: KeyboardEvent) => void;
+  renderOverlay2D?: (args: { ctx: CanvasRenderingContext2D; viewport: Viewport2DContext }) => void;
+  getCursor?: () => string;
+  dispose?: () => void;
+};
+
+export type EditorTool = {
+  id: string;
+  name: LocalizedString;
+  description?: LocalizedString;
+  icon?: string;
+  createSession: (ctx: EditorToolContext) => EditorToolSession;
+};
+
 export type TopoSyncHost = {
   registerElementType: (elementType: ElementType) => void;
   registerNotificationRenderer: (renderer: NotificationRenderer) => void;
+  registerEditorTool: (tool: EditorTool) => void;
   api: HostApi;
   i18n: HostI18n;
 };

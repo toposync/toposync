@@ -16,6 +16,7 @@ O objetivo dessa base é resolver o “maior nó”: **extensões com backend Py
 - `src/toposync`: backend core (FastAPI) + runtime de extensões
 - `frontend`: app host (React/Three + webpack)
 - `extensions/hello_lamp`: extensão exemplo (Python + UI prebuilt)
+- `extensions/structural`: extensão “first-party” (ferramentas 2D: paredes/áreas)
 
 ## Rodar (dev)
 
@@ -36,13 +37,14 @@ npm install
 3) Instale a extensão exemplo (editable, para o backend descobrir via entry point):
 
 ```bash
-uv pip install -e extensions/hello_lamp
+uv pip install -e extensions/hello_lamp -e extensions/structural
 ```
 
-4) Build do frontend da extensão (gera `static/remoteEntry.js` dentro do pacote Python da extensão):
+4) Build do frontend das extensões (gera `static/remoteEntry.js` dentro do pacote Python):
 
 ```bash
 npm --workspace @toposync/extension-hello-lamp-ui run build
+npm --workspace @toposync/extension-structural-ui run build
 ```
 
 5) Backend:
@@ -89,6 +91,7 @@ npm --workspace @toposync/frontend run build
 
 ```bash
 npm --workspace @toposync/extension-hello-lamp-ui run build
+npm --workspace @toposync/extension-structural-ui run build
 ```
 
 2) Build do wheel da extensão:
@@ -162,8 +165,11 @@ Hoje, o host suporta:
 
 - **Element types**: definem um tipo de elemento que pode entrar na composição:
   - como criar o objeto 3D (`create3D`)
+  - como renderizar no editor 2D (`render2D`)
   - modal de ação (quando o objeto é clicado no 3D): `renderActionModal`
   - modal de edição (na tela de composição): `renderEditorModal`
+  - agrupamento no painel de camadas (`layerGroup`, ex.: `walls` e `areas`)
+- **Editor tools**: ferramentas selecionáveis na edição de composição (cada uma controla a interação no canvas)
 - **Notification renderers**: como renderizar um tipo de notificação em card
 
 O modelo base de instância em uma composição é `CompositionElement`:
@@ -171,6 +177,28 @@ O modelo base de instância em uma composição é `CompositionElement`:
 - `id`, `type`, `name`
 - `position`/`rotation` (Vector3)
 - `props` (objeto livre da extensão)
+
+### Editor tools (rápido)
+
+- O editor 2D envia eventos de ponteiro em coordenadas do “mundo” (plano X/Z).
+- A ferramenta cria uma sessão (`createSession`) e recebe callbacks (`createElement`, `openEditor`, etc).
+- Exemplos reais: `extensions/structural` (paredes/áreas).
+
+Exemplo mínimo de ferramenta “clique para adicionar”:
+
+```ts
+host.registerEditorTool({
+  id: "com.exemplo.tool.point",
+  name: "Point",
+  icon: "plus",
+  createSession: ({ createElement }) => ({
+    onPointerEvent: (e) => {
+      if (e.kind !== "down" || e.button !== 0) return
+      createElement("com.exemplo.point", { position: { x: e.world.x, y: 0, z: e.world.z } })
+    },
+  }),
+})
+```
 
 ## i18n (en + pt-BR)
 

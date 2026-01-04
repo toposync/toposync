@@ -541,8 +541,26 @@ body {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.04));
 }
 
+.elementTypeButton.isSelected {
+  border-color: rgba(251, 191, 36, 0.55);
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.20), rgba(255, 255, 255, 0.04));
+}
+
 .elementTypeButton:active {
   transform: translateY(1px);
+}
+
+.toolLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.toolIcon {
+  color: rgba(230, 232, 242, 0.78);
+  width: 16px;
+  text-align: center;
 }
 
 .elementTypeButtonHint {
@@ -551,10 +569,82 @@ body {
   font-size: 12px;
 }
 
+.elementTypeButtonHint i {
+  color: rgba(251, 191, 36, 0.92);
+}
+
 .layerRow {
   display: flex;
   align-items: stretch;
   gap: 10px;
+}
+
+.layerGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.layerGroupHeader {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+    rgba(12, 18, 37, 0.40);
+  color: var(--text);
+  cursor: pointer;
+  backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+  -webkit-backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.layerGroupHeader:hover {
+  border-color: var(--borderStrong);
+}
+
+.layerGroupTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 750;
+  font-size: 13px;
+}
+
+.layerGroupChevron {
+  font-size: 12px;
+  color: rgba(230, 232, 242, 0.72);
+  width: 14px;
+  text-align: center;
+}
+
+.layerGroupCount {
+  font-size: 12px;
+  color: rgba(230, 232, 242, 0.64);
+}
+
+.layerGroupItems {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-left: 12px;
+  margin-left: 6px;
+  border-left: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.layerRowGrouped .layerMainButton {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02)),
+    rgba(12, 18, 37, 0.36);
+}
+
+.layerRowGrouped .layerDeleteButton {
+  border-radius: 12px;
 }
 
 .layerMainButton {

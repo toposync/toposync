@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
   CompositionElement,
@@ -85,6 +85,9 @@ function polygonArea(vertices: PlanePoint[]): number {
   return Math.abs(sum) / 2;
 }
 
+const CORE_TOOL_NAVIGATE_ID = "core.navigate";
+const CORE_TOOL_SELECT_ID = "core.select";
+
 export function CompositionEditorScreen({
   compositionName,
   compositions,
@@ -110,8 +113,8 @@ export function CompositionEditorScreen({
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
-  const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
-  const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
+  const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
+  const [selectedToolId, setSelectedToolId] = useState<string>(CORE_TOOL_NAVIGATE_ID);
   const [activeToolSession, setActiveToolSession] = useState<EditorToolSession | null>(null);
   const [isWallsOpen, setIsWallsOpen] = useState(true);
   const [isAreasOpen, setIsAreasOpen] = useState(true);
@@ -146,6 +149,23 @@ export function CompositionEditorScreen({
   );
 
   const tools = useMemo(() => {
+    const coreTools: EditorTool[] = [
+      {
+        id: CORE_TOOL_NAVIGATE_ID,
+        name: { key: "core.tools.navigate", fallback: "Navigate" },
+        description: { key: "core.tools.navigate_desc", fallback: "Pan around the canvas." },
+        icon: "hand",
+        createSession: () => ({}),
+      },
+      {
+        id: CORE_TOOL_SELECT_ID,
+        name: { key: "core.tools.select", fallback: "Select" },
+        description: { key: "core.tools.select_desc", fallback: "Select and move elements." },
+        icon: "arrow-pointer",
+        createSession: () => ({}),
+      },
+    ];
+
     const extTools = [...editorTools].sort((a, b) =>
       resolveLocalizedString(a.name).localeCompare(resolveLocalizedString(b.name)),
     );
@@ -170,7 +190,7 @@ export function CompositionEditorScreen({
         }),
       }));
 
-    return [...extTools, ...placementTools];
+    return [...coreTools, ...extTools, ...placementTools];
   }, [editorTools, elementTypes, locale]);
 
   const toolsById = useMemo(() => {
@@ -181,13 +201,19 @@ export function CompositionEditorScreen({
 
   useEffect(() => {
     if (selectedToolId && !toolsById[selectedToolId]) {
-      setSelectedToolId(null);
+      setSelectedToolId(CORE_TOOL_NAVIGATE_ID);
       setActiveToolSession(null);
       return;
     }
 
-    const tool = selectedToolId ? toolsById[selectedToolId] : null;
+    if (selectedToolId === CORE_TOOL_NAVIGATE_ID || selectedToolId === CORE_TOOL_SELECT_ID) {
+      setActiveToolSession(null);
+      return;
+    }
+
+    const tool = toolsById[selectedToolId] ?? null;
     if (!tool) {
+      setSelectedToolId(CORE_TOOL_NAVIGATE_ID);
       setActiveToolSession(null);
       return;
     }
@@ -212,21 +238,30 @@ export function CompositionEditorScreen({
   const editingType = editingElement ? elementTypesById[editingElement.type] ?? null : null;
 
   useEffect(() => {
-    if (!selectedElementId) return;
-    const el = elements.find((e) => e.id === selectedElementId);
-    if (!el) {
-      setSelectedElementId(null);
-      return;
-    }
-    const group = elementTypesById[el.type]?.layerGroup ?? "";
-    if (group === "walls") setIsWallsOpen(true);
-    if (group === "areas") setIsAreasOpen(true);
-  }, [elements, elementTypesById, selectedElementId]);
+    setSelectedElementIds((prev) => {
+      if (prev.length === 0) return prev;
+      const existing = new Set(elements.map((e) => e.id));
+      const next = prev.filter((id) => existing.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [elements]);
 
   useEffect(() => {
     if (!editingElementId) return;
-    setSelectedElementId(editingElementId);
+    setSelectedElementIds([editingElementId]);
   }, [editingElementId]);
+
+  useEffect(() => {
+    if (selectedElementIds.length === 0) return;
+    const byId = new Map(elements.map((e) => [e.id, e]));
+    for (const id of selectedElementIds) {
+      const el = byId.get(id);
+      if (!el) continue;
+      const group = elementTypesById[el.type]?.layerGroup ?? "";
+      if (group === "walls") setIsWallsOpen(true);
+      if (group === "areas") setIsAreasOpen(true);
+    }
+  }, [elements, elementTypesById, selectedElementIds]);
 
   const layerGroups = useMemo(() => {
     const ungrouped: Array<{ el: CompositionElement; idx: number }> = [];
@@ -253,20 +288,40 @@ export function CompositionEditorScreen({
     return `${t("core.actions.edit")}: ${title}`;
   }, [editingElement, editingType, t]);
 
+  const duplicateElements = useCallback(
+    (source: CompositionElement[]): string[] => {
+      const ids: string[] = [];
+      for (const el of source) {
+        const id = createElement(el.type, {
+          name: el.name,
+          position: { ...el.position },
+          rotation: { ...el.rotation },
+          props: { ...el.props },
+        });
+        if (!id) return [];
+        ids.push(id);
+      }
+      return ids;
+    },
+    [createElement],
+  );
+
   return (
     <div className="screenRoot">
       <Viewport2D
         elements={elements}
         elementTypesById={elementTypesById}
         activeToolSession={activeToolSession}
-        selectedElementId={selectedElementId}
-        onSelectElement={setSelectedElementId}
+        interactionMode={selectedToolId === CORE_TOOL_NAVIGATE_ID ? "navigate" : "select"}
+        selectedElementIds={selectedElementIds}
+        onSelectElements={setSelectedElementIds}
         onOpenEditor={(id) => {
-          setSelectedElementId(id);
+          setSelectedElementIds([id]);
           setEditingElementId(id);
         }}
         updateElement={updateElement}
         removeElement={removeElement}
+        duplicateElements={duplicateElements}
         onBeginUndoGroup={onBeginUndoGroup}
         onEndUndoGroup={onEndUndoGroup}
         onUndo={onUndo}
@@ -300,20 +355,24 @@ export function CompositionEditorScreen({
               {tools.map((tool) => {
                 const isSelected = selectedToolId === tool.id;
                 return (
-                <button
-                  className={["elementTypeButton", isSelected ? "isSelected" : ""].join(" ")}
-                  key={tool.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedToolId((prev) => (prev === tool.id ? null : tool.id));
-                  }}
-                >
-                  <span className="toolLabel">
-                    {tool.icon ? <Icon name={tool.icon} className="toolIcon" /> : null}
-                    <span>{resolveLocalizedString(tool.name)}</span>
-                  </span>
-                  <span className="elementTypeButtonHint">{isSelected ? <Icon name="check" /> : null}</span>
-                </button>
+                  <button
+                    className={["elementTypeButton", isSelected ? "isSelected" : ""].join(" ")}
+                    key={tool.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedToolId((prev) => {
+                        if (tool.id === CORE_TOOL_NAVIGATE_ID) return CORE_TOOL_NAVIGATE_ID;
+                        if (tool.id === CORE_TOOL_SELECT_ID) return CORE_TOOL_SELECT_ID;
+                        return prev === tool.id ? CORE_TOOL_NAVIGATE_ID : tool.id;
+                      });
+                    }}
+                  >
+                    <span className="toolLabel">
+                      {tool.icon ? <Icon name={tool.icon} className="toolIcon" /> : null}
+                      <span>{resolveLocalizedString(tool.name)}</span>
+                    </span>
+                    <span className="elementTypeButtonHint">{isSelected ? <Icon name="check" /> : null}</span>
+                  </button>
                 );
               })}
             </div>
@@ -333,15 +392,24 @@ export function CompositionEditorScreen({
               const type = elementTypesById[el.type];
               const typeName = type ? resolveLocalizedString(type.name) : el.type;
               const title = el.name || typeName || el.type;
-              const selected = selectedElementId === el.id;
+              const selected = selectedElementIds.includes(el.id);
               const measurement = measurementFor(el);
               return (
                 <div className="layerRow" key={el.id}>
                   <button
                     className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
                     type="button"
-                    onClick={() => setSelectedElementId(el.id)}
-                    onDoubleClick={() => setEditingElementId(el.id)}
+                    onClick={(e) => {
+                      if (e.metaKey || e.ctrlKey) {
+                        setSelectedElementIds((prev) => (prev.includes(el.id) ? prev.filter((id) => id !== el.id) : [...prev, el.id]));
+                        return;
+                      }
+                      setSelectedElementIds([el.id]);
+                    }}
+                    onDoubleClick={() => {
+                      setSelectedElementIds([el.id]);
+                      setEditingElementId(el.id);
+                    }}
                   >
                     <div className="layerMainTitle">{title}</div>
                     <div className="layerMainMeta">
@@ -371,15 +439,24 @@ export function CompositionEditorScreen({
                       const type = elementTypesById[el.type];
                       const typeName = type ? resolveLocalizedString(type.name) : el.type;
                       const title = el.name || typeName || el.type;
-                      const selected = selectedElementId === el.id;
+                      const selected = selectedElementIds.includes(el.id);
                       const measurement = measurementFor(el);
                       return (
                         <div className="layerRow layerRowGrouped" key={el.id}>
                           <button
                             className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
                             type="button"
-                            onClick={() => setSelectedElementId(el.id)}
-                            onDoubleClick={() => setEditingElementId(el.id)}
+                            onClick={(e) => {
+                              if (e.metaKey || e.ctrlKey) {
+                                setSelectedElementIds((prev) => (prev.includes(el.id) ? prev.filter((id) => id !== el.id) : [...prev, el.id]));
+                                return;
+                              }
+                              setSelectedElementIds([el.id]);
+                            }}
+                            onDoubleClick={() => {
+                              setSelectedElementIds([el.id]);
+                              setEditingElementId(el.id);
+                            }}
                           >
                             <div className="layerMainTitle">{title}</div>
                             <div className="layerMainMeta">
@@ -413,15 +490,24 @@ export function CompositionEditorScreen({
                       const type = elementTypesById[el.type];
                       const typeName = type ? resolveLocalizedString(type.name) : el.type;
                       const title = el.name || typeName || el.type;
-                      const selected = selectedElementId === el.id;
+                      const selected = selectedElementIds.includes(el.id);
                       const measurement = measurementFor(el);
                       return (
                         <div className="layerRow layerRowGrouped" key={el.id}>
                           <button
                             className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
                             type="button"
-                            onClick={() => setSelectedElementId(el.id)}
-                            onDoubleClick={() => setEditingElementId(el.id)}
+                            onClick={(e) => {
+                              if (e.metaKey || e.ctrlKey) {
+                                setSelectedElementIds((prev) => (prev.includes(el.id) ? prev.filter((id) => id !== el.id) : [...prev, el.id]));
+                                return;
+                              }
+                              setSelectedElementIds([el.id]);
+                            }}
+                            onDoubleClick={() => {
+                              setSelectedElementIds([el.id]);
+                              setEditingElementId(el.id);
+                            }}
                           >
                             <div className="layerMainTitle">{title}</div>
                             <div className="layerMainMeta">

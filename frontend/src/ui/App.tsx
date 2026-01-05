@@ -104,6 +104,12 @@ function asRecord(v: unknown): Record<string, unknown> {
   return {};
 }
 
+function isCompositionSnapshot(v: unknown): v is Composition {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+  const rec = v as Record<string, unknown>;
+  return typeof rec.id === "string" && typeof rec.name === "string" && Array.isArray(rec.elements);
+}
+
 function asVector3(v: unknown, fallback: Vector3): Vector3 {
   const obj = asRecord(v);
   return {
@@ -189,6 +195,8 @@ export function App(): React.ReactElement {
   });
   const [undoStack, setUndoStack] = useState<Composition[]>([]);
   const [redoStack, setRedoStack] = useState<Composition[]>([]);
+  const undoStackRef = useRef<Composition[]>([]);
+  const redoStackRef = useRef<Composition[]>([]);
 
   useLayoutEffect(() => {
     screenRef.current = screen;
@@ -198,8 +206,18 @@ export function App(): React.ReactElement {
     compositionRef.current = composition;
   }, [composition]);
 
+  useLayoutEffect(() => {
+    undoStackRef.current = undoStack;
+  }, [undoStack]);
+
+  useLayoutEffect(() => {
+    redoStackRef.current = redoStack;
+  }, [redoStack]);
+
   const resetHistory = useCallback(() => {
     historyGroupRef.current = { depth: 0, snapshot: null, changed: false };
+    undoStackRef.current = [];
+    redoStackRef.current = [];
     setUndoStack([]);
     setRedoStack([]);
   }, []);
@@ -348,22 +366,23 @@ export function App(): React.ReactElement {
     }
   }, [backendAvailable, composition, compositionLoaded]);
 
-  const recordHistoryBeforeChange = useCallback((prev: Composition) => {
+  const recordHistoryBeforeChange = useCallback((snapshot: Composition) => {
     if (screenRef.current !== "editor") return;
 
     const group = historyGroupRef.current;
     if (group.depth > 0) {
-      if (!group.snapshot) group.snapshot = prev;
+      if (!group.snapshot) group.snapshot = snapshot;
       group.changed = true;
+      redoStackRef.current = [];
       setRedoStack([]);
       return;
     }
 
-    setUndoStack((stack) => {
-      const next = [...stack, prev];
-      if (next.length > HISTORY_LIMIT) next.splice(0, next.length - HISTORY_LIMIT);
-      return next;
-    });
+    const nextUndo = [...undoStackRef.current, snapshot];
+    if (nextUndo.length > HISTORY_LIMIT) nextUndo.splice(0, nextUndo.length - HISTORY_LIMIT);
+    undoStackRef.current = nextUndo;
+    setUndoStack(nextUndo);
+    redoStackRef.current = [];
     setRedoStack([]);
   }, []);
 
@@ -384,12 +403,12 @@ export function App(): React.ReactElement {
     group.depth -= 1;
     if (group.depth !== 0) return;
 
-    if (group.changed && group.snapshot) {
-      setUndoStack((stack) => {
-        const next = [...stack, group.snapshot as Composition];
-        if (next.length > HISTORY_LIMIT) next.splice(0, next.length - HISTORY_LIMIT);
-        return next;
-      });
+    if (group.changed && group.snapshot && isCompositionSnapshot(group.snapshot)) {
+      const nextUndo = [...undoStackRef.current, group.snapshot];
+      if (nextUndo.length > HISTORY_LIMIT) nextUndo.splice(0, nextUndo.length - HISTORY_LIMIT);
+      undoStackRef.current = nextUndo;
+      setUndoStack(nextUndo);
+      redoStackRef.current = [];
       setRedoStack([]);
     }
 
@@ -401,44 +420,62 @@ export function App(): React.ReactElement {
     if (screenRef.current !== "editor") return;
     historyGroupRef.current = { depth: 0, snapshot: null, changed: false };
 
-    setUndoStack((stack) => {
-      if (stack.length === 0) return stack;
-      const snapshot = stack[stack.length - 1];
+    const stack = undoStackRef.current;
+    if (stack.length === 0) return;
 
-      setRedoStack((redo) => {
-        const next = [...redo, compositionRef.current];
-        if (next.length > HISTORY_LIMIT) next.splice(0, next.length - HISTORY_LIMIT);
-        return next;
-      });
+    let idx = stack.length - 1;
+    while (idx >= 0 && !isCompositionSnapshot(stack[idx])) idx -= 1;
+    if (idx < 0) {
+      resetHistory();
+      return;
+    }
 
-      compositionRef.current = snapshot;
-      setComposition(snapshot);
-      setCompositionRevision((v) => v + 1);
+    const snapshot = stack[idx];
+    const nextUndo = stack.slice(0, idx);
 
-      return stack.slice(0, -1);
-    });
+    const current = compositionRef.current;
+    const nextRedo = isCompositionSnapshot(current) ? [...redoStackRef.current, current] : [...redoStackRef.current];
+    if (nextRedo.length > HISTORY_LIMIT) nextRedo.splice(0, nextRedo.length - HISTORY_LIMIT);
+
+    undoStackRef.current = nextUndo;
+    redoStackRef.current = nextRedo;
+    setUndoStack(nextUndo);
+    setRedoStack(nextRedo);
+
+    compositionRef.current = snapshot;
+    setComposition(snapshot);
+    setCompositionRevision((v) => v + 1);
   }, []);
 
   const redo = useCallback(() => {
     if (screenRef.current !== "editor") return;
     historyGroupRef.current = { depth: 0, snapshot: null, changed: false };
 
-    setRedoStack((redoStack) => {
-      if (redoStack.length === 0) return redoStack;
-      const snapshot = redoStack[redoStack.length - 1];
+    const stack = redoStackRef.current;
+    if (stack.length === 0) return;
 
-      setUndoStack((stack) => {
-        const next = [...stack, compositionRef.current];
-        if (next.length > HISTORY_LIMIT) next.splice(0, next.length - HISTORY_LIMIT);
-        return next;
-      });
+    let idx = stack.length - 1;
+    while (idx >= 0 && !isCompositionSnapshot(stack[idx])) idx -= 1;
+    if (idx < 0) {
+      resetHistory();
+      return;
+    }
 
-      compositionRef.current = snapshot;
-      setComposition(snapshot);
-      setCompositionRevision((v) => v + 1);
+    const snapshot = stack[idx];
+    const nextRedo = stack.slice(0, idx);
 
-      return redoStack.slice(0, -1);
-    });
+    const current = compositionRef.current;
+    const nextUndo = isCompositionSnapshot(current) ? [...undoStackRef.current, current] : [...undoStackRef.current];
+    if (nextUndo.length > HISTORY_LIMIT) nextUndo.splice(0, nextUndo.length - HISTORY_LIMIT);
+
+    undoStackRef.current = nextUndo;
+    redoStackRef.current = nextRedo;
+    setUndoStack(nextUndo);
+    setRedoStack(nextRedo);
+
+    compositionRef.current = snapshot;
+    setComposition(snapshot);
+    setCompositionRevision((v) => v + 1);
   }, []);
 
   const updateExtensionSettings = useCallback(
@@ -494,8 +531,8 @@ export function App(): React.ReactElement {
       if (!def) return null;
 
       const id = newId();
+      recordHistoryBeforeChange(compositionRef.current);
       setComposition((prev) => {
-        recordHistoryBeforeChange(prev);
         const idx = prev.elements.length;
         const col = idx % 4;
         const row = Math.floor(idx / 4);
@@ -526,8 +563,8 @@ export function App(): React.ReactElement {
   );
 
   const updateElement = useCallback((elementId: string, patch: CompositionElementPatch) => {
+    recordHistoryBeforeChange(compositionRef.current);
     setComposition((prev) => {
-      recordHistoryBeforeChange(prev);
       return {
         ...prev,
         elements: prev.elements.map((el) => (el.id === elementId ? mergeElement(el, patch) : el)),
@@ -537,8 +574,8 @@ export function App(): React.ReactElement {
   }, [recordHistoryBeforeChange]);
 
   const removeElement = useCallback((elementId: string) => {
+    recordHistoryBeforeChange(compositionRef.current);
     setComposition((prev) => {
-      recordHistoryBeforeChange(prev);
       return { ...prev, elements: prev.elements.filter((el) => el.id !== elementId) };
     });
     setCompositionRevision((v) => v + 1);

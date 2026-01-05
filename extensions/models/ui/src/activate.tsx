@@ -14,8 +14,6 @@ import type {
 
 const MODEL_TYPE = "com.toposync.models.gltf";
 
-const DEFAULT_COLOR = "#38bdf8";
-
 const MIN_SCALE = 0.001;
 const MAX_SCALE = 1000;
 
@@ -67,7 +65,10 @@ const translations = {
     "ext.models.editor.size": "Size",
     "ext.models.editor.preview": "Preview",
     "ext.models.editor.scale": "Scale",
-    "ext.models.editor.tint": "Tint",
+    "ext.models.editor.height": "Height",
+    "ext.models.editor.height.floor": "Floor",
+    "ext.models.editor.height.mid": "Mid",
+    "ext.models.editor.height.ceiling": "Ceiling",
     "ext.models.editor.uploading": "Uploading…",
     "ext.models.editor.processing": "Processing preview…",
     "ext.models.editor.failed": "Failed to import model",
@@ -82,7 +83,10 @@ const translations = {
     "ext.models.editor.size": "Tamanho",
     "ext.models.editor.preview": "Prévia",
     "ext.models.editor.scale": "Escala",
-    "ext.models.editor.tint": "Cor",
+    "ext.models.editor.height": "Altura",
+    "ext.models.editor.height.floor": "Chão",
+    "ext.models.editor.height.mid": "Meio",
+    "ext.models.editor.height.ceiling": "Teto",
     "ext.models.editor.uploading": "Enviando...",
     "ext.models.editor.processing": "Processando prévia...",
     "ext.models.editor.failed": "Falha ao importar modelo",
@@ -116,16 +120,24 @@ function readScale(v: unknown, fallback = 1): number {
   return clamp(readNumber(v, fallback), MIN_SCALE, MAX_SCALE);
 }
 
+function stripFileExtension(filename: string): string {
+  const idx = filename.lastIndexOf(".");
+  if (idx <= 0) return filename;
+  return filename.slice(0, idx);
+}
+
 function suggestInitialScale(size: Vector3): number {
   const maxDim = Math.max(Math.abs(size.x), Math.abs(size.y), Math.abs(size.z));
   if (!Number.isFinite(maxDim) || maxDim <= 1e-6) return 1;
 
   // Only normalize obviously-wrong sizes; keep realistic ones untouched.
   const minTarget = 0.25; // 25cm
-  const maxTarget = 4; // 4m
 
+  const oversizedThreshold = 3; // 3m => likely wrong scale
+  const oversizedTarget = 1; // normalize to 1m on the largest axis
+
+  if (maxDim > oversizedThreshold) return clamp(oversizedTarget / maxDim, MIN_SCALE, MAX_SCALE);
   if (maxDim < minTarget) return clamp(minTarget / maxDim, MIN_SCALE, MAX_SCALE);
-  if (maxDim > maxTarget) return clamp(maxTarget / maxDim, MIN_SCALE, MAX_SCALE);
   return 1;
 }
 
@@ -285,7 +297,6 @@ function modelElementType(i18n: HostI18n): ElementType {
       center: { x: 0, y: 0, z: 0 },
       min_y: 0,
       scale: 1,
-      tint: DEFAULT_COLOR,
     },
     create3D: ({ THREE }, element) => {
       const group = new THREE.Group();
@@ -370,13 +381,10 @@ function modelElementType(i18n: HostI18n): ElementType {
       function apply(el: CompositionElement) {
         const dir = readString((el.props as any).dir, "");
         const model = readString((el.props as any).model, "");
-        const tint = readString((el.props as any).tint, DEFAULT_COLOR);
         const scale = readScale((el.props as any).scale, 1);
         const center = readVector3((el.props as any).center, { x: 0, y: 0, z: 0 });
         const minY = readNumber((el.props as any).min_y, 0);
 
-        // We currently only use tint in 2D. Keep it read to avoid stale props bugs.
-        void tint;
         group.scale.setScalar(scale);
 
         const url = dir && model ? `/files/${encodeURIComponent(dir)}/${encodeURIComponent(model)}` : "";
@@ -482,7 +490,7 @@ function ModelEditor({ element, update, remove, close, i18n }: EditorProps): Rea
   const preview = readString((element.props as any).preview, "");
   const size = readVector3((element.props as any).size, { x: 1, y: 1, z: 1 });
   const scale = readScale((element.props as any).scale, 1);
-  const tint = readString((element.props as any).tint, DEFAULT_COLOR);
+  const heightY = readNumber((element.position as any).y, 0);
 
   const previewUrl = dir && preview ? `/files/${encodeURIComponent(dir)}/${encodeURIComponent(preview)}` : "";
   const finalSize = useMemo(
@@ -530,15 +538,42 @@ function ModelEditor({ element, update, remove, close, i18n }: EditorProps): Rea
             }}
           />
         </div>
-        <div className="field" style={{ flex: 1, minWidth: 180 }}>
-          <div className="label">{t("ext.models.editor.tint")}</div>
-          <input
-            className="input"
-            type="color"
-            value={tint}
-            onChange={(e) => update({ props: { tint: e.target.value } })}
-          />
+      </div>
+
+      <div className="field">
+        <div className="label">
+          {t("ext.models.editor.height")}: {numberFmt.format(heightY)} m
         </div>
+        <div className="rowWrap">
+          {(
+            [
+              { key: "floor", y: 0 },
+              { key: "mid", y: 1.35 },
+              { key: "ceiling", y: 2.7 },
+            ] as const
+          ).map((preset) => {
+            const isActive = Math.abs(heightY - preset.y) < 0.01;
+            return (
+              <button
+                key={preset.key}
+                className={["chipButton", isActive ? "isActive" : ""].join(" ")}
+                type="button"
+                onClick={() => update({ position: { y: preset.y } })}
+              >
+                {t(`ext.models.editor.height.${preset.key}`)}
+              </button>
+            );
+          })}
+        </div>
+        <input
+          className="input"
+          type="range"
+          min={0}
+          max={3}
+          step={0.01}
+          value={heightY}
+          onChange={(e) => update({ position: { y: Number(e.target.value) } })}
+        />
       </div>
 
       {previewUrl ? (
@@ -658,8 +693,9 @@ function importModelTool(i18n: HostI18n): EditorTool {
         const previewBlob = await (await fetch(preview.dataUrl)).blob();
         const previewUpload = await uploadToFilesDir(previewBlob, { dir, filename: "preview.png" });
         dbg("[models:tool] preview uploaded", { url: previewUpload.url });
+        const inferredName = stripFileExtension(entryName);
         const id = ctx.createElement(MODEL_TYPE, {
-          name: entryName,
+          name: inferredName,
           position: { x: pendingAt.x, y: 0, z: pendingAt.z },
           props: {
             dir,
@@ -669,7 +705,6 @@ function importModelTool(i18n: HostI18n): EditorTool {
             center: preview.center,
             min_y: preview.minY,
             scale: suggestInitialScale(preview.size),
-            tint: DEFAULT_COLOR,
           },
         });
         if (id) ctx.openEditor(id);

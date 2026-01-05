@@ -15,7 +15,6 @@ O objetivo dessa base é resolver o “maior nó”: **extensões com backend Py
 
 - `src/toposync`: backend core (FastAPI) + runtime de extensões
 - `frontend`: app host (React/Three + webpack)
-- `extensions/hello_lamp`: extensão exemplo (Python + UI prebuilt)
 - `extensions/structural`: extensão “first-party” (paredes/áreas: ferramentas 2D + render 3D)
 - `extensions/models`: extensão “first-party” (importar GLB/GLTF + prévia 2D + render 3D)
 - `extensions/home_assistant`: extensão “first-party” (scaffold: configurar servidores Home Assistant)
@@ -39,13 +38,12 @@ npm install
 3) Instale a extensão exemplo (editable, para o backend descobrir via entry point):
 
 ```bash
-uv pip install -e extensions/hello_lamp -e extensions/structural -e extensions/models -e extensions/home_assistant
+uv pip install -e extensions/structural -e extensions/models -e extensions/home_assistant
 ```
 
 4) Build do frontend das extensões (gera `static/remoteEntry.js` dentro do pacote Python):
 
 ```bash
-npm --workspace @toposync/extension-hello-lamp-ui run build
 npm --workspace @toposync/extension-structural-ui run build
 npm --workspace @toposync/extension-models-ui run build
 npm --workspace @toposync/extension-home-assistant-ui run build
@@ -63,7 +61,7 @@ uv run toposync serve --data-dir $(pwd)/.toposync-data
 npm --workspace @toposync/frontend run dev
 ```
 
-Abra `http://localhost:5173`, clique em **Editar**, adicione a **Lâmpada (Hello Lamp)** e volte para a tela principal. Clique no objeto 3D para abrir o modal de ação.
+Abra `http://localhost:5173`, clique em **Editar**, use as ferramentas de **Parede/Área** ou **Importar modelo 3D**, e volte para a tela principal para ver o 3D.
 
 ### Quando rodar o quê (atalho mental)
 
@@ -94,7 +92,6 @@ npm --workspace @toposync/frontend run build
 1) Build do bundle JS da extensão (gera `static/`):
 
 ```bash
-npm --workspace @toposync/extension-hello-lamp-ui run build
 npm --workspace @toposync/extension-structural-ui run build
 npm --workspace @toposync/extension-models-ui run build
 npm --workspace @toposync/extension-home-assistant-ui run build
@@ -103,12 +100,12 @@ npm --workspace @toposync/extension-home-assistant-ui run build
 2) Build do wheel da extensão:
 
 ```bash
-uv build extensions/hello_lamp
+uv build extensions/structural
 uv build extensions/models
 uv build extensions/home_assistant
 ```
 
-Isso gera `extensions/hello_lamp/dist/*.whl`. Usuário final instala só o wheel (sem Node) e o app carrega o frontend prebuilt.
+Isso gera `extensions/<ext>/dist/*.whl`. Usuário final instala só o wheel (sem Node) e o app carrega o frontend prebuilt.
 
 ## Como as extensões funcionam
 
@@ -116,11 +113,11 @@ Isso gera `extensions/hello_lamp/dist/*.whl`. Usuário final instala só o wheel
 
 Cada extensão declara um entry point em `toposync.extensions`. O core descobre tudo via `importlib.metadata.entry_points()` e instancia o plugin.
 
-Exemplo (`extensions/hello_lamp/pyproject.toml`):
+Exemplo (`extensions/structural/pyproject.toml`):
 
 ```toml
 [project.entry-points."toposync.extensions"]
-hello_lamp = "toposync_ext_hello_lamp.plugin:HelloLampExtension"
+structural = "toposync_ext_structural.plugin:StructuralExtension"
 ```
 
 ### 2) Manifesto (`extension.json`)
@@ -429,7 +426,7 @@ npm install
 3) Instale a extensão exemplo (editable):
 
 ```bash
-uv pip install -e extensions/hello_lamp
+uv pip install -e extensions/structural -e extensions/models -e extensions/home_assistant
 ```
 
 4) Backend:
@@ -444,7 +441,7 @@ uv run toposync serve --data-dir $(pwd)/.toposync-data
 npm --workspace @toposync/frontend run dev
 ```
 
-Abra `http://localhost:5173`, clique em **Editar**, adicione a **Lâmpada (Hello Lamp)** e volte para a tela principal. Clique no objeto 3D para abrir o modal de ação.
+Abra `http://localhost:5173`, clique em **Editar**, use as ferramentas de **Parede/Área** ou **Importar modelo 3D**, e volte para a tela principal para ver o 3D.
 
 ## Formato de uma extensão (mínimo)
 
@@ -454,20 +451,20 @@ Uma extensão “prebuilt” precisa:
 - `src/<pkg>/extension.json` (manifesto)
 - `src/<pkg>/static/remoteEntry.js` (+ chunks, se houver)
 
-O manifesto base está em `extensions/hello_lamp/src/toposync_ext_hello_lamp/extension.json`.
+O manifesto base está em `extensions/structural/src/toposync_ext_structural/extension.json`.
 
 ## Build/distribuição da extensão (wheel)
 
 No exemplo, o bundle do frontend pode ser (re)gerado via:
 
 ```bash
-npm --workspace @toposync/extension-hello-lamp-ui run build
+npm --workspace @toposync/extension-structural-ui run build
 ```
 
 E o wheel via:
 
 ```bash
-uv build extensions/hello_lamp
+uv build extensions/structural
 ```
 
-Isso gera `extensions/hello_lamp/dist/*.whl`, que pode ser instalado sem Node.
+Isso gera `extensions/structural/dist/*.whl`, que pode ser instalado sem Node.

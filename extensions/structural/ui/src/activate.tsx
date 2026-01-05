@@ -17,11 +17,13 @@ const WALL_TYPE = "com.toposync.structural.wall";
 const AREA_TYPE = "com.toposync.structural.area";
 
 const DEFAULT_WALL_COLOR = "#94a3b8";
-const DEFAULT_AREA_COLOR = "#6366f1";
+const DEFAULT_AREA_COLOR = "#d1d5db";
 const DEFAULT_AREA_OPACITY = 0.22;
 
 const GROUND_Y = 0;
 const FLOOR_EPSILON = 0.01;
+
+const AREA_FILL_STORAGE_KEY = "toposync.structural.area.fill.v1";
 
 export function activate(host: TopoSyncHost): void {
   host.i18n.registerTranslations(translations);
@@ -48,7 +50,6 @@ const translations = {
     "ext.structural.editor.wall_color": "Wall color",
     "ext.structural.editor.area_name": "Area name (optional)",
     "ext.structural.editor.area_color": "Area color",
-    "ext.structural.editor.area_opacity": "Opacity",
     "ext.structural.editor.transparent": "Transparent",
     "ext.structural.editor.preview": "Preview",
   },
@@ -67,7 +68,6 @@ const translations = {
     "ext.structural.editor.wall_color": "Cor da parede",
     "ext.structural.editor.area_name": "Nome da área (opcional)",
     "ext.structural.editor.area_color": "Cor da área",
-    "ext.structural.editor.area_opacity": "Opacidade",
     "ext.structural.editor.transparent": "Transparente",
     "ext.structural.editor.preview": "Prévia",
   },
@@ -79,6 +79,29 @@ function readNumber(v: unknown, fallback: number): number {
 
 function readString(v: unknown, fallback: string): string {
   return typeof v === "string" ? v : fallback;
+}
+
+function isHexColor(value: string): boolean {
+  return /^#[0-9a-fA-F]{6}$/.test(value);
+}
+
+function loadAreaFill(): string {
+  try {
+    const stored = localStorage.getItem(AREA_FILL_STORAGE_KEY);
+    if (stored && isHexColor(stored)) return stored;
+  } catch {
+    // ignore
+  }
+  return DEFAULT_AREA_COLOR;
+}
+
+function saveAreaFill(fill: string): void {
+  try {
+    if (!isHexColor(fill)) return;
+    localStorage.setItem(AREA_FILL_STORAGE_KEY, fill);
+  } catch {
+    // ignore
+  }
 }
 
 function asPoint(v: unknown, fallback: PlanePoint): PlanePoint {
@@ -535,6 +558,7 @@ function AreaEditor({ element, update, remove, close, i18n }: EditorProps): Reac
   const { t } = i18n.useI18n();
   const fill = readString(element.props.fill, DEFAULT_AREA_COLOR);
   const opacity = readNumber(element.props.opacity, DEFAULT_AREA_OPACITY);
+  const transparent = opacity < 0.001;
 
   return (
     <div>
@@ -550,26 +574,21 @@ function AreaEditor({ element, update, remove, close, i18n }: EditorProps): Reac
             className="input"
             type="color"
             value={fill}
-            onChange={(e) => update({ props: { fill: e.target.value } })}
+            onChange={(e) => {
+              const next = e.target.value;
+              saveAreaFill(next);
+              update({ props: { fill: next } });
+            }}
           />
         </div>
-        <div className="field" style={{ flex: 1, minWidth: 180 }}>
-          <div className="label">
-            {t("ext.structural.editor.area_opacity")}: {Math.round(opacity * 100)}%
-          </div>
+        <label className="chipButton" style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
           <input
-            className="input"
-            type="range"
-            min={0}
-            max={1}
-            step={0.02}
-            value={opacity}
-            onChange={(e) => update({ props: { opacity: Number(e.target.value) } })}
+            type="checkbox"
+            checked={transparent}
+            onChange={(e) => update({ props: { opacity: e.target.checked ? 0 : DEFAULT_AREA_OPACITY } })}
           />
-        </div>
-        <button className="chipButton" type="button" onClick={() => update({ props: { opacity: 0 } })}>
-          {t("ext.structural.editor.transparent")}
-        </button>
+          <span>{t("ext.structural.editor.transparent")}</span>
+        </label>
       </div>
 
       <div className="sectionDivider" />
@@ -615,10 +634,11 @@ function createWall(
 
 function createArea(ctx: EditorToolContext, vertices: PlanePoint[]): string | null {
   const c = centerOf(vertices);
+  const fill = loadAreaFill();
   return ctx.createElement(AREA_TYPE, {
     name: "",
     position: { x: c.x, y: 0, z: c.z },
-    props: { vertices, fill: DEFAULT_AREA_COLOR, opacity: DEFAULT_AREA_OPACITY },
+    props: { vertices, fill, opacity: DEFAULT_AREA_OPACITY },
   });
 }
 

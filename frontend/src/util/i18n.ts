@@ -68,6 +68,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.layers_group_walls": "Walls",
     "core.ui.layers_group_areas": "Areas",
 
+    "core.tools.navigate": "Navigate",
+    "core.tools.navigate_desc": "Pan around the canvas.",
+    "core.tools.select": "Select",
+    "core.tools.select_desc": "Select and move elements.",
+
     "core.ui.empty_title": "Nothing configured yet",
     "core.ui.empty_desc": "Click “Edit” to add elements to the composition.",
     "core.ui.notifications_empty": "No notifications yet.",
@@ -154,6 +159,11 @@ const translationsByLocale: Record<Locale, Translations> = {
 
     "core.ui.layers_group_walls": "Paredes",
     "core.ui.layers_group_areas": "Áreas",
+
+    "core.tools.navigate": "Navegar",
+    "core.tools.navigate_desc": "Mover o canvas.",
+    "core.tools.select": "Selecionar",
+    "core.tools.select_desc": "Selecionar e mover elementos.",
 
     "core.ui.empty_title": "Nada configurado ainda",
     "core.ui.empty_desc": "Clique em “Editar” para adicionar elementos na composição.",

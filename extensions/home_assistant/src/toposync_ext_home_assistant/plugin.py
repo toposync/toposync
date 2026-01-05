@@ -8,7 +8,8 @@ from typing import Any
 
 import httpx
 import websockets
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 from urllib.parse import urlparse
 
@@ -78,11 +79,54 @@ class _RegistryCacheEntry:
     data: RegistryResponse
 
 
+@dataclass(slots=True)
+class _StateSubscriber:
+    queue: asyncio.Queue[dict[str, Any]]
+    entity_ids: set[str]
+
+
+@dataclass(slots=True)
+class _HaStateEnvelope:
+    entity_id: str
+    state: dict[str, Any]
+
+
+def _domain_from_entity_id(entity_id: str) -> str:
+    return entity_id.split(".", 1)[0] if "." in entity_id else ""
+
+
+def _bool_state_for_domain(domain: str, state: str) -> bool | None:
+    d = domain.lower()
+    s = state.lower()
+    if s in {"unknown", "unavailable", ""}:
+        return None
+    if d in {"light", "switch", "fan", "input_boolean", "humidifier"}:
+        return s == "on"
+    if d == "lock":
+        return s == "locked"
+    if d == "cover":
+        return s in {"closed", "closing"}
+    if d == "climate":
+        return s != "off"
+    return s == "on"
+
+
+def _sse(event: str, data: Any) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
 class HomeAssistantExtension(BaseExtension):
     def __init__(self) -> None:
         super().__init__(package="toposync_ext_home_assistant")
         self._http: httpx.AsyncClient | None = None
         self._registry_cache: dict[str, _RegistryCacheEntry] = {}
+        self._state_cache: dict[str, dict[str, dict[str, Any]]] = {}
+        self._state_tasks: dict[str, asyncio.Task[None]] = {}
+        self._state_subscribers: dict[str, set[_StateSubscriber]] = {}
+        self._state_lock = asyncio.Lock()
+        self._state_tracked: dict[str, set[str]] = {}
+        self._state_stop: dict[str, asyncio.Event] = {}
+        self._state_server_sig: dict[str, tuple[str, str]] = {}
 
     async def setup(self, app: FastAPI, *, bus: EventBus, services: ServiceRegistry) -> None:  # noqa: ARG002
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=8.0))
@@ -265,8 +309,26 @@ class HomeAssistantExtension(BaseExtension):
                 except Exception:  # noqa: BLE001
                     return entity_id, None
 
-            pairs = await asyncio.gather(*(_fetch_one(eid) for eid in ids))
-            return {eid: data for eid, data in pairs if data is not None}
+            cache = self._state_cache.setdefault(server.id, {})
+            out: dict[str, Any] = {}
+            missing: list[str] = []
+            for eid in ids:
+                cached = cache.get(eid)
+                if isinstance(cached, dict):
+                    out[eid] = cached
+                else:
+                    missing.append(eid)
+
+            if missing:
+                pairs = await asyncio.gather(*(_fetch_one(eid) for eid in missing))
+                for eid, data in pairs:
+                    if data is None:
+                        continue
+                    if isinstance(data, dict):
+                        cache[eid] = data
+                    out[eid] = data
+
+            return out
 
         async def _call_service(server: HomeAssistantServer, domain: str, service: str, data: dict[str, Any]) -> Any:
             client = self._http
@@ -286,6 +348,209 @@ class HomeAssistantExtension(BaseExtension):
                 return res.json()
             except Exception:  # noqa: BLE001
                 return None
+
+        async def _fetch_state(server: HomeAssistantServer, entity_id: str) -> dict[str, Any] | None:
+            client = self._http
+            if client is None:
+                raise HTTPException(status_code=500, detail="HA client not ready")
+            url = f"{server.host}/api/states/{entity_id}"
+            try:
+                res = await client.get(url, headers={"Authorization": f"Bearer {server.apiKey}"})
+                if res.status_code == 401:
+                    raise HTTPException(status_code=401, detail="HA auth failed")
+                if res.status_code >= 400:
+                    return None
+                payload = res.json()
+                return payload if isinstance(payload, dict) else None
+            except HTTPException:
+                raise
+            except Exception:  # noqa: BLE001
+                return None
+
+        async def _ensure_state_listener(server: HomeAssistantServer) -> None:
+            async with self._state_lock:
+                sig = (server.host, server.apiKey)
+                prev_sig = self._state_server_sig.get(server.id)
+                task = self._state_tasks.get(server.id)
+                if task and not task.done() and prev_sig == sig:
+                    return
+
+                if task and not task.done() and prev_sig != sig:
+                    stop = self._state_stop.get(server.id)
+                    if stop is not None:
+                        stop.set()
+                    try:
+                        task.cancel()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._state_tasks.pop(server.id, None)
+                    self._state_stop.pop(server.id, None)
+                    self._state_cache.pop(server.id, None)
+                    self._state_tracked.pop(server.id, None)
+                    self._state_subscribers.pop(server.id, None)
+                    self._state_server_sig.pop(server.id, None)
+                stop = self._state_stop.get(server.id)
+                if stop is None:
+                    stop = asyncio.Event()
+                    self._state_stop[server.id] = stop
+
+                self._state_server_sig[server.id] = sig
+                self._state_tasks[server.id] = asyncio.create_task(_state_listener(server, stop))
+
+        async def _state_listener(server: HomeAssistantServer, stop: asyncio.Event) -> None:
+            backoff = 1.0
+            ws_url = _ws_url(server.host)
+            while not stop.is_set():
+                try:
+                    async with websockets.connect(
+                        ws_url,
+                        open_timeout=8,
+                        close_timeout=2,
+                        max_size=2**23,
+                        ping_interval=20,
+                        ping_timeout=20,
+                    ) as ws:
+                        hello_raw = await asyncio.wait_for(ws.recv(), timeout=8)
+                        if not isinstance(hello_raw, str):
+                            raise RuntimeError("HA websocket error")
+                        hello = json.loads(hello_raw)
+                        if not isinstance(hello, dict) or hello.get("type") != "auth_required":
+                            raise RuntimeError("HA websocket auth error")
+
+                        await ws.send(json.dumps({"type": "auth", "access_token": server.apiKey}))
+                        auth_raw = await asyncio.wait_for(ws.recv(), timeout=8)
+                        if not isinstance(auth_raw, str):
+                            raise RuntimeError("HA websocket auth error")
+                        auth = json.loads(auth_raw)
+                        if not isinstance(auth, dict) or auth.get("type") != "auth_ok":
+                            raise RuntimeError("HA websocket auth failed")
+
+                        await ws.send(json.dumps({"id": 1, "type": "subscribe_events", "event_type": "state_changed"}))
+
+                        # Drain the subscription ack (best-effort).
+                        for _ in range(6):
+                            msg_raw = await asyncio.wait_for(ws.recv(), timeout=8)
+                            if not isinstance(msg_raw, str):
+                                continue
+                            msg = json.loads(msg_raw)
+                            if isinstance(msg, dict) and msg.get("type") == "result" and msg.get("id") == 1:
+                                break
+
+                        backoff = 1.0
+                        while not stop.is_set():
+                            try:
+                                msg_raw = await asyncio.wait_for(ws.recv(), timeout=30)
+                            except asyncio.TimeoutError:
+                                continue
+                            if not isinstance(msg_raw, str):
+                                continue
+                            try:
+                                msg_obj = json.loads(msg_raw)
+                            except Exception:  # noqa: BLE001
+                                continue
+                            if not isinstance(msg_obj, dict) or msg_obj.get("type") != "event":
+                                continue
+                            event = msg_obj.get("event")
+                            if not isinstance(event, dict) or event.get("event_type") != "state_changed":
+                                continue
+                            data = event.get("data")
+                            if not isinstance(data, dict):
+                                continue
+                            entity_id = str(data.get("entity_id", "")).strip()
+                            if not entity_id:
+                                continue
+                            new_state = data.get("new_state")
+                            if not isinstance(new_state, dict):
+                                continue
+
+                            envelope = _HaStateEnvelope(entity_id=entity_id, state=new_state)
+                            tracked = self._state_tracked.get(server.id, set())
+                            if entity_id not in tracked:
+                                continue
+
+                            self._state_cache.setdefault(server.id, {})[entity_id] = new_state
+
+                            subs = self._state_subscribers.get(server.id)
+                            if not subs:
+                                continue
+                            payload = {"entity_id": envelope.entity_id, "state": envelope.state}
+                            for sub in list(subs):
+                                if entity_id not in sub.entity_ids:
+                                    continue
+                                try:
+                                    sub.queue.put_nowait(payload)
+                                except asyncio.QueueFull:
+                                    try:
+                                        sub.queue.get_nowait()
+                                    except asyncio.QueueEmpty:
+                                        pass
+                                    try:
+                                        sub.queue.put_nowait(payload)
+                                    except asyncio.QueueFull:
+                                        pass
+                except Exception:  # noqa: BLE001
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2.0, 30.0)
+
+        async def _track_entities(server: HomeAssistantServer, entity_ids: set[str]) -> dict[str, dict[str, Any]]:
+            await _ensure_state_listener(server)
+            async with self._state_lock:
+                tracked = self._state_tracked.setdefault(server.id, set())
+                tracked.update(entity_ids)
+
+                cache = self._state_cache.setdefault(server.id, {})
+
+            missing = [eid for eid in entity_ids if eid not in cache]
+            if missing:
+                results = await asyncio.gather(*(_fetch_state(server, eid) for eid in missing))
+                async with self._state_lock:
+                    for eid, st in zip(missing, results, strict=False):
+                        if isinstance(st, dict):
+                            cache[eid] = st
+
+            return {eid: cache[eid] for eid in entity_ids if eid in cache}
+
+        async def _register_subscriber(server: HomeAssistantServer, entity_ids: set[str]) -> _StateSubscriber:
+            sub = _StateSubscriber(queue=asyncio.Queue(maxsize=250), entity_ids=set(entity_ids))
+            async with self._state_lock:
+                self._state_subscribers.setdefault(server.id, set()).add(sub)
+                self._state_tracked.setdefault(server.id, set()).update(entity_ids)
+            return sub
+
+        async def _unregister_subscriber(server_id: str, sub: _StateSubscriber) -> None:
+            async with self._state_lock:
+                subs = self._state_subscribers.get(server_id)
+                if subs:
+                    subs.discard(sub)
+
+                remaining = subs or set()
+                tracked: set[str] = set()
+                for s in remaining:
+                    tracked.update(s.entity_ids)
+                self._state_tracked[server_id] = tracked
+
+                cache = self._state_cache.get(server_id)
+                if cache is not None:
+                    for key in list(cache.keys()):
+                        if key not in tracked:
+                            cache.pop(key, None)
+
+                if not remaining:
+                    stop = self._state_stop.get(server_id)
+                    if stop is not None:
+                        stop.set()
+                    task = self._state_tasks.get(server_id)
+                    if task is not None:
+                        try:
+                            task.cancel()
+                        except Exception:  # noqa: BLE001
+                            pass
+                    self._state_tasks.pop(server_id, None)
+                    self._state_stop.pop(server_id, None)
+                    self._state_server_sig.pop(server_id, None)
+                    self._state_cache.pop(server_id, None)
+                    self._state_tracked.pop(server_id, None)
+                    self._state_subscribers.pop(server_id, None)
 
         async def _handle_service_call(payload: Any, ctx: dict[str, Any]) -> Any:  # noqa: ARG001
             if not isinstance(payload, dict):
@@ -308,46 +573,122 @@ class HomeAssistantExtension(BaseExtension):
             except ValidationError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             server = await get_server(body.server_id)
-            data = await _call_service(server, "homeassistant", "toggle", {"entity_id": body.entity_id})
+            entity_id = body.entity_id
+            domain = _domain_from_entity_id(entity_id)
+
+            current_state_obj = self._state_cache.get(server.id, {}).get(entity_id)
+            if not isinstance(current_state_obj, dict):
+                current_state_obj = await _fetch_state(server, entity_id)
+                if isinstance(current_state_obj, dict):
+                    self._state_cache.setdefault(server.id, {})[entity_id] = current_state_obj
+
+            current_state = str(current_state_obj.get("state", "")).strip() if isinstance(current_state_obj, dict) else ""
+            current_state_lower = current_state.lower()
+            is_locked = current_state_lower == "locked"
+            is_cover_open = current_state_lower not in {"", "unknown", "unavailable", "closed", "closing"}
+            is_climate_on = current_state_lower not in {"", "unknown", "unavailable", "off"}
+
+            async def _toggle() -> Any:
+                if domain == "lock":
+                    if is_locked:
+                        return await _call_service(server, "lock", "unlock", {"entity_id": entity_id})
+                    return await _call_service(server, "lock", "lock", {"entity_id": entity_id})
+                if domain == "cover":
+                    if is_cover_open:
+                        return await _call_service(server, "cover", "close_cover", {"entity_id": entity_id})
+                    return await _call_service(server, "cover", "open_cover", {"entity_id": entity_id})
+                if domain == "climate":
+                    if is_climate_on:
+                        return await _call_service(server, "climate", "turn_off", {"entity_id": entity_id})
+                    return await _call_service(server, "climate", "turn_on", {"entity_id": entity_id})
+                if domain in {"light", "switch", "fan", "input_boolean", "humidifier"}:
+                    return await _call_service(server, domain, "toggle", {"entity_id": entity_id})
+                return await _call_service(server, "homeassistant", "toggle", {"entity_id": entity_id})
+
+            try:
+                data = await _toggle()
+            except HTTPException:
+                data = await _call_service(server, "homeassistant", "toggle", {"entity_id": entity_id})
+
             state: str | None = None
             if isinstance(data, list):
                 for item in data:
-                    if isinstance(item, dict) and str(item.get("entity_id", "")) == body.entity_id:
+                    if isinstance(item, dict) and str(item.get("entity_id", "")) == entity_id:
                         state_raw = item.get("state")
                         state = str(state_raw) if state_raw is not None else None
                         break
             if state is None:
-                client = self._http
-                if client is not None:
-                    url = f"{server.host}/api/states/{body.entity_id}"
-                    for attempt in range(3):
-                        try:
-                            res = await client.get(url, headers={"Authorization": f"Bearer {server.apiKey}"})
-                            if res.status_code < 400:
-                                payload = res.json()
-                                if isinstance(payload, dict):
-                                    state_raw = payload.get("state")
-                                    state = str(state_raw) if state_raw is not None else None
-                                    if state is not None:
-                                        break
-                        except Exception:  # noqa: BLE001
-                            state = None
-                        if attempt < 2:
-                            await asyncio.sleep(0.15)
+                updated = await _fetch_state(server, entity_id)
+                if isinstance(updated, dict):
+                    self._state_cache.setdefault(server.id, {})[entity_id] = updated
+                    state_raw = updated.get("state")
+                    state = str(state_raw) if state_raw is not None else None
 
             from toposync.runtime.event_bus import EventOutcome
 
             return EventOutcome(
-                result={"entity_id": body.entity_id, "state": state, "raw": data},
+                result={"entity_id": entity_id, "state": state, "raw": data},
                 stop_propagation=True,
                 prevent_default=True,
             )
 
         bus.on("home_assistant.service_call", _handle_service_call, priority=50)
         bus.on("home_assistant.primary_action_requested", _handle_primary_action, priority=50)
+
+        @app.get("/api/home_assistant/{server_id}/stream")
+        async def ha_stream(request: Request, server_id: str, entity_ids: str = "") -> StreamingResponse:
+            server = await get_server(server_id)
+            ids = [s.strip() for s in entity_ids.split(",") if s.strip()]
+            ids = ids[:300]
+            if not ids:
+                raise HTTPException(status_code=400, detail="entity_ids is required")
+            ids_set = set(ids)
+
+            snapshot = await _track_entities(server, ids_set)
+            sub = await _register_subscriber(server, ids_set)
+
+            async def gen():
+                yield _sse("snapshot", snapshot)
+                last_ping = time.time()
+                try:
+                    while True:
+                        if await request.is_disconnected():
+                            break
+                        try:
+                            msg = await asyncio.wait_for(sub.queue.get(), timeout=15)
+                            yield _sse("state_changed", msg)
+                            last_ping = time.time()
+                        except asyncio.TimeoutError:
+                            now = time.time()
+                            if now - last_ping >= 10:
+                                yield ": ping\n\n"
+                                last_ping = now
+                finally:
+                    await _unregister_subscriber(server.id, sub)
+
+            return StreamingResponse(
+                gen(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
         return None
 
     async def shutdown(self) -> None:
+        for stop in self._state_stop.values():
+            stop.set()
+        for task in self._state_tasks.values():
+            try:
+                task.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+        self._state_tasks.clear()
+        self._state_stop.clear()
+        self._state_server_sig.clear()
+        self._state_cache.clear()
+        self._state_subscribers.clear()
+        self._state_tracked.clear()
+
         if self._http is not None:
             try:
                 await self._http.aclose()

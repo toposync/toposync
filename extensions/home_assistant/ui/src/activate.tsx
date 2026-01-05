@@ -278,6 +278,181 @@ function isToggleDomain(domain: string): boolean {
   return PRIMARY_TOGGLE_DOMAINS.has(domain.toLowerCase());
 }
 
+function boolStateForDomain(domain: string, rawState: string): boolean | null {
+  const d = domain.toLowerCase();
+  const s = rawState.trim().toLowerCase();
+  if (!s || s === "unknown" || s === "unavailable") return null;
+
+  if (d === "lock") return s === "locked";
+  if (d === "cover") return s === "closed" || s === "closing";
+  if (d === "climate") return s !== "off";
+
+  return s === "on";
+}
+
+type HaLiveState = { entity_id?: string; state?: string; attributes?: Record<string, any> };
+
+type HaLiveServerStream = {
+  counts: Map<string, number>;
+  wanted: Set<string>;
+  states: Map<string, HaLiveState>;
+  listeners: Set<() => void>;
+  es: EventSource | null;
+  refreshTimer: number | null;
+  lastUrl: string;
+};
+
+const haLiveServers = new Map<string, HaLiveServerStream>();
+
+function getLiveServerStream(serverId: string): HaLiveServerStream {
+  const existing = haLiveServers.get(serverId);
+  if (existing) return existing;
+  const created: HaLiveServerStream = {
+    counts: new Map(),
+    wanted: new Set(),
+    states: new Map(),
+    listeners: new Set(),
+    es: null,
+    refreshTimer: null,
+    lastUrl: "",
+  };
+  haLiveServers.set(serverId, created);
+  return created;
+}
+
+function notifyLiveServer(serverId: string): void {
+  const s = haLiveServers.get(serverId);
+  if (!s) return;
+  for (const fn of s.listeners) {
+    try {
+      fn();
+    } catch {
+      // ignore
+    }
+  }
+  try {
+    window.dispatchEvent(new CustomEvent("toposync:invalidate"));
+  } catch {
+    // ignore
+  }
+}
+
+function buildStreamUrl(serverId: string, entityIds: Set<string>): string {
+  const ids = Array.from(entityIds).slice(0, 300);
+  return `/api/home_assistant/${encodeURIComponent(serverId)}/stream?entity_ids=${encodeURIComponent(ids.join(","))}`;
+}
+
+function openLiveStream(serverId: string): void {
+  const stream = haLiveServers.get(serverId);
+  if (!stream) return;
+
+  if (stream.wanted.size === 0) {
+    try {
+      stream.es?.close();
+    } catch {
+      // ignore
+    }
+    stream.es = null;
+    stream.lastUrl = "";
+    return;
+  }
+
+  const url = buildStreamUrl(serverId, stream.wanted);
+  if (!url) return;
+  if (url === stream.lastUrl && stream.es) return;
+  stream.lastUrl = url;
+
+  try {
+    stream.es?.close();
+  } catch {
+    // ignore
+  }
+
+  const es = new EventSource(url);
+  stream.es = es;
+
+  es.addEventListener("snapshot", (evt) => {
+    try {
+      const data = JSON.parse((evt as MessageEvent).data);
+      if (!data || typeof data !== "object") return;
+      for (const [entityId, st] of Object.entries(data as Record<string, any>)) {
+        if (st && typeof st === "object") stream.states.set(entityId, st as HaLiveState);
+      }
+      notifyLiveServer(serverId);
+    } catch {
+      // ignore
+    }
+  });
+
+  es.addEventListener("state_changed", (evt) => {
+    try {
+      const data = JSON.parse((evt as MessageEvent).data);
+      const entityId = typeof data?.entity_id === "string" ? data.entity_id : "";
+      if (!entityId) return;
+      const state = data?.state;
+      if (state && typeof state === "object") stream.states.set(entityId, state as HaLiveState);
+      notifyLiveServer(serverId);
+    } catch {
+      // ignore
+    }
+  });
+}
+
+function scheduleLiveStreamRefresh(serverId: string): void {
+  const stream = haLiveServers.get(serverId);
+  if (!stream) return;
+  if (stream.refreshTimer) return;
+  stream.refreshTimer = window.setTimeout(() => {
+    stream.refreshTimer = null;
+    openLiveStream(serverId);
+  }, 180);
+}
+
+function watchLiveStates(serverId: string, entityIds: string[]): () => void {
+  const ids = entityIds.map((s) => s.trim()).filter(Boolean);
+  if (!serverId || ids.length === 0) return () => {};
+
+  const stream = getLiveServerStream(serverId);
+  for (const id of ids) {
+    const nextCount = (stream.counts.get(id) ?? 0) + 1;
+    stream.counts.set(id, nextCount);
+    stream.wanted.add(id);
+  }
+  scheduleLiveStreamRefresh(serverId);
+
+  return () => {
+    const current = haLiveServers.get(serverId);
+    if (!current) return;
+    for (const id of ids) {
+      const next = (current.counts.get(id) ?? 0) - 1;
+      if (next <= 0) {
+        current.counts.delete(id);
+        current.wanted.delete(id);
+        current.states.delete(id);
+      } else {
+        current.counts.set(id, next);
+      }
+    }
+    scheduleLiveStreamRefresh(serverId);
+  };
+}
+
+function subscribeLive(serverId: string, listener: () => void): () => void {
+  if (!serverId) return () => {};
+  const stream = getLiveServerStream(serverId);
+  stream.listeners.add(listener);
+  return () => {
+    stream.listeners.delete(listener);
+  };
+}
+
+function getLiveState(serverId: string, entityId: string): HaLiveState | null {
+  if (!serverId || !entityId) return null;
+  const stream = haLiveServers.get(serverId);
+  if (!stream) return null;
+  return stream.states.get(entityId) ?? null;
+}
+
 async function fetchHaServers(): Promise<HaServerPublic[]> {
   const res = await fetch("/api/home_assistant/servers");
   if (!res.ok) throw new Error(`Failed to list Home Assistant servers: ${res.status}`);
@@ -756,6 +931,33 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       let wantedIconKey = "house";
       let currentIconKey = houseGeo.key;
       let currentViewMode: HaViewMode = "floor";
+      let currentEl = element;
+
+      let unwatch: (() => void) | null = null;
+      let watchedServer = "";
+      let watchedEntity = "";
+      let watchedDomain = "";
+      let watchedIsToggle = false;
+      let lastState = "";
+
+      function applyNeonFromState(stateRaw: string) {
+        const s = stateRaw.trim().toLowerCase();
+        const boolState = watchedEntity ? boolStateForDomain(watchedDomain, s) : null;
+        const neon = watchedIsToggle
+          ? boolState === true
+            ? NEON_ON
+            : boolState === false
+              ? NEON_OFF
+              : NEON_DEFAULT
+          : NEON_DEFAULT;
+
+        sphereMat.emissive.set(neon);
+        iconMat.color.set(neon);
+        light.color.set(neon);
+
+        sphereMat.emissiveIntensity = watchedIsToggle ? (boolState === true ? 1.0 : 0.85) : 0.9;
+        light.intensity = watchedIsToggle ? (boolState === true ? 1.05 : 0.9) : 0.95;
+      }
 
       function applyViewMode(mode: HaViewMode) {
         if (mode !== currentViewMode) {
@@ -781,12 +983,25 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       }
 
       function apply(el: CompositionElement) {
+        currentEl = el;
         const p = asRecord(el.props);
         const icon = sanitizeFaIconName(asString(p.icon, "house")) || "house";
         const viewMode = readHaViewMode(p.view_mode);
         const primaryEntityId = asString(p.primary_entity_id).trim();
-        const primaryState = asString(p.primary_state).trim().toLowerCase();
-        const isOn = primaryState === "on";
+        const serverId = asString(p.server_id).trim();
+        if (serverId !== watchedServer || primaryEntityId !== watchedEntity) {
+          unwatch?.();
+          unwatch = null;
+          watchedServer = serverId;
+          watchedEntity = primaryEntityId;
+          watchedDomain = primaryEntityId ? domainFromEntityId(primaryEntityId) : "";
+          watchedIsToggle = watchedDomain ? isToggleDomain(watchedDomain) : false;
+          lastState = "";
+          if (serverId && primaryEntityId) unwatch = watchLiveStates(serverId, [primaryEntityId]);
+        }
+
+        const live = watchedServer && watchedEntity ? getLiveState(watchedServer, watchedEntity) : null;
+        const primaryState = asString(live?.state ?? p.primary_state);
 
         applyViewMode(viewMode);
 
@@ -798,15 +1013,8 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
           iconMesh.scale.setScalar(entry.scale);
         }
 
-        const isToggle = primaryEntityId ? isToggleDomain(domainFromEntityId(primaryEntityId)) : false;
-        const neon = isToggle ? (isOn ? NEON_ON : NEON_OFF) : NEON_DEFAULT;
-
-        sphereMat.emissive.set(neon);
-        iconMat.color.set(neon);
-        light.color.set(neon);
-
-        sphereMat.emissiveIntensity = isToggle ? (isOn ? 1.0 : 0.85) : 0.9;
-        light.intensity = isToggle ? (isOn ? 1.05 : 0.9) : 0.95;
+        lastState = primaryState.trim().toLowerCase();
+        applyNeonFromState(primaryState);
       }
 
       apply(element);
@@ -815,6 +1023,15 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
         object: group,
         update: apply,
         tick: () => {
+          if (watchedServer && watchedEntity) {
+            const live = getLiveState(watchedServer, watchedEntity);
+            const next = asString(live?.state).trim().toLowerCase();
+            if (next && next !== lastState) {
+              lastState = next;
+              applyNeonFromState(next);
+            }
+          }
+
           if (wantedIconKey === currentIconKey) return;
           if (!isFaSolidIconAvailable(wantedIconKey)) return;
           const entry = getIconGeometry(wantedIconKey);
@@ -824,6 +1041,7 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
           iconMesh.scale.setScalar(entry.scale);
         },
         dispose: () => {
+          unwatch?.();
           domeFloorGeom.dispose();
           domeCeilingGeom.dispose();
           topCapGeom.dispose();
@@ -837,22 +1055,29 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
     render2D: ({ ctx, element, viewport }) => {
       const p = asRecord(element.props);
       const primaryEntityId = asString(p.primary_entity_id).trim();
-      const primaryState = asString(p.primary_state).trim().toLowerCase();
-      const isOn = primaryState === "on";
-      const isToggle = primaryEntityId ? isToggleDomain(domainFromEntityId(primaryEntityId)) : false;
+      const serverId = asString(p.server_id).trim();
+      const live = serverId && primaryEntityId ? getLiveState(serverId, primaryEntityId) : null;
+      const primaryState = asString(live?.state ?? p.primary_state).trim().toLowerCase();
+      const domain = primaryEntityId ? domainFromEntityId(primaryEntityId) : "";
+      const isToggle = primaryEntityId ? isToggleDomain(domain) : false;
+      const boolState = primaryEntityId ? boolStateForDomain(domain, primaryState) : null;
 
       const center = viewport.worldToScreen({ x: element.position.x, z: element.position.z });
       const r = 11;
 
       const fill = isToggle
-        ? isOn
+        ? boolState === true
           ? "rgba(34,197,94,0.22)"
-          : "rgba(239,68,68,0.18)"
+          : boolState === false
+            ? "rgba(239,68,68,0.18)"
+            : "rgba(56,189,248,0.14)"
         : "rgba(56,189,248,0.14)";
       const stroke = isToggle
-        ? isOn
+        ? boolState === true
           ? "rgba(34,197,94,0.72)"
-          : "rgba(239,68,68,0.72)"
+          : boolState === false
+            ? "rgba(239,68,68,0.72)"
+            : "rgba(230,232,242,0.24)"
         : "rgba(230,232,242,0.24)";
 
       ctx.save();
@@ -970,6 +1195,25 @@ function HomeAssistantAction({ element, update, close, api, i18n }: ActionProps)
       });
     return () => {
       cancelled = true;
+    };
+  }, [serverId, selectedEntityIds.join("|")]);
+
+  useEffect(() => {
+    if (!serverId || selectedEntityIds.length === 0) return;
+    const unwatch = watchLiveStates(serverId, selectedEntityIds);
+    const unsub = subscribeLive(serverId, () => {
+      setStates((prev) => {
+        const next = { ...prev };
+        for (const eid of selectedEntityIds) {
+          const live = getLiveState(serverId, eid);
+          if (live?.state) next[eid] = { ...(next[eid] ?? {}), entity_id: eid, state: live.state, attributes: live.attributes };
+        }
+        return next;
+      });
+    });
+    return () => {
+      unwatch();
+      unsub();
     };
   }, [serverId, selectedEntityIds.join("|")]);
 

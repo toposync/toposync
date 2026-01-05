@@ -294,6 +294,7 @@ function modelElementType(i18n: HostI18n): ElementType {
       let disposed = false;
       let lastUrl = "";
       let current: THREEStandalone.Object3D | null = null;
+      let mixer: THREEStandalone.AnimationMixer | null = null;
       let token = 0;
 
       function disposeObject(obj: THREEStandalone.Object3D) {
@@ -304,6 +305,23 @@ function modelElementType(i18n: HostI18n): ElementType {
           if (Array.isArray(mat)) mat.forEach((m) => m?.dispose?.());
           else mat?.dispose?.();
         });
+      }
+
+      function disposeMixer() {
+        if (!mixer) return;
+        try {
+          mixer.stopAllAction();
+        } catch {
+          // ignore
+        }
+        if (current) {
+          try {
+            mixer.uncacheRoot(current);
+          } catch {
+            // ignore
+          }
+        }
+        mixer = null;
       }
 
       async function load(url: string, meta: { center: Vector3; minY: number } | null) {
@@ -333,11 +351,17 @@ function modelElementType(i18n: HostI18n): ElementType {
 
           if (current) {
             group.remove(current);
+            disposeMixer();
             disposeObject(current);
             current = null;
           }
           current = model;
           group.add(model);
+
+          if (Array.isArray(gltf.animations) && gltf.animations.length > 0) {
+            mixer = new THREE.AnimationMixer(model);
+            for (const clip of gltf.animations) mixer.clipAction(clip).play();
+          }
         } catch (err) {
           console.error(`[models:create3D]`, err);
         }
@@ -367,8 +391,12 @@ function modelElementType(i18n: HostI18n): ElementType {
       return {
         object: group,
         update: apply,
+        tick: (dt) => {
+          mixer?.update(dt);
+        },
         dispose: () => {
           disposed = true;
+          disposeMixer();
           if (current) disposeObject(current);
         },
       };

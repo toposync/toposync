@@ -60,6 +60,7 @@ export function Viewport3D({
     wallHeight: 2.7,
   });
   const viewKeyRef = useRef<string>("");
+  const onElementActivatedRef = useRef<Props["onElementActivated"]>(onElementActivated);
 
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
   const mouse = useMemo(() => new THREE.Vector2(), []);
@@ -68,6 +69,10 @@ export function Viewport3D({
     viewRef.current.wallHeightPreset = viewSettings.wallHeightPreset;
     viewRef.current.wallHeight = viewSettings.wallHeight;
   }, [viewSettings.wallHeight, viewSettings.wallHeightPreset]);
+
+  useEffect(() => {
+    onElementActivatedRef.current = onElementActivated;
+  }, [onElementActivated]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -131,9 +136,12 @@ export function Viewport3D({
     ro.observe(containerEl);
 
     let raf = 0;
+    const clock = new THREE.Clock();
 
     function animate() {
       raf = requestAnimationFrame(animate);
+      const dt = Math.min(clock.getDelta(), 0.05);
+      for (const tracked of trackedRef.current.values()) tracked.instance.tick?.(dt);
       controls.update();
       renderer.render(scene, camera);
       labelRenderer.render(scene, camera);
@@ -171,21 +179,23 @@ export function Viewport3D({
       downAt = { x: e.clientX, y: e.clientY };
       dragged = false;
       longPressFired = false;
-      downElementId = onElementActivated ? pickElementId(e.clientX, e.clientY) : null;
+      downElementId = onElementActivatedRef.current ? pickElementId(e.clientX, e.clientY) : null;
 
       if (longPressTimer) window.clearTimeout(longPressTimer);
       longPressTimer = null;
 
-      if (onElementActivated && downElementId && e.pointerType === "touch") {
+      if (onElementActivatedRef.current && downElementId && e.pointerType === "touch") {
         longPressTimer = window.setTimeout(() => {
           if (dragged) return;
           if (!downElementId) return;
+          const handler = onElementActivatedRef.current;
+          if (!handler) return;
           longPressFired = true;
           if (pendingClick) {
             window.clearTimeout(pendingClick.timer);
             pendingClick = null;
           }
-          onElementActivated(downElementId, "longpress");
+          handler(downElementId, "longpress");
         }, LONG_PRESS_MS);
       }
     }
@@ -208,7 +218,8 @@ export function Viewport3D({
       if (!downAt) return;
       downAt = null;
       if (dragged) return;
-      if (!onElementActivated) return;
+      const handler = onElementActivatedRef.current;
+      if (!handler) return;
       if (longPressFired) return;
 
       const id = pickElementId(e.clientX, e.clientY);
@@ -219,7 +230,7 @@ export function Viewport3D({
       if (pendingClick && pendingClick.id === id && now - pendingClick.at <= DOUBLE_CLICK_MS) {
         window.clearTimeout(pendingClick.timer);
         pendingClick = null;
-        onElementActivated(id, "dblclick");
+        handler(id, "dblclick");
         return;
       }
 
@@ -227,7 +238,7 @@ export function Viewport3D({
         window.clearTimeout(pendingClick.timer);
         const prevId = pendingClick.id;
         pendingClick = null;
-        onElementActivated(prevId, "click");
+        handler(prevId, "click");
       }
 
       pendingClick = {
@@ -236,7 +247,7 @@ export function Viewport3D({
         timer: window.setTimeout(() => {
           if (!pendingClick || pendingClick.id !== id) return;
           pendingClick = null;
-          onElementActivated(id, "click");
+          handler(id, "click");
         }, CLICK_DELAY_MS),
       };
     }
@@ -277,7 +288,7 @@ export function Viewport3D({
       cameraRef.current = null;
       sceneRef.current = null;
     };
-  }, [mouse, onElementActivated, raycaster]);
+  }, [mouse, raycaster]);
 
   useEffect(() => {
     const scene = sceneRef.current;

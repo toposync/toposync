@@ -316,6 +316,24 @@ class HomeAssistantExtension(BaseExtension):
                         state_raw = item.get("state")
                         state = str(state_raw) if state_raw is not None else None
                         break
+            if state is None:
+                client = self._http
+                if client is not None:
+                    url = f"{server.host}/api/states/{body.entity_id}"
+                    for attempt in range(3):
+                        try:
+                            res = await client.get(url, headers={"Authorization": f"Bearer {server.apiKey}"})
+                            if res.status_code < 400:
+                                payload = res.json()
+                                if isinstance(payload, dict):
+                                    state_raw = payload.get("state")
+                                    state = str(state_raw) if state_raw is not None else None
+                                    if state is not None:
+                                        break
+                        except Exception:  # noqa: BLE001
+                            state = None
+                        if attempt < 2:
+                            await asyncio.sleep(0.15)
 
             from toposync.runtime.event_bus import EventOutcome
 

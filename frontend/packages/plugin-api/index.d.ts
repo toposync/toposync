@@ -98,6 +98,7 @@ export type Scene3DContext = {
 
 export type Element3DInstance = {
   object: import("three").Object3D;
+  tick?: (deltaSeconds: number) => void;
   update?: (element: CompositionElement) => void;
   dispose?: () => void;
 };

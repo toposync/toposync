@@ -27,6 +27,10 @@ type Props = {
   editorTools: EditorTool[];
   updateElement: (elementId: string, patch: CompositionElementPatch) => void;
   removeElement: (elementId: string) => void;
+  onBeginUndoGroup: () => void;
+  onEndUndoGroup: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
   onExit: () => void;
   onOpenSettings: () => void;
   onActivateComposition: (compositionId: string) => Promise<Composition>;
@@ -91,6 +95,10 @@ export function CompositionEditorScreen({
   editorTools,
   updateElement,
   removeElement,
+  onBeginUndoGroup,
+  onEndUndoGroup,
+  onUndo,
+  onRedo,
   onExit,
   onOpenSettings,
   onActivateComposition,
@@ -259,6 +267,10 @@ export function CompositionEditorScreen({
         }}
         updateElement={updateElement}
         removeElement={removeElement}
+        onBeginUndoGroup={onBeginUndoGroup}
+        onEndUndoGroup={onEndUndoGroup}
+        onUndo={onUndo}
+        onRedo={onRedo}
       />
 
       <div className="overlayTopRight">

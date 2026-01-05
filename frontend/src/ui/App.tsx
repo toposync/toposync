@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type {
   CompositionElement,
@@ -58,6 +58,7 @@ type Composition = {
 const LEGACY_STORAGE_KEY = "toposync.composition.v1";
 const SAVE_DEBOUNCE_MS = 400;
 const VIEW_SETTINGS_STORAGE_KEY = "toposync.view.v1";
+const HISTORY_LIMIT = 120;
 
 function isWallHeightPreset(value: unknown): value is WallHeightPreset {
   return value === "low" || value === "medium" || value === "high";
@@ -169,6 +170,7 @@ export function App(): React.ReactElement {
   const [settingsPanelsById, setSettingsPanelsById] = useState<Record<string, SettingsPanel>>({});
   const [notifications] = useState<Notification[]>([]);
   const [composition, setComposition] = useState<Composition>(() => defaultComposition());
+  const compositionRef = useRef<Composition>(composition);
   const [compositions, setCompositions] = useState<Array<{ id: string; name: string }>>([]);
   const [activeCompositionId, setActiveCompositionId] = useState<string>("ground");
   const [compositionLoaded, setCompositionLoaded] = useState(false);
@@ -178,6 +180,33 @@ export function App(): React.ReactElement {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const [compositionRevision, setCompositionRevision] = useState(0);
+
+  const screenRef = useRef<Screen>(screen);
+  const historyGroupRef = useRef<{ depth: number; snapshot: Composition | null; changed: boolean }>({
+    depth: 0,
+    snapshot: null,
+    changed: false,
+  });
+  const [undoStack, setUndoStack] = useState<Composition[]>([]);
+  const [redoStack, setRedoStack] = useState<Composition[]>([]);
+
+  useLayoutEffect(() => {
+    screenRef.current = screen;
+  }, [screen]);
+
+  useLayoutEffect(() => {
+    compositionRef.current = composition;
+  }, [composition]);
+
+  const resetHistory = useCallback(() => {
+    historyGroupRef.current = { depth: 0, snapshot: null, changed: false };
+    setUndoStack([]);
+    setRedoStack([]);
+  }, []);
+
+  useEffect(() => {
+    resetHistory();
+  }, [resetHistory, screen, composition.id]);
 
   const notificationRenderers = useMemo(
     () => Object.values(notificationRenderersById),
@@ -319,6 +348,99 @@ export function App(): React.ReactElement {
     }
   }, [backendAvailable, composition, compositionLoaded]);
 
+  const recordHistoryBeforeChange = useCallback((prev: Composition) => {
+    if (screenRef.current !== "editor") return;
+
+    const group = historyGroupRef.current;
+    if (group.depth > 0) {
+      if (!group.snapshot) group.snapshot = prev;
+      group.changed = true;
+      setRedoStack([]);
+      return;
+    }
+
+    setUndoStack((stack) => {
+      const next = [...stack, prev];
+      if (next.length > HISTORY_LIMIT) next.splice(0, next.length - HISTORY_LIMIT);
+      return next;
+    });
+    setRedoStack([]);
+  }, []);
+
+  const beginUndoGroup = useCallback(() => {
+    if (screenRef.current !== "editor") return;
+    const group = historyGroupRef.current;
+    group.depth += 1;
+    if (group.depth === 1) {
+      group.snapshot = compositionRef.current;
+      group.changed = false;
+    }
+  }, []);
+
+  const endUndoGroup = useCallback(() => {
+    if (screenRef.current !== "editor") return;
+    const group = historyGroupRef.current;
+    if (group.depth <= 0) return;
+    group.depth -= 1;
+    if (group.depth !== 0) return;
+
+    if (group.changed && group.snapshot) {
+      setUndoStack((stack) => {
+        const next = [...stack, group.snapshot as Composition];
+        if (next.length > HISTORY_LIMIT) next.splice(0, next.length - HISTORY_LIMIT);
+        return next;
+      });
+      setRedoStack([]);
+    }
+
+    group.snapshot = null;
+    group.changed = false;
+  }, []);
+
+  const undo = useCallback(() => {
+    if (screenRef.current !== "editor") return;
+    historyGroupRef.current = { depth: 0, snapshot: null, changed: false };
+
+    setUndoStack((stack) => {
+      if (stack.length === 0) return stack;
+      const snapshot = stack[stack.length - 1];
+
+      setRedoStack((redo) => {
+        const next = [...redo, compositionRef.current];
+        if (next.length > HISTORY_LIMIT) next.splice(0, next.length - HISTORY_LIMIT);
+        return next;
+      });
+
+      compositionRef.current = snapshot;
+      setComposition(snapshot);
+      setCompositionRevision((v) => v + 1);
+
+      return stack.slice(0, -1);
+    });
+  }, []);
+
+  const redo = useCallback(() => {
+    if (screenRef.current !== "editor") return;
+    historyGroupRef.current = { depth: 0, snapshot: null, changed: false };
+
+    setRedoStack((redoStack) => {
+      if (redoStack.length === 0) return redoStack;
+      const snapshot = redoStack[redoStack.length - 1];
+
+      setUndoStack((stack) => {
+        const next = [...stack, compositionRef.current];
+        if (next.length > HISTORY_LIMIT) next.splice(0, next.length - HISTORY_LIMIT);
+        return next;
+      });
+
+      compositionRef.current = snapshot;
+      setComposition(snapshot);
+      setCompositionRevision((v) => v + 1);
+
+      return redoStack.slice(0, -1);
+    });
+  }, []);
+
   const updateExtensionSettings = useCallback(
     async (extensionId: string, patch: Record<string, unknown>) => {
       if (!backendAvailable) {
@@ -373,6 +495,7 @@ export function App(): React.ReactElement {
 
       const id = newId();
       setComposition((prev) => {
+        recordHistoryBeforeChange(prev);
         const idx = prev.elements.length;
         const col = idx % 4;
         const row = Math.floor(idx / 4);
@@ -399,21 +522,27 @@ export function App(): React.ReactElement {
       setCompositionRevision((v) => v + 1);
       return id;
     },
-    [elementTypesById],
+    [elementTypesById, recordHistoryBeforeChange],
   );
 
   const updateElement = useCallback((elementId: string, patch: CompositionElementPatch) => {
-    setComposition((prev) => ({
-      ...prev,
-      elements: prev.elements.map((el) => (el.id === elementId ? mergeElement(el, patch) : el)),
-    }));
+    setComposition((prev) => {
+      recordHistoryBeforeChange(prev);
+      return {
+        ...prev,
+        elements: prev.elements.map((el) => (el.id === elementId ? mergeElement(el, patch) : el)),
+      };
+    });
     setCompositionRevision((v) => v + 1);
-  }, []);
+  }, [recordHistoryBeforeChange]);
 
   const removeElement = useCallback((elementId: string) => {
-    setComposition((prev) => ({ ...prev, elements: prev.elements.filter((el) => el.id !== elementId) }));
+    setComposition((prev) => {
+      recordHistoryBeforeChange(prev);
+      return { ...prev, elements: prev.elements.filter((el) => el.id !== elementId) };
+    });
     setCompositionRevision((v) => v + 1);
-  }, []);
+  }, [recordHistoryBeforeChange]);
 
   const activateCompositionById = useCallback(
     async (compositionId: string): Promise<Composition> => {
@@ -488,6 +617,10 @@ export function App(): React.ReactElement {
           editorTools={Object.values(editorToolsById)}
           updateElement={updateElement}
           removeElement={removeElement}
+          onBeginUndoGroup={beginUndoGroup}
+          onEndUndoGroup={endUndoGroup}
+          onUndo={undo}
+          onRedo={redo}
           onExit={() => setScreen("main")}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onActivateComposition={activateCompositionById}

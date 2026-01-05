@@ -21,6 +21,10 @@ type Props = {
   onOpenEditor?: (elementId: string) => void;
   updateElement?: (elementId: string, patch: CompositionElementPatch) => void;
   removeElement?: (elementId: string) => void;
+  onBeginUndoGroup?: () => void;
+  onEndUndoGroup?: () => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
 };
 
 function toVector2(x: number, y: number): Vector2 {
@@ -205,6 +209,10 @@ export function Viewport2D({
   onOpenEditor,
   updateElement,
   removeElement,
+  onBeginUndoGroup,
+  onEndUndoGroup,
+  onUndo,
+  onRedo,
 }: Props): React.ReactElement {
   const { locale } = i18n.useI18n();
 
@@ -224,6 +232,10 @@ export function Viewport2D({
   const onOpenEditorRef = useRef<Props["onOpenEditor"]>(onOpenEditor);
   const updateElementRef = useRef<Props["updateElement"]>(updateElement);
   const removeElementRef = useRef<Props["removeElement"]>(removeElement);
+  const onBeginUndoGroupRef = useRef<Props["onBeginUndoGroup"]>(onBeginUndoGroup);
+  const onEndUndoGroupRef = useRef<Props["onEndUndoGroup"]>(onEndUndoGroup);
+  const onUndoRef = useRef<Props["onUndo"]>(onUndo);
+  const onRedoRef = useRef<Props["onRedo"]>(onRedo);
 
   const cameraRef = useRef<Camera2D>({ cx: 0, cz: 0, scale: 52 });
   const interactionRef = useRef<Interaction>({ kind: "none" });
@@ -269,6 +281,22 @@ export function Viewport2D({
   useEffect(() => {
     removeElementRef.current = removeElement;
   }, [removeElement]);
+
+  useEffect(() => {
+    onBeginUndoGroupRef.current = onBeginUndoGroup;
+  }, [onBeginUndoGroup]);
+
+  useEffect(() => {
+    onEndUndoGroupRef.current = onEndUndoGroup;
+  }, [onEndUndoGroup]);
+
+  useEffect(() => {
+    onUndoRef.current = onUndo;
+  }, [onUndo]);
+
+  useEffect(() => {
+    onRedoRef.current = onRedo;
+  }, [onRedo]);
 
   useEffect(() => {
     numberFmtRef.current = new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -735,6 +763,7 @@ export function Viewport2D({
       }
 
       if (toolSessionRef.current) {
+        onBeginUndoGroupRef.current?.();
         interactionRef.current = { kind: "tool", pointerId: e.pointerId };
         toToolEvent("down", e);
         return;
@@ -749,6 +778,7 @@ export function Viewport2D({
 
         const startElement = elementsRef.current.find((it) => it.id === hitId) ?? null;
         if (startElement && updateElementRef.current) {
+          onBeginUndoGroupRef.current?.();
           interactionRef.current = {
             kind: "drag",
             pointerId: e.pointerId,
@@ -844,6 +874,7 @@ export function Viewport2D({
       const interaction = interactionRef.current;
       if (interaction.kind === "tool") {
         toToolEvent("up", e);
+        onEndUndoGroupRef.current?.();
         interactionRef.current = { kind: "none" };
         return;
       }
@@ -862,6 +893,7 @@ export function Viewport2D({
       if (interaction.kind === "drag") {
         if (interaction.pointerId !== e.pointerId) return;
         flushDragPatch();
+        onEndUndoGroupRef.current?.();
         interactionRef.current = { kind: "none" };
         requestDraw();
         return;
@@ -874,6 +906,9 @@ export function Viewport2D({
       const interaction = interactionRef.current;
       if (interaction.kind === "tool") {
         toToolEvent("cancel", e);
+      }
+      if (interaction.kind === "tool" || interaction.kind === "drag") {
+        onEndUndoGroupRef.current?.();
       }
       interactionRef.current = { kind: "none" };
       requestDraw();
@@ -953,6 +988,24 @@ export function Viewport2D({
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName?.toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable) return;
+
+      const meta = e.metaKey || e.ctrlKey;
+      if (meta && !e.altKey) {
+        const key = e.key.toLowerCase();
+        if (key === "z") {
+          e.preventDefault();
+          if (e.shiftKey) onRedoRef.current?.();
+          else onUndoRef.current?.();
+          requestDraw();
+          return;
+        }
+        if (key === "y") {
+          e.preventDefault();
+          onRedoRef.current?.();
+          requestDraw();
+          return;
+        }
+      }
 
       if (e.key === " ") {
         e.preventDefault();

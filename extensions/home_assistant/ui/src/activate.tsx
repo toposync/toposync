@@ -542,7 +542,6 @@ function HomeAssistantSettings({
 function homeAssistantElementType(i18n: HostI18n): ElementType {
   const iconGeometryCache = new Map<string, { geometry: any; scale: number }>();
   const ICON_TARGET_SIZE = 0.14;
-  const ICON_EXTRUDE_DEPTH = 32; // in SVG coordinate units (Font Awesome uses ~512x512 viewBox)
 
   const BUTTON_RADIUS = 0.18;
   const BUTTON_THETA_TOP_CUT = 1.05;
@@ -587,15 +586,9 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
         const data = new SVGLoader().parse(svgText);
 
         const shapes: any[] = [];
-        for (const path of data.paths) shapes.push(...path.toShapes(true));
+        for (const path of data.paths) shapes.push(...SVGLoader.createShapes(path));
 
-        const geometry = new THREE.ExtrudeGeometry(shapes, {
-          depth: ICON_EXTRUDE_DEPTH,
-          bevelEnabled: false,
-          curveSegments: 4,
-          steps: 1,
-        });
-
+        const geometry = new THREE.ShapeGeometry(shapes);
         geometry.computeBoundingBox();
         const bbox = geometry.boundingBox;
         if (bbox) {
@@ -606,10 +599,6 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
 
         geometry.scale(1, -1, 1);
         geometry.rotateX(-Math.PI / 2);
-        geometry.computeBoundingBox();
-        const bbox2 = geometry.boundingBox;
-        if (bbox2) geometry.translate(0, -bbox2.min.y, 0);
-        geometry.computeVertexNormals();
 
         geometry.computeBoundingBox();
         const bbox3 = geometry.boundingBox;
@@ -653,71 +642,44 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
         Math.PI - BUTTON_THETA_TOP_CUT,
       );
 
-      const baseMat = new THREE.MeshStandardMaterial({
-        color: 0x1f2937,
-        roughness: 0.58,
-        metalness: 0.09,
+      const sphereMat = new THREE.MeshStandardMaterial({
+        color: 0x0b1220,
+        emissive: new THREE.Color(NEON_DEFAULT),
+        emissiveIntensity: 0.85,
+        roughness: 0.32,
+        metalness: 0.0,
       });
+      const cutMat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+      const iconMat = new THREE.MeshBasicMaterial({ color: NEON_DEFAULT, side: THREE.DoubleSide });
+      iconMat.depthWrite = false;
+      iconMat.polygonOffset = true;
+      iconMat.polygonOffsetFactor = -1;
+      iconMat.polygonOffsetUnits = -1;
 
-      const dome = new THREE.Mesh(domeFloorGeom, baseMat);
+      const dome = new THREE.Mesh(domeFloorGeom, sphereMat);
       mountGroup.add(dome);
 
       const topCapGeom = new THREE.CircleGeometry(topRadius, 48);
-      const topCap = new THREE.Mesh(topCapGeom, baseMat);
+      const topCap = new THREE.Mesh(topCapGeom, cutMat);
       topCap.rotation.x = -Math.PI / 2;
       topCap.position.set(0, topY, 0);
       mountGroup.add(topCap);
 
       const bottomCapGeom = new THREE.CircleGeometry(BUTTON_RADIUS, 48);
-      const bottomCap = new THREE.Mesh(bottomCapGeom, baseMat);
+      const bottomCap = new THREE.Mesh(bottomCapGeom, cutMat);
       bottomCap.rotation.x = Math.PI / 2;
       bottomCap.position.set(0, 0, 0);
       mountGroup.add(bottomCap);
 
-      const ringGeom = new THREE.RingGeometry(topRadius * 0.72, topRadius * 0.98, 56);
-      const ringMat = new THREE.MeshBasicMaterial({
-        color: NEON_DEFAULT,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0.78,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      });
-      const ring = new THREE.Mesh(ringGeom, ringMat);
-      ring.rotation.x = -Math.PI / 2;
-      ring.position.set(0, topY + 0.001, 0);
-      mountGroup.add(ring);
-
-      const glowGeom = new THREE.RingGeometry(topRadius * 0.52, topRadius * 1.22, 56);
-      const glowMat = new THREE.MeshBasicMaterial({
-        color: NEON_DEFAULT,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0.26,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      });
-      const glow = new THREE.Mesh(glowGeom, glowMat);
-      glow.rotation.x = -Math.PI / 2;
-      glow.position.set(0, topY + 0.0006, 0);
-      mountGroup.add(glow);
-
-      const light = new THREE.PointLight(NEON_DEFAULT, 0.7, 0.9, 2.2);
-      light.position.set(0, topY + 0.05, 0);
+      const light = new THREE.PointLight(NEON_DEFAULT, 0.9, 1.15, 2.2);
+      light.position.set(0, topY * 0.6, 0);
       mountGroup.add(light);
 
-      const iconMat = new THREE.MeshStandardMaterial({
-        color: 0xe2e8f0,
-        emissive: new THREE.Color(NEON_DEFAULT),
-        emissiveIntensity: 0.22,
-        side: THREE.DoubleSide,
-        roughness: 0.28,
-        metalness: 0.0,
-      });
       const houseGeo = getIconGeometry("house");
       const iconMesh = new THREE.Mesh(houseGeo.geometry, iconMat);
       iconMesh.scale.setScalar(houseGeo.scale);
       iconMesh.position.set(0, topY + 0.002, 0);
+      iconMesh.renderOrder = 10;
       mountGroup.add(iconMesh);
 
       let currentIconKey = "house";
@@ -767,18 +729,12 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
         const isToggle = primaryEntityId ? isToggleDomain(domainFromEntityId(primaryEntityId)) : false;
         const neon = isToggle ? (isOn ? NEON_ON : NEON_OFF) : NEON_DEFAULT;
 
-        ringMat.color.set(neon);
-        glowMat.color.set(neon);
+        sphereMat.emissive.set(neon);
+        iconMat.color.set(neon);
         light.color.set(neon);
 
-        ringMat.opacity = isToggle ? (isOn ? 0.92 : 0.82) : 0.78;
-        glowMat.opacity = isToggle ? (isOn ? 0.35 : 0.26) : 0.26;
-        light.intensity = isToggle ? (isOn ? 0.9 : 0.75) : 0.7;
-        iconMat.emissive.set(neon);
-        iconMat.emissiveIntensity = isToggle ? (isOn ? 0.32 : 0.24) : 0.22;
-
-        baseMat.color.set(isToggle ? 0x0b1220 : 0x1f2937);
-        iconMat.color.set(0xe2e8f0);
+        sphereMat.emissiveIntensity = isToggle ? (isOn ? 1.0 : 0.85) : 0.9;
+        light.intensity = isToggle ? (isOn ? 1.05 : 0.9) : 0.95;
       }
 
       apply(element);
@@ -791,11 +747,8 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
           domeCeilingGeom.dispose();
           topCapGeom.dispose();
           bottomCapGeom.dispose();
-          baseMat.dispose();
-          ringGeom.dispose();
-          ringMat.dispose();
-          glowGeom.dispose();
-          glowMat.dispose();
+          sphereMat.dispose();
+          cutMat.dispose();
           iconMat.dispose();
         },
       };

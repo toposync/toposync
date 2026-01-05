@@ -523,8 +523,11 @@ function HomeAssistantSettings({
 
 function homeAssistantElementType(i18n: HostI18n): ElementType {
   const iconGeometryCache = new Map<string, { geometry: any; scale: number }>();
-  const ICON_TARGET_SIZE = 0.16;
+  const ICON_TARGET_SIZE = 0.14;
   const ICON_EXTRUDE_DEPTH = 32; // in SVG coordinate units (Font Awesome uses ~512x512 viewBox)
+
+  const BUTTON_RADIUS = 0.18;
+  const BUTTON_THETA_TOP_CUT = 1.05;
 
   return {
     type: ELEMENT_TYPE_ID,
@@ -603,17 +606,40 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
 
       const group = new THREE.Group();
 
-      const baseGeom = new THREE.CylinderGeometry(0.18, 0.18, 0.05, 32);
+      const topY = BUTTON_RADIUS * Math.cos(BUTTON_THETA_TOP_CUT);
+      const topRadius = BUTTON_RADIUS * Math.sin(BUTTON_THETA_TOP_CUT);
+
+      const domeGeom = new THREE.SphereGeometry(
+        BUTTON_RADIUS,
+        48,
+        24,
+        0,
+        Math.PI * 2,
+        BUTTON_THETA_TOP_CUT,
+        Math.PI / 2 - BUTTON_THETA_TOP_CUT,
+      );
       const baseMat = new THREE.MeshStandardMaterial({
         color: 0x334155,
-        roughness: 0.85,
-        metalness: 0.12,
+        roughness: 0.62,
+        metalness: 0.06,
       });
-      const base = new THREE.Mesh(baseGeom, baseMat);
-      base.position.set(0, 0.025, 0);
-      group.add(base);
 
-      const ringGeom = new THREE.RingGeometry(0.11, 0.18, 36);
+      const dome = new THREE.Mesh(domeGeom, baseMat);
+      group.add(dome);
+
+      const topCapGeom = new THREE.CircleGeometry(topRadius, 44);
+      const topCap = new THREE.Mesh(topCapGeom, baseMat);
+      topCap.rotation.x = -Math.PI / 2;
+      topCap.position.set(0, topY, 0);
+      group.add(topCap);
+
+      const bottomCapGeom = new THREE.CircleGeometry(BUTTON_RADIUS, 44);
+      const bottomCap = new THREE.Mesh(bottomCapGeom, baseMat);
+      bottomCap.rotation.x = Math.PI / 2;
+      bottomCap.position.set(0, 0, 0);
+      group.add(bottomCap);
+
+      const ringGeom = new THREE.RingGeometry(topRadius * 0.72, topRadius * 0.98, 44);
       const ringMat = new THREE.MeshBasicMaterial({
         color: 0x38bdf8,
         side: THREE.DoubleSide,
@@ -623,7 +649,7 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       });
       const ring = new THREE.Mesh(ringGeom, ringMat);
       ring.rotation.x = -Math.PI / 2;
-      ring.position.set(0, 0.052, 0);
+      ring.position.set(0, topY + 0.001, 0);
       group.add(ring);
 
       const iconMat = new THREE.MeshStandardMaterial({
@@ -634,7 +660,7 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       });
       const iconMesh = new THREE.Mesh(getIconGeometry("house").geometry, iconMat);
       iconMesh.scale.setScalar(getIconGeometry("house").scale);
-      iconMesh.position.set(0, 0.053, 0);
+      iconMesh.position.set(0, topY + 0.002, 0);
       group.add(iconMesh);
 
       let currentIconKey = "house";
@@ -665,7 +691,9 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
         object: group,
         update: apply,
         dispose: () => {
-          baseGeom.dispose();
+          domeGeom.dispose();
+          topCapGeom.dispose();
+          bottomCapGeom.dispose();
           baseMat.dispose();
           ringGeom.dispose();
           ringMat.dispose();

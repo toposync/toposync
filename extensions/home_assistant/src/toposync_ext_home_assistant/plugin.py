@@ -90,7 +90,7 @@ class HomeAssistantExtension(BaseExtension):
         def _config_store() -> ConfigStore:
             store = getattr(app.state, "config_store", None)
             if store is None:
-                raise RuntimeError("TopoSync config_store not available")
+                raise RuntimeError("Toposync config_store not available")
             return store
 
         async def list_servers() -> list[HomeAssistantServer]:

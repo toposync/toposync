@@ -1,4 +1,4 @@
-# TopoSync Extension: Hello Lamp
+# Toposync Extension: Hello Lamp
 
 Exemplo de extensão **prebuilt**: instala via `pip/uv` como pacote Python, e o backend serve o bundle do frontend (`remoteEntry.js`) direto do wheel.
 

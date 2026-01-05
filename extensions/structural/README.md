@@ -1,4 +1,4 @@
-# TopoSync Extension: Structural
+# Toposync Extension: Structural
 
 Ferramentas e tipos de elemento estruturais (2D) para o editor de composição:
 

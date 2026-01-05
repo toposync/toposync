@@ -1,7 +1,7 @@
 [project]
 name = "toposync-ext-structural"
 version = "0.1.0"
-description = "TopoSync first-party extension: Structural drawing tools (2D walls/areas)."
+description = "Toposync first-party extension: Structural drawing tools (2D walls/areas)."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["toposync>=0.1.0"]

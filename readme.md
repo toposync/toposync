@@ -1,4 +1,4 @@
-# TopoSync
+# Toposync
 
 Plataforma local‑first (Python + React + ThreeJS) para “gêmeo digital” de automação residencial — com **runtime de extensões** como alicerce.
 
@@ -282,8 +282,8 @@ Dica: o core já fornece chaves comuns em `core.actions.*` (ex.: `close`, `delet
 - Dica (dev): `uv run toposync serve --data-dir $(pwd)/.toposync-data` (pasta ignorada pelo git)
 - Default por SO:
   - Linux: `$XDG_DATA_HOME/toposync` ou `~/.local/share/toposync`
-  - macOS: `~/Library/Application Support/TopoSync`
-  - Windows: `%APPDATA%/TopoSync`
+  - macOS: `~/Library/Application Support/Toposync`
+  - Windows: `%APPDATA%/Toposync`
 
 Se bater dúvida sobre *qual* diretório está em uso, chame `GET /api/system/paths`.
 

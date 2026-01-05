@@ -59,13 +59,13 @@ def _default_data_dir() -> Path:
         return Path.home() / ".local" / "share" / "toposync"
 
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "TopoSync"
+        return Path.home() / "Library" / "Application Support" / "Toposync"
 
     if os.name == "nt":
         base = os.getenv("APPDATA") or os.getenv("LOCALAPPDATA")
         if base:
-            return Path(base) / "TopoSync"
-        return Path.home() / "TopoSync"
+            return Path(base) / "Toposync"
+        return Path.home() / "Toposync"
 
     return Path.home() / ".toposync"
 

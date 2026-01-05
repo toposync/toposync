@@ -10,7 +10,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="toposync")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    serve = sub.add_parser("serve", help="Run the TopoSync backend server.")
+    serve = sub.add_parser("serve", help="Run the Toposync backend server.")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--log-level", default="info")

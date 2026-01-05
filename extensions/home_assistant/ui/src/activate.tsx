@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import Select from "react-select";
 import type { GroupBase, StylesConfig } from "react-select";
@@ -174,15 +174,77 @@ const FA_SVG_BY_NAME: Record<string, string> = {
   tv: tvSvg,
 };
 
+type FaIconSvg = {
+  viewBox: number[];
+  path: string;
+};
+
+type FaIconFamilies = Record<
+  string,
+  {
+    label?: string;
+    search?: { terms?: string[] };
+    svgs?: { classic?: { solid?: FaIconSvg } };
+  }
+>;
+
+let faIconFamilies: FaIconFamilies | null = null;
+let faIconFamiliesPromise: Promise<FaIconFamilies> | null = null;
+
+function loadFaIconFamilies(): Promise<FaIconFamilies> {
+  if (faIconFamilies) return Promise.resolve(faIconFamilies);
+  if (faIconFamiliesPromise) return faIconFamiliesPromise;
+
+  faIconFamiliesPromise = import("@fortawesome/fontawesome-free/metadata/icon-families.json")
+    .then((m: any) => (m.default ?? m) as FaIconFamilies)
+    .then((data) => {
+      faIconFamilies = data;
+      return data;
+    })
+    .finally(() => {
+      faIconFamiliesPromise = null;
+    });
+
+  return faIconFamiliesPromise;
+}
+
 function normalizeFaSvgName(value: string): string {
   const key = sanitizeFaIconName(value);
   if (key === "thermometer-half" || key === "thermometer") return "temperature-half";
   return key;
 }
 
-function resolveFaSvg(value: string): string {
-  const key = normalizeFaSvgName(value);
-  return FA_SVG_BY_NAME[key] ?? FA_SVG_BY_NAME.house;
+function getFaSolidSvgFromFamilies(name: string): FaIconSvg | null {
+  const key = normalizeFaSvgName(name);
+  const entry = faIconFamilies?.[key];
+  const svg = entry?.svgs?.classic?.solid;
+  if (!svg?.path || !svg?.viewBox?.length) return null;
+  return svg;
+}
+
+function buildSvgFromFaSolid(svg: FaIconSvg): string {
+  const vb = svg.viewBox.join(" ");
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}"><path d="${svg.path}"/></svg>`;
+}
+
+function isFaSolidIconAvailable(name: string): boolean {
+  const key = normalizeFaSvgName(name);
+  if (FA_SVG_BY_NAME[key]) return true;
+  return Boolean(getFaSolidSvgFromFamilies(key));
+}
+
+function resolveFaSvg(value: string): { key: string; svgText: string } {
+  const key = normalizeFaSvgName(value) || "house";
+
+  const direct = FA_SVG_BY_NAME[key];
+  if (direct) return { key, svgText: direct };
+
+  const metaSvg = getFaSolidSvgFromFamilies(key);
+  if (metaSvg) return { key, svgText: buildSvgFromFaSolid(metaSvg) };
+
+  if (!faIconFamilies && !faIconFamiliesPromise) void loadFaIconFamilies();
+
+  return { key: "house", svgText: FA_SVG_BY_NAME.house };
 }
 
 function isHaViewMode(value: unknown): value is HaViewMode {
@@ -262,7 +324,7 @@ const translations = {
     "ext.home_assistant.settings.name": "Home Assistant",
     "ext.home_assistant.settings.desc": "Configure one or more Home Assistant servers to connect and integrate.",
     "ext.home_assistant.settings.notice":
-      "Your API token is stored locally in TopoSync configuration (local-first).",
+      "Your API token is stored locally in Toposync configuration (local-first).",
     "ext.home_assistant.settings.servers": "Servers",
     "ext.home_assistant.settings.add": "Add server",
     "ext.home_assistant.settings.empty": "No servers yet.",
@@ -280,7 +342,13 @@ const translations = {
     "ext.home_assistant.editor.group_entities": "Entities",
     "ext.home_assistant.editor.group_devices": "Devices",
     "ext.home_assistant.editor.icon": "Icon",
-    "ext.home_assistant.editor.icon_hint": "Font Awesome (solid) icon name, e.g. lightbulb, toggle-on, thermostat.",
+    "ext.home_assistant.editor.icon_hint": "Font Awesome Free (solid) icons. Some names may not exist in the free set.",
+    "ext.home_assistant.editor.icon_search": "Search icons…",
+    "ext.home_assistant.editor.icon_loading": "Loading icons…",
+    "ext.home_assistant.editor.icon_suggested": "Suggested icons",
+    "ext.home_assistant.editor.icon_results": "{{count}} results",
+    "ext.home_assistant.editor.icon_no_results": "No icons found.",
+    "ext.home_assistant.editor.icon_not_found": "Icon not found in Font Awesome Free.",
     "ext.home_assistant.editor.view_mode": "View mode",
     "ext.home_assistant.editor.view_mode.floor": "Floor",
     "ext.home_assistant.editor.view_mode.ceiling": "Ceiling",
@@ -298,7 +366,7 @@ const translations = {
     "ext.home_assistant.settings.desc":
       "Configure um ou mais servidores do Home Assistant para conectar e integrar.",
     "ext.home_assistant.settings.notice":
-      "Seu token de API é armazenado localmente na configuração do TopoSync (local-first).",
+      "Seu token de API é armazenado localmente na configuração do Toposync (local-first).",
     "ext.home_assistant.settings.servers": "Servidores",
     "ext.home_assistant.settings.add": "Adicionar servidor",
     "ext.home_assistant.settings.empty": "Nenhum servidor ainda.",
@@ -316,8 +384,13 @@ const translations = {
     "ext.home_assistant.editor.group_entities": "Entidades",
     "ext.home_assistant.editor.group_devices": "Dispositivos",
     "ext.home_assistant.editor.icon": "Ícone",
-    "ext.home_assistant.editor.icon_hint":
-      "Nome do ícone Font Awesome (solid), ex.: lightbulb, toggle-on, thermostat.",
+    "ext.home_assistant.editor.icon_hint": "Ícones Font Awesome Free (solid). Alguns nomes não existem no pacote free.",
+    "ext.home_assistant.editor.icon_search": "Buscar ícones…",
+    "ext.home_assistant.editor.icon_loading": "Carregando ícones…",
+    "ext.home_assistant.editor.icon_suggested": "Ícones sugeridos",
+    "ext.home_assistant.editor.icon_results": "{{count}} resultados",
+    "ext.home_assistant.editor.icon_no_results": "Nenhum ícone encontrado.",
+    "ext.home_assistant.editor.icon_not_found": "Ícone não encontrado no Font Awesome Free.",
     "ext.home_assistant.editor.view_mode": "Visualização",
     "ext.home_assistant.editor.view_mode.floor": "Chão",
     "ext.home_assistant.editor.view_mode.ceiling": "Teto",
@@ -576,14 +649,12 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       return true;
     },
     create3D: ({ THREE, view }, element) => {
-      function getIconGeometry(iconName: string): { geometry: any; scale: number } {
-        const normalized = normalizeFaSvgName(iconName);
-        const cacheKey = FA_SVG_BY_NAME[normalized] ? normalized : "house";
-        const cached = iconGeometryCache.get(cacheKey);
-        if (cached) return cached;
+      function getIconGeometry(iconName: string): { geometry: any; scale: number; key: string } {
+        const resolved = resolveFaSvg(iconName);
+        const cached = iconGeometryCache.get(resolved.key);
+        if (cached) return { ...cached, key: resolved.key };
 
-        const svgText = resolveFaSvg(cacheKey);
-        const data = new SVGLoader().parse(svgText);
+        const data = new SVGLoader().parse(resolved.svgText);
 
         const shapes: any[] = [];
         for (const path of data.paths) shapes.push(...SVGLoader.createShapes(path));
@@ -608,8 +679,8 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
         const scale = ICON_TARGET_SIZE / maxXZ;
 
         const entry = { geometry, scale };
-        iconGeometryCache.set(cacheKey, entry);
-        return entry;
+        iconGeometryCache.set(resolved.key, entry);
+        return { ...entry, key: resolved.key };
       }
 
       const NEON_DEFAULT = 0x38bdf8;
@@ -682,7 +753,8 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       iconMesh.renderOrder = 10;
       mountGroup.add(iconMesh);
 
-      let currentIconKey = "house";
+      let wantedIconKey = "house";
+      let currentIconKey = houseGeo.key;
       let currentViewMode: HaViewMode = "floor";
 
       function applyViewMode(mode: HaViewMode) {
@@ -718,10 +790,10 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
 
         applyViewMode(viewMode);
 
-        const iconKey = normalizeFaSvgName(icon);
-        if (iconKey !== currentIconKey) {
-          currentIconKey = iconKey;
-          const entry = getIconGeometry(iconKey);
+        wantedIconKey = normalizeFaSvgName(icon) || "house";
+        const entry = getIconGeometry(wantedIconKey);
+        if (entry.key !== currentIconKey) {
+          currentIconKey = entry.key;
           iconMesh.geometry = entry.geometry;
           iconMesh.scale.setScalar(entry.scale);
         }
@@ -742,6 +814,15 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       return {
         object: group,
         update: apply,
+        tick: () => {
+          if (wantedIconKey === currentIconKey) return;
+          if (!isFaSolidIconAvailable(wantedIconKey)) return;
+          const entry = getIconGeometry(wantedIconKey);
+          if (entry.key === currentIconKey) return;
+          currentIconKey = entry.key;
+          iconMesh.geometry = entry.geometry;
+          iconMesh.scale.setScalar(entry.scale);
+        },
         dispose: () => {
           domeFloorGeom.dispose();
           domeCeilingGeom.dispose();
@@ -1013,6 +1094,13 @@ function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorPro
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const [isIconPickerOpen, setIsIconPickerOpen] = useState(false);
+  const [iconSearch, setIconSearch] = useState("");
+  const [iconFamilies, setIconFamilies] = useState<FaIconFamilies | null>(faIconFamilies);
+  const [iconLoadError, setIconLoadError] = useState<string | null>(null);
+  const [iconLoading, setIconLoading] = useState(false);
+  const iconSearchRef = useRef<HTMLInputElement | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     fetchHaServers()
@@ -1026,6 +1114,40 @@ function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorPro
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isIconPickerOpen) return;
+
+    let cancelled = false;
+    setIconLoadError(null);
+
+    if (faIconFamilies) {
+      setIconFamilies(faIconFamilies);
+      return;
+    }
+
+    setIconLoading(true);
+    loadFaIconFamilies()
+      .then((data) => {
+        if (!cancelled) setIconFamilies(data);
+      })
+      .catch((e) => {
+        if (!cancelled) setIconLoadError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setIconLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isIconPickerOpen]);
+
+  useEffect(() => {
+    if (!isIconPickerOpen) return;
+    const id = window.setTimeout(() => iconSearchRef.current?.focus(), 0);
+    return () => window.clearTimeout(id);
+  }, [isIconPickerOpen]);
 
   useEffect(() => {
     if (serverId) return;
@@ -1132,6 +1254,69 @@ function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorPro
   );
 
   const portalTarget = typeof document !== "undefined" ? document.body : undefined;
+
+  const iconPickerPreview = useMemo(() => {
+    if (!iconFamilies) return icon;
+    return isFaSolidIconAvailable(icon) ? icon : "house";
+  }, [icon, iconFamilies]);
+
+  const iconPickerResults = useMemo(() => {
+    if (!iconFamilies) return [];
+    const q = iconSearch.trim().toLowerCase();
+
+    const suggested = [
+      iconPickerPreview,
+      "house",
+      "bell",
+      "lightbulb",
+      "toggle-on",
+      "fan",
+      "temperature-half",
+      "lock",
+      "video",
+      "tv",
+      "wifi",
+      "plug",
+      "power-off",
+      "snowflake",
+      "sun",
+      "door-open",
+      "camera",
+    ];
+
+    if (!q) {
+      const out: string[] = [];
+      const seen = new Set<string>();
+      for (const name of suggested) {
+        const key = normalizeFaSvgName(name);
+        if (!key || seen.has(key)) continue;
+        if (!iconFamilies[key]?.svgs?.classic?.solid && !FA_SVG_BY_NAME[key]) continue;
+        seen.add(key);
+        out.push(key);
+      }
+      return out;
+    }
+
+    const matches: string[] = [];
+    for (const [name, entry] of Object.entries(iconFamilies)) {
+      if (!entry?.svgs?.classic?.solid) continue;
+      if (name.includes(q)) {
+        matches.push(name);
+        continue;
+      }
+      const label = (entry.label ?? "").toLowerCase();
+      if (label && label.includes(q)) {
+        matches.push(name);
+        continue;
+      }
+      const terms = entry.search?.terms ?? [];
+      if (Array.isArray(terms) && terms.some((t) => String(t).toLowerCase().includes(q))) {
+        matches.push(name);
+      }
+    }
+    matches.sort();
+    return matches.slice(0, 220);
+  }, [iconFamilies, iconPickerPreview, iconSearch]);
 
   function setItemsFromOptions(next: readonly HaItemOption[]) {
     const refs: HaItemRef[] = next.map((opt) => ({
@@ -1240,15 +1425,135 @@ function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorPro
 
           <div className="field">
             <div className="label">{t("ext.home_assistant.editor.icon")}</div>
-            <input
-              className="input"
-              value={icon}
-              onChange={(e) => update({ props: { icon: sanitizeFaIconName(e.target.value) } })}
-              placeholder="lightbulb"
-            />
-            <div className="label" style={{ marginTop: 6 }}>
-              {t("ext.home_assistant.editor.icon_hint")}
-            </div>
+            <button
+              className="chipButton"
+              type="button"
+              onClick={() => setIsIconPickerOpen((prev) => !prev)}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+              }}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                <i
+                  className={["fa-solid", `fa-${iconPickerPreview}`].join(" ")}
+                  aria-hidden="true"
+                  style={{ width: 18, textAlign: "center" }}
+                />
+                <span style={{ fontWeight: 650, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {iconPickerPreview}
+                </span>
+              </span>
+              <i
+                className={["fa-solid", isIconPickerOpen ? "fa-chevron-up" : "fa-chevron-down"].join(" ")}
+                aria-hidden="true"
+              />
+            </button>
+
+            {isIconPickerOpen ? (
+              <div className="card" style={{ marginTop: 10 }}>
+                <div className="cardBody">
+                  <div className="row" style={{ gap: 10 }}>
+                    <input
+                      ref={iconSearchRef}
+                      className="input"
+                      style={{ flex: 1, minWidth: 0 }}
+                      value={iconSearch}
+                      onChange={(e) => setIconSearch(e.target.value.slice(0, 64))}
+                      placeholder={t("ext.home_assistant.editor.icon_search")}
+                    />
+                    <button
+                      className="iconButton"
+                      type="button"
+                      aria-label={t("core.actions.close")}
+                      onClick={() => {
+                        setIconSearch("");
+                        setIsIconPickerOpen(false);
+                      }}
+                    >
+                      <i className={["fa-solid", "fa-xmark"].join(" ")} aria-hidden="true" />
+                    </button>
+                  </div>
+
+                  {iconLoading ? (
+                    <div className="cardMeta" style={{ marginTop: 10 }}>
+                      {t("ext.home_assistant.editor.icon_loading")}
+                    </div>
+                  ) : iconLoadError ? (
+                    <div className="cardMeta" style={{ marginTop: 10, color: "rgba(252,165,165,0.92)" }}>
+                      {iconLoadError}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="cardMeta" style={{ marginTop: 10 }}>
+                        {!iconSearch.trim()
+                          ? t("ext.home_assistant.editor.icon_suggested")
+                          : t("ext.home_assistant.editor.icon_results", { count: iconPickerResults.length })}
+                      </div>
+
+                      <div
+                        style={{
+                          marginTop: 10,
+                          display: "grid",
+                          gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
+                          gap: 8,
+                          maxHeight: 260,
+                          overflow: "auto",
+                          paddingRight: 4,
+                        }}
+                      >
+                        {iconPickerResults.length === 0 ? (
+                          <div className="cardMeta">{t("ext.home_assistant.editor.icon_no_results")}</div>
+                        ) : (
+                          iconPickerResults.map((name) => (
+                            <button
+                              key={name}
+                              className="chipButton"
+                              type="button"
+                              onClick={() => {
+                                update({ props: { icon: name } });
+                                setIsIconPickerOpen(false);
+                              }}
+                              style={{
+                                height: 34,
+                                borderRadius: 12,
+                                padding: "0 10px",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "flex-start",
+                                gap: 10,
+                                borderColor:
+                                  name === iconPickerPreview ? "rgba(251,191,36,0.60)" : "rgba(255,255,255,0.10)",
+                              }}
+                            >
+                              <i
+                                className={["fa-solid", `fa-${name}`].join(" ")}
+                                aria-hidden="true"
+                                style={{ width: 18, textAlign: "center" }}
+                              />
+                              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="label" style={{ marginTop: 6 }}>
+                {t("ext.home_assistant.editor.icon_hint")}
+              </div>
+            )}
+
+            {iconFamilies && !isFaSolidIconAvailable(icon) ? (
+              <div className="cardMeta" style={{ marginTop: 6, color: "rgba(252,165,165,0.92)" }}>
+                {t("ext.home_assistant.editor.icon_not_found")}
+              </div>
+            ) : null}
           </div>
 
           <div className="field">

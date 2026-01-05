@@ -1,7 +1,7 @@
 [project]
 name = "toposync-ext-hello-lamp"
 version = "0.1.0"
-description = "TopoSync example extension: Hello Lamp (prebuilt frontend + Python hook)."
+description = "Toposync example extension: Hello Lamp (prebuilt frontend + Python hook)."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["toposync>=0.1.0"]

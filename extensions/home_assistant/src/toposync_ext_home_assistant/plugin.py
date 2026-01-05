@@ -79,7 +79,7 @@ class _RegistryCacheEntry:
     data: RegistryResponse
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, eq=False)
 class _StateSubscriber:
     queue: asyncio.Queue[dict[str, Any]]
     entity_ids: set[str]
@@ -121,6 +121,7 @@ class HomeAssistantExtension(BaseExtension):
         self._http: httpx.AsyncClient | None = None
         self._registry_cache: dict[str, _RegistryCacheEntry] = {}
         self._state_cache: dict[str, dict[str, dict[str, Any]]] = {}
+        self._state_cache_at: dict[str, dict[str, float]] = {}
         self._state_tasks: dict[str, asyncio.Task[None]] = {}
         self._state_subscribers: dict[str, set[_StateSubscriber]] = {}
         self._state_lock = asyncio.Lock()
@@ -130,6 +131,7 @@ class HomeAssistantExtension(BaseExtension):
 
     async def setup(self, app: FastAPI, *, bus: EventBus, services: ServiceRegistry) -> None:  # noqa: ARG002
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=8.0))
+        state_cache_ttl_s = 1.5
 
         def _config_store() -> ConfigStore:
             store = getattr(app.state, "config_store", None)
@@ -310,22 +312,28 @@ class HomeAssistantExtension(BaseExtension):
                     return entity_id, None
 
             cache = self._state_cache.setdefault(server.id, {})
+            cache_at = self._state_cache_at.setdefault(server.id, {})
             out: dict[str, Any] = {}
             missing: list[str] = []
+            now = time.monotonic()
             for eid in ids:
                 cached = cache.get(eid)
                 if isinstance(cached, dict):
                     out[eid] = cached
-                else:
-                    missing.append(eid)
+                    if now - cache_at.get(eid, 0.0) >= state_cache_ttl_s:
+                        missing.append(eid)
+                    continue
+                missing.append(eid)
 
             if missing:
                 pairs = await asyncio.gather(*(_fetch_one(eid) for eid in missing))
+                fetched_at = time.monotonic()
                 for eid, data in pairs:
                     if data is None:
                         continue
                     if isinstance(data, dict):
                         cache[eid] = data
+                        cache_at[eid] = fetched_at
                     out[eid] = data
 
             return out
@@ -367,6 +375,28 @@ class HomeAssistantExtension(BaseExtension):
             except Exception:  # noqa: BLE001
                 return None
 
+        async def _fetch_state_until_changed(
+            server: HomeAssistantServer,
+            entity_id: str,
+            *,
+            prev_state: str,
+            timeout_s: float = 4.0,
+        ) -> dict[str, Any] | None:
+            prev = prev_state.strip().lower()
+            deadline = time.monotonic() + max(0.1, timeout_s)
+            delay = 0.18
+            last: dict[str, Any] | None = None
+            while time.monotonic() < deadline:
+                st = await _fetch_state(server, entity_id)
+                if isinstance(st, dict):
+                    last = st
+                    next_state = str(st.get("state", "")).strip().lower()
+                    if next_state and next_state not in {"unknown", "unavailable"} and next_state != prev:
+                        return st
+                await asyncio.sleep(delay)
+                delay = min(delay * 1.4, 0.9)
+            return last
+
         async def _ensure_state_listener(server: HomeAssistantServer) -> None:
             async with self._state_lock:
                 sig = (server.host, server.apiKey)
@@ -386,6 +416,7 @@ class HomeAssistantExtension(BaseExtension):
                     self._state_tasks.pop(server.id, None)
                     self._state_stop.pop(server.id, None)
                     self._state_cache.pop(server.id, None)
+                    self._state_cache_at.pop(server.id, None)
                     self._state_tracked.pop(server.id, None)
                     self._state_subscribers.pop(server.id, None)
                     self._state_server_sig.pop(server.id, None)
@@ -469,6 +500,7 @@ class HomeAssistantExtension(BaseExtension):
                                 continue
 
                             self._state_cache.setdefault(server.id, {})[entity_id] = new_state
+                            self._state_cache_at.setdefault(server.id, {})[entity_id] = time.monotonic()
 
                             subs = self._state_subscribers.get(server.id)
                             if not subs:
@@ -499,14 +531,18 @@ class HomeAssistantExtension(BaseExtension):
                 tracked.update(entity_ids)
 
                 cache = self._state_cache.setdefault(server.id, {})
+                cache_at = self._state_cache_at.setdefault(server.id, {})
 
-            missing = [eid for eid in entity_ids if eid not in cache]
+            now = time.monotonic()
+            missing = [eid for eid in entity_ids if eid not in cache or now - cache_at.get(eid, 0.0) >= state_cache_ttl_s]
             if missing:
                 results = await asyncio.gather(*(_fetch_state(server, eid) for eid in missing))
                 async with self._state_lock:
+                    fetched_at = time.monotonic()
                     for eid, st in zip(missing, results, strict=False):
                         if isinstance(st, dict):
                             cache[eid] = st
+                            cache_at[eid] = fetched_at
 
             return {eid: cache[eid] for eid in entity_ids if eid in cache}
 
@@ -535,6 +571,12 @@ class HomeAssistantExtension(BaseExtension):
                         if key not in tracked:
                             cache.pop(key, None)
 
+                cache_at = self._state_cache_at.get(server_id)
+                if cache_at is not None:
+                    for key in list(cache_at.keys()):
+                        if key not in tracked:
+                            cache_at.pop(key, None)
+
                 if not remaining:
                     stop = self._state_stop.get(server_id)
                     if stop is not None:
@@ -549,6 +591,7 @@ class HomeAssistantExtension(BaseExtension):
                     self._state_stop.pop(server_id, None)
                     self._state_server_sig.pop(server_id, None)
                     self._state_cache.pop(server_id, None)
+                    self._state_cache_at.pop(server_id, None)
                     self._state_tracked.pop(server_id, None)
                     self._state_subscribers.pop(server_id, None)
 
@@ -610,19 +653,13 @@ class HomeAssistantExtension(BaseExtension):
             except HTTPException:
                 data = await _call_service(server, "homeassistant", "toggle", {"entity_id": entity_id})
 
-            state: str | None = None
-            if isinstance(data, list):
-                for item in data:
-                    if isinstance(item, dict) and str(item.get("entity_id", "")) == entity_id:
-                        state_raw = item.get("state")
-                        state = str(state_raw) if state_raw is not None else None
-                        break
-            if state is None:
-                updated = await _fetch_state(server, entity_id)
-                if isinstance(updated, dict):
-                    self._state_cache.setdefault(server.id, {})[entity_id] = updated
-                    state_raw = updated.get("state")
-                    state = str(state_raw) if state_raw is not None else None
+            updated = await _fetch_state_until_changed(server, entity_id, prev_state=current_state_lower)
+            if isinstance(updated, dict):
+                self._state_cache.setdefault(server.id, {})[entity_id] = updated
+                self._state_cache_at.setdefault(server.id, {})[entity_id] = time.monotonic()
+
+            state_raw = updated.get("state") if isinstance(updated, dict) else None
+            state = str(state_raw) if state_raw is not None else None
 
             from toposync.runtime.event_bus import EventOutcome
 
@@ -686,6 +723,7 @@ class HomeAssistantExtension(BaseExtension):
         self._state_stop.clear()
         self._state_server_sig.clear()
         self._state_cache.clear()
+        self._state_cache_at.clear()
         self._state_subscribers.clear()
         self._state_tracked.clear()
 

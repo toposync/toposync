@@ -299,10 +299,20 @@ type HaLiveServerStream = {
   listeners: Set<() => void>;
   es: EventSource | null;
   refreshTimer: number | null;
+  restRefreshTimer: number | null;
+  reconnectTimer: number | null;
+  reconnectDelayMs: number;
   lastUrl: string;
 };
 
 const haLiveServers = new Map<string, HaLiveServerStream>();
+const HA_LIVE_DEBUG = (() => {
+  try {
+    return typeof window !== "undefined" && window.localStorage?.getItem("toposync:debug_ha") === "1";
+  } catch {
+    return false;
+  }
+})();
 
 function getLiveServerStream(serverId: string): HaLiveServerStream {
   const existing = haLiveServers.get(serverId);
@@ -314,6 +324,9 @@ function getLiveServerStream(serverId: string): HaLiveServerStream {
     listeners: new Set(),
     es: null,
     refreshTimer: null,
+    restRefreshTimer: null,
+    reconnectTimer: null,
+    reconnectDelayMs: 500,
     lastUrl: "",
   };
   haLiveServers.set(serverId, created);
@@ -342,11 +355,48 @@ function buildStreamUrl(serverId: string, entityIds: Set<string>): string {
   return `/api/home_assistant/${encodeURIComponent(serverId)}/stream?entity_ids=${encodeURIComponent(ids.join(","))}`;
 }
 
+function scheduleRestRefresh(serverId: string): void {
+  const stream = haLiveServers.get(serverId);
+  if (!stream) return;
+  if (stream.restRefreshTimer) return;
+  stream.restRefreshTimer = window.setTimeout(() => {
+    stream.restRefreshTimer = null;
+    const ids = Array.from(stream.wanted);
+    if (ids.length === 0) return;
+    fetchStates(serverId, ids)
+      .then((data) => {
+        let changed = false;
+        for (const [entityId, st] of Object.entries(data)) {
+          if (!st || typeof st !== "object") continue;
+          stream.states.set(entityId, st as HaLiveState);
+          changed = true;
+        }
+        if (changed) notifyLiveServer(serverId);
+      })
+      .catch(() => {
+        // ignore
+      });
+  }, 60);
+}
+
+function scheduleLiveReconnect(serverId: string): void {
+  const stream = haLiveServers.get(serverId);
+  if (!stream) return;
+  if (stream.reconnectTimer) return;
+  const delay = stream.reconnectDelayMs;
+  stream.reconnectTimer = window.setTimeout(() => {
+    stream.reconnectTimer = null;
+    openLiveStream(serverId);
+  }, delay);
+  stream.reconnectDelayMs = Math.min(stream.reconnectDelayMs * 2, 10_000);
+}
+
 function openLiveStream(serverId: string): void {
   const stream = haLiveServers.get(serverId);
   if (!stream) return;
 
   if (stream.wanted.size === 0) {
+    if (HA_LIVE_DEBUG) console.log("[HA live] closing stream (no wanted entities)", serverId);
     try {
       stream.es?.close();
     } catch {
@@ -368,8 +418,29 @@ function openLiveStream(serverId: string): void {
     // ignore
   }
 
+  scheduleRestRefresh(serverId);
+
+  if (HA_LIVE_DEBUG) console.log("[HA live] opening stream", { serverId, url, wanted: Array.from(stream.wanted) });
   const es = new EventSource(url);
   stream.es = es;
+
+  es.onopen = () => {
+    if (HA_LIVE_DEBUG) console.log("[HA live] stream open", { serverId, url });
+  };
+
+  es.onerror = () => {
+    if (stream.es !== es) return;
+    if (HA_LIVE_DEBUG) console.log("[HA live] stream error; scheduling reconnect", { serverId, url });
+    try {
+      es.close();
+    } catch {
+      // ignore
+    }
+    stream.es = null;
+    stream.lastUrl = "";
+    scheduleRestRefresh(serverId);
+    scheduleLiveReconnect(serverId);
+  };
 
   es.addEventListener("snapshot", (evt) => {
     try {
@@ -378,6 +449,7 @@ function openLiveStream(serverId: string): void {
       for (const [entityId, st] of Object.entries(data as Record<string, any>)) {
         if (st && typeof st === "object") stream.states.set(entityId, st as HaLiveState);
       }
+      stream.reconnectDelayMs = 500;
       notifyLiveServer(serverId);
     } catch {
       // ignore
@@ -419,6 +491,7 @@ function watchLiveStates(serverId: string, entityIds: string[]): () => void {
     stream.wanted.add(id);
   }
   scheduleLiveStreamRefresh(serverId);
+  scheduleRestRefresh(serverId);
 
   return () => {
     const current = haLiveServers.get(serverId);
@@ -820,7 +893,13 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
         entity_id: entityId,
       });
       const state = (res as any)?.result?.state;
-      if (typeof state === "string") update({ props: { primary_state: state } });
+      if (typeof state === "string") {
+        update({ props: { primary_state: state } });
+        const stream = getLiveServerStream(serverId);
+        const prev = stream.states.get(entityId) ?? { entity_id: entityId };
+        stream.states.set(entityId, { ...prev, entity_id: entityId, state });
+        notifyLiveServer(serverId);
+      }
       return true;
     },
     create3D: ({ THREE, view }, element) => {

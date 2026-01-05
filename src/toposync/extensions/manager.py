@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from dataclasses import dataclass
 from importlib.metadata import EntryPoint, entry_points
 from importlib.resources.abc import Traversable
@@ -13,6 +14,8 @@ from fastapi import FastAPI
 from toposync.extensions.manifest import ExtensionManifest
 from toposync.runtime.event_bus import EventBus
 from toposync.runtime.services import ServiceRegistry
+
+logger = logging.getLogger("toposync.extensions")
 
 
 def _iter_entry_points(group: str) -> Iterable[EntryPoint]:
@@ -76,27 +79,58 @@ class ExtensionManager:
 
     async def load(self, *, app: FastAPI, bus: EventBus, services: ServiceRegistry) -> None:
         for ep in _iter_entry_points(self._group):
-            plugin = ep.load()
-            plugin_obj = plugin() if isinstance(plugin, type) else plugin
+            try:
+                plugin = ep.load()
+            except Exception:
+                logger.warning("Failed to load extension entry point '%s' (%s).", ep.name, ep.value, exc_info=True)
+                continue
+
+            try:
+                plugin_obj = plugin() if isinstance(plugin, type) else plugin
+            except Exception:
+                logger.warning(
+                    "Failed to initialize extension entry point '%s' (%s).", ep.name, ep.value, exc_info=True
+                )
+                continue
 
             if not hasattr(plugin_obj, "manifest"):
+                logger.warning("Ignoring entry point '%s' (%s): missing .manifest().", ep.name, ep.value)
                 continue
-            manifest: ExtensionManifest = plugin_obj.manifest()
+
+            try:
+                manifest: ExtensionManifest = plugin_obj.manifest()
+            except Exception:
+                logger.warning("Failed to read manifest for '%s' (%s).", ep.name, ep.value, exc_info=True)
+                continue
 
             static_root: Traversable | None = None
             if hasattr(plugin_obj, "static_root"):
-                static_root = plugin_obj.static_root()
+                try:
+                    static_root = plugin_obj.static_root()
+                except Exception:
+                    logger.warning(
+                        "Failed to read static_root for '%s' (%s).", ep.name, ep.value, exc_info=True
+                    )
+                    static_root = None
 
-            self._extensions[manifest.id] = LoadedExtension(
-                manifest=manifest,
-                plugin=plugin_obj,
-                static_root=static_root,
-            )
+            if manifest.id in self._extensions:
+                logger.warning(
+                    "Duplicate extension id '%s' from entry point '%s' (%s) ignored.",
+                    manifest.id,
+                    ep.name,
+                    ep.value,
+                )
+                continue
+
+            self._extensions[manifest.id] = LoadedExtension(manifest=manifest, plugin=plugin_obj, static_root=static_root)
 
         async def _setup(ext: LoadedExtension) -> None:
             if hasattr(ext.plugin, "setup"):
-                maybe = ext.plugin.setup(app, bus=bus, services=services)
-                if inspect.isawaitable(maybe):
-                    await maybe
+                try:
+                    maybe = ext.plugin.setup(app, bus=bus, services=services)
+                    if inspect.isawaitable(maybe):
+                        await maybe
+                except Exception:
+                    logger.error("Extension '%s' setup failed.", ext.manifest.id, exc_info=True)
 
         await asyncio.gather(*(_setup(ext) for ext in self._extensions.values()))

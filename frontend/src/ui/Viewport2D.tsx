@@ -93,6 +93,14 @@ function mul(v: PlanePoint, s: number): PlanePoint {
   return { x: v.x * s, z: v.z * s };
 }
 
+function rotateAround(p: PlanePoint, center: PlanePoint, angleRad: number): PlanePoint {
+  const dx = p.x - center.x;
+  const dz = p.z - center.z;
+  const c = Math.cos(angleRad);
+  const s = Math.sin(angleRad);
+  return { x: center.x + dx * c - dz * s, z: center.z + dx * s + dz * c };
+}
+
 function distPointToSegment(p: PlanePoint, a: PlanePoint, b: PlanePoint): number {
   const ab = sub(b, a);
   const ap = sub(p, a);
@@ -1036,6 +1044,50 @@ export function Viewport2D({
           if (!el) return;
           const patch = translateElement(el, delta);
           updateElementRef.current(selectedId, patch);
+          requestDraw();
+          return;
+        }
+
+        const lower = e.key.toLowerCase();
+        if ((lower === "q" || lower === "e") && updateElementRef.current) {
+          e.preventDefault();
+          const el = elementsRef.current.find((it) => it.id === selectedId) ?? null;
+          if (!el) return;
+
+          const sign = lower === "q" ? -1 : 1;
+          const stepDeg = e.shiftKey ? 15 : 5;
+          const deltaRad = (sign * stepDeg * Math.PI) / 180;
+
+          const group = elementTypesRef.current[el.type]?.layerGroup ?? "";
+          const pivot = toPlanePoint(el.position.x, el.position.z);
+
+          if (group === "walls") {
+            const propsPatch: Record<string, unknown> = {};
+            const a = readPlanePoint(el.props.a);
+            const b = readPlanePoint(el.props.b);
+            const aPrev = readPlanePoint((el.props as any).a_prev);
+            const bNext = readPlanePoint((el.props as any).b_next);
+            if (a) propsPatch.a = rotateAround(a, pivot, deltaRad);
+            if (b) propsPatch.b = rotateAround(b, pivot, deltaRad);
+            if (aPrev) propsPatch.a_prev = rotateAround(aPrev, pivot, deltaRad);
+            if (bNext) propsPatch.b_next = rotateAround(bNext, pivot, deltaRad);
+            if (Object.keys(propsPatch).length > 0) updateElementRef.current(selectedId, { props: propsPatch });
+            requestDraw();
+            return;
+          }
+
+          if (group === "areas") {
+            const vertices = readVertices(el.props.vertices);
+            if (vertices.length >= 3) {
+              updateElementRef.current(selectedId, {
+                props: { vertices: vertices.map((p) => rotateAround(p, pivot, deltaRad)) },
+              });
+            }
+            requestDraw();
+            return;
+          }
+
+          updateElementRef.current(selectedId, { rotation: { y: el.rotation.y + deltaRad } });
           requestDraw();
           return;
         }

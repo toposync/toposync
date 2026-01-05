@@ -41,6 +41,8 @@ const PRIMARY_TOGGLE_DOMAINS = new Set([
   "humidifier",
 ]);
 
+type HaViewMode = "floor" | "ceiling" | "wall";
+
 type HaServer = {
   id: string;
   name: string;
@@ -183,6 +185,14 @@ function resolveFaSvg(value: string): string {
   return FA_SVG_BY_NAME[key] ?? FA_SVG_BY_NAME.house;
 }
 
+function isHaViewMode(value: unknown): value is HaViewMode {
+  return value === "floor" || value === "ceiling" || value === "wall";
+}
+
+function readHaViewMode(value: unknown): HaViewMode {
+  return isHaViewMode(value) ? value : "floor";
+}
+
 function domainFromEntityId(entityId: string): string {
   const idx = entityId.indexOf(".");
   if (idx <= 0) return "";
@@ -271,6 +281,10 @@ const translations = {
     "ext.home_assistant.editor.group_devices": "Devices",
     "ext.home_assistant.editor.icon": "Icon",
     "ext.home_assistant.editor.icon_hint": "Font Awesome (solid) icon name, e.g. lightbulb, toggle-on, thermostat.",
+    "ext.home_assistant.editor.view_mode": "View mode",
+    "ext.home_assistant.editor.view_mode.floor": "Floor",
+    "ext.home_assistant.editor.view_mode.ceiling": "Ceiling",
+    "ext.home_assistant.editor.view_mode.wall": "Wall",
     "ext.home_assistant.action.toggle": "Toggle",
     "ext.home_assistant.action.loading": "Loading…",
     "ext.home_assistant.action.no_items": "No entities/devices selected.",
@@ -304,6 +318,10 @@ const translations = {
     "ext.home_assistant.editor.icon": "Ícone",
     "ext.home_assistant.editor.icon_hint":
       "Nome do ícone Font Awesome (solid), ex.: lightbulb, toggle-on, thermostat.",
+    "ext.home_assistant.editor.view_mode": "Visualização",
+    "ext.home_assistant.editor.view_mode.floor": "Chão",
+    "ext.home_assistant.editor.view_mode.ceiling": "Teto",
+    "ext.home_assistant.editor.view_mode.wall": "Parede",
     "ext.home_assistant.action.toggle": "Alternar",
     "ext.home_assistant.action.loading": "Carregando...",
     "ext.home_assistant.action.no_items": "Nenhuma entidade/dispositivo selecionado.",
@@ -540,6 +558,7 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       icon: "house",
       primary_entity_id: "",
       primary_state: "",
+      view_mode: "floor",
     },
     primaryAction: async ({ element, api, update }) => {
       const props = asRecord(element.props);
@@ -557,7 +576,7 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       if (typeof state === "string") update({ props: { primary_state: state } });
       return true;
     },
-    create3D: ({ THREE }, element) => {
+    create3D: ({ THREE, view }, element) => {
       function getIconGeometry(iconName: string): { geometry: any; scale: number } {
         const normalized = normalizeFaSvgName(iconName);
         const cacheKey = FA_SVG_BY_NAME[normalized] ? normalized : "house";
@@ -604,72 +623,138 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
         return entry;
       }
 
+      const NEON_DEFAULT = 0x38bdf8;
+      const NEON_ON = 0x22c55e;
+      const NEON_OFF = 0xef4444;
+
       const group = new THREE.Group();
+      const mountGroup = new THREE.Group();
+      group.add(mountGroup);
 
       const topY = BUTTON_RADIUS * Math.cos(BUTTON_THETA_TOP_CUT);
       const topRadius = BUTTON_RADIUS * Math.sin(BUTTON_THETA_TOP_CUT);
 
-      const domeGeom = new THREE.SphereGeometry(
+      const domeFloorGeom = new THREE.SphereGeometry(
         BUTTON_RADIUS,
-        48,
-        24,
+        56,
+        28,
         0,
         Math.PI * 2,
         BUTTON_THETA_TOP_CUT,
         Math.PI / 2 - BUTTON_THETA_TOP_CUT,
       );
+      const domeCeilingGeom = new THREE.SphereGeometry(
+        BUTTON_RADIUS,
+        56,
+        34,
+        0,
+        Math.PI * 2,
+        BUTTON_THETA_TOP_CUT,
+        Math.PI - BUTTON_THETA_TOP_CUT,
+      );
+
       const baseMat = new THREE.MeshStandardMaterial({
-        color: 0x334155,
-        roughness: 0.62,
-        metalness: 0.06,
+        color: 0x1f2937,
+        roughness: 0.58,
+        metalness: 0.09,
       });
 
-      const dome = new THREE.Mesh(domeGeom, baseMat);
-      group.add(dome);
+      const dome = new THREE.Mesh(domeFloorGeom, baseMat);
+      mountGroup.add(dome);
 
-      const topCapGeom = new THREE.CircleGeometry(topRadius, 44);
+      const topCapGeom = new THREE.CircleGeometry(topRadius, 48);
       const topCap = new THREE.Mesh(topCapGeom, baseMat);
       topCap.rotation.x = -Math.PI / 2;
       topCap.position.set(0, topY, 0);
-      group.add(topCap);
+      mountGroup.add(topCap);
 
-      const bottomCapGeom = new THREE.CircleGeometry(BUTTON_RADIUS, 44);
+      const bottomCapGeom = new THREE.CircleGeometry(BUTTON_RADIUS, 48);
       const bottomCap = new THREE.Mesh(bottomCapGeom, baseMat);
       bottomCap.rotation.x = Math.PI / 2;
       bottomCap.position.set(0, 0, 0);
-      group.add(bottomCap);
+      mountGroup.add(bottomCap);
 
-      const ringGeom = new THREE.RingGeometry(topRadius * 0.72, topRadius * 0.98, 44);
+      const ringGeom = new THREE.RingGeometry(topRadius * 0.72, topRadius * 0.98, 56);
       const ringMat = new THREE.MeshBasicMaterial({
-        color: 0x38bdf8,
+        color: NEON_DEFAULT,
         side: THREE.DoubleSide,
         transparent: true,
-        opacity: 0.65,
+        opacity: 0.78,
         depthWrite: false,
+        blending: THREE.AdditiveBlending,
       });
       const ring = new THREE.Mesh(ringGeom, ringMat);
       ring.rotation.x = -Math.PI / 2;
       ring.position.set(0, topY + 0.001, 0);
-      group.add(ring);
+      mountGroup.add(ring);
+
+      const glowGeom = new THREE.RingGeometry(topRadius * 0.52, topRadius * 1.22, 56);
+      const glowMat = new THREE.MeshBasicMaterial({
+        color: NEON_DEFAULT,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.26,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const glow = new THREE.Mesh(glowGeom, glowMat);
+      glow.rotation.x = -Math.PI / 2;
+      glow.position.set(0, topY + 0.0006, 0);
+      mountGroup.add(glow);
+
+      const light = new THREE.PointLight(NEON_DEFAULT, 0.7, 0.9, 2.2);
+      light.position.set(0, topY + 0.05, 0);
+      mountGroup.add(light);
 
       const iconMat = new THREE.MeshStandardMaterial({
         color: 0xe2e8f0,
+        emissive: new THREE.Color(NEON_DEFAULT),
+        emissiveIntensity: 0.22,
         side: THREE.DoubleSide,
-        roughness: 0.35,
+        roughness: 0.28,
         metalness: 0.0,
       });
-      const iconMesh = new THREE.Mesh(getIconGeometry("house").geometry, iconMat);
-      iconMesh.scale.setScalar(getIconGeometry("house").scale);
+      const houseGeo = getIconGeometry("house");
+      const iconMesh = new THREE.Mesh(houseGeo.geometry, iconMat);
+      iconMesh.scale.setScalar(houseGeo.scale);
       iconMesh.position.set(0, topY + 0.002, 0);
-      group.add(iconMesh);
+      mountGroup.add(iconMesh);
 
       let currentIconKey = "house";
+      let currentViewMode: HaViewMode = "floor";
+
+      function applyViewMode(mode: HaViewMode) {
+        if (mode !== currentViewMode) {
+          currentViewMode = mode;
+          if (mode === "ceiling") {
+            dome.geometry = domeCeilingGeom;
+            bottomCap.visible = false;
+          } else {
+            dome.geometry = domeFloorGeom;
+            bottomCap.visible = true;
+          }
+        }
+
+        mountGroup.rotation.set(0, 0, 0);
+        mountGroup.position.set(0, 0, 0);
+
+        if (mode === "ceiling") {
+          mountGroup.position.y = view.wallHeight - topY;
+        } else if (mode === "wall") {
+          mountGroup.position.y = view.wallHeight / 2;
+          mountGroup.rotation.x = Math.PI / 2;
+        }
+      }
 
       function apply(el: CompositionElement) {
         const p = asRecord(el.props);
         const icon = sanitizeFaIconName(asString(p.icon, "house")) || "house";
+        const viewMode = readHaViewMode(p.view_mode);
+        const primaryEntityId = asString(p.primary_entity_id).trim();
         const primaryState = asString(p.primary_state).trim().toLowerCase();
         const isOn = primaryState === "on";
+
+        applyViewMode(viewMode);
 
         const iconKey = normalizeFaSvgName(icon);
         if (iconKey !== currentIconKey) {
@@ -679,10 +764,21 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
           iconMesh.scale.setScalar(entry.scale);
         }
 
-        ringMat.color.set(isOn ? 0xfbbf24 : 0x38bdf8);
-        ringMat.opacity = isOn ? 0.88 : 0.58;
-        baseMat.color.set(isOn ? 0x1f2937 : 0x334155);
-        iconMat.color.set(isOn ? 0xfff4d2 : 0xe2e8f0);
+        const isToggle = primaryEntityId ? isToggleDomain(domainFromEntityId(primaryEntityId)) : false;
+        const neon = isToggle ? (isOn ? NEON_ON : NEON_OFF) : NEON_DEFAULT;
+
+        ringMat.color.set(neon);
+        glowMat.color.set(neon);
+        light.color.set(neon);
+
+        ringMat.opacity = isToggle ? (isOn ? 0.92 : 0.82) : 0.78;
+        glowMat.opacity = isToggle ? (isOn ? 0.35 : 0.26) : 0.26;
+        light.intensity = isToggle ? (isOn ? 0.9 : 0.75) : 0.7;
+        iconMat.emissive.set(neon);
+        iconMat.emissiveIntensity = isToggle ? (isOn ? 0.32 : 0.24) : 0.22;
+
+        baseMat.color.set(isToggle ? 0x0b1220 : 0x1f2937);
+        iconMat.color.set(0xe2e8f0);
       }
 
       apply(element);
@@ -691,31 +787,47 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
         object: group,
         update: apply,
         dispose: () => {
-          domeGeom.dispose();
+          domeFloorGeom.dispose();
+          domeCeilingGeom.dispose();
           topCapGeom.dispose();
           bottomCapGeom.dispose();
           baseMat.dispose();
           ringGeom.dispose();
           ringMat.dispose();
+          glowGeom.dispose();
+          glowMat.dispose();
           iconMat.dispose();
         },
       };
     },
     render2D: ({ ctx, element, viewport }) => {
       const p = asRecord(element.props);
+      const primaryEntityId = asString(p.primary_entity_id).trim();
       const primaryState = asString(p.primary_state).trim().toLowerCase();
       const isOn = primaryState === "on";
+      const isToggle = primaryEntityId ? isToggleDomain(domainFromEntityId(primaryEntityId)) : false;
 
       const center = viewport.worldToScreen({ x: element.position.x, z: element.position.z });
       const r = 11;
+
+      const fill = isToggle
+        ? isOn
+          ? "rgba(34,197,94,0.22)"
+          : "rgba(239,68,68,0.18)"
+        : "rgba(56,189,248,0.14)";
+      const stroke = isToggle
+        ? isOn
+          ? "rgba(34,197,94,0.72)"
+          : "rgba(239,68,68,0.72)"
+        : "rgba(230,232,242,0.24)";
 
       ctx.save();
       ctx.translate(center.x, center.y);
       ctx.beginPath();
       ctx.arc(0, 0, r, 0, Math.PI * 2);
-      ctx.fillStyle = isOn ? "rgba(251,191,36,0.22)" : "rgba(56,189,248,0.14)";
+      ctx.fillStyle = fill;
       ctx.fill();
-      ctx.strokeStyle = isOn ? "rgba(251,191,36,0.70)" : "rgba(230,232,242,0.24)";
+      ctx.strokeStyle = stroke;
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.fillStyle = "rgba(230,232,242,0.92)";
@@ -752,7 +864,7 @@ function addHomeAssistantTool(i18n: HostI18n): EditorTool {
         const id = createElement(ELEMENT_TYPE_ID, {
           name: "",
           position: { x: evt.world.x, y: 0, z: evt.world.z },
-          props: { server_id: "", items: [], icon: "house", primary_entity_id: "", primary_state: "" },
+          props: { server_id: "", items: [], icon: "house", primary_entity_id: "", primary_state: "", view_mode: "floor" },
         });
         if (id) openEditor(id);
       },
@@ -940,6 +1052,7 @@ function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorPro
   const props = asRecord(element.props);
   const serverId = asString(props.server_id).trim();
   const icon = sanitizeFaIconName(asString(props.icon, "house")) || "house";
+  const viewMode = readHaViewMode(props.view_mode);
   const items = useMemo(() => readItemRefs(props.items), [props.items]);
 
   const [servers, setServers] = useState<HaServerPublic[]>([]);
@@ -1183,6 +1296,19 @@ function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorPro
             <div className="label" style={{ marginTop: 6 }}>
               {t("ext.home_assistant.editor.icon_hint")}
             </div>
+          </div>
+
+          <div className="field">
+            <div className="label">{t("ext.home_assistant.editor.view_mode")}</div>
+            <select
+              className="input"
+              value={viewMode}
+              onChange={(e) => update({ props: { view_mode: e.target.value } })}
+            >
+              <option value="floor">{t("ext.home_assistant.editor.view_mode.floor")}</option>
+              <option value="ceiling">{t("ext.home_assistant.editor.view_mode.ceiling")}</option>
+              <option value="wall">{t("ext.home_assistant.editor.view_mode.wall")}</option>
+            </select>
           </div>
         </>
       )}

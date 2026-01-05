@@ -197,16 +197,27 @@ type Interaction =
       startedByLeft: boolean;
       moved: boolean;
     }
-	  | {
-	      kind: "drag";
-	      pointerId: number;
-	      elementId: string;
-	      startScreen: Vector2;
-	      startWorld: PlanePoint;
-	      startWorldSnapped: PlanePoint;
-	      startElement: CompositionElement;
-	      moved: boolean;
-	    };
+  | {
+      kind: "drag";
+      pointerId: number;
+      elementId: string;
+      startScreen: Vector2;
+      startWorld: PlanePoint;
+      startWorldSnapped: PlanePoint;
+      startElement: CompositionElement;
+      moved: boolean;
+    }
+  | {
+      kind: "rotate";
+      pointerId: number;
+      elementId: string;
+      pivot: PlanePoint;
+      startAngle: number;
+      startElement: CompositionElement;
+      currentScreen: Vector2;
+      snappedDelta: number;
+      stepDeg: number;
+    };
 
 export function Viewport2D({
   elements,
@@ -248,6 +259,7 @@ export function Viewport2D({
   const cameraRef = useRef<Camera2D>({ cx: 0, cz: 0, scale: 52 });
   const interactionRef = useRef<Interaction>({ kind: "none" });
   const hoverRef = useRef<string | null>(null);
+  const rotateHoverRef = useRef(false);
   const spacePressedRef = useRef(false);
 
   useEffect(() => {
@@ -271,6 +283,7 @@ export function Viewport2D({
 
   useEffect(() => {
     selectedRef.current = selectedElementId ?? null;
+    rotateHoverRef.current = false;
     drawRef.current?.();
   }, [selectedElementId]);
 
@@ -324,6 +337,8 @@ export function Viewport2D({
     let raf = 0;
     let dragRaf = 0;
     let pendingDragPatch: { id: string; patch: CompositionElementPatch } | null = null;
+    let rotateRaf = 0;
+    let pendingRotatePatch: { id: string; patch: CompositionElementPatch } | null = null;
 
     function requestDraw() {
       if (raf) return;
@@ -337,6 +352,13 @@ export function Viewport2D({
       if (!pendingDragPatch) return;
       updateElementRef.current?.(pendingDragPatch.id, pendingDragPatch.patch);
       pendingDragPatch = null;
+      requestDraw();
+    }
+
+    function flushRotatePatch() {
+      if (!pendingRotatePatch) return;
+      updateElementRef.current?.(pendingRotatePatch.id, pendingRotatePatch.patch);
+      pendingRotatePatch = null;
       requestDraw();
     }
 
@@ -570,6 +592,76 @@ export function Viewport2D({
             ctx2d.fillText(label, anchorX, anchorY);
             ctx2d.restore();
           }
+
+          if (!toolSessionRef.current) {
+            const info = getRotateHandleInfo(selectedEl, viewport);
+            const pivot = info.pivotScreen;
+
+            const baseHandle = info.handleScreen;
+            const baseRadius = Math.hypot(baseHandle.x - pivot.x, baseHandle.y - pivot.y);
+
+            const interaction = interactionRef.current;
+            const isRotating = interaction.kind === "rotate" && interaction.elementId === selectedEl.id;
+            const isHot = isRotating || rotateHoverRef.current;
+
+            let handle = baseHandle;
+            let deltaDeg: number | null = null;
+            let stepDeg: number | null = null;
+            if (isRotating) {
+              const dx = interaction.currentScreen.x - pivot.x;
+              const dy = interaction.currentScreen.y - pivot.y;
+              const len = Math.hypot(dx, dy);
+              if (len > 1e-6) {
+                handle = toVector2(pivot.x + (dx / len) * baseRadius, pivot.y + (dy / len) * baseRadius);
+              }
+              deltaDeg = Math.round((interaction.snappedDelta * 180) / Math.PI);
+              stepDeg = interaction.stepDeg;
+            }
+
+            ctx2d.save();
+            ctx2d.lineWidth = 2;
+            ctx2d.strokeStyle = isHot ? "rgba(251,191,36,0.78)" : "rgba(255,255,255,0.10)";
+            ctx2d.beginPath();
+            ctx2d.moveTo(pivot.x, pivot.y);
+            ctx2d.lineTo(handle.x, handle.y);
+            ctx2d.stroke();
+
+            ctx2d.shadowColor = isHot ? "rgba(251,191,36,0.35)" : "rgba(0,0,0,0)";
+            ctx2d.shadowBlur = isHot ? 12 : 0;
+            ctx2d.fillStyle = "rgba(8,12,26,0.92)";
+            ctx2d.strokeStyle = isHot ? "rgba(251,191,36,0.92)" : "rgba(255,255,255,0.18)";
+            ctx2d.lineWidth = 2;
+            ctx2d.beginPath();
+            ctx2d.arc(handle.x, handle.y, 8, 0, Math.PI * 2);
+            ctx2d.fill();
+            ctx2d.shadowBlur = 0;
+            ctx2d.stroke();
+
+            if (deltaDeg !== null) {
+              const label = `${deltaDeg}°`;
+              const hint = stepDeg ? `  (${stepDeg}°)` : "";
+              const text = `${label}${hint}`;
+              ctx2d.font = "12px ui-sans-serif, system-ui";
+              ctx2d.textAlign = "center";
+              ctx2d.textBaseline = "middle";
+              const metrics = ctx2d.measureText(text);
+              const boxW = metrics.width + 18;
+              const boxH = 24;
+              const x0 = handle.x - boxW / 2;
+              const y0 = handle.y - 24;
+              ctx2d.fillStyle = "rgba(8,12,26,0.82)";
+              ctx2d.strokeStyle = "rgba(255,255,255,0.14)";
+              ctx2d.lineWidth = 1;
+              ctx2d.beginPath();
+              roundRectPath(ctx2d, x0, y0, boxW, boxH, 999);
+              ctx2d.fill();
+              ctx2d.stroke();
+              ctx2d.fillStyle = "rgba(230,232,242,0.92)";
+              ctx2d.fillText(text, handle.x, y0 + boxH / 2);
+            }
+
+            ctx2d.restore();
+          }
         }
       }
 
@@ -587,15 +679,17 @@ export function Viewport2D({
       const hoverId = hoverRef.current;
 
       const cursor =
-        interaction.kind === "pan" || interaction.kind === "drag"
+        interaction.kind === "pan" || interaction.kind === "drag" || interaction.kind === "rotate"
           ? "grabbing"
           : spacePressed
             ? "grab"
             : session
               ? session.getCursor?.() ?? "crosshair"
-              : hoverId
-                ? "move"
-                : "grab";
+              : rotateHoverRef.current
+                ? "grab"
+                : hoverId
+                  ? "move"
+                  : "grab";
 
       canvasEl.style.cursor = cursor;
     }
@@ -744,6 +838,82 @@ export function Viewport2D({
       return patch;
     }
 
+    function getRotateHandleInfo(el: CompositionElement, viewport: Viewport2DContext): {
+      pivotWorld: PlanePoint;
+      pivotScreen: Vector2;
+      handleScreen: Vector2;
+      hitRadiusPx: number;
+      radiusPx: number;
+    } {
+      const pivotWorld = toPlanePoint(el.position.x, el.position.z);
+      const pivotScreen = viewport.worldToScreen(pivotWorld);
+
+      const verts = readVertices(el.props.vertices);
+      const a = readPlanePoint(el.props.a);
+      const b = readPlanePoint(el.props.b);
+
+      const points: PlanePoint[] = [];
+      if (verts.length >= 3) points.push(...verts);
+      else if (a && b) points.push(a, b);
+      else points.push(pivotWorld);
+
+      const pts = points.map((p) => viewport.worldToScreen(p));
+      let minX = Math.min(...pts.map((p) => p.x));
+      let maxX = Math.max(...pts.map((p) => p.x));
+      let minY = Math.min(...pts.map((p) => p.y));
+      let maxY = Math.max(...pts.map((p) => p.y));
+
+      if (pts.length === 1) {
+        minX = pivotScreen.x - 18;
+        maxX = pivotScreen.x + 18;
+        minY = pivotScreen.y - 18;
+        maxY = pivotScreen.y + 18;
+      }
+
+      const extent = Math.max(maxX - minX, maxY - minY, 36);
+      const radiusPx = Math.max(34, Math.min(92, extent / 2 + 34));
+      const baseAngle = -Math.PI / 2;
+      const angle = baseAngle - el.rotation.y;
+      const handleScreen = toVector2(pivotScreen.x + Math.cos(angle) * radiusPx, pivotScreen.y + Math.sin(angle) * radiusPx);
+      const hitRadiusPx = 12;
+      return { pivotWorld, pivotScreen, handleScreen, hitRadiusPx, radiusPx };
+    }
+
+    function dist2(a: Vector2, b: Vector2): number {
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      return dx * dx + dy * dy;
+    }
+
+    function normalizeAngleRad(angle: number): number {
+      return Math.atan2(Math.sin(angle), Math.cos(angle));
+    }
+
+    function buildRotationPatch(startElement: CompositionElement, pivot: PlanePoint, deltaRad: number): CompositionElementPatch {
+      const group = elementTypesRef.current[startElement.type]?.layerGroup ?? "";
+
+      if (group === "walls") {
+        const propsPatch: Record<string, unknown> = {};
+        const a = readPlanePoint(startElement.props.a);
+        const b = readPlanePoint(startElement.props.b);
+        const aPrev = readPlanePoint((startElement.props as any).a_prev);
+        const bNext = readPlanePoint((startElement.props as any).b_next);
+        if (a) propsPatch.a = rotateAround(a, pivot, deltaRad);
+        if (b) propsPatch.b = rotateAround(b, pivot, deltaRad);
+        if (aPrev) propsPatch.a_prev = rotateAround(aPrev, pivot, deltaRad);
+        if (bNext) propsPatch.b_next = rotateAround(bNext, pivot, deltaRad);
+        return Object.keys(propsPatch).length ? { props: propsPatch } : {};
+      }
+
+      if (group === "areas") {
+        const vertices = readVertices(startElement.props.vertices);
+        if (vertices.length >= 3) return { props: { vertices: vertices.map((p) => rotateAround(p, pivot, deltaRad)) } };
+        return {};
+      }
+
+      return { rotation: { y: startElement.rotation.y - deltaRad } };
+    }
+
     function handlePointerDown(e: PointerEvent) {
       e.preventDefault();
       canvasEl.setPointerCapture(e.pointerId);
@@ -768,6 +938,34 @@ export function Viewport2D({
         };
         requestDraw();
         return;
+      }
+
+      const selectedId = selectedRef.current;
+      if (selectedId && !toolSessionRef.current && !spacePressed && e.button === 0) {
+        const selectedEl = elementsRef.current.find((it) => it.id === selectedId) ?? null;
+        if (selectedEl) {
+          const viewport = makeViewportContext();
+          const info = getRotateHandleInfo(selectedEl, viewport);
+          if (dist2(screen, info.handleScreen) <= info.hitRadiusPx * info.hitRadiusPx) {
+            const pivot = info.pivotWorld;
+            const startAngle = Math.atan2(world.z - pivot.z, world.x - pivot.x);
+            onBeginUndoGroupRef.current?.();
+            interactionRef.current = {
+              kind: "rotate",
+              pointerId: e.pointerId,
+              elementId: selectedId,
+              pivot,
+              startAngle,
+              startElement: selectedEl,
+              currentScreen: screen,
+              snappedDelta: 0,
+              stepDeg: 15,
+            };
+            rotateHoverRef.current = false;
+            requestDraw();
+            return;
+          }
+        }
       }
 
       if (toolSessionRef.current) {
@@ -830,6 +1028,33 @@ export function Viewport2D({
         return;
       }
 
+      if (interaction.kind === "rotate") {
+        if (interaction.pointerId !== e.pointerId) return;
+
+        const world = screenToWorld(screen);
+        const currentAngle = Math.atan2(world.z - interaction.pivot.z, world.x - interaction.pivot.x);
+        const rawDelta = normalizeAngleRad(currentAngle - interaction.startAngle);
+
+        const stepDeg = e.shiftKey ? 5 : 15;
+        const stepRad = (stepDeg * Math.PI) / 180;
+        const snappedDelta = e.altKey ? rawDelta : Math.round(rawDelta / stepRad) * stepRad;
+
+        interaction.currentScreen = screen;
+        interaction.snappedDelta = snappedDelta;
+        interaction.stepDeg = stepDeg;
+
+        const patch = buildRotationPatch(interaction.startElement, interaction.pivot, snappedDelta);
+        pendingRotatePatch = { id: interaction.elementId, patch };
+        if (!rotateRaf) {
+          rotateRaf = requestAnimationFrame(() => {
+            rotateRaf = 0;
+            flushRotatePatch();
+          });
+        }
+        requestDraw();
+        return;
+      }
+
       if (interaction.kind === "pan") {
         if (interaction.pointerId !== e.pointerId) return;
         const dx = screen.x - interaction.startScreen.x;
@@ -866,11 +1091,33 @@ export function Viewport2D({
         return;
       }
 
+      if (toolSessionRef.current && !spacePressedRef.current) {
+        toToolEvent("move", e);
+        return;
+      }
+
       if (!toolSessionRef.current && !spacePressedRef.current) {
         const world = screenToWorld(screen);
         const hitId = findHitElement(world);
         if (hitId !== hoverRef.current) {
           hoverRef.current = hitId;
+          requestDraw();
+        }
+
+        const selectedId = selectedRef.current;
+        if (selectedId) {
+          const selectedEl = elementsRef.current.find((it) => it.id === selectedId) ?? null;
+          if (selectedEl) {
+            const viewport = makeViewportContext();
+            const info = getRotateHandleInfo(selectedEl, viewport);
+            const overRotate = dist2(screen, info.handleScreen) <= info.hitRadiusPx * info.hitRadiusPx;
+            if (overRotate !== rotateHoverRef.current) {
+              rotateHoverRef.current = overRotate;
+              requestDraw();
+            }
+          }
+        } else if (rotateHoverRef.current) {
+          rotateHoverRef.current = false;
           requestDraw();
         }
       }
@@ -884,6 +1131,15 @@ export function Viewport2D({
         toToolEvent("up", e);
         onEndUndoGroupRef.current?.();
         interactionRef.current = { kind: "none" };
+        return;
+      }
+
+      if (interaction.kind === "rotate") {
+        if (interaction.pointerId !== e.pointerId) return;
+        flushRotatePatch();
+        onEndUndoGroupRef.current?.();
+        interactionRef.current = { kind: "none" };
+        requestDraw();
         return;
       }
 
@@ -915,7 +1171,8 @@ export function Viewport2D({
       if (interaction.kind === "tool") {
         toToolEvent("cancel", e);
       }
-      if (interaction.kind === "tool" || interaction.kind === "drag") {
+      if (interaction.kind === "tool" || interaction.kind === "drag" || interaction.kind === "rotate") {
+        if (interaction.kind === "rotate") flushRotatePatch();
         onEndUndoGroupRef.current?.();
       }
       interactionRef.current = { kind: "none" };
@@ -1055,7 +1312,7 @@ export function Viewport2D({
           if (!el) return;
 
           const sign = lower === "q" ? -1 : 1;
-          const stepDeg = e.shiftKey ? 15 : 5;
+          const stepDeg = e.shiftKey ? 5 : 15;
           const deltaRad = (sign * stepDeg * Math.PI) / 180;
 
           const group = elementTypesRef.current[el.type]?.layerGroup ?? "";
@@ -1087,7 +1344,7 @@ export function Viewport2D({
             return;
           }
 
-          updateElementRef.current(selectedId, { rotation: { y: el.rotation.y + deltaRad } });
+          updateElementRef.current(selectedId, { rotation: { y: el.rotation.y - deltaRad } });
           requestDraw();
           return;
         }
@@ -1136,6 +1393,7 @@ export function Viewport2D({
       ro.disconnect();
       if (raf) cancelAnimationFrame(raf);
       if (dragRaf) cancelAnimationFrame(dragRaf);
+      if (rotateRaf) cancelAnimationFrame(rotateRaf);
       drawRef.current = null;
     };
   }, []);

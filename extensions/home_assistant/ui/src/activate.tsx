@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import Select from "react-select";
 import type { GroupBase, StylesConfig } from "react-select";
 
-import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
+import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
 
 import type {
   CompositionElement,
@@ -15,6 +15,16 @@ import type {
   SettingsPanel,
   TopoSyncHost,
 } from "@toposync/plugin-api";
+
+import houseSvg from "@fortawesome/fontawesome-free/svgs/solid/house.svg";
+import lightbulbSvg from "@fortawesome/fontawesome-free/svgs/solid/lightbulb.svg";
+import toggleOnSvg from "@fortawesome/fontawesome-free/svgs/solid/toggle-on.svg";
+import fanSvg from "@fortawesome/fontawesome-free/svgs/solid/fan.svg";
+import temperatureHalfSvg from "@fortawesome/fontawesome-free/svgs/solid/temperature-half.svg";
+import lockSvg from "@fortawesome/fontawesome-free/svgs/solid/lock.svg";
+import windowMaximizeSvg from "@fortawesome/fontawesome-free/svgs/solid/window-maximize.svg";
+import videoSvg from "@fortawesome/fontawesome-free/svgs/solid/video.svg";
+import tvSvg from "@fortawesome/fontawesome-free/svgs/solid/tv.svg";
 
 const EXTENSION_ID = "com.toposync.home_assistant";
 const ELEMENT_TYPE_ID = "com.toposync.home_assistant.item";
@@ -148,6 +158,29 @@ function sanitizeFaIconName(value: string): string {
     .replace(/^fa-/, "")
     .replace(/[^a-z0-9-]/g, "")
     .slice(0, 64);
+}
+
+const FA_SVG_BY_NAME: Record<string, string> = {
+  house: houseSvg,
+  lightbulb: lightbulbSvg,
+  "toggle-on": toggleOnSvg,
+  fan: fanSvg,
+  "temperature-half": temperatureHalfSvg,
+  lock: lockSvg,
+  "window-maximize": windowMaximizeSvg,
+  video: videoSvg,
+  tv: tvSvg,
+};
+
+function normalizeFaSvgName(value: string): string {
+  const key = sanitizeFaIconName(value);
+  if (key === "thermometer-half" || key === "thermometer") return "temperature-half";
+  return key;
+}
+
+function resolveFaSvg(value: string): string {
+  const key = normalizeFaSvgName(value);
+  return FA_SVG_BY_NAME[key] ?? FA_SVG_BY_NAME.house;
 }
 
 function domainFromEntityId(entityId: string): string {
@@ -489,6 +522,10 @@ function HomeAssistantSettings({
 }
 
 function homeAssistantElementType(i18n: HostI18n): ElementType {
+  const iconGeometryCache = new Map<string, { geometry: any; scale: number }>();
+  const ICON_TARGET_SIZE = 0.16;
+  const ICON_EXTRUDE_DEPTH = 32; // in SVG coordinate units (Font Awesome uses ~512x512 viewBox)
+
   return {
     type: ELEMENT_TYPE_ID,
     name: { key: "ext.home_assistant.element.name", fallback: "Home Assistant item" },
@@ -518,6 +555,52 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       return true;
     },
     create3D: ({ THREE }, element) => {
+      function getIconGeometry(iconName: string): { geometry: any; scale: number } {
+        const normalized = normalizeFaSvgName(iconName);
+        const cacheKey = FA_SVG_BY_NAME[normalized] ? normalized : "house";
+        const cached = iconGeometryCache.get(cacheKey);
+        if (cached) return cached;
+
+        const svgText = resolveFaSvg(cacheKey);
+        const data = new SVGLoader().parse(svgText);
+
+        const shapes: any[] = [];
+        for (const path of data.paths) shapes.push(...path.toShapes(true));
+
+        const geometry = new THREE.ExtrudeGeometry(shapes, {
+          depth: ICON_EXTRUDE_DEPTH,
+          bevelEnabled: false,
+          curveSegments: 4,
+          steps: 1,
+        });
+
+        geometry.computeBoundingBox();
+        const bbox = geometry.boundingBox;
+        if (bbox) {
+          const cx = (bbox.min.x + bbox.max.x) / 2;
+          const cy = (bbox.min.y + bbox.max.y) / 2;
+          geometry.translate(-cx, -cy, 0);
+        }
+
+        geometry.scale(1, -1, 1);
+        geometry.rotateX(-Math.PI / 2);
+        geometry.computeBoundingBox();
+        const bbox2 = geometry.boundingBox;
+        if (bbox2) geometry.translate(0, -bbox2.min.y, 0);
+        geometry.computeVertexNormals();
+
+        geometry.computeBoundingBox();
+        const bbox3 = geometry.boundingBox;
+        const sizeX = bbox3 ? bbox3.max.x - bbox3.min.x : 1;
+        const sizeZ = bbox3 ? bbox3.max.z - bbox3.min.z : 1;
+        const maxXZ = Math.max(sizeX, sizeZ, 1e-9);
+        const scale = ICON_TARGET_SIZE / maxXZ;
+
+        const entry = { geometry, scale };
+        iconGeometryCache.set(cacheKey, entry);
+        return entry;
+      }
+
       const group = new THREE.Group();
 
       const baseGeom = new THREE.CylinderGeometry(0.18, 0.18, 0.05, 32);
@@ -543,15 +626,18 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       ring.position.set(0, 0.052, 0);
       group.add(ring);
 
-      const labelEl = document.createElement("div");
-      labelEl.className = "sceneIconButton";
-      const iconEl = document.createElement("i");
-      iconEl.setAttribute("aria-hidden", "true");
-      labelEl.appendChild(iconEl);
+      const iconMat = new THREE.MeshStandardMaterial({
+        color: 0xe2e8f0,
+        side: THREE.DoubleSide,
+        roughness: 0.35,
+        metalness: 0.0,
+      });
+      const iconMesh = new THREE.Mesh(getIconGeometry("house").geometry, iconMat);
+      iconMesh.scale.setScalar(getIconGeometry("house").scale);
+      iconMesh.position.set(0, 0.053, 0);
+      group.add(iconMesh);
 
-      const cssLabel = new CSS2DObject(labelEl);
-      cssLabel.position.set(0, 0.16, 0);
-      group.add(cssLabel);
+      let currentIconKey = "house";
 
       function apply(el: CompositionElement) {
         const p = asRecord(el.props);
@@ -559,12 +645,18 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
         const primaryState = asString(p.primary_state).trim().toLowerCase();
         const isOn = primaryState === "on";
 
-        iconEl.className = `fa-solid fa-${icon}`;
-        labelEl.classList.toggle("isOn", isOn);
+        const iconKey = normalizeFaSvgName(icon);
+        if (iconKey !== currentIconKey) {
+          currentIconKey = iconKey;
+          const entry = getIconGeometry(iconKey);
+          iconMesh.geometry = entry.geometry;
+          iconMesh.scale.setScalar(entry.scale);
+        }
 
         ringMat.color.set(isOn ? 0xfbbf24 : 0x38bdf8);
         ringMat.opacity = isOn ? 0.88 : 0.58;
         baseMat.color.set(isOn ? 0x1f2937 : 0x334155);
+        iconMat.color.set(isOn ? 0xfff4d2 : 0xe2e8f0);
       }
 
       apply(element);
@@ -577,6 +669,7 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
           baseMat.dispose();
           ringGeom.dispose();
           ringMat.dispose();
+          iconMat.dispose();
         },
       };
     },

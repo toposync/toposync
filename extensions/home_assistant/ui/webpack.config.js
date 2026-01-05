@@ -21,6 +21,10 @@ module.exports = {
         loader: "ts-loader",
         options: { transpileOnly: true },
         exclude: /node_modules/
+      },
+      {
+        test: /\.svg$/i,
+        type: "asset/source"
       }
     ]
   },
@@ -33,7 +37,8 @@ module.exports = {
       },
       shared: {
         react: { singleton: true, requiredVersion: false },
-        "react-dom": { singleton: true, requiredVersion: false }
+        "react-dom": { singleton: true, requiredVersion: false },
+        three: { singleton: true, requiredVersion: false }
       }
     })
   ],
@@ -42,4 +47,3 @@ module.exports = {
     runtimeChunk: false
   }
 };
-

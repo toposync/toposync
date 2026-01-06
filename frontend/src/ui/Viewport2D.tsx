@@ -17,6 +17,8 @@ type Props = {
   elementTypesById: Record<string, ElementType>;
   activeToolSession?: EditorToolSession | null;
   interactionMode?: "navigate" | "select";
+  enableKeyboardShortcuts?: boolean;
+  toolSnapToGrid?: boolean;
   selectedElementIds?: string[];
   onSelectElements?: (elementIds: string[]) => void;
   onOpenEditor?: (elementId: string) => void;
@@ -237,6 +239,8 @@ export function Viewport2D({
   elementTypesById,
   activeToolSession,
   interactionMode = "select",
+  enableKeyboardShortcuts = true,
+  toolSnapToGrid = true,
   selectedElementIds,
   onSelectElements,
   onOpenEditor,
@@ -261,6 +265,8 @@ export function Viewport2D({
   const elementTypesRef = useRef<Record<string, ElementType>>(elementTypesById);
   const toolSessionRef = useRef<EditorToolSession | null>(activeToolSession ?? null);
   const interactionModeRef = useRef<"navigate" | "select">(interactionMode);
+  const enableKeyboardShortcutsRef = useRef<boolean>(enableKeyboardShortcuts);
+  const toolSnapToGridRef = useRef<boolean>(toolSnapToGrid);
 
   const selectedRef = useRef<string[]>(selectedElementIds ?? []);
   const onSelectRef = useRef<Props["onSelectElements"]>(onSelectElements);
@@ -304,6 +310,14 @@ export function Viewport2D({
     interactionModeRef.current = interactionMode;
     drawRef.current?.();
   }, [interactionMode]);
+
+  useEffect(() => {
+    enableKeyboardShortcutsRef.current = enableKeyboardShortcuts;
+  }, [enableKeyboardShortcuts]);
+
+  useEffect(() => {
+    toolSnapToGridRef.current = toolSnapToGrid;
+  }, [toolSnapToGrid]);
 
   useEffect(() => {
     selectedRef.current = selectedElementIds ?? [];
@@ -815,7 +829,8 @@ export function Viewport2D({
       const y = e.clientY - rect.top;
       const screen = toVector2(x, y);
       const worldRaw = screenToWorld(screen);
-      const world = e.altKey ? worldRaw : snapPoint(worldRaw, SNAP_STEP);
+      const shouldSnap = toolSnapToGridRef.current && !e.altKey;
+      const world = shouldSnap ? snapPoint(worldRaw, SNAP_STEP) : worldRaw;
 
       session.onPointerEvent({
         kind,
@@ -1488,6 +1503,7 @@ export function Viewport2D({
     }
 
     function handleKeyDown(e: KeyboardEvent) {
+      if (!enableKeyboardShortcutsRef.current) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName?.toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable) return;
@@ -1611,6 +1627,7 @@ export function Viewport2D({
     }
 
     function handleKeyUp(e: KeyboardEvent) {
+      if (!enableKeyboardShortcutsRef.current) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName?.toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable) return;

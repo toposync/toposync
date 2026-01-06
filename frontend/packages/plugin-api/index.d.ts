@@ -180,6 +180,16 @@ export type EditorToolSession = {
   dispose?: () => void;
 };
 
+export type Viewport2DReplicaProps = {
+  className?: string;
+  style?: import("react").CSSProperties;
+  session?: EditorToolSession | null;
+};
+
+export type HostUi = {
+  Viewport2DReplica: (props: Viewport2DReplicaProps) => import("react").ReactNode;
+};
+
 export type EditorTool = {
   id: string;
   name: LocalizedString;
@@ -195,4 +205,5 @@ export type TopoSyncHost = {
   registerSettingsPanel: (panel: SettingsPanel) => void;
   api: HostApi;
   i18n: HostI18n;
+  ui: HostUi;
 };

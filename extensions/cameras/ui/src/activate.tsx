@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
 
 import cameraSvg from "@fortawesome/fontawesome-free/svgs/solid/camera.svg";
@@ -7,11 +8,14 @@ import type {
   CompositionElement,
   CompositionElementPatch,
   EditorTool,
+  EditorToolPointerEvent,
+  EditorToolSession,
   ElementType,
   HostI18n,
   PlanePoint,
   SettingsPanel,
   TopoSyncHost,
+  Viewport2DContext,
 } from "@toposync/plugin-api";
 
 const EXTENSION_ID = "com.toposync.cameras";
@@ -71,6 +75,78 @@ function asRecord(v: unknown): Record<string, unknown> {
 function newId(): string {
   const cryptoAny = crypto as unknown as { randomUUID?: () => string };
   return cryptoAny.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+type ControlPoint = {
+  id: string;
+  label: string;
+  image?: { x: number; y: number } | null;
+  world?: { x: number; z: number } | null;
+};
+
+const CONTROL_POINT_COLORS = [
+  "#ef4444",
+  "#f59e0b",
+  "#22c55e",
+  "#38bdf8",
+  "#a855f7",
+  "#f472b6",
+  "#14b8a6",
+  "#eab308",
+];
+
+function labelForIndex(index: number): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  if (index >= 0 && index < alphabet.length) return alphabet[index];
+  return String(index + 1);
+}
+
+function readFiniteNumber(v: unknown, fallback: number): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
+function readNormalizedPoint(v: unknown): { x: number; y: number } | null {
+  const rec = asRecord(v);
+  const x = readFiniteNumber(rec.x, NaN);
+  const y = readFiniteNumber(rec.y, NaN);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
+}
+
+function readWorldPoint(v: unknown): { x: number; z: number } | null {
+  const rec = asRecord(v);
+  const x = readFiniteNumber(rec.x, NaN);
+  const z = readFiniteNumber(rec.z, NaN);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  return { x, z };
+}
+
+function readControlPoints(v: unknown): ControlPoint[] {
+  if (!Array.isArray(v)) return [];
+  const out: ControlPoint[] = [];
+  for (let i = 0; i < v.length; i += 1) {
+    const rec = asRecord(v[i]);
+    const id = asString(rec.id).trim();
+    if (!id) continue;
+    const label = asString(rec.label).trim() || labelForIndex(i);
+    out.push({
+      id,
+      label,
+      image: readNormalizedPoint(rec.image),
+      world: readWorldPoint(rec.world),
+    });
+  }
+  return out;
+}
+
+function defaultControlPoints(count = 4): ControlPoint[] {
+  const n = Math.max(1, Math.min(12, Math.floor(count)));
+  return Array.from({ length: n }, (_, i) => ({
+    id: newId(),
+    label: labelForIndex(i),
+    image: null,
+    world: null,
+  }));
 }
 
 function readProcessingServers(settings: Record<string, unknown>): ProcessingServer[] {
@@ -181,6 +257,16 @@ const translations = {
     "ext.cameras.editor.camera": "Camera",
     "ext.cameras.editor.no_cameras": "Add a camera in Settings first.",
     "ext.cameras.editor.select_placeholder": "Select…",
+    "ext.cameras.editor.control_points": "Control points",
+    "ext.cameras.editor.control_points_none": "No control points yet.",
+    "ext.cameras.editor.control_points_some": "{{complete}}/{{total}} points",
+    "ext.cameras.editor.control_points_open": "Place control points",
+    "ext.cameras.control.title": "Control points",
+    "ext.cameras.control.help": "Select a point, then click on the image and on the canvas.",
+    "ext.cameras.control.loading": "Loading…",
+    "ext.cameras.control.min_points": "Use at least 4 points.",
+    "ext.cameras.control.image": "Camera snapshot",
+    "ext.cameras.control.canvas": "Composition canvas",
     "ext.cameras.action.no_camera": "No camera selected.",
     "ext.cameras.action.refresh": "Refresh snapshot",
     "ext.cameras.action.loading": "Loading…",
@@ -217,6 +303,16 @@ const translations = {
     "ext.cameras.editor.camera": "Câmera",
     "ext.cameras.editor.no_cameras": "Adicione uma câmera nas Configurações primeiro.",
     "ext.cameras.editor.select_placeholder": "Selecionar…",
+    "ext.cameras.editor.control_points": "Pontos de controle",
+    "ext.cameras.editor.control_points_none": "Nenhum ponto definido.",
+    "ext.cameras.editor.control_points_some": "{{complete}}/{{total}} pontos",
+    "ext.cameras.editor.control_points_open": "Posicionar pontos de controle",
+    "ext.cameras.control.title": "Pontos de controle",
+    "ext.cameras.control.help": "Selecione um ponto e clique na imagem e no canvas.",
+    "ext.cameras.control.loading": "Carregando…",
+    "ext.cameras.control.min_points": "Use ao menos 4 pontos.",
+    "ext.cameras.control.image": "Imagem da câmera",
+    "ext.cameras.control.canvas": "Canvas da composição",
     "ext.cameras.action.no_camera": "Nenhuma câmera selecionada.",
     "ext.cameras.action.refresh": "Atualizar snapshot",
     "ext.cameras.action.loading": "Carregando...",
@@ -226,7 +322,7 @@ const translations = {
 export function activate(host: TopoSyncHost): void {
   host.i18n.registerTranslations(translations);
   host.registerSettingsPanel(settingsPanel());
-  host.registerElementType(cameraElementType(host.i18n));
+  host.registerElementType(cameraElementType(host));
   host.registerEditorTool(addCameraTool(host.i18n));
 }
 
@@ -247,14 +343,19 @@ function SubModal({
   open,
   onClose,
   children,
+  panelStyle,
+  bodyStyle,
 }: {
   title: string;
   open: boolean;
   onClose: () => void;
   children: React.ReactNode;
+  panelStyle?: React.CSSProperties;
+  bodyStyle?: React.CSSProperties;
 }): React.ReactElement | null {
   if (!open) return null;
-  return (
+
+  return createPortal(
     <div
       className="modalBackdrop"
       style={{ zIndex: 70 }}
@@ -265,7 +366,7 @@ function SubModal({
     >
       <div
         className="modalPanel"
-        style={{ width: "min(980px, calc(100vw - 28px))" }}
+        style={{ width: "min(980px, calc(100vw - 28px))", ...(panelStyle ?? {}) }}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -276,9 +377,12 @@ function SubModal({
             <i className="fa-solid fa-xmark" aria-hidden="true" />
           </button>
         </div>
-        <div className="modalBody">{children}</div>
+        <div className="modalBody" style={bodyStyle}>
+          {children}
+        </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -807,7 +911,8 @@ function addCameraTool(i18n: HostI18n): EditorTool {
   };
 }
 
-function cameraElementType(i18n: HostI18n): ElementType {
+function cameraElementType(host: TopoSyncHost): ElementType {
+  const i18n = host.i18n;
   const iconGeometryCache = new Map<string, { geometry: any; scale: number }>();
   const ICON_TARGET_SIZE = 0.14;
 
@@ -990,7 +1095,7 @@ function cameraElementType(i18n: HostI18n): ElementType {
       };
     },
     renderEditorModal: ({ element, update, remove, close }) => (
-      <CameraEditor element={element} update={update} remove={remove} close={close} i18n={i18n} />
+      <CameraEditor element={element} update={update} remove={remove} close={close} i18n={i18n} host={host} />
     ),
     renderActionModal: ({ element }) => <CameraAction element={element} i18n={i18n} />,
   };
@@ -1002,16 +1107,22 @@ function CameraEditor({
   remove,
   close,
   i18n,
+  host,
 }: {
   element: CompositionElement;
   update: (patch: CompositionElementPatch) => void;
   remove: () => void;
   close: () => void;
   i18n: HostI18n;
+  host: TopoSyncHost;
 }): React.ReactElement {
   const { t } = i18n.useI18n();
   const props = asRecord(element.props);
   const selectedId = asString(props.camera_id).trim();
+  const existingControlPoints = useMemo(() => readControlPoints(props.control_points), [props.control_points]);
+  const controlPointPairs = existingControlPoints.filter((p) => Boolean(p.image) && Boolean(p.world)).length;
+  const totalControlPoints = existingControlPoints.length;
+  const [isControlPointsOpen, setIsControlPointsOpen] = useState(false);
 
   const [index, setIndex] = useState<CamerasIndex | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -1075,6 +1186,31 @@ function CameraEditor({
         </div>
       )}
 
+      <div className="field">
+        <label className="label">{t("ext.cameras.editor.control_points")}</label>
+        <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <div className="cardMeta">
+            {totalControlPoints > 0
+              ? t("ext.cameras.editor.control_points_some", { complete: controlPointPairs, total: totalControlPoints })
+              : t("ext.cameras.editor.control_points_none")}
+          </div>
+
+          <button
+            className="chipButton"
+            type="button"
+            disabled={!selectedId}
+            onClick={() => setIsControlPointsOpen(true)}
+          >
+            {t("ext.cameras.editor.control_points_open")}
+          </button>
+        </div>
+        {totalControlPoints > 0 && controlPointPairs < 4 ? (
+          <div className="cardMeta" style={{ marginTop: 6 }}>
+            {t("ext.cameras.control.min_points")}
+          </div>
+        ) : null}
+      </div>
+
       <div className="sectionDivider" />
 
       <div className="rowWrap" style={{ justifyContent: "space-between" }}>
@@ -1093,7 +1229,333 @@ function CameraEditor({
           {t("core.actions.close")}
         </button>
       </div>
+
+      <ControlPointsModal
+        open={isControlPointsOpen}
+        onClose={() => setIsControlPointsOpen(false)}
+        host={host}
+        i18n={i18n}
+        cameraId={selectedId}
+        initialPoints={existingControlPoints}
+        onSave={(points) => update({ props: { control_points: points } })}
+      />
     </div>
+  );
+}
+
+function ControlPointsModal({
+  open,
+  onClose,
+  host,
+  i18n,
+  cameraId,
+  initialPoints,
+  onSave,
+}: {
+  open: boolean;
+  onClose: () => void;
+  host: TopoSyncHost;
+  i18n: HostI18n;
+  cameraId: string;
+  initialPoints: ControlPoint[];
+  onSave: (points: ControlPoint[]) => void;
+}): React.ReactElement | null {
+  const { t } = i18n.useI18n();
+
+  const [points, setPoints] = useState<ControlPoint[]>([]);
+  const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
+
+  const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
+  const [snapshotErr, setSnapshotErr] = useState<string | null>(null);
+  const [snapshotBusy, setSnapshotBusy] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (snapshotUrl) URL.revokeObjectURL(snapshotUrl);
+    };
+  }, [snapshotUrl]);
+
+  useEffect(() => {
+    if (!open) return;
+    const base = initialPoints.length ? initialPoints : defaultControlPoints(4);
+    const padded: ControlPoint[] = base.map((p) => ({ ...p, image: p.image ?? null, world: p.world ?? null }));
+    while (padded.length < 4) {
+      padded.push({ id: newId(), label: labelForIndex(padded.length), image: null, world: null });
+    }
+    setPoints(padded);
+    setSelectedPointId(padded[0]?.id ?? null);
+  }, [open, initialPoints]);
+
+  useEffect(() => {
+    if (!open) {
+      setSnapshotErr(null);
+      setSnapshotBusy(false);
+      setSnapshotUrl(null);
+      return;
+    }
+    if (!cameraId) return;
+
+    let cancelled = false;
+    setSnapshotBusy(true);
+    setSnapshotErr(null);
+    fetchCameraSnapshot(cameraId)
+      .then((blob) => {
+        if (cancelled) return;
+        const url = URL.createObjectURL(blob);
+        setSnapshotUrl(url);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setSnapshotErr(e instanceof Error ? e.message : String(e));
+        setSnapshotUrl(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSnapshotBusy(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, cameraId]);
+
+  const completePairs = useMemo(() => points.filter((p) => Boolean(p.image) && Boolean(p.world)).length, [points]);
+
+  const toolSession = useMemo<EditorToolSession>(() => {
+    return {
+      onPointerEvent: (evt: EditorToolPointerEvent) => {
+        if (evt.kind !== "down") return;
+        if (!selectedPointId) return;
+        setPoints((prev) =>
+          prev.map((p) => (p.id === selectedPointId ? { ...p, world: { x: evt.world.x, z: evt.world.z } } : p)),
+        );
+      },
+      renderOverlay2D: ({ ctx, viewport }: { ctx: CanvasRenderingContext2D; viewport: Viewport2DContext }) => {
+        ctx.save();
+        ctx.font = "700 12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        for (let i = 0; i < points.length; i += 1) {
+          const p = points[i];
+          if (!p.world) continue;
+          const color = CONTROL_POINT_COLORS[i % CONTROL_POINT_COLORS.length];
+          const screen = viewport.worldToScreen(p.world);
+          const isSelected = selectedPointId === p.id;
+          const r = isSelected ? 10 : 8;
+
+          ctx.beginPath();
+          ctx.arc(screen.x, screen.y, r, 0, Math.PI * 2);
+          ctx.fillStyle = color;
+          ctx.fill();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = isSelected ? "rgba(255,255,255,0.92)" : "rgba(0,0,0,0.65)";
+          ctx.stroke();
+
+          ctx.fillStyle = "rgba(0,0,0,0.82)";
+          ctx.fillText(p.label || labelForIndex(i), screen.x, screen.y + 0.5);
+        }
+
+        ctx.restore();
+      },
+      getCursor: () => "crosshair",
+    };
+  }, [points, selectedPointId]);
+
+  function addPoint() {
+    const id = newId();
+    setPoints((prev) => [...prev, { id, label: labelForIndex(prev.length), image: null, world: null }]);
+    setSelectedPointId(id);
+  }
+
+  function setImagePointFromEvent(e: React.MouseEvent<HTMLImageElement>) {
+    if (!selectedPointId) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const nx = Math.max(0, Math.min(1, (e.clientX - rect.left) / Math.max(1, rect.width)));
+    const ny = Math.max(0, Math.min(1, (e.clientY - rect.top) / Math.max(1, rect.height)));
+    setPoints((prev) => prev.map((p) => (p.id === selectedPointId ? { ...p, image: { x: nx, y: ny } } : p)));
+  }
+
+  return (
+    <SubModal
+      open={open}
+      onClose={onClose}
+      title={t("ext.cameras.control.title")}
+      panelStyle={{
+        width: "min(1440px, calc(100vw - 28px))",
+        height: "calc(100vh - 28px)",
+        maxHeight: "calc(100vh - 28px)",
+      }}
+      bodyStyle={{
+        padding: 0,
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 12, flex: 1, minHeight: 0 }}>
+        <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <div className="rowWrap" style={{ gap: 8 }}>
+            {points.map((p, i) => {
+              const isSelected = selectedPointId === p.id;
+              const color = CONTROL_POINT_COLORS[i % CONTROL_POINT_COLORS.length];
+              const hasImg = Boolean(p.image);
+              const hasWorld = Boolean(p.world);
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="chipButton"
+                  onClick={() => setSelectedPointId(p.id)}
+                  style={{
+                    minWidth: 46,
+                    justifyContent: "center",
+                    borderColor: isSelected ? "rgba(56,189,248,0.55)" : "rgba(255,255,255,0.14)",
+                    background: isSelected ? "rgba(56,189,248,0.10)" : undefined,
+                  }}
+                  aria-label={`Point ${p.label || labelForIndex(i)}`}
+                >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: 999,
+                      background: color,
+                      boxShadow: "0 0 0 2px rgba(0,0,0,0.25)",
+                      opacity: hasImg && hasWorld ? 1 : 0.4,
+                    }}
+                  />
+                  <span>{p.label || labelForIndex(i)}</span>
+                </button>
+              );
+            })}
+
+            <button className="iconButton" type="button" onClick={addPoint} aria-label={t("core.actions.add")}>
+              <i className="fa-solid fa-plus" aria-hidden="true" />
+            </button>
+          </div>
+
+          <div className="cardMeta" style={{ textAlign: "right" }}>
+            {t("ext.cameras.control.help")}
+            {completePairs > 0 && completePairs < 4 ? ` ${t("ext.cameras.control.min_points")}` : ""}
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, flex: 1, minHeight: 0 }}>
+          <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+            <div className="label">{t("ext.cameras.control.image")}</div>
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                borderRadius: 16,
+                border: "1px solid rgba(255,255,255,0.14)",
+                background: "rgba(0,0,0,0.30)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: 10,
+                overflow: "hidden",
+              }}
+            >
+              {snapshotErr ? (
+                <div className="card">
+                  <div className="cardBody">{snapshotErr}</div>
+                </div>
+              ) : snapshotUrl ? (
+                <div style={{ position: "relative", display: "inline-block", maxWidth: "100%", maxHeight: "100%" }}>
+                  <img
+                    src={snapshotUrl}
+                    alt={t("ext.cameras.control.image")}
+                    style={{
+                      display: "block",
+                      maxWidth: "100%",
+                      maxHeight: "100%",
+                      borderRadius: 14,
+                      border: "1px solid rgba(255,255,255,0.10)",
+                    }}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      setImagePointFromEvent(e);
+                    }}
+                  />
+
+                  {points.map((p, i) => {
+                    if (!p.image) return null;
+                    const isSelected = selectedPointId === p.id;
+                    const color = CONTROL_POINT_COLORS[i % CONTROL_POINT_COLORS.length];
+                    return (
+                      <div
+                        key={p.id}
+                        style={{
+                          position: "absolute",
+                          left: `${p.image.x * 100}%`,
+                          top: `${p.image.y * 100}%`,
+                          transform: "translate(-50%,-50%)",
+                          width: isSelected ? 22 : 20,
+                          height: isSelected ? 22 : 20,
+                          borderRadius: 999,
+                          background: color,
+                          border: isSelected ? "2px solid rgba(255,255,255,0.92)" : "2px solid rgba(0,0,0,0.65)",
+                          boxShadow: "0 8px 18px rgba(0,0,0,0.28)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: 12,
+                          fontWeight: 800,
+                          color: "rgba(0,0,0,0.82)",
+                          pointerEvents: "none",
+                        }}
+                      >
+                        {p.label || labelForIndex(i)}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="card">
+                  <div className="cardBody">{snapshotBusy ? t("ext.cameras.control.loading") : t("ext.cameras.control.image")}</div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+            <div className="label">{t("ext.cameras.control.canvas")}</div>
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                borderRadius: 16,
+                border: "1px solid rgba(255,255,255,0.14)",
+                background: "rgba(0,0,0,0.30)",
+                overflow: "hidden",
+              }}
+            >
+              <host.ui.Viewport2DReplica session={toolSession} style={{ width: "100%", height: "100%" }} />
+            </div>
+          </div>
+        </div>
+
+        <div className="rowWrap" style={{ justifyContent: "space-between" }}>
+          <button className="chipButton" type="button" onClick={onClose}>
+            {t("core.actions.cancel")}
+          </button>
+          <button
+            className="primaryButton"
+            type="button"
+            onClick={() => {
+              onSave(points);
+              onClose();
+            }}
+          >
+            {t("core.actions.save")}
+          </button>
+        </div>
+      </div>
+    </SubModal>
   );
 }
 

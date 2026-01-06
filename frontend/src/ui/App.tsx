@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import type {
   CompositionElement,
@@ -32,6 +32,7 @@ import type { AppSettings } from "../util/api";
 import { i18n, resolveLocalizedString } from "../util/i18n";
 import { loadRemoteActivate } from "../util/moduleFederation";
 import { SettingsModal } from "./SettingsModal";
+import { Viewport2D } from "./Viewport2D";
 import { CompositionEditorScreen } from "./screens/CompositionEditorScreen";
 import { MainScreen } from "./screens/MainScreen";
 
@@ -243,6 +244,47 @@ export function App(): React.ReactElement {
     saveWallHeightPreset(wallHeightPreset);
   }, [wallHeightPreset]);
 
+  const elementTypesRef = useRef<Record<string, ElementType>>(elementTypesById);
+  useLayoutEffect(() => {
+    elementTypesRef.current = elementTypesById;
+  }, [elementTypesById]);
+
+  const compositionStore = useMemo(() => {
+    const listeners = new Set<() => void>();
+    return {
+      getSnapshot: () => compositionRef.current,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      notify: () => {
+        for (const listener of listeners) listener();
+      },
+    };
+  }, []);
+
+  useEffect(() => {
+    compositionStore.notify();
+  }, [composition, compositionRevision, compositionStore]);
+
+  const elementTypesStore = useMemo(() => {
+    const listeners = new Set<() => void>();
+    return {
+      getSnapshot: () => elementTypesRef.current,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      notify: () => {
+        for (const listener of listeners) listener();
+      },
+    };
+  }, []);
+
+  useEffect(() => {
+    elementTypesStore.notify();
+  }, [elementTypesById, elementTypesStore]);
+
   const host: TopoSyncHost = useMemo(
     () => ({
       registerElementType(elementType) {
@@ -262,6 +304,33 @@ export function App(): React.ReactElement {
         getDevice,
       },
       i18n,
+      ui: {
+        Viewport2DReplica: ({ session, className, style }) => {
+          const currentComposition = useSyncExternalStore(
+            compositionStore.subscribe,
+            compositionStore.getSnapshot,
+            compositionStore.getSnapshot,
+          );
+          const currentElementTypes = useSyncExternalStore(
+            elementTypesStore.subscribe,
+            elementTypesStore.getSnapshot,
+            elementTypesStore.getSnapshot,
+          );
+
+          return (
+            <div className={className} style={{ position: "relative", ...style }}>
+              <Viewport2D
+                elements={currentComposition.elements}
+                elementTypesById={currentElementTypes}
+                interactionMode="navigate"
+                activeToolSession={session ?? null}
+                enableKeyboardShortcuts={false}
+                toolSnapToGrid={false}
+              />
+            </div>
+          );
+        },
+      },
     }),
     [],
   );

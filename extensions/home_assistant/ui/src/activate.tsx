@@ -42,6 +42,11 @@ const PRIMARY_TOGGLE_DOMAINS = new Set([
 ]);
 
 type HaViewMode = "floor" | "ceiling" | "wall";
+type HaSpecialView = "none" | "lamp";
+
+const LAMP_COMPAT_DOMAINS = new Set(["light", "switch", "fan", "input_boolean", "humidifier"]);
+const DEFAULT_LAMP_COLOR = "#ffe8b0";
+const DEFAULT_LAMP_INTENSITY = 1.0;
 
 type HaServer = {
   id: string;
@@ -98,6 +103,26 @@ function asString(v: unknown, fallback = ""): string {
 
 function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
+function readFiniteNumber(v: unknown, fallback: number): number {
+  const num = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function readLampIntensity(v: unknown): number {
+  return clamp(readFiniteNumber(v, DEFAULT_LAMP_INTENSITY), 0.2, 3.0);
+}
+
+function readHexColor(v: unknown, fallback: string): string {
+  const s = typeof v === "string" ? v.trim() : "";
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(s);
+  if (!m) return fallback;
+  return `#${m[1].toLowerCase()}`;
 }
 
 function newId(): string {
@@ -253,6 +278,14 @@ function isHaViewMode(value: unknown): value is HaViewMode {
 
 function readHaViewMode(value: unknown): HaViewMode {
   return isHaViewMode(value) ? value : "floor";
+}
+
+function isHaSpecialView(value: unknown): value is HaSpecialView {
+  return value === "none" || value === "lamp";
+}
+
+function readHaSpecialView(value: unknown): HaSpecialView {
+  return isHaSpecialView(value) ? value : "none";
 }
 
 function domainFromEntityId(entityId: string): string {
@@ -601,6 +634,12 @@ const translations = {
     "ext.home_assistant.editor.view_mode.floor": "Floor",
     "ext.home_assistant.editor.view_mode.ceiling": "Ceiling",
     "ext.home_assistant.editor.view_mode.wall": "Wall",
+    "ext.home_assistant.editor.special_view": "Special view",
+    "ext.home_assistant.editor.special_view.none": "None",
+    "ext.home_assistant.editor.special_view.lamp": "Lamp",
+    "ext.home_assistant.editor.special_view.hint": "Available when a single on/off entity is selected.",
+    "ext.home_assistant.editor.lamp_intensity": "Light intensity",
+    "ext.home_assistant.editor.lamp_color": "Light color",
     "ext.home_assistant.action.toggle": "Toggle",
     "ext.home_assistant.action.loading": "Loading…",
     "ext.home_assistant.action.no_items": "No entities/devices selected.",
@@ -643,6 +682,12 @@ const translations = {
     "ext.home_assistant.editor.view_mode.floor": "Chão",
     "ext.home_assistant.editor.view_mode.ceiling": "Teto",
     "ext.home_assistant.editor.view_mode.wall": "Parede",
+    "ext.home_assistant.editor.special_view": "Visualização especial",
+    "ext.home_assistant.editor.special_view.none": "Nenhuma",
+    "ext.home_assistant.editor.special_view.lamp": "Luminária",
+    "ext.home_assistant.editor.special_view.hint": "Disponível quando apenas um item liga/desliga estiver selecionado.",
+    "ext.home_assistant.editor.lamp_intensity": "Intensidade da luz",
+    "ext.home_assistant.editor.lamp_color": "Cor da luz",
     "ext.home_assistant.action.toggle": "Alternar",
     "ext.home_assistant.action.loading": "Carregando...",
     "ext.home_assistant.action.no_items": "Nenhuma entidade/dispositivo selecionado.",
@@ -879,6 +924,9 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       primary_entity_id: "",
       primary_state: "",
       view_mode: "floor",
+      special_view: "none",
+      lamp_intensity: DEFAULT_LAMP_INTENSITY,
+      lamp_color: DEFAULT_LAMP_COLOR,
     },
     primaryAction: async ({ element, api, update }) => {
       const props = asRecord(element.props);
@@ -1011,6 +1059,10 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       let currentIconKey = houseGeo.key;
       let currentViewMode: HaViewMode = "floor";
       let currentEl = element;
+      let currentSpecialView: HaSpecialView = "none";
+      let currentItemCount = 0;
+      const lampColor = new THREE.Color(DEFAULT_LAMP_COLOR);
+      let lampIntensity = DEFAULT_LAMP_INTENSITY;
 
       let unwatch: (() => void) | null = null;
       let watchedServer = "";
@@ -1022,6 +1074,38 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       function applyNeonFromState(stateRaw: string) {
         const s = stateRaw.trim().toLowerCase();
         const boolState = watchedEntity ? boolStateForDomain(watchedDomain, s) : null;
+        const canLamp =
+          currentSpecialView === "lamp" &&
+          currentItemCount === 1 &&
+          watchedDomain &&
+          LAMP_COMPAT_DOMAINS.has(watchedDomain.toLowerCase());
+
+        if (canLamp) {
+          const on = boolState === true;
+          const unknown = boolState == null;
+
+          const neon = on ? lampColor : 0x000000;
+          sphereMat.emissive.set(neon);
+          iconMat.color.set(on ? lampColor : unknown ? 0x334155 : 0x111827);
+          light.color.set(lampColor);
+
+          if (on) {
+            const amp = clamp(lampIntensity, 0.2, 3.0);
+            sphereMat.emissiveIntensity = 0.55 + 0.75 * amp;
+            light.intensity = 1.8 * amp;
+            light.distance = 4.5 + 3.5 * amp;
+          } else if (unknown) {
+            sphereMat.emissiveIntensity = 0.22;
+            light.intensity = 0.0;
+            light.distance = 0.0;
+          } else {
+            sphereMat.emissiveIntensity = 0.08;
+            light.intensity = 0.0;
+            light.distance = 0.0;
+          }
+          return;
+        }
+
         const neon = watchedIsToggle
           ? boolState === true
             ? NEON_ON
@@ -1034,8 +1118,22 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
         iconMat.color.set(neon);
         light.color.set(neon);
 
-        sphereMat.emissiveIntensity = watchedIsToggle ? (boolState === true ? 1.0 : 0.85) : 0.9;
-        light.intensity = watchedIsToggle ? (boolState === true ? 1.05 : 0.9) : 0.95;
+        // Subtle indicator glow (non-special).
+        sphereMat.emissiveIntensity = watchedIsToggle
+          ? boolState === true
+            ? 0.55
+            : boolState === false
+              ? 0.35
+              : 0.42
+          : 0.42;
+        light.intensity = watchedIsToggle
+          ? boolState === true
+            ? 0.25
+            : boolState === false
+              ? 0.12
+              : 0.16
+          : 0.16;
+        light.distance = 1.6;
       }
 
       function applyViewMode(mode: HaViewMode) {
@@ -1066,6 +1164,9 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
         const p = asRecord(el.props);
         const icon = sanitizeFaIconName(asString(p.icon, "house")) || "house";
         const viewMode = readHaViewMode(p.view_mode);
+        const specialView = readHaSpecialView(p.special_view);
+        const itemsRaw = p.items;
+        const itemCount = Array.isArray(itemsRaw) ? itemsRaw.length : 0;
         const primaryEntityId = asString(p.primary_entity_id).trim();
         const serverId = asString(p.server_id).trim();
         if (serverId !== watchedServer || primaryEntityId !== watchedEntity) {
@@ -1083,6 +1184,17 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
         const primaryState = asString(live?.state ?? p.primary_state);
 
         applyViewMode(viewMode);
+
+        currentItemCount = itemCount;
+        currentSpecialView = specialView;
+        lampColor.set(readHexColor(p.lamp_color, DEFAULT_LAMP_COLOR));
+        lampIntensity = readLampIntensity(p.lamp_intensity);
+        if (
+          currentSpecialView === "lamp" &&
+          !(itemCount === 1 && watchedDomain && LAMP_COMPAT_DOMAINS.has(watchedDomain.toLowerCase()))
+        ) {
+          currentSpecialView = "none";
+        }
 
         wantedIconKey = normalizeFaSvgName(icon) || "house";
         const entry = getIconGeometry(wantedIconKey);
@@ -1202,7 +1314,17 @@ function addHomeAssistantTool(i18n: HostI18n): EditorTool {
         const id = createElement(ELEMENT_TYPE_ID, {
           name: "",
           position: { x: evt.world.x, y: 0, z: evt.world.z },
-          props: { server_id: "", items: [], icon: "house", primary_entity_id: "", primary_state: "", view_mode: "floor" },
+          props: {
+            server_id: "",
+            items: [],
+            icon: "house",
+            primary_entity_id: "",
+            primary_state: "",
+            view_mode: "floor",
+            special_view: "none",
+            lamp_intensity: DEFAULT_LAMP_INTENSITY,
+            lamp_color: DEFAULT_LAMP_COLOR,
+          },
         });
         if (id) openEditor(id);
       },
@@ -1410,6 +1532,10 @@ function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorPro
   const serverId = asString(props.server_id).trim();
   const icon = sanitizeFaIconName(asString(props.icon, "house")) || "house";
   const viewMode = readHaViewMode(props.view_mode);
+  const specialView = readHaSpecialView(props.special_view);
+  const primaryEntityId = asString(props.primary_entity_id).trim();
+  const lampIntensityValue = readLampIntensity(props.lamp_intensity);
+  const lampColorValue = readHexColor(props.lamp_color, DEFAULT_LAMP_COLOR);
   const items = useMemo(() => readItemRefs(props.items), [props.items]);
 
   const [servers, setServers] = useState<HaServerPublic[]>([]);
@@ -1476,6 +1602,17 @@ function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorPro
     if (serverId) return;
     if (servers.length === 1) update({ props: { server_id: servers[0].id } });
   }, [serverId, servers, update]);
+
+  const canLamp = useMemo(() => {
+    if (items.length !== 1) return false;
+    if (!primaryEntityId) return false;
+    const d = domainFromEntityId(primaryEntityId).toLowerCase();
+    return LAMP_COMPAT_DOMAINS.has(d);
+  }, [items.length, primaryEntityId]);
+
+  useEffect(() => {
+    if (specialView === "lamp" && !canLamp) update({ props: { special_view: "none" } });
+  }, [canLamp, specialView, update]);
 
   useEffect(() => {
     if (!serverId) {
@@ -1891,6 +2028,62 @@ function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorPro
               <option value="wall">{t("ext.home_assistant.editor.view_mode.wall")}</option>
             </select>
           </div>
+
+          <div className="field">
+            <div className="label">{t("ext.home_assistant.editor.special_view")}</div>
+            <select
+              className="input"
+              value={specialView}
+              onChange={(e) => {
+                const next = readHaSpecialView(e.target.value);
+                if (next === "lamp") {
+                  update({
+                    props: {
+                      special_view: next,
+                      lamp_intensity: lampIntensityValue,
+                      lamp_color: lampColorValue,
+                    },
+                  });
+                } else {
+                  update({ props: { special_view: "none" } });
+                }
+              }}
+            >
+              <option value="none">{t("ext.home_assistant.editor.special_view.none")}</option>
+              <option value="lamp" disabled={!canLamp}>
+                {t("ext.home_assistant.editor.special_view.lamp")}
+              </option>
+            </select>
+            {!canLamp ? <div className="label" style={{ marginTop: 6 }}>{t("ext.home_assistant.editor.special_view.hint")}</div> : null}
+          </div>
+
+          {specialView === "lamp" && canLamp ? (
+            <div className="rowWrap">
+              <div className="field" style={{ flex: 1, minWidth: 160 }}>
+                <div className="label">{t("ext.home_assistant.editor.lamp_color")}</div>
+                <input
+                  className="input"
+                  type="color"
+                  value={lampColorValue}
+                  onChange={(e) => update({ props: { lamp_color: readHexColor(e.target.value, DEFAULT_LAMP_COLOR) } })}
+                />
+              </div>
+              <div className="field" style={{ flex: 1, minWidth: 180 }}>
+                <div className="label">
+                  {t("ext.home_assistant.editor.lamp_intensity")}: {lampIntensityValue.toFixed(2)}
+                </div>
+                <input
+                  className="input"
+                  type="range"
+                  min={0.2}
+                  max={3}
+                  step={0.05}
+                  value={lampIntensityValue}
+                  onChange={(e) => update({ props: { lamp_intensity: Number(e.target.value) } })}
+                />
+              </div>
+            </div>
+          ) : null}
         </>
       )}
 

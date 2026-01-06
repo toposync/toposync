@@ -21,3 +21,5 @@ ignore/
 # Playwright
 test-results/
 playwright-report/
+yolo*.pt
+

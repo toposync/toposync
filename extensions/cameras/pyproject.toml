@@ -6,6 +6,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["toposync>=0.1.0", "numpy>=1.26", "opencv-python-headless>=4.10", "httpx>=0.27"]
 
+[project.optional-dependencies]
+# Heavy dependencies for object detection/tracking (YOLO). Install only when needed.
+yolo = ["ultralytics>=8.3.0"]
+
 [project.entry-points."toposync.extensions"]
 cameras = "toposync_ext_cameras.plugin:CamerasExtension"
 

@@ -16,7 +16,8 @@ from .mapping import ControlPointMapper, ControlPointPair
 from .motion import MotionDetector
 from .remote import RemoteProcessorClient, RemoteProcessorServer
 from .tracking_db import TrackingDatabase
-from .tracker import BBoxTracker, Detection
+from .tracker import BBoxTracker, Detection, iou01
+from .yolo import YoloTracker, YoloOutput
 
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,14 @@ class CameraWorker:
         self._grabber = FrameGrabber(url, target_fps=spec.fps).start()
         self._motion = MotionDetector(threshold=motion_threshold)
         self._tracker = BBoxTracker()
+        self._yolo: YoloTracker | None = None
+        self._yolo_failed = False
+        self._yolo_last_run_ts = 0.0
+        self._yolo_min_interval_s = 0.45
+        self._yolo_cache: YoloOutput | None = None
+        self._yolo_cache_ts = 0.0
+        self._yolo_cache_ttl_s = 1.2
+        self._yolo_track_state: dict[str, dict[str, Any]] = {}
 
         import threading
 
@@ -205,63 +214,225 @@ class CameraWorker:
                 continue
             self._last_processed_ts = ts
 
-            motion_rules = [r for r in self._spec.detections if r.trigger.kind == "motion"]
-            if not motion_rules:
-                # No configured detector wants motion events yet.
-                time.sleep(0.02)
+            rules = list(self._spec.detections)
+            if not rules:
+                time.sleep(0.05)
                 continue
 
-            try:
-                motion_result = self._motion.process(frame)
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("motion processing failed for camera=%s: %s", self.camera_id, exc)
-                time.sleep(0.02)
-                continue
+            motion_needed = any(
+                (r.trigger.kind == "motion") or any(f.kind == "motion" for f in r.filters)
+                for r in rules
+            )
+            object_needed = any(
+                (r.trigger.kind == "object") or any(f.kind == "object" for f in r.filters)
+                for r in rules
+            )
 
-            if not motion_result.active:
+            motion_active = False
+            motion_result = None
+            if motion_needed:
+                try:
+                    motion_result = self._motion.process(frame)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("motion processing failed for camera=%s: %s", self.camera_id, exc)
+                    motion_result = None
+                if motion_result is not None:
+                    motion_active = bool(motion_result.active)
+
+            # Determine whether YOLO is needed and if so, run it with throttling.
+            yolo_output: YoloOutput | None = None
+            present_classes: set[str] = set()
+
+            def _rule_gate_passes_without_yolo(rule: DetectionRule) -> bool:
+                if rule.trigger.kind == "motion" and not motion_active:
+                    return False
+                for f in rule.filters:
+                    if f.kind == "motion" and not motion_active:
+                        return False
+                return True
+
+            desired_classes: set[str] = set()
+            if object_needed:
+                for r in rules:
+                    if r.trigger.kind == "object" and r.trigger.category:
+                        desired_classes.add(r.trigger.category)
+                    for f in r.filters:
+                        if f.kind == "object" and f.category:
+                            desired_classes.add(f.category)
+
+                needs_yolo_now = any(
+                    ((r.trigger.kind == "object") or any(f.kind == "object" for f in r.filters))
+                    and _rule_gate_passes_without_yolo(r)
+                    for r in rules
+                )
+
+                if needs_yolo_now:
+                    if self._yolo_cache and (ts - self._yolo_cache_ts) <= self._yolo_cache_ttl_s:
+                        yolo_output = self._yolo_cache
+                    elif (ts - self._yolo_last_run_ts) >= self._yolo_min_interval_s:
+                        if not self._yolo_failed:
+                            try:
+                                if self._yolo is None:
+                                    self._yolo = YoloTracker()
+                                yolo_output = self._yolo.process(frame, classes=desired_classes or None)
+                                self._yolo_cache = yolo_output
+                                self._yolo_cache_ts = ts
+                                self._yolo_last_run_ts = ts
+                            except Exception as exc:  # noqa: BLE001
+                                # Don't spam: disable YOLO for this worker unless it restarts.
+                                self._yolo_failed = True
+                                logger.warning("YOLO processing disabled for camera_id=%s: %s", self.camera_id, exc)
+                                yolo_output = None
+
+            if yolo_output is not None:
+                for obj in yolo_output.objects:
+                    present_classes.add(obj.label)
+
+            def _has_object(category: str) -> bool:
+                if not category:
+                    return bool(yolo_output and yolo_output.objects)
+                return category in present_classes
+
+            def _filters_ok(rule: DetectionRule) -> bool:
+                for f in rule.filters:
+                    if f.kind == "motion":
+                        if not motion_active:
+                            return False
+                        continue
+                    if f.kind == "object":
+                        if not _has_object(f.category):
+                            return False
+                        continue
+                    # Unsupported filters (HA etc) are not satisfied yet.
+                    return False
+                return True
+
+            motion_emit_tracks = []
+            if motion_result is not None and motion_active:
+                detections = [Detection(bbox01=b, label="motion", conf=motion_result.score) for b in motion_result.bboxes01]
+                motion_emit_tracks = self._tracker.update(detections, ts=ts)
+            else:
                 self._tracker.update([], ts=ts)
-                time.sleep(0.01)
-                continue
 
-            detections = [Detection(bbox01=b, label="motion", conf=motion_result.score) for b in motion_result.bboxes01]
-            tracks = self._tracker.update(detections, ts=ts)
-            if not tracks:
-                time.sleep(0.005)
+            motion_rules = [r for r in rules if r.trigger.kind == "motion"]
+            object_rules = [r for r in rules if r.trigger.kind == "object"]
+
+            if not motion_emit_tracks and not (yolo_output and yolo_output.objects and object_rules):
+                time.sleep(0.01)
                 continue
 
             image_path = self._maybe_capture(frame, ts)
 
-            for tr in tracks:
-                x1, y1, x2, y2 = tr.bbox01
-                u = float(x1 + x2) / 2.0
-                v = float(y2)
-                payload = {
-                    "type": "motion",
-                    "score": motion_result.score,
-                    "threshold": self._motion.threshold,
-                    "latency_ms": motion_result.last_latency_ms,
-                    "fps": motion_result.fps,
-                }
-                base = {
-                    "ts": ts,
-                    "camera_id": self.camera_id,
-                    "tracking_id": tr.id,
-                    "kind": "motion",
-                    "payload": payload,
-                    "image_path": image_path,
-                    "image": {"u": u, "v": v},
-                    "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
-                    "composition_id": None,
-                    "world": None,
-                }
+            # Emit motion events (optionally gated by filters, including object presence).
+            if motion_emit_tracks and motion_result is not None:
+                for tr in motion_emit_tracks:
+                    x1, y1, x2, y2 = tr.bbox01
+                    u = float(x1 + x2) / 2.0
+                    v = float(y2)
+                    payload = {
+                        "type": "motion",
+                        "score": motion_result.score,
+                        "threshold": self._motion.threshold,
+                        "latency_ms": motion_result.last_latency_ms,
+                        "fps": motion_result.fps,
+                    }
+                    base = {
+                        "ts": ts,
+                        "camera_id": self.camera_id,
+                        "tracking_id": tr.id,
+                        "kind": "motion",
+                        "payload": payload,
+                        "image_path": image_path,
+                        "image": {"u": u, "v": v},
+                        "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+                        "composition_id": None,
+                        "world": None,
+                    }
 
-                for rule in motion_rules:
-                    event = dict(base)
-                    event["detection_id"] = rule.id
-                    try:
-                        self._on_event(event)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.debug("failed to publish detection event: %s", exc)
+                    for rule in motion_rules:
+                        if not _filters_ok(rule):
+                            continue
+                        event = dict(base)
+                        event["detection_id"] = rule.id
+                        try:
+                            self._on_event(event)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug("failed to publish detection event: %s", exc)
+
+            # Emit object events (YOLO tracking IDs).
+            if yolo_output is not None and yolo_output.objects and object_rules:
+                now = ts
+                # Garbage-collect old tracks.
+                cutoff = now - 3.0
+                for tid in list(self._yolo_track_state.keys()):
+                    if float(self._yolo_track_state[tid].get("last_ts") or 0.0) < cutoff:
+                        self._yolo_track_state.pop(tid, None)
+
+                for obj in yolo_output.objects:
+                    if obj.track_id is None:
+                        continue
+                    track_key = f"yolo:{self.camera_id}:{obj.track_id}"
+                    state = self._yolo_track_state.get(track_key)
+                    if state is None:
+                        state = {"last_ts": now, "last_emit_ts": 0.0, "last_emit_bbox": None}
+                        self._yolo_track_state[track_key] = state
+                    state["last_ts"] = now
+
+                    # Emit gating (throttle + motion-based dedupe).
+                    last_emit_ts = float(state.get("last_emit_ts") or 0.0)
+                    last_bbox = state.get("last_emit_bbox")
+                    if last_emit_ts and (now - last_emit_ts) < 0.45:
+                        continue
+                    if isinstance(last_bbox, tuple) and len(last_bbox) == 4:
+                        try:
+                            if iou01(last_bbox, obj.bbox01) >= 0.985:
+                                continue
+                        except Exception:
+                            pass
+
+                    x1, y1, x2, y2 = obj.bbox01
+                    u = float(x1 + x2) / 2.0
+                    v = float(y2)
+                    payload = {
+                        "type": "object",
+                        "label": obj.label,
+                        "confidence": obj.confidence,
+                        "model": yolo_output.model,
+                        "tracker": yolo_output.tracker,
+                        "latency_ms": yolo_output.last_latency_ms,
+                        "fps": yolo_output.fps,
+                    }
+
+                    base = {
+                        "ts": ts,
+                        "camera_id": self.camera_id,
+                        "tracking_id": track_key,
+                        "kind": "object",
+                        "payload": payload,
+                        "image_path": image_path,
+                        "image": {"u": u, "v": v},
+                        "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+                        "composition_id": None,
+                        "world": None,
+                    }
+
+                    emitted = False
+                    for rule in object_rules:
+                        if rule.trigger.category and rule.trigger.category != obj.label:
+                            continue
+                        if not _filters_ok(rule):
+                            continue
+                        event = dict(base)
+                        event["detection_id"] = rule.id
+                        emitted = True
+                        try:
+                            self._on_event(event)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug("failed to publish detection event: %s", exc)
+
+                    if emitted:
+                        state["last_emit_ts"] = now
+                        state["last_emit_bbox"] = obj.bbox01
 
 
 class CamerasProcessingRuntime:

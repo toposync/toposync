@@ -16,7 +16,9 @@ When the Toposync backend starts, this extension spins up a background processin
 
 - Each enabled camera with a configured `rtsp_url` is processed continuously
 - Processing keeps running even if no UI is open
-- For now, the only implemented detector is **motion** (frame-diff heuristic)
+- Implemented detectors:
+  - **motion** (frame-diff heuristic)
+  - **object** (YOLO tracking, when installed)
 
 Detections are stored in SQLite under the user `data_dir` and are also streamed as SSE.
 
@@ -37,6 +39,27 @@ uv pip install opencv-python
 ```
 
 Then restart `toposync serve`.
+
+#### Dependency: YOLO (Ultralytics)
+
+Object tracking uses Ultralytics (YOLO + ByteTrack/BOTSort). It is optional because it pulls heavy deps (e.g. Torch).
+
+Install it in the same environment where Toposync runs:
+
+```bash
+uv pip install -e "extensions/cameras[yolo]"
+```
+
+Or directly:
+
+```bash
+uv pip install ultralytics
+```
+
+Then restart `toposync serve`. If you run the remote processing server, install it there too.
+
+If installing `torch` fails for your current Python version, the recommended approach is to run the **remote processing server**
+in a separate environment/machine with a supported Python + Torch build, and point the camera to that server.
 
 ## Tracking + mapping (compositions)
 

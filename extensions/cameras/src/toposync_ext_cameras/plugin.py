@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 import urllib.parse
 from typing import Any
@@ -56,52 +57,78 @@ def _rtsp_url_with_auth(url: str, username: str, password: str) -> str:
     return urllib.parse.urlunparse(parsed._replace(netloc=netloc))
 
 
+def _redact_rtsp_credentials(text: str) -> str:
+    # Redact userinfo in RTSP URLs: rtsp://user:pass@host -> rtsp://***@host
+    return re.sub(r"rtsp://[^@\s]+@", "rtsp://***@", text)
+
+
 async def _ffmpeg_snapshot(rtsp_url: str, *, timeout_ms: int) -> bytes:
     if shutil.which("ffmpeg") is None:
         raise HTTPException(status_code=500, detail="ffmpeg is required to capture RTSP snapshots")
 
     timeout_s = max(1.5, timeout_ms / 1000)
+    timeout_us = int(max(0, timeout_ms) * 1000)
 
-    args = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-rtsp_transport",
-        "tcp",
-        "-i",
-        rtsp_url,
-        "-an",
-        "-sn",
-        "-dn",
-        "-frames:v",
-        "1",
-        "-f",
-        "image2pipe",
-        "-vcodec",
-        "mjpeg",
-        "pipe:1",
+    # Some RTSP servers misbehave when clients negotiate audio+video; for snapshots we only need video.
+    # Also, a few servers only work reliably over UDP even when TCP is requested.
+    attempts: list[tuple[str, list[str]]] = [
+        ("tcp", ["-rtsp_transport", "tcp"]),
+        ("udp", ["-rtsp_transport", "udp"]),
     ]
 
-    proc = await asyncio.create_subprocess_exec(
-        *args,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    last_error = "Failed to capture RTSP snapshot"
 
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s + 2.0)
-    except TimeoutError as exc:
-        proc.kill()
-        await proc.communicate()
-        raise HTTPException(status_code=504, detail="Snapshot timed out") from exc
+    for name, rtsp_args in attempts:
+        args = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-timeout",
+            str(timeout_us),
+            *rtsp_args,
+            "-allowed_media_types",
+            "video",
+            "-i",
+            rtsp_url,
+            "-an",
+            "-sn",
+            "-dn",
+            "-frames:v",
+            "1",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "mjpeg",
+            "pipe:1",
+        ]
 
-    if proc.returncode != 0 or not stdout:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s + 2.0)
+        except TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            last_error = f"Snapshot timed out (transport={name})"
+            continue
+
+        if proc.returncode == 0 and stdout:
+            return stdout
+
         message = (stderr or b"").decode("utf-8", errors="ignore").strip()
-        raise HTTPException(status_code=502, detail=message or "Failed to capture RTSP snapshot")
+        message = _redact_rtsp_credentials(message)
+        if message:
+            last_error = f"{message} (transport={name})"
+        else:
+            last_error = f"Failed to capture RTSP snapshot (transport={name})"
 
-    return stdout
+    raise HTTPException(status_code=502, detail=last_error)
 
 
 class CamerasExtension(BaseExtension):

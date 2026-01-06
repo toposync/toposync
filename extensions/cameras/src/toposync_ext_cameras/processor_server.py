@@ -27,7 +27,7 @@ class ProcessorCamera(BaseModel):
     rtsp_url: str
     username: str = ""
     password: str = ""
-    fps: float = Field(default=15.0, ge=1.0, le=60.0)
+    fps: float = Field(default=5.0, ge=1.0, le=60.0)
     enabled: bool = True
     detections: list[dict[str, Any]] = Field(default_factory=list)
 

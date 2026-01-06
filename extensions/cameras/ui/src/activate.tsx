@@ -37,6 +37,7 @@ type CameraConfig = {
   rtsp_url: string;
   username?: string;
   password?: string;
+  fps: number;
   processing_server_id?: string;
   detections?: CameraDetection[];
 };
@@ -338,6 +339,7 @@ function readCameras(settings: Record<string, unknown>): CameraConfig[] {
       rtsp_url: asString(rec.rtsp_url).trim(),
       username: asString(rec.username).trim(),
       password: asString(rec.password).trim(),
+      fps: Math.max(1, Math.min(60, readFiniteNumber(rec.fps, 5))),
       processing_server_id: asString(rec.processing_server_id).trim(),
       detections: readCameraDetections(rec.detections),
     });
@@ -400,6 +402,8 @@ const translations = {
     "ext.cameras.settings.camera_type": "Connection type",
     "ext.cameras.settings.camera_type_rtsp": "RTSP",
     "ext.cameras.settings.camera_url": "RTSP URL",
+    "ext.cameras.settings.camera_fps": "Processing FPS",
+    "ext.cameras.settings.camera_fps_hint": "How many frames per second to process (5 is usually enough).",
     "ext.cameras.settings.processing_server": "Processing server (optional)",
     "ext.cameras.settings.none": "None",
     "ext.cameras.settings.test": "Test connection",
@@ -464,6 +468,8 @@ const translations = {
     "ext.cameras.settings.camera_type": "Tipo de conexão",
     "ext.cameras.settings.camera_type_rtsp": "RTSP",
     "ext.cameras.settings.camera_url": "URL RTSP",
+    "ext.cameras.settings.camera_fps": "FPS de processamento",
+    "ext.cameras.settings.camera_fps_hint": "Quantos frames por segundo processar (geralmente 5 já é suficiente).",
     "ext.cameras.settings.processing_server": "Servidor de processamento (opcional)",
     "ext.cameras.settings.none": "Nenhum",
     "ext.cameras.settings.test": "Testar conexão",
@@ -863,6 +869,7 @@ function CamerasSettings({
                     rtsp_url: "",
                     username: "",
                     password: "",
+                    fps: 5,
                     processing_server_id: "",
                     detections: [],
                   },
@@ -992,6 +999,26 @@ function CamerasSettings({
                     }}
                     placeholder="rtsp://..."
                   />
+                </div>
+
+                <div className="field">
+                  <label className="label">{t("ext.cameras.settings.camera_fps")}</label>
+                  <input
+                    className="input"
+                    type="number"
+                    min={1}
+                    max={60}
+                    step={1}
+                    value={Number.isFinite(cam.fps) ? cam.fps : 5}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const parsed = raw ? Number(raw) : NaN;
+                      const next = Number.isFinite(parsed) ? Math.max(1, Math.min(60, parsed)) : 5;
+                      setDraftCameras((prev) => prev.map((c) => (c.id === cam.id ? { ...c, fps: next } : c)));
+                      setDirtyCameras(true);
+                    }}
+                  />
+                  <div className="label">{t("ext.cameras.settings.camera_fps_hint")}</div>
                 </div>
 
                 <div className="rowWrap" style={{ gap: 10 }}>

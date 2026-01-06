@@ -16,6 +16,7 @@ When the Toposync backend starts, this extension spins up a background processin
 
 - Each enabled camera with a configured `rtsp_url` is processed continuously
 - Processing keeps running even if no UI is open
+- Each camera can set `fps` (default: 5) to limit capture/processing rate
 - Implemented detectors:
   - **motion** (frame-diff heuristic)
   - **object** (YOLO tracking, when installed)
@@ -99,3 +100,14 @@ Then, in **Settings → Cameras → Processing servers**, set the server URL to 
 - `GET /api/cameras/cameras/{camera_id}/snapshot`
 - `GET /api/cameras/detections/recent` (filters: `camera_id`, `composition_id`, `tracking_id`)
 - `GET /api/cameras/detections/stream` (SSE)
+
+## Notes (RTSP quirks)
+
+Some cameras (notably TP-Link) expose multiple RTSP endpoints, often:
+
+- `/stream1` (main stream)
+- `/stream2` (substream, lower resolution)
+
+If `/stream1` fails with “Operation not permitted” while `/stream2` works, Toposync will try a best-effort fallback to
+`/stream2` for snapshots and local processing. For reliability (and to avoid surprises), prefer configuring the camera
+RTSP URL explicitly with `/stream2`.

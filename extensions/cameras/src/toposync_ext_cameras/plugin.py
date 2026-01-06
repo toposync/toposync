@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import urllib.parse
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -62,7 +63,31 @@ def _redact_rtsp_credentials(text: str) -> str:
     return re.sub(r"rtsp://[^@\s]+@", "rtsp://***@", text)
 
 
-async def _ffmpeg_snapshot(rtsp_url: str, *, timeout_ms: int) -> bytes:
+def _rtsp_stream2_fallback(rtsp_url: str) -> str | None:
+    try:
+        parsed = urllib.parse.urlsplit(rtsp_url)
+    except Exception:
+        return None
+
+    path = parsed.path or ""
+    trailing = "/" if path.endswith("/") else ""
+    stripped = path.rstrip("/")
+    if not stripped.endswith("/stream1"):
+        return None
+
+    base = stripped[: -len("/stream1")]
+    new_path = f"{base}/stream2{trailing}"
+    return urllib.parse.urlunsplit(parsed._replace(path=new_path))
+
+
+@dataclass(frozen=True, slots=True)
+class RtspSnapshotResult:
+    blob: bytes
+    source: str
+    transport: str
+
+
+async def _ffmpeg_snapshot(rtsp_url: str, *, timeout_ms: int) -> RtspSnapshotResult:
     if shutil.which("ffmpeg") is None:
         raise HTTPException(status_code=500, detail="ffmpeg is required to capture RTSP snapshots")
 
@@ -76,57 +101,63 @@ async def _ffmpeg_snapshot(rtsp_url: str, *, timeout_ms: int) -> bytes:
         ("udp", ["-rtsp_transport", "udp"]),
     ]
 
+    url_candidates: list[tuple[str, str]] = [("configured", rtsp_url)]
+    stream2 = _rtsp_stream2_fallback(rtsp_url)
+    if stream2 and stream2 != rtsp_url:
+        url_candidates.append(("fallback_stream2", stream2))
+
     last_error = "Failed to capture RTSP snapshot"
 
-    for name, rtsp_args in attempts:
-        args = [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-timeout",
-            str(timeout_us),
-            *rtsp_args,
-            "-allowed_media_types",
-            "video",
-            "-i",
-            rtsp_url,
-            "-an",
-            "-sn",
-            "-dn",
-            "-frames:v",
-            "1",
-            "-f",
-            "image2pipe",
-            "-vcodec",
-            "mjpeg",
-            "pipe:1",
-        ]
+    for source, url in url_candidates:
+        for name, rtsp_args in attempts:
+            args = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-timeout",
+                str(timeout_us),
+                *rtsp_args,
+                "-allowed_media_types",
+                "video",
+                "-i",
+                url,
+                "-an",
+                "-sn",
+                "-dn",
+                "-frames:v",
+                "1",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "mjpeg",
+                "pipe:1",
+            ]
 
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
 
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s + 2.0)
-        except TimeoutError:
-            proc.kill()
-            await proc.communicate()
-            last_error = f"Snapshot timed out (transport={name})"
-            continue
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s + 2.0)
+            except TimeoutError:
+                proc.kill()
+                await proc.communicate()
+                last_error = f"Snapshot timed out (transport={name}, source={source})"
+                continue
 
-        if proc.returncode == 0 and stdout:
-            return stdout
+            if proc.returncode == 0 and stdout:
+                return RtspSnapshotResult(blob=stdout, source=source, transport=name)
 
-        message = (stderr or b"").decode("utf-8", errors="ignore").strip()
-        message = _redact_rtsp_credentials(message)
-        if message:
-            last_error = f"{message} (transport={name})"
-        else:
-            last_error = f"Failed to capture RTSP snapshot (transport={name})"
+            message = (stderr or b"").decode("utf-8", errors="ignore").strip()
+            message = _redact_rtsp_credentials(message)
+            if message:
+                last_error = f"{message} (transport={name}, source={source})"
+            else:
+                last_error = f"Failed to capture RTSP snapshot (transport={name}, source={source})"
 
     raise HTTPException(status_code=502, detail=last_error)
 
@@ -257,8 +288,13 @@ class CamerasExtension(BaseExtension):
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-            blob = await _ffmpeg_snapshot(url, timeout_ms=body.timeout_ms)
-            return Response(content=blob, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+            result = await _ffmpeg_snapshot(url, timeout_ms=body.timeout_ms)
+            headers = {
+                "Cache-Control": "no-store",
+                "X-Toposync-Snapshot-Source": result.source,
+                "X-Toposync-Snapshot-Transport": result.transport,
+            }
+            return Response(content=result.blob, media_type="image/jpeg", headers=headers)
 
         @app.get("/api/cameras/cameras/{camera_id}/snapshot")
         async def camera_snapshot(request: Request, camera_id: str) -> Response:
@@ -296,5 +332,10 @@ class CamerasExtension(BaseExtension):
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-            blob = await _ffmpeg_snapshot(url, timeout_ms=9000)
-            return Response(content=blob, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+            result = await _ffmpeg_snapshot(url, timeout_ms=9000)
+            headers = {
+                "Cache-Control": "no-store",
+                "X-Toposync-Snapshot-Source": result.source,
+                "X-Toposync-Snapshot-Transport": result.transport,
+            }
+            return Response(content=result.blob, media_type="image/jpeg", headers=headers)

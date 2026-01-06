@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -625,7 +626,10 @@ class CamerasProcessingRuntime:
             rtsp_url = _as_str(rec.get("rtsp_url")).strip()
             username = _as_str(rec.get("username")).strip()
             password = _as_str(rec.get("password")).strip()
-            fps = _as_float(rec.get("fps"), 15.0)
+            fps = _as_float(rec.get("fps"), 5.0)
+            if not math.isfinite(fps):
+                fps = 5.0
+            fps = max(1.0, min(60.0, fps))
             processing_server_id = _as_str(rec.get("processing_server_id")).strip()
             detections = _parse_detections(rec.get("detections"))
             out[cid] = CameraSpec(

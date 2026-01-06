@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
+import urllib.parse
 from typing import Any
 
 
@@ -9,6 +11,25 @@ try:
     import cv2  # type: ignore
 except Exception:  # noqa: BLE001
     cv2 = None  # type: ignore[assignment]
+
+logger = logging.getLogger(__name__)
+
+
+def _rtsp_stream2_fallback(rtsp_url: str) -> str | None:
+    try:
+        parsed = urllib.parse.urlsplit(rtsp_url)
+    except Exception:
+        return None
+
+    path = parsed.path or ""
+    trailing = "/" if path.endswith("/") else ""
+    stripped = path.rstrip("/")
+    if not stripped.endswith("/stream1"):
+        return None
+
+    base = stripped[: -len("/stream1")]
+    new_path = f"{base}/stream2{trailing}"
+    return urllib.parse.urlunsplit(parsed._replace(path=new_path))
 
 
 class FrameGrabber:
@@ -19,8 +40,30 @@ class FrameGrabber:
                 "`uv pip install opencv-python-headless` (recommended) or `uv pip install opencv-python` (then restart Toposync)."
             )
 
+        self.original_rtsp_url = rtsp_url
         self.rtsp_url = rtsp_url
         self.cap = cv2.VideoCapture(rtsp_url)
+        if not self.cap.isOpened():
+            fallback = _rtsp_stream2_fallback(rtsp_url)
+            if fallback:
+                cap2 = cv2.VideoCapture(fallback)
+                if cap2.isOpened():
+                    try:
+                        self.cap.release()
+                    except Exception:
+                        pass
+                    self.cap = cap2
+                    self.rtsp_url = fallback
+                    logger.warning(
+                        "RTSP stream1 failed to open; falling back to stream2 (substream). "
+                        "Update the camera rtsp_url to /stream2 if you want this permanently."
+                    )
+                else:
+                    try:
+                        cap2.release()
+                    except Exception:
+                        pass
+
         try:
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:
@@ -172,7 +215,8 @@ class FrameGrabber:
 
     def stop(self) -> None:
         self.stopped.set()
-        self.thread.join(timeout=1.0)
+        if self.thread.is_alive():
+            self.thread.join(timeout=1.0)
         try:
             self.cap.release()
         except Exception:

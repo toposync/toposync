@@ -8,6 +8,7 @@ import type {
   Notification,
   NotificationRenderer,
   SettingsPanel,
+  ThemeDefinition,
   TopoSyncHost,
   Vector3,
   ViewSettings,
@@ -31,6 +32,7 @@ import {
 import type { AppSettings } from "../util/api";
 import { i18n, resolveLocalizedString } from "../util/i18n";
 import { loadRemoteActivate } from "../util/moduleFederation";
+import { applyTheme, loadThemeId, saveThemeId } from "../util/theme";
 import { SettingsModal } from "./SettingsModal";
 import { Viewport2D } from "./Viewport2D";
 import { CompositionEditorScreen } from "./screens/CompositionEditorScreen";
@@ -175,6 +177,7 @@ export function App(): React.ReactElement {
   const [notificationRenderersById, setNotificationRenderersById] = useState<Record<string, NotificationRenderer>>({});
   const [editorToolsById, setEditorToolsById] = useState<Record<string, EditorTool>>({});
   const [settingsPanelsById, setSettingsPanelsById] = useState<Record<string, SettingsPanel>>({});
+  const [themesById, setThemesById] = useState<Record<string, ThemeDefinition>>({});
   const [notifications] = useState<Notification[]>([]);
   const [composition, setComposition] = useState<Composition>(() => defaultComposition());
   const compositionRef = useRef<Composition>(composition);
@@ -183,6 +186,7 @@ export function App(): React.ReactElement {
   const [compositionLoaded, setCompositionLoaded] = useState(false);
   const [backendAvailable, setBackendAvailable] = useState(false);
   const [wallHeightPreset, setWallHeightPreset] = useState<WallHeightPreset>(() => loadWallHeightPreset());
+  const [themeId, setThemeId] = useState<string>(() => loadThemeId());
   const [settings, setSettings] = useState<AppSettings>({ core: {}, extensions: {} });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
@@ -244,6 +248,26 @@ export function App(): React.ReactElement {
     saveWallHeightPreset(wallHeightPreset);
   }, [wallHeightPreset]);
 
+  useEffect(() => {
+    saveThemeId(themeId);
+  }, [themeId]);
+
+  useEffect(() => {
+    const theme = themeId === "default" ? null : themesById[themeId] ?? null;
+    applyTheme(theme);
+  }, [themeId, themesById]);
+
+  const themeOptions = useMemo<ThemeDefinition[]>(() => {
+    return [
+      {
+        id: "default",
+        name: { key: "core.ui.settings.theme.default", fallback: "Default" },
+        description: { key: "core.ui.settings.theme.default_desc", fallback: "Toposync default theme." },
+      },
+      ...Object.values(themesById),
+    ];
+  }, [themesById]);
+
   const elementTypesRef = useRef<Record<string, ElementType>>(elementTypesById);
   useLayoutEffect(() => {
     elementTypesRef.current = elementTypesById;
@@ -298,6 +322,9 @@ export function App(): React.ReactElement {
       },
       registerSettingsPanel(panel) {
         setSettingsPanelsById((prev) => ({ ...prev, [panel.id]: panel }));
+      },
+      registerTheme(theme) {
+        setThemesById((prev) => ({ ...prev, [theme.id]: theme }));
       },
       api: {
         emitEvent,
@@ -741,6 +768,9 @@ export function App(): React.ReactElement {
         backendAvailable={backendAvailable}
         api={host.api}
         panels={Object.values(settingsPanelsById)}
+        themes={themeOptions}
+        themeId={themeId}
+        onSetThemeId={setThemeId}
         settings={settings}
         onPatchExtensionSettings={updateExtensionSettings}
         onClose={() => setIsSettingsOpen(false)}

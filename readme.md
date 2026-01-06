@@ -9,7 +9,7 @@ O objetivo dessa base é resolver o “maior nó”: **extensões com backend Py
 - **Backend (Python)**: host de extensões (entry points), event bus async (com prevenção/substituição), service registry e servidor de assets estáticos das extensões.
 - **Frontend (React/ThreeJS)**: host que consulta `/api/extensions` e carrega `remoteEntry.js` de cada extensão em runtime (Module Federation).
 - **Extensão = pacote Python**: `extension.json` + entry point + `static/remoteEntry.js` embutido no wheel.
-- **Contrato TS (host)**: extensões registram `element types` (objeto 3D + modais de ação/edição) e `notification renderers` (ver `frontend/packages/plugin-api/index.d.ts`).
+- **Contrato TS (host)**: extensões registram `element types` (objeto 3D + modais de ação/edição), `notification renderers`, `settings panels` e **temas** (ver `frontend/packages/plugin-api/index.d.ts`).
 
 ## Estrutura do repo
 
@@ -18,7 +18,7 @@ O objetivo dessa base é resolver o “maior nó”: **extensões com backend Py
 - `extensions/structural`: extensão “first-party” (paredes/áreas: ferramentas 2D + render 3D)
 - `extensions/models`: extensão “first-party” (importar GLB/GLTF + prévia 2D + render 3D)
 - `extensions/home_assistant`: extensão “first-party” (scaffold: configurar servidores Home Assistant)
-- `extensions/cameras`: extensão “first-party” (RTSP snapshots + scaffold de servidores de processamento)
+- `extensions/cameras`: extensão “first-party” (RTSP snapshots + processamento local/remoto + detecções)
 
 ## Rodar (dev)
 
@@ -71,6 +71,32 @@ Abra `http://localhost:5173`, clique em **Editar**, use as ferramentas de **Pare
 - Alterou código Python do core ou da extensão → reinicie `uv run toposync serve` (use o mesmo `--data-dir`, se estiver usando)
 - Alterou UI do host → o `webpack-dev-server` recarrega (HMR)
 - Alterou UI de uma extensão → rode `npm --workspace <ext-ui> run build` (ou use `--watch`) e dê refresh
+
+## Temas (via extensões)
+
+Extensões podem registrar temas chamando `host.registerTheme()` no `activate(host)`. Um tema é basicamente um conjunto de overrides de CSS variables (ex.: `--bg`, `--accent`), aplicado no `:root`.
+
+O tema ativo é escolhido em **Configurações → Base → Tema** e fica salvo no `localStorage`.
+
+## Testes E2E (Playwright)
+
+1) Instalar dependências Node:
+
+```bash
+npm install
+```
+
+2) Instalar o browser do Playwright (1x):
+
+```bash
+npx playwright install chromium
+```
+
+3) Rodar:
+
+```bash
+npm run test:e2e
+```
 
 ## Build (produção / distribuição)
 

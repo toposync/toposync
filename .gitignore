@@ -17,3 +17,7 @@ build/
 
 *.ignore.md
 ignore/
+
+# Playwright
+test-results/
+playwright-report/

@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import urllib.parse
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
+from starlette.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from toposync.extensions import BaseExtension
 from toposync.runtime.config_store import ConfigStore
 from toposync.runtime.event_bus import EventBus
 from toposync.runtime.services import ServiceRegistry
+
+from .processing.runtime import CamerasProcessingRuntime
 
 
 EXTENSION_ID = "com.toposync.cameras"
@@ -116,6 +120,24 @@ class CamerasExtension(BaseExtension):
             ext = settings.extensions.get(EXTENSION_ID, {})
             return ext if isinstance(ext, dict) else {}
 
+        config_store = getattr(app.state, "config_store", None)
+        if isinstance(config_store, ConfigStore):
+            runtime = CamerasProcessingRuntime(
+                config_store=config_store,
+                extension_id=EXTENSION_ID,
+                data_dir=config_store.paths.data_dir,
+                files_dir=config_store.paths.files_dir,
+            )
+            runtime.start()
+
+            async def _stop_runtime() -> None:
+                await runtime.stop()
+
+            app.add_event_handler("shutdown", _stop_runtime)
+            app.state.cameras_processing = runtime
+        else:
+            runtime = None
+
         @app.get("/api/cameras/index")
         async def cameras_index(request: Request) -> dict[str, Any]:
             ext = await _read_ext_settings(request)
@@ -157,6 +179,41 @@ class CamerasExtension(BaseExtension):
                     )
 
             return {"processing_servers": servers, "cameras": cameras}
+
+        @app.get("/api/cameras/detections/recent")
+        async def recent_detections(request: Request, camera_id: str | None = None, limit: int = 200) -> dict[str, Any]:
+            if runtime is None:
+                return {"events": []}
+            cam = (camera_id or "").strip() or None
+            return {"events": runtime.db.list_events(camera_id=cam, limit=limit)}
+
+        @app.get("/api/cameras/processing/status")
+        async def processing_status() -> dict[str, Any]:
+            if runtime is None:
+                return {"local_workers": [], "remote_servers": []}
+            return runtime.status()
+
+        @app.get("/api/cameras/detections/stream")
+        async def detections_stream(request: Request) -> StreamingResponse:
+            if runtime is None:
+                async def empty_stream():
+                    yield "event: ready\ndata: {}\n\n"
+                return StreamingResponse(empty_stream(), media_type="text/event-stream")
+
+            q = runtime.broadcaster.subscribe()
+
+            async def gen():
+                try:
+                    yield "retry: 1000\n\n"
+                    while True:
+                        event = await q.get()
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                except asyncio.CancelledError:
+                    raise
+                finally:
+                    runtime.broadcaster.unsubscribe(q)
+
+            return StreamingResponse(gen(), media_type="text/event-stream")
 
         @app.post("/api/cameras/rtsp/snapshot")
         async def rtsp_snapshot(body: RtspSnapshotRequest) -> Response:

@@ -76,6 +76,14 @@ export type SettingsPanel = {
   }) => import("react").ReactNode;
 };
 
+export type ThemeDefinition = {
+  id: string;
+  name: LocalizedString;
+  description?: LocalizedString;
+  vars?: Record<string, string>;
+  css?: string;
+};
+
 export type EmitEventResponse = {
   payload: unknown;
   result: any;
@@ -203,6 +211,7 @@ export type TopoSyncHost = {
   registerNotificationRenderer: (renderer: NotificationRenderer) => void;
   registerEditorTool: (tool: EditorTool) => void;
   registerSettingsPanel: (panel: SettingsPanel) => void;
+  registerTheme: (theme: ThemeDefinition) => void;
   api: HostApi;
   i18n: HostI18n;
   ui: HostUi;

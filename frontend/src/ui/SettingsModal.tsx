@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-import type { HostApi, SettingsPanel } from "@toposync/plugin-api";
+import type { HostApi, SettingsPanel, ThemeDefinition } from "@toposync/plugin-api";
 
 import type { AppSettings } from "../util/api";
 import { i18n, resolveLocalizedString } from "../util/i18n";
@@ -13,6 +13,9 @@ type Props = {
   backendAvailable: boolean;
   api: HostApi;
   panels: SettingsPanel[];
+  themes: ThemeDefinition[];
+  themeId: string;
+  onSetThemeId: (themeId: string) => void;
   settings: AppSettings;
   onPatchExtensionSettings: (extensionId: string, patch: Record<string, unknown>) => void;
   onClose: () => void;
@@ -26,6 +29,9 @@ export function SettingsModal({
   backendAvailable,
   api,
   panels,
+  themes,
+  themeId,
+  onSetThemeId,
   settings,
   onPatchExtensionSettings,
   onClose,
@@ -100,6 +106,32 @@ export function SettingsModal({
               >
                 <div className="choiceTitle">{opt.title}</div>
                 <div className="choiceDesc">{opt.desc}</div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="sectionDivider" />
+
+        <div className="modalSectionTitle">{t("core.ui.settings.theme")}</div>
+        <div className="choiceList">
+          {themes.map((opt) => {
+            const selected = themeId === opt.id;
+            const title = resolveLocalizedString(opt.name);
+            const desc = opt.description ? resolveLocalizedString(opt.description) : "";
+            return (
+              <div
+                key={opt.id}
+                className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                role="button"
+                tabIndex={0}
+                onClick={() => onSetThemeId(opt.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") onSetThemeId(opt.id);
+                }}
+              >
+                <div className="choiceTitle">{title}</div>
+                {desc ? <div className="choiceDesc">{desc}</div> : null}
               </div>
             );
           })}

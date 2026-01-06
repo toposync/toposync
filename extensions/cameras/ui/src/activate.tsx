@@ -427,6 +427,8 @@ const translations = {
     "ext.cameras.action.no_camera": "No camera selected.",
     "ext.cameras.action.refresh": "Refresh snapshot",
     "ext.cameras.action.loading": "Loading…",
+    "ext.cameras.theme.neon_name": "Neon (blue)",
+    "ext.cameras.theme.neon_desc": "A cool neon-blue variant for the whole UI.",
     "ext.cameras.detections.title": "Detections",
     "ext.cameras.detections.help": "Each rule has a trigger and optional filters. Filters help avoid expensive object detections when they are not needed (future).",
     "ext.cameras.detections.list": "Rules",
@@ -489,6 +491,8 @@ const translations = {
     "ext.cameras.action.no_camera": "Nenhuma câmera selecionada.",
     "ext.cameras.action.refresh": "Atualizar snapshot",
     "ext.cameras.action.loading": "Carregando...",
+    "ext.cameras.theme.neon_name": "Neon (azul)",
+    "ext.cameras.theme.neon_desc": "Uma variação neon azul para toda a interface.",
     "ext.cameras.detections.title": "Detecções",
     "ext.cameras.detections.help": "Cada regra tem um gatilho e filtros opcionais. Filtros ajudam a evitar detecções pesadas de objetos quando não são necessárias (futuro).",
     "ext.cameras.detections.list": "Regras",
@@ -509,6 +513,20 @@ const translations = {
 
 export function activate(host: TopoSyncHost): void {
   host.i18n.registerTranslations(translations);
+  host.registerTheme({
+    id: "com.toposync.theme.neon_blue",
+    name: { key: "ext.cameras.theme.neon_name", fallback: "Neon (blue)" },
+    description: { key: "ext.cameras.theme.neon_desc" },
+    vars: {
+      "--bg": "#050814",
+      "--panel": "rgba(8, 14, 30, 0.74)",
+      "--panelSolid": "#080e1e",
+      "--panel2": "rgba(10, 18, 40, 0.90)",
+      "--accent": "#38bdf8",
+      "--glassBlur": "18px",
+      "--glassSaturate": "1.25",
+    },
+  });
   host.registerSettingsPanel(settingsPanel());
   host.registerElementType(cameraElementType(host));
   host.registerEditorTool(addCameraTool(host.i18n));

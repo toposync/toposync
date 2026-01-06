@@ -57,6 +57,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.settings.language.pt_desc": "Portuguese interface.",
     "core.ui.settings.language.en": "English",
     "core.ui.settings.language.en_desc": "English interface.",
+    "core.ui.settings.theme": "Theme",
+    "core.ui.settings.theme.default": "Default",
+    "core.ui.settings.theme.default_desc": "Toposync default theme.",
 
     "core.ui.wall_height.low": "Low",
     "core.ui.wall_height.low_desc": "Low walls for quick overview.",
@@ -149,6 +152,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.settings.language.pt_desc": "Interface em português.",
     "core.ui.settings.language.en": "English",
     "core.ui.settings.language.en_desc": "Interface in English.",
+    "core.ui.settings.theme": "Tema",
+    "core.ui.settings.theme.default": "Padrão",
+    "core.ui.settings.theme.default_desc": "Tema padrão do Toposync.",
 
     "core.ui.wall_height.low": "Baixa",
     "core.ui.wall_height.low_desc": "Baixa para facilitar a visualização.",

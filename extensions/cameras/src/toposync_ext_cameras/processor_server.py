@@ -107,9 +107,7 @@ class ProcessorRuntime:
             try:
                 worker = CameraWorker(
                     spec=spec,
-                    mapper=None,
                     files_dir=self._files_dir,
-                    db=self.db,
                     on_event=self._publish_from_thread,
                 )
             except Exception as exc:
@@ -122,7 +120,75 @@ class ProcessorRuntime:
         loop = self._loop
         if loop is None:
             return
-        loop.call_soon_threadsafe(self.broadcaster.publish, event)
+        loop.call_soon_threadsafe(self._ingest_event, event)
+
+    def _ingest_event(self, event: dict[str, Any]) -> None:
+        if not isinstance(event, dict):
+            return
+        camera_id = str(event.get("camera_id") or "").strip()
+        kind = str(event.get("kind") or "").strip()
+        if not camera_id or not kind:
+            return
+
+        try:
+            ts = float(event.get("ts") or 0.0) or None
+        except Exception:
+            ts = None
+
+        detection_id = str(event.get("detection_id") or "").strip() or None
+        tracking_id = str(event.get("tracking_id") or "").strip() or None
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        image_path = str(event.get("image_path") or "").strip() or None
+
+        image = event.get("image") if isinstance(event.get("image"), dict) else {}
+        image_u = image.get("u")
+        image_v = image.get("v")
+        try:
+            image_u_f = float(image_u) if image_u is not None else None
+            image_v_f = float(image_v) if image_v is not None else None
+        except Exception:
+            image_u_f = None
+            image_v_f = None
+
+        bbox = event.get("bbox") if isinstance(event.get("bbox"), dict) else {}
+        bbox01 = None
+        try:
+            if all(k in bbox for k in ("x1", "y1", "x2", "y2")):
+                bbox01 = (float(bbox["x1"]), float(bbox["y1"]), float(bbox["x2"]), float(bbox["y2"]))
+        except Exception:
+            bbox01 = None
+
+        world = event.get("world") if isinstance(event.get("world"), dict) else None
+        world_x = world_z = None
+        if world and world.get("x") is not None and world.get("z") is not None:
+            try:
+                world_x = float(world.get("x"))
+                world_z = float(world.get("z"))
+            except Exception:
+                world_x = world_z = None
+
+        composition_id = str(event.get("composition_id") or "").strip() or None
+
+        try:
+            self.db.insert_event(
+                camera_id=camera_id,
+                composition_id=composition_id,
+                tracking_id=tracking_id,
+                detection_id=detection_id,
+                kind=kind,
+                payload=payload,
+                ts=ts,
+                image_path=image_path,
+                image_u=image_u_f,
+                image_v=image_v_f,
+                bbox01=bbox01,
+                world_x=world_x,
+                world_z=world_z,
+            )
+        except Exception:
+            pass
+
+        self.broadcaster.publish(event)
 
 
 def create_app(*, data_dir: Path, files_dir: Path) -> FastAPI:
@@ -147,9 +213,16 @@ def create_app(*, data_dir: Path, files_dir: Path) -> FastAPI:
         return {"ok": True, "cameras": len(body.cameras)}
 
     @app.get("/api/processor/detections/recent")
-    async def recent(camera_id: str | None = None, limit: int = 200) -> dict[str, Any]:
+    async def recent(
+        camera_id: str | None = None,
+        composition_id: str | None = None,
+        tracking_id: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
         cam = (camera_id or "").strip() or None
-        return {"events": runtime.db.list_events(camera_id=cam, limit=limit)}
+        comp = (composition_id or "").strip() or None
+        track = (tracking_id or "").strip() or None
+        return {"events": runtime.db.list_events(camera_id=cam, composition_id=comp, tracking_id=track, limit=limit)}
 
     @app.get("/api/processor/detections/stream")
     async def stream(request: Request) -> StreamingResponse:
@@ -199,4 +272,3 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

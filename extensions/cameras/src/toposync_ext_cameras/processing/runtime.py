@@ -16,6 +16,7 @@ from .mapping import ControlPointMapper, ControlPointPair
 from .motion import MotionDetector
 from .remote import RemoteProcessorClient, RemoteProcessorServer
 from .tracking_db import TrackingDatabase
+from .tracker import BBoxTracker, Detection
 
 
 logger = logging.getLogger(__name__)
@@ -137,9 +138,7 @@ class CameraWorker:
         self,
         *,
         spec: CameraSpec,
-        mapper: ControlPointMapper | None,
         files_dir: Path,
-        db: TrackingDatabase,
         on_event: callable,
         motion_threshold: float = 0.010,
     ) -> None:
@@ -147,9 +146,7 @@ class CameraWorker:
         self._spec = spec
         self._signature = spec.signature()
         self._files_dir = files_dir
-        self._db = db
         self._on_event = on_event
-        self._mapper = mapper
         self._last_processed_ts = 0.0
         self._last_capture_ts = 0.0
         self._capture_min_interval_s = 2.0
@@ -157,6 +154,7 @@ class CameraWorker:
         url = _safe_rtsp_url_with_auth(spec.rtsp_url, spec.username, spec.password)
         self._grabber = FrameGrabber(url, target_fps=spec.fps).start()
         self._motion = MotionDetector(threshold=motion_threshold)
+        self._tracker = BBoxTracker()
 
         import threading
 
@@ -167,9 +165,6 @@ class CameraWorker:
     @property
     def signature(self) -> str:
         return self._signature
-
-    def update_mapper(self, mapper: ControlPointMapper | None) -> None:
-        self._mapper = mapper
 
     def stop(self) -> None:
         self._stopped.set()
@@ -210,22 +205,36 @@ class CameraWorker:
                 continue
             self._last_processed_ts = ts
 
-            motion_result = None
-            for rule in self._spec.detections:
-                if rule.trigger.kind != "motion":
-                    continue
-                if motion_result is None:
-                    try:
-                        motion_result = self._motion.process(frame)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.debug("motion processing failed for camera=%s: %s", self.camera_id, exc)
-                        motion_result = None
-                        break
-                if not motion_result.active:
-                    continue
+            motion_rules = [r for r in self._spec.detections if r.trigger.kind == "motion"]
+            if not motion_rules:
+                # No configured detector wants motion events yet.
+                time.sleep(0.02)
+                continue
 
-                image_path = self._maybe_capture(frame, ts)
+            try:
+                motion_result = self._motion.process(frame)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("motion processing failed for camera=%s: %s", self.camera_id, exc)
+                time.sleep(0.02)
+                continue
 
+            if not motion_result.active:
+                self._tracker.update([], ts=ts)
+                time.sleep(0.01)
+                continue
+
+            detections = [Detection(bbox01=b, label="motion", conf=motion_result.score) for b in motion_result.bboxes01]
+            tracks = self._tracker.update(detections, ts=ts)
+            if not tracks:
+                time.sleep(0.005)
+                continue
+
+            image_path = self._maybe_capture(frame, ts)
+
+            for tr in tracks:
+                x1, y1, x2, y2 = tr.bbox01
+                u = float(x1 + x2) / 2.0
+                v = float(y2)
                 payload = {
                     "type": "motion",
                     "score": motion_result.score,
@@ -233,32 +242,26 @@ class CameraWorker:
                     "latency_ms": motion_result.last_latency_ms,
                     "fps": motion_result.fps,
                 }
-                event = {
+                base = {
                     "ts": ts,
                     "camera_id": self.camera_id,
-                    "detection_id": rule.id,
+                    "tracking_id": tr.id,
                     "kind": "motion",
                     "payload": payload,
                     "image_path": image_path,
+                    "image": {"u": u, "v": v},
+                    "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+                    "composition_id": None,
                     "world": None,
                 }
 
-                try:
-                    self._db.insert_event(
-                        camera_id=self.camera_id,
-                        kind="motion",
-                        payload=payload,
-                        ts=ts,
-                        detection_id=rule.id,
-                        image_path=image_path,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("failed to persist detection event: %s", exc)
-
-                try:
-                    self._on_event(event)
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("failed to publish detection event: %s", exc)
+                for rule in motion_rules:
+                    event = dict(base)
+                    event["detection_id"] = rule.id
+                    try:
+                        self._on_event(event)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("failed to publish detection event: %s", exc)
 
 
 class CamerasProcessingRuntime:
@@ -287,6 +290,7 @@ class CamerasProcessingRuntime:
         self._remote_clients: dict[str, RemoteProcessorClient] = {}
         self._opencv_available = _opencv_available()
         self._logged_missing_opencv = False
+        self._camera_mappers: dict[str, list[tuple[str, ControlPointMapper]]] = {}
 
     def start(self) -> None:
         if self._task is not None:
@@ -323,7 +327,94 @@ class CamerasProcessingRuntime:
         loop = self._loop
         if loop is None:
             return
-        loop.call_soon_threadsafe(self.broadcaster.publish, event)
+        loop.call_soon_threadsafe(self._ingest_event, event)
+
+    def _ingest_event(self, event: dict[str, Any]) -> None:
+        # Map to compositions and persist.
+        camera_id = str(event.get("camera_id") or "").strip()
+        kind = str(event.get("kind") or "").strip()
+        if not camera_id or not kind:
+            return
+
+        try:
+            ts = float(event.get("ts") or 0.0) or time.time()
+        except Exception:
+            ts = time.time()
+
+        detection_id = str(event.get("detection_id") or "").strip() or None
+        tracking_id = str(event.get("tracking_id") or "").strip() or None
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        image_path = str(event.get("image_path") or "").strip() or None
+
+        image = event.get("image") if isinstance(event.get("image"), dict) else {}
+        image_u = image.get("u")
+        image_v = image.get("v")
+        try:
+            image_u_f = float(image_u) if image_u is not None else None
+            image_v_f = float(image_v) if image_v is not None else None
+        except Exception:
+            image_u_f = None
+            image_v_f = None
+
+        bbox = event.get("bbox") if isinstance(event.get("bbox"), dict) else {}
+        bbox01 = None
+        try:
+            if all(k in bbox for k in ("x1", "y1", "x2", "y2")):
+                bbox01 = (float(bbox["x1"]), float(bbox["y1"]), float(bbox["x2"]), float(bbox["y2"]))
+        except Exception:
+            bbox01 = None
+
+        explicit_comp = str(event.get("composition_id") or "").strip() or None
+
+        mappers = self._camera_mappers.get(camera_id) or []
+        entries: list[tuple[str | None, ControlPointMapper | None]] = []
+        if explicit_comp:
+            mapper = None
+            for cid, m in mappers:
+                if cid == explicit_comp:
+                    mapper = m
+                    break
+            entries = [(explicit_comp, mapper)]
+        elif mappers:
+            entries = [(cid, m) for (cid, m) in mappers]
+        else:
+            entries = [(None, None)]
+
+        for comp_id, mapper in entries:
+            world = None
+            world_x = world_z = None
+            if mapper is not None and image_u_f is not None and image_v_f is not None:
+                try:
+                    mapped = mapper.map(image_u_f, image_v_f)
+                except Exception:
+                    mapped = None
+                if mapped is not None:
+                    world_x, world_z = float(mapped[0]), float(mapped[1])
+                    world = {"x": world_x, "z": world_z}
+
+            try:
+                self.db.insert_event(
+                    camera_id=camera_id,
+                    composition_id=comp_id,
+                    tracking_id=tracking_id,
+                    detection_id=detection_id,
+                    kind=kind,
+                    payload=payload,
+                    ts=ts,
+                    image_path=image_path,
+                    image_u=image_u_f,
+                    image_v=image_v_f,
+                    bbox01=bbox01,
+                    world_x=world_x,
+                    world_z=world_z,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("failed to persist detection event: %s", exc)
+
+            enriched = dict(event)
+            enriched["composition_id"] = comp_id
+            enriched["world"] = world
+            self.broadcaster.publish(enriched)
 
     def status(self) -> dict[str, Any]:
         return {
@@ -394,36 +485,37 @@ class CamerasProcessingRuntime:
             out[sid] = RemoteProcessorServer(id=sid, url=url)
         return out
 
-    async def _load_control_point_mappers(self) -> dict[str, ControlPointMapper | None]:
-        try:
-            composition: Composition = await self._config_store.get_active_composition()
-        except Exception:
-            return {}
+    async def _load_control_point_mappers(self) -> dict[str, list[tuple[str, ControlPointMapper]]]:
+        cfg = await self._config_store.get_config()
+        out: dict[str, list[tuple[str, ControlPointMapper]]] = {}
 
-        # Prefer the first element that contains a complete set for a camera_id.
-        out: dict[str, ControlPointMapper | None] = {}
+        for comp in cfg.compositions:
+            seen: set[str] = set()
+            for el in comp.elements:
+                props = el.props if isinstance(el.props, dict) else {}
+                camera_id = _as_str(props.get("camera_id")).strip()
+                if not camera_id or camera_id in seen:
+                    continue
+                raw_points = props.get("control_points")
+                pairs = _parse_control_point_pairs(raw_points)
+                if len(pairs) < 4:
+                    continue
+                try:
+                    mapper = ControlPointMapper(pairs)
+                except Exception:
+                    continue
+                out.setdefault(camera_id, []).append((comp.id, mapper))
+                seen.add(camera_id)
 
-        for el in composition.elements:
-            props = el.props if isinstance(el.props, dict) else {}
-            camera_id = _as_str(props.get("camera_id")).strip()
-            if not camera_id or camera_id in out:
-                continue
-            raw_points = props.get("control_points")
-            pairs = _parse_control_point_pairs(raw_points)
-            if len(pairs) < 4:
-                continue
-            try:
-                out[camera_id] = ControlPointMapper(pairs)
-            except Exception:
-                continue
         return out
 
     def _reconcile(
         self,
         specs: dict[str, CameraSpec],
         servers: dict[str, RemoteProcessorServer],
-        mappers: dict[str, ControlPointMapper | None],
+        mappers: dict[str, list[tuple[str, ControlPointMapper]]],
     ) -> None:
+        self._camera_mappers = mappers
         remote_groups: dict[str, list[CameraSpec]] = {}
         desired: dict[str, CameraSpec] = {}
         for cid, spec in specs.items():
@@ -468,7 +560,6 @@ class CamerasProcessingRuntime:
         for cid, spec in desired.items():
             sig = spec.signature()
             if cid in self._workers and self._worker_sigs.get(cid) == sig:
-                self._workers[cid].update_mapper(mappers.get(cid))
                 continue
             if cid in self._workers:
                 try:
@@ -481,9 +572,7 @@ class CamerasProcessingRuntime:
             try:
                 worker = CameraWorker(
                     spec=spec,
-                    mapper=mappers.get(cid),
                     files_dir=self._files_dir,
-                    db=self.db,
                     on_event=self._publish_from_thread,
                 )
             except Exception as exc:
@@ -508,8 +597,7 @@ class CamerasProcessingRuntime:
                     asyncio.create_task(client.stop())
                 client = RemoteProcessorClient(
                     server=server,
-                    broadcaster=self.broadcaster,
-                    db=self.db,
+                    on_event=self._ingest_event,
                     stop_event=self._stopped,
                 )
                 client.start()

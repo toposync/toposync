@@ -38,6 +38,21 @@ uv pip install opencv-python
 
 Then restart `toposync serve`.
 
+## Tracking + mapping (compositions)
+
+The processor emits **events** that can include:
+
+- `tracking_id`: groups multiple occurrences of the same moving blob/object across frames
+- `bbox`: normalized bounding box (`x1,y1,x2,y2` in 0..1)
+- `image`: a normalized point used for mapping (`u,v` in 0..1), currently the bbox bottom-center
+
+If a camera is placed in one or more **compositions** with at least 4 control points, Toposync will:
+
+- map `image(u,v)` → `world(x,z)` for **each composition that references the camera**
+- persist events with `composition_id` + `world`
+
+This is important when the same physical camera is reused across floors/compositions.
+
 ### Remote (processing server)
 
 If a camera is assigned to a **processing server**, Toposync will:
@@ -59,5 +74,5 @@ Then, in **Settings → Cameras → Processing servers**, set the server URL to 
 - `GET /api/cameras/index`
 - `POST /api/cameras/rtsp/snapshot`
 - `GET /api/cameras/cameras/{camera_id}/snapshot`
-- `GET /api/cameras/detections/recent`
+- `GET /api/cameras/detections/recent` (filters: `camera_id`, `composition_id`, `tracking_id`)
 - `GET /api/cameras/detections/stream` (SSE)

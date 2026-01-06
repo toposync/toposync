@@ -181,11 +181,19 @@ class CamerasExtension(BaseExtension):
             return {"processing_servers": servers, "cameras": cameras}
 
         @app.get("/api/cameras/detections/recent")
-        async def recent_detections(request: Request, camera_id: str | None = None, limit: int = 200) -> dict[str, Any]:
+        async def recent_detections(
+            request: Request,
+            camera_id: str | None = None,
+            composition_id: str | None = None,
+            tracking_id: str | None = None,
+            limit: int = 200,
+        ) -> dict[str, Any]:
             if runtime is None:
                 return {"events": []}
             cam = (camera_id or "").strip() or None
-            return {"events": runtime.db.list_events(camera_id=cam, limit=limit)}
+            comp = (composition_id or "").strip() or None
+            track = (tracking_id or "").strip() or None
+            return {"events": runtime.db.list_events(camera_id=cam, composition_id=comp, tracking_id=track, limit=limit)}
 
         @app.get("/api/cameras/processing/status")
         async def processing_status() -> dict[str, Any]:

@@ -8,10 +8,6 @@ from typing import Any
 
 import httpx
 
-from .events import EventBroadcaster
-from .tracking_db import TrackingDatabase
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -26,13 +22,11 @@ class RemoteProcessorClient:
         self,
         *,
         server: RemoteProcessorServer,
-        broadcaster: EventBroadcaster,
-        db: TrackingDatabase,
+        on_event: callable,
         stop_event: asyncio.Event,
     ) -> None:
         self.server = server
-        self._broadcaster = broadcaster
-        self._db = db
+        self._on_event = on_event
         self._stop_event = stop_event
 
         self._desired_config_json: str | None = None
@@ -104,38 +98,11 @@ class RemoteProcessorClient:
                     reconnect_delay = min(10.0, reconnect_delay * 1.6)
 
     def _handle_event(self, event: dict[str, Any]) -> None:
-        try:
-            ts = float(event.get("ts") or 0.0) or None
-            camera_id = str(event.get("camera_id") or "").strip()
-            kind = str(event.get("kind") or "").strip()
-            detection_id = str(event.get("detection_id") or "").strip() or None
-            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-            image_path = str(event.get("image_path") or "").strip() or None
-            world = event.get("world") if isinstance(event.get("world"), dict) else None
-            world_x = float(world.get("x")) if world and world.get("x") is not None else None
-            world_z = float(world.get("z")) if world and world.get("z") is not None else None
-        except Exception:
+        if not isinstance(event, dict):
             return
-
-        if not camera_id or not kind:
-            return
-
-        try:
-            self._db.insert_event(
-                camera_id=camera_id,
-                kind=kind,
-                payload=payload,
-                ts=ts,
-                detection_id=detection_id,
-                image_path=image_path,
-                world_x=world_x,
-                world_z=world_z,
-            )
-        except Exception:
-            pass
-
-        # Tag event as remote source (helpful for debugging/UI decisions).
         enriched = dict(event)
         enriched["source"] = {"kind": "remote", "server_id": self.server.id, "url": self.server.url}
-        self._broadcaster.publish(enriched)
-
+        try:
+            self._on_event(enriched)
+        except Exception:
+            return

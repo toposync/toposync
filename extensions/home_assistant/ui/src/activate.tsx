@@ -5,6 +5,8 @@ import type { GroupBase, StylesConfig } from "react-select";
 
 import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
 
+import { createAirflowEffect, type AirflowMode } from "./airflow";
+
 import type {
   CompositionElement,
   CompositionElementPatch,
@@ -42,11 +44,13 @@ const PRIMARY_TOGGLE_DOMAINS = new Set([
 ]);
 
 type HaViewMode = "floor" | "ceiling" | "wall";
-type HaSpecialView = "none" | "lamp";
+type HaSpecialView = "none" | "lamp" | "airflow";
 
 const LAMP_COMPAT_DOMAINS = new Set(["light", "switch", "fan", "input_boolean", "humidifier"]);
 const DEFAULT_LAMP_COLOR = "#ffe8b0";
 const DEFAULT_LAMP_INTENSITY = 1.0;
+const AIRFLOW_COMPAT_DOMAINS = new Set(["climate"]);
+const DEFAULT_AIRFLOW_INTENSITY = 1.0;
 
 type HaServer = {
   id: string;
@@ -116,6 +120,10 @@ function readFiniteNumber(v: unknown, fallback: number): number {
 
 function readLampIntensity(v: unknown): number {
   return clamp(readFiniteNumber(v, DEFAULT_LAMP_INTENSITY), 0.2, 3.0);
+}
+
+function readAirflowIntensity(v: unknown): number {
+  return clamp(readFiniteNumber(v, DEFAULT_AIRFLOW_INTENSITY), 0.2, 3.0);
 }
 
 function readHexColor(v: unknown, fallback: string): string {
@@ -281,11 +289,48 @@ function readHaViewMode(value: unknown): HaViewMode {
 }
 
 function isHaSpecialView(value: unknown): value is HaSpecialView {
-  return value === "none" || value === "lamp";
+  return value === "none" || value === "lamp" || value === "airflow";
 }
 
 function readHaSpecialView(value: unknown): HaSpecialView {
   return isHaSpecialView(value) ? value : "none";
+}
+
+type ClimateFlow = {
+  active: boolean;
+  mode: AirflowMode;
+  factor: number;
+  sig: string;
+};
+
+function climateFlowFromLive(live: HaLiveState | null, fallbackStateRaw: string): ClimateFlow {
+  const state = asString(live?.state ?? fallbackStateRaw).trim().toLowerCase();
+  const attrs = live?.attributes && typeof live.attributes === "object" ? (live.attributes as Record<string, any>) : null;
+  const action = attrs ? asString(attrs.hvac_action).trim().toLowerCase() : "";
+
+  if (!state || state === "unknown" || state === "unavailable") {
+    return { active: false, mode: "off", factor: 0, sig: `${state}|${action}` };
+  }
+
+  if (state === "off" || action === "off") {
+    return { active: false, mode: "off", factor: 0, sig: `${state}|${action}` };
+  }
+
+  if (action === "idle") {
+    const inferredMode: AirflowMode =
+      state.includes("heat") ? "heat" : state.includes("cool") || state === "dry" ? "cool" : "neutral";
+    return { active: true, mode: inferredMode, factor: 0.22, sig: `${state}|${action}` };
+  }
+
+  if (action.includes("heat")) return { active: true, mode: "heat", factor: 1.0, sig: `${state}|${action}` };
+  if (action.includes("cool") || action.includes("dry")) return { active: true, mode: "cool", factor: 1.0, sig: `${state}|${action}` };
+  if (action.includes("fan")) return { active: true, mode: "neutral", factor: 0.75, sig: `${state}|${action}` };
+
+  if (state.includes("heat")) return { active: true, mode: "heat", factor: 0.85, sig: `${state}|${action}` };
+  if (state.includes("cool") || state === "dry") return { active: true, mode: "cool", factor: 0.85, sig: `${state}|${action}` };
+  if (state === "fan_only") return { active: true, mode: "neutral", factor: 0.65, sig: `${state}|${action}` };
+
+  return { active: true, mode: "neutral", factor: 0.75, sig: `${state}|${action}` };
 }
 
 function domainFromEntityId(entityId: string): string {
@@ -637,9 +682,12 @@ const translations = {
     "ext.home_assistant.editor.special_view": "Special view",
     "ext.home_assistant.editor.special_view.none": "None",
     "ext.home_assistant.editor.special_view.lamp": "Lamp",
-    "ext.home_assistant.editor.special_view.hint": "Available when a single on/off entity is selected.",
+    "ext.home_assistant.editor.special_view.airflow": "Conditioned airflow",
+    "ext.home_assistant.editor.special_view.hint_lamp": "Available when a single on/off entity is selected.",
+    "ext.home_assistant.editor.special_view.hint_airflow": "Available when a single climate entity is selected.",
     "ext.home_assistant.editor.lamp_intensity": "Light intensity",
     "ext.home_assistant.editor.lamp_color": "Light color",
+    "ext.home_assistant.editor.airflow_intensity": "Airflow intensity",
     "ext.home_assistant.action.toggle": "Toggle",
     "ext.home_assistant.action.loading": "Loading…",
     "ext.home_assistant.action.no_items": "No entities/devices selected.",
@@ -685,9 +733,12 @@ const translations = {
     "ext.home_assistant.editor.special_view": "Visualização especial",
     "ext.home_assistant.editor.special_view.none": "Nenhuma",
     "ext.home_assistant.editor.special_view.lamp": "Luminária",
-    "ext.home_assistant.editor.special_view.hint": "Disponível quando apenas um item liga/desliga estiver selecionado.",
+    "ext.home_assistant.editor.special_view.airflow": "Vento climatizado",
+    "ext.home_assistant.editor.special_view.hint_lamp": "Disponível quando apenas um item liga/desliga estiver selecionado.",
+    "ext.home_assistant.editor.special_view.hint_airflow": "Disponível quando apenas um item de climatização estiver selecionado.",
     "ext.home_assistant.editor.lamp_intensity": "Intensidade da luz",
     "ext.home_assistant.editor.lamp_color": "Cor da luz",
+    "ext.home_assistant.editor.airflow_intensity": "Intensidade do vento",
     "ext.home_assistant.action.toggle": "Alternar",
     "ext.home_assistant.action.loading": "Carregando...",
     "ext.home_assistant.action.no_items": "Nenhuma entidade/dispositivo selecionado.",
@@ -927,6 +978,7 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       special_view: "none",
       lamp_intensity: DEFAULT_LAMP_INTENSITY,
       lamp_color: DEFAULT_LAMP_COLOR,
+      airflow_intensity: DEFAULT_AIRFLOW_INTENSITY,
     },
     primaryAction: async ({ element, api, update }) => {
       const props = asRecord(element.props);
@@ -992,9 +1044,15 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       const group = new THREE.Group();
       const mountGroup = new THREE.Group();
       group.add(mountGroup);
+      const airflow = createAirflowEffect(THREE, { particleCount: 900 });
+      group.add(airflow.object);
 
       const topY = BUTTON_RADIUS * Math.cos(BUTTON_THETA_TOP_CUT);
       const topRadius = BUTTON_RADIUS * Math.sin(BUTTON_THETA_TOP_CUT);
+      const AC_WIDTH = 0.82;
+      const AC_HEIGHT = 0.22;
+      const AC_DEPTH = 0.18;
+      const AC_TOP_MARGIN = 0.14;
 
       const domeFloorGeom = new THREE.SphereGeometry(
         BUTTON_RADIUS,
@@ -1055,6 +1113,32 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       iconMesh.renderOrder = 10;
       mountGroup.add(iconMesh);
 
+      const acMat = new THREE.MeshStandardMaterial({
+        color: 0x0b1220,
+        emissive: new THREE.Color(0x000000),
+        emissiveIntensity: 0.12,
+        roughness: 0.42,
+        metalness: 0.05,
+      });
+      const acBodyGeom = new THREE.BoxGeometry(AC_WIDTH, AC_HEIGHT, AC_DEPTH);
+      const acBody = new THREE.Mesh(acBodyGeom, acMat);
+      acBody.visible = false;
+      mountGroup.add(acBody);
+
+      const acVentMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.55 });
+      const acVentGeom = new THREE.PlaneGeometry(AC_WIDTH * 0.86, AC_HEIGHT * 0.22);
+      const acVent = new THREE.Mesh(acVentGeom, acVentMat);
+      acVent.position.set(0, -AC_HEIGHT * 0.26, AC_DEPTH / 2 + 0.001);
+      acVent.visible = false;
+      mountGroup.add(acVent);
+
+      const acLedMat = new THREE.MeshBasicMaterial({ color: NEON_DEFAULT });
+      const acLedGeom = new THREE.SphereGeometry(0.012, 16, 10);
+      const acLed = new THREE.Mesh(acLedGeom, acLedMat);
+      acLed.position.set(AC_WIDTH * 0.42, AC_HEIGHT * 0.08, AC_DEPTH / 2 + 0.006);
+      acLed.visible = false;
+      mountGroup.add(acLed);
+
       let wantedIconKey = "house";
       let currentIconKey = houseGeo.key;
       let currentViewMode: HaViewMode = "floor";
@@ -1063,15 +1147,17 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       let currentItemCount = 0;
       const lampColor = new THREE.Color(DEFAULT_LAMP_COLOR);
       let lampIntensity = DEFAULT_LAMP_INTENSITY;
+      let airflowIntensity = DEFAULT_AIRFLOW_INTENSITY;
+      let airflowAnchorY = view.wallHeight / 2;
 
       let unwatch: (() => void) | null = null;
       let watchedServer = "";
       let watchedEntity = "";
       let watchedDomain = "";
       let watchedIsToggle = false;
-      let lastState = "";
+      let lastLiveSig = "";
 
-      function applyNeonFromState(stateRaw: string) {
+      function applyNeonFromState(stateRaw: string, live: HaLiveState | null) {
         const s = stateRaw.trim().toLowerCase();
         const boolState = watchedEntity ? boolStateForDomain(watchedDomain, s) : null;
         const canLamp =
@@ -1079,6 +1165,43 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
           currentItemCount === 1 &&
           watchedDomain &&
           LAMP_COMPAT_DOMAINS.has(watchedDomain.toLowerCase());
+        const canAirflow =
+          currentSpecialView === "airflow" &&
+          currentItemCount === 1 &&
+          watchedDomain &&
+          AIRFLOW_COMPAT_DOMAINS.has(watchedDomain.toLowerCase());
+
+        if (canAirflow) {
+          const flow = climateFlowFromLive(live, stateRaw);
+          const amp = clamp(airflowIntensity, 0.2, 3.0) * clamp(flow.factor, 0, 1);
+          const active = flow.active && amp > 0.05 && flow.mode !== "off";
+
+          const baseColor = flow.mode === "heat" ? 0xff6b6b : flow.mode === "cool" ? 0x4dabf7 : 0x93c5fd;
+          const pitch = flow.mode === "heat" ? 0.22 : flow.mode === "cool" ? -0.18 : 0.06;
+          const dir = active ? { x: 0, y: pitch, z: 1 } : { x: 0, y: 0, z: 1 };
+          const origin = { x: 0, y: airflowAnchorY, z: AC_DEPTH / 2 + 0.025 };
+
+          airflow.update({
+            active,
+            mode: flow.mode,
+            intensity: amp,
+            origin,
+            direction: dir,
+            ventWidth: AC_WIDTH * 0.9,
+            ventHeight: 0.08,
+          });
+
+          acMat.emissive.set(active ? baseColor : 0x000000);
+          acLedMat.color.set(active ? baseColor : 0x111827);
+          light.color.set(active ? baseColor : 0x000000);
+
+          acMat.emissiveIntensity = active ? 0.22 + 0.08 * amp : 0.08;
+          light.intensity = active ? 0.08 + 0.10 * amp : 0.0;
+          light.distance = active ? 1.0 + 0.7 * amp : 0.0;
+          return;
+        }
+
+        airflow.update({ active: false });
 
         if (canLamp) {
           const on = boolState === true;
@@ -1176,24 +1299,62 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
           watchedEntity = primaryEntityId;
           watchedDomain = primaryEntityId ? domainFromEntityId(primaryEntityId) : "";
           watchedIsToggle = watchedDomain ? isToggleDomain(watchedDomain) : false;
-          lastState = "";
+          lastLiveSig = "";
           if (serverId && primaryEntityId) unwatch = watchLiveStates(serverId, [primaryEntityId]);
         }
 
         const live = watchedServer && watchedEntity ? getLiveState(watchedServer, watchedEntity) : null;
         const primaryState = asString(live?.state ?? p.primary_state);
 
-        applyViewMode(viewMode);
-
         currentItemCount = itemCount;
         currentSpecialView = specialView;
         lampColor.set(readHexColor(p.lamp_color, DEFAULT_LAMP_COLOR));
         lampIntensity = readLampIntensity(p.lamp_intensity);
+        airflowIntensity = readAirflowIntensity(p.airflow_intensity);
         if (
           currentSpecialView === "lamp" &&
           !(itemCount === 1 && watchedDomain && LAMP_COMPAT_DOMAINS.has(watchedDomain.toLowerCase()))
         ) {
           currentSpecialView = "none";
+        }
+        if (
+          currentSpecialView === "airflow" &&
+          !(itemCount === 1 && watchedDomain && AIRFLOW_COMPAT_DOMAINS.has(watchedDomain.toLowerCase()))
+        ) {
+          currentSpecialView = "none";
+        }
+
+        if (currentSpecialView === "airflow") {
+          dome.visible = false;
+          topCap.visible = false;
+          bottomCap.visible = false;
+          iconMesh.visible = false;
+          acBody.visible = true;
+          acVent.visible = true;
+          acLed.visible = true;
+
+          mountGroup.rotation.set(0, 0, 0);
+          mountGroup.position.set(0, 0, 0);
+
+          const centerY = view.wallHeight - AC_TOP_MARGIN - AC_HEIGHT / 2;
+          mountGroup.position.y = centerY;
+          airflowAnchorY = centerY - AC_HEIGHT * 0.26;
+
+          // Keep the point light close to the unit's front.
+          light.position.set(0, -AC_HEIGHT * 0.06, AC_DEPTH * 0.15);
+        } else {
+          acBody.visible = false;
+          acVent.visible = false;
+          acLed.visible = false;
+          iconMesh.visible = true;
+          dome.visible = true;
+          topCap.visible = true;
+
+          // Ensure bottom cap follows view mode.
+          applyViewMode(viewMode);
+
+          // Restore default light position.
+          light.position.set(0, topY * 0.6, 0);
         }
 
         wantedIconKey = normalizeFaSvgName(icon) || "house";
@@ -1204,8 +1365,13 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
           iconMesh.scale.setScalar(entry.scale);
         }
 
-        lastState = primaryState.trim().toLowerCase();
-        applyNeonFromState(primaryState);
+        if (currentSpecialView === "airflow") {
+          const flow = climateFlowFromLive(live, primaryState);
+          lastLiveSig = flow.sig;
+        } else {
+          lastLiveSig = primaryState.trim().toLowerCase();
+        }
+        applyNeonFromState(primaryState, live);
       }
 
       apply(element);
@@ -1213,13 +1379,16 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
       return {
         object: group,
         update: apply,
-        tick: () => {
+        tick: (dt: number) => {
+          airflow.tick(dt);
           if (watchedServer && watchedEntity) {
             const live = getLiveState(watchedServer, watchedEntity);
             const next = asString(live?.state).trim().toLowerCase();
-            if (next && next !== lastState) {
-              lastState = next;
-              applyNeonFromState(next);
+            const nextSig =
+              currentSpecialView === "airflow" ? climateFlowFromLive(live, next).sig : next;
+            if (next && nextSig !== lastLiveSig) {
+              lastLiveSig = nextSig;
+              applyNeonFromState(next, live);
             }
           }
 
@@ -1240,6 +1409,13 @@ function homeAssistantElementType(i18n: HostI18n): ElementType {
           sphereMat.dispose();
           cutMat.dispose();
           iconMat.dispose();
+          acBodyGeom.dispose();
+          acVentGeom.dispose();
+          acLedGeom.dispose();
+          acMat.dispose();
+          acVentMat.dispose();
+          acLedMat.dispose();
+          airflow.dispose();
         },
       };
     },
@@ -1324,6 +1500,7 @@ function addHomeAssistantTool(i18n: HostI18n): EditorTool {
             special_view: "none",
             lamp_intensity: DEFAULT_LAMP_INTENSITY,
             lamp_color: DEFAULT_LAMP_COLOR,
+            airflow_intensity: DEFAULT_AIRFLOW_INTENSITY,
           },
         });
         if (id) openEditor(id);
@@ -1536,6 +1713,7 @@ function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorPro
   const primaryEntityId = asString(props.primary_entity_id).trim();
   const lampIntensityValue = readLampIntensity(props.lamp_intensity);
   const lampColorValue = readHexColor(props.lamp_color, DEFAULT_LAMP_COLOR);
+  const airflowIntensityValue = readAirflowIntensity(props.airflow_intensity);
   const items = useMemo(() => readItemRefs(props.items), [props.items]);
 
   const [servers, setServers] = useState<HaServerPublic[]>([]);
@@ -1610,9 +1788,17 @@ function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorPro
     return LAMP_COMPAT_DOMAINS.has(d);
   }, [items.length, primaryEntityId]);
 
+  const canAirflow = useMemo(() => {
+    if (items.length !== 1) return false;
+    if (!primaryEntityId) return false;
+    const d = domainFromEntityId(primaryEntityId).toLowerCase();
+    return AIRFLOW_COMPAT_DOMAINS.has(d);
+  }, [items.length, primaryEntityId]);
+
   useEffect(() => {
     if (specialView === "lamp" && !canLamp) update({ props: { special_view: "none" } });
-  }, [canLamp, specialView, update]);
+    if (specialView === "airflow" && !canAirflow) update({ props: { special_view: "none" } });
+  }, [canAirflow, canLamp, specialView, update]);
 
   useEffect(() => {
     if (!serverId) {
@@ -2021,6 +2207,7 @@ function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorPro
             <select
               className="input"
               value={viewMode}
+              disabled={specialView === "airflow"}
               onChange={(e) => update({ props: { view_mode: e.target.value } })}
             >
               <option value="floor">{t("ext.home_assistant.editor.view_mode.floor")}</option>
@@ -2044,6 +2231,14 @@ function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorPro
                       lamp_color: lampColorValue,
                     },
                   });
+                } else if (next === "airflow") {
+                  update({
+                    props: {
+                      special_view: next,
+                      airflow_intensity: airflowIntensityValue,
+                      view_mode: "wall",
+                    },
+                  });
                 } else {
                   update({ props: { special_view: "none" } });
                 }
@@ -2053,8 +2248,20 @@ function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorPro
               <option value="lamp" disabled={!canLamp}>
                 {t("ext.home_assistant.editor.special_view.lamp")}
               </option>
+              <option value="airflow" disabled={!canAirflow}>
+                {t("ext.home_assistant.editor.special_view.airflow")}
+              </option>
             </select>
-            {!canLamp ? <div className="label" style={{ marginTop: 6 }}>{t("ext.home_assistant.editor.special_view.hint")}</div> : null}
+            {!canLamp ? (
+              <div className="label" style={{ marginTop: 6 }}>
+                {t("ext.home_assistant.editor.special_view.hint_lamp")}
+              </div>
+            ) : null}
+            {!canAirflow ? (
+              <div className="label" style={{ marginTop: 6 }}>
+                {t("ext.home_assistant.editor.special_view.hint_airflow")}
+              </div>
+            ) : null}
           </div>
 
           {specialView === "lamp" && canLamp ? (
@@ -2080,6 +2287,25 @@ function HomeAssistantEditor({ element, update, remove, close, i18n }: EditorPro
                   step={0.05}
                   value={lampIntensityValue}
                   onChange={(e) => update({ props: { lamp_intensity: Number(e.target.value) } })}
+                />
+              </div>
+            </div>
+          ) : null}
+
+          {specialView === "airflow" && canAirflow ? (
+            <div className="rowWrap">
+              <div className="field" style={{ flex: 1, minWidth: 220 }}>
+                <div className="label">
+                  {t("ext.home_assistant.editor.airflow_intensity")}: {airflowIntensityValue.toFixed(2)}
+                </div>
+                <input
+                  className="input"
+                  type="range"
+                  min={0.2}
+                  max={3}
+                  step={0.05}
+                  value={airflowIntensityValue}
+                  onChange={(e) => update({ props: { airflow_intensity: Number(e.target.value) } })}
                 />
               </div>
             </div>

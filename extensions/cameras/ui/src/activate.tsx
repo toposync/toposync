@@ -38,6 +38,7 @@ type CameraConfig = {
   username?: string;
   password?: string;
   processing_server_id?: string;
+  detections?: CameraDetection[];
 };
 
 type CamerasIndex = {
@@ -84,6 +85,112 @@ type ControlPoint = {
   world?: { x: number; z: number } | null;
 };
 
+const YOLO_V12_CATEGORIES = [
+  "person",
+  "bicycle",
+  "car",
+  "motorcycle",
+  "airplane",
+  "bus",
+  "train",
+  "truck",
+  "boat",
+  "traffic light",
+  "fire hydrant",
+  "stop sign",
+  "parking meter",
+  "bench",
+  "bird",
+  "cat",
+  "dog",
+  "horse",
+  "sheep",
+  "cow",
+  "elephant",
+  "bear",
+  "zebra",
+  "giraffe",
+  "backpack",
+  "umbrella",
+  "handbag",
+  "tie",
+  "suitcase",
+  "frisbee",
+  "skis",
+  "snowboard",
+  "sports ball",
+  "kite",
+  "baseball bat",
+  "baseball glove",
+  "skateboard",
+  "surfboard",
+  "tennis racket",
+  "bottle",
+  "wine glass",
+  "cup",
+  "fork",
+  "knife",
+  "spoon",
+  "bowl",
+  "banana",
+  "apple",
+  "sandwich",
+  "orange",
+  "broccoli",
+  "carrot",
+  "hot dog",
+  "pizza",
+  "donut",
+  "cake",
+  "chair",
+  "couch",
+  "potted plant",
+  "bed",
+  "dining table",
+  "toilet",
+  "tv",
+  "laptop",
+  "mouse",
+  "remote",
+  "keyboard",
+  "cell phone",
+  "microwave",
+  "oven",
+  "toaster",
+  "sink",
+  "refrigerator",
+  "book",
+  "clock",
+  "vase",
+  "scissors",
+  "teddy bear",
+  "hair drier",
+  "toothbrush",
+] as const;
+
+type YoloV12Category = (typeof YOLO_V12_CATEGORIES)[number];
+
+const YOLO_LEGACY_CATEGORY_MAP: Record<string, YoloV12Category> = {
+  motorbike: "motorcycle",
+  aeroplane: "airplane",
+  sofa: "couch",
+  pottedplant: "potted plant",
+  diningtable: "dining table",
+  tvmonitor: "tv",
+};
+
+type DetectionCondition =
+  | { kind: "motion" }
+  | { kind: "ha_sensor"; entity_id: string }
+  | { kind: "ha_state"; entity_id: string; state: string }
+  | { kind: "object"; category: YoloV12Category };
+
+type CameraDetection = {
+  id: string;
+  trigger: DetectionCondition;
+  filters: DetectionCondition[];
+};
+
 const CONTROL_POINT_COLORS = [
   "#ef4444",
   "#f59e0b",
@@ -99,6 +206,23 @@ function labelForIndex(index: number): string {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
   if (index >= 0 && index < alphabet.length) return alphabet[index];
   return String(index + 1);
+}
+
+function titleCaseWords(v: string): string {
+  return v
+    .split(" ")
+    .map((part) => {
+      const s = part.trim();
+      if (!s) return "";
+      return `${s.slice(0, 1).toUpperCase()}${s.slice(1)}`;
+    })
+    .join(" ")
+    .trim();
+}
+
+function yoloCategoryLabel(category: YoloV12Category): string {
+  if (category === "tv") return "TV";
+  return titleCaseWords(category);
 }
 
 function readFiniteNumber(v: unknown, fallback: number): number {
@@ -135,6 +259,37 @@ function readControlPoints(v: unknown): ControlPoint[] {
       image: readNormalizedPoint(rec.image),
       world: readWorldPoint(rec.world),
     });
+  }
+  return out;
+}
+
+function readDetectionCondition(v: unknown): DetectionCondition | null {
+  const rec = asRecord(v);
+  const kind = asString(rec.kind).trim();
+  if (kind === "motion") return { kind: "motion" };
+  if (kind === "ha_sensor") return { kind: "ha_sensor", entity_id: asString(rec.entity_id).trim() };
+  if (kind === "ha_state")
+    return { kind: "ha_state", entity_id: asString(rec.entity_id).trim(), state: asString(rec.state).trim() };
+  if (kind === "object") {
+    const rawCategory = asString(rec.category).trim();
+    const normalized = YOLO_LEGACY_CATEGORY_MAP[rawCategory] ?? rawCategory;
+    const category = YOLO_V12_CATEGORIES.find((c) => c === normalized);
+    if (!category) return null;
+    return { kind: "object", category };
+  }
+  return null;
+}
+
+function readCameraDetections(v: unknown): CameraDetection[] {
+  if (!Array.isArray(v)) return [];
+  const out: CameraDetection[] = [];
+  for (const item of v) {
+    const rec = asRecord(item);
+    const id = asString(rec.id).trim();
+    if (!id) continue;
+    const trigger = readDetectionCondition(rec.trigger) ?? { kind: "motion" };
+    const filters = Array.isArray(rec.filters) ? rec.filters.map(readDetectionCondition).filter(Boolean) : [];
+    out.push({ id, trigger, filters: filters as DetectionCondition[] });
   }
   return out;
 }
@@ -184,6 +339,7 @@ function readCameras(settings: Record<string, unknown>): CameraConfig[] {
       username: asString(rec.username).trim(),
       password: asString(rec.password).trim(),
       processing_server_id: asString(rec.processing_server_id).trim(),
+      detections: readCameraDetections(rec.detections),
     });
   }
   return out;
@@ -250,6 +406,7 @@ const translations = {
     "ext.cameras.settings.testing": "Testing…",
     "ext.cameras.settings.snapshot": "Snapshot",
     "ext.cameras.settings.snapshot_loading": "Loading snapshot…",
+    "ext.cameras.settings.detections": "Detections",
     "ext.cameras.element.name": "Camera",
     "ext.cameras.element.desc": "Camera placed in the scene; click to see a snapshot.",
     "ext.cameras.tool.add": "Camera",
@@ -270,6 +427,21 @@ const translations = {
     "ext.cameras.action.no_camera": "No camera selected.",
     "ext.cameras.action.refresh": "Refresh snapshot",
     "ext.cameras.action.loading": "Loading…",
+    "ext.cameras.detections.title": "Detections",
+    "ext.cameras.detections.help": "Each rule has a trigger and optional filters. Filters help avoid expensive object detections when they are not needed (future).",
+    "ext.cameras.detections.list": "Rules",
+    "ext.cameras.detections.empty": "No detections yet.",
+    "ext.cameras.detections.item": "Rule {{n}}",
+    "ext.cameras.detections.details": "Details",
+    "ext.cameras.detections.trigger": "Trigger",
+    "ext.cameras.detections.filters": "Filters",
+    "ext.cameras.detections.add_filter": "Add filter",
+    "ext.cameras.detections.filters_empty": "No filters.",
+    "ext.cameras.detections.select_prompt": "Select or add a rule.",
+    "ext.cameras.detections.cond.motion": "Motion",
+    "ext.cameras.detections.cond.object": "Object (YOLOv12)",
+    "ext.cameras.detections.cond.ha_sensor": "HA sensor (soon)",
+    "ext.cameras.detections.cond.ha_state": "HA entity state (soon)",
   },
   "pt-BR": {
     "ext.cameras.settings.name": "Câmeras",
@@ -296,6 +468,7 @@ const translations = {
     "ext.cameras.settings.testing": "Testando…",
     "ext.cameras.settings.snapshot": "Snapshot",
     "ext.cameras.settings.snapshot_loading": "Carregando snapshot…",
+    "ext.cameras.settings.detections": "Detecções",
     "ext.cameras.element.name": "Câmera",
     "ext.cameras.element.desc": "Câmera na cena; clique para ver um snapshot.",
     "ext.cameras.tool.add": "Câmera",
@@ -316,6 +489,21 @@ const translations = {
     "ext.cameras.action.no_camera": "Nenhuma câmera selecionada.",
     "ext.cameras.action.refresh": "Atualizar snapshot",
     "ext.cameras.action.loading": "Carregando...",
+    "ext.cameras.detections.title": "Detecções",
+    "ext.cameras.detections.help": "Cada regra tem um gatilho e filtros opcionais. Filtros ajudam a evitar detecções pesadas de objetos quando não são necessárias (futuro).",
+    "ext.cameras.detections.list": "Regras",
+    "ext.cameras.detections.empty": "Nenhuma detecção por enquanto.",
+    "ext.cameras.detections.item": "Regra {{n}}",
+    "ext.cameras.detections.details": "Detalhes",
+    "ext.cameras.detections.trigger": "Gatilho",
+    "ext.cameras.detections.filters": "Filtros",
+    "ext.cameras.detections.add_filter": "Adicionar filtro",
+    "ext.cameras.detections.filters_empty": "Nenhum filtro.",
+    "ext.cameras.detections.select_prompt": "Selecione ou adicione uma regra.",
+    "ext.cameras.detections.cond.motion": "Movimento",
+    "ext.cameras.detections.cond.object": "Objeto (YOLOv12)",
+    "ext.cameras.detections.cond.ha_sensor": "Sensor HA (em breve)",
+    "ext.cameras.detections.cond.ha_state": "Estado de entidade HA (em breve)",
   },
 } as const;
 
@@ -412,6 +600,9 @@ function CamerasSettings({
   const [snapshotErr, setSnapshotErr] = useState<string | null>(null);
   const [snapshotBusy, setSnapshotBusy] = useState(false);
 
+  const [detectionsModalOpen, setDetectionsModalOpen] = useState(false);
+  const [detectionsCameraId, setDetectionsCameraId] = useState<string | null>(null);
+
   useEffect(() => {
     if (!dirtyServers) setDraftServers(serversFromSettings);
   }, [dirtyServers, serversFromSettings]);
@@ -446,6 +637,15 @@ function CamerasSettings({
       if (prev) URL.revokeObjectURL(prev);
       return null;
     });
+  }
+
+  function openDetectionsModal(cameraId: string) {
+    setDetectionsCameraId(cameraId);
+    setDetectionsModalOpen(true);
+  }
+
+  function closeDetectionsModal() {
+    setDetectionsModalOpen(false);
   }
 
   async function testCamera(cam: CameraConfig) {
@@ -646,6 +846,7 @@ function CamerasSettings({
                     username: "",
                     password: "",
                     processing_server_id: "",
+                    detections: [],
                   },
                   ...prev,
                 ]);
@@ -696,6 +897,22 @@ function CamerasSettings({
                     ID: {cam.id}
                   </div>
                   <div className="row" style={{ gap: 10 }}>
+                    <button
+                      className={[
+                        "iconButton",
+                        (cam.detections?.length ?? 0) > 0 ? "iconButtonPrimary" : "",
+                      ].join(" ")}
+                      type="button"
+                      onClick={() => openDetectionsModal(cam.id)}
+                      aria-label={t("ext.cameras.settings.detections")}
+                      title={
+                        (cam.detections?.length ?? 0) > 0
+                          ? `${t("ext.cameras.settings.detections")} (${cam.detections?.length ?? 0})`
+                          : t("ext.cameras.settings.detections")
+                      }
+                    >
+                      <i className="fa-solid fa-bullseye" aria-hidden="true" />
+                    </button>
                     <button
                       className="chipButton"
                       type="button"
@@ -822,6 +1039,8 @@ function CamerasSettings({
     );
   }
 
+  const detectionsCamera = detectionsCameraId ? draftCameras.find((c) => c.id === detectionsCameraId) ?? null : null;
+
   return (
     <div>
       <div className="card">
@@ -887,6 +1106,19 @@ function CamerasSettings({
           </div>
         )}
       </SubModal>
+
+      <CameraDetectionsModal
+        open={detectionsModalOpen}
+        onClose={closeDetectionsModal}
+        i18n={i18n}
+        cameraLabel={detectionsCamera?.name || detectionsCamera?.id || ""}
+        initialDetections={detectionsCamera?.detections ?? []}
+        onSave={(next) => {
+          if (!detectionsCameraId) return;
+          setDraftCameras((prev) => prev.map((c) => (c.id === detectionsCameraId ? { ...c, detections: next } : c)));
+          setDirtyCameras(true);
+        }}
+      />
     </div>
   );
 }
@@ -1548,6 +1780,353 @@ function ControlPointsModal({
             type="button"
             onClick={() => {
               onSave(points);
+              onClose();
+            }}
+          >
+            {t("core.actions.save")}
+          </button>
+        </div>
+      </div>
+    </SubModal>
+  );
+}
+
+function describeDetectionCondition(
+  cond: DetectionCondition,
+  t: (key: string, vars?: Record<string, unknown>) => string,
+): string {
+  if (cond.kind === "motion") return t("ext.cameras.detections.cond.motion");
+  if (cond.kind === "ha_sensor")
+    return cond.entity_id
+      ? `${t("ext.cameras.detections.cond.ha_sensor")}: ${cond.entity_id}`
+      : t("ext.cameras.detections.cond.ha_sensor");
+  if (cond.kind === "ha_state") {
+    const base = cond.entity_id
+      ? `${t("ext.cameras.detections.cond.ha_state")}: ${cond.entity_id}`
+      : t("ext.cameras.detections.cond.ha_state");
+    return cond.state ? `${base} = ${cond.state}` : base;
+  }
+  return `${t("ext.cameras.detections.cond.object")}: ${yoloCategoryLabel(cond.category)}`;
+}
+
+function DetectionConditionEditor({
+  value,
+  onChange,
+  i18n,
+}: {
+  value: DetectionCondition;
+  onChange: (next: DetectionCondition) => void;
+  i18n: HostI18n;
+}): React.ReactElement {
+  const { t } = i18n.useI18n();
+  return (
+    <div className="rowWrap" style={{ gap: 8, alignItems: "center" }}>
+      <select
+        className="input"
+        value={value.kind}
+        onChange={(e) => {
+          const nextKind = e.target.value as DetectionCondition["kind"];
+          if (nextKind === "motion") onChange({ kind: "motion" });
+          else if (nextKind === "object") onChange({ kind: "object", category: "person" });
+          else if (nextKind === "ha_sensor") onChange({ kind: "ha_sensor", entity_id: "" });
+          else if (nextKind === "ha_state") onChange({ kind: "ha_state", entity_id: "", state: "" });
+        }}
+        style={{ minWidth: 220 }}
+      >
+        <option value="motion">{t("ext.cameras.detections.cond.motion")}</option>
+        <option value="object">{t("ext.cameras.detections.cond.object")}</option>
+        <option value="ha_sensor">{t("ext.cameras.detections.cond.ha_sensor")}</option>
+        <option value="ha_state">{t("ext.cameras.detections.cond.ha_state")}</option>
+      </select>
+
+      {value.kind === "object" ? (
+        <select
+          className="input"
+          value={value.category}
+          onChange={(e) => {
+            const raw = e.target.value;
+            const category = YOLO_V12_CATEGORIES.find((c) => c === raw);
+            if (!category) return;
+            onChange({ kind: "object", category });
+          }}
+          style={{ minWidth: 240, flex: 1 }}
+        >
+          {YOLO_V12_CATEGORIES.map((c) => (
+            <option key={c} value={c}>
+              {yoloCategoryLabel(c)}
+            </option>
+          ))}
+        </select>
+      ) : null}
+
+      {value.kind === "ha_sensor" || value.kind === "ha_state" ? (
+        <input
+          className="input"
+          value={value.entity_id}
+          onChange={(e) => {
+            const next = e.target.value;
+            onChange(value.kind === "ha_sensor" ? { ...value, entity_id: next } : { ...value, entity_id: next });
+          }}
+          placeholder="sensor.some_entity"
+          style={{ minWidth: 240, flex: 1 }}
+        />
+      ) : null}
+
+      {value.kind === "ha_state" ? (
+        <input
+          className="input"
+          value={value.state}
+          onChange={(e) => onChange({ ...value, state: e.target.value })}
+          placeholder="on"
+          style={{ width: 120 }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function CameraDetectionsModal({
+  open,
+  onClose,
+  i18n,
+  cameraLabel,
+  initialDetections,
+  onSave,
+}: {
+  open: boolean;
+  onClose: () => void;
+  i18n: HostI18n;
+  cameraLabel: string;
+  initialDetections: CameraDetection[];
+  onSave: (detections: CameraDetection[]) => void;
+}): React.ReactElement | null {
+  const { t } = i18n.useI18n();
+
+  const [detections, setDetections] = useState<CameraDetection[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const normalized = (initialDetections ?? []).map((d) => ({
+      id: d.id || newId(),
+      trigger: d.trigger ?? { kind: "motion" },
+      filters: Array.isArray(d.filters) ? d.filters : [],
+    }));
+    setDetections(normalized);
+    setSelectedId(normalized[0]?.id ?? null);
+  }, [open, initialDetections]);
+
+  const selected = useMemo(
+    () => (selectedId ? detections.find((d) => d.id === selectedId) ?? null : null),
+    [detections, selectedId],
+  );
+
+  function addDetection() {
+    const id = newId();
+    setDetections((prev) => [{ id, trigger: { kind: "motion" }, filters: [] }, ...prev]);
+    setSelectedId(id);
+  }
+
+  function updateDetection(id: string, patch: Partial<CameraDetection>) {
+    setDetections((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+  }
+
+  function deleteDetection(id: string) {
+    setDetections((prev) => prev.filter((d) => d.id !== id));
+    setSelectedId((prev) => (prev === id ? null : prev));
+  }
+
+  return (
+    <SubModal
+      open={open}
+      onClose={onClose}
+      title={cameraLabel ? `${t("ext.cameras.detections.title")}: ${cameraLabel}` : t("ext.cameras.detections.title")}
+      panelStyle={{ width: "min(1100px, calc(100vw - 28px))" }}
+      bodyStyle={{
+        padding: 0,
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 12, flex: 1, minHeight: 0 }}>
+        <div className="card">
+          <div className="cardBody">{t("ext.cameras.detections.help")}</div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 12, flex: 1, minHeight: 0 }}>
+          <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+            <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+              <div className="label" style={{ margin: 0 }}>
+                {t("ext.cameras.detections.list")}
+              </div>
+              <button
+                className="iconButton iconButtonPrimary"
+                type="button"
+                onClick={addDetection}
+                aria-label={t("core.actions.add")}
+              >
+                <i className="fa-solid fa-plus" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="sectionDivider" />
+
+            <div style={{ overflow: "auto", minHeight: 0, paddingRight: 2 }}>
+              {detections.length === 0 ? (
+                <div className="card">
+                  <div className="cardBody">{t("ext.cameras.detections.empty")}</div>
+                </div>
+              ) : (
+                <div className="choiceList">
+                  {detections.map((d, i) => {
+                    const isSelected = selectedId === d.id;
+                    const summary = describeDetectionCondition(d.trigger, t);
+                    const filtersCount = d.filters.length;
+                    return (
+                      <button
+                        key={d.id}
+                        type="button"
+                        className={["choiceItem", isSelected ? "isSelected" : ""].join(" ")}
+                        onClick={() => setSelectedId(d.id)}
+                      >
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
+                          <div className="row" style={{ justifyContent: "space-between", gap: 10 }}>
+                            <span style={{ fontWeight: 700 }}>{t("ext.cameras.detections.item", { n: i + 1 })}</span>
+                            {filtersCount ? (
+                              <span
+                                style={{
+                                  minWidth: 24,
+                                  height: 20,
+                                  padding: "0 8px",
+                                  borderRadius: 999,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  fontSize: 12,
+                                  fontWeight: 700,
+                                  border: "1px solid rgba(255,255,255,0.14)",
+                                  background: "rgba(255,255,255,0.06)",
+                                  color: "rgba(230,232,242,0.92)",
+                                }}
+                              >
+                                {filtersCount}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="cardMeta" style={{ margin: 0 }}>
+                            {summary}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+            {selected ? (
+              <div className="card" style={{ overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
+                <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                  <div className="label" style={{ margin: 0 }}>
+                    {t("ext.cameras.detections.details")}
+                  </div>
+                  <button
+                    className="iconButton iconButtonDanger"
+                    type="button"
+                    onClick={() => deleteDetection(selected.id)}
+                    aria-label={t("core.actions.delete")}
+                  >
+                    <i className="fa-solid fa-trash" aria-hidden="true" />
+                  </button>
+                </div>
+
+                <div className="sectionDivider" />
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
+                  <div className="field">
+                    <label className="label">{t("ext.cameras.detections.trigger")}</label>
+                    <DetectionConditionEditor
+                      value={selected.trigger}
+                      i18n={i18n}
+                      onChange={(next) => updateDetection(selected.id, { trigger: next })}
+                    />
+                  </div>
+
+                  <div className="field">
+                    <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                      <label className="label" style={{ margin: 0 }}>
+                        {t("ext.cameras.detections.filters")}
+                      </label>
+                      <button
+                        className="iconButton"
+                        type="button"
+                        onClick={() => {
+                          updateDetection(selected.id, { filters: [...selected.filters, { kind: "motion" }] });
+                        }}
+                        aria-label={t("ext.cameras.detections.add_filter")}
+                      >
+                        <i className="fa-solid fa-plus" aria-hidden="true" />
+                      </button>
+                    </div>
+
+                    {selected.filters.length === 0 ? (
+                      <div className="card">
+                        <div className="cardBody">{t("ext.cameras.detections.filters_empty")}</div>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        {selected.filters.map((f, idx) => (
+                          <div className="rowWrap" key={idx} style={{ gap: 8, alignItems: "center" }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <DetectionConditionEditor
+                                value={f}
+                                i18n={i18n}
+                                onChange={(next) => {
+                                  const nextFilters = selected.filters.map((prev, j) => (j === idx ? next : prev));
+                                  updateDetection(selected.id, { filters: nextFilters });
+                                }}
+                              />
+                            </div>
+                            <button
+                              className="iconButton iconButtonDanger"
+                              type="button"
+                              onClick={() => {
+                                const nextFilters = selected.filters.filter((_, j) => j !== idx);
+                                updateDetection(selected.id, { filters: nextFilters });
+                              }}
+                              aria-label={t("core.actions.delete")}
+                            >
+                              <i className="fa-solid fa-trash" aria-hidden="true" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="card">
+                <div className="cardBody">{t("ext.cameras.detections.select_prompt")}</div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="rowWrap" style={{ justifyContent: "space-between" }}>
+          <button className="chipButton" type="button" onClick={onClose}>
+            {t("core.actions.cancel")}
+          </button>
+          <button
+            className="primaryButton"
+            type="button"
+            onClick={() => {
+              onSave(detections);
               onClose();
             }}
           >

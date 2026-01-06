@@ -1,4 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
+
+import cameraSvg from "@fortawesome/fontawesome-free/svgs/solid/camera.svg";
 
 import type {
   CompositionElement,
@@ -796,7 +799,7 @@ function addCameraTool(i18n: HostI18n): EditorTool {
         if (evt.button !== 0) return;
         const id = createElement(ELEMENT_TYPE_ID, {
           position: { x: evt.world.x, y: 0, z: evt.world.z },
-          props: { camera_id: "", camera_name: "" },
+          props: { camera_id: "", camera_name: "", view_mode: "ceiling" },
         });
         if (id) openEditor(id);
       },
@@ -805,12 +808,19 @@ function addCameraTool(i18n: HostI18n): EditorTool {
 }
 
 function cameraElementType(i18n: HostI18n): ElementType {
+  const iconGeometryCache = new Map<string, { geometry: any; scale: number }>();
+  const ICON_TARGET_SIZE = 0.14;
+
+  const BUTTON_RADIUS = 0.18;
+  const BUTTON_THETA_TOP_CUT = 1.05;
+  const CEILING_TOP_MARGIN = 0.0;
+
   return {
     type: ELEMENT_TYPE_ID,
     name: { key: "ext.cameras.element.name", fallback: "Camera" },
     description: { key: "ext.cameras.element.desc" },
     placeable: false,
-    defaultProps: { camera_id: "", camera_name: "" },
+    defaultProps: { camera_id: "", camera_name: "", view_mode: "ceiling" },
     render2D: ({ ctx, element, viewport }) => {
       const center = viewport.worldToScreen({ x: element.position.x, z: element.position.z });
       const rot = typeof element.rotation?.y === "number" ? element.rotation.y : 0;
@@ -848,64 +858,134 @@ function cameraElementType(i18n: HostI18n): ElementType {
     translate2D: ({ element, delta }) => ({
       position: { x: element.position.x + delta.x, z: element.position.z + delta.z },
     }),
-    create3D: ({ THREE }, element) => {
+    create3D: ({ THREE, view }, element) => {
+      function getIconGeometry(): { geometry: any; scale: number } {
+        const cached = iconGeometryCache.get("camera");
+        if (cached) return cached;
+
+        const data = new SVGLoader().parse(cameraSvg);
+        const shapes: any[] = [];
+        for (const path of data.paths) shapes.push(...SVGLoader.createShapes(path));
+
+        const geometry = new THREE.ShapeGeometry(shapes);
+        geometry.computeBoundingBox();
+        const bbox = geometry.boundingBox;
+        if (bbox) {
+          const cx = (bbox.min.x + bbox.max.x) / 2;
+          const cy = (bbox.min.y + bbox.max.y) / 2;
+          geometry.translate(-cx, -cy, 0);
+        }
+
+        geometry.scale(1, -1, 1);
+        geometry.rotateX(-Math.PI / 2);
+
+        geometry.computeBoundingBox();
+        const bbox3 = geometry.boundingBox;
+        const sizeX = bbox3 ? bbox3.max.x - bbox3.min.x : 1;
+        const sizeZ = bbox3 ? bbox3.max.z - bbox3.min.z : 1;
+        const maxXZ = Math.max(sizeX, sizeZ, 1e-9);
+        const scale = ICON_TARGET_SIZE / maxXZ;
+
+        const entry = { geometry, scale };
+        iconGeometryCache.set("camera", entry);
+        return entry;
+      }
+
+      const NEON = 0x38bdf8;
+
       const group = new THREE.Group();
+      const mountGroup = new THREE.Group();
+      group.add(mountGroup);
 
-      const bodyMat = new THREE.MeshStandardMaterial({
+      const topY = BUTTON_RADIUS * Math.cos(BUTTON_THETA_TOP_CUT);
+      const topRadius = BUTTON_RADIUS * Math.sin(BUTTON_THETA_TOP_CUT);
+
+      const domeCeilingGeom = new THREE.SphereGeometry(
+        BUTTON_RADIUS,
+        56,
+        34,
+        0,
+        Math.PI * 2,
+        BUTTON_THETA_TOP_CUT,
+        Math.PI - BUTTON_THETA_TOP_CUT,
+      );
+
+      const sphereMat = new THREE.MeshStandardMaterial({
         color: 0x0b1220,
-        roughness: 0.38,
-        metalness: 0.08,
+        emissive: new THREE.Color(NEON),
+        emissiveIntensity: 0.36,
+        roughness: 0.32,
+        metalness: 0.0,
       });
-      const accentMat = new THREE.MeshStandardMaterial({
-        color: 0x111827,
-        roughness: 0.42,
-        metalness: 0.1,
-      });
-      const lensMat = new THREE.MeshStandardMaterial({
-        color: 0x020617,
-        emissive: new THREE.Color(0x38bdf8),
-        emissiveIntensity: 0.15,
-        roughness: 0.22,
-        metalness: 0.2,
-      });
+      const cutMat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+      const iconMat = new THREE.MeshBasicMaterial({ color: NEON, side: THREE.DoubleSide });
+      iconMat.depthWrite = false;
+      iconMat.polygonOffset = true;
+      iconMat.polygonOffsetFactor = -1;
+      iconMat.polygonOffsetUnits = -1;
 
-      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.05, 18), accentMat);
-      base.position.y = 0.025;
-      group.add(base);
+      const dome = new THREE.Mesh(domeCeilingGeom, sphereMat);
+      mountGroup.add(dome);
 
-      const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.022, 0.16, 14), bodyMat);
-      neck.position.y = 0.12;
-      group.add(neck);
+      const topCapGeom = new THREE.CircleGeometry(topRadius, 48);
+      const topCap = new THREE.Mesh(topCapGeom, cutMat);
+      topCap.rotation.x = -Math.PI / 2;
+      topCap.position.set(0, topY, 0);
+      mountGroup.add(topCap);
 
-      const head = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.07, 0.18), bodyMat);
-      head.position.set(0, 0.19, 0.06);
-      group.add(head);
+      const topIconGeo = getIconGeometry();
+      const topIcon = new THREE.Mesh(topIconGeo.geometry, iconMat);
+      topIcon.scale.setScalar(topIconGeo.scale);
+      topIcon.position.set(0, topY + 0.002, 0);
+      topIcon.renderOrder = 10;
+      mountGroup.add(topIcon);
 
-      const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.025, 18), lensMat);
-      lens.rotation.x = Math.PI / 2;
-      lens.position.set(0, 0.19, 0.16);
-      group.add(lens);
+      // Dome camera lens "window" on the underside, slightly angled.
+      const lensCutMat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+      lensCutMat.depthWrite = false;
+      lensCutMat.polygonOffset = true;
+      lensCutMat.polygonOffsetFactor = -1;
+      lensCutMat.polygonOffsetUnits = -1;
 
-      const led = new THREE.PointLight(0x38bdf8, 0.15, 0.65, 2.0);
-      led.position.set(0, 0.2, 0.165);
-      group.add(led);
+      const lensRadius = 0.055;
+      const lensCutGeom = new THREE.CircleGeometry(lensRadius, 42);
+      const lensCut = new THREE.Mesh(lensCutGeom, lensCutMat);
+      lensCut.renderOrder = 9;
+      mountGroup.add(lensCut);
 
-      led.intensity = Boolean(asString(asRecord(element.props).camera_id).trim()) ? 0.15 : 0.05;
+      const light = new THREE.PointLight(NEON, 0.18, 0.9, 2.2);
+      light.position.set(0, BUTTON_RADIUS * 0.45, 0);
+      mountGroup.add(light);
+
+      function apply(el: CompositionElement) {
+        // Ceiling-only for now.
+        mountGroup.rotation.set(0, 0, 0);
+        mountGroup.position.set(0, 0, 0);
+
+        // Hang from ceiling: top cut flush at wallHeight.
+        mountGroup.position.y = view.wallHeight - topY - CEILING_TOP_MARGIN;
+
+        const lensDir = new THREE.Vector3(0.12, -0.72, 1).normalize();
+        const lensPos = lensDir.clone().multiplyScalar(BUTTON_RADIUS * 0.92);
+        lensCut.position.copy(lensPos);
+        lensCut.lookAt(lensPos.clone().add(lensDir));
+        lensCut.rotateZ(0.55);
+        lensCut.position.add(lensDir.clone().multiplyScalar(0.002));
+      }
+
+      apply(element);
 
       return {
         object: group,
-        update: (el) => {
-          const props = asRecord(el.props);
-          led.intensity = Boolean(asString(props.camera_id).trim()) ? 0.15 : 0.05;
-        },
+        update: apply,
         dispose: () => {
-          (base.geometry as any).dispose?.();
-          (neck.geometry as any).dispose?.();
-          (head.geometry as any).dispose?.();
-          (lens.geometry as any).dispose?.();
-          bodyMat.dispose();
-          accentMat.dispose();
-          lensMat.dispose();
+          domeCeilingGeom.dispose();
+          topCapGeom.dispose();
+          lensCutGeom.dispose();
+          sphereMat.dispose();
+          cutMat.dispose();
+          iconMat.dispose();
+          lensCutMat.dispose();
         },
       };
     },

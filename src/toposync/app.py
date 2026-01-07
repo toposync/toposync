@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import mimetypes
 import os
@@ -10,12 +12,14 @@ from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from toposync.extensions.manager import ExtensionManager
 from toposync.runtime.device_store import DeviceStore
 from toposync.runtime.event_bus import EventBus, EventOutcome
 from toposync.runtime.config_store import AppConfig, AppSettings, Composition, ConfigStore, UserDataPaths
+from toposync.runtime.notifications import NotificationsRuntime
 from toposync.runtime.services import ServiceRegistry
 
 logger = logging.getLogger("toposync")
@@ -115,6 +119,9 @@ async def _lifespan(app: FastAPI):
         config_store.paths.files_dir,
     )
 
+    notifications = NotificationsRuntime(data_dir=config_store.paths.data_dir)
+    services.register("notifications.upsert", notifications.upsert)
+
     services.register("devices.get_state", store.get_state)
     services.register("devices.set_state", store.set_state)
     services.register("devices.toggle", store.toggle)
@@ -135,6 +142,7 @@ async def _lifespan(app: FastAPI):
     app.state.bus = bus
     app.state.services = services
     app.state.config_store = config_store
+    app.state.notifications = notifications
 
     ext_manager = ExtensionManager(group="toposync.extensions")
     await ext_manager.load(app=app, bus=bus, services=services)
@@ -344,5 +352,66 @@ def create_app() -> FastAPI:
     async def get_device(request: Request, device_id: str) -> dict[str, Any]:
         store: DeviceStore = request.app.state.store
         return {"device_id": device_id, "state": store.peek(device_id)}
+
+    @app.get("/api/notifications")
+    async def list_notifications(request: Request, before: int | None = None, limit: int = 50) -> dict[str, Any]:
+        runtime: NotificationsRuntime = request.app.state.notifications
+        items, next_cursor = await runtime.list(before=before, limit=limit)
+        return {"notifications": items, "next_cursor": next_cursor}
+
+    @app.get("/api/notifications/stream")
+    async def notifications_stream(request: Request) -> StreamingResponse:  # noqa: ARG001
+        runtime: NotificationsRuntime = request.app.state.notifications
+        q = runtime.broadcaster.subscribe()
+
+        async def gen():
+            try:
+                yield "retry: 1000\n\n"
+                yield "event: ready\ndata: {}\n\n"
+                while True:
+                    event = await q.get()
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            except asyncio.CancelledError:
+                raise
+            finally:
+                runtime.broadcaster.unsubscribe(q)
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    @app.get("/api/notifications/{notification_id}/stream")
+    async def notification_stream(request: Request, notification_id: str) -> StreamingResponse:  # noqa: ARG001
+        runtime: NotificationsRuntime = request.app.state.notifications
+        wanted = notification_id.strip()
+        if not wanted:
+            raise HTTPException(status_code=400, detail="notification_id is required")
+
+        q = runtime.broadcaster.subscribe()
+
+        async def gen():
+            try:
+                yield "retry: 1000\n\n"
+                yield "event: ready\ndata: {}\n\n"
+                while True:
+                    event = await q.get()
+                    notif = event.get("notification") if isinstance(event, dict) else None
+                    if not isinstance(notif, dict):
+                        continue
+                    if str(notif.get("id") or "") != wanted:
+                        continue
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            except asyncio.CancelledError:
+                raise
+            finally:
+                runtime.broadcaster.unsubscribe(q)
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    @app.get("/api/notifications/{notification_id}")
+    async def get_notification(request: Request, notification_id: str) -> dict[str, Any]:
+        runtime: NotificationsRuntime = request.app.state.notifications
+        notif = await runtime.get(notification_id)
+        if notif is None:
+            raise HTTPException(status_code=404, detail="Unknown notification")
+        return notif
 
     return app

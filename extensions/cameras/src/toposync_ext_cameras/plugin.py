@@ -185,6 +185,7 @@ class CamerasExtension(BaseExtension):
                 extension_id=EXTENSION_ID,
                 data_dir=config_store.paths.data_dir,
                 files_dir=config_store.paths.files_dir,
+                services=services,
             )
             runtime.start()
 

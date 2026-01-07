@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from toposync.runtime.config_store import Composition, ConfigStore
+from toposync.runtime.services import ServiceRegistry
 
 from .events import EventBroadcaster
 from .frame_grabber import FrameGrabber
@@ -444,6 +445,7 @@ class CamerasProcessingRuntime:
         extension_id: str,
         data_dir: Path,
         files_dir: Path,
+        services: ServiceRegistry | None = None,
         poll_interval_s: float = 2.0,
     ) -> None:
         self._config_store = config_store
@@ -456,6 +458,8 @@ class CamerasProcessingRuntime:
         self.broadcaster = EventBroadcaster()
         self.db = TrackingDatabase(data_dir / "cameras" / "tracking.sqlite3")
         self._files_dir = files_dir
+        self._services = services
+        self._notification_last_emit: dict[str, float] = {}
 
         self._workers: dict[str, CameraWorker] = {}
         self._worker_sigs: dict[str, str] = {}
@@ -587,6 +591,7 @@ class CamerasProcessingRuntime:
             enriched["composition_id"] = comp_id
             enriched["world"] = world
             self.broadcaster.publish(enriched)
+            self._maybe_publish_notification(enriched)
 
     def status(self) -> dict[str, Any]:
         return {
@@ -595,6 +600,80 @@ class CamerasProcessingRuntime:
                 {"server_id": sid, "url": client.server.url} for sid, client in sorted(self._remote_clients.items())
             ],
         }
+
+    def _maybe_publish_notification(self, event: dict[str, Any]) -> None:
+        if self._services is None:
+            return
+        tracking_id = str(event.get("tracking_id") or "").strip()
+        if not tracking_id:
+            return
+        camera_id = str(event.get("camera_id") or "").strip()
+        if not camera_id:
+            return
+
+        comp_id = str(event.get("composition_id") or "").strip() or None
+        kind = str(event.get("kind") or "").strip()
+
+        try:
+            ts = float(event.get("ts") or 0.0) or time.time()
+        except Exception:
+            ts = time.time()
+
+        image_path = str(event.get("image_path") or "").strip() or None
+        dedupe_key = f"camera:{camera_id}:comp:{comp_id or '-'}:track:{tracking_id}"
+
+        last = float(self._notification_last_emit.get(dedupe_key) or 0.0)
+        if last and (ts - last) < 1.25 and not image_path:
+            return
+        self._notification_last_emit[dedupe_key] = ts
+
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        label = str(payload.get("label") or "").strip()
+        conf = payload.get("confidence")
+        try:
+            conf_f = float(conf) if conf is not None else None
+        except Exception:
+            conf_f = None
+
+        title = "Detecção na câmera"
+        description = f"Câmera {camera_id}"
+        if kind == "motion":
+            title = "Movimento detectado"
+        elif kind == "object":
+            title = f"Objeto detectado: {label}" if label else "Objeto detectado"
+            if label and conf_f is not None:
+                description = f"Câmera {camera_id} • {label} ({conf_f:.2f})"
+
+        notif_payload: dict[str, Any] = {
+            "source": "cameras",
+            "camera_id": camera_id,
+            "composition_id": comp_id,
+            "tracking_id": tracking_id,
+            "kind": kind,
+        }
+        if label:
+            notif_payload["label"] = label
+        if conf_f is not None:
+            notif_payload["confidence"] = conf_f
+
+        async def _call() -> None:
+            try:
+                await self._services.call(
+                    "notifications.upsert",
+                    type="cameras.tracking",
+                    title=title,
+                    description=description,
+                    image_path=image_path,
+                    payload=notif_payload,
+                    dedupe_key=dedupe_key,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("failed to publish notification: %s", exc)
+
+        try:
+            asyncio.create_task(_call())
+        except Exception:
+            pass
 
     async def _run(self) -> None:
         while not self._stopped.is_set():

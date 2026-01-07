@@ -6,6 +6,7 @@ export type EmitEventResponse = {
 };
 
 import type { CompositionElement } from "@toposync/plugin-api";
+import type { Notification } from "@toposync/plugin-api";
 
 export type Composition = {
   id: string;
@@ -32,6 +33,11 @@ export type DeleteCompositionResponse = {
 export type AppSettings = {
   core: Record<string, unknown>;
   extensions: Record<string, Record<string, unknown>>;
+};
+
+export type NotificationsPage = {
+  notifications: Notification[];
+  next_cursor: number | null;
 };
 
 export async function fetchExtensions(): Promise<any[]> {
@@ -127,5 +133,21 @@ export async function renameComposition(compositionId: string, name: string): Pr
 export async function deleteComposition(compositionId: string): Promise<DeleteCompositionResponse> {
   const res = await fetch(`/api/compositions/${encodeURIComponent(compositionId)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`Failed to delete composition: ${res.status}`);
+  return res.json();
+}
+
+export async function listNotifications(before: number | null = null, limit = 40): Promise<NotificationsPage> {
+  const params = new URLSearchParams();
+  if (before != null) params.set("before", String(before));
+  params.set("limit", String(limit));
+  const res = await fetch(`/api/notifications?${params.toString()}`);
+  if (!res.ok) throw new Error(`Failed to list notifications: ${res.status}`);
+  const body = (await res.json()) as { notifications?: Notification[]; next_cursor?: number | null };
+  return { notifications: body.notifications ?? [], next_cursor: body.next_cursor ?? null };
+}
+
+export async function getNotification(notificationId: string): Promise<Notification> {
+  const res = await fetch(`/api/notifications/${encodeURIComponent(notificationId)}`);
+  if (!res.ok) throw new Error(`Failed to fetch notification ${notificationId}: ${res.status}`);
   return res.json();
 }

@@ -79,6 +79,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.empty_title": "Nothing configured yet",
     "core.ui.empty_desc": "Click “Edit” to add elements to the composition.",
     "core.ui.notifications_empty": "No notifications yet.",
+    "core.ui.loading": "Loading…",
     "core.ui.element_types_empty": "No extensions have registered elements yet.",
     "core.ui.layers_empty": "No elements added yet.",
 
@@ -174,6 +175,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.empty_title": "Nada configurado ainda",
     "core.ui.empty_desc": "Clique em “Editar” para adicionar elementos na composição.",
     "core.ui.notifications_empty": "Nenhuma notificação por enquanto.",
+    "core.ui.loading": "Carregando…",
     "core.ui.element_types_empty": "Nenhuma extensão registrou elementos ainda.",
     "core.ui.layers_empty": "Nenhum elemento adicionado ainda.",
 

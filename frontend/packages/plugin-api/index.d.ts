@@ -53,7 +53,10 @@ export type Notification = {
   id: string;
   type: string;
   title: string;
+  description?: string;
+  imageUrl?: string;
   createdAt?: string;
+  updatedAt?: string;
   payload?: unknown;
 };
 

@@ -22,8 +22,10 @@ import {
   fetchExtensions,
   getComposition,
   getDevice,
+  getNotification,
   getSettings,
   listCompositions,
+  listNotifications,
   emitEvent,
   patchExtensionSettings,
   putComposition,
@@ -178,7 +180,13 @@ export function App(): React.ReactElement {
   const [editorToolsById, setEditorToolsById] = useState<Record<string, EditorTool>>({});
   const [settingsPanelsById, setSettingsPanelsById] = useState<Record<string, SettingsPanel>>({});
   const [themesById, setThemesById] = useState<Record<string, ThemeDefinition>>({});
-  const [notifications] = useState<Notification[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notificationsCursor, setNotificationsCursor] = useState<number | null>(null);
+  const [notificationsHasMore, setNotificationsHasMore] = useState(true);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [activeNotificationId, setActiveNotificationId] = useState<string | null>(null);
+  const lastUserInteractionTsRef = useRef<number>(Date.now());
+  const hasManualNotificationSelectionRef = useRef(false);
   const [composition, setComposition] = useState<Composition>(() => defaultComposition());
   const compositionRef = useRef<Composition>(composition);
   const [compositions, setCompositions] = useState<Array<{ id: string; name: string }>>([]);
@@ -438,6 +446,131 @@ export function App(): React.ReactElement {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const bump = () => {
+      lastUserInteractionTsRef.current = Date.now();
+    };
+    window.addEventListener("pointerdown", bump, { capture: true });
+    window.addEventListener("keydown", bump, { capture: true });
+    window.addEventListener("wheel", bump, { capture: true, passive: true });
+    window.addEventListener("touchstart", bump, { capture: true, passive: true });
+    return () => {
+      window.removeEventListener("pointerdown", bump, true);
+      window.removeEventListener("keydown", bump, true);
+      window.removeEventListener("wheel", bump, true);
+      window.removeEventListener("touchstart", bump, true);
+    };
+  }, []);
+
+  const upsertNotification = useCallback((next: Notification, op: "insert" | "update") => {
+    setNotifications((prev) => {
+      const idx = prev.findIndex((n) => n.id === next.id);
+      if (idx === -1) {
+        return op === "insert" ? [next, ...prev] : [next, ...prev];
+      }
+      const merged = { ...prev[idx], ...next };
+      const out = prev.slice();
+      out[idx] = merged;
+      return out;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!backendAvailable) return;
+    let cancelled = false;
+    setNotificationsLoading(true);
+    void (async () => {
+      try {
+        const page = await listNotifications(null, 40);
+        if (cancelled) return;
+        setNotifications(page.notifications ?? []);
+        setNotificationsCursor(page.next_cursor ?? null);
+        setNotificationsHasMore(page.next_cursor != null);
+      } catch (err) {
+        console.error("Failed to load notifications", err);
+      } finally {
+        if (!cancelled) setNotificationsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [backendAvailable]);
+
+  useEffect(() => {
+    if (notifications.length === 0) {
+      if (activeNotificationId) setActiveNotificationId(null);
+      return;
+    }
+    if (activeNotificationId && notifications.some((n) => n.id === activeNotificationId)) return;
+    setActiveNotificationId(notifications[0].id);
+  }, [activeNotificationId, notifications]);
+
+  useEffect(() => {
+    if (!backendAvailable) return;
+
+    const es = new EventSource("/api/notifications/stream");
+    es.onmessage = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.data ?? "{}") as { op?: string; notification?: Notification };
+        const op = parsed.op === "update" ? "update" : "insert";
+        const notif = parsed.notification;
+        if (!notif || typeof notif.id !== "string") return;
+        upsertNotification(notif, op);
+
+        if (op === "insert") {
+          const now = Date.now();
+          const idle = now - lastUserInteractionTsRef.current > 12_000;
+          const allowAuto = !hasManualNotificationSelectionRef.current || idle;
+          if (allowAuto) setActiveNotificationId(notif.id);
+        }
+      } catch (err) {
+        console.warn("Failed to parse notifications SSE", err);
+      }
+    };
+    es.onerror = (err) => {
+      console.warn("Notifications SSE error", err);
+    };
+
+    return () => es.close();
+  }, [backendAvailable, upsertNotification]);
+
+  useEffect(() => {
+    if (!backendAvailable) return;
+    if (!activeNotificationId) return;
+
+    let cancelled = false;
+    void getNotification(activeNotificationId)
+      .then((notif) => {
+        if (cancelled) return;
+        upsertNotification(notif, "update");
+      })
+      .catch((err) => {
+        console.warn("Failed to fetch active notification", err);
+      });
+
+    const es = new EventSource(`/api/notifications/${encodeURIComponent(activeNotificationId)}/stream`);
+    es.onmessage = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.data ?? "{}") as { op?: string; notification?: Notification };
+        const op = parsed.op === "update" ? "update" : "insert";
+        const notif = parsed.notification;
+        if (!notif || typeof notif.id !== "string") return;
+        upsertNotification(notif, op);
+      } catch (err) {
+        console.warn("Failed to parse notification detail SSE", err);
+      }
+    };
+    es.onerror = (err) => {
+      console.warn("Notification detail SSE error", err);
+    };
+
+    return () => {
+      cancelled = true;
+      es.close();
+    };
+  }, [activeNotificationId, backendAvailable, upsertNotification]);
 
   useEffect(() => {
     if (!compositionLoaded) return;
@@ -717,6 +850,35 @@ export function App(): React.ReactElement {
     [],
   );
 
+  const loadMoreNotifications = useCallback(async (): Promise<void> => {
+    if (!backendAvailable) return;
+    if (notificationsLoading) return;
+    if (!notificationsHasMore) return;
+
+    setNotificationsLoading(true);
+    try {
+      const page = await listNotifications(notificationsCursor, 40);
+      setNotificationsCursor(page.next_cursor ?? null);
+      setNotificationsHasMore(page.next_cursor != null);
+      if (page.notifications.length === 0) return;
+      setNotifications((prev) => {
+        const existing = new Set(prev.map((n) => n.id));
+        const toAdd = page.notifications.filter((n) => !existing.has(n.id));
+        return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+      });
+    } catch (err) {
+      console.error("Failed to load more notifications", err);
+    } finally {
+      setNotificationsLoading(false);
+    }
+  }, [backendAvailable, notificationsCursor, notificationsHasMore, notificationsLoading]);
+
+  const selectNotification = useCallback((notificationId: string) => {
+    setActiveNotificationId(notificationId);
+    hasManualNotificationSelectionRef.current = true;
+    lastUserInteractionTsRef.current = Date.now();
+  }, []);
+
   return (
     <div className="appShell">
       {screen === "main" ? (
@@ -730,6 +892,10 @@ export function App(): React.ReactElement {
           onSetWallHeightPreset={setWallHeightPreset}
           notificationRenderers={notificationRenderers}
           notifications={notifications}
+          activeNotificationId={activeNotificationId}
+          notificationsLoading={notificationsLoading}
+          onSelectNotification={selectNotification}
+          onLoadMoreNotifications={loadMoreNotifications}
           api={host.api}
           updateElement={updateElement}
           onEditComposition={() => setScreen("editor")}

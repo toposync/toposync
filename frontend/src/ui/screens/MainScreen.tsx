@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   CompositionElement,
@@ -29,6 +29,10 @@ type Props = {
   onSetWallHeightPreset: (preset: WallHeightPreset) => void;
   notificationRenderers: NotificationRenderer[];
   notifications: Notification[];
+  activeNotificationId: string | null;
+  notificationsLoading: boolean;
+  onSelectNotification: (notificationId: string) => void;
+  onLoadMoreNotifications: () => void;
   api: HostApi;
   updateElement: (elementId: string, patch: CompositionElementPatch) => void;
   onEditComposition: () => void;
@@ -56,6 +60,10 @@ export function MainScreen({
   onSetWallHeightPreset,
   notificationRenderers,
   notifications,
+  activeNotificationId,
+  notificationsLoading,
+  onSelectNotification,
+  onLoadMoreNotifications,
   api,
   updateElement,
   onEditComposition,
@@ -70,6 +78,8 @@ export function MainScreen({
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
   const [isViewSettingsOpen, setIsViewSettingsOpen] = useState(false);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
+  const notificationScrollRef = useRef<HTMLDivElement | null>(null);
+  const notificationSentinelRef = useRef<HTMLDivElement | null>(null);
 
   const activeElement = useMemo(
     () => (activeElementId ? elements.find((e) => e.id === activeElementId) ?? null : null),
@@ -79,6 +89,24 @@ export function MainScreen({
 
   const actionTitle = activeElement ? activeElement.name : t("core.ui.action");
   const isActionModalOpen = Boolean(activeElement);
+
+  useEffect(() => {
+    const root = notificationScrollRef.current;
+    const sentinel = notificationSentinelRef.current;
+    if (!root || !sentinel) return;
+
+    const obs = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (!entry?.isIntersecting) return;
+        onLoadMoreNotifications();
+      },
+      { root, rootMargin: "220px" },
+    );
+
+    obs.observe(sentinel);
+    return () => obs.disconnect();
+  }, [onLoadMoreNotifications]);
 
   return (
     <div className="screenRoot">
@@ -144,7 +172,7 @@ export function MainScreen({
       <div className="overlayLeft">
         <div className="rail railNotifications">
           <div className="railTitle">{t("core.ui.notifications")}</div>
-          <div className="railScroll">
+          <div className="railScroll" ref={notificationScrollRef}>
             {notifications.length === 0 ? (
               <div className="card">
                 <div className="cardBody">{t("core.ui.notifications_empty")}</div>
@@ -153,16 +181,40 @@ export function MainScreen({
             {notifications.map((n) => {
               const renderer = notificationRenderers.find((r) => r.type === n.type);
               const time = formatTime(n.createdAt);
+              const isActive = Boolean(activeNotificationId && n.id === activeNotificationId);
               return (
-                <div className="card" key={n.id}>
+                <button
+                  className={["card", "cardButton", isActive ? "isActive" : ""].filter(Boolean).join(" ")}
+                  type="button"
+                  key={n.id}
+                  onClick={() => onSelectNotification(n.id)}
+                >
                   <div className="cardHeaderRow">
                     <div className="cardTitle">{n.title}</div>
                     {time ? <div className="cardMeta">{time}</div> : null}
                   </div>
-                  <div className="cardBody">{renderer ? renderer.render(n) : JSON.stringify(n.payload)}</div>
-                </div>
+                  <div className="cardBody">
+                    {renderer ? (
+                      renderer.render(n)
+                    ) : (
+                      <>
+                        {n.description ? <div className="notificationText">{n.description}</div> : null}
+                        {n.imageUrl ? (
+                          <img className="notificationThumb" src={n.imageUrl} alt="" loading="lazy" />
+                        ) : null}
+                        {!n.description && !n.imageUrl ? <div className="notificationText">{JSON.stringify(n.payload)}</div> : null}
+                      </>
+                    )}
+                  </div>
+                </button>
               );
             })}
+            <div ref={notificationSentinelRef} />
+            {notificationsLoading ? (
+              <div className="card">
+                <div className="cardBody">{t("core.ui.loading")}</div>
+              </div>
+            ) : null}
           </div>
         </div>
       </div>

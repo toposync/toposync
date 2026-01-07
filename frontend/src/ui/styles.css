@@ -225,6 +225,36 @@ textarea {
   line-height: 1.4;
 }
 
+.cardButton {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  appearance: none;
+}
+
+.cardButton:hover {
+  border-color: var(--borderStrong);
+}
+
+.card.isActive {
+  border-color: rgba(99, 102, 241, 0.55);
+  box-shadow: 0 18px 56px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+.notificationText {
+  white-space: pre-wrap;
+}
+
+.notificationThumb {
+  width: 100%;
+  margin-top: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(0, 0, 0, 0.16);
+  display: block;
+}
+
 .row {
   display: flex;
   gap: 10px;

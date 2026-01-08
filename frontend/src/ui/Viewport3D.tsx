@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
@@ -19,6 +19,50 @@ type Tracked = {
 };
 
 const ELEMENT_ID = "__toposyncElementId";
+const FULL_WALL_HEIGHT = 2.7;
+const FOCUS_HIGHLIGHT_COLOR = 0xfbbf24;
+const GHOST_WALLS_OPACITY = 0.22;
+const GHOST_WALLS_MATERIAL_STATE_KEY = "__toposyncGhostWallsOriginal";
+
+function applyGhostWalls(object: THREE.Object3D, enabled: boolean): void {
+  object.traverse((node) => {
+    const matRaw = (node as any).material as unknown;
+    if (!matRaw) return;
+
+    const mats = Array.isArray(matRaw) ? matRaw : [matRaw];
+    for (const m of mats) {
+      if (!m || !(m as any).isMaterial) continue;
+      const mat = m as THREE.Material;
+      const userData = (mat.userData ??= {});
+
+      if (enabled) {
+        if (!(GHOST_WALLS_MATERIAL_STATE_KEY in userData)) {
+          (userData as any)[GHOST_WALLS_MATERIAL_STATE_KEY] = {
+            opacity: (mat as any).opacity,
+            transparent: mat.transparent,
+            depthWrite: (mat as any).depthWrite,
+          };
+        }
+
+        if (typeof (mat as any).opacity === "number") (mat as any).opacity = GHOST_WALLS_OPACITY;
+        mat.transparent = true;
+        if (typeof (mat as any).depthWrite === "boolean") (mat as any).depthWrite = false;
+        mat.needsUpdate = true;
+        continue;
+      }
+
+      const original = (userData as any)[GHOST_WALLS_MATERIAL_STATE_KEY];
+      if (original && typeof original === "object") {
+        if (typeof original.opacity === "number" && typeof (mat as any).opacity === "number") (mat as any).opacity = original.opacity;
+        if (typeof original.transparent === "boolean") mat.transparent = original.transparent;
+        if (typeof original.depthWrite === "boolean" && typeof (mat as any).depthWrite === "boolean")
+          (mat as any).depthWrite = original.depthWrite;
+        delete (userData as any)[GHOST_WALLS_MATERIAL_STATE_KEY];
+        mat.needsUpdate = true;
+      }
+    }
+  });
+}
 
 function findElementId(obj: THREE.Object3D): string | null {
   let cur: THREE.Object3D | null = obj;
@@ -57,10 +101,20 @@ export function Viewport3D({
   const trackedRef = useRef<Map<string, Tracked>>(new Map());
   const viewRef = useRef<ViewSettings>({
     wallHeightPreset: "high",
-    wallHeight: 2.7,
+    wallHeight: FULL_WALL_HEIGHT,
+    ghostWalls: false,
+  });
+  const elementViewRef = useRef<ViewSettings>({
+    wallHeightPreset: "high",
+    wallHeight: FULL_WALL_HEIGHT,
+    ghostWalls: false,
   });
   const viewKeyRef = useRef<string>("");
   const onElementActivatedRef = useRef<Props["onElementActivated"]>(onElementActivated);
+  const elementTypesByIdRef = useRef<Record<string, ElementType>>(elementTypesById);
+
+  const [focusedElementId, setFocusedElementId] = useState<string | null>(null);
+  const focusHelperRef = useRef<THREE.BoxHelper | null>(null);
 
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
   const mouse = useMemo(() => new THREE.Vector2(), []);
@@ -68,11 +122,39 @@ export function Viewport3D({
   useEffect(() => {
     viewRef.current.wallHeightPreset = viewSettings.wallHeightPreset;
     viewRef.current.wallHeight = viewSettings.wallHeight;
-  }, [viewSettings.wallHeight, viewSettings.wallHeightPreset]);
+    viewRef.current.ghostWalls = Boolean(viewSettings.ghostWalls);
+    elementViewRef.current.wallHeightPreset = viewSettings.wallHeightPreset;
+    elementViewRef.current.wallHeight =
+      viewSettings.wallHeightPreset === "low" ? FULL_WALL_HEIGHT : viewSettings.wallHeight;
+    elementViewRef.current.ghostWalls = Boolean(viewSettings.ghostWalls);
+  }, [viewSettings.ghostWalls, viewSettings.wallHeight, viewSettings.wallHeightPreset]);
 
   useEffect(() => {
     onElementActivatedRef.current = onElementActivated;
   }, [onElementActivated]);
+
+  useEffect(() => {
+    elementTypesByIdRef.current = elementTypesById;
+  }, [elementTypesById]);
+
+  const focusables = useMemo(() => {
+    const out: Array<{ id: string; x: number; z: number }> = [];
+    for (const el of elements) {
+      const def = elementTypesById[el.type];
+      if (!def?.create3D) continue;
+      if (def.layerGroup === "walls") continue;
+      const interactive = Boolean(def.primaryAction || def.renderActionModal);
+      if (!interactive) continue;
+      out.push({ id: el.id, x: el.position.x, z: el.position.z });
+    }
+    out.sort((a, b) => a.z - b.z || a.x - b.x || a.id.localeCompare(b.id));
+    return out;
+  }, [elements, elementTypesById]);
+
+  useEffect(() => {
+    if (!focusedElementId) return;
+    if (!focusables.some((f) => f.id === focusedElementId)) setFocusedElementId(null);
+  }, [focusables, focusedElementId]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -142,6 +224,7 @@ export function Viewport3D({
       raf = requestAnimationFrame(animate);
       const dt = Math.min(clock.getDelta(), 0.05);
       for (const tracked of trackedRef.current.values()) tracked.instance.tick?.(dt);
+      focusHelperRef.current?.update();
       controls.update();
       renderer.render(scene, camera);
       labelRenderer.render(scene, camera);
@@ -170,12 +253,19 @@ export function Viewport3D({
       const hits = raycaster.intersectObjects(scene.children, true);
       for (const hit of hits) {
         const id = findElementId(hit.object);
-        if (id) return id;
+        if (!id) continue;
+        if (viewRef.current.ghostWalls) {
+          const tracked = trackedRef.current.get(id);
+          const def = tracked ? elementTypesByIdRef.current[tracked.type] : null;
+          if (def?.layerGroup === "walls") continue;
+        }
+        return id;
       }
       return null;
     }
 
     function handlePointerDown(e: PointerEvent) {
+      containerEl.focus();
       downAt = { x: e.clientX, y: e.clientY };
       dragged = false;
       longPressFired = false;
@@ -225,6 +315,8 @@ export function Viewport3D({
       const id = pickElementId(e.clientX, e.clientY);
       if (!id) return;
 
+      setFocusedElementId(id);
+
       const now = Date.now();
 
       if (pendingClick && pendingClick.id === id && now - pendingClick.at <= DOUBLE_CLICK_MS) {
@@ -268,6 +360,15 @@ export function Viewport3D({
       if (pendingClick) window.clearTimeout(pendingClick.timer);
       pendingClick = null;
 
+      if (focusHelperRef.current) {
+        scene.remove(focusHelperRef.current);
+        focusHelperRef.current.geometry.dispose();
+        const mat = focusHelperRef.current.material as unknown as THREE.Material | THREE.Material[];
+        if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+        else mat.dispose();
+        focusHelperRef.current = null;
+      }
+
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
       renderer.domElement.removeEventListener("pointermove", handlePointerMove);
       renderer.domElement.removeEventListener("pointerup", handlePointerUp);
@@ -292,13 +393,47 @@ export function Viewport3D({
 
   useEffect(() => {
     const scene = sceneRef.current;
+    if (!scene) return;
+
+    if (focusHelperRef.current) {
+      scene.remove(focusHelperRef.current);
+      focusHelperRef.current.geometry.dispose();
+      const mat = focusHelperRef.current.material as unknown as THREE.Material | THREE.Material[];
+      if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+      else mat.dispose();
+      focusHelperRef.current = null;
+    }
+
+    if (!focusedElementId) return;
+    const tracked = trackedRef.current.get(focusedElementId);
+    if (!tracked) return;
+
+    const helper = new THREE.BoxHelper(tracked.instance.object, FOCUS_HIGHLIGHT_COLOR);
+    const mat = helper.material as unknown as THREE.Material | THREE.Material[];
+    if (Array.isArray(mat)) {
+      for (const m of mat) {
+        (m as any).depthTest = false;
+        m.transparent = true;
+      }
+    } else {
+      (mat as any).depthTest = false;
+      mat.transparent = true;
+    }
+    helper.renderOrder = 9999;
+    scene.add(helper);
+    focusHelperRef.current = helper;
+  }, [focusedElementId]);
+
+  useEffect(() => {
+    const scene = sceneRef.current;
     const renderer = rendererRef.current;
     const camera = cameraRef.current;
     if (!scene || !renderer || !camera) return;
 
-    const viewKey = `${viewSettings.wallHeightPreset}:${viewSettings.wallHeight}`;
+    const viewKey = `${viewSettings.wallHeightPreset}:${viewSettings.wallHeight}:${Boolean(viewSettings.ghostWalls)}`;
     const viewChanged = viewKeyRef.current !== viewKey;
     viewKeyRef.current = viewKey;
+    const ghostWallsEnabled = Boolean(viewSettings.ghostWalls);
 
     const tracked = trackedRef.current;
     const elementsById = new Map(elements.map((e) => [e.id, e]));
@@ -325,9 +460,11 @@ export function Viewport3D({
           tracked.delete(element.id);
         }
 
-        const instance = def.create3D({ THREE, scene, camera, renderer, view: viewRef.current }, element);
+        const view = def.layerGroup === "walls" ? viewRef.current : elementViewRef.current;
+        const instance = def.create3D({ THREE, scene, camera, renderer, view }, element);
         (instance.object.userData as any)[ELEMENT_ID] = element.id;
         scene.add(instance.object);
+        if (def.layerGroup === "walls") applyGhostWalls(instance.object, ghostWallsEnabled);
         tracked.set(element.id, { type: element.type, instance, last: element });
       }
 
@@ -341,8 +478,113 @@ export function Viewport3D({
         entry.instance.update?.(element);
         entry.last = element;
       }
-    }
-  }, [elements, elementTypesById, viewSettings.wallHeight, viewSettings.wallHeightPreset]);
 
-  return <div className="viewportRoot" ref={containerRef} />;
+      if (viewChanged && def.layerGroup === "walls") applyGhostWalls(entry.instance.object, ghostWallsEnabled);
+    }
+  }, [elements, elementTypesById, viewSettings.ghostWalls, viewSettings.wallHeight, viewSettings.wallHeightPreset]);
+
+  function focusNext(delta: number) {
+    if (focusables.length === 0) return;
+    const idx = focusables.findIndex((f) => f.id === focusedElementId);
+    const nextIdx = idx === -1 ? (delta >= 0 ? 0 : focusables.length - 1) : (idx + delta + focusables.length) % focusables.length;
+    setFocusedElementId(focusables[nextIdx].id);
+  }
+
+  function focusDirection(direction: "left" | "right" | "up" | "down") {
+    if (focusables.length === 0) return;
+    const current = focusables.find((f) => f.id === focusedElementId) ?? focusables[0];
+
+    let best: { id: string; score: number } | null = null;
+    for (const cand of focusables) {
+      if (cand.id === current.id) continue;
+      const dx = cand.x - current.x;
+      const dz = cand.z - current.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < 1e-6) continue;
+
+      let parallel = 0;
+      let perp = 0;
+      if (direction === "right") {
+        if (dx <= 1e-6) continue;
+        parallel = dx;
+        perp = Math.abs(dz);
+      } else if (direction === "left") {
+        if (dx >= -1e-6) continue;
+        parallel = -dx;
+        perp = Math.abs(dz);
+      } else if (direction === "down") {
+        if (dz <= 1e-6) continue;
+        parallel = dz;
+        perp = Math.abs(dx);
+      } else {
+        // up => negative Z
+        if (dz >= -1e-6) continue;
+        parallel = -dz;
+        perp = Math.abs(dx);
+      }
+
+      const angle = Math.atan2(perp, parallel);
+      const score = angle * 1000 + dist;
+      if (!best || score < best.score) best = { id: cand.id, score };
+    }
+
+    if (best) setFocusedElementId(best.id);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (e.defaultPrevented) return;
+    if (e.key === "Escape") {
+      if (focusedElementId) {
+        e.preventDefault();
+        setFocusedElementId(null);
+      }
+      return;
+    }
+
+    if (e.key === "Tab") {
+      if (!focusedElementId) return;
+      if (focusables.length === 0) return;
+      e.preventDefault();
+      focusNext(e.shiftKey ? -1 : 1);
+      return;
+    }
+
+    if (e.key === "ArrowLeft") {
+      if (focusables.length === 0) return;
+      e.preventDefault();
+      if (!focusedElementId) setFocusedElementId(focusables[0].id);
+      else focusDirection("left");
+      return;
+    }
+    if (e.key === "ArrowRight") {
+      if (focusables.length === 0) return;
+      e.preventDefault();
+      if (!focusedElementId) setFocusedElementId(focusables[0].id);
+      else focusDirection("right");
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      if (focusables.length === 0) return;
+      e.preventDefault();
+      if (!focusedElementId) setFocusedElementId(focusables[0].id);
+      else focusDirection("up");
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      if (focusables.length === 0) return;
+      e.preventDefault();
+      if (!focusedElementId) setFocusedElementId(focusables[0].id);
+      else focusDirection("down");
+      return;
+    }
+
+    if (e.key === "Enter" || e.key === " ") {
+      const handler = onElementActivatedRef.current;
+      if (!handler || !focusedElementId) return;
+      e.preventDefault();
+      handler(focusedElementId, "click");
+    }
+  }
+
+  return <div className="viewportRoot" ref={containerRef} tabIndex={0} onKeyDown={handleKeyDown} />;
 }

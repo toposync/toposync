@@ -75,22 +75,30 @@ function wallHeightForPreset(preset: WallHeightPreset): number {
   return 2.7;
 }
 
-function loadWallHeightPreset(): WallHeightPreset {
+function loadViewSettingsRecord(): Record<string, unknown> {
   try {
     const raw = localStorage.getItem(VIEW_SETTINGS_STORAGE_KEY);
-    if (!raw) return "high";
-    const obj = JSON.parse(raw);
-    const rec = asRecord(obj);
-    const preset = rec.wall_height_preset;
-    return isWallHeightPreset(preset) ? preset : "high";
+    if (!raw) return {};
+    return asRecord(JSON.parse(raw));
   } catch {
-    return "high";
+    return {};
   }
 }
 
-function saveWallHeightPreset(preset: WallHeightPreset): void {
+function loadWallHeightPreset(): WallHeightPreset {
+  const rec = loadViewSettingsRecord();
+  const preset = rec.wall_height_preset;
+  return isWallHeightPreset(preset) ? preset : "high";
+}
+
+function loadGhostWalls(): boolean {
+  const rec = loadViewSettingsRecord();
+  return rec.ghost_walls === true;
+}
+
+function saveViewSettings(preset: WallHeightPreset, ghostWalls: boolean): void {
   try {
-    localStorage.setItem(VIEW_SETTINGS_STORAGE_KEY, JSON.stringify({ wall_height_preset: preset }));
+    localStorage.setItem(VIEW_SETTINGS_STORAGE_KEY, JSON.stringify({ wall_height_preset: preset, ghost_walls: ghostWalls }));
   } catch {
     // ignore
   }
@@ -194,6 +202,7 @@ export function App(): React.ReactElement {
   const [compositionLoaded, setCompositionLoaded] = useState(false);
   const [backendAvailable, setBackendAvailable] = useState(false);
   const [wallHeightPreset, setWallHeightPreset] = useState<WallHeightPreset>(() => loadWallHeightPreset());
+  const [ghostWalls, setGhostWalls] = useState<boolean>(() => loadGhostWalls());
   const [themeId, setThemeId] = useState<string>(() => loadThemeId());
   const [settings, setSettings] = useState<AppSettings>({ core: {}, extensions: {} });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -248,13 +257,14 @@ export function App(): React.ReactElement {
     () => ({
       wallHeightPreset,
       wallHeight: wallHeightForPreset(wallHeightPreset),
+      ghostWalls,
     }),
-    [wallHeightPreset],
+    [ghostWalls, wallHeightPreset],
   );
 
   useEffect(() => {
-    saveWallHeightPreset(wallHeightPreset);
-  }, [wallHeightPreset]);
+    saveViewSettings(wallHeightPreset, ghostWalls);
+  }, [ghostWalls, wallHeightPreset]);
 
   useEffect(() => {
     saveThemeId(themeId);
@@ -881,20 +891,21 @@ export function App(): React.ReactElement {
 
   return (
     <div className="appShell">
-      {screen === "main" ? (
-        <MainScreen
-          compositionName={composition.name}
-          compositions={compositions}
-          activeCompositionId={activeCompositionId}
-          elements={composition.elements}
-          elementTypesById={elementTypesById}
-          viewSettings={viewSettings}
-          onSetWallHeightPreset={setWallHeightPreset}
-          notificationRenderers={notificationRenderers}
-          notifications={notifications}
-          activeNotificationId={activeNotificationId}
-          notificationsLoading={notificationsLoading}
-          onSelectNotification={selectNotification}
+	      {screen === "main" ? (
+	        <MainScreen
+	          compositionName={composition.name}
+	          compositions={compositions}
+	          activeCompositionId={activeCompositionId}
+	          elements={composition.elements}
+	          elementTypesById={elementTypesById}
+	          viewSettings={viewSettings}
+	          onSetWallHeightPreset={setWallHeightPreset}
+	          onSetGhostWalls={setGhostWalls}
+	          notificationRenderers={notificationRenderers}
+	          notifications={notifications}
+	          activeNotificationId={activeNotificationId}
+	          notificationsLoading={notificationsLoading}
+	          onSelectNotification={selectNotification}
           onLoadMoreNotifications={loadMoreNotifications}
           api={host.api}
           updateElement={updateElement}

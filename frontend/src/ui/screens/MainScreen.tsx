@@ -27,6 +27,7 @@ type Props = {
   elementTypesById: Record<string, ElementType>;
   viewSettings: ViewSettings;
   onSetWallHeightPreset: (preset: WallHeightPreset) => void;
+  onSetGhostWalls: (enabled: boolean) => void;
   notificationRenderers: NotificationRenderer[];
   notifications: Notification[];
   activeNotificationId: string | null;
@@ -58,6 +59,7 @@ export function MainScreen({
   elementTypesById,
   viewSettings,
   onSetWallHeightPreset,
+  onSetGhostWalls,
   notificationRenderers,
   notifications,
   activeNotificationId,
@@ -286,6 +288,27 @@ export function MainScreen({
               </div>
             );
           })}
+        </div>
+
+        <div className="modalSectionTitle">{t("core.ui.view_settings.interactivity")}</div>
+        <div className="choiceList">
+          {(() => {
+            const selected = Boolean(viewSettings.ghostWalls);
+            return (
+              <div
+                className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                role="button"
+                tabIndex={0}
+                onClick={() => onSetGhostWalls(!selected)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") onSetGhostWalls(!selected);
+                }}
+              >
+                <div className="choiceTitle">{t("core.ui.view_settings.ghost_walls")}</div>
+                <div className="choiceDesc">{t("core.ui.view_settings.ghost_walls_desc")}</div>
+              </div>
+            );
+          })()}
         </div>
       </Modal>
 

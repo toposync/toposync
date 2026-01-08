@@ -7,6 +7,7 @@ export type WallHeightPreset = "low" | "medium" | "high";
 export type ViewSettings = {
   wallHeightPreset: WallHeightPreset;
   wallHeight: number;
+  ghostWalls?: boolean;
 };
 
 export type Locale = "en" | "pt-BR";

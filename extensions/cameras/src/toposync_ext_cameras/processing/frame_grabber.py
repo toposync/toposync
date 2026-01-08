@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 import urllib.parse
@@ -13,6 +14,20 @@ except Exception:  # noqa: BLE001
     cv2 = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
+
+
+def _read_env_int(name: str, fallback: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return fallback
+    try:
+        return int(raw)
+    except Exception:
+        return fallback
+
+
+def _clamp_int(v: int, *, min_value: int, max_value: int) -> int:
+    return max(min_value, min(max_value, int(v)))
 
 
 def _rtsp_stream2_fallback(rtsp_url: str) -> str | None:
@@ -33,7 +48,14 @@ def _rtsp_stream2_fallback(rtsp_url: str) -> str | None:
 
 
 class FrameGrabber:
-    def __init__(self, rtsp_url: str, *, target_fps: float = 15.0) -> None:
+    def __init__(
+        self,
+        rtsp_url: str,
+        *,
+        target_fps: float = 15.0,
+        open_timeout_ms: int | None = None,
+        read_timeout_ms: int | None = None,
+    ) -> None:
         if cv2 is None:
             raise RuntimeError(
                 "OpenCV (cv2) is required for camera processing. Install with: "
@@ -42,11 +64,29 @@ class FrameGrabber:
 
         self.original_rtsp_url = rtsp_url
         self.rtsp_url = rtsp_url
-        self.cap = cv2.VideoCapture(rtsp_url)
+
+        self._target_fps: float = min(60.0, max(1.0, float(target_fps or 15.0)))
+        self._min_interval: float = 1.0 / self._target_fps
+        self._last_retrieve_ts: float = 0.0
+
+        default_open_timeout = _read_env_int("TOPOSYNC_RTSP_OPEN_TIMEOUT_MS", 8000)
+        default_read_timeout = _read_env_int("TOPOSYNC_RTSP_READ_TIMEOUT_MS", 8000)
+        self._open_timeout_ms = _clamp_int(
+            int(open_timeout_ms) if open_timeout_ms is not None else default_open_timeout,
+            min_value=1000,
+            max_value=120_000,
+        )
+        self._read_timeout_ms = _clamp_int(
+            int(read_timeout_ms) if read_timeout_ms is not None else default_read_timeout,
+            min_value=1000,
+            max_value=120_000,
+        )
+
+        self.cap = self._open_capture(rtsp_url)
         if not self.cap.isOpened():
             fallback = _rtsp_stream2_fallback(rtsp_url)
             if fallback:
-                cap2 = cv2.VideoCapture(fallback)
+                cap2 = self._open_capture(fallback)
                 if cap2.isOpened():
                     try:
                         self.cap.release()
@@ -69,10 +109,6 @@ class FrameGrabber:
         except Exception:
             pass
 
-        self._target_fps: float = min(60.0, max(1.0, float(target_fps or 15.0)))
-        self._min_interval: float = 1.0 / self._target_fps
-        self._last_retrieve_ts: float = 0.0
-
         self._fail_count: int = 0
         self._last_open_ts: float = time.time()
         self._reopen_cooldown_s: float = 2.0
@@ -88,6 +124,43 @@ class FrameGrabber:
         self.last_frame_ts: float = 0.0
         self.stopped = threading.Event()
         self.thread = threading.Thread(target=self._reader_loop, daemon=True)
+
+    def _open_capture(self, url: str) -> Any:
+        if cv2 is None:
+            raise RuntimeError(
+                "OpenCV (cv2) is required for camera processing. Install with: "
+                "`uv pip install opencv-python-headless` (recommended) or `uv pip install opencv-python` (then restart Toposync)."
+            )
+
+        cap = cv2.VideoCapture()
+
+        open_timeout_prop = getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", None)
+        read_timeout_prop = getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", None)
+        try:
+            if open_timeout_prop is not None:
+                cap.set(open_timeout_prop, float(self._open_timeout_ms))
+            if read_timeout_prop is not None:
+                cap.set(read_timeout_prop, float(self._read_timeout_ms))
+        except Exception:
+            pass
+
+        try:
+            cap.open(url, cv2.CAP_FFMPEG)
+        except Exception:
+            cap.open(url)
+
+        # Post-open tuning (safe to ignore if unsupported).
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+
+        try:
+            cap.set(cv2.CAP_PROP_FPS, self._target_fps)
+        except Exception:
+            pass
+
+        return cap
 
     @property
     def target_fps(self) -> float:
@@ -128,15 +201,7 @@ class FrameGrabber:
                     pass
                 if cv2 is None:
                     return
-                self.cap = cv2.VideoCapture(self.rtsp_url)
-                try:
-                    self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                except Exception:
-                    pass
-                try:
-                    self.cap.set(cv2.CAP_PROP_FPS, self._target_fps)
-                except Exception:
-                    pass
+                self.cap = self._open_capture(self.rtsp_url)
                 self.frame = None
                 self.last_frame_ts = 0.0
             self._last_retrieve_ts = 0.0

@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -167,6 +168,12 @@ class CameraWorker:
         self._yolo_cache_ttl_s = 1.2
         self._yolo_track_state: dict[str, dict[str, Any]] = {}
 
+        self._motion_incident_gap_s = 3.0
+        self._motion_capture_retry_s = 1.2
+        self._motion_rule_state: dict[str, dict[str, Any]] = {}
+
+        self._capture_error_logged = False
+
         import threading
 
         self._stopped = threading.Event()
@@ -185,8 +192,8 @@ class CameraWorker:
             pass
         self._thread.join(timeout=1.5)
 
-    def _maybe_capture(self, frame: Any, ts: float) -> str | None:
-        if ts and (ts - self._last_capture_ts) < self._capture_min_interval_s:
+    def _maybe_capture(self, frame: Any, ts: float, *, force: bool = False) -> str | None:
+        if not force and ts and (ts - self._last_capture_ts) < self._capture_min_interval_s:
             return None
         try:
             import cv2  # type: ignore
@@ -202,7 +209,10 @@ class CameraWorker:
             self._last_capture_ts = ts
             # Stored as a /files relative path so the UI can fetch later.
             return f"cameras/{self.camera_id}/{filename}"
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            if not self._capture_error_logged:
+                self._capture_error_logged = True
+                logger.warning("failed to capture detection image camera_id=%s: %s", self.camera_id, exc)
             return None
 
     def _loop(self) -> None:
@@ -230,6 +240,13 @@ class CameraWorker:
                 for r in rules
             )
 
+            def _uses_object(rule: DetectionRule) -> bool:
+                return (rule.trigger.kind == "object") or any(f.kind == "object" for f in rule.filters)
+
+            # Object detection (trigger or filter) takes priority for notification/tracking.
+            object_rules = [r for r in rules if _uses_object(r)]
+            motion_rules = [r for r in rules if (r.trigger.kind == "motion") and not _uses_object(r)]
+
             motion_active = False
             motion_result = None
             if motion_needed:
@@ -241,12 +258,30 @@ class CameraWorker:
                 if motion_result is not None:
                     motion_active = bool(motion_result.active)
 
+            if motion_rules:
+                for rule in motion_rules:
+                    state = self._motion_rule_state.get(rule.id)
+                    if not motion_active:
+                        continue
+                    last_active_ts = float(state.get("last_active_ts") or 0.0) if state else 0.0
+                    if not last_active_ts or (ts - last_active_ts) >= self._motion_incident_gap_s:
+                        self._motion_rule_state[rule.id] = {
+                            "tracking_id": f"motion:{self.camera_id}:{rule.id}:{uuid.uuid4().hex[:10]}",
+                            "last_active_ts": ts,
+                            "needs_capture": True,
+                            "last_capture_try_ts": 0.0,
+                        }
+                        continue
+                    state["last_active_ts"] = ts
+
             # Determine whether YOLO is needed and if so, run it with throttling.
             yolo_output: YoloOutput | None = None
             present_classes: set[str] = set()
 
             def _rule_gate_passes_without_yolo(rule: DetectionRule) -> bool:
                 if rule.trigger.kind == "motion" and not motion_active:
+                    return False
+                if rule.trigger.kind not in {"motion", "object"}:
                     return False
                 for f in rule.filters:
                     if f.kind == "motion" and not motion_active:
@@ -295,7 +330,16 @@ class CameraWorker:
                     return bool(yolo_output and yolo_output.objects)
                 return category in present_classes
 
-            def _filters_ok(rule: DetectionRule) -> bool:
+            def _rule_ok(rule: DetectionRule) -> bool:
+                # Trigger gating.
+                if rule.trigger.kind == "motion":
+                    if not motion_active:
+                        return False
+                elif rule.trigger.kind == "object":
+                    pass
+                else:
+                    return False
+
                 for f in rule.filters:
                     if f.kind == "motion":
                         if not motion_active:
@@ -310,22 +354,42 @@ class CameraWorker:
                 return True
 
             motion_emit_tracks = []
-            if motion_result is not None and motion_active:
+            if motion_rules and motion_result is not None and motion_active:
                 detections = [Detection(bbox01=b, label="motion", conf=motion_result.score) for b in motion_result.bboxes01]
                 motion_emit_tracks = self._tracker.update(detections, ts=ts)
-            else:
+            elif motion_rules:
                 self._tracker.update([], ts=ts)
-
-            motion_rules = [r for r in rules if r.trigger.kind == "motion"]
-            object_rules = [r for r in rules if r.trigger.kind == "object"]
 
             if not motion_emit_tracks and not (yolo_output and yolo_output.objects and object_rules):
                 time.sleep(0.01)
                 continue
 
-            image_path = self._maybe_capture(frame, ts)
+            capture_targets: list[str] = []
+            if motion_emit_tracks and motion_rules:
+                for rule in motion_rules:
+                    state = self._motion_rule_state.get(rule.id)
+                    if not state or not state.get("needs_capture"):
+                        continue
+                    last_try = float(state.get("last_capture_try_ts") or 0.0)
+                    if not last_try or (ts - last_try) >= self._motion_capture_retry_s:
+                        capture_targets.append(rule.id)
 
-            # Emit motion events (optionally gated by filters, including object presence).
+            if capture_targets:
+                for rid in capture_targets:
+                    state = self._motion_rule_state.get(rid)
+                    if state:
+                        state["last_capture_try_ts"] = ts
+
+            force_capture = bool(capture_targets)
+            image_path = self._maybe_capture(frame, ts, force=force_capture)
+
+            if image_path and motion_rules:
+                for rule in motion_rules:
+                    state = self._motion_rule_state.get(rule.id)
+                    if state and state.get("needs_capture"):
+                        state["needs_capture"] = False
+
+            # Emit motion events (rules that do not involve object detection).
             if motion_emit_tracks and motion_result is not None:
                 for tr in motion_emit_tracks:
                     x1, y1, x2, y2 = tr.bbox01
@@ -352,9 +416,12 @@ class CameraWorker:
                     }
 
                     for rule in motion_rules:
-                        if not _filters_ok(rule):
+                        if not _rule_ok(rule):
                             continue
                         event = dict(base)
+                        state = self._motion_rule_state.get(rule.id)
+                        if state and isinstance(state.get("tracking_id"), str):
+                            event["tracking_id"] = state["tracking_id"]
                         event["detection_id"] = rule.id
                         try:
                             self._on_event(event)
@@ -420,10 +487,20 @@ class CameraWorker:
 
                     emitted = False
                     for rule in object_rules:
-                        if rule.trigger.category and rule.trigger.category != obj.label:
+                        if not _rule_ok(rule):
                             continue
-                        if not _filters_ok(rule):
+
+                        # Decide which object(s) represent this rule.
+                        target_categories: set[str] | None
+                        if rule.trigger.kind == "object" and rule.trigger.category:
+                            target_categories = {rule.trigger.category}
+                        else:
+                            cats = {f.category for f in rule.filters if f.kind == "object" and f.category}
+                            target_categories = cats or None
+
+                        if target_categories is not None and obj.label not in target_categories:
                             continue
+
                         event = dict(base)
                         event["detection_id"] = rule.id
                         emitted = True

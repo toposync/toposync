@@ -4,11 +4,12 @@ import type {
   NotificationOverlayActions,
   Scene3DContext,
 } from "@toposync/plugin-api";
+import type { Mesh, Object3D } from "three";
 
 type CamerasTrackingPayload = {
   camera_id?: string;
-  camera_name?: string | null;
-  composition_id?: string | null;
+  camera_name?: string;
+  composition_id?: string;
   tracking_id?: string;
 };
 
@@ -18,6 +19,12 @@ type DetectionEvent = {
   composition_id: string | null;
   world: { x: number; z: number } | null;
   image_path: string | null;
+};
+
+type CaptureUserData = {
+  url: string;
+  title?: string;
+  subtitle?: string;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -38,14 +45,24 @@ function parsePayload(notification: Notification): CamerasTrackingPayload {
   const rec = asRecord(notification.payload);
   return {
     camera_id: asString(rec.camera_id) || undefined,
-    camera_name: (asString(rec.camera_name) || undefined) ?? undefined,
-    composition_id: (asString(rec.composition_id) || undefined) ?? undefined,
+    camera_name: asString(rec.camera_name) || undefined,
+    composition_id: asString(rec.composition_id) || undefined,
     tracking_id: asString(rec.tracking_id) || undefined,
   };
 }
 
 function encodeFilesPath(path: string): string {
   return encodeURIComponent(path).replace(/%2F/g, "/");
+}
+
+function readCaptureUserData(userData: unknown): CaptureUserData | null {
+  const root = asRecord(userData);
+  const cap = asRecord(root.capture);
+  const url = asString(cap.url).trim();
+  if (!url) return null;
+  const title = asString(cap.title).trim() || undefined;
+  const subtitle = asString(cap.subtitle).trim() || undefined;
+  return { url, title, subtitle };
 }
 
 function parseDetectionEvent(value: unknown): DetectionEvent | null {
@@ -102,7 +119,7 @@ export function createCameraTracking3dOverlay(
   trailLine.frustumCulled = false;
   trailLine.renderOrder = 2900;
   // Avoid intercepting clicks meant for capture points.
-  (trailLine as any).raycast = () => {};
+  trailLine.raycast = () => {};
   root.add(trailLine);
 
   const trailPointMaterial = new THREE.PointsMaterial({
@@ -118,7 +135,7 @@ export function createCameraTracking3dOverlay(
   trailPoints.frustumCulled = false;
   trailPoints.renderOrder = 2901;
   // Avoid intercepting clicks meant for capture points.
-  (trailPoints as any).raycast = () => {};
+  trailPoints.raycast = () => {};
   root.add(trailPoints);
 
   const captureGroup = new THREE.Group();
@@ -139,7 +156,7 @@ export function createCameraTracking3dOverlay(
   });
 
   const pointsByTs = new Map<number, { x: number; z: number }>();
-  const capturesByTs = new Map<number, THREE.Mesh>();
+  const capturesByTs = new Map<number, Mesh>();
   const MAX_TRAIL_POINTS = 800;
 
   function rebuildTrailGeometry() {
@@ -170,7 +187,7 @@ export function createCameraTracking3dOverlay(
     const url = `/files/${encodeFilesPath(imagePath)}`;
     const mesh = new THREE.Mesh(captureGeometry, captureMaterial);
     mesh.position.set(world.x, captureY, world.z);
-    (mesh.userData as any).capture = {
+    mesh.userData.capture = {
       url,
       title: payload.camera_name?.trim() || payload.camera_id?.trim() || notification.title,
       subtitle: new Date(ts * 1000).toLocaleString(),
@@ -258,10 +275,10 @@ export function createCameraTracking3dOverlay(
     },
     onPointerEvent(event) {
       const hit = event.intersection;
-      let cur: any = hit.object;
+      let cur: Object3D | null = hit.object;
       while (cur) {
-        const capture = cur.userData?.capture;
-        if (capture && typeof capture.url === "string") {
+        const capture = readCaptureUserData(cur.userData);
+        if (capture) {
           actions.openImage({ url: capture.url, title: capture.title, subtitle: capture.subtitle });
           return true;
         }

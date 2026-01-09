@@ -480,8 +480,8 @@ export function App(): React.ReactElement {
 
       const merged = { ...prev[idx], ...next };
       const out = prev.slice();
-      out.splice(idx, 1);
-      return [merged, ...out];
+      out[idx] = merged;
+      return out;
     });
   }, []);
 

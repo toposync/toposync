@@ -2,19 +2,21 @@ import React, { useMemo } from "react";
 
 import type { Notification, NotificationRenderer, TopoSyncHost } from "@toposync/plugin-api";
 
-import { YOLO_LEGACY_CATEGORY_MAP, formatYoloCategoryLabel } from "../yolo";
+import { YOLO_LEGACY_CATEGORY_MAP, YOLO_V12_CATEGORIES, formatYoloCategoryLabel, type YoloV12Category } from "../yolo";
 import { createCameraTracking3dOverlay } from "./cameraTracking3dOverlay";
 
 type CamerasTrackingPayload = {
   source?: string;
   camera_id?: string;
-  camera_name?: string | null;
-  composition_id?: string | null;
+  camera_name?: string;
+  composition_id?: string;
   tracking_id?: string;
   kind?: string;
   label?: string;
   confidence?: number;
 };
+
+const YOLO_V12_CATEGORY_SET = new Set<string>(YOLO_V12_CATEGORIES);
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
@@ -66,6 +68,28 @@ function normalizeYoloLabel(raw: string): string {
   return mapped;
 }
 
+function asYoloV12Category(value: string): YoloV12Category | null {
+  return YOLO_V12_CATEGORY_SET.has(value) ? (value as YoloV12Category) : null;
+}
+
+function toTitleCaseWords(value: string): string {
+  return value
+    .split(" ")
+    .map((part) => {
+      const trimmed = part.trim();
+      if (!trimmed) return "";
+      return `${trimmed.slice(0, 1).toUpperCase()}${trimmed.slice(1)}`;
+    })
+    .join(" ")
+    .trim();
+}
+
+function formatYoloFallbackLabel(category: string): string {
+  if (!category) return "";
+  if (category === "tv") return "TV";
+  return toTitleCaseWords(category);
+}
+
 function yoloI18nKey(category: string): string {
   return `ext.cameras.yolo.${category.replace(/\s+/g, "_")}`;
 }
@@ -87,8 +111,8 @@ function parsePayload(notification: Notification): CamerasTrackingPayload {
   return {
     source: asString(rec.source) || undefined,
     camera_id: asString(rec.camera_id) || undefined,
-    camera_name: (asString(rec.camera_name) || undefined) ?? undefined,
-    composition_id: (asString(rec.composition_id) || undefined) ?? undefined,
+    camera_name: asString(rec.camera_name) || undefined,
+    composition_id: asString(rec.composition_id) || undefined,
     tracking_id: asString(rec.tracking_id) || undefined,
     kind: asString(rec.kind) || undefined,
     label: asString(rec.label) || undefined,
@@ -134,9 +158,9 @@ function CameraTrackingNotificationBody({ notification, host }: { notification: 
   const cameraName = payload.camera_name?.trim() || payload.camera_id?.trim() || (notification.description ?? "").trim() || "—";
   const yoloLabelRaw = payload.label?.trim() || "";
   const yoloCategory = normalizeYoloLabel(yoloLabelRaw);
-  const translatedLabel = yoloCategory
-    ? t(yoloI18nKey(yoloCategory), {}, formatYoloCategoryLabel(yoloCategory as any))
-    : null;
+  const typedYoloCategory = yoloCategory ? asYoloV12Category(yoloCategory) : null;
+  const yoloFallback = yoloCategory ? (typedYoloCategory ? formatYoloCategoryLabel(typedYoloCategory) : formatYoloFallbackLabel(yoloCategory)) : undefined;
+  const translatedLabel = yoloCategory ? t(yoloI18nKey(yoloCategory), {}, yoloFallback) : null;
   const confText = formatConfidence(locale, payload.confidence ?? null);
 
   const createdAt = parseIso(notification.createdAt);
@@ -148,7 +172,7 @@ function CameraTrackingNotificationBody({ notification, host }: { notification: 
       : null;
   const isLive = Boolean(updatedAt && Date.now() - updatedAt.getTime() < 12_000);
 
-  const metaParts = [translatedLabel, confText, durationText].filter(Boolean);
+  const metaParts = [translatedLabel, confText, durationText].filter((value): value is string => Boolean(value));
 
   return (
     <div style={{ display: "flex", gap: 12, alignItems: "center" }}>

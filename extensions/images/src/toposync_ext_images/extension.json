@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "com.toposync.images",
+  "name": "Images",
+  "version": "0.1.0",
+  "frontend": {
+    "kind": "module-federation",
+    "remote_entry": "remoteEntry.js",
+    "scope": "images",
+    "module": "./activate"
+  }
+}
+

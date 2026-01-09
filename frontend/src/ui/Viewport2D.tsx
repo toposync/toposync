@@ -524,6 +524,7 @@ export function Viewport2D({
 
       const groupRank = (typeId: string): number => {
         const group = elementTypesRef.current[typeId]?.layerGroup ?? "";
+        if (group === "background") return -1;
         if (group === "areas") return 0;
         if (group === "walls") return 1;
         return 2;
@@ -878,6 +879,7 @@ export function Viewport2D({
 
       const groupRank = (typeId: string): number => {
         const group = elementTypesRef.current[typeId]?.layerGroup ?? "";
+        if (group === "background") return -1;
         if (group === "areas") return 0;
         if (group === "walls") return 1;
         return 2;

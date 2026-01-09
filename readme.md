@@ -19,6 +19,7 @@ O objetivo dessa base é resolver o “maior nó”: **extensões com backend Py
 - `extensions/models`: extensão “first-party” (importar GLB/GLTF + prévia 2D + render 3D)
 - `extensions/home_assistant`: extensão “first-party” (scaffold: configurar servidores Home Assistant)
 - `extensions/cameras`: extensão “first-party” (RTSP snapshots + processamento local/remoto + detecções)
+- `extensions/images`: extensão “first-party” (importar imagens como sobreposição ou decalque)
 
 ## Rodar (dev)
 
@@ -39,7 +40,7 @@ npm install
 3) Instale a extensão exemplo (editable, para o backend descobrir via entry point):
 
 ```bash
-uv pip install -e extensions/structural -e extensions/models -e extensions/home_assistant
+uv pip install -e extensions/structural -e extensions/models -e extensions/home_assistant -e extensions/images
 uv pip install -e extensions/cameras
 ```
 
@@ -50,6 +51,7 @@ npm --workspace @toposync/extension-structural-ui run build
 npm --workspace @toposync/extension-models-ui run build
 npm --workspace @toposync/extension-home-assistant-ui run build
 npm --workspace @toposync/extension-cameras-ui run build
+npm --workspace @toposync/extension-images-ui run build
 ```
 
 5) Backend:
@@ -125,6 +127,7 @@ npm --workspace @toposync/extension-structural-ui run build
 npm --workspace @toposync/extension-models-ui run build
 npm --workspace @toposync/extension-home-assistant-ui run build
 npm --workspace @toposync/extension-cameras-ui run build
+npm --workspace @toposync/extension-images-ui run build
 ```
 
 2) Build do wheel da extensão:
@@ -134,6 +137,7 @@ uv build extensions/structural
 uv build extensions/models
 uv build extensions/home_assistant
 uv build extensions/cameras
+uv build extensions/images
 ```
 
 Isso gera `extensions/<ext>/dist/*.whl`. Usuário final instala só o wheel (sem Node) e o app carrega o frontend prebuilt.

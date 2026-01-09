@@ -10,7 +10,7 @@
     "dev:backend": "uv run toposync serve",
     "dev:frontend": "npm --workspace @toposync/frontend run dev",
     "build:frontend": "npm --workspace @toposync/frontend run build",
-    "build:extensions": "npm --workspace @toposync/extension-structural-ui run build && npm --workspace @toposync/extension-models-ui run build && npm --workspace @toposync/extension-home-assistant-ui run build && npm --workspace @toposync/extension-cameras-ui run build",
+    "build:extensions": "npm --workspace @toposync/extension-structural-ui run build && npm --workspace @toposync/extension-models-ui run build && npm --workspace @toposync/extension-home-assistant-ui run build && npm --workspace @toposync/extension-cameras-ui run build && npm --workspace @toposync/extension-images-ui run build",
     "test:e2e": "playwright test"
   },
   "devDependencies": {

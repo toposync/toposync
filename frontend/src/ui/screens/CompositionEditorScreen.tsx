@@ -116,6 +116,7 @@ export function CompositionEditorScreen({
   const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
   const [selectedToolId, setSelectedToolId] = useState<string>(CORE_TOOL_NAVIGATE_ID);
   const [activeToolSession, setActiveToolSession] = useState<EditorToolSession | null>(null);
+  const [isBackgroundOpen, setIsBackgroundOpen] = useState(true);
   const [isWallsOpen, setIsWallsOpen] = useState(true);
   const [isAreasOpen, setIsAreasOpen] = useState(true);
 
@@ -258,6 +259,7 @@ export function CompositionEditorScreen({
       const el = byId.get(id);
       if (!el) continue;
       const group = elementTypesById[el.type]?.layerGroup ?? "";
+      if (group === "background") setIsBackgroundOpen(true);
       if (group === "walls") setIsWallsOpen(true);
       if (group === "areas") setIsAreasOpen(true);
     }
@@ -265,20 +267,23 @@ export function CompositionEditorScreen({
 
   const layerGroups = useMemo(() => {
     const ungrouped: Array<{ el: CompositionElement; idx: number }> = [];
+    const background: Array<{ el: CompositionElement; idx: number }> = [];
     const walls: Array<{ el: CompositionElement; idx: number }> = [];
     const areas: Array<{ el: CompositionElement; idx: number }> = [];
 
     elements.forEach((el, idx) => {
       const group = elementTypesById[el.type]?.layerGroup ?? "";
-      if (group === "walls") walls.push({ el, idx });
+      if (group === "background") background.push({ el, idx });
+      else if (group === "walls") walls.push({ el, idx });
       else if (group === "areas") areas.push({ el, idx });
       else ungrouped.push({ el, idx });
     });
 
+    background.sort((a, b) => b.idx - a.idx);
     walls.sort((a, b) => b.idx - a.idx);
     areas.sort((a, b) => b.idx - a.idx);
 
-    return { ungrouped, walls, areas };
+    return { ungrouped, background, walls, areas };
   }, [elements, elementTypesById]);
 
   const editingTitle = useMemo(() => {
@@ -385,6 +390,62 @@ export function CompositionEditorScreen({
             {elements.length === 0 ? (
               <div className="card">
                 <div className="cardBody">{t("core.ui.layers_empty")}</div>
+              </div>
+            ) : null}
+
+            {layerGroups.background.length > 0 ? (
+              <div className="layerGroup">
+                <button className="layerGroupHeader" type="button" onClick={() => setIsBackgroundOpen((v) => !v)}>
+                  <span className="layerGroupTitle">
+                    <Icon
+                      name={isBackgroundOpen ? "chevron-down" : "chevron-right"}
+                      className="layerGroupChevron"
+                    />
+                    <span>{t("core.ui.layers_group_background")}</span>
+                  </span>
+                  <span className="layerGroupCount">{layerGroups.background.length}</span>
+                </button>
+                {isBackgroundOpen ? (
+                  <div className="layerGroupItems">
+                    {layerGroups.background.map(({ el }) => {
+                      const type = elementTypesById[el.type];
+                      const typeName = type ? resolveLocalizedString(type.name) : el.type;
+                      const title = el.name || typeName || el.type;
+                      const selected = selectedElementIds.includes(el.id);
+                      const measurement = measurementFor(el);
+                      return (
+                        <div className="layerRow layerRowGrouped" key={el.id}>
+                          <button
+                            className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
+                            type="button"
+                            onClick={(e) => {
+                              if (e.metaKey || e.ctrlKey) {
+                                setSelectedElementIds((prev) =>
+                                  prev.includes(el.id) ? prev.filter((id) => id !== el.id) : [...prev, el.id],
+                                );
+                                return;
+                              }
+                              setSelectedElementIds([el.id]);
+                            }}
+                            onDoubleClick={() => {
+                              setSelectedElementIds([el.id]);
+                              setEditingElementId(el.id);
+                            }}
+                          >
+                            <div className="layerMainTitle">{title}</div>
+                            <div className="layerMainMeta">
+                              {typeName}
+                              {measurement ? ` • ${measurement}` : ""}
+                            </div>
+                          </button>
+                          <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
+                            {t("core.actions.delete")}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
               </div>
             ) : null}
 

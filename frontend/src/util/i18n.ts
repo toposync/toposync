@@ -73,6 +73,7 @@ const translationsByLocale: Record<Locale, Translations> = {
 
     "core.ui.layers_group_walls": "Walls",
     "core.ui.layers_group_areas": "Areas",
+    "core.ui.layers_group_background": "Background",
 
     "core.tools.navigate": "Navigate",
     "core.tools.navigate_desc": "Pan around the canvas.",
@@ -173,6 +174,7 @@ const translationsByLocale: Record<Locale, Translations> = {
 
     "core.ui.layers_group_walls": "Paredes",
     "core.ui.layers_group_areas": "Áreas",
+    "core.ui.layers_group_background": "Fundo",
 
     "core.tools.navigate": "Navegar",
     "core.tools.navigate_desc": "Mover o canvas.",

@@ -275,7 +275,7 @@ export function Viewport3D({
     if (!container) return;
     const containerEl: HTMLDivElement = container;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.setClearColor(0x070a14, 1);
     renderer.domElement.style.display = "block";

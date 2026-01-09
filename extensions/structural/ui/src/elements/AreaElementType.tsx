@@ -37,6 +37,14 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
         polygonOffsetFactor: 1,
         polygonOffsetUnits: 1,
       });
+      material.stencilWrite = true;
+      material.stencilRef = 1;
+      material.stencilFunc = THREE.NotEqualStencilFunc;
+      material.stencilFail = THREE.KeepStencilOp;
+      material.stencilZFail = THREE.KeepStencilOp;
+      material.stencilZPass = THREE.KeepStencilOp;
+      material.stencilWriteMask = 0x00;
+      material.stencilFuncMask = 0xff;
 
       let mesh: ThreeTypes.Mesh | null = null;
       let lastKey = "";
@@ -191,4 +199,3 @@ function AreaEditor({ element, update, remove, close, i18n }: AreaEditorProps): 
     </div>
   );
 }
-

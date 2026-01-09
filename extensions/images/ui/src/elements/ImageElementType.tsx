@@ -124,29 +124,34 @@ export function createImageElementType(i18n: HostI18n): ElementType {
       function apply(el: CompositionElement) {
         const p = parseImageProps(el.props);
         mesh.scale.set(p.width_m, 1, p.depth_m);
-        mesh.visible = Boolean(p.dir && p.file);
+        const hasImage = Boolean(p.dir && p.file);
+        const shouldRenderIn3D = hasImage && p.mode === "overlay";
+        mesh.visible = shouldRenderIn3D;
+
+        if (!shouldRenderIn3D) {
+          lastUrl = "";
+          token++;
+          if (currentTexture) {
+            currentTexture.dispose();
+            currentTexture = null;
+          }
+          if (material.map) {
+            material.map = null;
+            material.needsUpdate = true;
+          }
+          return;
+        }
 
         const blending =
           p.mode === "tracing" && p.blend === "multiply" ? THREE.MultiplyBlending : THREE.NormalBlending;
 
         const opacityTransparent = p.opacity < 0.999;
-        const nextTransparent = Boolean(p.dir && p.file) || opacityTransparent || blending !== THREE.NormalBlending;
+        const nextTransparent = hasImage || opacityTransparent || blending !== THREE.NormalBlending;
         const needsUpdate = material.blending !== blending || material.transparent !== nextTransparent;
         material.blending = blending;
         material.transparent = nextTransparent;
         material.opacity = p.opacity;
         if (needsUpdate) material.needsUpdate = true;
-
-        if (!p.dir || !p.file) {
-          lastUrl = "";
-          if (currentTexture) {
-            currentTexture.dispose();
-            currentTexture = null;
-          }
-          material.map = null;
-          material.needsUpdate = true;
-          return;
-        }
 
         const url = imageUrl(p);
         if (url !== lastUrl) {

@@ -80,8 +80,19 @@ export function MainScreen({
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
   const [isViewSettingsOpen, setIsViewSettingsOpen] = useState(false);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
+  const [imageModal, setImageModal] = useState<{ url: string; title: string; subtitle?: string } | null>(null);
   const notificationScrollRef = useRef<HTMLDivElement | null>(null);
   const notificationSentinelRef = useRef<HTMLDivElement | null>(null);
+
+  const activeNotification = useMemo(() => {
+    if (!activeNotificationId) return null;
+    return notifications.find((n) => n.id === activeNotificationId) ?? null;
+  }, [activeNotificationId, notifications]);
+
+  const activeNotificationRenderer = useMemo(() => {
+    if (!activeNotification) return null;
+    return notificationRenderers.find((r) => r.type === activeNotification.type) ?? null;
+  }, [activeNotification, notificationRenderers]);
 
   const activeElement = useMemo(
     () => (activeElementId ? elements.find((e) => e.id === activeElementId) ?? null : null),
@@ -141,6 +152,16 @@ export function MainScreen({
           setActiveElementId(elementId);
         }}
         viewSettings={viewSettings}
+        compositionId={activeCompositionId}
+        activeNotification={activeNotification}
+        activeNotificationRenderer={activeNotificationRenderer}
+        onOpenImage={(args) => {
+          setImageModal({
+            url: args.url,
+            title: args.title ?? t("core.ui.image_preview"),
+            subtitle: args.subtitle,
+          });
+        }}
       />
 
       <div className="overlayTopRight">
@@ -341,6 +362,30 @@ export function MainScreen({
           ) : (
             <div className="cardBody">{t("core.ui.action_unavailable")}</div>
           )
+        ) : null}
+      </Modal>
+
+      <Modal
+        open={Boolean(imageModal)}
+        title={imageModal?.title ?? t("core.ui.image_preview")}
+        onClose={() => setImageModal(null)}
+      >
+        {imageModal?.subtitle ? <div className="cardMeta">{imageModal.subtitle}</div> : null}
+        {imageModal?.url ? (
+          <img
+            src={imageModal.url}
+            alt=""
+            style={{
+              width: "100%",
+              maxHeight: "72vh",
+              objectFit: "contain",
+              borderRadius: 14,
+              border: "1px solid rgba(255,255,255,0.12)",
+              background: "rgba(0,0,0,0.18)",
+              marginTop: imageModal.subtitle ? 12 : 0,
+              display: "block",
+            }}
+          />
         ) : null}
       </Modal>
     </div>

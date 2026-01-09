@@ -537,6 +537,7 @@ class CamerasProcessingRuntime:
         self._files_dir = files_dir
         self._services = services
         self._notification_last_emit: dict[str, float] = {}
+        self._camera_names: dict[str, str] = {}
 
         self._workers: dict[str, CameraWorker] = {}
         self._worker_sigs: dict[str, str] = {}
@@ -588,6 +589,7 @@ class CamerasProcessingRuntime:
         kind = str(event.get("kind") or "").strip()
         if not camera_id or not kind:
             return
+        camera_name = str(self._camera_names.get(camera_id) or "").strip() or None
 
         try:
             ts = float(event.get("ts") or 0.0) or time.time()
@@ -667,6 +669,8 @@ class CamerasProcessingRuntime:
             enriched = dict(event)
             enriched["composition_id"] = comp_id
             enriched["world"] = world
+            if camera_name:
+                enriched["camera_name"] = camera_name
             self.broadcaster.publish(enriched)
             self._maybe_publish_notification(enriched)
 
@@ -687,6 +691,7 @@ class CamerasProcessingRuntime:
         camera_id = str(event.get("camera_id") or "").strip()
         if not camera_id:
             return
+        camera_name = str(event.get("camera_name") or "").strip() or (self._camera_names.get(camera_id) or "").strip() or None
 
         comp_id = str(event.get("composition_id") or "").strip() or None
         kind = str(event.get("kind") or "").strip()
@@ -713,17 +718,16 @@ class CamerasProcessingRuntime:
             conf_f = None
 
         title = "Detecção na câmera"
-        description = f"Câmera {camera_id}"
+        description = camera_name or camera_id
         if kind == "motion":
             title = "Movimento detectado"
         elif kind == "object":
-            title = f"Objeto detectado: {label}" if label else "Objeto detectado"
-            if label and conf_f is not None:
-                description = f"Câmera {camera_id} • {label} ({conf_f:.2f})"
+            title = "Objeto detectado"
 
         notif_payload: dict[str, Any] = {
             "source": "cameras",
             "camera_id": camera_id,
+            "camera_name": camera_name,
             "composition_id": comp_id,
             "tracking_id": tracking_id,
             "kind": kind,
@@ -847,6 +851,7 @@ class CamerasProcessingRuntime:
         mappers: dict[str, list[tuple[str, ControlPointMapper]]],
     ) -> None:
         self._camera_mappers = mappers
+        self._camera_names = {cid: spec.name for cid, spec in specs.items() if spec.name}
         remote_groups: dict[str, list[CameraSpec]] = {}
         desired: dict[str, CameraSpec] = {}
         for cid, spec in specs.items():

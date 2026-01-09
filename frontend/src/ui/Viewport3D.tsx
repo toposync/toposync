@@ -3,13 +3,26 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 
-import type { CompositionElement, Element3DInstance, ElementType, ViewSettings } from "@toposync/plugin-api";
+import type {
+  CompositionElement,
+  Element3DInstance,
+  ElementType,
+  Notification,
+  Notification3DOverlay,
+  NotificationOverlayActions,
+  NotificationRenderer,
+  ViewSettings,
+} from "@toposync/plugin-api";
 
 type Props = {
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
   onElementActivated?: (elementId: string, intent?: "click" | "dblclick" | "longpress") => void;
   viewSettings: ViewSettings;
+  compositionId?: string;
+  activeNotification?: Notification | null;
+  activeNotificationRenderer?: NotificationRenderer | null;
+  onOpenImage?: (args: { url: string; title?: string; subtitle?: string }) => void;
 };
 
 type Tracked = {
@@ -93,12 +106,20 @@ export function Viewport3D({
   elementTypesById,
   onElementActivated,
   viewSettings,
+  compositionId,
+  activeNotification,
+  activeNotificationRenderer,
+  onOpenImage,
 }: Props): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const trackedRef = useRef<Map<string, Tracked>>(new Map());
+  const notificationOverlayRef = useRef<Notification3DOverlay | null>(null);
+  const notificationOverlayNotificationIdRef = useRef<string | null>(null);
+  const notificationOverlayRendererIdRef = useRef<string | null>(null);
+  const notificationOverlayCompositionIdRef = useRef<string | null>(null);
   const viewRef = useRef<ViewSettings>({
     wallHeightPreset: "high",
     wallHeight: FULL_WALL_HEIGHT,
@@ -112,6 +133,10 @@ export function Viewport3D({
   const viewKeyRef = useRef<string>("");
   const onElementActivatedRef = useRef<Props["onElementActivated"]>(onElementActivated);
   const elementTypesByIdRef = useRef<Record<string, ElementType>>(elementTypesById);
+  const activeNotificationRef = useRef<Notification | null>(activeNotification ?? null);
+  const activeNotificationRendererRef = useRef<NotificationRenderer | null>(activeNotificationRenderer ?? null);
+  const onOpenImageRef = useRef<Props["onOpenImage"]>(onOpenImage);
+  const compositionIdRef = useRef<string | undefined>(compositionId);
 
   const [focusedElementId, setFocusedElementId] = useState<string | null>(null);
   const focusHelperRef = useRef<THREE.BoxHelper | null>(null);
@@ -136,6 +161,95 @@ export function Viewport3D({
   useEffect(() => {
     elementTypesByIdRef.current = elementTypesById;
   }, [elementTypesById]);
+
+  function syncNotificationOverlay(): void {
+    const overlay = notificationOverlayRef.current;
+    const scene = sceneRef.current;
+    const renderer = rendererRef.current;
+    const camera = cameraRef.current;
+    if (!scene || !renderer || !camera) return;
+
+    const notification = activeNotificationRef.current;
+    const rendererDef = activeNotificationRendererRef.current;
+    const create3DOverlay = rendererDef?.create3DOverlay;
+    const currentCompositionId = compositionIdRef.current ?? null;
+
+    if (!notification || !rendererDef || !create3DOverlay) {
+      if (overlay) {
+        scene.remove(overlay.object);
+        overlay.dispose?.();
+        notificationOverlayRef.current = null;
+      }
+      notificationOverlayNotificationIdRef.current = null;
+      notificationOverlayRendererIdRef.current = null;
+      notificationOverlayCompositionIdRef.current = null;
+      return;
+    }
+
+    const needsRecreate =
+      !overlay ||
+      notificationOverlayNotificationIdRef.current !== notification.id ||
+      notificationOverlayRendererIdRef.current !== rendererDef.id ||
+      notificationOverlayCompositionIdRef.current !== currentCompositionId;
+
+    if (!needsRecreate) {
+      overlay.update?.(notification);
+      return;
+    }
+
+    if (overlay) {
+      scene.remove(overlay.object);
+      overlay.dispose?.();
+      notificationOverlayRef.current = null;
+    }
+
+    const actions: NotificationOverlayActions = {
+      openImage: (args) => onOpenImageRef.current?.(args),
+    };
+
+    try {
+      const created = create3DOverlay(
+        { THREE, scene, camera, renderer, view: viewRef.current, compositionId: currentCompositionId ?? undefined },
+        notification,
+        actions,
+      );
+      if (!created) {
+        notificationOverlayNotificationIdRef.current = null;
+        notificationOverlayRendererIdRef.current = null;
+        notificationOverlayCompositionIdRef.current = null;
+        return;
+      }
+      scene.add(created.object);
+      notificationOverlayRef.current = created;
+      notificationOverlayNotificationIdRef.current = notification.id;
+      notificationOverlayRendererIdRef.current = rendererDef.id;
+      notificationOverlayCompositionIdRef.current = currentCompositionId;
+    } catch (err) {
+      console.warn("[notificationOverlay]", err);
+      notificationOverlayNotificationIdRef.current = null;
+      notificationOverlayRendererIdRef.current = null;
+      notificationOverlayCompositionIdRef.current = null;
+    }
+  }
+
+  useEffect(() => {
+    activeNotificationRef.current = activeNotification ?? null;
+    syncNotificationOverlay();
+  }, [activeNotification]);
+
+  useEffect(() => {
+    activeNotificationRendererRef.current = activeNotificationRenderer ?? null;
+    syncNotificationOverlay();
+  }, [activeNotificationRenderer]);
+
+  useEffect(() => {
+    onOpenImageRef.current = onOpenImage;
+  }, [onOpenImage]);
+
+  useEffect(() => {
+    compositionIdRef.current = compositionId;
+    syncNotificationOverlay();
+  }, [compositionId]);
 
   const focusables = useMemo(() => {
     const out: Array<{ id: string; x: number; z: number }> = [];
@@ -203,6 +317,7 @@ export function Viewport3D({
     rendererRef.current = renderer;
     cameraRef.current = camera;
     sceneRef.current = scene;
+    syncNotificationOverlay();
 
     function resize() {
       const w = containerEl.clientWidth;
@@ -224,6 +339,7 @@ export function Viewport3D({
       raf = requestAnimationFrame(animate);
       const dt = Math.min(clock.getDelta(), 0.05);
       for (const tracked of trackedRef.current.values()) tracked.instance.tick?.(dt);
+      notificationOverlayRef.current?.tick?.(dt);
       focusHelperRef.current?.update();
       controls.update();
       renderer.render(scene, camera);
@@ -262,6 +378,30 @@ export function Viewport3D({
         return id;
       }
       return null;
+    }
+
+    function tryHandleNotificationOverlay(clientX: number, clientY: number): boolean {
+      const overlay = notificationOverlayRef.current;
+      const notification = activeNotificationRef.current;
+      if (!overlay || !notification) return false;
+
+      const handler = overlay.onPointerEvent;
+      if (!handler) return false;
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -(((clientY - rect.top) / rect.height) * 2 - 1);
+      raycaster.setFromCamera(mouse, camera);
+
+      const hits = raycaster.intersectObject(overlay.object, true);
+      if (hits.length === 0) return false;
+
+      try {
+        return Boolean(handler({ kind: "click", intersection: hits[0], notification }));
+      } catch (err) {
+        console.warn("[notificationOverlay.onPointerEvent]", err);
+        return false;
+      }
     }
 
     function handlePointerDown(e: PointerEvent) {
@@ -309,8 +449,17 @@ export function Viewport3D({
       downAt = null;
       if (dragged) return;
       const handler = onElementActivatedRef.current;
-      if (!handler) return;
+      if (!handler) {
+        tryHandleNotificationOverlay(e.clientX, e.clientY);
+        return;
+      }
       if (longPressFired) return;
+
+      if (tryHandleNotificationOverlay(e.clientX, e.clientY)) {
+        if (pendingClick) window.clearTimeout(pendingClick.timer);
+        pendingClick = null;
+        return;
+      }
 
       const id = pickElementId(e.clientX, e.clientY);
       if (!id) return;
@@ -378,6 +527,12 @@ export function Viewport3D({
       cancelAnimationFrame(raf);
 
       controls.dispose();
+
+      if (notificationOverlayRef.current) {
+        scene.remove(notificationOverlayRef.current.object);
+        notificationOverlayRef.current.dispose?.();
+        notificationOverlayRef.current = null;
+      }
 
       for (const tracked of trackedRef.current.values()) tracked.instance.dispose?.();
       trackedRef.current.clear();
@@ -461,7 +616,7 @@ export function Viewport3D({
         }
 
         const view = def.layerGroup === "walls" ? viewRef.current : elementViewRef.current;
-        const instance = def.create3D({ THREE, scene, camera, renderer, view }, element);
+        const instance = def.create3D({ THREE, scene, camera, renderer, view, compositionId: compositionIdRef.current }, element);
         (instance.object.userData as any)[ELEMENT_ID] = element.id;
         scene.add(instance.object);
         if (def.layerGroup === "walls") applyGhostWalls(instance.object, ghostWallsEnabled);

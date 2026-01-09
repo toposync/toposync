@@ -473,16 +473,15 @@ export function App(): React.ReactElement {
     };
   }, []);
 
-  const upsertNotification = useCallback((next: Notification, op: "insert" | "update") => {
+  const upsertNotification = useCallback((next: Notification, _op: "insert" | "update") => {
     setNotifications((prev) => {
       const idx = prev.findIndex((n) => n.id === next.id);
-      if (idx === -1) {
-        return op === "insert" ? [next, ...prev] : [next, ...prev];
-      }
+      if (idx === -1) return [next, ...prev];
+
       const merged = { ...prev[idx], ...next };
       const out = prev.slice();
-      out[idx] = merged;
-      return out;
+      out.splice(idx, 1);
+      return [merged, ...out];
     });
   }, []);
 

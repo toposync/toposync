@@ -61,10 +61,33 @@ export type Notification = {
   payload?: unknown;
 };
 
+export type NotificationOverlayActions = {
+  openImage: (args: { url: string; title?: string; subtitle?: string }) => void;
+};
+
+export type NotificationOverlayPointerEvent = {
+  kind: "click" | "dblclick" | "longpress";
+  intersection: import("three").Intersection;
+  notification: Notification;
+};
+
+export type Notification3DOverlay = {
+  object: import("three").Object3D;
+  tick?: (deltaSeconds: number) => void;
+  update?: (notification: Notification) => void;
+  onPointerEvent?: (event: NotificationOverlayPointerEvent) => boolean | void;
+  dispose?: () => void;
+};
+
 export type NotificationRenderer = {
   id: string;
   type: string;
   render: (notification: Notification) => import("react").ReactNode;
+  create3DOverlay?: (
+    ctx: Scene3DContext,
+    notification: Notification,
+    actions: NotificationOverlayActions,
+  ) => Notification3DOverlay | null;
 };
 
 export type SettingsPanel = {
@@ -106,6 +129,7 @@ export type Scene3DContext = {
   camera: import("three").Camera;
   renderer: import("three").WebGLRenderer;
   view: ViewSettings;
+  compositionId?: string;
 };
 
 export type Element3DInstance = {

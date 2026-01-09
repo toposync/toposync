@@ -1,8 +1,8 @@
 import type { TopoSyncHost } from "@toposync/plugin-api";
 
-import { createAreaElementType } from "./elements/area_element_type";
-import { createWallElementType } from "./elements/wall_element_type";
-import { createStructuralTools } from "./tools/structural_tools";
+import { createAreaElementType } from "./elements/AreaElementType";
+import { createWallElementType } from "./elements/WallElementType";
+import { createStructuralTools } from "./tools/structuralTools";
 import { structuralTranslations } from "./translations";
 
 export function activate(host: TopoSyncHost): void {
@@ -11,4 +11,3 @@ export function activate(host: TopoSyncHost): void {
   host.registerElementType(createAreaElementType(host.i18n));
   for (const tool of createStructuralTools(host.i18n)) host.registerEditorTool(tool);
 }
-

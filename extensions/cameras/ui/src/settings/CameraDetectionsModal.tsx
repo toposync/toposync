@@ -4,9 +4,9 @@ import type { HostI18n } from "@toposync/plugin-api";
 
 import { createUniqueId } from "../parsing";
 import type { CameraDetection } from "../types";
-import { SubModal } from "../ui/sub_modal";
+import { SubModal } from "../ui/SubModal";
 
-import { DetectionConditionEditor, describeDetectionCondition } from "./detection_condition_editor";
+import { DetectionConditionEditor, describeDetectionCondition } from "./DetectionConditionEditor";
 
 export function CameraDetectionsModal({
   open,
@@ -262,4 +262,3 @@ export function CameraDetectionsModal({
     </SubModal>
   );
 }
-

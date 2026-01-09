@@ -25,11 +25,11 @@ import {
   normalizeFontAwesomeSvgName,
   resolveFontAwesomeSvg,
   sanitizeFontAwesomeIconName,
-} from "../fontawesome";
+} from "../fontAwesome";
 import { clamp, readAirflowIntensity, readHexColor, readLampIntensity, readRecord, readString } from "../parsing";
-import { getHomeAssistantLiveState, setHomeAssistantLiveState, watchHomeAssistantLiveStates } from "../live_states";
-import { HomeAssistantAction } from "../ui/home_assistant_action";
-import { HomeAssistantEditor } from "../ui/home_assistant_editor";
+import { getHomeAssistantLiveState, setHomeAssistantLiveState, watchHomeAssistantLiveStates } from "../liveStates";
+import { HomeAssistantAction } from "../ui/HomeAssistantAction";
+import { HomeAssistantEditor } from "../ui/HomeAssistantEditor";
 
 import type { HomeAssistantLiveState, HomeAssistantSpecialView, HomeAssistantViewMode } from "../types";
 
@@ -544,4 +544,3 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
     ),
   };
 }
-

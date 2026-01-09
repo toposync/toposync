@@ -1,9 +1,9 @@
 import type { EditorTool, HostI18n, PlanePoint } from "@toposync/plugin-api";
 
-import { uploadToFilesDir } from "../api/files_api";
+import { uploadToFilesDir } from "../api/filesApi";
 import { debugLog } from "../debug";
 import { IMPORT_MODEL_TOOL_ID, MODEL_ELEMENT_TYPE_ID } from "../constants";
-import { generateModelTopDownPreview, stripFileExtension, suggestInitialScale } from "../preview/model_preview";
+import { generateModelTopDownPreview, stripFileExtension, suggestInitialScale } from "../preview/modelPreview";
 
 export function createImportModelTool(i18n: HostI18n): EditorTool {
   return {
@@ -228,4 +228,3 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
     },
   };
 }
-

@@ -1,7 +1,7 @@
 import type { TopoSyncHost } from "@toposync/plugin-api";
 
-import { createModelElementType } from "./elements/model_element_type";
-import { createImportModelTool } from "./tools/import_model_tool";
+import { createModelElementType } from "./elements/ModelElementType";
+import { createImportModelTool } from "./tools/importModelTool";
 import { modelsTranslations } from "./translations";
 
 export function activate(host: TopoSyncHost): void {
@@ -9,4 +9,3 @@ export function activate(host: TopoSyncHost): void {
   host.registerElementType(createModelElementType(host.i18n));
   host.registerEditorTool(createImportModelTool(host.i18n));
 }
-

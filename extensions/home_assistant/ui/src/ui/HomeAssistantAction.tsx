@@ -4,8 +4,8 @@ import type { CompositionElement, CompositionElementPatch, HostI18n, TopoSyncHos
 
 import { domainFromEntityId, isToggleDomain } from "../domain";
 import { readHomeAssistantItemRefs, readRecord, readString } from "../parsing";
-import { fetchHomeAssistantRegistry, fetchHomeAssistantStates } from "../api/home_assistant_api";
-import { getHomeAssistantLiveState, subscribeToHomeAssistantLive, watchHomeAssistantLiveStates } from "../live_states";
+import { fetchHomeAssistantRegistry, fetchHomeAssistantStates } from "../api/homeAssistantApi";
+import { getHomeAssistantLiveState, subscribeToHomeAssistantLive, watchHomeAssistantLiveStates } from "../liveStates";
 import type { HomeAssistantRegistryResponse } from "../types";
 
 type HomeAssistantActionProps = {
@@ -201,4 +201,3 @@ export function HomeAssistantAction({
     </div>
   );
 }
-

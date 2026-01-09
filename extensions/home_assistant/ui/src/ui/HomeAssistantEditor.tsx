@@ -12,7 +12,7 @@ import {
   loadFontAwesomeIconFamilies,
   normalizeFontAwesomeSvgName,
   sanitizeFontAwesomeIconName,
-} from "../fontawesome";
+} from "../fontAwesome";
 import {
   domainFromEntityId,
   isToggleDomain,
@@ -22,7 +22,7 @@ import {
 } from "../domain";
 import { DEFAULT_AIRFLOW_INTENSITY, DEFAULT_LAMP_COLOR, DEFAULT_LAMP_INTENSITY, AIRFLOW_COMPATIBLE_DOMAINS, LAMP_COMPATIBLE_DOMAINS } from "../constants";
 import { readAirflowIntensity, readHexColor, readHomeAssistantItemRefs, readLampIntensity, readRecord, readString, itemValue } from "../parsing";
-import { fetchHomeAssistantRegistry, fetchHomeAssistantServers } from "../api/home_assistant_api";
+import { fetchHomeAssistantRegistry, fetchHomeAssistantServers } from "../api/homeAssistantApi";
 import type { FontAwesomeIconFamilies, HomeAssistantItemOption, HomeAssistantItemRef, HomeAssistantRegistryResponse, HomeAssistantServerPublic } from "../types";
 
 type HomeAssistantEditorProps = {
@@ -666,4 +666,3 @@ export function HomeAssistantEditor({
     </div>
   );
 }
-

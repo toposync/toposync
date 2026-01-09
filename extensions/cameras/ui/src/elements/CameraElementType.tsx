@@ -14,11 +14,11 @@ import type {
   Viewport2DContext,
 } from "@toposync/plugin-api";
 
-import { fetchCameraSnapshot, fetchCamerasIndex } from "../api/cameras_api";
+import { fetchCameraSnapshot, fetchCamerasIndex } from "../api/camerasApi";
 import { CAMERA_ELEMENT_TYPE_ID, CONTROL_POINT_COLORS } from "../constants";
 import { createDefaultControlPoints, createUniqueId, labelForIndex, readControlPoints, readRecord, readString } from "../parsing";
 import type { CamerasIndex, ControlPoint } from "../types";
-import { SubModal } from "../ui/sub_modal";
+import { SubModal } from "../ui/SubModal";
 
 function roundRectPath(
   canvasContext: CanvasRenderingContext2D,
@@ -786,4 +786,3 @@ function CameraAction({ element, i18n }: { element: CompositionElement; i18n: Ho
     </div>
   );
 }
-

@@ -2,13 +2,13 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import type { HostI18n, SettingsPanel } from "@toposync/plugin-api";
 
-import { fetchRtspSnapshot } from "../api/cameras_api";
+import { fetchRtspSnapshot } from "../api/camerasApi";
 import { CAMERAS_EXTENSION_ID } from "../constants";
 import { createUniqueId, parseCameras, parseProcessingServers } from "../parsing";
 import type { CameraConfig, ProcessingServer } from "../types";
-import { SubModal } from "../ui/sub_modal";
+import { SubModal } from "../ui/SubModal";
 
-import { CameraDetectionsModal } from "./camera_detections_modal";
+import { CameraDetectionsModal } from "./CameraDetectionsModal";
 
 export function createCamerasSettingsPanel(): SettingsPanel {
   return {
@@ -607,4 +607,3 @@ function CamerasSettingsPanelContent({
     </div>
   );
 }
-

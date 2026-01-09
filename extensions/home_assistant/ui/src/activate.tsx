@@ -1,8 +1,8 @@
 import type { TopoSyncHost } from "@toposync/plugin-api";
 
-import { createHomeAssistantElementType } from "./elements/home_assistant_element_type";
-import { createHomeAssistantSettingsPanel } from "./settings/home_assistant_settings_panel";
-import { createAddHomeAssistantTool } from "./tools/add_home_assistant_tool";
+import { createHomeAssistantElementType } from "./elements/HomeAssistantElementType";
+import { createHomeAssistantSettingsPanel } from "./settings/HomeAssistantSettingsPanel";
+import { createAddHomeAssistantTool } from "./tools/addHomeAssistantTool";
 import { homeAssistantTranslations } from "./translations";
 
 export function activate(host: TopoSyncHost): void {
@@ -11,4 +11,3 @@ export function activate(host: TopoSyncHost): void {
   host.registerElementType(createHomeAssistantElementType(host.i18n));
   host.registerEditorTool(createAddHomeAssistantTool(host.i18n));
 }
-

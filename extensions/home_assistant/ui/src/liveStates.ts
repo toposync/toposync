@@ -6,7 +6,7 @@ import {
   HOME_ASSISTANT_STREAM_MAX_ENTITY_IDS,
   HOME_ASSISTANT_STREAM_REFRESH_DELAY_MS,
 } from "./constants";
-import { fetchHomeAssistantStates } from "./api/home_assistant_api";
+import { fetchHomeAssistantStates } from "./api/homeAssistantApi";
 import type { HomeAssistantLiveState } from "./types";
 
 type HomeAssistantLiveServerStream = {
@@ -251,4 +251,3 @@ export function setHomeAssistantLiveState(serverId: string, entityId: string, pa
   stream.states.set(entityId, { ...prev, entity_id: entityId, ...patch });
   notifyLiveServer(serverId);
 }
-

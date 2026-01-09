@@ -74,6 +74,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.layers_group_walls": "Walls",
     "core.ui.layers_group_areas": "Areas",
     "core.ui.layers_group_background": "Background",
+    "core.ui.layers.hide": "Hide layer",
+    "core.ui.layers.show": "Show layer",
+    "core.ui.layers.lock": "Lock movement",
+    "core.ui.layers.unlock": "Unlock movement",
 
     "core.tools.navigate": "Navigate",
     "core.tools.navigate_desc": "Pan around the canvas.",
@@ -175,6 +179,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.layers_group_walls": "Paredes",
     "core.ui.layers_group_areas": "Áreas",
     "core.ui.layers_group_background": "Fundo",
+    "core.ui.layers.hide": "Ocultar camada",
+    "core.ui.layers.show": "Mostrar camada",
+    "core.ui.layers.lock": "Bloquear movimentação",
+    "core.ui.layers.unlock": "Desbloquear movimentação",
 
     "core.tools.navigate": "Navegar",
     "core.tools.navigate_desc": "Mover o canvas.",

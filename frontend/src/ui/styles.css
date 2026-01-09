@@ -662,6 +662,48 @@ textarea {
   gap: 10px;
 }
 
+.layerRow.isHidden .layerMainButton {
+  opacity: 0.58;
+}
+
+.layerToggleButton {
+  width: 40px;
+  padding: 0;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+    rgba(12, 18, 37, 0.46);
+  color: rgba(230, 232, 242, 0.85);
+  cursor: pointer;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+  -webkit-backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+  position: relative;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.layerToggleButton:hover {
+  border-color: var(--borderStrong);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.03)),
+    rgba(12, 18, 37, 0.46);
+}
+
+.layerToggleButton.isActive {
+  border-color: rgba(251, 191, 36, 0.40);
+  background:
+    linear-gradient(180deg, rgba(251, 191, 36, 0.14), rgba(255, 255, 255, 0.02)),
+    rgba(12, 18, 37, 0.46);
+  box-shadow:
+    0 14px 38px rgba(0, 0, 0, 0.32),
+    0 0 0 1px rgba(251, 191, 36, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
 .layerGroup {
   display: flex;
   flex-direction: column;

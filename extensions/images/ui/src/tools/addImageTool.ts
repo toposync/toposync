@@ -10,30 +10,9 @@ import {
   IMAGE_ELEMENT_TYPE_ID,
 } from "../constants";
 import { debugLog } from "../debug";
+import { filenameStem, readImageDimensions } from "../imageUtils";
 
 type Mode = "overlay" | "tracing";
-
-function filenameStem(filename: string): string {
-  const base = filename.replace(/^.*[\\/]/, "");
-  const idx = base.lastIndexOf(".");
-  if (idx <= 0) return base;
-  return base.slice(0, idx);
-}
-
-async function readImageDimensions(file: File): Promise<{ width: number; height: number } | null> {
-  const url = URL.createObjectURL(file);
-  try {
-    const img = new Image();
-    img.decoding = "async";
-    img.src = url;
-    await img.decode();
-    return { width: img.naturalWidth, height: img.naturalHeight };
-  } catch {
-    return null;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
 
 function createAddImageTool(i18n: HostI18n, mode: Mode): EditorTool {
   const id = mode === "tracing" ? ADD_TRACING_IMAGE_TOOL_ID : ADD_OVERLAY_IMAGE_TOOL_ID;
@@ -93,7 +72,9 @@ function createAddImageTool(i18n: HostI18n, mode: Mode): EditorTool {
             const blend = mode === "tracing" ? "multiply" : "normal";
 
             const createdElementId = createElement(IMAGE_ELEMENT_TYPE_ID, {
-              name: filenameStem(file.name) || (mode === "tracing" ? t("ext.images.editor.mode.tracing") : t("ext.images.editor.mode.overlay")),
+              name:
+                filenameStem(file.name) ||
+                (mode === "tracing" ? t("ext.images.editor.mode.tracing") : t("ext.images.editor.mode.overlay")),
               position: { x: pendingPlacementPoint.x, y: 0, z: pendingPlacementPoint.z },
               props: {
                 dir: upload.dir,

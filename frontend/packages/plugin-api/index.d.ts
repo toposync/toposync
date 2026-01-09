@@ -216,6 +216,28 @@ export type EditorToolSession = {
   dispose?: () => void;
 };
 
+export type EditorFileDropEvent = {
+  files: File[];
+  world: PlanePoint;
+  screen: Vector2;
+  viewport: Viewport2DContext;
+};
+
+export type FileDropHandlerContext = {
+  i18n: HostI18n;
+  api: HostApi;
+  compositionId?: string;
+  elements: CompositionElement[];
+  createElement: EditorToolContext["createElement"];
+  openEditor: EditorToolContext["openEditor"];
+};
+
+export type FileDropHandler = {
+  id: string;
+  canHandle?: (event: EditorFileDropEvent) => boolean;
+  handle: (ctx: FileDropHandlerContext, event: EditorFileDropEvent) => boolean | void | Promise<boolean | void>;
+};
+
 export type Viewport2DReplicaProps = {
   className?: string;
   style?: import("react").CSSProperties;
@@ -238,6 +260,7 @@ export type TopoSyncHost = {
   registerElementType: (elementType: ElementType) => void;
   registerNotificationRenderer: (renderer: NotificationRenderer) => void;
   registerEditorTool: (tool: EditorTool) => void;
+  registerFileDropHandler: (handler: FileDropHandler) => void;
   registerSettingsPanel: (panel: SettingsPanel) => void;
   registerTheme: (theme: ThemeDefinition) => void;
   api: HostApi;

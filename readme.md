@@ -461,8 +461,7 @@ npm install
 3) Instale a extensão exemplo (editable):
 
 ```bash
-uv pip install -e extensions/structural -e extensions/models -e extensions/home_assistant
-uv pip install -e extensions/cameras
+uv pip install -e extensions/structural -e extensions/models -e extensions/home_assistant -e extensions/images -e extensions/cameras
 ```
 
 4) Backend:

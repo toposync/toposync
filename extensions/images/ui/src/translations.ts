@@ -24,6 +24,24 @@ export const imagesTranslations = {
     "ext.images.editor.replace": "Replace image",
     "ext.images.editor.uploading": "Uploading…",
     "ext.images.editor.failed": "Failed to upload image",
+
+    "ext.images.scale.title": "Scale reference",
+    "ext.images.scale.hint": "Optional",
+    "ext.images.scale.desc":
+      "Drag to draw a line on the image, then enter its real-world length to scale the entire image.",
+    "ext.images.scale.distance": "Reference length",
+    "ext.images.scale.distance_placeholder": "e.g. 2.4",
+    "ext.images.scale.unit": "Unit",
+    "ext.images.scale.pixel_distance": "Line length",
+    "ext.images.scale.clear": "Clear",
+    "ext.images.scale.apply": "Apply scale",
+    "ext.images.scale.result": "Result: {{w}} m × {{d}} m ({{mpp}} m/px)",
+
+    "ext.images.units.m": "m",
+    "ext.images.units.cm": "cm",
+    "ext.images.units.mm": "mm",
+    "ext.images.units.ft": "ft",
+    "ext.images.units.in": "in",
   },
   "pt-BR": {
     "ext.images.element.name": "Imagem",
@@ -50,6 +68,23 @@ export const imagesTranslations = {
     "ext.images.editor.replace": "Substituir imagem",
     "ext.images.editor.uploading": "Enviando…",
     "ext.images.editor.failed": "Falha ao enviar imagem",
+
+    "ext.images.scale.title": "Referência de escala",
+    "ext.images.scale.hint": "Opcional",
+    "ext.images.scale.desc":
+      "Arraste para desenhar uma reta na imagem e informe o tamanho real dessa distância para escalar a imagem inteira.",
+    "ext.images.scale.distance": "Distância de referência",
+    "ext.images.scale.distance_placeholder": "ex.: 2,4",
+    "ext.images.scale.unit": "Unidade",
+    "ext.images.scale.pixel_distance": "Comprimento da reta",
+    "ext.images.scale.clear": "Limpar",
+    "ext.images.scale.apply": "Aplicar escala",
+    "ext.images.scale.result": "Resultado: {{w}} m × {{d}} m ({{mpp}} m/px)",
+
+    "ext.images.units.m": "m",
+    "ext.images.units.cm": "cm",
+    "ext.images.units.mm": "mm",
+    "ext.images.units.ft": "ft",
+    "ext.images.units.in": "in",
   },
 };
-

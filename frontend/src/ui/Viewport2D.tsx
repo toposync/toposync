@@ -3,6 +3,7 @@ import React, { useEffect, useRef } from "react";
 import type {
   CompositionElement,
   CompositionElementPatch,
+  EditorFileDropEvent,
   EditorToolSession,
   ElementType,
   PlanePoint,
@@ -19,12 +20,15 @@ type Props = {
   interactionMode?: "navigate" | "select";
   enableKeyboardShortcuts?: boolean;
   toolSnapToGrid?: boolean;
+  hiddenElementIds?: string[];
+  lockedElementIds?: string[];
   selectedElementIds?: string[];
   onSelectElements?: (elementIds: string[]) => void;
   onOpenEditor?: (elementId: string) => void;
   updateElement?: (elementId: string, patch: CompositionElementPatch) => void;
   removeElement?: (elementId: string) => void;
   duplicateElements?: (elements: CompositionElement[]) => string[];
+  onDropFiles?: (event: EditorFileDropEvent) => void;
   onBeginUndoGroup?: () => void;
   onEndUndoGroup?: () => void;
   onUndo?: () => void;
@@ -241,12 +245,15 @@ export function Viewport2D({
   interactionMode = "select",
   enableKeyboardShortcuts = true,
   toolSnapToGrid = true,
+  hiddenElementIds,
+  lockedElementIds,
   selectedElementIds,
   onSelectElements,
   onOpenEditor,
   updateElement,
   removeElement,
   duplicateElements,
+  onDropFiles,
   onBeginUndoGroup,
   onEndUndoGroup,
   onUndo,
@@ -274,6 +281,7 @@ export function Viewport2D({
   const updateElementRef = useRef<Props["updateElement"]>(updateElement);
   const removeElementRef = useRef<Props["removeElement"]>(removeElement);
   const duplicateElementsRef = useRef<Props["duplicateElements"]>(duplicateElements);
+  const onDropFilesRef = useRef<Props["onDropFiles"]>(onDropFiles);
   const onBeginUndoGroupRef = useRef<Props["onBeginUndoGroup"]>(onBeginUndoGroup);
   const onEndUndoGroupRef = useRef<Props["onEndUndoGroup"]>(onEndUndoGroup);
   const onUndoRef = useRef<Props["onUndo"]>(onUndo);
@@ -284,6 +292,8 @@ export function Viewport2D({
   const hoverRef = useRef<string | null>(null);
   const rotateHoverRef = useRef(false);
   const spacePressedRef = useRef(false);
+  const hiddenElementIdsRef = useRef<Set<string>>(new Set());
+  const lockedElementIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     elementsRef.current = elements;
@@ -320,6 +330,20 @@ export function Viewport2D({
   }, [toolSnapToGrid]);
 
   useEffect(() => {
+    hiddenElementIdsRef.current = new Set(hiddenElementIds ?? []);
+    rotateHoverRef.current = false;
+    const hoverId = hoverRef.current;
+    if (hoverId && hiddenElementIdsRef.current.has(hoverId)) hoverRef.current = null;
+    drawRef.current?.();
+  }, [hiddenElementIds]);
+
+  useEffect(() => {
+    lockedElementIdsRef.current = new Set(lockedElementIds ?? []);
+    rotateHoverRef.current = false;
+    drawRef.current?.();
+  }, [lockedElementIds]);
+
+  useEffect(() => {
     selectedRef.current = selectedElementIds ?? [];
     rotateHoverRef.current = false;
     drawRef.current?.();
@@ -336,6 +360,10 @@ export function Viewport2D({
   useEffect(() => {
     onOpenEditorRef.current = onOpenEditor;
   }, [onOpenEditor]);
+
+  useEffect(() => {
+    onDropFilesRef.current = onDropFiles;
+  }, [onDropFiles]);
 
   useEffect(() => {
     updateElementRef.current = updateElement;
@@ -392,7 +420,10 @@ export function Viewport2D({
 
     function flushDragPatch() {
       if (!pendingDragPatch) return;
+      const hidden = hiddenElementIdsRef.current;
+      const locked = lockedElementIdsRef.current;
       for (const item of pendingDragPatch) {
+        if (hidden.has(item.id) || locked.has(item.id)) continue;
         updateElementRef.current?.(item.id, item.patch);
       }
       pendingDragPatch = null;
@@ -401,7 +432,12 @@ export function Viewport2D({
 
     function flushRotatePatch() {
       if (!pendingRotatePatch) return;
-      updateElementRef.current?.(pendingRotatePatch.id, pendingRotatePatch.patch);
+      const { id } = pendingRotatePatch;
+      const hidden = hiddenElementIdsRef.current;
+      const locked = lockedElementIdsRef.current;
+      if (!hidden.has(id) && !locked.has(id)) {
+        updateElementRef.current?.(id, pendingRotatePatch.patch);
+      }
       pendingRotatePatch = null;
       requestDraw();
     }
@@ -535,7 +571,10 @@ export function Viewport2D({
         .sort((a, b) => groupRank(a.el.type) - groupRank(b.el.type) || a.idx - b.idx)
         .map((v) => v.el);
 
+      const hidden = hiddenElementIdsRef.current;
+
       for (const el of ordered) {
+        if (hidden.has(el.id)) continue;
         const def = elementTypesRef.current[el.type];
         if (def?.render2D) {
           try {
@@ -558,13 +597,14 @@ export function Viewport2D({
       }
 
       const selectedIds = selectedRef.current;
-      const primaryId = selectedIds.length === 1 ? selectedIds[0] : null;
+      const primaryId = selectedIds.length === 1 && !hidden.has(selectedIds[0]) ? selectedIds[0] : null;
       const selectedById = selectedIds.length
         ? new Map(elementsRef.current.map((e) => [e.id, e] as const))
         : null;
 
       if (selectedById) {
         for (const id of selectedIds) {
+          if (hidden.has(id)) continue;
           const el = selectedById.get(id);
           if (!el) continue;
 
@@ -653,7 +693,12 @@ export function Viewport2D({
               ctx2d.restore();
             }
 
-            if (!toolSessionRef.current && interactionModeRef.current === "select") {
+            if (
+              !hidden.has(selectedEl.id) &&
+              !lockedElementIdsRef.current.has(selectedEl.id) &&
+              !toolSessionRef.current &&
+              interactionModeRef.current === "select"
+            ) {
               const info = getRotateHandleInfo(selectedEl, viewport);
               const pivot = info.pivotScreen;
 
@@ -741,7 +786,9 @@ export function Viewport2D({
       const interaction = interactionRef.current;
       const interactionModeValue = interactionModeRef.current;
       const spacePressed = spacePressedRef.current;
-      const hoverId = hoverRef.current;
+      const rawHoverId = hoverRef.current;
+      const hoverId = rawHoverId && !hidden.has(rawHoverId) ? rawHoverId : null;
+      const hoverLocked = hoverId ? lockedElementIdsRef.current.has(hoverId) : false;
 
       if (interaction.kind === "select-box") {
         const left = Math.min(interaction.startScreen.x, interaction.currentScreen.x);
@@ -776,7 +823,9 @@ export function Viewport2D({
                   : rotateHoverRef.current
                     ? "grab"
                     : hoverId
-                      ? "move"
+                      ? hoverLocked
+                        ? "not-allowed"
+                        : "move"
                       : "default";
 
       canvasEl.style.cursor = cursor;
@@ -876,6 +925,7 @@ export function Viewport2D({
 
     function findHitElement(world: PlanePoint): string | null {
       const viewport = makeViewportContext();
+      const hidden = hiddenElementIdsRef.current;
 
       const groupRank = (typeId: string): number => {
         const group = elementTypesRef.current[typeId]?.layerGroup ?? "";
@@ -892,6 +942,7 @@ export function Viewport2D({
 
       for (let i = ordered.length - 1; i >= 0; i--) {
         const el = ordered[i];
+        if (hidden.has(el.id)) continue;
         if (hitTestElement(el, world, viewport)) return el.id;
       }
       return null;
@@ -941,6 +992,7 @@ export function Viewport2D({
       const viewport = makeViewportContext();
       const out: string[] = [];
       for (const el of elementsRef.current) {
+        if (hiddenElementIdsRef.current.has(el.id)) continue;
         const bounds = elementScreenBounds(el, viewport);
         const intersects = !(bounds.maxX < left || bounds.minX > right || bounds.maxY < top || bounds.minY > bottom);
         if (intersects) out.push(el.id);
@@ -1094,7 +1146,15 @@ export function Viewport2D({
 
       const selectedIds = selectedRef.current;
       const primaryId = selectedIds.length === 1 ? selectedIds[0] : null;
-      if (primaryId && !session && !spacePressed && mode === "select" && e.button === 0) {
+      if (
+        primaryId &&
+        !hiddenElementIdsRef.current.has(primaryId) &&
+        !lockedElementIdsRef.current.has(primaryId) &&
+        !session &&
+        !spacePressed &&
+        mode === "select" &&
+        e.button === 0
+      ) {
         const selectedEl = elementsRef.current.find((it) => it.id === primaryId) ?? null;
         if (selectedEl) {
           const viewport = makeViewportContext();
@@ -1317,6 +1377,13 @@ export function Viewport2D({
 
         const primaryId = selectedRef.current.length === 1 ? selectedRef.current[0] : null;
         if (primaryId && interactionModeRef.current === "select") {
+          if (hiddenElementIdsRef.current.has(primaryId) || lockedElementIdsRef.current.has(primaryId)) {
+            if (rotateHoverRef.current) {
+              rotateHoverRef.current = false;
+              requestDraw();
+            }
+            return;
+          }
           const selectedEl = elementsRef.current.find((it) => it.id === primaryId) ?? null;
           if (selectedEl) {
             const viewport = makeViewportContext();
@@ -1504,6 +1571,39 @@ export function Viewport2D({
       (event as MouseEvent).preventDefault();
     }
 
+    function handleDragOver(event: Event) {
+      const handler = onDropFilesRef.current;
+      if (!handler) return;
+      const e = event as DragEvent;
+      if (!e.dataTransfer) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    }
+
+    function handleDrop(event: Event) {
+      const handler = onDropFilesRef.current;
+      if (!handler) return;
+      const e = event as DragEvent;
+      if (!e.dataTransfer) return;
+
+      const files = e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
+      if (files.length === 0) return;
+
+      e.preventDefault();
+
+      const rect = canvasEl.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const screen = toVector2(x, y);
+      const worldRaw = screenToWorld(screen);
+      const shouldSnap = toolSnapToGridRef.current && !e.altKey;
+      const world = shouldSnap ? snapPoint(worldRaw, SNAP_STEP) : worldRaw;
+      const viewport = makeViewportContext();
+
+      handler({ files, world, screen, viewport });
+      requestDraw();
+    }
+
     function handleKeyDown(e: KeyboardEvent) {
       if (!enableKeyboardShortcutsRef.current) return;
       const target = e.target as HTMLElement | null;
@@ -1565,6 +1665,7 @@ export function Viewport2D({
           e.preventDefault();
           onBeginUndoGroupRef.current?.();
           for (const id of selectedIds) {
+            if (hiddenElementIdsRef.current.has(id) || lockedElementIdsRef.current.has(id)) continue;
             const el = elementsRef.current.find((it) => it.id === id) ?? null;
             if (!el) continue;
             updateElementRef.current(id, translateElement(el, delta));
@@ -1579,6 +1680,7 @@ export function Viewport2D({
           const lower = e.key.toLowerCase();
           if (lower === "q" || lower === "e") {
             e.preventDefault();
+            if (hiddenElementIdsRef.current.has(selectedId) || lockedElementIdsRef.current.has(selectedId)) return;
             const el = elementsRef.current.find((it) => it.id === selectedId) ?? null;
             if (!el) return;
 
@@ -1647,6 +1749,8 @@ export function Viewport2D({
     canvasEl.addEventListener("pointercancel", handlePointerCancel);
     canvasEl.addEventListener("dblclick", handleDoubleClick);
     canvasEl.addEventListener("wheel", handleWheel, { passive: false });
+    canvasEl.addEventListener("dragover", handleDragOver);
+    canvasEl.addEventListener("drop", handleDrop);
     canvasEl.addEventListener("contextmenu", handleContextMenu);
     canvasEl.addEventListener("toposync:invalidate", requestDraw as unknown as EventListener);
     window.addEventListener("toposync:invalidate", requestDraw as unknown as EventListener);
@@ -1660,6 +1764,8 @@ export function Viewport2D({
       canvasEl.removeEventListener("pointercancel", handlePointerCancel);
       canvasEl.removeEventListener("dblclick", handleDoubleClick);
       canvasEl.removeEventListener("wheel", handleWheel);
+      canvasEl.removeEventListener("dragover", handleDragOver);
+      canvasEl.removeEventListener("drop", handleDrop);
       canvasEl.removeEventListener("contextmenu", handleContextMenu);
       canvasEl.removeEventListener("toposync:invalidate", requestDraw as unknown as EventListener);
       window.removeEventListener("toposync:invalidate", requestDraw as unknown as EventListener);

@@ -3,9 +3,12 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   CompositionElement,
   CompositionElementPatch,
+  EditorFileDropEvent,
   EditorTool,
   EditorToolSession,
   ElementType,
+  FileDropHandler,
+  HostApi,
   PlanePoint,
 } from "@toposync/plugin-api";
 
@@ -23,6 +26,8 @@ type Props = {
   activeCompositionId: string;
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
+  api: HostApi;
+  fileDropHandlers: FileDropHandler[];
   createElement: (typeId: string, init?: Partial<Omit<CompositionElement, "id" | "type">>) => string | null;
   editorTools: EditorTool[];
   updateElement: (elementId: string, patch: CompositionElementPatch) => void;
@@ -39,6 +44,16 @@ type Props = {
   onDeleteComposition: (compositionId: string) => Promise<void>;
 };
 
+type LayerControl = {
+  hidden?: boolean;
+  locked?: boolean;
+};
+
+type LayerControlsState = {
+  compositionId: string;
+  byElementId: Record<string, LayerControl>;
+};
+
 function degrees(rad: number): number {
   return (rad * 180) / Math.PI;
 }
@@ -49,6 +64,48 @@ function radians(deg: number): number {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return Boolean(v) && typeof v === "object" && !Array.isArray(v);
+}
+
+const LAYER_CONTROLS_STORAGE_KEY_PREFIX = "toposync.editor.layerControls.v1:";
+
+function loadLayerControls(compositionId: string): Record<string, LayerControl> {
+  try {
+    const raw = localStorage.getItem(`${LAYER_CONTROLS_STORAGE_KEY_PREFIX}${compositionId}`);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) return {};
+
+    const out: Record<string, LayerControl> = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      if (!isRecord(value)) continue;
+      const hidden = value.hidden === true;
+      const locked = value.locked === true;
+      if (hidden || locked) out[id] = { hidden, locked };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveLayerControls(compositionId: string, byElementId: Record<string, LayerControl>): void {
+  try {
+    const key = `${LAYER_CONTROLS_STORAGE_KEY_PREFIX}${compositionId}`;
+    const cleaned: Record<string, LayerControl> = {};
+    for (const [id, value] of Object.entries(byElementId)) {
+      const hidden = value.hidden === true;
+      const locked = value.locked === true;
+      if (hidden || locked) cleaned[id] = { hidden, locked };
+    }
+
+    if (Object.keys(cleaned).length === 0) {
+      localStorage.removeItem(key);
+      return;
+    }
+    localStorage.setItem(key, JSON.stringify(cleaned));
+  } catch {
+    // ignore
+  }
 }
 
 function readPlanePoint(v: unknown): PlanePoint | null {
@@ -94,6 +151,8 @@ export function CompositionEditorScreen({
   activeCompositionId,
   elements,
   elementTypesById,
+  api,
+  fileDropHandlers,
   createElement,
   editorTools,
   updateElement,
@@ -119,6 +178,113 @@ export function CompositionEditorScreen({
   const [isBackgroundOpen, setIsBackgroundOpen] = useState(true);
   const [isWallsOpen, setIsWallsOpen] = useState(true);
   const [isAreasOpen, setIsAreasOpen] = useState(true);
+
+  const [layerControlsState, setLayerControlsState] = useState<LayerControlsState>(() => ({
+    compositionId: activeCompositionId,
+    byElementId: loadLayerControls(activeCompositionId),
+  }));
+
+  useEffect(() => {
+    setLayerControlsState({
+      compositionId: activeCompositionId,
+      byElementId: loadLayerControls(activeCompositionId),
+    });
+  }, [activeCompositionId]);
+
+  useEffect(() => {
+    saveLayerControls(layerControlsState.compositionId, layerControlsState.byElementId);
+  }, [layerControlsState]);
+
+  useEffect(() => {
+    setLayerControlsState((prev) => {
+      if (prev.compositionId !== activeCompositionId) return prev;
+      const existing = new Set(elements.map((e) => e.id));
+      let changed = false;
+      const next: Record<string, LayerControl> = {};
+      for (const [id, value] of Object.entries(prev.byElementId)) {
+        if (!existing.has(id)) {
+          changed = true;
+          continue;
+        }
+        if (value.hidden || value.locked) next[id] = value;
+      }
+      return changed ? { ...prev, byElementId: next } : prev;
+    });
+  }, [activeCompositionId, elements]);
+
+  const hiddenElementIds = useMemo(
+    () => Object.entries(layerControlsState.byElementId).filter(([, v]) => v.hidden).map(([id]) => id),
+    [layerControlsState.byElementId],
+  );
+
+  const lockedElementIds = useMemo(
+    () => Object.entries(layerControlsState.byElementId).filter(([, v]) => v.locked).map(([id]) => id),
+    [layerControlsState.byElementId],
+  );
+
+  const toggleLayerHidden = useCallback(
+    (elementId: string) => {
+      setLayerControlsState((prev) => {
+        if (prev.compositionId !== activeCompositionId) return prev;
+        const current = prev.byElementId[elementId] ?? {};
+        const nextHidden = current.hidden !== true;
+        const nextEntry: LayerControl = { ...current, hidden: nextHidden };
+        if (!nextEntry.hidden && !nextEntry.locked) {
+          const { [elementId]: _, ...rest } = prev.byElementId;
+          return { ...prev, byElementId: rest };
+        }
+        return { ...prev, byElementId: { ...prev.byElementId, [elementId]: nextEntry } };
+      });
+    },
+    [activeCompositionId],
+  );
+
+  const toggleLayerLocked = useCallback(
+    (elementId: string) => {
+      setLayerControlsState((prev) => {
+        if (prev.compositionId !== activeCompositionId) return prev;
+        const current = prev.byElementId[elementId] ?? {};
+        const nextLocked = current.locked !== true;
+        const nextEntry: LayerControl = { ...current, locked: nextLocked };
+        if (!nextEntry.hidden && !nextEntry.locked) {
+          const { [elementId]: _, ...rest } = prev.byElementId;
+          return { ...prev, byElementId: rest };
+        }
+        return { ...prev, byElementId: { ...prev.byElementId, [elementId]: nextEntry } };
+      });
+    },
+    [activeCompositionId],
+  );
+
+  const onDropFiles = useCallback(
+    (event: EditorFileDropEvent) => {
+      if (fileDropHandlers.length === 0) return;
+
+      const ctx = {
+        i18n,
+        api,
+        compositionId: activeCompositionId,
+        elements,
+        createElement,
+        openEditor: (elementId: string) => setEditingElementId(elementId),
+      };
+
+      for (const handler of fileDropHandlers) {
+        try {
+          if (handler.canHandle && !handler.canHandle(event)) continue;
+          const out = handler.handle(ctx, event);
+          if (out instanceof Promise) {
+            out.catch((err) => console.error(`[fileDropHandler:${handler.id}]`, err));
+            break;
+          }
+          if (out !== false) break;
+        } catch (err) {
+          console.error(`[fileDropHandler:${handler.id}]`, err);
+        }
+      }
+    },
+    [activeCompositionId, api, createElement, elements, fileDropHandlers],
+  );
 
   const numberFmt = useMemo(
     () => new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
@@ -318,6 +484,9 @@ export function CompositionEditorScreen({
         elementTypesById={elementTypesById}
         activeToolSession={activeToolSession}
         interactionMode={selectedToolId === CORE_TOOL_NAVIGATE_ID ? "navigate" : "select"}
+        onDropFiles={onDropFiles}
+        hiddenElementIds={hiddenElementIds}
+        lockedElementIds={lockedElementIds}
         selectedElementIds={selectedElementIds}
         onSelectElements={setSelectedElementIds}
         onOpenEditor={(id) => {
@@ -412,9 +581,12 @@ export function CompositionEditorScreen({
                       const typeName = type ? resolveLocalizedString(type.name) : el.type;
                       const title = el.name || typeName || el.type;
                       const selected = selectedElementIds.includes(el.id);
+                      const control = layerControlsState.byElementId[el.id] ?? {};
+                      const hidden = control.hidden === true;
+                      const locked = control.locked === true;
                       const measurement = measurementFor(el);
                       return (
-                        <div className="layerRow layerRowGrouped" key={el.id}>
+                        <div className={["layerRow", "layerRowGrouped", hidden ? "isHidden" : ""].join(" ")} key={el.id}>
                           <button
                             className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
                             type="button"
@@ -438,6 +610,22 @@ export function CompositionEditorScreen({
                               {measurement ? ` • ${measurement}` : ""}
                             </div>
                           </button>
+                          <button
+                            className={["layerToggleButton", locked ? "isActive" : ""].join(" ")}
+                            type="button"
+                            title={locked ? t("core.ui.layers.unlock") : t("core.ui.layers.lock")}
+                            onClick={() => toggleLayerLocked(el.id)}
+                          >
+                            <Icon name={locked ? "lock" : "lock-open"} />
+                          </button>
+                          <button
+                            className={["layerToggleButton", hidden ? "isActive" : ""].join(" ")}
+                            type="button"
+                            title={hidden ? t("core.ui.layers.show") : t("core.ui.layers.hide")}
+                            onClick={() => toggleLayerHidden(el.id)}
+                          >
+                            <Icon name={hidden ? "eye-slash" : "eye"} />
+                          </button>
                           <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
                             {t("core.actions.delete")}
                           </button>
@@ -454,9 +642,12 @@ export function CompositionEditorScreen({
               const typeName = type ? resolveLocalizedString(type.name) : el.type;
               const title = el.name || typeName || el.type;
               const selected = selectedElementIds.includes(el.id);
+              const control = layerControlsState.byElementId[el.id] ?? {};
+              const hidden = control.hidden === true;
+              const locked = control.locked === true;
               const measurement = measurementFor(el);
               return (
-                <div className="layerRow" key={el.id}>
+                <div className={["layerRow", hidden ? "isHidden" : ""].join(" ")} key={el.id}>
                   <button
                     className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
                     type="button"
@@ -477,6 +668,22 @@ export function CompositionEditorScreen({
                       {typeName}
                       {measurement ? ` • ${measurement}` : ""}
                     </div>
+                  </button>
+                  <button
+                    className={["layerToggleButton", locked ? "isActive" : ""].join(" ")}
+                    type="button"
+                    title={locked ? t("core.ui.layers.unlock") : t("core.ui.layers.lock")}
+                    onClick={() => toggleLayerLocked(el.id)}
+                  >
+                    <Icon name={locked ? "lock" : "lock-open"} />
+                  </button>
+                  <button
+                    className={["layerToggleButton", hidden ? "isActive" : ""].join(" ")}
+                    type="button"
+                    title={hidden ? t("core.ui.layers.show") : t("core.ui.layers.hide")}
+                    onClick={() => toggleLayerHidden(el.id)}
+                  >
+                    <Icon name={hidden ? "eye-slash" : "eye"} />
                   </button>
                   <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
                     {t("core.actions.delete")}
@@ -501,9 +708,12 @@ export function CompositionEditorScreen({
                       const typeName = type ? resolveLocalizedString(type.name) : el.type;
                       const title = el.name || typeName || el.type;
                       const selected = selectedElementIds.includes(el.id);
+                      const control = layerControlsState.byElementId[el.id] ?? {};
+                      const hidden = control.hidden === true;
+                      const locked = control.locked === true;
                       const measurement = measurementFor(el);
                       return (
-                        <div className="layerRow layerRowGrouped" key={el.id}>
+                        <div className={["layerRow", "layerRowGrouped", hidden ? "isHidden" : ""].join(" ")} key={el.id}>
                           <button
                             className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
                             type="button"
@@ -524,6 +734,22 @@ export function CompositionEditorScreen({
                               {typeName}
                               {measurement ? ` • ${measurement}` : ""}
                             </div>
+                          </button>
+                          <button
+                            className={["layerToggleButton", locked ? "isActive" : ""].join(" ")}
+                            type="button"
+                            title={locked ? t("core.ui.layers.unlock") : t("core.ui.layers.lock")}
+                            onClick={() => toggleLayerLocked(el.id)}
+                          >
+                            <Icon name={locked ? "lock" : "lock-open"} />
+                          </button>
+                          <button
+                            className={["layerToggleButton", hidden ? "isActive" : ""].join(" ")}
+                            type="button"
+                            title={hidden ? t("core.ui.layers.show") : t("core.ui.layers.hide")}
+                            onClick={() => toggleLayerHidden(el.id)}
+                          >
+                            <Icon name={hidden ? "eye-slash" : "eye"} />
                           </button>
                           <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
                             {t("core.actions.delete")}
@@ -552,9 +778,12 @@ export function CompositionEditorScreen({
                       const typeName = type ? resolveLocalizedString(type.name) : el.type;
                       const title = el.name || typeName || el.type;
                       const selected = selectedElementIds.includes(el.id);
+                      const control = layerControlsState.byElementId[el.id] ?? {};
+                      const hidden = control.hidden === true;
+                      const locked = control.locked === true;
                       const measurement = measurementFor(el);
                       return (
-                        <div className="layerRow layerRowGrouped" key={el.id}>
+                        <div className={["layerRow", "layerRowGrouped", hidden ? "isHidden" : ""].join(" ")} key={el.id}>
                           <button
                             className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
                             type="button"
@@ -575,6 +804,22 @@ export function CompositionEditorScreen({
                               {typeName}
                               {measurement ? ` • ${measurement}` : ""}
                             </div>
+                          </button>
+                          <button
+                            className={["layerToggleButton", locked ? "isActive" : ""].join(" ")}
+                            type="button"
+                            title={locked ? t("core.ui.layers.unlock") : t("core.ui.layers.lock")}
+                            onClick={() => toggleLayerLocked(el.id)}
+                          >
+                            <Icon name={locked ? "lock" : "lock-open"} />
+                          </button>
+                          <button
+                            className={["layerToggleButton", hidden ? "isActive" : ""].join(" ")}
+                            type="button"
+                            title={hidden ? t("core.ui.layers.show") : t("core.ui.layers.hide")}
+                            onClick={() => toggleLayerHidden(el.id)}
+                          >
+                            <Icon name={hidden ? "eye-slash" : "eye"} />
                           </button>
                           <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
                             {t("core.actions.delete")}

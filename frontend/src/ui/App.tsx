@@ -5,6 +5,7 @@ import type {
   CompositionElementPatch,
   EditorTool,
   ElementType,
+  FileDropHandler,
   Notification,
   NotificationRenderer,
   SettingsPanel,
@@ -186,6 +187,7 @@ export function App(): React.ReactElement {
   const [elementTypesById, setElementTypesById] = useState<Record<string, ElementType>>({});
   const [notificationRenderersById, setNotificationRenderersById] = useState<Record<string, NotificationRenderer>>({});
   const [editorToolsById, setEditorToolsById] = useState<Record<string, EditorTool>>({});
+  const [fileDropHandlers, setFileDropHandlers] = useState<FileDropHandler[]>([]);
   const [settingsPanelsById, setSettingsPanelsById] = useState<Record<string, SettingsPanel>>({});
   const [themesById, setThemesById] = useState<Record<string, ThemeDefinition>>({});
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -337,6 +339,15 @@ export function App(): React.ReactElement {
       },
       registerEditorTool(tool) {
         setEditorToolsById((prev) => ({ ...prev, [tool.id]: tool }));
+      },
+      registerFileDropHandler(handler) {
+        setFileDropHandlers((prev) => {
+          const idx = prev.findIndex((h) => h.id === handler.id);
+          if (idx === -1) return [...prev, handler];
+          const next = prev.slice();
+          next[idx] = handler;
+          return next;
+        });
       },
       registerSettingsPanel(panel) {
         setSettingsPanelsById((prev) => ({ ...prev, [panel.id]: panel }));
@@ -922,6 +933,8 @@ export function App(): React.ReactElement {
           activeCompositionId={activeCompositionId}
           elements={composition.elements}
           elementTypesById={elementTypesById}
+          api={host.api}
+          fileDropHandlers={fileDropHandlers}
           createElement={createElement}
           editorTools={Object.values(editorToolsById)}
           updateElement={updateElement}

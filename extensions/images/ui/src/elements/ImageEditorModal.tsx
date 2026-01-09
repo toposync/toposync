@@ -4,7 +4,9 @@ import type { CompositionElement, CompositionElementPatch, HostI18n } from "@top
 
 import { uploadToFilesDir } from "../api/filesApi";
 import { DEFAULT_IMAGE_WIDTH_METERS, IMAGE_LAYER_Y } from "../constants";
-import { clamp, readBlendMode, readImageMode, readNumber } from "../parsing";
+import { clamp, readBlendMode, readImageMode, readNumber, readString } from "../parsing";
+import { filenameStem, readImageDimensions } from "../imageUtils";
+import { ImageScaleReference } from "./ImageScaleReference";
 
 type Props = {
   element: CompositionElement;
@@ -13,28 +15,6 @@ type Props = {
   close: () => void;
   i18n: HostI18n;
 };
-
-async function readImageDimensions(file: File): Promise<{ width: number; height: number } | null> {
-  const url = URL.createObjectURL(file);
-  try {
-    const img = new Image();
-    img.decoding = "async";
-    img.src = url;
-    await img.decode();
-    return { width: img.naturalWidth, height: img.naturalHeight };
-  } catch {
-    return null;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-function filenameStem(filename: string): string {
-  const base = filename.replace(/^.*[\\/]/, "");
-  const idx = base.lastIndexOf(".");
-  if (idx <= 0) return base;
-  return base.slice(0, idx);
-}
 
 export function ImageEditorModal({ element, update, remove, close, i18n }: Props): React.ReactElement {
   const { t, locale } = i18n.useI18n();
@@ -46,6 +26,8 @@ export function ImageEditorModal({ element, update, remove, close, i18n }: Props
   });
 
   const props = element.props;
+  const dir = readString(props["dir"], "");
+  const file = readString(props["file"], "");
   const mode = readImageMode(props["mode"], "overlay");
   const blendFallback = mode === "tracing" ? "multiply" : "normal";
 
@@ -55,6 +37,10 @@ export function ImageEditorModal({ element, update, remove, close, i18n }: Props
   const blend = readBlendMode(props["blend"], blendFallback);
 
   const rotationDeg = useMemo(() => (element.rotation.y * 180) / Math.PI, [element.rotation.y]);
+
+  const imageUrl = dir && file ? `/files/${encodeURIComponent(dir)}/${encodeURIComponent(file)}` : "";
+  const pixelWidth = readNumber(props["pixel_width"], NaN);
+  const pixelHeight = readNumber(props["pixel_height"], NaN);
 
   const onReplace = useCallback(() => {
     fileInputRef.current?.click();
@@ -180,6 +166,21 @@ export function ImageEditorModal({ element, update, remove, close, i18n }: Props
           {uploadState.status === "uploading" ? t("ext.images.editor.uploading") : t("ext.images.editor.replace")}
         </button>
       </div>
+
+      {imageUrl ? (
+        <>
+          <div className="sectionDivider" />
+          <ImageScaleReference
+            t={t}
+            locale={locale}
+            imageUrl={imageUrl}
+            pixelWidth={Number.isFinite(pixelWidth) ? pixelWidth : null}
+            pixelHeight={Number.isFinite(pixelHeight) ? pixelHeight : null}
+            scaleRef={props["scale_ref"]}
+            onApply={(patch) => update({ props: patch })}
+          />
+        </>
+      ) : null}
 
       {uploadState.status === "error" ? (
         <div className="card" style={{ borderColor: "rgba(248,113,113,0.35)" }}>

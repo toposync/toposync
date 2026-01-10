@@ -77,6 +77,23 @@ function applyGhostWalls(object: THREE.Object3D, enabled: boolean): void {
   });
 }
 
+function applyPolygonOffsetUnits(object: THREE.Object3D, units: number): void {
+  object.traverse((node) => {
+    const matRaw = (node as any).material as unknown;
+    if (!matRaw) return;
+
+    const mats = Array.isArray(matRaw) ? matRaw : [matRaw];
+    for (const m of mats) {
+      if (!m || !(m as any).isMaterial) continue;
+      const matAny = m as any;
+      if (matAny.polygonOffset !== true) continue;
+      if (typeof matAny.polygonOffsetUnits !== "number") continue;
+      if (matAny.polygonOffsetUnits === units) continue;
+      matAny.polygonOffsetUnits = units;
+    }
+  });
+}
+
 function findElementId(obj: THREE.Object3D): string | null {
   let cur: THREE.Object3D | null = obj;
   while (cur) {
@@ -585,13 +602,16 @@ export function Viewport3D({
     const camera = cameraRef.current;
     if (!scene || !renderer || !camera) return;
 
-    const viewKey = `${viewSettings.wallHeightPreset}:${viewSettings.wallHeight}:${Boolean(viewSettings.ghostWalls)}:${viewSettings.graphicsQuality ?? "simplified"}`;
-    const viewChanged = viewKeyRef.current !== viewKey;
-    viewKeyRef.current = viewKey;
-    const ghostWallsEnabled = Boolean(viewSettings.ghostWalls);
+	    const viewKey = `${viewSettings.wallHeightPreset}:${viewSettings.wallHeight}:${Boolean(viewSettings.ghostWalls)}:${viewSettings.graphicsQuality ?? "simplified"}`;
+	    const viewChanged = viewKeyRef.current !== viewKey;
+	    viewKeyRef.current = viewKey;
+	    const ghostWallsEnabled = Boolean(viewSettings.ghostWalls);
 
-    const tracked = trackedRef.current;
-    const elementsById = new Map(elements.map((e) => [e.id, e]));
+	    const tracked = trackedRef.current;
+	    const elementsById = new Map(elements.map((e) => [e.id, e]));
+	    const areaElements = elements.filter((e) => (elementTypesById[e.type]?.layerGroup ?? "") === "areas");
+	    const areaOrderById = new Map<string, number>();
+	    for (let i = 0; i < areaElements.length; i += 1) areaOrderById.set(areaElements[i].id, i);
 
     for (const [id, entry] of tracked.entries()) {
       const element = elementsById.get(id);
@@ -629,17 +649,24 @@ export function Viewport3D({
       entry.instance.object.position.set(element.position.x, element.position.y, element.position.z);
       entry.instance.object.rotation.set(element.rotation.x, element.rotation.y, element.rotation.z);
 
-      if (viewChanged || !elementsEqual(entry.last, element)) {
-        entry.instance.update?.(element);
-        entry.last = element;
-      }
+	      if (viewChanged || !elementsEqual(entry.last, element)) {
+	        entry.instance.update?.(element);
+	        entry.last = element;
+	      }
 
-      if (viewChanged && def.layerGroup === "walls") applyGhostWalls(entry.instance.object, ghostWallsEnabled);
-    }
-  }, [
-    elements,
-    elementTypesById,
-    viewSettings.ghostWalls,
+	      if (viewChanged && def.layerGroup === "walls") applyGhostWalls(entry.instance.object, ghostWallsEnabled);
+	      if (def.layerGroup === "areas") {
+	        const order = areaOrderById.get(element.id);
+	        if (typeof order === "number") {
+	          const stackIndex = areaElements.length - 1 - order;
+	          applyPolygonOffsetUnits(entry.instance.object, 1 + stackIndex);
+	        }
+	      }
+	    }
+	  }, [
+	    elements,
+	    elementTypesById,
+	    viewSettings.ghostWalls,
     viewSettings.graphicsQuality,
     viewSettings.wallHeight,
     viewSettings.wallHeightPreset,

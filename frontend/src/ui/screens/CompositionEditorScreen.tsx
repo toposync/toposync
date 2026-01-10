@@ -31,6 +31,7 @@ type Props = {
   createElement: (typeId: string, init?: Partial<Omit<CompositionElement, "id" | "type">>) => string | null;
   editorTools: EditorTool[];
   updateElement: (elementId: string, patch: CompositionElementPatch) => void;
+  reorderElements: (nextElements: CompositionElement[]) => void;
   removeElement: (elementId: string) => void;
   onBeginUndoGroup: () => void;
   onEndUndoGroup: () => void;
@@ -53,6 +54,9 @@ type LayerControlsState = {
   compositionId: string;
   byElementId: Record<string, LayerControl>;
 };
+
+type LayerGroupId = "background" | "ungrouped" | "walls" | "areas";
+type DragInsertPosition = "before" | "after";
 
 function degrees(rad: number): number {
   return (rad * 180) / Math.PI;
@@ -156,6 +160,7 @@ export function CompositionEditorScreen({
   createElement,
   editorTools,
   updateElement,
+  reorderElements,
   removeElement,
   onBeginUndoGroup,
   onEndUndoGroup,
@@ -178,6 +183,12 @@ export function CompositionEditorScreen({
   const [isBackgroundOpen, setIsBackgroundOpen] = useState(true);
   const [isWallsOpen, setIsWallsOpen] = useState(true);
   const [isAreasOpen, setIsAreasOpen] = useState(true);
+  const [draggingLayer, setDraggingLayer] = useState<{ elementId: string; groupId: LayerGroupId } | null>(null);
+  const [dragOverLayer, setDragOverLayer] = useState<{
+    elementId: string;
+    groupId: LayerGroupId;
+    position: DragInsertPosition;
+  } | null>(null);
 
   const [layerControlsState, setLayerControlsState] = useState<LayerControlsState>(() => ({
     compositionId: activeCompositionId,
@@ -431,6 +442,111 @@ export function CompositionEditorScreen({
     }
   }, [elements, elementTypesById, selectedElementIds]);
 
+  const layerGroupForElement = useCallback(
+    (el: CompositionElement): LayerGroupId => {
+      const group = elementTypesById[el.type]?.layerGroup ?? "";
+      if (group === "background") return "background";
+      if (group === "walls") return "walls";
+      if (group === "areas") return "areas";
+      return "ungrouped";
+    },
+    [elementTypesById],
+  );
+
+  const reorderLayersInGroup = useCallback(
+    (args: { groupId: LayerGroupId; draggedId: string; targetId: string; position: DragInsertPosition }) => {
+      const groupIndices: number[] = [];
+      const byId = new Map<string, CompositionElement>();
+      for (let idx = 0; idx < elements.length; idx += 1) {
+        const el = elements[idx];
+        if (layerGroupForElement(el) !== args.groupId) continue;
+        groupIndices.push(idx);
+        byId.set(el.id, el);
+      }
+
+      if (groupIndices.length < 2) return;
+      if (!byId.has(args.draggedId) || !byId.has(args.targetId) || args.draggedId === args.targetId) return;
+
+      const displayOrderIds = [...groupIndices].sort((a, b) => b - a).map((idx) => elements[idx].id);
+      const nextDisplayOrderIds = displayOrderIds.filter((id) => id !== args.draggedId);
+      const targetIndex = nextDisplayOrderIds.indexOf(args.targetId);
+      if (targetIndex < 0) return;
+
+      const insertIndex = args.position === "before" ? targetIndex : targetIndex + 1;
+      nextDisplayOrderIds.splice(insertIndex, 0, args.draggedId);
+
+      const arrayOrderIds = [...nextDisplayOrderIds].reverse();
+      const orderedIndices = [...groupIndices].sort((a, b) => a - b);
+
+      const nextElements = elements.slice();
+      for (let i = 0; i < orderedIndices.length; i += 1) {
+        const el = byId.get(arrayOrderIds[i]);
+        if (!el) return;
+        nextElements[orderedIndices[i]] = el;
+      }
+
+      reorderElements(nextElements);
+    },
+    [elements, layerGroupForElement, reorderElements],
+  );
+
+  const beginLayerDrag = useCallback((event: React.DragEvent, elementId: string, groupId: LayerGroupId) => {
+    setDraggingLayer({ elementId, groupId });
+    setDragOverLayer(null);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", elementId);
+  }, []);
+
+  const endLayerDrag = useCallback(() => {
+    setDraggingLayer(null);
+    setDragOverLayer(null);
+  }, []);
+
+  const updateDragOverLayer = useCallback(
+    (event: React.DragEvent<HTMLElement>, targetId: string, groupId: LayerGroupId) => {
+      const dragging = draggingLayer;
+      if (!dragging) return;
+      if (dragging.groupId !== groupId) return;
+      if (dragging.elementId === targetId) return;
+
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      const rect = event.currentTarget.getBoundingClientRect();
+      const position: DragInsertPosition = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+      setDragOverLayer({ elementId: targetId, groupId, position });
+    },
+    [draggingLayer],
+  );
+
+  const handleLayerDrop = useCallback(
+    (event: React.DragEvent<HTMLElement>, targetId: string, groupId: LayerGroupId) => {
+      const dragging = draggingLayer;
+      if (!dragging) return;
+      if (dragging.groupId !== groupId) return;
+      if (dragging.elementId === targetId) return;
+
+      event.preventDefault();
+      const rect = event.currentTarget.getBoundingClientRect();
+      const position: DragInsertPosition = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+      reorderLayersInGroup({ groupId, draggedId: dragging.elementId, targetId, position });
+      setDraggingLayer(null);
+      setDragOverLayer(null);
+    },
+    [draggingLayer, reorderLayersInGroup],
+  );
+
+  const layerRowClassName = useCallback(
+    (base: string[], elementId: string, groupId: LayerGroupId): string => {
+      const cls = [...base];
+      if (draggingLayer?.elementId === elementId && draggingLayer.groupId === groupId) cls.push("isDragSource");
+      if (dragOverLayer?.elementId === elementId && dragOverLayer.groupId === groupId) {
+        cls.push(dragOverLayer.position === "before" ? "isDropBefore" : "isDropAfter");
+      }
+      return cls.join(" ");
+    },
+    [dragOverLayer, draggingLayer],
+  );
+
   const layerGroups = useMemo(() => {
     const ungrouped: Array<{ el: CompositionElement; idx: number }> = [];
     const background: Array<{ el: CompositionElement; idx: number }> = [];
@@ -445,6 +561,7 @@ export function CompositionEditorScreen({
       else ungrouped.push({ el, idx });
     });
 
+    ungrouped.sort((a, b) => b.idx - a.idx);
     background.sort((a, b) => b.idx - a.idx);
     walls.sort((a, b) => b.idx - a.idx);
     areas.sort((a, b) => b.idx - a.idx);
@@ -586,7 +703,23 @@ export function CompositionEditorScreen({
                       const locked = control.locked === true;
                       const measurement = measurementFor(el);
                       return (
-                        <div className={["layerRow", "layerRowGrouped", hidden ? "isHidden" : ""].join(" ")} key={el.id}>
+                        <div
+                          className={layerRowClassName(["layerRow", "layerRowGrouped", hidden ? "isHidden" : ""], el.id, "background")}
+                          key={el.id}
+                          onDragOver={(e) => updateDragOverLayer(e, el.id, "background")}
+                          onDrop={(e) => handleLayerDrop(e, el.id, "background")}
+                        >
+                          <button
+                            className="layerDragHandle"
+                            type="button"
+                            title={t("core.ui.layers.reorder")}
+                            aria-label={t("core.ui.layers.reorder")}
+                            draggable
+                            onDragStart={(e) => beginLayerDrag(e, el.id, "background")}
+                            onDragEnd={endLayerDrag}
+                          >
+                            <Icon name="grip-vertical" />
+                          </button>
                           <button
                             className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
                             type="button"
@@ -647,7 +780,23 @@ export function CompositionEditorScreen({
               const locked = control.locked === true;
               const measurement = measurementFor(el);
               return (
-                <div className={["layerRow", hidden ? "isHidden" : ""].join(" ")} key={el.id}>
+                <div
+                  className={layerRowClassName(["layerRow", hidden ? "isHidden" : ""], el.id, "ungrouped")}
+                  key={el.id}
+                  onDragOver={(e) => updateDragOverLayer(e, el.id, "ungrouped")}
+                  onDrop={(e) => handleLayerDrop(e, el.id, "ungrouped")}
+                >
+                  <button
+                    className="layerDragHandle"
+                    type="button"
+                    title={t("core.ui.layers.reorder")}
+                    aria-label={t("core.ui.layers.reorder")}
+                    draggable
+                    onDragStart={(e) => beginLayerDrag(e, el.id, "ungrouped")}
+                    onDragEnd={endLayerDrag}
+                  >
+                    <Icon name="grip-vertical" />
+                  </button>
                   <button
                     className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
                     type="button"
@@ -709,16 +858,32 @@ export function CompositionEditorScreen({
                       const title = el.name || typeName || el.type;
                       const selected = selectedElementIds.includes(el.id);
                       const control = layerControlsState.byElementId[el.id] ?? {};
-                      const hidden = control.hidden === true;
-                      const locked = control.locked === true;
-                      const measurement = measurementFor(el);
-                      return (
-                        <div className={["layerRow", "layerRowGrouped", hidden ? "isHidden" : ""].join(" ")} key={el.id}>
-                          <button
-                            className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
-                            type="button"
-                            onClick={(e) => {
-                              if (e.metaKey || e.ctrlKey) {
+	                      const hidden = control.hidden === true;
+	                      const locked = control.locked === true;
+	                      const measurement = measurementFor(el);
+	                      return (
+	                        <div
+	                          className={layerRowClassName(["layerRow", "layerRowGrouped", hidden ? "isHidden" : ""], el.id, "walls")}
+	                          key={el.id}
+	                          onDragOver={(e) => updateDragOverLayer(e, el.id, "walls")}
+	                          onDrop={(e) => handleLayerDrop(e, el.id, "walls")}
+	                        >
+	                          <button
+	                            className="layerDragHandle"
+	                            type="button"
+	                            title={t("core.ui.layers.reorder")}
+	                            aria-label={t("core.ui.layers.reorder")}
+	                            draggable
+	                            onDragStart={(e) => beginLayerDrag(e, el.id, "walls")}
+	                            onDragEnd={endLayerDrag}
+	                          >
+	                            <Icon name="grip-vertical" />
+	                          </button>
+	                          <button
+	                            className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
+	                            type="button"
+	                            onClick={(e) => {
+	                              if (e.metaKey || e.ctrlKey) {
                                 setSelectedElementIds((prev) => (prev.includes(el.id) ? prev.filter((id) => id !== el.id) : [...prev, el.id]));
                                 return;
                               }
@@ -779,16 +944,32 @@ export function CompositionEditorScreen({
                       const title = el.name || typeName || el.type;
                       const selected = selectedElementIds.includes(el.id);
                       const control = layerControlsState.byElementId[el.id] ?? {};
-                      const hidden = control.hidden === true;
-                      const locked = control.locked === true;
-                      const measurement = measurementFor(el);
-                      return (
-                        <div className={["layerRow", "layerRowGrouped", hidden ? "isHidden" : ""].join(" ")} key={el.id}>
-                          <button
-                            className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
-                            type="button"
-                            onClick={(e) => {
-                              if (e.metaKey || e.ctrlKey) {
+	                      const hidden = control.hidden === true;
+	                      const locked = control.locked === true;
+	                      const measurement = measurementFor(el);
+	                      return (
+	                        <div
+	                          className={layerRowClassName(["layerRow", "layerRowGrouped", hidden ? "isHidden" : ""], el.id, "areas")}
+	                          key={el.id}
+	                          onDragOver={(e) => updateDragOverLayer(e, el.id, "areas")}
+	                          onDrop={(e) => handleLayerDrop(e, el.id, "areas")}
+	                        >
+	                          <button
+	                            className="layerDragHandle"
+	                            type="button"
+	                            title={t("core.ui.layers.reorder")}
+	                            aria-label={t("core.ui.layers.reorder")}
+	                            draggable
+	                            onDragStart={(e) => beginLayerDrag(e, el.id, "areas")}
+	                            onDragEnd={endLayerDrag}
+	                          >
+	                            <Icon name="grip-vertical" />
+	                          </button>
+	                          <button
+	                            className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
+	                            type="button"
+	                            onClick={(e) => {
+	                              if (e.metaKey || e.ctrlKey) {
                                 setSelectedElementIds((prev) => (prev.includes(el.id) ? prev.filter((id) => id !== el.id) : [...prev, el.id]));
                                 return;
                               }

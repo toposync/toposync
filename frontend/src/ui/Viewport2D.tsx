@@ -612,9 +612,13 @@ export function Viewport2D({
       ctx2d.strokeStyle = "rgba(0,0,0,0.35)";
       ctx2d.font = "12px ui-sans-serif, system-ui";
 
-      const groupRank = (typeId: string): number => {
-        const group = elementTypesRef.current[typeId]?.layerGroup ?? "";
-        if (group === "background") return -1;
+      const elementRank = (el: CompositionElement): number => {
+        const group = elementTypesRef.current[el.type]?.layerGroup ?? "";
+        if (group === "background") {
+          const mode = el.props?.mode;
+          if (mode === "tracing") return 0.5;
+          return -1;
+        }
         if (group === "areas") return 0;
         if (group === "walls") return 1;
         return 2;
@@ -622,7 +626,7 @@ export function Viewport2D({
 
       const ordered = elementsRef.current
         .map((el, idx) => ({ el, idx }))
-        .sort((a, b) => groupRank(a.el.type) - groupRank(b.el.type) || a.idx - b.idx)
+        .sort((a, b) => elementRank(a.el) - elementRank(b.el) || a.idx - b.idx)
         .map((v) => v.el);
 
       const hidden = hiddenElementIdsRef.current;
@@ -1049,25 +1053,29 @@ export function Viewport2D({
       return Math.hypot(world.x - p.x, world.z - p.z) <= radius;
     }
 
-    function findHitElement(world: PlanePoint): string | null {
-      const viewport = makeViewportContext();
-      const hidden = hiddenElementIdsRef.current;
+	    function findHitElement(world: PlanePoint): string | null {
+	      const viewport = makeViewportContext();
+	      const hidden = hiddenElementIdsRef.current;
 
-      const groupRank = (typeId: string): number => {
-        const group = elementTypesRef.current[typeId]?.layerGroup ?? "";
-        if (group === "background") return -1;
-        if (group === "areas") return 0;
-        if (group === "walls") return 1;
-        return 2;
-      };
+	      const elementRank = (el: CompositionElement): number => {
+	        const group = elementTypesRef.current[el.type]?.layerGroup ?? "";
+	        if (group === "background") {
+	          const mode = el.props?.mode;
+	          if (mode === "tracing") return 0.5;
+	          return -1;
+	        }
+	        if (group === "areas") return 0;
+	        if (group === "walls") return 1;
+	        return 2;
+	      };
 
-      const ordered = elementsRef.current
-        .map((el, idx) => ({ el, idx }))
-        .sort((a, b) => groupRank(a.el.type) - groupRank(b.el.type) || a.idx - b.idx)
-        .map((v) => v.el);
+	      const ordered = elementsRef.current
+	        .map((el, idx) => ({ el, idx }))
+	        .sort((a, b) => elementRank(a.el) - elementRank(b.el) || a.idx - b.idx)
+	        .map((v) => v.el);
 
-      for (let i = ordered.length - 1; i >= 0; i--) {
-        const el = ordered[i];
+	      for (let i = ordered.length - 1; i >= 0; i--) {
+	        const el = ordered[i];
         if (hidden.has(el.id)) continue;
         if (hitTestElement(el, world, viewport)) return el.id;
       }

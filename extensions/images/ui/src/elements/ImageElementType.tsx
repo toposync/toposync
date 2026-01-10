@@ -84,12 +84,15 @@ export function createImageElementType(i18n: HostI18n): ElementType {
       const geometry = new THREE.PlaneGeometry(1, 1, 1, 1);
       geometry.rotateX(-Math.PI / 2);
 
-      const material = new THREE.MeshBasicMaterial({
-        color: 0xffffff,
-        transparent: true,
-        opacity: 1,
-        depthWrite: false,
-      });
+	      const material = new THREE.MeshBasicMaterial({
+	        color: 0xffffff,
+	        transparent: true,
+	        opacity: 1,
+	        depthWrite: false,
+	        polygonOffset: true,
+	        polygonOffsetFactor: -1,
+	        polygonOffsetUnits: -1,
+	      });
       const mesh = new THREE.Mesh(geometry, material);
       mesh.position.y = IMAGE_LAYER_Y;
       mesh.raycast = () => undefined;
@@ -173,13 +176,13 @@ export function createImageElementType(i18n: HostI18n): ElementType {
         },
       };
     },
-    render2D: ({ ctx, element, viewport }) => {
-      const p = parseImageProps(element.props);
+	    render2D: ({ ctx, element, viewport }) => {
+	      const p = parseImageProps(element.props);
 
-      const center = viewport.worldToScreen({ x: element.position.x, z: element.position.z });
-      const widthPx = Math.max(20, p.width_m * viewport.scale);
-      const depthPx = Math.max(20, p.depth_m * viewport.scale);
-      const rotationY = readNumber(element.rotation.y, 0);
+	      const center = viewport.worldToScreen({ x: element.position.x, z: element.position.z });
+	      const widthPx = Math.max(20, p.width_m * viewport.scale);
+	      const depthPx = Math.max(20, p.depth_m * viewport.scale);
+	      const rotationY = readNumber(element.rotation.y, 0);
 
       const url = p.dir && p.file ? imageUrl(p) : "";
       const image =
@@ -195,22 +198,24 @@ export function createImageElementType(i18n: HostI18n): ElementType {
           return created;
         })();
 
-      ctx.save();
-      ctx.translate(center.x, center.y);
-      ctx.rotate(-rotationY);
+	      ctx.save();
+	      ctx.translate(center.x, center.y);
+	      ctx.rotate(-rotationY);
 
-      ctx.globalAlpha = p.opacity;
-      if (image && image.complete && image.naturalWidth > 0) {
-        ctx.drawImage(image, -widthPx / 2, -depthPx / 2, widthPx, depthPx);
-      } else {
-        ctx.fillStyle = "rgba(56,189,248,0.10)";
-        ctx.fillRect(-widthPx / 2, -depthPx / 2, widthPx, depthPx);
-      }
-      ctx.globalAlpha = 1;
+	      if (p.blend === "multiply") ctx.globalCompositeOperation = "multiply";
+	      ctx.globalAlpha = p.opacity;
+	      if (image && image.complete && image.naturalWidth > 0) {
+	        ctx.drawImage(image, -widthPx / 2, -depthPx / 2, widthPx, depthPx);
+	      } else {
+	        ctx.fillStyle = "rgba(56,189,248,0.10)";
+	        ctx.fillRect(-widthPx / 2, -depthPx / 2, widthPx, depthPx);
+	      }
+	      ctx.globalCompositeOperation = "source-over";
+	      ctx.globalAlpha = 1;
 
-      ctx.strokeStyle = "rgba(230,232,242,0.22)";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(-widthPx / 2, -depthPx / 2, widthPx, depthPx);
+	      ctx.strokeStyle = "rgba(230,232,242,0.22)";
+	      ctx.lineWidth = 2;
+	      ctx.strokeRect(-widthPx / 2, -depthPx / 2, widthPx, depthPx);
       ctx.restore();
     },
     hitTest2D: ({ element, world }) => {

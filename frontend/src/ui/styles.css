@@ -230,6 +230,7 @@ textarea {
   text-align: left;
   cursor: pointer;
   font: inherit;
+  color: inherit;
   appearance: none;
 }
 
@@ -660,10 +661,70 @@ textarea {
   display: flex;
   align-items: stretch;
   gap: 10px;
+  position: relative;
 }
 
 .layerRow.isHidden .layerMainButton {
   opacity: 0.58;
+}
+
+.layerRow.isDragSource {
+  opacity: 0.78;
+}
+
+.layerRow.isDropBefore::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -6px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.78);
+}
+
+.layerRow.isDropAfter::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -6px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.78);
+}
+
+.layerDragHandle {
+  width: 34px;
+  padding: 0;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+    rgba(12, 18, 37, 0.46);
+  color: rgba(230, 232, 242, 0.75);
+  cursor: grab;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+  -webkit-backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+  position: relative;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.layerDragHandle:hover {
+  border-color: var(--borderStrong);
+}
+
+.layerDragHandle:active {
+  cursor: grabbing;
+  transform: translateY(1px);
+}
+
+.layerDragHandle i {
+  font-size: 14px;
 }
 
 .layerToggleButton {

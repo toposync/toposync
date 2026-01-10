@@ -302,10 +302,6 @@ export function Viewport3D({
     dirLight.position.set(2.2, 6, 3);
     scene.add(dirLight);
 
-    const grid = new THREE.GridHelper(12, 24, 0x23304d, 0x162040);
-    grid.position.y = 0;
-    scene.add(grid);
-
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;

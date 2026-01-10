@@ -66,6 +66,8 @@ export const camerasTranslations = {
     "ext.cameras.detections.cond.ha_sensor": "HA sensor (soon)",
     "ext.cameras.detections.cond.ha_state": "HA entity state (soon)",
 
+    "ext.cameras.notification.object_detected": "Object detected: {{label}}",
+
     "ext.cameras.yolo.person": "Person",
     "ext.cameras.yolo.bicycle": "Bicycle",
     "ext.cameras.yolo.car": "Car",
@@ -213,6 +215,8 @@ export const camerasTranslations = {
     "ext.cameras.detections.cond.object": "Objeto (YOLOv12)",
     "ext.cameras.detections.cond.ha_sensor": "Sensor HA (em breve)",
     "ext.cameras.detections.cond.ha_state": "Estado de entidade HA (em breve)",
+
+    "ext.cameras.notification.object_detected": "Objeto detectado: {{label}}",
 
     "ext.cameras.yolo.person": "Pessoa",
     "ext.cameras.yolo.bicycle": "Bicicleta",

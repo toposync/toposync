@@ -46,11 +46,37 @@ type Props = {
   onDeleteComposition: (compositionId: string) => Promise<void>;
 };
 
-function formatTime(iso: string | undefined): string | null {
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+  return {};
+}
+
+function asString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function formatDateTimeShort(locale: string, iso: string | undefined): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  try {
+    return new Intl.DateTimeFormat(locale, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(d);
+  } catch {
+    return d.toLocaleString();
+  }
+}
+
+function formatCameraTrackingTitle(
+  t: (key: string, params?: Record<string, unknown>, fallback?: string) => string,
+  notification: Notification,
+): string | null {
+  if (notification.type !== "cameras.tracking") return null;
+  const payload = asRecord(notification.payload);
+  const rawLabel = asString(payload.label).trim();
+  if (!rawLabel) return null;
+  const key = `ext.cameras.yolo.${rawLabel.toLowerCase().replace(/\\s+/g, "_")}`;
+  const label = t(key, {}, rawLabel);
+  return t("ext.cameras.notification.object_detected", { label }, `Object detected: ${label}`);
 }
 
 export function MainScreen({
@@ -78,7 +104,7 @@ export function MainScreen({
   onRenameComposition,
   onDeleteComposition,
 }: Props): React.ReactElement {
-  const { t } = i18n.useI18n();
+  const { t, locale } = i18n.useI18n();
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
   const [isViewSettingsOpen, setIsViewSettingsOpen] = useState(false);
@@ -212,7 +238,8 @@ export function MainScreen({
             ) : null}
             {notifications.map((n) => {
               const renderer = notificationRenderers.find((r) => r.type === n.type);
-              const time = formatTime(n.createdAt);
+              const time = formatDateTimeShort(locale, n.createdAt);
+              const title = formatCameraTrackingTitle(t, n) ?? n.title;
               const isActive = Boolean(activeNotificationId && n.id === activeNotificationId);
               return (
                 <button
@@ -222,7 +249,7 @@ export function MainScreen({
                   onClick={() => onSelectNotification(n.id)}
                 >
                   <div className="cardHeaderRow">
-                    <div className="cardTitle">{n.title}</div>
+                    <div className="cardTitle">{title}</div>
                     {time ? <div className="cardMeta">{time}</div> : null}
                   </div>
                   <div className="cardBody">

@@ -83,6 +83,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.layers.show": "Show layer",
     "core.ui.layers.lock": "Lock movement",
     "core.ui.layers.unlock": "Unlock movement",
+    "core.ui.layers.reorder": "Reorder layer",
 
     "core.tools.navigate": "Navigate",
     "core.tools.navigate_desc": "Pan around the canvas.",
@@ -193,6 +194,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.layers.show": "Mostrar camada",
     "core.ui.layers.lock": "Bloquear movimentação",
     "core.ui.layers.unlock": "Desbloquear movimentação",
+    "core.ui.layers.reorder": "Reordenar camada",
 
     "core.tools.navigate": "Navegar",
     "core.tools.navigate_desc": "Mover o canvas.",

@@ -846,6 +846,20 @@ export function App(): React.ReactElement {
     setCompositionRevision((v) => v + 1);
   }, [recordHistoryBeforeChange]);
 
+  const reorderElements = useCallback(
+    (nextElements: CompositionElement[]) => {
+      const current = compositionRef.current.elements;
+      const sameOrder =
+        nextElements.length === current.length && nextElements.every((el, idx) => el.id === current[idx]?.id);
+      if (sameOrder) return;
+
+      recordHistoryBeforeChange(compositionRef.current);
+      setComposition((prev) => ({ ...prev, elements: nextElements }));
+      setCompositionRevision((v) => v + 1);
+    },
+    [recordHistoryBeforeChange],
+  );
+
   const activateCompositionById = useCallback(
     async (compositionId: string): Promise<Composition> => {
       await flushSave();
@@ -944,21 +958,22 @@ export function App(): React.ReactElement {
           onDeleteComposition={deleteExistingComposition}
         />
       ) : (
-        <CompositionEditorScreen
-          compositionName={composition.name}
-          compositions={compositions}
-          activeCompositionId={activeCompositionId}
-          elements={composition.elements}
-          elementTypesById={elementTypesById}
-          api={host.api}
-          fileDropHandlers={fileDropHandlers}
-          createElement={createElement}
-          editorTools={Object.values(editorToolsById)}
-          updateElement={updateElement}
-          removeElement={removeElement}
-          onBeginUndoGroup={beginUndoGroup}
-          onEndUndoGroup={endUndoGroup}
-          onUndo={undo}
+	        <CompositionEditorScreen
+	          compositionName={composition.name}
+	          compositions={compositions}
+	          activeCompositionId={activeCompositionId}
+	          elements={composition.elements}
+	          elementTypesById={elementTypesById}
+	          api={host.api}
+	          fileDropHandlers={fileDropHandlers}
+	          createElement={createElement}
+	          editorTools={Object.values(editorToolsById)}
+	          updateElement={updateElement}
+	          reorderElements={reorderElements}
+	          removeElement={removeElement}
+	          onBeginUndoGroup={beginUndoGroup}
+	          onEndUndoGroup={endUndoGroup}
+	          onUndo={undo}
           onRedo={redo}
           onExit={() => setScreen("main")}
           onOpenSettings={() => setIsSettingsOpen(true)}

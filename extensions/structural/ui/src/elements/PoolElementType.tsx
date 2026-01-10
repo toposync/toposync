@@ -13,6 +13,7 @@ type PoolProps = {
 };
 
 let cachedWaterBumpTexture: ThreeTypes.Texture | null = null;
+let cachedWaterNormalTexture: ThreeTypes.Texture | null = null;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -65,6 +66,73 @@ function getWaterBumpTexture(THREE: typeof import("three")): ThreeTypes.Texture 
   tex.anisotropy = 4;
   (tex as any).colorSpace = (THREE as any).NoColorSpace ?? (THREE as any).LinearSRGBColorSpace;
   cachedWaterBumpTexture = tex;
+  return tex;
+}
+
+function createWaterNormalCanvas(size: number): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+
+  const image = ctx.createImageData(size, size);
+  const data = image.data;
+  const twoPi = Math.PI * 2;
+  const waves: Array<{ dirX: number; dirY: number; freq: number; amp: number; phase: number }> = [
+    { dirX: 0.92, dirY: 0.39, freq: 3.0, amp: 0.7, phase: Math.random() * twoPi },
+    { dirX: -0.16, dirY: 0.99, freq: 5.0, amp: 0.5, phase: Math.random() * twoPi },
+    { dirX: 0.68, dirY: -0.73, freq: 8.0, amp: 0.35, phase: Math.random() * twoPi },
+    { dirX: -0.91, dirY: -0.41, freq: 12.0, amp: 0.22, phase: Math.random() * twoPi },
+  ];
+
+  const strength = 0.085;
+
+  for (let y = 0; y < size; y += 1) {
+    const v = y / size;
+    for (let x = 0; x < size; x += 1) {
+      const u = x / size;
+
+      let du = 0;
+      let dv = 0;
+      for (const w of waves) {
+        const theta = twoPi * (w.dirX * u + w.dirY * v) * w.freq + w.phase;
+        const c = Math.cos(theta);
+        const scale = w.amp * w.freq * twoPi;
+        du += c * scale * w.dirX;
+        dv += c * scale * w.dirY;
+      }
+
+      let nx = -du * strength;
+      let ny = 1.0;
+      let nz = -dv * strength;
+      const invLen = 1 / Math.sqrt(nx * nx + ny * ny + nz * nz);
+      nx *= invLen;
+      ny *= invLen;
+      nz *= invLen;
+
+      const idx = (y * size + x) * 4;
+      data[idx + 0] = Math.round((nx * 0.5 + 0.5) * 255);
+      data[idx + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+      data[idx + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+      data[idx + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(image, 0, 0);
+  return canvas;
+}
+
+function getWaterNormalTexture(THREE: typeof import("three")): ThreeTypes.Texture {
+  if (cachedWaterNormalTexture) return cachedWaterNormalTexture;
+  const canvas = createWaterNormalCanvas(256);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 2);
+  tex.anisotropy = 8;
+  (tex as any).colorSpace = (THREE as any).NoColorSpace ?? (THREE as any).LinearSRGBColorSpace;
+  cachedWaterNormalTexture = tex;
   return tex;
 }
 
@@ -166,7 +234,9 @@ export function createPoolElementType(i18n: HostI18n): ElementType {
       stencilMaterial.stencilZPass = THREE.ReplaceStencilOp;
 
       const waterBump = getWaterBumpTexture(THREE);
-      const waterMaterial = new THREE.MeshStandardMaterial({
+      const waterNormal = getWaterNormalTexture(THREE);
+
+      const waterMaterialSimplified = new THREE.MeshStandardMaterial({
         color: 0x0ea5e9,
         roughness: 0.18,
         metalness: 0.02,
@@ -177,8 +247,27 @@ export function createPoolElementType(i18n: HostI18n): ElementType {
         emissive: new THREE.Color(0x06243a),
         emissiveIntensity: 0.10,
       });
-      waterMaterial.bumpMap = waterBump;
-      waterMaterial.bumpScale = 0.0;
+      waterMaterialSimplified.bumpMap = waterBump;
+      waterMaterialSimplified.bumpScale = 0.0;
+
+      const waterMaterialDetailed = new THREE.MeshPhysicalMaterial({
+        color: 0x0ea5e9,
+        roughness: 0.12,
+        metalness: 0.0,
+        transmission: 0.92,
+        thickness: 0.18,
+        ior: 1.33,
+        transparent: true,
+        opacity: 1.0,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        clearcoat: 0.62,
+        clearcoatRoughness: 0.08,
+      });
+      waterMaterialDetailed.normalMap = waterNormal;
+      waterMaterialDetailed.normalScale = new THREE.Vector2(0.55, 0.55);
+      (waterMaterialDetailed as any).attenuationColor = new THREE.Color(0x06243a);
+      (waterMaterialDetailed as any).attenuationDistance = 0.8;
 
       const wallMaterial = new THREE.MeshStandardMaterial({
         color: 0x0f172a,
@@ -197,7 +286,7 @@ export function createPoolElementType(i18n: HostI18n): ElementType {
       const stencilMesh = new THREE.Mesh(emptyGeometry, stencilMaterial);
       stencilMesh.renderOrder = -20;
 
-      const waterMesh = new THREE.Mesh(emptyGeometry, waterMaterial);
+      const waterMesh = new THREE.Mesh(emptyGeometry, waterMaterialSimplified);
       waterMesh.renderOrder = 10;
 
       const wallMesh = new THREE.Mesh(emptyGeometry, wallMaterial);
@@ -258,10 +347,19 @@ export function createPoolElementType(i18n: HostI18n): ElementType {
         const waterOffset = Math.min(0.06, Math.max(0.02, pool.depth_m * 0.3));
         waterMesh.position.y = GROUND_Y - waterOffset;
 
-        waterMaterial.roughness = detailed ? 0.10 : 0.22;
-        waterMaterial.opacity = detailed ? 0.72 : 0.66;
-        waterMaterial.emissiveIntensity = detailed ? 0.14 : 0.06;
-        waterMaterial.bumpScale = detailed ? 0.06 : 0.0;
+        waterMesh.material = detailed ? waterMaterialDetailed : waterMaterialSimplified;
+        if (detailed) {
+          waterMaterialDetailed.roughness = 0.10;
+          waterMaterialDetailed.transmission = 0.92;
+          waterMaterialDetailed.clearcoat = 0.65;
+          waterMaterialDetailed.clearcoatRoughness = 0.08;
+          (waterMaterialDetailed as any).attenuationDistance = 0.8 + clamp(pool.depth_m, 0.2, 2.5) * 0.35;
+        } else {
+          waterMaterialSimplified.roughness = 0.22;
+          waterMaterialSimplified.opacity = 0.66;
+          waterMaterialSimplified.emissiveIntensity = 0.06;
+          waterMaterialSimplified.bumpScale = 0.0;
+        }
       }
 
       apply(element);
@@ -272,13 +370,13 @@ export function createPoolElementType(i18n: HostI18n): ElementType {
         tick: (dt: number) => {
           if ((view.graphicsQuality ?? "simplified") !== "detailed") return;
           const now = performance.now();
-          const userData = ((waterBump as any).userData ??= {});
+          const userData = ((waterNormal as any).userData ??= {});
           const lastUpdate = typeof userData.lastOffsetUpdateMs === "number" ? userData.lastOffsetUpdateMs : 0;
           if (now - lastUpdate < 4) return;
           userData.lastOffsetUpdateMs = now;
-          const speed = 0.015;
-          waterBump.offset.x = (waterBump.offset.x + dt * speed) % 1;
-          waterBump.offset.y = (waterBump.offset.y + dt * speed * 0.7) % 1;
+          const speed = 0.022;
+          waterNormal.offset.x = (waterNormal.offset.x + dt * speed) % 1;
+          waterNormal.offset.y = (waterNormal.offset.y + dt * speed * 0.7) % 1;
         },
         dispose: () => {
           if (shapeGeometry) shapeGeometry.dispose();
@@ -287,7 +385,8 @@ export function createPoolElementType(i18n: HostI18n): ElementType {
           stencilMaterial.dispose();
           wallMaterial.dispose();
           bottomMaterial.dispose();
-          waterMaterial.dispose();
+          waterMaterialSimplified.dispose();
+          waterMaterialDetailed.dispose();
         },
       };
     },

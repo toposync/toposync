@@ -8,6 +8,121 @@ import { AREA_ELEMENT_TYPE_ID, DEFAULT_AREA_FILL_COLOR, DEFAULT_AREA_OPACITY, FL
 import { readNumber, readPlanePointArray, readString, saveAreaFillColor } from "../parsing";
 import { getFloorTexture, readFloorTextureId } from "../textures";
 
+let cachedGrassBladeAlphaTexture: ThreeTypes.Texture | null = null;
+
+function getGrassBladeAlphaTexture(THREE: typeof import("three")): ThreeTypes.Texture {
+  if (cachedGrassBladeAlphaTexture) return cachedGrassBladeAlphaTexture;
+
+  const size = 64;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = "black";
+    ctx.fillRect(0, 0, size, size);
+
+    const grad = ctx.createLinearGradient(0, size, 0, 0);
+    grad.addColorStop(0.0, "rgba(255,255,255,0)");
+    grad.addColorStop(0.18, "rgba(255,255,255,1)");
+    grad.addColorStop(1.0, "rgba(255,255,255,1)");
+    ctx.fillStyle = grad;
+
+    ctx.beginPath();
+    ctx.moveTo(size * 0.5, size * 0.02);
+    ctx.quadraticCurveTo(size * 0.58, size * 0.45, size * 0.62, size * 0.98);
+    ctx.quadraticCurveTo(size * 0.5, size * 0.90, size * 0.38, size * 0.98);
+    ctx.quadraticCurveTo(size * 0.42, size * 0.45, size * 0.5, size * 0.02);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.globalCompositeOperation = "destination-in";
+    const edge = ctx.createRadialGradient(size * 0.5, size * 0.8, 0, size * 0.5, size * 0.8, size * 0.55);
+    edge.addColorStop(0, "rgba(255,255,255,1)");
+    edge.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = edge;
+    ctx.fillRect(0, 0, size, size);
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  (texture as any).colorSpace = (THREE as any).NoColorSpace ?? (THREE as any).LinearSRGBColorSpace;
+  cachedGrassBladeAlphaTexture = texture;
+  return texture;
+}
+
+function polygonAreaXZ(vertices: Array<{ x: number; z: number }>): number {
+  if (vertices.length < 3) return 0;
+  let sum = 0;
+  for (let i = 0; i < vertices.length; i += 1) {
+    const a = vertices[i];
+    const b = vertices[(i + 1) % vertices.length];
+    sum += a.x * b.z - b.x * a.z;
+  }
+  return Math.abs(sum) / 2;
+}
+
+type TriangleXZ = {
+  ax: number;
+  az: number;
+  bx: number;
+  bz: number;
+  cx: number;
+  cz: number;
+  area: number;
+};
+
+function buildTriangleTable(geometry: ThreeTypes.BufferGeometry): { triangles: TriangleXZ[]; cdf: number[]; totalArea: number } {
+  const pos = geometry.getAttribute("position") as ThreeTypes.BufferAttribute;
+  const idx = geometry.getIndex();
+  const triangles: TriangleXZ[] = [];
+  const cdf: number[] = [];
+  let total = 0;
+
+  function pushTriangle(ai: number, bi: number, ci: number) {
+    const ax = pos.getX(ai);
+    const az = pos.getZ(ai);
+    const bx = pos.getX(bi);
+    const bz = pos.getZ(bi);
+    const cx = pos.getX(ci);
+    const cz = pos.getZ(ci);
+    const area = Math.abs((bx - ax) * (cz - az) - (cx - ax) * (bz - az)) * 0.5;
+    if (!(area > 1e-9)) return;
+    total += area;
+    triangles.push({ ax, az, bx, bz, cx, cz, area });
+    cdf.push(total);
+  }
+
+  if (idx) {
+    for (let i = 0; i < idx.count; i += 3) {
+      pushTriangle(idx.getX(i), idx.getX(i + 1), idx.getX(i + 2));
+    }
+  } else {
+    for (let i = 0; i < pos.count; i += 3) {
+      pushTriangle(i, i + 1, i + 2);
+    }
+  }
+
+  return { triangles, cdf, totalArea: total };
+}
+
+function sampleTrianglePoint(tri: TriangleXZ): { x: number; z: number } {
+  const r1 = Math.random();
+  const r2 = Math.random();
+  const sqrtR1 = Math.sqrt(r1);
+  const u = 1 - sqrtR1;
+  const v = r2 * sqrtR1;
+  const w = 1 - u - v;
+  return {
+    x: tri.ax * u + tri.bx * v + tri.cx * w,
+    z: tri.az * u + tri.bz * v + tri.cz * w,
+  };
+}
+
 export function createAreaElementType(i18n: HostI18n): ElementType {
   return {
     type: AREA_ELEMENT_TYPE_ID,
@@ -33,8 +148,8 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
         roughness: 0.95,
         metalness: 0.0,
         side: THREE.DoubleSide,
-        transparent: true,
-        opacity: DEFAULT_AREA_OPACITY,
+        transparent: false,
+        opacity: 1.0,
         polygonOffset: true,
         polygonOffsetFactor: 1,
         polygonOffsetUnits: 1,
@@ -50,6 +165,9 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
 
       let mesh: ThreeTypes.Mesh | null = null;
       let lastKey = "";
+      let grassBlades: ThreeTypes.InstancedMesh | null = null;
+      let grassBladeMaterial: ThreeTypes.MeshStandardMaterial | null = null;
+      let lastGrassKey = "";
 
       function buildGeometry(el: CompositionElement): ThreeTypes.BufferGeometry | null {
         const vertices = readPlanePointArray(el.props.vertices);
@@ -73,6 +191,114 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
         }
         geometry.setAttribute("uv", uv);
         return geometry;
+      }
+
+      function ensureGrassBladeMaterial(): ThreeTypes.MeshStandardMaterial {
+        if (grassBladeMaterial) return grassBladeMaterial;
+
+        const alpha = getGrassBladeAlphaTexture(THREE);
+        const m = new THREE.MeshStandardMaterial({
+          color: 0x16a34a,
+          roughness: 0.88,
+          metalness: 0.0,
+          side: THREE.DoubleSide,
+          alphaMap: alpha,
+          alphaTest: 0.35,
+        });
+
+        m.stencilWrite = true;
+        m.stencilRef = 1;
+        m.stencilFunc = THREE.NotEqualStencilFunc;
+        m.stencilFail = THREE.KeepStencilOp;
+        m.stencilZFail = THREE.KeepStencilOp;
+        m.stencilZPass = THREE.KeepStencilOp;
+        m.stencilWriteMask = 0x00;
+        m.stencilFuncMask = 0xff;
+
+        m.onBeforeCompile = (shader) => {
+          shader.uniforms.uTime = { value: 0 };
+          shader.vertexShader = shader.vertexShader
+            .replace("#include <common>", "#include <common>\nuniform float uTime;\nattribute float instanceSeed;")
+            .replace(
+              "#include <begin_vertex>",
+              `#include <begin_vertex>
+float h01 = clamp(position.y, 0.0, 1.0);
+float wind = sin(uTime * 1.2 + instanceSeed + position.x * 2.4) * 0.12;
+float wind2 = cos(uTime * 0.9 + instanceSeed * 1.7) * 0.08;
+transformed.x += (wind + wind2) * h01 * h01;
+transformed.z += sin(uTime * 1.1 + instanceSeed * 0.7) * 0.06 * h01 * h01;`,
+            );
+          (m.userData as any).shader = shader;
+        };
+
+        grassBladeMaterial = m;
+        return m;
+      }
+
+      function rebuildGrassBlades(geometry: ThreeTypes.BufferGeometry, bladeCount: number, fill: string) {
+        if (grassBlades) {
+          group.remove(grassBlades);
+          (grassBlades.geometry as ThreeTypes.BufferGeometry).dispose();
+          grassBlades = null;
+        }
+
+        if (!(bladeCount > 0)) return;
+
+        const baseGeometry = new THREE.PlaneGeometry(1, 1, 1, 4);
+        baseGeometry.translate(0, 0.5, 0);
+        const instancedGeometry = baseGeometry;
+        const seeds = new THREE.InstancedBufferAttribute(new Float32Array(bladeCount), 1);
+        instancedGeometry.setAttribute("instanceSeed", seeds);
+
+        const bladesMaterial = ensureGrassBladeMaterial();
+        bladesMaterial.color.set(fill);
+
+        const blades = new THREE.InstancedMesh(instancedGeometry, bladesMaterial, bladeCount);
+        blades.frustumCulled = false;
+        blades.renderOrder = 5;
+
+        const table = buildTriangleTable(geometry);
+        if (!(table.totalArea > 1e-9) || table.triangles.length === 0) {
+          instancedGeometry.dispose();
+          return;
+        }
+
+        const mat = new THREE.Matrix4();
+        const quat = new THREE.Quaternion();
+        const pos = new THREE.Vector3();
+        const scale = new THREE.Vector3();
+        const axisY = new THREE.Vector3(0, 1, 0);
+
+        for (let i = 0; i < bladeCount; i += 1) {
+          const r = Math.random() * table.totalArea;
+          let lo = 0;
+          let hi = table.cdf.length - 1;
+          while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (r <= table.cdf[mid]) hi = mid;
+            else lo = mid + 1;
+          }
+          const tri = table.triangles[lo];
+          const point = sampleTrianglePoint(tri);
+
+          const yaw = Math.random() * Math.PI * 2;
+          quat.setFromAxisAngle(axisY, yaw);
+
+          const height = 0.10 + Math.random() * 0.20;
+          const width = height * (0.12 + Math.random() * 0.10);
+          scale.set(width, height, 1);
+
+          pos.set(point.x, GROUND_Y + FLOOR_EPSILON + 0.002, point.z);
+          mat.compose(pos, quat, scale);
+          blades.setMatrixAt(i, mat);
+          seeds.setX(i, Math.random() * 1000);
+        }
+
+        blades.instanceMatrix.needsUpdate = true;
+        seeds.needsUpdate = true;
+
+        grassBlades = blades;
+        group.add(blades);
       }
 
       function apply(el: CompositionElement) {
@@ -104,7 +330,9 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
         }
 
         const fill = readString(el.props.fill, DEFAULT_AREA_FILL_COLOR);
-        const opacity = Math.max(0, Math.min(1, readNumber(el.props.opacity, DEFAULT_AREA_OPACITY)));
+        const opacityRaw = Math.max(0, Math.min(1, readNumber(el.props.opacity, DEFAULT_AREA_OPACITY)));
+        const isHidden = opacityRaw < 0.001;
+        const opacity = isHidden ? 0 : 1;
         const textureId = readFloorTextureId(el.props.texture, "none");
         const quality = view.graphicsQuality ?? "simplified";
         const nextMap = getFloorTexture(THREE, textureId, quality);
@@ -116,19 +344,49 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
         material.roughness = textureId === "grass" ? 0.98 : 0.95;
         material.metalness = 0.0;
         material.opacity = opacity;
-        material.transparent = opacity < 0.999;
-        material.depthWrite = opacity >= 0.999;
+        material.transparent = isHidden;
+        material.depthWrite = !isHidden;
 
-        if (mesh) mesh.position.y = GROUND_Y + FLOOR_EPSILON;
+        if (mesh) {
+          mesh.visible = !isHidden;
+          mesh.position.y = GROUND_Y + FLOOR_EPSILON;
+        }
+
+        const wantsGrassBlades = !isHidden && textureId === "grass" && quality === "detailed" && Boolean(mesh && mesh.geometry);
+        if (!wantsGrassBlades) {
+          if (grassBlades) grassBlades.visible = false;
+          return;
+        }
+
+        if (grassBlades) grassBlades.visible = true;
+
+        const area = polygonAreaXZ(vertices);
+        const density = 35;
+        const bladeCount = Math.max(240, Math.min(1800, Math.floor(area * density)));
+        const grassKey = `${localKey}:${bladeCount}`;
+        if (grassKey !== lastGrassKey && mesh) {
+          lastGrassKey = grassKey;
+          rebuildGrassBlades(mesh.geometry as ThreeTypes.BufferGeometry, bladeCount, fill);
+        } else if (grassBladeMaterial) {
+          grassBladeMaterial.color.set(fill);
+        }
       }
 
       apply(element);
       return {
         object: group,
         update: apply,
+        tick: () => {
+          if (!grassBladeMaterial) return;
+          const shader = (grassBladeMaterial.userData as any).shader;
+          if (!shader) return;
+          shader.uniforms.uTime.value = performance.now() / 1000;
+        },
         dispose: () => {
           if (mesh) (mesh.geometry as ThreeTypes.BufferGeometry).dispose();
           material.dispose();
+          if (grassBlades) (grassBlades.geometry as ThreeTypes.BufferGeometry).dispose();
+          grassBladeMaterial?.dispose();
         },
       };
     },
@@ -137,7 +395,8 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
       if (vertices.length < 3) return;
 
       const fill = readString(element.props.fill, DEFAULT_AREA_FILL_COLOR);
-      const opacity = readNumber(element.props.opacity, DEFAULT_AREA_OPACITY);
+      const opacityRaw = readNumber(element.props.opacity, DEFAULT_AREA_OPACITY);
+      const opacity = opacityRaw < 0.001 ? 0 : 1;
 
       const points = vertices.map((p) => viewport.worldToScreen(p));
 

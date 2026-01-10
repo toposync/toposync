@@ -1,8 +1,9 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 import type { Notification, NotificationRenderer, TopoSyncHost } from "@toposync/plugin-api";
 
-import { YOLO_LEGACY_CATEGORY_MAP, YOLO_V12_CATEGORIES, formatYoloCategoryLabel, type YoloV12Category } from "../yolo";
+import { fetchCamerasIndex } from "../api/camerasApi";
+import type { CamerasIndex } from "../types";
 import { createCameraTracking3dOverlay } from "./cameraTracking3dOverlay";
 
 type CamerasTrackingPayload = {
@@ -15,8 +16,6 @@ type CamerasTrackingPayload = {
   label?: string;
   confidence?: number;
 };
-
-const YOLO_V12_CATEGORY_SET = new Set<string>(YOLO_V12_CATEGORIES);
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
@@ -39,15 +38,7 @@ function parseIso(value: string | undefined): Date | null {
   return d;
 }
 
-function formatDateTimeShort(locale: string, date: Date): string {
-  try {
-    return new Intl.DateTimeFormat(locale, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
-  } catch {
-    return date.toLocaleString();
-  }
-}
-
-function formatDurationShort(locale: string, ms: number): string {
+function formatDurationShort(ms: number): string {
   const seconds = Math.max(0, Math.round(ms / 1000));
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
@@ -58,40 +49,6 @@ function formatDurationShort(locale: string, ms: number): string {
   if (m > 0 || h > 0) parts.push(`${m}m`);
   parts.push(`${s}s`);
   return parts.join(" ");
-}
-
-function normalizeYoloLabel(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return "";
-  const lower = trimmed.toLowerCase();
-  const mapped = YOLO_LEGACY_CATEGORY_MAP[lower] ?? lower;
-  return mapped;
-}
-
-function asYoloV12Category(value: string): YoloV12Category | null {
-  return YOLO_V12_CATEGORY_SET.has(value) ? (value as YoloV12Category) : null;
-}
-
-function toTitleCaseWords(value: string): string {
-  return value
-    .split(" ")
-    .map((part) => {
-      const trimmed = part.trim();
-      if (!trimmed) return "";
-      return `${trimmed.slice(0, 1).toUpperCase()}${trimmed.slice(1)}`;
-    })
-    .join(" ")
-    .trim();
-}
-
-function formatYoloFallbackLabel(category: string): string {
-  if (!category) return "";
-  if (category === "tv") return "TV";
-  return toTitleCaseWords(category);
-}
-
-function yoloI18nKey(category: string): string {
-  return `ext.cameras.yolo.${category.replace(/\s+/g, "_")}`;
 }
 
 function formatConfidence(locale: string, value: number | null): string | null {
@@ -118,6 +75,65 @@ function parsePayload(notification: Notification): CamerasTrackingPayload {
     label: asString(rec.label) || undefined,
     confidence: asNumber(rec.confidence) ?? undefined,
   };
+}
+
+const cameraNameById = new Map<string, string>();
+let cameraNamesPromise: Promise<void> | null = null;
+let cameraNamesLoaded = false;
+
+async function ensureCameraNamesLoaded(): Promise<void> {
+  if (cameraNamesLoaded) return;
+  if (!cameraNamesPromise) {
+    cameraNamesPromise = fetchCamerasIndex()
+      .then((index: CamerasIndex) => {
+        cameraNameById.clear();
+        for (const cam of index.cameras) {
+          const id = typeof cam?.id === "string" ? cam.id : "";
+          if (!id) continue;
+          const name = typeof cam?.name === "string" ? cam.name.trim() : "";
+          cameraNameById.set(id, name || id);
+        }
+        cameraNamesLoaded = true;
+      })
+      .catch((err) => {
+        cameraNamesPromise = null;
+        console.warn("[cameras] Failed to load cameras index:", err);
+      });
+  }
+  await cameraNamesPromise;
+}
+
+function useCameraNameFromIndex(cameraId: string | undefined): string | null {
+  const [name, setName] = useState(() => (cameraId ? cameraNameById.get(cameraId) ?? null : null));
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!cameraId) {
+      setName(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const cached = cameraNameById.get(cameraId);
+    if (cached) {
+      setName(cached);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    ensureCameraNamesLoaded().then(() => {
+      if (cancelled) return;
+      setName(cameraNameById.get(cameraId) ?? null);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cameraId]);
+
+  return name;
 }
 
 function LivePip(): React.ReactElement {
@@ -152,27 +168,27 @@ function LivePip(): React.ReactElement {
 }
 
 function CameraTrackingNotificationBody({ notification, host }: { notification: Notification; host: TopoSyncHost }): React.ReactElement {
-  const { t, locale } = host.i18n.useI18n();
+  const { locale } = host.i18n.useI18n();
   const payload = useMemo(() => parsePayload(notification), [notification]);
 
-  const cameraName = payload.camera_name?.trim() || payload.camera_id?.trim() || (notification.description ?? "").trim() || "—";
-  const yoloLabelRaw = payload.label?.trim() || "";
-  const yoloCategory = normalizeYoloLabel(yoloLabelRaw);
-  const typedYoloCategory = yoloCategory ? asYoloV12Category(yoloCategory) : null;
-  const yoloFallback = yoloCategory ? (typedYoloCategory ? formatYoloCategoryLabel(typedYoloCategory) : formatYoloFallbackLabel(yoloCategory)) : undefined;
-  const translatedLabel = yoloCategory ? t(yoloI18nKey(yoloCategory), {}, yoloFallback) : null;
+  const cameraNameFromIndex = useCameraNameFromIndex(payload.camera_id);
+  const cameraName =
+    payload.camera_name?.trim() ||
+    cameraNameFromIndex?.trim() ||
+    (notification.description ?? "").trim() ||
+    payload.camera_id?.trim() ||
+    "—";
   const confText = formatConfidence(locale, payload.confidence ?? null);
 
   const createdAt = parseIso(notification.createdAt);
   const updatedAt = parseIso(notification.updatedAt);
-  const startedText = createdAt ? formatDateTimeShort(locale, createdAt) : null;
   const durationText =
     createdAt && updatedAt
-      ? formatDurationShort(locale, updatedAt.getTime() - createdAt.getTime())
+      ? formatDurationShort(updatedAt.getTime() - createdAt.getTime())
       : null;
   const isLive = Boolean(updatedAt && Date.now() - updatedAt.getTime() < 12_000);
 
-  const metaParts = [translatedLabel, confText, durationText].filter((value): value is string => Boolean(value));
+  const metaParts = [confText, durationText].filter((value): value is string => Boolean(value));
 
   return (
     <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
@@ -193,19 +209,13 @@ function CameraTrackingNotificationBody({ notification, host }: { notification: 
           {isLive ? <LivePip /> : null}
         </div>
 
-        {metaParts.length > 0 ? (
-          <div className="cardMeta" style={{ margin: 0, display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {metaParts.map((part, idx) => (
-              <span key={`${idx}-${String(part)}`}>{part}</span>
-            ))}
-          </div>
-        ) : null}
-
-        {startedText ? (
-          <div className="cardMeta" style={{ margin: 0 }}>
-            {startedText}
-          </div>
-        ) : null}
+	        {metaParts.length > 0 ? (
+	          <div className="cardMeta" style={{ margin: 0, display: "flex", flexWrap: "wrap", gap: 8 }}>
+	            {metaParts.map((part, idx) => (
+	              <span key={`${idx}-${String(part)}`}>{part}</span>
+	            ))}
+	          </div>
+	        ) : null}
       </div>
 
       {notification.imageUrl ? (

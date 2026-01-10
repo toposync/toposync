@@ -71,6 +71,10 @@ class UploadFileResponse(BaseModel):
     size_bytes: int
 
 
+class FileExistsResponse(BaseModel):
+    exists: bool
+
+
 class ExtensionSettingsResponse(BaseModel):
     extension_id: str
     settings: dict[str, Any] = Field(default_factory=dict)
@@ -277,6 +281,17 @@ def create_app() -> FastAPI:
             media_type=_guess_media_type(path),
             headers={"Cache-Control": "no-store"},
         )
+
+    @app.get("/api/files/exists", response_model=FileExistsResponse)
+    async def file_exists(request: Request, path: str) -> FileExistsResponse:
+        config_store: ConfigStore = request.app.state.config_store
+        base_dir = config_store.paths.files_dir.resolve()
+        candidate = (base_dir / path).resolve()
+
+        if not candidate.is_relative_to(base_dir):
+            return FileExistsResponse(exists=False)
+
+        return FileExistsResponse(exists=candidate.is_file())
 
     @app.post("/api/files/upload", response_model=UploadFileResponse)
     async def upload_file(

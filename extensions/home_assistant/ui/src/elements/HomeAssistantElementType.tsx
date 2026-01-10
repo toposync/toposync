@@ -168,7 +168,11 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
         roughness: 0.32,
         metalness: 0.0,
       });
+      const domeBaseColorHex = 0x0b1220;
+      const lampBodyColorHex = 0x111827;
+
       const cutMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+      const cutBaseColorHex = 0x000000;
       const iconMaterial = new THREE.MeshBasicMaterial({ color: neonDefault, side: THREE.DoubleSide });
       iconMaterial.depthWrite = false;
       iconMaterial.polygonOffset = true;
@@ -298,6 +302,9 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
           watchedDomain &&
           AIRFLOW_COMPATIBLE_DOMAINS.has(watchedDomain.toLowerCase());
 
+        sphereMaterial.color.setHex(domeBaseColorHex);
+        cutMaterial.color.setHex(cutBaseColorHex);
+
         if (canAirflow) {
           const flow = climateFlowFromLiveState(live, stateRaw);
           const amp = clamp(airflowIntensity, 0.2, 3.0) * clamp(flow.factor, 0, 1);
@@ -346,12 +353,15 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
         airflow.update({ active: false });
 
         if (canLamp) {
+          sphereMaterial.color.setHex(lampBodyColorHex);
+          cutMaterial.color.setHex(lampBodyColorHex);
+
           const on = boolState === true;
           const unknown = boolState == null;
 
           const neon = on ? lampColor : 0x000000;
           sphereMaterial.emissive.set(neon);
-          iconMaterial.color.set(on ? lampColor : unknown ? 0x334155 : 0x111827);
+          iconMaterial.color.set(lampColor);
           light.color.set(lampColor);
 
           if (on) {

@@ -1,5 +1,5 @@
 :root {
-  --bg: #070a14;
+  --bg: #000;
   --panel: rgba(12, 18, 37, 0.72);
   --panelSolid: #0c1225;
   --panel2: rgba(15, 23, 48, 0.88);
@@ -45,9 +45,7 @@ textarea {
   position: fixed;
   inset: 0;
   overflow: hidden;
-  background: radial-gradient(1200px 600px at 50% -10%, rgba(251, 191, 36, 0.12), transparent 60%),
-    radial-gradient(1000px 500px at 0% 100%, rgba(99, 102, 241, 0.12), transparent 55%),
-    var(--bg);
+  background: var(--bg);
 }
 
 .screenRoot {

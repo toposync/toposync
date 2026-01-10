@@ -37,15 +37,59 @@ const FOCUS_HIGHLIGHT_COLOR = 0xfbbf24;
 const GHOST_WALLS_OPACITY = 0.22;
 const GHOST_WALLS_MATERIAL_STATE_KEY = "__toposyncGhostWallsOriginal";
 
+function expandBoundsByVisibleObject(target: THREE.Box3, root: THREE.Object3D): boolean {
+  let added = false;
+  const temp = new THREE.Box3();
+
+  const stack: THREE.Object3D[] = [root];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node || !node.visible) continue;
+
+    for (const child of node.children) stack.push(child);
+
+    const anyNode = node as any;
+
+    if (anyNode.isInstancedMesh) {
+      const instanced = anyNode as THREE.InstancedMesh;
+      try {
+        instanced.computeBoundingBox?.();
+      } catch {
+        // ignore
+      }
+      const bbox = instanced.boundingBox;
+      if (!bbox) continue;
+      temp.copy(bbox);
+      temp.applyMatrix4(instanced.matrixWorld);
+      if (temp.isEmpty()) continue;
+      target.union(temp);
+      added = true;
+      continue;
+    }
+
+    const geometry = anyNode.geometry as THREE.BufferGeometry | undefined;
+    if (!geometry) continue;
+    if (geometry.boundingBox == null) geometry.computeBoundingBox();
+    const bbox = geometry.boundingBox;
+    if (!bbox) continue;
+
+    temp.copy(bbox);
+    temp.applyMatrix4(node.matrixWorld);
+    if (temp.isEmpty()) continue;
+    target.union(temp);
+    added = true;
+  }
+
+  return added;
+}
+
 function computeTrackedBounds(tracked: Map<string, Tracked>): THREE.Box3 | null {
   const out = new THREE.Box3();
+  out.makeEmpty();
   let hasAny = false;
   for (const entry of tracked.values()) {
     entry.instance.object.updateWorldMatrix(true, true);
-    const box = new THREE.Box3().setFromObject(entry.instance.object);
-    if (box.isEmpty()) continue;
-    out.union(box);
-    hasAny = true;
+    if (expandBoundsByVisibleObject(out, entry.instance.object)) hasAny = true;
   }
   return hasAny ? out : null;
 }

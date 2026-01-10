@@ -216,7 +216,7 @@ export const camerasTranslations = {
     "ext.cameras.detections.cond.ha_sensor": "Sensor HA (em breve)",
     "ext.cameras.detections.cond.ha_state": "Estado de entidade HA (em breve)",
 
-    "ext.cameras.notification.object_detected": "Objeto detectado: {{label}}",
+    "ext.cameras.notification.object_detected": "{{label}}",
 
     "ext.cameras.yolo.person": "Pessoa",
     "ext.cameras.yolo.bicycle": "Bicicleta",

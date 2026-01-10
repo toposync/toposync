@@ -2,7 +2,7 @@ import type { CompositionElement, Element3DInstance, ElementType, ViewSettings }
 import * as THREE from "three";
 
 const RENDER_DIR_ID = "render2d";
-const RENDER_VERSION = 6 as const;
+const RENDER_VERSION = 7 as const;
 const HOME_ASSISTANT_ELEMENT_TYPE_ID = "com.toposync.home_assistant.item";
 const MODEL_ELEMENT_TYPE_ID = "com.toposync.models.gltf";
 const IMAGE_ELEMENT_TYPE_ID = "com.toposync.images.image";
@@ -325,6 +325,12 @@ function computeBoundsFromElements(elements: CompositionElement[], overlayTarget
     }
 
     if (element.type === IMAGE_ELEMENT_TYPE_ID) {
+      const dir = readString(props.dir).trim();
+      const file = readString(props.file).trim();
+      const mode = readString(props.mode).trim().toLowerCase() || "overlay";
+      const shouldRender = Boolean(dir && file && mode === "overlay");
+      if (!shouldRender) continue;
+
       const width = readNumber(props.width_m, 1);
       const depth = readNumber(props.depth_m, 1);
       includeBoundsRotatedRect(bounds, element.position, { x: width, z: depth }, element.rotation.y);
@@ -474,6 +480,13 @@ async function fetchJson<T>(url: string): Promise<T | null> {
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`);
   return response.json();
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  const response = await fetch(`/api/files/exists?path=${encodeURIComponent(path)}`);
+  if (!response.ok) throw new Error(`Failed to check ${path}: ${response.status}`);
+  const data = (await response.json().catch(() => null)) as { exists?: unknown } | null;
+  return Boolean(data && data.exists === true);
 }
 
 async function uploadBlob(dir: string, filename: string, blob: Blob): Promise<UploadFileResponse> {
@@ -714,15 +727,19 @@ export async function getOrCreateMain2DRenderManifest(args: {
   const signatureInput = stableStringify(buildSignatureElements(args.elements));
   const signature = (await sha256Hex(signatureInput)).slice(0, 24);
   const prefix = manifestFilePrefix(args.compositionId, signature);
-  const manifestUrl = `/files/${encodeURIComponent(RENDER_DIR_ID)}/${encodeURIComponent(`${prefix}_manifest.json`)}`;
+  const manifestFilename = `${prefix}_manifest.json`;
+  const manifestPath = `${RENDER_DIR_ID}/${manifestFilename}`;
+  const manifestUrl = `/files/${encodeURIComponent(RENDER_DIR_ID)}/${encodeURIComponent(manifestFilename)}`;
 
   const inflightKey = `${args.compositionId}:${signature}`;
   const existing = inflight.get(inflightKey);
   if (existing) return existing;
 
   const promise = (async () => {
-    const existingManifest = await fetchJson<Main2DRenderManifest>(manifestUrl);
-    if (existingManifest) return existingManifest;
+    if (await fileExists(manifestPath)) {
+      const existingManifest = await fetchJson<Main2DRenderManifest>(manifestUrl);
+      if (existingManifest) return existingManifest;
+    }
 
     const maximumRenderSize = Math.max(512, Math.min(8192, args.maximumRenderSize ?? 4096));
     const captured = await captureBaseAndOverlays({
@@ -759,7 +776,6 @@ export async function getOrCreateMain2DRenderManifest(args: {
       overlays,
     };
 
-    const manifestFilename = `${prefix}_manifest.json`;
     const manifestBlob = new Blob([JSON.stringify(manifest)], { type: "application/json" });
     await uploadBlob(RENDER_DIR_ID, manifestFilename, manifestBlob);
 

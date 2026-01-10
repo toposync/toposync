@@ -4,6 +4,7 @@ import type {
   CompositionElement,
   CompositionElementPatch,
   ElementType,
+  GraphicsQuality,
   HostApi,
   Notification,
   NotificationRenderer,
@@ -28,6 +29,7 @@ type Props = {
   viewSettings: ViewSettings;
   onSetWallHeightPreset: (preset: WallHeightPreset) => void;
   onSetGhostWalls: (enabled: boolean) => void;
+  onSetGraphicsQuality: (quality: GraphicsQuality) => void;
   notificationRenderers: NotificationRenderer[];
   notifications: Notification[];
   activeNotificationId: string | null;
@@ -60,6 +62,7 @@ export function MainScreen({
   viewSettings,
   onSetWallHeightPreset,
   onSetGhostWalls,
+  onSetGraphicsQuality,
   notificationRenderers,
   notifications,
   activeNotificationId,
@@ -336,6 +339,33 @@ export function MainScreen({
               </div>
             );
           })()}
+        </div>
+
+        <div className="modalSectionTitle">{t("core.ui.view_settings.graphics_quality")}</div>
+        <div className="choiceList">
+          {(
+            [
+              { id: "simplified", title: t("core.ui.graphics_quality.simplified"), desc: t("core.ui.graphics_quality.simplified_desc") },
+              { id: "detailed", title: t("core.ui.graphics_quality.detailed"), desc: t("core.ui.graphics_quality.detailed_desc") },
+            ] as const
+          ).map((opt) => {
+            const selected = (viewSettings.graphicsQuality ?? "simplified") === opt.id;
+            return (
+              <div
+                key={opt.id}
+                className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                role="button"
+                tabIndex={0}
+                onClick={() => onSetGraphicsQuality(opt.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") onSetGraphicsQuality(opt.id);
+                }}
+              >
+                <div className="choiceTitle">{opt.title}</div>
+                <div className="choiceDesc">{opt.desc}</div>
+              </div>
+            );
+          })}
         </div>
       </Modal>
 

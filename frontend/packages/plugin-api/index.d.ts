@@ -4,10 +4,13 @@ export type PlanePoint = { x: number; z: number };
 
 export type WallHeightPreset = "low" | "medium" | "high";
 
+export type GraphicsQuality = "simplified" | "detailed";
+
 export type ViewSettings = {
   wallHeightPreset: WallHeightPreset;
   wallHeight: number;
   ghostWalls?: boolean;
+  graphicsQuality?: GraphicsQuality;
 };
 
 export type Locale = "en" | "pt-BR";

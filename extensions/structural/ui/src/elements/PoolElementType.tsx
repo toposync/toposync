@@ -12,8 +12,60 @@ type PoolProps = {
   vertices: PlanePoint[];
 };
 
+let cachedWaterBumpTexture: ThreeTypes.Texture | null = null;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function createWaterBumpCanvas(size: number): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+
+  ctx.fillStyle = "rgb(128,128,128)";
+  ctx.fillRect(0, 0, size, size);
+
+  ctx.save();
+  ctx.globalAlpha = 0.14;
+  ctx.fillStyle = "rgb(150,150,150)";
+  for (let i = 0; i < 220; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = 6 + Math.random() * 26;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.globalAlpha = 0.10;
+  ctx.fillStyle = "rgb(100,100,100)";
+  for (let i = 0; i < 160; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = 4 + Math.random() * 20;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  return canvas;
+}
+
+function getWaterBumpTexture(THREE: typeof import("three")): ThreeTypes.Texture {
+  if (cachedWaterBumpTexture) return cachedWaterBumpTexture;
+  const canvas = createWaterBumpCanvas(256);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 2);
+  tex.anisotropy = 4;
+  (tex as any).colorSpace = (THREE as any).NoColorSpace ?? (THREE as any).LinearSRGBColorSpace;
+  cachedWaterBumpTexture = tex;
+  return tex;
 }
 
 function parsePoolProps(props: Record<string, unknown>): PoolProps {
@@ -100,7 +152,7 @@ export function createPoolElementType(i18n: HostI18n): ElementType {
         { x: -1, z: 1 },
       ],
     },
-    create3D: ({ THREE }, element) => {
+    create3D: ({ THREE, view }, element) => {
       const group = new THREE.Group();
       const emptyGeometry = new THREE.BufferGeometry();
 
@@ -113,15 +165,20 @@ export function createPoolElementType(i18n: HostI18n): ElementType {
       stencilMaterial.stencilFunc = THREE.AlwaysStencilFunc;
       stencilMaterial.stencilZPass = THREE.ReplaceStencilOp;
 
+      const waterBump = getWaterBumpTexture(THREE);
       const waterMaterial = new THREE.MeshStandardMaterial({
         color: 0x0ea5e9,
-        roughness: 0.35,
+        roughness: 0.18,
         metalness: 0.02,
         transparent: true,
         opacity: 0.68,
         side: THREE.DoubleSide,
         depthWrite: false,
+        emissive: new THREE.Color(0x06243a),
+        emissiveIntensity: 0.10,
       });
+      waterMaterial.bumpMap = waterBump;
+      waterMaterial.bumpScale = 0.0;
 
       const wallMaterial = new THREE.MeshStandardMaterial({
         color: 0x0f172a,
@@ -157,6 +214,7 @@ export function createPoolElementType(i18n: HostI18n): ElementType {
 
       function apply(next: CompositionElement) {
         const pool = parsePoolProps(next.props);
+        const detailed = (view.graphicsQuality ?? "simplified") === "detailed";
 
         const localKey = JSON.stringify({
           v: pool.vertices.map((p) => ({
@@ -199,6 +257,11 @@ export function createPoolElementType(i18n: HostI18n): ElementType {
 
         const waterOffset = Math.min(0.06, Math.max(0.02, pool.depth_m * 0.3));
         waterMesh.position.y = GROUND_Y - waterOffset;
+
+        waterMaterial.roughness = detailed ? 0.10 : 0.22;
+        waterMaterial.opacity = detailed ? 0.72 : 0.66;
+        waterMaterial.emissiveIntensity = detailed ? 0.14 : 0.06;
+        waterMaterial.bumpScale = detailed ? 0.06 : 0.0;
       }
 
       apply(element);
@@ -206,6 +269,17 @@ export function createPoolElementType(i18n: HostI18n): ElementType {
       return {
         object: group,
         update: apply,
+        tick: (dt: number) => {
+          if ((view.graphicsQuality ?? "simplified") !== "detailed") return;
+          const now = performance.now();
+          const userData = ((waterBump as any).userData ??= {});
+          const lastUpdate = typeof userData.lastOffsetUpdateMs === "number" ? userData.lastOffsetUpdateMs : 0;
+          if (now - lastUpdate < 4) return;
+          userData.lastOffsetUpdateMs = now;
+          const speed = 0.015;
+          waterBump.offset.x = (waterBump.offset.x + dt * speed) % 1;
+          waterBump.offset.y = (waterBump.offset.y + dt * speed * 0.7) % 1;
+        },
         dispose: () => {
           if (shapeGeometry) shapeGeometry.dispose();
           if (wallGeometry) wallGeometry.dispose();

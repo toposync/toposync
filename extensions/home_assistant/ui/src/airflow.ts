@@ -10,6 +10,7 @@ export type AirflowConfig = {
   direction: Vec3;
   ventWidth: number;
   ventHeight: number;
+  activeParticleCount: number;
 };
 
 type AirflowEffect = {
@@ -58,15 +59,15 @@ function clamp(n: number, min: number, max: number): number {
 }
 
 export function createAirflowEffect(THREE: any, opts?: { particleCount?: number }): AirflowEffect {
-  const particleCount = Math.max(220, Math.min(9000, opts?.particleCount ?? 900));
-  const heads = new Float32Array(particleCount * 3);
-  const vels = new Float32Array(particleCount * 3);
-  const ages = new Float32Array(particleCount);
-  const lifes = new Float32Array(particleCount);
-  const seeds = new Float32Array(particleCount);
-  const linePositions = new Float32Array(particleCount * 2 * 3);
-  const lineColors = new Float32Array(particleCount * 2 * 3);
-  const pointColors = new Float32Array(particleCount * 3);
+  const particleCapacity = Math.max(220, Math.min(9000, opts?.particleCount ?? 900));
+  const heads = new Float32Array(particleCapacity * 3);
+  const vels = new Float32Array(particleCapacity * 3);
+  const ages = new Float32Array(particleCapacity);
+  const lifes = new Float32Array(particleCapacity);
+  const seeds = new Float32Array(particleCapacity);
+  const linePositions = new Float32Array(particleCapacity * 2 * 3);
+  const lineColors = new Float32Array(particleCapacity * 2 * 3);
+  const pointColors = new Float32Array(particleCapacity * 3);
 
   const origin = new THREE.Vector3(0, 0, 0);
   const direction = new THREE.Vector3(0, 0, 1);
@@ -76,6 +77,7 @@ export function createAirflowEffect(THREE: any, opts?: { particleCount?: number 
   let active = false;
   let mode: AirflowMode = "neutral";
   let intensity = 1.0;
+  let activeParticleCount = particleCapacity;
 
   const colorCool = new THREE.Color(0x4dabf7);
   const colorHeat = new THREE.Color(0xff6b6b);
@@ -114,11 +116,12 @@ export function createAirflowEffect(THREE: any, opts?: { particleCount?: number 
     seeds[i] = Math.random() * 1000;
   }
 
-  for (let i = 0; i < particleCount; i += 1) respawn(i);
+  for (let i = 0; i < particleCapacity; i += 1) respawn(i);
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(linePositions, 3));
   geometry.setAttribute("color", new THREE.BufferAttribute(lineColors, 3));
+  geometry.setDrawRange(0, 0);
 
   const material = new THREE.LineBasicMaterial({
     vertexColors: true,
@@ -146,6 +149,7 @@ export function createAirflowEffect(THREE: any, opts?: { particleCount?: number 
   const pointsGeo = new THREE.BufferGeometry();
   pointsGeo.setAttribute("position", new THREE.BufferAttribute(heads, 3));
   pointsGeo.setAttribute("color", new THREE.BufferAttribute(pointColors, 3));
+  pointsGeo.setDrawRange(0, 0);
   const points = new THREE.Points(pointsGeo, sprite);
   points.frustumCulled = false;
   points.renderOrder = 1;
@@ -163,6 +167,8 @@ export function createAirflowEffect(THREE: any, opts?: { particleCount?: number 
       active = patch.active;
       root.visible = active;
       needsRespawn = needsRespawn || active;
+      geometry.setDrawRange(0, active ? activeParticleCount * 2 : 0);
+      pointsGeo.setDrawRange(0, active ? activeParticleCount : 0);
     }
     if (patch.mode && patch.mode !== mode) {
       mode = patch.mode;
@@ -193,13 +199,20 @@ export function createAirflowEffect(THREE: any, opts?: { particleCount?: number 
       if (Math.abs(next - ventHeight) > 1e-6) needsRespawn = true;
       ventHeight = next;
     }
+    if (typeof patch.activeParticleCount === "number" && Number.isFinite(patch.activeParticleCount)) {
+      const next = Math.max(30, Math.min(particleCapacity, Math.floor(patch.activeParticleCount)));
+      if (next !== activeParticleCount) needsRespawn = needsRespawn || active;
+      activeParticleCount = next;
+      geometry.setDrawRange(0, activeParticleCount * 2);
+      pointsGeo.setDrawRange(0, activeParticleCount);
+    }
 
     if (!active) return;
     if (needsRespawn) {
-      for (let i = 0; i < particleCount; i += 1) respawn(i);
+      for (let i = 0; i < activeParticleCount; i += 1) respawn(i);
       return;
     }
-    for (let i = 0; i < particleCount; i += 1) if (ages[i] > lifes[i]) respawn(i);
+    for (let i = 0; i < activeParticleCount; i += 1) if (ages[i] > lifes[i]) respawn(i);
   }
 
   function tick(dt: number): void {
@@ -216,7 +229,7 @@ export function createAirflowEffect(THREE: any, opts?: { particleCount?: number 
     const tailLen = 0.09 + 0.09 * clamp(intensity, 0.2, 3.0);
     const damping = Math.pow(0.985, d * 60);
 
-    for (let i = 0; i < particleCount; i += 1) {
+    for (let i = 0; i < activeParticleCount; i += 1) {
       ages[i] += d;
       if (ages[i] >= lifes[i]) {
         respawn(i);

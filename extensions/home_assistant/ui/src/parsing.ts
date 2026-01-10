@@ -18,12 +18,22 @@ export function readFiniteNumber(value: unknown, fallback: number): number {
   return Number.isFinite(num) ? num : fallback;
 }
 
+export function readOptionalFiniteNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const num = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(num) ? num : null;
+}
+
 export function readLampIntensity(value: unknown): number {
   return clamp(readFiniteNumber(value, DEFAULT_LAMP_INTENSITY), 0.2, 3.0);
 }
 
 export function readAirflowIntensity(value: unknown): number {
   return clamp(readFiniteNumber(value, DEFAULT_AIRFLOW_INTENSITY), 0.2, 3.0);
+}
+
+export function readAirflowWidth(value: unknown, fallback: number): number {
+  return clamp(readFiniteNumber(value, fallback), 0.06, 1.5);
 }
 
 export function readHexColor(value: unknown, fallback: string): string {
@@ -89,4 +99,3 @@ export function readHomeAssistantItemRefs(value: unknown): HomeAssistantItemRef[
 export function itemValue(kind: "entity" | "device", id: string): string {
   return `${kind}:${id}`;
 }
-

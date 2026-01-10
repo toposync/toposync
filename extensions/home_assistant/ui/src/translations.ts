@@ -45,6 +45,10 @@ export const homeAssistantTranslations = {
     "ext.home_assistant.editor.lamp_intensity": "Light intensity",
     "ext.home_assistant.editor.lamp_color": "Light color",
     "ext.home_assistant.editor.airflow_intensity": "Airflow intensity",
+    "ext.home_assistant.editor.airflow_width": "Vent width",
+    "ext.home_assistant.editor.airflow_mount_y": "Mount height (Y)",
+    "ext.home_assistant.editor.airflow_mount_y_hint":
+      "Leave empty to use the default. Negative values place it below the floor (e.g., inside pools).",
     "ext.home_assistant.action.toggle": "Toggle",
     "ext.home_assistant.action.loading": "Loading…",
     "ext.home_assistant.action.no_items": "No entities/devices selected.",
@@ -98,9 +102,12 @@ export const homeAssistantTranslations = {
     "ext.home_assistant.editor.lamp_intensity": "Intensidade da luz",
     "ext.home_assistant.editor.lamp_color": "Cor da luz",
     "ext.home_assistant.editor.airflow_intensity": "Intensidade do vento",
+    "ext.home_assistant.editor.airflow_width": "Largura do vento",
+    "ext.home_assistant.editor.airflow_mount_y": "Altura (Y)",
+    "ext.home_assistant.editor.airflow_mount_y_hint":
+      "Deixe vazio para usar o padrão. Valores negativos colocam abaixo do chão (ex.: dentro de piscinas).",
     "ext.home_assistant.action.toggle": "Alternar",
     "ext.home_assistant.action.loading": "Carregando...",
     "ext.home_assistant.action.no_items": "Nenhuma entidade/dispositivo selecionado.",
   },
 } as const;
-

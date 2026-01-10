@@ -25,7 +25,7 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
         { x: -1, z: 1 },
       ],
     },
-    create3D: ({ THREE }, element) => {
+    create3D: ({ THREE, view }, element) => {
       const group = new THREE.Group();
 
       const material = new THREE.MeshStandardMaterial({
@@ -106,7 +106,8 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
         const fill = readString(el.props.fill, DEFAULT_AREA_FILL_COLOR);
         const opacity = Math.max(0, Math.min(1, readNumber(el.props.opacity, DEFAULT_AREA_OPACITY)));
         const textureId = readFloorTextureId(el.props.texture, "none");
-        const nextMap = getFloorTexture(THREE, textureId);
+        const quality = view.graphicsQuality ?? "simplified";
+        const nextMap = getFloorTexture(THREE, textureId, quality);
         material.color.set(fill);
         if (material.map !== nextMap) {
           material.map = nextMap;
@@ -174,6 +175,7 @@ function AreaEditor({ element, update, remove, close, i18n }: AreaEditorProps): 
   const opacity = readNumber(element.props.opacity, DEFAULT_AREA_OPACITY);
   const transparent = opacity < 0.001;
   const texture = readFloorTextureId(element.props.texture, "none");
+  const defaultGrassFill = "#16a34a";
 
   return (
     <div>
@@ -201,7 +203,17 @@ function AreaEditor({ element, update, remove, close, i18n }: AreaEditorProps): 
           <select
             className="input"
             value={texture}
-            onChange={(e) => update({ props: { texture: readFloorTextureId(e.target.value, texture) } })}
+            onChange={(e) => {
+              const nextTexture = readFloorTextureId(e.target.value, texture);
+              const nextFill =
+                nextTexture === "grass"
+                  ? defaultGrassFill
+                  : nextTexture === "concrete"
+                    ? DEFAULT_AREA_FILL_COLOR
+                    : fill;
+              saveAreaFillColor(nextFill);
+              update({ props: { texture: nextTexture, fill: nextFill } });
+            }}
           >
             <option value="none">{t("ext.structural.editor.texture.none")}</option>
             <option value="grass">{t("ext.structural.editor.texture.grass")}</option>

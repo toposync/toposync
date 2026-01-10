@@ -12,6 +12,7 @@ import type {
   ThemeDefinition,
   TopoSyncHost,
   Vector3,
+  GraphicsQuality,
   ViewSettings,
   WallHeightPreset,
 } from "@toposync/plugin-api";
@@ -70,6 +71,10 @@ function isWallHeightPreset(value: unknown): value is WallHeightPreset {
   return value === "low" || value === "medium" || value === "high";
 }
 
+function isGraphicsQuality(value: unknown): value is GraphicsQuality {
+  return value === "simplified" || value === "detailed";
+}
+
 function wallHeightForPreset(preset: WallHeightPreset): number {
   if (preset === "low") return 0.6;
   if (preset === "medium") return 1.4;
@@ -97,9 +102,18 @@ function loadGhostWalls(): boolean {
   return rec.ghost_walls === true;
 }
 
-function saveViewSettings(preset: WallHeightPreset, ghostWalls: boolean): void {
+function loadGraphicsQuality(): GraphicsQuality {
+  const rec = loadViewSettingsRecord();
+  const raw = rec.graphics_quality;
+  return isGraphicsQuality(raw) ? raw : "simplified";
+}
+
+function saveViewSettings(preset: WallHeightPreset, ghostWalls: boolean, graphicsQuality: GraphicsQuality): void {
   try {
-    localStorage.setItem(VIEW_SETTINGS_STORAGE_KEY, JSON.stringify({ wall_height_preset: preset, ghost_walls: ghostWalls }));
+    localStorage.setItem(
+      VIEW_SETTINGS_STORAGE_KEY,
+      JSON.stringify({ wall_height_preset: preset, ghost_walls: ghostWalls, graphics_quality: graphicsQuality }),
+    );
   } catch {
     // ignore
   }
@@ -205,6 +219,7 @@ export function App(): React.ReactElement {
   const [backendAvailable, setBackendAvailable] = useState(false);
   const [wallHeightPreset, setWallHeightPreset] = useState<WallHeightPreset>(() => loadWallHeightPreset());
   const [ghostWalls, setGhostWalls] = useState<boolean>(() => loadGhostWalls());
+  const [graphicsQuality, setGraphicsQuality] = useState<GraphicsQuality>(() => loadGraphicsQuality());
   const [themeId, setThemeId] = useState<string>(() => loadThemeId());
   const [settings, setSettings] = useState<AppSettings>({ core: {}, extensions: {} });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -260,13 +275,14 @@ export function App(): React.ReactElement {
       wallHeightPreset,
       wallHeight: wallHeightForPreset(wallHeightPreset),
       ghostWalls,
+      graphicsQuality,
     }),
-    [ghostWalls, wallHeightPreset],
+    [ghostWalls, graphicsQuality, wallHeightPreset],
   );
 
   useEffect(() => {
-    saveViewSettings(wallHeightPreset, ghostWalls);
-  }, [ghostWalls, wallHeightPreset]);
+    saveViewSettings(wallHeightPreset, ghostWalls, graphicsQuality);
+  }, [ghostWalls, graphicsQuality, wallHeightPreset]);
 
   useEffect(() => {
     saveThemeId(themeId);
@@ -911,6 +927,7 @@ export function App(): React.ReactElement {
 	          viewSettings={viewSettings}
 	          onSetWallHeightPreset={setWallHeightPreset}
 	          onSetGhostWalls={setGhostWalls}
+	          onSetGraphicsQuality={setGraphicsQuality}
 	          notificationRenderers={notificationRenderers}
 	          notifications={notifications}
 	          activeNotificationId={activeNotificationId}

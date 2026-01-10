@@ -124,11 +124,13 @@ export function Viewport3D({
     wallHeightPreset: "high",
     wallHeight: FULL_WALL_HEIGHT,
     ghostWalls: false,
+    graphicsQuality: "simplified",
   });
   const elementViewRef = useRef<ViewSettings>({
     wallHeightPreset: "high",
     wallHeight: FULL_WALL_HEIGHT,
     ghostWalls: false,
+    graphicsQuality: "simplified",
   });
   const viewKeyRef = useRef<string>("");
   const onElementActivatedRef = useRef<Props["onElementActivated"]>(onElementActivated);
@@ -148,11 +150,13 @@ export function Viewport3D({
     viewRef.current.wallHeightPreset = viewSettings.wallHeightPreset;
     viewRef.current.wallHeight = viewSettings.wallHeight;
     viewRef.current.ghostWalls = Boolean(viewSettings.ghostWalls);
+    viewRef.current.graphicsQuality = viewSettings.graphicsQuality ?? "simplified";
     elementViewRef.current.wallHeightPreset = viewSettings.wallHeightPreset;
     elementViewRef.current.wallHeight =
       viewSettings.wallHeightPreset === "low" ? FULL_WALL_HEIGHT : viewSettings.wallHeight;
     elementViewRef.current.ghostWalls = Boolean(viewSettings.ghostWalls);
-  }, [viewSettings.ghostWalls, viewSettings.wallHeight, viewSettings.wallHeightPreset]);
+    elementViewRef.current.graphicsQuality = viewSettings.graphicsQuality ?? "simplified";
+  }, [viewSettings.ghostWalls, viewSettings.graphicsQuality, viewSettings.wallHeight, viewSettings.wallHeightPreset]);
 
   useEffect(() => {
     onElementActivatedRef.current = onElementActivated;
@@ -585,7 +589,7 @@ export function Viewport3D({
     const camera = cameraRef.current;
     if (!scene || !renderer || !camera) return;
 
-    const viewKey = `${viewSettings.wallHeightPreset}:${viewSettings.wallHeight}:${Boolean(viewSettings.ghostWalls)}`;
+    const viewKey = `${viewSettings.wallHeightPreset}:${viewSettings.wallHeight}:${Boolean(viewSettings.ghostWalls)}:${viewSettings.graphicsQuality ?? "simplified"}`;
     const viewChanged = viewKeyRef.current !== viewKey;
     viewKeyRef.current = viewKey;
     const ghostWallsEnabled = Boolean(viewSettings.ghostWalls);
@@ -636,7 +640,14 @@ export function Viewport3D({
 
       if (viewChanged && def.layerGroup === "walls") applyGhostWalls(entry.instance.object, ghostWallsEnabled);
     }
-  }, [elements, elementTypesById, viewSettings.ghostWalls, viewSettings.wallHeight, viewSettings.wallHeightPreset]);
+  }, [
+    elements,
+    elementTypesById,
+    viewSettings.ghostWalls,
+    viewSettings.graphicsQuality,
+    viewSettings.wallHeight,
+    viewSettings.wallHeightPreset,
+  ]);
 
   function focusNext(delta: number) {
     if (focusables.length === 0) return;

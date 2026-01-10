@@ -21,7 +21,17 @@ import {
   suggestIconForDomain,
 } from "../domain";
 import { DEFAULT_AIRFLOW_INTENSITY, DEFAULT_LAMP_COLOR, DEFAULT_LAMP_INTENSITY, AIRFLOW_COMPATIBLE_DOMAINS, LAMP_COMPATIBLE_DOMAINS } from "../constants";
-import { readAirflowIntensity, readHexColor, readHomeAssistantItemRefs, readLampIntensity, readRecord, readString, itemValue } from "../parsing";
+import {
+  readAirflowIntensity,
+  readAirflowWidth,
+  readHexColor,
+  readHomeAssistantItemRefs,
+  readLampIntensity,
+  readOptionalFiniteNumber,
+  readRecord,
+  readString,
+  itemValue,
+} from "../parsing";
 import { fetchHomeAssistantRegistry, fetchHomeAssistantServers } from "../api/homeAssistantApi";
 import type { FontAwesomeIconFamilies, HomeAssistantItemOption, HomeAssistantItemRef, HomeAssistantRegistryResponse, HomeAssistantServerPublic } from "../types";
 
@@ -45,12 +55,15 @@ export function HomeAssistantEditor({
   const props = readRecord(element.props);
   const serverId = readString(props.server_id).trim();
   const icon = sanitizeFontAwesomeIconName(readString(props.icon, "house")) || "house";
-  const viewMode = readHomeAssistantViewMode(props.view_mode);
   const specialView = readHomeAssistantSpecialView(props.special_view);
+  const viewModeRaw = readHomeAssistantViewMode(props.view_mode);
+  const viewMode = specialView === "airflow" ? (viewModeRaw === "ceiling" ? "ceiling" : "wall") : viewModeRaw;
   const primaryEntityId = readString(props.primary_entity_id).trim();
   const lampIntensityValue = readLampIntensity(props.lamp_intensity);
   const lampColorValue = readHexColor(props.lamp_color, DEFAULT_LAMP_COLOR);
   const airflowIntensityValue = readAirflowIntensity(props.airflow_intensity);
+  const airflowWidthValue = readAirflowWidth(props.airflow_width, viewMode === "ceiling" ? 0.62 : 0.72);
+  const airflowMountYValue = readOptionalFiniteNumber(props.airflow_mount_y);
   const items = useMemo(() => readHomeAssistantItemRefs(props.items), [props.items]);
 
   const [servers, setServers] = useState<HomeAssistantServerPublic[]>([]);
@@ -548,10 +561,9 @@ export function HomeAssistantEditor({
             <select
               className="input"
               value={viewMode}
-              disabled={specialView === "airflow"}
               onChange={(e) => update({ props: { view_mode: e.target.value } })}
             >
-              <option value="floor">{t("ext.home_assistant.editor.view_mode.floor")}</option>
+              {specialView !== "airflow" ? <option value="floor">{t("ext.home_assistant.editor.view_mode.floor")}</option> : null}
               <option value="ceiling">{t("ext.home_assistant.editor.view_mode.ceiling")}</option>
               <option value="wall">{t("ext.home_assistant.editor.view_mode.wall")}</option>
             </select>
@@ -573,11 +585,12 @@ export function HomeAssistantEditor({
                     },
                   });
                 } else if (next === "airflow") {
+                  const mountMode = viewMode === "ceiling" ? "ceiling" : "wall";
                   update({
                     props: {
                       special_view: next,
                       airflow_intensity: airflowIntensityValue,
-                      view_mode: "wall",
+                      view_mode: mountMode,
                     },
                   });
                 } else {
@@ -634,22 +647,56 @@ export function HomeAssistantEditor({
           ) : null}
 
           {specialView === "airflow" && canAirflow ? (
-            <div className="rowWrap">
-              <div className="field" style={{ flex: 1, minWidth: 220 }}>
-                <div className="label">
-                  {t("ext.home_assistant.editor.airflow_intensity")}: {airflowIntensityValue.toFixed(2)}
+            <>
+              <div className="rowWrap">
+                <div className="field" style={{ flex: 1, minWidth: 220 }}>
+                  <div className="label">
+                    {t("ext.home_assistant.editor.airflow_intensity")}: {airflowIntensityValue.toFixed(2)}
+                  </div>
+                  <input
+                    className="input"
+                    type="range"
+                    min={0.2}
+                    max={3}
+                    step={0.05}
+                    value={airflowIntensityValue}
+                    onChange={(e) => update({ props: { airflow_intensity: Number(e.target.value) } })}
+                  />
                 </div>
-                <input
-                  className="input"
-                  type="range"
-                  min={0.2}
-                  max={3}
-                  step={0.05}
-                  value={airflowIntensityValue}
-                  onChange={(e) => update({ props: { airflow_intensity: Number(e.target.value) } })}
-                />
+                <div className="field" style={{ flex: 1, minWidth: 220 }}>
+                  <div className="label">
+                    {t("ext.home_assistant.editor.airflow_width")}: {airflowWidthValue.toFixed(2)}
+                  </div>
+                  <input
+                    className="input"
+                    type="range"
+                    min={0.06}
+                    max={1.5}
+                    step={0.01}
+                    value={airflowWidthValue}
+                    onChange={(e) => update({ props: { airflow_width: Number(e.target.value) } })}
+                  />
+                </div>
               </div>
-            </div>
+              <div className="rowWrap">
+                <div className="field" style={{ flex: 1, minWidth: 220 }}>
+                  <div className="label">{t("ext.home_assistant.editor.airflow_mount_y")}</div>
+                  <input
+                    className="input"
+                    type="number"
+                    step={0.01}
+                    value={airflowMountYValue ?? ""}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      update({ props: { airflow_mount_y: raw ? Number(raw) : null } });
+                    }}
+                  />
+                  <div className="label" style={{ marginTop: 6 }}>
+                    {t("ext.home_assistant.editor.airflow_mount_y_hint")}
+                  </div>
+                </div>
+              </div>
+            </>
           ) : null}
         </>
       )}

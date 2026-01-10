@@ -26,7 +26,16 @@ import {
   resolveFontAwesomeSvg,
   sanitizeFontAwesomeIconName,
 } from "../fontAwesome";
-import { clamp, readAirflowIntensity, readHexColor, readLampIntensity, readRecord, readString } from "../parsing";
+import {
+  clamp,
+  readAirflowIntensity,
+  readAirflowWidth,
+  readHexColor,
+  readLampIntensity,
+  readOptionalFiniteNumber,
+  readRecord,
+  readString,
+} from "../parsing";
 import { getHomeAssistantLiveState, setHomeAssistantLiveState, watchHomeAssistantLiveStates } from "../liveStates";
 import { HomeAssistantAction } from "../ui/HomeAssistantAction";
 import { HomeAssistantEditor } from "../ui/HomeAssistantEditor";
@@ -118,15 +127,20 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
       const group = new THREE.Group();
       const mountGroup = new THREE.Group();
       group.add(mountGroup);
-      const airflow = createAirflowEffect(THREE, { particleCount: 900 });
+      const airflow = createAirflowEffect(THREE, { particleCount: 700 });
       group.add(airflow.object);
 
       const topY = buttonRadius * Math.cos(buttonThetaTopCut);
       const topRadius = buttonRadius * Math.sin(buttonThetaTopCut);
-      const airConditionerWidth = 0.82;
-      const airConditionerHeight = 0.22;
-      const airConditionerDepth = 0.18;
-      const airConditionerTopMargin = 0.14;
+      const airflowWallVentWidth = 0.72;
+      const airflowWallVentRadius = 0.03;
+      const airflowWallVentTopMargin = 0.22;
+      const airflowWallVentZ = 0.08;
+      const airflowCassetteWidth = 0.62;
+      const airflowCassetteDepth = 0.42;
+      const airflowCassetteThickness = 0.05;
+      const airflowCassetteCornerRadius = 0.09;
+      const airflowStartOffset = 0.045;
 
       const domeFloorGeometry = new THREE.SphereGeometry(
         buttonRadius,
@@ -187,31 +201,69 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
       iconMesh.renderOrder = 10;
       mountGroup.add(iconMesh);
 
-      const airConditionerMaterial = new THREE.MeshStandardMaterial({
+      const airflowVentMaterial = new THREE.MeshStandardMaterial({
         color: 0x0b1220,
         emissive: new THREE.Color(0x000000),
-        emissiveIntensity: 0.12,
-        roughness: 0.42,
-        metalness: 0.05,
+        emissiveIntensity: 0.1,
+        roughness: 0.5,
+        metalness: 0.06,
       });
-      const airConditionerBodyGeometry = new THREE.BoxGeometry(airConditionerWidth, airConditionerHeight, airConditionerDepth);
-      const airConditionerBody = new THREE.Mesh(airConditionerBodyGeometry, airConditionerMaterial);
-      airConditionerBody.visible = false;
-      mountGroup.add(airConditionerBody);
 
-      const airConditionerVentMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.55 });
-      const airConditionerVentGeometry = new THREE.PlaneGeometry(airConditionerWidth * 0.86, airConditionerHeight * 0.22);
-      const airConditionerVent = new THREE.Mesh(airConditionerVentGeometry, airConditionerVentMaterial);
-      airConditionerVent.position.set(0, -airConditionerHeight * 0.26, airConditionerDepth / 2 + 0.001);
-      airConditionerVent.visible = false;
-      mountGroup.add(airConditionerVent);
+      function createAirflowWallVentGeometry(ventWidth: number): any {
+        return new THREE.CapsuleGeometry(
+          airflowWallVentRadius,
+          Math.max(0.01, ventWidth - airflowWallVentRadius * 2),
+          5,
+          14,
+        );
+      }
 
-      const airConditionerLedMaterial = new THREE.MeshBasicMaterial({ color: neonDefault });
-      const airConditionerLedGeometry = new THREE.SphereGeometry(0.012, 16, 10);
-      const airConditionerLed = new THREE.Mesh(airConditionerLedGeometry, airConditionerLedMaterial);
-      airConditionerLed.position.set(airConditionerWidth * 0.42, airConditionerHeight * 0.08, airConditionerDepth / 2 + 0.006);
-      airConditionerLed.visible = false;
-      mountGroup.add(airConditionerLed);
+      let airflowWallVentGeometry = createAirflowWallVentGeometry(airflowWallVentWidth);
+      const airflowWallVent = new THREE.Mesh(airflowWallVentGeometry, airflowVentMaterial);
+      airflowWallVent.rotation.z = -Math.PI / 2;
+      airflowWallVent.visible = false;
+      mountGroup.add(airflowWallVent);
+
+      function roundedRectShape(width: number, height: number, radius: number): any {
+        const w = Math.max(0.01, width);
+        const h = Math.max(0.01, height);
+        const r = Math.max(0.001, Math.min(radius, Math.min(w, h) / 2));
+
+        const x0 = -w / 2;
+        const y0 = -h / 2;
+        const x1 = w / 2;
+        const y1 = h / 2;
+
+        const shape = new THREE.Shape();
+        shape.moveTo(x0 + r, y0);
+        shape.lineTo(x1 - r, y0);
+        shape.quadraticCurveTo(x1, y0, x1, y0 + r);
+        shape.lineTo(x1, y1 - r);
+        shape.quadraticCurveTo(x1, y1, x1 - r, y1);
+        shape.lineTo(x0 + r, y1);
+        shape.quadraticCurveTo(x0, y1, x0, y1 - r);
+        shape.lineTo(x0, y0 + r);
+        shape.quadraticCurveTo(x0, y0, x0 + r, y0);
+        return shape;
+      }
+
+      const airflowCassetteGeometry = new THREE.ExtrudeGeometry(
+        roundedRectShape(airflowCassetteWidth, airflowCassetteDepth, airflowCassetteCornerRadius),
+        {
+          depth: airflowCassetteThickness,
+          bevelEnabled: true,
+          bevelThickness: airflowCassetteThickness * 0.55,
+          bevelSize: airflowCassetteCornerRadius * 0.35,
+          bevelOffset: 0,
+          bevelSegments: 2,
+          steps: 1,
+        },
+      );
+      airflowCassetteGeometry.rotateX(Math.PI / 2);
+
+      const airflowCassette = new THREE.Mesh(airflowCassetteGeometry, airflowVentMaterial);
+      airflowCassette.visible = false;
+      mountGroup.add(airflowCassette);
 
       let wantedIconKey = "house";
       let currentIconKey = houseGeometry.key;
@@ -221,7 +273,9 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
       const lampColor = new THREE.Color(DEFAULT_LAMP_COLOR);
       let lampIntensity = DEFAULT_LAMP_INTENSITY;
       let airflowIntensity = DEFAULT_AIRFLOW_INTENSITY;
-      let airflowAnchorY = view.wallHeight / 2;
+      let currentAirflowMount: "wall" | "ceiling" = "wall";
+      let currentAirflowWallVentWidth = airflowWallVentWidth;
+      let currentAirflowCassetteWidth = airflowCassetteWidth;
 
       let unwatch: (() => void) | null = null;
       let watchedServer = "";
@@ -250,9 +304,24 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
           const active = flow.active && amp > 0.05 && flow.mode !== "off";
 
           const baseColor = flow.mode === "heat" ? 0xff6b6b : flow.mode === "cool" ? 0x4dabf7 : 0x93c5fd;
-          const pitch = flow.mode === "heat" ? 0.22 : flow.mode === "cool" ? -0.18 : 0.06;
+          const detailed = (view.graphicsQuality ?? "simplified") === "detailed";
+          const baseParticleBudget = detailed ? 520 : 320;
+          const widthScale =
+            currentAirflowMount === "ceiling"
+              ? currentAirflowCassetteWidth / airflowCassetteWidth
+              : currentAirflowWallVentWidth / airflowWallVentWidth;
+          const particleBudget = Math.max(
+            30,
+            Math.min(baseParticleBudget, Math.floor(baseParticleBudget * clamp(widthScale, 0.05, 1.0))),
+          );
+          const pitch = currentAirflowMount === "wall" ? (flow.mode === "heat" ? 0.22 : flow.mode === "cool" ? -0.18 : 0.06) : 0.0;
           const dir = active ? { x: 0, y: pitch, z: 1 } : { x: 0, y: 0, z: 1 };
-          const origin = { x: 0, y: airflowAnchorY, z: airConditionerDepth / 2 + 0.025 };
+          const origin = { x: 0, y: 0, z: airflowStartOffset };
+          const ventWidth =
+            currentAirflowMount === "ceiling"
+              ? currentAirflowCassetteWidth * 0.78
+              : currentAirflowWallVentWidth * 0.92;
+          const ventHeight = currentAirflowMount === "ceiling" ? airflowCassetteDepth * 0.55 : 0.08;
 
           airflow.update({
             active,
@@ -260,17 +329,17 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
             intensity: amp,
             origin,
             direction: dir,
-            ventWidth: airConditionerWidth * 0.9,
-            ventHeight: 0.08,
+            ventWidth,
+            ventHeight,
+            activeParticleCount: particleBudget,
           });
 
-          airConditionerMaterial.emissive.set(active ? baseColor : 0x000000);
-          airConditionerLedMaterial.color.set(active ? baseColor : 0x111827);
+          airflowVentMaterial.emissive.set(active ? baseColor : 0x000000);
           light.color.set(active ? baseColor : 0x000000);
 
-          airConditionerMaterial.emissiveIntensity = active ? 0.22 + 0.08 * amp : 0.08;
-          light.intensity = active ? 0.08 + 0.10 * amp : 0.0;
-          light.distance = active ? 1.0 + 0.7 * amp : 0.0;
+          airflowVentMaterial.emissiveIntensity = active ? 0.22 + 0.08 * amp : 0.06;
+          light.intensity = active ? 0.07 + 0.09 * amp : 0.0;
+          light.distance = active ? 0.95 + 0.6 * amp : 0.0;
           return;
         }
 
@@ -383,6 +452,9 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
         lampColor.set(readHexColor(p.lamp_color, DEFAULT_LAMP_COLOR));
         lampIntensity = readLampIntensity(p.lamp_intensity);
         airflowIntensity = readAirflowIntensity(p.airflow_intensity);
+        const airflowWallWidth = readAirflowWidth(p.airflow_width, airflowWallVentWidth);
+        const airflowCassetteWidthValue = readAirflowWidth(p.airflow_width, airflowCassetteWidth);
+        const airflowMountYOverride = readOptionalFiniteNumber(p.airflow_mount_y);
         if (
           currentSpecialView === "lamp" &&
           !(itemCount === 1 && watchedDomain && LAMP_COMPATIBLE_DOMAINS.has(watchedDomain.toLowerCase()))
@@ -397,26 +469,48 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
         }
 
         if (currentSpecialView === "airflow") {
+          currentAirflowMount = viewMode === "ceiling" ? "ceiling" : "wall";
+
+          currentAirflowCassetteWidth = airflowCassetteWidthValue;
+          airflowCassette.scale.set(currentAirflowCassetteWidth / airflowCassetteWidth, 1, 1);
+
+          if (Math.abs(airflowWallWidth - currentAirflowWallVentWidth) > 1e-6) {
+            currentAirflowWallVentWidth = airflowWallWidth;
+            airflowWallVentGeometry.dispose();
+            airflowWallVentGeometry = createAirflowWallVentGeometry(currentAirflowWallVentWidth);
+            airflowWallVent.geometry = airflowWallVentGeometry;
+          }
+
           dome.visible = false;
           topCap.visible = false;
           bottomCap.visible = false;
           iconMesh.visible = false;
-          airConditionerBody.visible = true;
-          airConditionerVent.visible = true;
-          airConditionerLed.visible = true;
+          airflowWallVent.visible = currentAirflowMount === "wall";
+          airflowCassette.visible = currentAirflowMount === "ceiling";
 
           mountGroup.rotation.set(0, 0, 0);
           mountGroup.position.set(0, 0, 0);
 
-          const centerY = view.wallHeight - airConditionerTopMargin - airConditionerHeight / 2;
-          mountGroup.position.y = centerY;
-          airflowAnchorY = centerY - airConditionerHeight * 0.26;
+          const mountY =
+            airflowMountYOverride ??
+            (currentAirflowMount === "ceiling" ? view.wallHeight - 0.001 : view.wallHeight - airflowWallVentTopMargin);
 
-          light.position.set(0, -airConditionerHeight * 0.06, airConditionerDepth * 0.15);
+          if (currentAirflowMount === "ceiling") {
+            mountGroup.position.y = mountY;
+            mountGroup.position.z = 0;
+            light.position.set(0, -0.12, 0);
+            airflow.object.position.set(0, mountGroup.position.y, mountGroup.position.z);
+            airflow.object.rotation.set(Math.PI / 2, 0, 0);
+          } else {
+            mountGroup.position.y = mountY;
+            mountGroup.position.z = airflowWallVentZ;
+            light.position.set(0, 0.0, 0.02);
+            airflow.object.position.set(0, mountGroup.position.y, mountGroup.position.z);
+            airflow.object.rotation.set(0, 0, 0);
+          }
         } else {
-          airConditionerBody.visible = false;
-          airConditionerVent.visible = false;
-          airConditionerLed.visible = false;
+          airflowWallVent.visible = false;
+          airflowCassette.visible = false;
           iconMesh.visible = true;
           dome.visible = true;
           topCap.visible = true;
@@ -477,12 +571,9 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
           sphereMaterial.dispose();
           cutMaterial.dispose();
           iconMaterial.dispose();
-          airConditionerBodyGeometry.dispose();
-          airConditionerVentGeometry.dispose();
-          airConditionerLedGeometry.dispose();
-          airConditionerMaterial.dispose();
-          airConditionerVentMaterial.dispose();
-          airConditionerLedMaterial.dispose();
+          airflowWallVentGeometry.dispose();
+          airflowCassetteGeometry.dispose();
+          airflowVentMaterial.dispose();
           airflow.dispose();
         },
       };

@@ -23,11 +23,11 @@ import { loadAreaFillColor } from "../parsing";
 export function createStructuralTools(i18n: HostI18n): EditorTool[] {
   return [
     createWallTool(i18n),
-    createAreaSquareTool(i18n, { withWalls: false }),
+    createAreaRectangleTool(i18n, { withWalls: false }),
     createAreaPolygonTool(i18n, { withWalls: false }),
     createPoolSquareTool(i18n),
     createPoolPolygonTool(i18n),
-    createAreaSquareTool(i18n, { withWalls: true }),
+    createAreaRectangleTool(i18n, { withWalls: true }),
     createAreaPolygonTool(i18n, { withWalls: true }),
   ];
 }
@@ -150,12 +150,12 @@ function createWallTool(i18n: HostI18n): EditorTool {
   };
 }
 
-function createAreaSquareTool(i18n: HostI18n, options: { withWalls: boolean }): EditorTool {
+function createAreaRectangleTool(i18n: HostI18n, options: { withWalls: boolean }): EditorTool {
   return {
     id: options.withWalls ? AREA_SQUARE_WITH_WALLS_TOOL_ID : AREA_SQUARE_TOOL_ID,
     name: {
       key: options.withWalls ? "ext.structural.tools.area_square_walls" : "ext.structural.tools.area_square",
-      fallback: options.withWalls ? "Area + walls (square)" : "Area (square)",
+      fallback: options.withWalls ? "Area + walls (rectangle)" : "Area (rectangle)",
     },
     icon: options.withWalls ? "draw-polygon" : "square",
     createSession: (toolContext) => {

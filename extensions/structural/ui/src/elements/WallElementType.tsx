@@ -14,6 +14,7 @@ import {
   subtractPoints,
 } from "../geometry";
 import { readNumber, readOptionalPlanePoint, readPlanePoint, readString } from "../parsing";
+import { getWallTexture, readWallTextureId } from "../textures";
 
 export function createWallElementType(i18n: HostI18n): ElementType {
   return {
@@ -23,6 +24,7 @@ export function createWallElementType(i18n: HostI18n): ElementType {
     description: { key: "ext.structural.wall.desc", fallback: "Simple wall (line) in 2D." },
     defaultProps: {
       color: DEFAULT_WALL_COLOR,
+      texture: "none",
       width: DEFAULT_WALL_WIDTH,
       a: { x: 0, z: 0 },
       b: { x: 1, z: 0 },
@@ -50,6 +52,8 @@ export function createWallElementType(i18n: HostI18n): ElementType {
         const height = Math.max(0.15, view.wallHeight);
 
         const color = readString(el.props.color, DEFAULT_WALL_COLOR);
+        const textureId = readWallTextureId(el.props.texture, "none");
+        const nextMap = getWallTexture(THREE, textureId);
 
         const half = thicknessWorld / 2;
         const direction = normalizePoint(subtractPoints(endPoint, startPoint));
@@ -138,6 +142,24 @@ export function createWallElementType(i18n: HostI18n): ElementType {
             positions[base + 2] = p.z;
           }
 
+          const uvs = new Float32Array(8 * 2);
+          const dotDir = (p: PlanePoint): number => {
+            const dx = p.x - startPoint.x;
+            const dz = p.z - startPoint.z;
+            return dx * direction.x + dz * direction.z;
+          };
+          const u0 = dotDir(startPlus);
+          const u1 = dotDir(endPlus);
+          const u2 = dotDir(endMinus);
+          const u3 = dotDir(startMinus);
+          const us = [u0, u1, u2, u3];
+          for (let i = 0; i < 4; i++) {
+            uvs[i * 2 + 0] = us[i];
+            uvs[i * 2 + 1] = 0;
+            uvs[(4 + i) * 2 + 0] = us[i];
+            uvs[(4 + i) * 2 + 1] = height;
+          }
+
           const indices = [
             // top (clockwise in XZ => +Y)
             4, 5, 6, 4, 6, 7,
@@ -152,6 +174,7 @@ export function createWallElementType(i18n: HostI18n): ElementType {
 
           const nextGeometry = new THREE.BufferGeometry();
           nextGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+          nextGeometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
           nextGeometry.setIndex(indices);
           nextGeometry.computeVertexNormals();
 
@@ -161,6 +184,12 @@ export function createWallElementType(i18n: HostI18n): ElementType {
         }
 
         material.color.set(color);
+        if (material.map !== nextMap) {
+          material.map = nextMap;
+          material.needsUpdate = true;
+        }
+        material.roughness = textureId === "brick" ? 0.9 : 0.82;
+        material.metalness = textureId === "brick" ? 0.02 : 0.05;
       }
 
       apply(element);
@@ -218,6 +247,7 @@ type WallEditorProps = {
 function WallEditor({ element, update, remove, close, i18n }: WallEditorProps): React.ReactElement {
   const { t, locale } = i18n.useI18n();
   const color = readString(element.props.color, DEFAULT_WALL_COLOR);
+  const texture = readWallTextureId(element.props.texture, "none");
 
   const numberFormatter = useMemo(
     () => new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
@@ -252,6 +282,18 @@ function WallEditor({ element, update, remove, close, i18n }: WallEditorProps): 
             onChange={(e) => update({ props: { color: e.target.value } })}
           />
         </div>
+        <div className="field" style={{ flex: 1, minWidth: 160 }}>
+          <div className="label">{t("ext.structural.editor.wall_texture")}</div>
+          <select
+            className="input"
+            value={texture}
+            onChange={(e) => update({ props: { texture: readWallTextureId(e.target.value, texture) } })}
+          >
+            <option value="none">{t("ext.structural.editor.texture.none")}</option>
+            <option value="brick">{t("ext.structural.editor.texture.brick")}</option>
+            <option value="concrete">{t("ext.structural.editor.texture.concrete")}</option>
+          </select>
+        </div>
       </div>
 
       <div className="sectionDivider" />
@@ -267,4 +309,3 @@ function WallEditor({ element, update, remove, close, i18n }: WallEditorProps): 
     </div>
   );
 }
-

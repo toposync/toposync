@@ -187,8 +187,14 @@ export function MainScreen({
         >
           <Icon name="gear" />
         </button>
-        <button className="primaryButton" type="button" onClick={onEditComposition}>
-          {t("core.actions.edit")}
+        <button
+          className="iconButton iconButtonPrimary"
+          type="button"
+          aria-label={t("core.actions.edit")}
+          title={t("core.actions.edit")}
+          onClick={onEditComposition}
+        >
+          <Icon name="pen-to-square" />
         </button>
       </div>
 

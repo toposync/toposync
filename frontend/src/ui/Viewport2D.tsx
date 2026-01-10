@@ -173,6 +173,10 @@ function polygonCentroid(vertices: PlanePoint[]): PlanePoint {
   return { x: cx / denom, z: cz / denom };
 }
 
+function midpoint(a: PlanePoint, b: PlanePoint): PlanePoint {
+  return { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 };
+}
+
 function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   const anyCtx = ctx as unknown as { roundRect?: (x: number, y: number, w: number, h: number, r: number) => void };
   if (typeof anyCtx.roundRect === "function") {
@@ -193,6 +197,11 @@ function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: n
 }
 
 type Camera2D = { cx: number; cz: number; scale: number };
+
+type VertexHandleHit =
+  | { kind: "wall-endpoint"; endpoint: "a" | "b" }
+  | { kind: "poly-vertex"; vertexIndex: number }
+  | { kind: "poly-ghost"; edgeIndex: number };
 
 type Interaction =
   | { kind: "none" }
@@ -236,6 +245,33 @@ type Interaction =
       currentScreen: Vector2;
       snappedDelta: number;
       stepDeg: number;
+    }
+  | {
+      kind: "wall-endpoint-drag";
+      pointerId: number;
+      elementId: string;
+      startElement: CompositionElement;
+      endpoint: "a" | "b";
+      startA: PlanePoint;
+      startB: PlanePoint;
+    }
+  | {
+      kind: "poly-vertex-drag";
+      pointerId: number;
+      elementId: string;
+      startElement: CompositionElement;
+      vertexIndex: number;
+      startVertices: PlanePoint[];
+    }
+  | {
+      kind: "poly-ghost-drag";
+      pointerId: number;
+      elementId: string;
+      startElement: CompositionElement;
+      edgeIndex: number;
+      startVertices: PlanePoint[];
+      startScreen: Vector2;
+      activated: boolean;
     };
 
 export function Viewport2D({
@@ -291,6 +327,7 @@ export function Viewport2D({
   const interactionRef = useRef<Interaction>({ kind: "none" });
   const hoverRef = useRef<string | null>(null);
   const rotateHoverRef = useRef(false);
+  const vertexHoverRef = useRef<VertexHandleHit | null>(null);
   const spacePressedRef = useRef(false);
   const hiddenElementIdsRef = useRef<Set<string>>(new Set());
   const lockedElementIdsRef = useRef<Set<string>>(new Set());
@@ -332,6 +369,7 @@ export function Viewport2D({
   useEffect(() => {
     hiddenElementIdsRef.current = new Set(hiddenElementIds ?? []);
     rotateHoverRef.current = false;
+    vertexHoverRef.current = null;
     const hoverId = hoverRef.current;
     if (hoverId && hiddenElementIdsRef.current.has(hoverId)) hoverRef.current = null;
     drawRef.current?.();
@@ -340,12 +378,14 @@ export function Viewport2D({
   useEffect(() => {
     lockedElementIdsRef.current = new Set(lockedElementIds ?? []);
     rotateHoverRef.current = false;
+    vertexHoverRef.current = null;
     drawRef.current?.();
   }, [lockedElementIds]);
 
   useEffect(() => {
     selectedRef.current = selectedElementIds ?? [];
     rotateHoverRef.current = false;
+    vertexHoverRef.current = null;
     drawRef.current?.();
   }, [selectedElementIds]);
 
@@ -409,6 +449,8 @@ export function Viewport2D({
     let pendingDragPatch: Array<{ id: string; patch: CompositionElementPatch }> | null = null;
     let rotateRaf = 0;
     let pendingRotatePatch: { id: string; patch: CompositionElementPatch } | null = null;
+    let vertexRaf = 0;
+    let pendingVertexPatch: { id: string; patch: CompositionElementPatch } | null = null;
 
     function requestDraw() {
       if (raf) return;
@@ -439,6 +481,18 @@ export function Viewport2D({
         updateElementRef.current?.(id, pendingRotatePatch.patch);
       }
       pendingRotatePatch = null;
+      requestDraw();
+    }
+
+    function flushVertexPatch() {
+      if (!pendingVertexPatch) return;
+      const { id, patch } = pendingVertexPatch;
+      const hidden = hiddenElementIdsRef.current;
+      const locked = lockedElementIdsRef.current;
+      if (!hidden.has(id) && !locked.has(id)) {
+        updateElementRef.current?.(id, patch);
+      }
+      pendingVertexPatch = null;
       requestDraw();
     }
 
@@ -693,12 +747,77 @@ export function Viewport2D({
               ctx2d.restore();
             }
 
-            if (
+            const canEditVertices =
               !hidden.has(selectedEl.id) &&
               !lockedElementIdsRef.current.has(selectedEl.id) &&
               !toolSessionRef.current &&
-              interactionModeRef.current === "select"
-            ) {
+              interactionModeRef.current === "select";
+
+            if (canEditVertices) {
+              const handleRadiusPx = 6;
+              const ghostRadiusPx = 4;
+
+              const vertexHover = vertexHoverRef.current;
+              const interaction = interactionRef.current;
+              const activeHandle: VertexHandleHit | null =
+                interaction.kind === "wall-endpoint-drag" && interaction.elementId === selectedEl.id
+                  ? { kind: "wall-endpoint", endpoint: interaction.endpoint }
+                  : interaction.kind === "poly-vertex-drag" && interaction.elementId === selectedEl.id
+                    ? { kind: "poly-vertex", vertexIndex: interaction.vertexIndex }
+                    : interaction.kind === "poly-ghost-drag" && interaction.elementId === selectedEl.id
+                      ? { kind: "poly-ghost", edgeIndex: interaction.edgeIndex }
+                      : null;
+
+              const isHandleHot = (handle: VertexHandleHit): boolean => {
+                const match = (a: VertexHandleHit | null): boolean => {
+                  if (!a) return false;
+                  if (a.kind !== handle.kind) return false;
+                  if (a.kind === "wall-endpoint") return a.endpoint === (handle as Extract<VertexHandleHit, { kind: "wall-endpoint" }>).endpoint;
+                  if (a.kind === "poly-vertex") return a.vertexIndex === (handle as Extract<VertexHandleHit, { kind: "poly-vertex" }>).vertexIndex;
+                  return a.edgeIndex === (handle as Extract<VertexHandleHit, { kind: "poly-ghost" }>).edgeIndex;
+                };
+                return match(activeHandle) || match(vertexHover);
+              };
+
+              const drawHandle = (pt: PlanePoint, handle: VertexHandleHit, opts: { ghost: boolean }) => {
+                const p = worldToScreen(pt);
+                const hot = isHandleHot(handle);
+                ctx2d.save();
+                ctx2d.shadowColor = hot && !opts.ghost ? "rgba(251,191,36,0.35)" : "rgba(0,0,0,0)";
+                ctx2d.shadowBlur = hot && !opts.ghost ? 12 : 0;
+                ctx2d.fillStyle = opts.ghost ? "rgba(8,12,26,0.72)" : "rgba(8,12,26,0.92)";
+                ctx2d.strokeStyle = opts.ghost
+                  ? hot
+                    ? "rgba(251,191,36,0.85)"
+                    : "rgba(251,191,36,0.55)"
+                  : hot
+                    ? "rgba(251,191,36,0.98)"
+                    : "rgba(251,191,36,0.92)";
+                ctx2d.lineWidth = hot ? 2.5 : 2;
+                if (opts.ghost) ctx2d.setLineDash([3, 3]);
+                ctx2d.beginPath();
+                ctx2d.arc(p.x, p.y, opts.ghost ? ghostRadiusPx : handleRadiusPx, 0, Math.PI * 2);
+                ctx2d.fill();
+                ctx2d.stroke();
+                ctx2d.restore();
+              };
+
+              if (group === "walls" && a && b) {
+                drawHandle(a, { kind: "wall-endpoint", endpoint: "a" }, { ghost: false });
+                drawHandle(b, { kind: "wall-endpoint", endpoint: "b" }, { ghost: false });
+              } else if (group === "areas" && verts.length >= 3) {
+                for (let i = 0; i < verts.length; i++) {
+                  drawHandle(verts[i], { kind: "poly-vertex", vertexIndex: i }, { ghost: false });
+                }
+                for (let i = 0; i < verts.length; i++) {
+                  const v0 = verts[i];
+                  const v1 = verts[(i + 1) % verts.length];
+                  drawHandle(midpoint(v0, v1), { kind: "poly-ghost", edgeIndex: i }, { ghost: true });
+                }
+              }
+            }
+
+            if (canEditVertices) {
               const info = getRotateHandleInfo(selectedEl, viewport);
               const pivot = info.pivotScreen;
 
@@ -810,7 +929,12 @@ export function Viewport2D({
       }
 
       const cursor =
-        interaction.kind === "pan" || interaction.kind === "drag" || interaction.kind === "rotate"
+        interaction.kind === "pan" ||
+        interaction.kind === "drag" ||
+        interaction.kind === "rotate" ||
+        interaction.kind === "wall-endpoint-drag" ||
+        interaction.kind === "poly-vertex-drag" ||
+        interaction.kind === "poly-ghost-drag"
           ? "grabbing"
           : interaction.kind === "select-box"
             ? "crosshair"
@@ -822,6 +946,8 @@ export function Viewport2D({
                   ? "grab"
                   : rotateHoverRef.current
                     ? "grab"
+                    : vertexHoverRef.current
+                      ? "grab"
                     : hoverId
                       ? hoverLocked
                         ? "not-allowed"
@@ -1078,6 +1204,42 @@ export function Viewport2D({
       return dx * dx + dy * dy;
     }
 
+    function getVertexHandleHit(el: CompositionElement, viewport: Viewport2DContext, screen: Vector2): VertexHandleHit | null {
+      const group = elementTypesRef.current[el.type]?.layerGroup ?? "";
+
+      const handleHitRadiusPx = 12;
+      const ghostHitRadiusPx = 10;
+
+      if (group === "walls") {
+        const a = readPlanePoint(el.props.a);
+        const b = readPlanePoint(el.props.b);
+        if (!a || !b) return null;
+        const pa = viewport.worldToScreen(a);
+        if (dist2(screen, pa) <= handleHitRadiusPx * handleHitRadiusPx) return { kind: "wall-endpoint", endpoint: "a" };
+        const pb = viewport.worldToScreen(b);
+        if (dist2(screen, pb) <= handleHitRadiusPx * handleHitRadiusPx) return { kind: "wall-endpoint", endpoint: "b" };
+        return null;
+      }
+
+      if (group === "areas") {
+        const vertices = readVertices(el.props.vertices);
+        if (vertices.length < 3) return null;
+        for (let i = 0; i < vertices.length; i++) {
+          const p = viewport.worldToScreen(vertices[i]);
+          if (dist2(screen, p) <= handleHitRadiusPx * handleHitRadiusPx) return { kind: "poly-vertex", vertexIndex: i };
+        }
+        for (let i = 0; i < vertices.length; i++) {
+          const v0 = vertices[i];
+          const v1 = vertices[(i + 1) % vertices.length];
+          const p = viewport.worldToScreen(midpoint(v0, v1));
+          if (dist2(screen, p) <= ghostHitRadiusPx * ghostHitRadiusPx) return { kind: "poly-ghost", edgeIndex: i };
+        }
+        return null;
+      }
+
+      return null;
+    }
+
     function normalizeAngleRad(angle: number): number {
       return Math.atan2(Math.sin(angle), Math.cos(angle));
     }
@@ -1158,6 +1320,62 @@ export function Viewport2D({
         const selectedEl = elementsRef.current.find((it) => it.id === primaryId) ?? null;
         if (selectedEl) {
           const viewport = makeViewportContext();
+          const vertexHit = getVertexHandleHit(selectedEl, viewport, screen);
+          if (vertexHit && updateElementRef.current) {
+            if (vertexHit.kind === "wall-endpoint") {
+              const a = readPlanePoint(selectedEl.props.a);
+              const b = readPlanePoint(selectedEl.props.b);
+              if (a && b) {
+                onBeginUndoGroupRef.current?.();
+                interactionRef.current = {
+                  kind: "wall-endpoint-drag",
+                  pointerId: e.pointerId,
+                  elementId: primaryId,
+                  startElement: selectedEl,
+                  endpoint: vertexHit.endpoint,
+                  startA: a,
+                  startB: b,
+                };
+                rotateHoverRef.current = false;
+                vertexHoverRef.current = null;
+                requestDraw();
+                return;
+              }
+            }
+
+            if (vertexHit.kind === "poly-vertex" || vertexHit.kind === "poly-ghost") {
+              const vertices = readVertices(selectedEl.props.vertices);
+              if (vertices.length >= 3) {
+                onBeginUndoGroupRef.current?.();
+                if (vertexHit.kind === "poly-vertex") {
+                  interactionRef.current = {
+                    kind: "poly-vertex-drag",
+                    pointerId: e.pointerId,
+                    elementId: primaryId,
+                    startElement: selectedEl,
+                    vertexIndex: vertexHit.vertexIndex,
+                    startVertices: vertices,
+                  };
+                } else {
+                  interactionRef.current = {
+                    kind: "poly-ghost-drag",
+                    pointerId: e.pointerId,
+                    elementId: primaryId,
+                    startElement: selectedEl,
+                    edgeIndex: vertexHit.edgeIndex,
+                    startVertices: vertices,
+                    startScreen: screen,
+                    activated: false,
+                  };
+                }
+                rotateHoverRef.current = false;
+                vertexHoverRef.current = null;
+                requestDraw();
+                return;
+              }
+            }
+          }
+
           const info = getRotateHandleInfo(selectedEl, viewport);
           if (dist2(screen, info.handleScreen) <= info.hitRadiusPx * info.hitRadiusPx) {
             const pivot = info.pivotWorld;
@@ -1303,6 +1521,87 @@ export function Viewport2D({
         return;
       }
 
+      if (interaction.kind === "wall-endpoint-drag") {
+        if (interaction.pointerId !== e.pointerId) return;
+        const viewport = makeViewportContext();
+        const worldRaw = viewport.screenToWorld(screen);
+        const shouldSnap = toolSnapToGridRef.current && !e.altKey;
+        const world = shouldSnap ? snapPoint(worldRaw, SNAP_STEP) : worldRaw;
+
+        const nextA = interaction.endpoint === "a" ? world : interaction.startA;
+        const nextB = interaction.endpoint === "b" ? world : interaction.startB;
+        const nextPos = midpoint(nextA, nextB);
+
+        pendingVertexPatch = {
+          id: interaction.elementId,
+          patch: { position: { x: nextPos.x, z: nextPos.z }, props: { a: nextA, b: nextB } },
+        };
+        if (!vertexRaf) {
+          vertexRaf = requestAnimationFrame(() => {
+            vertexRaf = 0;
+            flushVertexPatch();
+          });
+        }
+        requestDraw();
+        return;
+      }
+
+      if (interaction.kind === "poly-ghost-drag") {
+        if (interaction.pointerId !== e.pointerId) return;
+
+        const dx = screen.x - interaction.startScreen.x;
+        const dy = screen.y - interaction.startScreen.y;
+        const movedNow = dx * dx + dy * dy >= 9;
+
+        if (!interaction.activated && !movedNow) return;
+
+        const viewport = makeViewportContext();
+        const worldRaw = viewport.screenToWorld(screen);
+        const shouldSnap = toolSnapToGridRef.current && !e.altKey;
+        const world = shouldSnap ? snapPoint(worldRaw, SNAP_STEP) : worldRaw;
+
+        if (!interaction.activated) {
+          const insertedIndex = interaction.edgeIndex + 1;
+          const nextVertices = interaction.startVertices.slice();
+          nextVertices.splice(insertedIndex, 0, world);
+
+          interactionRef.current = {
+            kind: "poly-vertex-drag",
+            pointerId: interaction.pointerId,
+            elementId: interaction.elementId,
+            startElement: interaction.startElement,
+            vertexIndex: insertedIndex,
+            startVertices: nextVertices,
+          };
+        }
+      }
+
+      if (interactionRef.current.kind === "poly-vertex-drag") {
+        const current = interactionRef.current;
+        if (current.pointerId !== e.pointerId) return;
+
+        const viewport = makeViewportContext();
+        const worldRaw = viewport.screenToWorld(screen);
+        const shouldSnap = toolSnapToGridRef.current && !e.altKey;
+        const world = shouldSnap ? snapPoint(worldRaw, SNAP_STEP) : worldRaw;
+
+        const nextVertices = current.startVertices.map((p, idx) => (idx === current.vertexIndex ? world : p));
+        const nextPos = polygonCentroid(nextVertices);
+
+        pendingVertexPatch = {
+          id: current.elementId,
+          patch: { position: { x: nextPos.x, z: nextPos.z }, props: { vertices: nextVertices } },
+        };
+        if (!vertexRaf) {
+          vertexRaf = requestAnimationFrame(() => {
+            vertexRaf = 0;
+            flushVertexPatch();
+          });
+        }
+        requestDraw();
+        return;
+      }
+
       if (interaction.kind === "select-box") {
         if (interaction.pointerId !== e.pointerId) return;
         interaction.currentScreen = screen;
@@ -1382,6 +1681,10 @@ export function Viewport2D({
               rotateHoverRef.current = false;
               requestDraw();
             }
+            if (vertexHoverRef.current) {
+              vertexHoverRef.current = null;
+              requestDraw();
+            }
             return;
           }
           const selectedEl = elementsRef.current.find((it) => it.id === primaryId) ?? null;
@@ -1393,10 +1696,32 @@ export function Viewport2D({
               rotateHoverRef.current = overRotate;
               requestDraw();
             }
+
+            const overVertex = getVertexHandleHit(selectedEl, viewport, screen);
+            const same =
+              (vertexHoverRef.current?.kind ?? null) === (overVertex?.kind ?? null) &&
+              (vertexHoverRef.current?.kind === "wall-endpoint"
+                ? vertexHoverRef.current.endpoint === (overVertex as Extract<VertexHandleHit, { kind: "wall-endpoint" }> | null)?.endpoint
+                : vertexHoverRef.current?.kind === "poly-vertex"
+                  ? vertexHoverRef.current.vertexIndex ===
+                    (overVertex as Extract<VertexHandleHit, { kind: "poly-vertex" }> | null)?.vertexIndex
+                  : vertexHoverRef.current?.kind === "poly-ghost"
+                    ? vertexHoverRef.current.edgeIndex === (overVertex as Extract<VertexHandleHit, { kind: "poly-ghost" }> | null)?.edgeIndex
+                    : overVertex === null);
+            if (!same) {
+              vertexHoverRef.current = overVertex;
+              requestDraw();
+            }
           }
-        } else if (rotateHoverRef.current) {
-          rotateHoverRef.current = false;
-          requestDraw();
+        } else {
+          if (rotateHoverRef.current) {
+            rotateHoverRef.current = false;
+            requestDraw();
+          }
+          if (vertexHoverRef.current) {
+            vertexHoverRef.current = null;
+            requestDraw();
+          }
         }
       }
     }
@@ -1415,6 +1740,19 @@ export function Viewport2D({
       if (interaction.kind === "rotate") {
         if (interaction.pointerId !== e.pointerId) return;
         flushRotatePatch();
+        onEndUndoGroupRef.current?.();
+        interactionRef.current = { kind: "none" };
+        requestDraw();
+        return;
+      }
+
+      if (
+        interaction.kind === "wall-endpoint-drag" ||
+        interaction.kind === "poly-vertex-drag" ||
+        interaction.kind === "poly-ghost-drag"
+      ) {
+        if (interaction.pointerId !== e.pointerId) return;
+        flushVertexPatch();
         onEndUndoGroupRef.current?.();
         interactionRef.current = { kind: "none" };
         requestDraw();
@@ -1491,9 +1829,23 @@ export function Viewport2D({
       if (interaction.kind === "tool") {
         toToolEvent("cancel", e);
       }
-      if (interaction.kind === "tool" || interaction.kind === "drag" || interaction.kind === "rotate") {
+      if (
+        interaction.kind === "tool" ||
+        interaction.kind === "drag" ||
+        interaction.kind === "rotate" ||
+        interaction.kind === "wall-endpoint-drag" ||
+        interaction.kind === "poly-vertex-drag" ||
+        interaction.kind === "poly-ghost-drag"
+      ) {
         if (interaction.kind === "rotate") flushRotatePatch();
         if (interaction.kind === "drag") flushDragPatch();
+        if (
+          interaction.kind === "wall-endpoint-drag" ||
+          interaction.kind === "poly-vertex-drag" ||
+          interaction.kind === "poly-ghost-drag"
+        ) {
+          flushVertexPatch();
+        }
         onEndUndoGroupRef.current?.();
       }
       interactionRef.current = { kind: "none" };

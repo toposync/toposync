@@ -6,6 +6,7 @@ import type { CompositionElement, CompositionElementPatch, ElementType, HostI18n
 import { rgbaFromHex } from "../colors";
 import { AREA_ELEMENT_TYPE_ID, DEFAULT_AREA_FILL_COLOR, DEFAULT_AREA_OPACITY, FLOOR_EPSILON, GROUND_Y } from "../constants";
 import { readNumber, readPlanePointArray, readString, saveAreaFillColor } from "../parsing";
+import { getFloorTexture, readFloorTextureId } from "../textures";
 
 export function createAreaElementType(i18n: HostI18n): ElementType {
   return {
@@ -16,6 +17,7 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
     defaultProps: {
       fill: DEFAULT_AREA_FILL_COLOR,
       opacity: DEFAULT_AREA_OPACITY,
+      texture: "none",
       vertices: [
         { x: -1, z: -1 },
         { x: 1, z: -1 },
@@ -61,6 +63,15 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
 
         const geometry = new THREE.ShapeGeometry(shape);
         geometry.rotateX(-Math.PI / 2);
+
+        const pos = geometry.getAttribute("position") as ThreeTypes.BufferAttribute;
+        const uv = new THREE.BufferAttribute(new Float32Array(pos.count * 2), 2);
+        for (let i = 0; i < pos.count; i++) {
+          const worldX = pos.getX(i) + el.position.x;
+          const worldZ = pos.getZ(i) + el.position.z;
+          uv.setXY(i, worldX, worldZ);
+        }
+        geometry.setAttribute("uv", uv);
         return geometry;
       }
 
@@ -94,7 +105,15 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
 
         const fill = readString(el.props.fill, DEFAULT_AREA_FILL_COLOR);
         const opacity = Math.max(0, Math.min(1, readNumber(el.props.opacity, DEFAULT_AREA_OPACITY)));
+        const textureId = readFloorTextureId(el.props.texture, "none");
+        const nextMap = getFloorTexture(THREE, textureId);
         material.color.set(fill);
+        if (material.map !== nextMap) {
+          material.map = nextMap;
+          material.needsUpdate = true;
+        }
+        material.roughness = textureId === "grass" ? 0.98 : 0.95;
+        material.metalness = 0.0;
         material.opacity = opacity;
         material.transparent = opacity < 0.999;
         material.depthWrite = opacity >= 0.999;
@@ -154,6 +173,7 @@ function AreaEditor({ element, update, remove, close, i18n }: AreaEditorProps): 
   const fill = readString(element.props.fill, DEFAULT_AREA_FILL_COLOR);
   const opacity = readNumber(element.props.opacity, DEFAULT_AREA_OPACITY);
   const transparent = opacity < 0.001;
+  const texture = readFloorTextureId(element.props.texture, "none");
 
   return (
     <div>
@@ -175,6 +195,18 @@ function AreaEditor({ element, update, remove, close, i18n }: AreaEditorProps): 
               update({ props: { fill: next } });
             }}
           />
+        </div>
+        <div className="field" style={{ flex: 1, minWidth: 160 }}>
+          <div className="label">{t("ext.structural.editor.floor_texture")}</div>
+          <select
+            className="input"
+            value={texture}
+            onChange={(e) => update({ props: { texture: readFloorTextureId(e.target.value, texture) } })}
+          >
+            <option value="none">{t("ext.structural.editor.texture.none")}</option>
+            <option value="grass">{t("ext.structural.editor.texture.grass")}</option>
+            <option value="concrete">{t("ext.structural.editor.texture.concrete")}</option>
+          </select>
         </div>
         <label className="chipButton" style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
           <input

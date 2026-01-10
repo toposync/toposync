@@ -81,23 +81,33 @@ function boolStateForDomain(domain: string, rawState: string): boolean | null {
   return s === "on";
 }
 
-function climateFlowFactor(live: HomeAssistantLiveState | null, fallbackStateRaw: string): { active: boolean; factor: number } {
+type AirflowMode = "off" | "neutral" | "cool" | "heat";
+
+function climateFlowFromLiveState(
+  live: HomeAssistantLiveState | null,
+  fallbackStateRaw: string,
+): { active: boolean; mode: AirflowMode; factor: number } {
   const state = readString(live?.state ?? fallbackStateRaw).trim().toLowerCase();
   const action = readString(live?.attributes?.hvac_action).trim().toLowerCase();
 
-  if (!state || state === "unknown" || state === "unavailable") return { active: false, factor: 0 };
-  if (state === "off" || action === "off") return { active: false, factor: 0 };
-  if (action === "idle") return { active: true, factor: 0.22 };
+  if (!state || state === "unknown" || state === "unavailable") return { active: false, mode: "off", factor: 0 };
+  if (state === "off" || action === "off") return { active: false, mode: "off", factor: 0 };
 
-  if (action.includes("heat")) return { active: true, factor: 1.0 };
-  if (action.includes("cool") || action.includes("dry")) return { active: true, factor: 1.0 };
-  if (action.includes("fan")) return { active: true, factor: 0.75 };
+  if (action === "idle") {
+    const inferredMode: AirflowMode =
+      state.includes("heat") ? "heat" : state.includes("cool") || state === "dry" ? "cool" : "neutral";
+    return { active: true, mode: inferredMode, factor: 0.22 };
+  }
 
-  if (state.includes("heat")) return { active: true, factor: 0.85 };
-  if (state.includes("cool") || state === "dry") return { active: true, factor: 0.85 };
-  if (state === "fan_only") return { active: true, factor: 0.65 };
+  if (action.includes("heat")) return { active: true, mode: "heat", factor: 1.0 };
+  if (action.includes("cool") || action.includes("dry")) return { active: true, mode: "cool", factor: 1.0 };
+  if (action.includes("fan")) return { active: true, mode: "neutral", factor: 0.75 };
 
-  return { active: true, factor: 0.75 };
+  if (state.includes("heat")) return { active: true, mode: "heat", factor: 0.85 };
+  if (state.includes("cool") || state === "dry") return { active: true, mode: "cool", factor: 0.85 };
+  if (state === "fan_only") return { active: true, mode: "neutral", factor: 0.65 };
+
+  return { active: true, mode: "neutral", factor: 0.75 };
 }
 
 export function MainViewport2D({ compositionId, elements, elementTypesById, onElementActivated }: Props): React.ReactElement {
@@ -196,7 +206,43 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
 
     setHomeAssistantLiveStates({});
 
+    const upsertSnapshot = (serverId: string, data: unknown) => {
+      if (!data || typeof data !== "object") return;
+      setHomeAssistantLiveStates((prev) => {
+        const next = { ...prev };
+        for (const [entityId, state] of Object.entries(data as Record<string, any>)) {
+          if (!state || typeof state !== "object") continue;
+          const key = `${serverId}|${entityId}`;
+          next[key] = {
+            entity_id: readString((state as any).entity_id) || entityId,
+            state: readString((state as any).state),
+            attributes:
+              (state as any).attributes && typeof (state as any).attributes === "object" ? (state as any).attributes : undefined,
+          };
+        }
+        return next;
+      });
+    };
+
+    async function fetchInitialStates(serverId: string, entityIds: string[]) {
+      if (entityIds.length === 0) return;
+      try {
+        const response = await fetch(`/api/home_assistant/${encodeURIComponent(serverId)}/states`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ entity_ids: entityIds }),
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+        if (cancelled) return;
+        upsertSnapshot(serverId, data);
+      } catch {
+        // ignore
+      }
+    }
+
     for (const target of homeAssistantWatchTargets) {
+      void fetchInitialStates(target.serverId, target.entityIds);
       const url = `/api/home_assistant/${encodeURIComponent(target.serverId)}/stream?entity_ids=${encodeURIComponent(target.entityIds.join(","))}`;
       const eventSource = new EventSource(url);
       sources.push(eventSource);
@@ -206,20 +252,7 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
         const msg = event as MessageEvent;
         try {
           const data = JSON.parse(msg.data);
-          if (!data || typeof data !== "object") return;
-          setHomeAssistantLiveStates((prev) => {
-            const next = { ...prev };
-            for (const [entityId, state] of Object.entries(data as Record<string, any>)) {
-              if (!state || typeof state !== "object") continue;
-              const key = `${target.serverId}|${entityId}`;
-              next[key] = {
-                entity_id: readString((state as any).entity_id) || entityId,
-                state: readString((state as any).state),
-                attributes: (state as any).attributes && typeof (state as any).attributes === "object" ? (state as any).attributes : undefined,
-              };
-            }
-            return next;
-          });
+          upsertSnapshot(target.serverId, data);
         } catch {
           // ignore
         }
@@ -483,10 +516,10 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
     return out;
   }, [homeAssistantElements, homeAssistantLiveStates, manifest]);
 
-  const overlayOpacityByElementId = useMemo(() => {
-    const out: Record<string, number> = {};
-    if (!manifest) return out;
+  const overlayViews = useMemo(() => {
+    if (!manifest) return [];
 
+    const out: Array<{ key: string; url: string; opacity: number }> = [];
     for (const overlay of manifest.overlays) {
       const homeAssistantElement = homeAssistantElements.find((e) => e.id === overlay.elementId) ?? null;
       if (!homeAssistantElement) continue;
@@ -496,7 +529,8 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
           ? `${homeAssistantElement.serverId}|${homeAssistantElement.entityId}`
           : "";
       const live = liveKey ? homeAssistantLiveStates[liveKey] ?? null : null;
-      const stateRaw = readString(live?.state ?? homeAssistantElement.fallbackState)
+      const fallbackState = homeAssistantElement.fallbackState;
+      const stateRaw = readString(live?.state ?? fallbackState)
         .trim()
         .toLowerCase();
       const domain = homeAssistantElement.entityId ? domainFromEntityId(homeAssistantElement.entityId) : "";
@@ -504,14 +538,17 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
       if (overlay.kind === "lamp") {
         const boolState = domain ? boolStateForDomain(domain, stateRaw) : null;
         const intensity = clamp(homeAssistantElement.lampIntensity, 0, 3);
-        out[overlay.elementId] = boolState === true ? clamp(0.75 * intensity, 0.2, 1.0) : 0;
+        const opacity = boolState === true ? clamp(0.75 * intensity, 0.2, 1.0) : 0;
+        out.push({ key: `${overlay.elementId}:lamp`, url: overlay.url, opacity });
         continue;
       }
 
       if (overlay.kind === "airflow") {
-        const flow = climateFlowFactor(live, stateRaw);
+        const flow = climateFlowFromLiveState(live, fallbackState);
         const intensity = clamp(homeAssistantElement.airflowIntensity, 0, 3);
-        out[overlay.elementId] = flow.active ? clamp(flow.factor * 0.7 * intensity, 0.1, 1.0) : 0;
+        const baseOpacity = flow.active ? clamp(flow.factor * 0.7 * intensity, 0.1, 1.0) : 0;
+        const matches = flow.mode !== "off" && overlay.mode === flow.mode;
+        out.push({ key: `${overlay.elementId}:airflow:${overlay.mode}`, url: overlay.url, opacity: matches ? baseOpacity : 0 });
       }
     }
 
@@ -555,14 +592,14 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
           }}
         >
           <img className="main2dImage main2dBase" src={manifest.base.url} alt="" draggable={false} />
-          {manifest.overlays.map((overlay) => (
+          {overlayViews.map((overlay) => (
             <img
-              key={overlay.elementId}
+              key={overlay.key}
               className="main2dImage main2dOverlay"
               src={overlay.url}
               alt=""
               draggable={false}
-              style={{ opacity: overlayOpacityByElementId[overlay.elementId] ?? 0 }}
+              style={{ opacity: overlay.opacity }}
             />
           ))}
           <div className="main2dButtons">

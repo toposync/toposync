@@ -2,7 +2,7 @@ import type { CompositionElement, Element3DInstance, ElementType, ViewSettings }
 import * as THREE from "three";
 
 const RENDER_DIR_ID = "render2d";
-const RENDER_VERSION = 3 as const;
+const RENDER_VERSION = 4 as const;
 const HOME_ASSISTANT_ELEMENT_TYPE_ID = "com.toposync.home_assistant.item";
 const MODEL_ELEMENT_TYPE_ID = "com.toposync.models.gltf";
 const IMAGE_ELEMENT_TYPE_ID = "com.toposync.images.image";
@@ -17,11 +17,9 @@ type BoundsXZ = {
   maxZ: number;
 };
 
-export type Main2DOverlayManifest = {
-  elementId: string;
-  kind: "lamp" | "airflow";
-  url: string;
-};
+export type Main2DOverlayManifest =
+  | { elementId: string; kind: "lamp"; url: string }
+  | { elementId: string; kind: "airflow"; mode: "cool" | "heat" | "neutral"; url: string };
 
 export type Main2DRenderManifest = {
   version: typeof RENDER_VERSION;
@@ -495,14 +493,21 @@ function pickOverlayTargets(elements: CompositionElement[]): Array<{ elementId: 
   return out;
 }
 
-function forceHomeAssistantVisualOn(el: CompositionElement, specialView: "lamp" | "airflow"): CompositionElement {
+type AirflowOverlayMode = "cool" | "heat" | "neutral";
+
+function forceHomeAssistantVisualOn(
+  el: CompositionElement,
+  args: { specialView: "lamp" } | { specialView: "airflow"; mode: AirflowOverlayMode },
+): CompositionElement {
   const props = asRecord(el.props);
+  const primaryState =
+    args.specialView === "lamp" ? "on" : args.mode === "heat" ? "heat" : args.mode === "neutral" ? "fan_only" : "cool";
   return {
     ...el,
     props: {
       ...props,
       server_id: "",
-      primary_state: specialView === "airflow" ? "cool" : "on",
+      primary_state: primaryState,
     },
   };
 }
@@ -562,7 +567,12 @@ async function captureBaseAndOverlays(args: {
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
   maximumRenderSize: number;
-}): Promise<Omit<Main2DRenderManifest, "base" | "overlays" | "signature"> & { baseDataUrl: string; overlays: Array<Main2DOverlayManifest & { dataUrl: string }> }> {
+}): Promise<
+  Omit<Main2DRenderManifest, "base" | "overlays" | "signature"> & {
+    baseDataUrl: string;
+    overlays: Array<Main2DOverlayManifest & { dataUrl: string }>;
+  }
+> {
   const { compositionId, elements, elementTypesById } = args;
   const overlayTargets = pickOverlayTargets(elements);
   const nonHomeAssistantElements = elements.filter((el) => el.type !== HOME_ASSISTANT_ELEMENT_TYPE_ID);
@@ -601,38 +611,78 @@ async function captureBaseAndOverlays(args: {
   // Overlay captures.
   const overlays: Array<Main2DOverlayManifest & { dataUrl: string }> = [];
   for (const target of overlayTargets) {
-    const overlayScene = new THREE.Scene();
-    const overlayRenderer = createRenderer(renderWidth, renderHeight, 0x000000, 1);
-    const overlayCamera = buildCamera(viewBounds, viewWidth, viewHeight);
+    const variants: Array<Main2DOverlayManifest & { forced: CompositionElement; warmupSeconds: number }> =
+      target.specialView === "lamp"
+        ? [
+            {
+              elementId: target.elementId,
+              kind: "lamp",
+              url: "",
+              forced: forceHomeAssistantVisualOn(target.element, { specialView: "lamp" }),
+              warmupSeconds: 0.35,
+            },
+          ]
+        : ([
+            {
+              elementId: target.elementId,
+              kind: "airflow",
+              mode: "cool",
+              url: "",
+              forced: forceHomeAssistantVisualOn(target.element, { specialView: "airflow", mode: "cool" }),
+              warmupSeconds: 2.0,
+            },
+            {
+              elementId: target.elementId,
+              kind: "airflow",
+              mode: "heat",
+              url: "",
+              forced: forceHomeAssistantVisualOn(target.element, { specialView: "airflow", mode: "heat" }),
+              warmupSeconds: 2.0,
+            },
+            {
+              elementId: target.elementId,
+              kind: "airflow",
+              mode: "neutral",
+              url: "",
+              forced: forceHomeAssistantVisualOn(target.element, { specialView: "airflow", mode: "neutral" }),
+              warmupSeconds: 2.0,
+            },
+          ] satisfies Array<Main2DOverlayManifest & { forced: CompositionElement; warmupSeconds: number }>);
 
-    // No extra lighting: we want the special-view element to drive the glow.
-    const forced = forceHomeAssistantVisualOn(target.element, target.specialView);
-    const overlayInstances = createInstances(
-      overlayScene,
-      overlayCamera,
-      overlayRenderer,
-      [...nonHomeAssistantElements, forced],
-      elementTypesById,
-      view,
-      compositionId,
-    );
-    await warmupCapture(
-      overlayInstances.map((entry) => ({ element: entry.element, instance: entry.instance })),
-      overlayRenderer,
-      overlayScene,
-      overlayCamera,
-      {
-        maxWaitMs: 5000,
-        warmupSeconds: target.specialView === "airflow" ? 1.1 : 0.35,
-        stepMs: 50,
-      },
-    );
-    overlayRenderer.render(overlayScene, overlayCamera);
-    const dataUrl = overlayRenderer.domElement.toDataURL("image/png");
-    overlays.push({ elementId: target.elementId, kind: target.specialView, url: "", dataUrl });
+    for (const variant of variants) {
+      const { forced, warmupSeconds, ...overlayManifest } = variant;
+      const overlayScene = new THREE.Scene();
+      const overlayRenderer = createRenderer(renderWidth, renderHeight, 0x000000, 1);
+      const overlayCamera = buildCamera(viewBounds, viewWidth, viewHeight);
 
-    disposeInstances(overlayInstances);
-    overlayRenderer.dispose();
+      // No extra lighting: we want the special-view element to drive the glow.
+      const overlayInstances = createInstances(
+        overlayScene,
+        overlayCamera,
+        overlayRenderer,
+        [...nonHomeAssistantElements, forced],
+        elementTypesById,
+        view,
+        compositionId,
+      );
+      await warmupCapture(
+        overlayInstances.map((entry) => ({ element: entry.element, instance: entry.instance })),
+        overlayRenderer,
+        overlayScene,
+        overlayCamera,
+        {
+          maxWaitMs: 5000,
+          warmupSeconds,
+          stepMs: 50,
+        },
+      );
+      overlayRenderer.render(overlayScene, overlayCamera);
+      const dataUrl = overlayRenderer.domElement.toDataURL("image/png");
+      overlays.push({ ...overlayManifest, dataUrl });
+
+      disposeInstances(overlayInstances);
+      overlayRenderer.dispose();
+    }
   }
 
   return {
@@ -682,10 +732,13 @@ export async function getOrCreateMain2DRenderManifest(args: {
     const baseUpload = await uploadBlob(RENDER_DIR_ID, baseFilename, baseBlob);
 
     for (const overlay of captured.overlays) {
-      const filename = `${prefix}_ha_${overlay.elementId}.png`;
+      const filename =
+        overlay.kind === "lamp"
+          ? `${prefix}_ha_${overlay.elementId}_lamp.png`
+          : `${prefix}_ha_${overlay.elementId}_airflow_${overlay.mode}.png`;
       const blob = await dataUrlToBlob(overlay.dataUrl);
       const uploaded = await uploadBlob(RENDER_DIR_ID, filename, blob);
-      overlays.push({ elementId: overlay.elementId, kind: overlay.kind, url: uploaded.url });
+      overlays.push(overlay.kind === "lamp" ? { elementId: overlay.elementId, kind: "lamp", url: uploaded.url } : { elementId: overlay.elementId, kind: "airflow", mode: overlay.mode, url: uploaded.url });
     }
 
     const manifest: Main2DRenderManifest = {

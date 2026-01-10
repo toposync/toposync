@@ -37,6 +37,48 @@ const FOCUS_HIGHLIGHT_COLOR = 0xfbbf24;
 const GHOST_WALLS_OPACITY = 0.22;
 const GHOST_WALLS_MATERIAL_STATE_KEY = "__toposyncGhostWallsOriginal";
 
+function computeTrackedBounds(tracked: Map<string, Tracked>): THREE.Box3 | null {
+  const out = new THREE.Box3();
+  let hasAny = false;
+  for (const entry of tracked.values()) {
+    entry.instance.object.updateWorldMatrix(true, true);
+    const box = new THREE.Box3().setFromObject(entry.instance.object);
+    if (box.isEmpty()) continue;
+    out.union(box);
+    hasAny = true;
+  }
+  return hasAny ? out : null;
+}
+
+function fitCameraTopDown(camera: THREE.PerspectiveCamera, controls: OrbitControls, bounds: THREE.Box3): void {
+  const size = new THREE.Vector3();
+  bounds.getSize(size);
+
+  const center = new THREE.Vector3();
+  bounds.getCenter(center);
+
+  const target = new THREE.Vector3(center.x, 0, center.z);
+
+  const halfWidth = Math.max(0.5, size.x / 2);
+  const halfHeight = Math.max(0.5, size.z / 2);
+
+  const vFov = THREE.MathUtils.degToRad(camera.fov);
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+  const distance = Math.max(halfHeight / Math.tan(vFov / 2), halfWidth / Math.tan(hFov / 2));
+
+  const padding = 1.25;
+  const height = distance * padding;
+  const depthEpsilon = Math.max(0.01, height * 0.001);
+
+  controls.target.copy(target);
+  const cameraY = Math.max(target.y, bounds.max.y) + height;
+  camera.position.set(target.x, cameraY, target.z + depthEpsilon);
+
+  controls.maxDistance = Math.max(controls.maxDistance, height * 4);
+  controls.minDistance = Math.min(controls.minDistance, Math.max(0.5, height * 0.05));
+  controls.update();
+}
+
 function applyGhostWalls(object: THREE.Object3D, enabled: boolean): void {
   object.traverse((node) => {
     const matRaw = (node as any).material as unknown;
@@ -132,6 +174,7 @@ export function Viewport3D({
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
   const trackedRef = useRef<Map<string, Tracked>>(new Map());
   const notificationOverlayRef = useRef<Notification3DOverlay | null>(null);
   const notificationOverlayNotificationIdRef = useRef<string | null>(null);
@@ -156,6 +199,8 @@ export function Viewport3D({
   const activeNotificationRendererRef = useRef<NotificationRenderer | null>(activeNotificationRenderer ?? null);
   const onOpenImageRef = useRef<Props["onOpenImage"]>(onOpenImage);
   const compositionIdRef = useRef<string | undefined>(compositionId);
+  const lastAutoFitCompositionIdRef = useRef<string | null>(null);
+  const userInteractedWithCameraRef = useRef(false);
 
   const [focusedElementId, setFocusedElementId] = useState<string | null>(null);
   const focusHelperRef = useRef<THREE.BoxHelper | null>(null);
@@ -269,6 +314,10 @@ export function Viewport3D({
 
   useEffect(() => {
     compositionIdRef.current = compositionId;
+    if (compositionId !== lastAutoFitCompositionIdRef.current) {
+      lastAutoFitCompositionIdRef.current = null;
+      userInteractedWithCameraRef.current = false;
+    }
     syncNotificationOverlay();
   }, [compositionId]);
 
@@ -319,8 +368,8 @@ export function Viewport3D({
     dirLight.position.set(2.2, 6, 3);
     scene.add(dirLight);
 
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
+	    const controls = new OrbitControls(camera, renderer.domElement);
+	    controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.rotateSpeed = 0.7;
     controls.zoomSpeed = 0.9;
@@ -328,8 +377,14 @@ export function Viewport3D({
     controls.target.set(0, 0.2, 0);
     controls.minDistance = 1.2;
     controls.maxDistance = 40;
-    controls.maxPolarAngle = Math.PI / 2 - 0.02;
-    controls.update();
+	    controls.maxPolarAngle = Math.PI / 2 - 0.02;
+	    controls.update();
+	    controlsRef.current = controls;
+
+	    const handleControlsStart = () => {
+	      userInteractedWithCameraRef.current = true;
+	    };
+	    controls.addEventListener("start", handleControlsStart);
 
     rendererRef.current = renderer;
     cameraRef.current = camera;
@@ -520,7 +575,7 @@ export function Viewport3D({
     renderer.domElement.addEventListener("pointercancel", handlePointerUp);
     renderer.domElement.addEventListener("contextmenu", handleContextMenu);
 
-    return () => {
+	    return () => {
       if (longPressTimer) window.clearTimeout(longPressTimer);
       longPressTimer = null;
       if (pendingClick) window.clearTimeout(pendingClick.timer);
@@ -541,9 +596,11 @@ export function Viewport3D({
       renderer.domElement.removeEventListener("pointercancel", handlePointerUp);
       renderer.domElement.removeEventListener("contextmenu", handleContextMenu);
       ro.disconnect();
-      cancelAnimationFrame(raf);
+	      cancelAnimationFrame(raf);
 
-      controls.dispose();
+	      controls.dispose();
+	      controls.removeEventListener("start", handleControlsStart);
+	      controlsRef.current = null;
 
       if (notificationOverlayRef.current) {
         scene.remove(notificationOverlayRef.current.object);
@@ -563,7 +620,7 @@ export function Viewport3D({
     };
   }, [mouse, raycaster]);
 
-  useEffect(() => {
+	  useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
 
@@ -663,14 +720,25 @@ export function Viewport3D({
 	        }
 	      }
 	    }
+
+	    const fitKey = compositionId ?? null;
+	    const controls = controlsRef.current;
+	    if (controls && !userInteractedWithCameraRef.current && lastAutoFitCompositionIdRef.current !== fitKey) {
+	      const bounds = computeTrackedBounds(tracked);
+	      if (bounds) {
+	        fitCameraTopDown(camera, controls, bounds);
+	        lastAutoFitCompositionIdRef.current = fitKey;
+	      }
+	    }
 	  }, [
 	    elements,
 	    elementTypesById,
 	    viewSettings.ghostWalls,
-    viewSettings.graphicsQuality,
-    viewSettings.wallHeight,
-    viewSettings.wallHeightPreset,
-  ]);
+	    viewSettings.graphicsQuality,
+	    viewSettings.wallHeight,
+	    viewSettings.wallHeightPreset,
+	    compositionId,
+	  ]);
 
   function focusNext(delta: number) {
     if (focusables.length === 0) return;

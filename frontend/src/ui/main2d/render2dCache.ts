@@ -2,7 +2,7 @@ import type { CompositionElement, Element3DInstance, ElementType, ViewSettings }
 import * as THREE from "three";
 
 const RENDER_DIR_ID = "render2d";
-const RENDER_VERSION = 4 as const;
+const RENDER_VERSION = 6 as const;
 const HOME_ASSISTANT_ELEMENT_TYPE_ID = "com.toposync.home_assistant.item";
 const MODEL_ELEMENT_TYPE_ID = "com.toposync.models.gltf";
 const IMAGE_ELEMENT_TYPE_ID = "com.toposync.images.image";
@@ -343,11 +343,21 @@ function expandBoundsXZ(bounds: THREE.Box3, p: { x: number; z: number }): void {
   bounds.expandByPoint(new THREE.Vector3(p.x, 0, p.z));
 }
 
-function addDefaultLights(scene: THREE.Scene): void {
-  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-  const dir = new THREE.DirectionalLight(0xffffff, 0.85);
-  dir.position.set(2.2, 6, 3);
-  scene.add(dir);
+function addDefaultLights(scene: THREE.Scene): THREE.Light[] {
+  const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+  scene.add(ambient);
+  const directional = new THREE.DirectionalLight(0xffffff, 0.85);
+  directional.position.set(2.2, 6, 3);
+  scene.add(directional);
+  return [ambient, directional];
+}
+
+function hideNonLightRenderables(object: THREE.Object3D): void {
+  object.traverse((node) => {
+    const anyNode = node as any;
+    if (anyNode?.isLight) return;
+    if (anyNode?.isMesh || anyNode?.isLine || anyNode?.isPoints || anyNode?.isSprite) anyNode.visible = false;
+  });
 }
 
 function sleep(ms: number): Promise<void> {
@@ -590,23 +600,24 @@ async function captureBaseAndOverlays(args: {
   const { viewBounds, viewWidth, viewHeight } = computeViewBoundsXZ(boundsBox, paddingRatio);
   const { renderWidth, renderHeight } = computeRenderSize(viewWidth, viewHeight, args.maximumRenderSize);
 
-  // Base capture.
-  const baseScene = new THREE.Scene();
-  const baseRenderer = createRenderer(renderWidth, renderHeight, 0x070a14, 1);
-  const baseCamera = buildCamera(viewBounds, viewWidth, viewHeight);
-  addDefaultLights(baseScene);
-  const baseInstances = createInstances(baseScene, baseCamera, baseRenderer, nonHomeAssistantElements, elementTypesById, view, compositionId);
+  const scene = new THREE.Scene();
+  const renderer = createRenderer(renderWidth, renderHeight, 0x070a14, 0);
+  const camera = buildCamera(viewBounds, viewWidth, viewHeight);
+  const defaultLights = addDefaultLights(scene);
+
+  const baseInstances = createInstances(scene, camera, renderer, nonHomeAssistantElements, elementTypesById, view, compositionId);
   await warmupCapture(
     baseInstances.map((entry) => ({ element: entry.element, instance: entry.instance })),
-    baseRenderer,
-    baseScene,
-    baseCamera,
+    renderer,
+    scene,
+    camera,
     { maxWaitMs: 6500, warmupSeconds: 0.25, stepMs: 60 },
   );
-  baseRenderer.render(baseScene, baseCamera);
-  const baseDataUrl = baseRenderer.domElement.toDataURL("image/png");
-  disposeInstances(baseInstances);
-  baseRenderer.dispose();
+  renderer.render(scene, camera);
+  const baseDataUrl = renderer.domElement.toDataURL("image/png");
+
+  for (const light of defaultLights) scene.remove(light);
+  renderer.setClearColor(0x000000, 1);
 
   // Overlay captures.
   const overlays: Array<Main2DOverlayManifest & { dataUrl: string }> = [];
@@ -651,39 +662,35 @@ async function captureBaseAndOverlays(args: {
 
     for (const variant of variants) {
       const { forced, warmupSeconds, ...overlayManifest } = variant;
-      const overlayScene = new THREE.Scene();
-      const overlayRenderer = createRenderer(renderWidth, renderHeight, 0x000000, 1);
-      const overlayCamera = buildCamera(viewBounds, viewWidth, viewHeight);
-
       // No extra lighting: we want the special-view element to drive the glow.
-      const overlayInstances = createInstances(
-        overlayScene,
-        overlayCamera,
-        overlayRenderer,
-        [...nonHomeAssistantElements, forced],
-        elementTypesById,
-        view,
-        compositionId,
-      );
+      const overlayInstances = createInstances(scene, camera, renderer, [forced], elementTypesById, view, compositionId);
+      if (overlayManifest.kind === "lamp") {
+        const forcedInstance = overlayInstances[0]?.instance ?? null;
+        if (forcedInstance) hideNonLightRenderables(forcedInstance.object);
+      }
       await warmupCapture(
         overlayInstances.map((entry) => ({ element: entry.element, instance: entry.instance })),
-        overlayRenderer,
-        overlayScene,
-        overlayCamera,
+        renderer,
+        scene,
+        camera,
         {
           maxWaitMs: 5000,
           warmupSeconds,
           stepMs: 50,
         },
       );
-      overlayRenderer.render(overlayScene, overlayCamera);
-      const dataUrl = overlayRenderer.domElement.toDataURL("image/png");
+      renderer.render(scene, camera);
+      const dataUrl = renderer.domElement.toDataURL("image/png");
       overlays.push({ ...overlayManifest, dataUrl });
 
       disposeInstances(overlayInstances);
-      overlayRenderer.dispose();
+      for (const entry of overlayInstances) scene.remove(entry.instance.object);
     }
   }
+
+  disposeInstances(baseInstances);
+  for (const entry of baseInstances) scene.remove(entry.instance.object);
+  renderer.dispose();
 
   return {
     version: RENDER_VERSION,
@@ -717,7 +724,7 @@ export async function getOrCreateMain2DRenderManifest(args: {
     const existingManifest = await fetchJson<Main2DRenderManifest>(manifestUrl);
     if (existingManifest) return existingManifest;
 
-    const maximumRenderSize = Math.max(512, Math.min(4096, args.maximumRenderSize ?? 2560));
+    const maximumRenderSize = Math.max(512, Math.min(8192, args.maximumRenderSize ?? 4096));
     const captured = await captureBaseAndOverlays({
       compositionId: args.compositionId,
       elements: args.elements,

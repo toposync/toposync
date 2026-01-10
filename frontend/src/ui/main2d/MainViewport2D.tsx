@@ -22,7 +22,7 @@ function clamp(value: number, min: number, max: number): number {
 
 const HOME_ASSISTANT_ELEMENT_TYPE_ID = "com.toposync.home_assistant.item";
 
-type HomeAssistantLiveState = { entity_id?: string; state?: string; attributes?: Record<string, any> };
+type HomeAssistantLiveState = { entity_id?: string; state?: string; attributes?: Record<string, unknown> };
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
@@ -181,6 +181,7 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
   );
 
   const [homeAssistantLiveStates, setHomeAssistantLiveStates] = useState<Record<string, HomeAssistantLiveState>>({});
+  const fallbackStateByEntityKeyRef = useRef<Record<string, string>>({});
 
   const homeAssistantWatchTargets = useMemo(() => {
     const byServer = new Map<string, Set<string>>();
@@ -199,6 +200,49 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
     () => homeAssistantWatchTargets.map((t) => `${t.serverId}:${t.entityIds.join(",")}`).join("|"),
     [homeAssistantWatchTargets],
   );
+
+  useEffect(() => {
+    const prev = fallbackStateByEntityKeyRef.current;
+    const next: Record<string, string> = {};
+    const changes: Array<{ key: string; entityId: string; fallbackState: string }> = [];
+
+    for (const homeAssistantElement of homeAssistantElements) {
+      if (!homeAssistantElement.serverId || !homeAssistantElement.entityId) continue;
+      const fallbackState = homeAssistantElement.fallbackState.trim().toLowerCase();
+      if (!fallbackState) continue;
+
+      const key = `${homeAssistantElement.serverId}|${homeAssistantElement.entityId}`;
+      next[key] = fallbackState;
+
+      const previousFallback = prev[key];
+      if (previousFallback && previousFallback !== fallbackState) {
+        changes.push({ key, entityId: homeAssistantElement.entityId, fallbackState });
+      }
+    }
+
+    fallbackStateByEntityKeyRef.current = next;
+
+    if (changes.length === 0) return;
+
+    setHomeAssistantLiveStates((current) => {
+      let changed = false;
+      const merged = { ...current };
+
+      for (const entry of changes) {
+        const existing = current[entry.key];
+        const existingState = readString(existing?.state).trim().toLowerCase();
+        if (existingState === entry.fallbackState) continue;
+        merged[entry.key] = {
+          entity_id: entry.entityId,
+          state: entry.fallbackState,
+          attributes: existing?.attributes,
+        };
+        changed = true;
+      }
+
+      return changed ? merged : current;
+    });
+  }, [homeAssistantElements]);
 
   useEffect(() => {
     const sources: EventSource[] = [];

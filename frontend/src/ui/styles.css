@@ -63,6 +63,85 @@ textarea {
   height: 100%;
 }
 
+.main2dRoot {
+  overflow: hidden;
+  touch-action: none;
+}
+
+.main2dCenterHint {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.main2dCenterHint .card {
+  pointer-events: auto;
+}
+
+.main2dStage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+
+.main2dImage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  user-drag: none;
+  -webkit-user-drag: none;
+}
+
+.main2dOverlay {
+  mix-blend-mode: screen;
+}
+
+.main2dButtons {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+}
+
+.main2dHaButton {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(12, 18, 37, 0.72);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.main2dHaButton:hover {
+  border-color: var(--borderStrong);
+  background: rgba(15, 23, 48, 0.85);
+}
+
+.main2dHaButton.isOn {
+  border-color: rgba(34, 197, 94, 0.55);
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.main2dHaButton.isOff {
+  border-color: rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.main2dHaButton i {
+  font-size: 14px;
+}
+
 .overlayTopRight {
   position: absolute;
   top: 14px;

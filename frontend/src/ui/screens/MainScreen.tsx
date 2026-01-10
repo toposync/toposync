@@ -19,6 +19,7 @@ import { Modal } from "../Modal";
 import { CompositionSelectorModal } from "../CompositionSelectorModal";
 import { Icon } from "../Icon";
 import { Viewport3D } from "../Viewport3D";
+import { MainViewport2D } from "../main2d/MainViewport2D";
 
 type Props = {
   compositionName: string;
@@ -110,6 +111,14 @@ export function MainScreen({
   const [isViewSettingsOpen, setIsViewSettingsOpen] = useState(false);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
   const [imageModal, setImageModal] = useState<{ url: string; title: string; subtitle?: string } | null>(null);
+  const [renderMode, setRenderMode] = useState<"3d" | "2d">(() => {
+    try {
+      const saved = localStorage.getItem("toposync.render_mode.v1");
+      return saved === "2d" ? "2d" : "3d";
+    } catch {
+      return "3d";
+    }
+  });
   const notificationScrollRef = useRef<HTMLDivElement | null>(null);
   const notificationSentinelRef = useRef<HTMLDivElement | null>(null);
 
@@ -133,6 +142,14 @@ export function MainScreen({
   const isActionModalOpen = Boolean(activeElement);
 
   useEffect(() => {
+    try {
+      localStorage.setItem("toposync.render_mode.v1", renderMode);
+    } catch {
+      // ignore
+    }
+  }, [renderMode]);
+
+  useEffect(() => {
     const root = notificationScrollRef.current;
     const sentinel = notificationSentinelRef.current;
     if (!root || !sentinel) return;
@@ -150,52 +167,63 @@ export function MainScreen({
     return () => obs.disconnect();
   }, [onLoadMoreNotifications]);
 
+  const handleElementActivated = (elementId: string, intent?: "click" | "dblclick" | "longpress") => {
+    const el = elements.find((e) => e.id === elementId) ?? null;
+    const def = el ? elementTypesById[el.type] ?? null : null;
+
+    if (!el || !def) return;
+
+    if (intent === "dblclick" || intent === "longpress") {
+      setActiveElementId(elementId);
+      return;
+    }
+
+    if (intent === "click" && def.primaryAction) {
+      Promise.resolve(def.primaryAction({ element: el, api, update: (patch) => updateElement(el.id, patch) }))
+        .then((handled) => {
+          if (!handled) setActiveElementId(elementId);
+        })
+        .catch((err) => {
+          console.error(`[primaryAction:${el.type}]`, err);
+          setActiveElementId(elementId);
+        });
+      return;
+    }
+
+    setActiveElementId(elementId);
+  };
+
   return (
     <div className="screenRoot">
-      <Viewport3D
-        elements={elements}
-        elementTypesById={elementTypesById}
-        onElementActivated={(elementId, intent) => {
-          const el = elements.find((e) => e.id === elementId) ?? null;
-          const def = el ? elementTypesById[el.type] ?? null : null;
-
-          if (!el || !def) return;
-
-          if (intent === "dblclick" || intent === "longpress") {
-            setActiveElementId(elementId);
-            return;
-          }
-
-          if (intent === "click" && def.primaryAction) {
-            Promise.resolve(def.primaryAction({ element: el, api, update: (patch) => updateElement(el.id, patch) }))
-              .then((handled) => {
-                if (!handled) setActiveElementId(elementId);
-              })
-              .catch((err) => {
-                console.error(`[primaryAction:${el.type}]`, err);
-                setActiveElementId(elementId);
-              });
-            return;
-          }
-
-          setActiveElementId(elementId);
-        }}
-        viewSettings={viewSettings}
-        compositionId={activeCompositionId}
-        activeNotification={activeNotification}
-        activeNotificationRenderer={activeNotificationRenderer}
-        onOpenImage={(args) => {
-          setImageModal({
-            url: args.url,
-            title: args.title ?? t("core.ui.image_preview"),
-            subtitle: args.subtitle,
-          });
-        }}
-      />
+      {renderMode === "3d" ? (
+        <Viewport3D
+          elements={elements}
+          elementTypesById={elementTypesById}
+          onElementActivated={handleElementActivated}
+          viewSettings={viewSettings}
+          compositionId={activeCompositionId}
+          activeNotification={activeNotification}
+          activeNotificationRenderer={activeNotificationRenderer}
+          onOpenImage={(args) => {
+            setImageModal({
+              url: args.url,
+              title: args.title ?? t("core.ui.image_preview"),
+              subtitle: args.subtitle,
+            });
+          }}
+        />
+      ) : (
+        <MainViewport2D
+          elements={elements}
+          elementTypesById={elementTypesById}
+          compositionId={activeCompositionId}
+          onElementActivated={handleElementActivated}
+        />
+      )}
 
       <div className="overlayTopRight">
         <button className="chipButton" type="button" onClick={() => setIsRenderModalOpen(true)}>
-          {t("core.ui.rendering")}: 3D
+          {t("core.ui.rendering")}: {renderMode === "3d" ? "3D" : "2D"}
         </button>
         <button className="chipButton" type="button" onClick={() => setIsCompositionModalOpen(true)}>
           {t("core.ui.composition")}: {compositionName}
@@ -294,16 +322,40 @@ export function MainScreen({
       >
         <div className="choiceList">
           <div
-            className="choiceItem"
+            className={["choiceItem", renderMode === "3d" ? "isSelected" : ""].filter(Boolean).join(" ")}
             role="button"
             tabIndex={0}
-            onClick={() => setIsRenderModalOpen(false)}
+            onClick={() => {
+              setRenderMode("3d");
+              setIsRenderModalOpen(false);
+            }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") setIsRenderModalOpen(false);
+              if (e.key === "Enter" || e.key === " ") {
+                setRenderMode("3d");
+                setIsRenderModalOpen(false);
+              }
             }}
           >
             <div className="choiceTitle">{t("core.ui.render_modal.option_3d.title")}</div>
             <div className="choiceDesc">{t("core.ui.render_modal.option_3d.desc")}</div>
+          </div>
+          <div
+            className={["choiceItem", renderMode === "2d" ? "isSelected" : ""].filter(Boolean).join(" ")}
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              setRenderMode("2d");
+              setIsRenderModalOpen(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                setRenderMode("2d");
+                setIsRenderModalOpen(false);
+              }
+            }}
+          >
+            <div className="choiceTitle">{t("core.ui.render_modal.option_2d.title")}</div>
+            <div className="choiceDesc">{t("core.ui.render_modal.option_2d.desc")}</div>
           </div>
         </div>
       </Modal>

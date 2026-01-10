@@ -95,14 +95,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.notifications_empty": "No notifications yet.",
     "core.ui.image_preview": "Image",
     "core.ui.loading": "Loading…",
+    "core.ui.error": "Error",
     "core.ui.element_types_empty": "No extensions have registered elements yet.",
     "core.ui.layers_empty": "No elements added yet.",
 
     "core.ui.render_modal.title": "Rendering",
     "core.ui.render_modal.option_3d.title": "3D (ThreeJS)",
-    "core.ui.render_modal.option_3d.desc": "Current mode. Coming soon: 2D and other modes.",
-    "core.ui.render_modal.option_2d.title": "2D (Canvas)",
-    "core.ui.render_modal.option_2d.desc": "Current editing mode. Coming soon: pan/zoom and more tools.",
+    "core.ui.render_modal.option_3d.desc": "Interactive 3D view.",
+    "core.ui.render_modal.option_2d.title": "2D (Snapshot)",
+    "core.ui.render_modal.option_2d.desc": "Top-down snapshot with Home Assistant overlays.",
 
     "core.ui.action_unavailable": "No actions available for this element.",
 
@@ -206,14 +207,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.notifications_empty": "Nenhuma notificação por enquanto.",
     "core.ui.image_preview": "Imagem",
     "core.ui.loading": "Carregando…",
+    "core.ui.error": "Erro",
     "core.ui.element_types_empty": "Nenhuma extensão registrou elementos ainda.",
     "core.ui.layers_empty": "Nenhum elemento adicionado ainda.",
 
     "core.ui.render_modal.title": "Renderização",
     "core.ui.render_modal.option_3d.title": "3D (ThreeJS)",
-    "core.ui.render_modal.option_3d.desc": "Modo atual. Em breve: 2D e outros modos.",
-    "core.ui.render_modal.option_2d.title": "2D (Canvas)",
-    "core.ui.render_modal.option_2d.desc": "Modo atual de edição. Em breve: pan/zoom e mais ferramentas.",
+    "core.ui.render_modal.option_3d.desc": "Visualização 3D interativa.",
+    "core.ui.render_modal.option_2d.title": "2D (Captura)",
+    "core.ui.render_modal.option_2d.desc": "Captura de cima com overlays do Home Assistant.",
 
     "core.ui.action_unavailable": "Sem ações disponíveis para este elemento.",
 

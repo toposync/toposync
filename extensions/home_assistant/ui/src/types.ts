@@ -47,7 +47,14 @@ export type HomeAssistantItemOption = {
   label: string;
   kind: "entity" | "device";
   id: string;
-  meta?: { subLabel?: string; icon?: string; domain?: string; deviceId?: string };
+  meta?: {
+    subLabel?: string;
+    icon?: string;
+    domain?: string;
+    deviceId?: string;
+    deviceName?: string;
+    searchText?: string;
+  };
 };
 
 export type FontAwesomeIconSvg = {
@@ -65,4 +72,3 @@ export type FontAwesomeIconFamilies = Record<
 >;
 
 export type HomeAssistantLiveState = { entity_id?: string; state?: string; attributes?: Record<string, any> };
-

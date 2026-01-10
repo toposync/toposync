@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import Select from "react-select";
-import type { GroupBase, StylesConfig } from "react-select";
+import type { FilterOptionOption, GroupBase, StylesConfig } from "react-select";
 
 import type { CompositionElement, CompositionElementPatch, HostI18n } from "@toposync/plugin-api";
 
@@ -42,6 +42,16 @@ type HomeAssistantEditorProps = {
   close: () => void;
   i18n: HostI18n;
 };
+
+function normalizeSearchText(value: string): string {
+  const normalized = typeof value.normalize === "function" ? value.normalize("NFD") : value;
+  return normalized
+    .toLowerCase()
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[_\-./:]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 export function HomeAssistantEditor({
   element,
@@ -175,25 +185,73 @@ export function HomeAssistantEditor({
   }, [serverId]);
 
   const options = useMemo(() => {
-    const entities: HomeAssistantItemOption[] = (registry?.entities ?? []).map((entity) => ({
-      value: itemValue("entity", entity.entity_id),
-      label: entity.name || entity.entity_id,
-      kind: "entity",
-      id: entity.entity_id,
-      meta: { subLabel: entity.entity_id, icon: entity.icon, domain: entity.domain, deviceId: entity.device_id },
-    }));
-    const devices: HomeAssistantItemOption[] = (registry?.devices ?? []).map((device) => ({
-      value: itemValue("device", device.id),
-      label: device.name || device.id,
-      kind: "device",
-      id: device.id,
-      meta: { subLabel: device.id },
-    }));
+    const deviceNameById: Record<string, string> = {};
+    for (const device of registry?.devices ?? []) {
+      if (!device || typeof device.id !== "string") continue;
+      deviceNameById[device.id] = typeof device.name === "string" ? device.name : "";
+    }
+
+    const entities: HomeAssistantItemOption[] = (registry?.entities ?? []).map((entity) => {
+      const deviceId = entity.device_id;
+      const deviceName = deviceId ? deviceNameById[deviceId] : "";
+      const value = itemValue("entity", entity.entity_id);
+      const label = entity.name || entity.entity_id;
+      const searchText = normalizeSearchText(
+        [label, value, entity.entity_id, entity.domain, deviceId, deviceName, entity.icon].filter(Boolean).join(" "),
+      );
+      return {
+        value,
+        label,
+        kind: "entity",
+        id: entity.entity_id,
+        meta: {
+          subLabel: entity.entity_id,
+          icon: entity.icon,
+          domain: entity.domain,
+          deviceId,
+          deviceName: deviceName || undefined,
+          searchText,
+        },
+      };
+    });
+
+    const devices: HomeAssistantItemOption[] = (registry?.devices ?? []).map((device) => {
+      const value = itemValue("device", device.id);
+      const label = device.name || device.id;
+      return {
+        value,
+        label,
+        kind: "device",
+        id: device.id,
+        meta: {
+          subLabel: device.id,
+          searchText: normalizeSearchText([label, value, device.id].filter(Boolean).join(" ")),
+        },
+      };
+    });
     const groups: Array<GroupBase<HomeAssistantItemOption>> = [];
     if (entities.length > 0) groups.push({ label: t("ext.home_assistant.editor.group_entities"), options: entities });
     if (devices.length > 0) groups.push({ label: t("ext.home_assistant.editor.group_devices"), options: devices });
     return groups;
   }, [registry, t]);
+
+  const filterOption = useMemo(() => {
+    let lastQuery = "";
+    let lastTerms: string[] = [];
+    return (candidate: FilterOptionOption<HomeAssistantItemOption>, rawInput: string): boolean => {
+      const normalized = normalizeSearchText(rawInput);
+      if (!normalized) return true;
+
+      if (normalized !== lastQuery) {
+        lastQuery = normalized;
+        lastTerms = normalized.split(" ").filter(Boolean).slice(0, 12);
+      }
+
+      const searchText =
+        candidate.data.meta?.searchText ?? normalizeSearchText(`${candidate.data.label} ${candidate.data.value}`);
+      return lastTerms.every((term) => searchText.includes(term));
+    };
+  }, []);
 
   const optionByValue = useMemo(() => {
     const out: Record<string, HomeAssistantItemOption> = {};
@@ -410,6 +468,7 @@ export function HomeAssistantEditor({
               value={selectedOptions}
               placeholder={t("ext.home_assistant.editor.items_placeholder")}
               styles={selectStyles}
+              filterOption={filterOption}
               menuPortalTarget={portalTarget}
               menuPosition="fixed"
               onChange={(next) => setItemsFromOptions(next ?? [])}

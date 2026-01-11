@@ -340,10 +340,15 @@ textarea {
   top: 0;
   left: 0;
   height: 100%;
-  width: min(420px, calc(100vw - 28px));
+  width: min(clamp(280px, 34vw, 420px), calc(100vw - 28px));
   padding: 14px;
   z-index: 20;
   pointer-events: none;
+}
+
+.overlayLeft.isCollapsed {
+  width: 56px;
+  padding: 14px 10px;
 }
 
 .rail {
@@ -364,8 +369,50 @@ textarea {
   pointer-events: none;
 }
 
+.railNotifications .railHeader {
+  pointer-events: auto;
+}
+
 .railNotifications .card {
   pointer-events: auto;
+}
+
+.railHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.notificationsCollapsedRail {
+  height: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.notificationsToggleButton {
+  position: relative;
+}
+
+.notificationsToggleBadge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.95);
+  color: rgba(11, 16, 33, 0.98);
+  font-size: 11px;
+  font-weight: 900;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42), 0 0 0 3px rgba(251, 191, 36, 0.16);
+  pointer-events: none;
 }
 
 .railScroll {
@@ -377,6 +424,7 @@ textarea {
   gap: 10px;
   min-height: 0;
   overscroll-behavior: contain;
+  touch-action: pan-y;
   scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
 }
 
@@ -512,10 +560,83 @@ textarea {
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.30);
 }
 
+.notificationCardThumb {
+  flex: 0 0 auto;
+}
+
 .notificationCameraBody {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .overlayTopRight {
+    top: 10px;
+    right: 10px;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .overlayLeft.isOpen {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    height: min(68vh, calc(100vh - 120px));
+    width: 100%;
+    padding: 14px;
+  }
+
+  .overlayLeft.isCollapsed {
+    top: auto;
+    bottom: 14px;
+    left: 14px;
+    height: auto;
+    width: auto;
+    padding: 0;
+  }
+
+  .notificationsCollapsedRail {
+    height: auto;
+  }
+
+  .notificationsToggleButton {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+  }
+
+  .railNotifications {
+    pointer-events: auto;
+    border-radius: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+      rgba(12, 18, 37, 0.72);
+    padding: 12px 12px;
+    box-shadow: var(--shadow);
+  }
+
+  .railNotifications .railTitle,
+  .railNotifications .railScroll {
+    pointer-events: auto;
+  }
+
+  .railScroll {
+    padding-right: 0;
+    gap: 8px;
+  }
+
+  .notificationCardThumb {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+  }
+
+  .notificationCardTitle {
+    font-size: 13px;
+  }
 }
 
 .notificationCameraTopRow {

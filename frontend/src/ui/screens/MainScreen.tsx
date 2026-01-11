@@ -80,6 +80,35 @@ function formatCameraTrackingTitle(
   return t("ext.cameras.notification.object_detected", { label }, `Object detected: ${label}`);
 }
 
+const NOTIFICATIONS_OPEN_STORAGE_KEY = "toposync.notifications_open.v1";
+
+function loadNotificationsOpen(): boolean {
+  if (typeof window === "undefined") return true;
+
+  try {
+    const raw = localStorage.getItem(NOTIFICATIONS_OPEN_STORAGE_KEY);
+    if (raw === "0") return false;
+    if (raw === "1") return true;
+  } catch {
+    // ignore
+  }
+
+  try {
+    return !window.matchMedia("(max-width: 720px)").matches;
+  } catch {
+    return true;
+  }
+}
+
+function shouldAutoCloseNotificationsAfterSelect(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.matchMedia("(max-width: 720px)").matches;
+  } catch {
+    return window.innerWidth <= 720;
+  }
+}
+
 export function MainScreen({
   compositionName,
   compositions,
@@ -111,6 +140,7 @@ export function MainScreen({
   const [isViewSettingsOpen, setIsViewSettingsOpen] = useState(false);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
   const [imageModal, setImageModal] = useState<{ url: string; title: string; subtitle?: string } | null>(null);
+  const [notificationsOpen, setNotificationsOpen] = useState(() => loadNotificationsOpen());
   const [renderMode, setRenderMode] = useState<"3d" | "2d">(() => {
     try {
       const saved = localStorage.getItem("toposync.render_mode.v1");
@@ -148,6 +178,14 @@ export function MainScreen({
       // ignore
     }
   }, [renderMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(NOTIFICATIONS_OPEN_STORAGE_KEY, notificationsOpen ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [notificationsOpen]);
 
   useEffect(() => {
     const root = notificationScrollRef.current;
@@ -255,60 +293,90 @@ export function MainScreen({
         </button>
       </div>
 
-      <div className="overlayLeft">
-        <div className="rail railNotifications">
-          <div className="railTitle">{t("core.ui.notifications")}</div>
-          <div className="railScroll" ref={notificationScrollRef}>
-            {notifications.length === 0 ? (
-              <div className="card">
-                <div className="cardBody">{t("core.ui.notifications_empty")}</div>
-              </div>
-            ) : null}
-            {notifications.map((n) => {
-              const renderer = notificationRenderers.find((r) => r.type === n.type);
-              const time = formatDateTimeShort(locale, n.createdAt);
-              const title = formatCameraTrackingTitle(t, n) ?? n.title;
-              const isActive = Boolean(activeNotificationId && n.id === activeNotificationId);
-              return (
-                <button
-                  className={["card", "cardButton", "notificationCard", isActive ? "isActive" : ""].filter(Boolean).join(" ")}
-                  type="button"
-                  key={n.id}
-                  onClick={() => onSelectNotification(n.id)}
-                >
-                  <div className="notificationCardGrid">
-                    <div className="notificationCardMain">
-                      <div className="notificationCardHeader">
-                        <div className="notificationCardTitle">{title}</div>
-                        {time ? <div className="notificationCardTime">{time}</div> : null}
+      <div className={["overlayLeft", notificationsOpen ? "isOpen" : "isCollapsed"].filter(Boolean).join(" ")}>
+        {notificationsOpen ? (
+          <div className="rail railNotifications">
+            <div className="railHeader">
+              <div className="railTitle">{t("core.ui.notifications")}</div>
+              <button
+                className="iconButton notificationsCollapseButton"
+                type="button"
+                aria-label={t("core.ui.notifications.aria_close", {}, "Close notifications")}
+                title={t("core.ui.notifications.aria_close", {}, "Close notifications")}
+                onClick={() => setNotificationsOpen(false)}
+              >
+                <Icon name="chevron-left" />
+              </button>
+            </div>
+
+            <div className="railScroll" ref={notificationScrollRef}>
+              {notifications.length === 0 ? (
+                <div className="card">
+                  <div className="cardBody">{t("core.ui.notifications_empty")}</div>
+                </div>
+              ) : null}
+              {notifications.map((n) => {
+                const renderer = notificationRenderers.find((r) => r.type === n.type);
+                const time = formatDateTimeShort(locale, n.createdAt);
+                const title = formatCameraTrackingTitle(t, n) ?? n.title;
+                const isActive = Boolean(activeNotificationId && n.id === activeNotificationId);
+                return (
+                  <button
+                    className={["card", "cardButton", "notificationCard", isActive ? "isActive" : ""].filter(Boolean).join(" ")}
+                    type="button"
+                    key={n.id}
+                    onClick={() => {
+                      onSelectNotification(n.id);
+                      if (shouldAutoCloseNotificationsAfterSelect()) setNotificationsOpen(false);
+                    }}
+                  >
+                    <div className="notificationCardGrid">
+                      <div className="notificationCardMain">
+                        <div className="notificationCardHeader">
+                          <div className="notificationCardTitle">{title}</div>
+                          {time ? <div className="notificationCardTime">{time}</div> : null}
+                        </div>
+
+                        <div className="notificationCardBody">
+                          {renderer ? (
+                            <div className="notificationCardRenderer">{renderer.render(n)}</div>
+                          ) : n.description ? (
+                            <div className="notificationCardDesc">{n.description}</div>
+                          ) : n.payload ? (
+                            <div className="notificationCardDesc">{JSON.stringify(n.payload)}</div>
+                          ) : null}
+                        </div>
                       </div>
 
-                      <div className="notificationCardBody">
-                        {renderer ? (
-                          <div className="notificationCardRenderer">{renderer.render(n)}</div>
-                        ) : n.description ? (
-                          <div className="notificationCardDesc">{n.description}</div>
-                        ) : n.payload ? (
-                          <div className="notificationCardDesc">{JSON.stringify(n.payload)}</div>
-                        ) : null}
-                      </div>
+                      {n.imageUrl ? (
+                        <img className="notificationCardThumb" src={n.imageUrl} alt="" loading="lazy" draggable={false} />
+                      ) : null}
                     </div>
-
-                    {n.imageUrl ? (
-                      <img className="notificationCardThumb" src={n.imageUrl} alt="" loading="lazy" draggable={false} />
-                    ) : null}
-                  </div>
-                </button>
-              );
-            })}
-            <div ref={notificationSentinelRef} />
-            {notificationsLoading ? (
-              <div className="card">
-                <div className="cardBody">{t("core.ui.loading")}</div>
-              </div>
-            ) : null}
+                  </button>
+                );
+              })}
+              <div ref={notificationSentinelRef} />
+              {notificationsLoading ? (
+                <div className="card">
+                  <div className="cardBody">{t("core.ui.loading")}</div>
+                </div>
+              ) : null}
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="notificationsCollapsedRail">
+            <button
+              className="iconButton notificationsToggleButton"
+              type="button"
+              aria-label={t("core.ui.notifications.aria_open", {}, "Open notifications")}
+              title={t("core.ui.notifications.aria_open", {}, "Open notifications")}
+              onClick={() => setNotificationsOpen(true)}
+            >
+              <Icon name="bell" />
+              {notifications.length > 0 ? <span className="notificationsToggleBadge">{notifications.length}</span> : null}
+            </button>
+          </div>
+        )}
       </div>
 
       {elements.length === 0 ? (

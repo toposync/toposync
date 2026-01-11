@@ -4,6 +4,7 @@ import type { CompositionElement, ElementType } from "@toposync/plugin-api";
 
 import { i18n } from "../../util/i18n";
 import { Icon } from "../Icon";
+import { Modal } from "../Modal";
 import { getOrCreateMain2DRenderManifest } from "./render2dCache";
 import type { Main2DRenderManifest } from "./render2dCache";
 
@@ -21,6 +22,8 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 const HOME_ASSISTANT_ELEMENT_TYPE_ID = "com.toposync.home_assistant.item";
+const HOME_ASSISTANT_BUTTON_SIZE_PX = 44;
+const HOME_ASSISTANT_CLUSTER_THRESHOLD_PX = HOME_ASSISTANT_BUTTON_SIZE_PX * 0.92;
 
 type HomeAssistantLiveState = { entity_id?: string; state?: string; attributes?: Record<string, unknown> };
 
@@ -81,6 +84,31 @@ function boolStateForDomain(domain: string, rawState: string): boolean | null {
   return s === "on";
 }
 
+type HomeAssistantButtonStage = {
+  id: string;
+  title: string;
+  subtitle: string;
+  icon: string;
+  stageX: number;
+  stageY: number;
+  boolState: boolean | null;
+};
+
+type HomeAssistantButtonEntry =
+  | (HomeAssistantButtonStage & {
+      kind: "single";
+      screenX: number;
+      screenY: number;
+    })
+  | {
+      kind: "cluster";
+      id: string;
+      buttons: Array<HomeAssistantButtonStage & { screenX: number; screenY: number }>;
+      screenX: number;
+      screenY: number;
+      title: string;
+    };
+
 type AirflowMode = "off" | "neutral" | "cool" | "heat";
 
 function climateFlowFromLiveState(
@@ -124,6 +152,8 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
   const isPanningRef = useRef(false);
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const clickTimersRef = useRef<Map<string, number>>(new Map());
+
+  const [clusterModalButtons, setClusterModalButtons] = useState<HomeAssistantButtonStage[] | null>(null);
 
   const renderableElements = useMemo(
     () => elements.filter((element) => Boolean(elementTypesById[element.type]?.create3D)),
@@ -411,7 +441,8 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
       const cursorX = event.clientX - rect.left;
       const cursorY = event.clientY - rect.top;
 
-      const zoomFactor = Math.exp(-event.deltaY * 0.0012);
+      const zoomSpeed = event.ctrlKey ? 0.0042 : 0.0024;
+      const zoomFactor = Math.exp(-event.deltaY * zoomSpeed);
 
       setTransform((prev) => {
         const baseMin = fitTransformRef.current.scale;
@@ -500,7 +531,7 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
     [onElementActivated],
   );
 
-  const homeAssistantButtons = useMemo(() => {
+  const homeAssistantButtonsStage = useMemo<HomeAssistantButtonStage[]>(() => {
     if (!manifest) return [];
     const bounds = manifest.bounds;
     const spanX = Math.max(1e-6, bounds.maxX - bounds.minX);
@@ -520,9 +551,15 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
       const domain = homeAssistantElement.entityId ? domainFromEntityId(homeAssistantElement.entityId) : "";
       const boolState = domain ? boolStateForDomain(domain, stateRaw) : null;
 
+      const title = homeAssistantElement.name || homeAssistantElement.entityId || "Home Assistant";
+      const subtitle =
+        homeAssistantElement.name && homeAssistantElement.entityId && homeAssistantElement.entityId !== homeAssistantElement.name
+          ? homeAssistantElement.entityId
+          : "";
       return {
         id: homeAssistantElement.id,
-        title: homeAssistantElement.name || homeAssistantElement.entityId || "Home Assistant",
+        title,
+        subtitle,
         icon: homeAssistantElement.icon,
         stageX,
         stageY,
@@ -530,35 +567,84 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
       };
     });
 
-    // Very small clustering: when multiple buttons overlap, spread them in a ring.
-    const grouped = new Map<string, typeof buttons>();
-    for (const button of buttons) {
-      const key = `${Math.round(button.stageX / 28)}|${Math.round(button.stageY / 28)}`;
-      const list = grouped.get(key) ?? [];
-      list.push(button);
-      grouped.set(key, list);
+    buttons.sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
+    return buttons;
+  }, [homeAssistantElements, homeAssistantLiveStates, manifest]);
+
+  const homeAssistantButtonEntries = useMemo<HomeAssistantButtonEntry[]>(() => {
+    const buttonsWithScreen = homeAssistantButtonsStage.map((button) => ({
+      ...button,
+      screenX: transform.x + button.stageX * transform.scale,
+      screenY: transform.y + button.stageY * transform.scale,
+    }));
+
+    if (buttonsWithScreen.length === 0) return [];
+
+    const parent: number[] = Array.from({ length: buttonsWithScreen.length }, (_, i) => i);
+
+    function find(x: number): number {
+      let cur = x;
+      while (parent[cur] !== cur) {
+        parent[cur] = parent[parent[cur]];
+        cur = parent[cur];
+      }
+      return cur;
     }
 
-    const out: Array<
-      typeof buttons[number] & {
-        offsetX: number;
-        offsetY: number;
-      }
-    > = [];
-    for (const list of grouped.values()) {
-      for (let i = 0; i < list.length; i += 1) {
-        const radius = list.length <= 1 ? 0 : Math.min(18, 8 + (list.length - 2) * 2);
-        const angle = list.length <= 1 ? 0 : (i / list.length) * Math.PI * 2;
-        out.push({
-          ...list[i],
-          offsetX: Math.cos(angle) * radius,
-          offsetY: Math.sin(angle) * radius,
-        });
+    function union(a: number, b: number): void {
+      const ra = find(a);
+      const rb = find(b);
+      if (ra === rb) return;
+      parent[rb] = ra;
+    }
+
+    for (let i = 0; i < buttonsWithScreen.length; i += 1) {
+      for (let j = i + 1; j < buttonsWithScreen.length; j += 1) {
+        const dx = Math.abs(buttonsWithScreen[i].screenX - buttonsWithScreen[j].screenX);
+        const dy = Math.abs(buttonsWithScreen[i].screenY - buttonsWithScreen[j].screenY);
+        if (dx < HOME_ASSISTANT_CLUSTER_THRESHOLD_PX && dy < HOME_ASSISTANT_CLUSTER_THRESHOLD_PX) union(i, j);
       }
     }
-    out.sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
+
+    const groups = new Map<number, number[]>();
+    for (let i = 0; i < buttonsWithScreen.length; i += 1) {
+      const root = find(i);
+      const list = groups.get(root) ?? [];
+      list.push(i);
+      groups.set(root, list);
+    }
+
+    const out: HomeAssistantButtonEntry[] = [];
+    for (const indices of groups.values()) {
+      if (indices.length === 1) {
+        const button = buttonsWithScreen[indices[0]];
+        out.push({ kind: "single", ...button });
+        continue;
+      }
+
+      const groupButtons = indices.map((idx) => buttonsWithScreen[idx]);
+      groupButtons.sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
+
+      const centerX = groupButtons.reduce((sum, b) => sum + b.screenX, 0) / groupButtons.length;
+      const centerY = groupButtons.reduce((sum, b) => sum + b.screenY, 0) / groupButtons.length;
+      const id = groupButtons.map((b) => b.id).join("|");
+      out.push({
+        kind: "cluster",
+        id,
+        buttons: groupButtons,
+        screenX: centerX,
+        screenY: centerY,
+        title: t("core.ui.main2d.cluster.tooltip", { count: groupButtons.length }, `${groupButtons.length} items`),
+      });
+    }
+
+    out.sort((a, b) => {
+      const dy = a.screenY - b.screenY;
+      if (Math.abs(dy) > 0.1) return dy;
+      return a.screenX - b.screenX;
+    });
     return out;
-  }, [homeAssistantElements, homeAssistantLiveStates, manifest]);
+  }, [homeAssistantButtonsStage, t, transform.scale, transform.x, transform.y]);
 
   const overlayViews = useMemo(() => {
     if (!manifest) return [];
@@ -627,49 +713,124 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
       ) : null}
 
       {manifest ? (
-        <div
-          className="main2dStage"
-          style={{
-            width: manifest.widthPx,
-            height: manifest.heightPx,
-            transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
-          }}
-        >
-          <img className="main2dImage main2dBase" src={manifest.base.url} alt="" draggable={false} />
-          {overlayViews.map((overlay) => (
-            <img
-              key={overlay.key}
-              className="main2dImage main2dOverlay"
-              src={overlay.url}
-              alt=""
-              draggable={false}
-              style={{ opacity: overlay.opacity }}
-            />
-          ))}
-          <div className="main2dButtons">
-            {homeAssistantButtons.map((button) => (
+        <>
+          <div
+            className="main2dStage"
+            style={{
+              width: manifest.widthPx,
+              height: manifest.heightPx,
+              transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+            }}
+          >
+            <img className="main2dImage main2dBase" src={manifest.base.url} alt="" draggable={false} />
+            {overlayViews.map((overlay) => (
+              <img
+                key={overlay.key}
+                className="main2dImage main2dOverlay"
+                src={overlay.url}
+                alt=""
+                draggable={false}
+                style={{ opacity: overlay.opacity }}
+              />
+            ))}
+          </div>
+
+          <div className="main2dButtonsOverlay">
+            {homeAssistantButtonEntries.map((entry) => {
+              if (entry.kind === "cluster") {
+                return (
+                  <button
+                    key={`cluster:${entry.id}`}
+                    className="main2dHaButton main2dHaCluster"
+                    type="button"
+                    title={entry.title}
+                    style={{ left: entry.screenX, top: entry.screenY }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => {
+                      setClusterModalButtons(
+                        entry.buttons.map(({ screenX: _screenX, screenY: _screenY, ...rest }) => rest),
+                      );
+                    }}
+                  >
+                    <Icon name="layer-group" />
+                    <span className="main2dHaClusterCount">{entry.buttons.length}</span>
+                  </button>
+                );
+              }
+
+              return (
+                <button
+                  key={entry.id}
+                  className={[
+                    "main2dHaButton",
+                    entry.boolState === true ? "isOn" : "",
+                    entry.boolState === false ? "isOff" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  type="button"
+                  title={entry.title}
+                  style={{ left: entry.screenX, top: entry.screenY }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => triggerClick(entry.id)}
+                  onDoubleClick={() => triggerDoubleClick(entry.id)}
+                >
+                  <Icon name={entry.icon} />
+                </button>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
+
+      <Modal
+        open={Boolean(clusterModalButtons)}
+        title={t(
+          "core.ui.main2d.cluster.title",
+          { count: clusterModalButtons?.length ?? 0 },
+          `Multiple items (${clusterModalButtons?.length ?? 0})`,
+        )}
+        onClose={() => setClusterModalButtons(null)}
+      >
+        <div className="main2dClusterList">
+          {(clusterModalButtons ?? []).map((item) => (
+            <div key={item.id} className="main2dClusterRow">
               <button
-                key={button.id}
                 className={[
-                  "main2dHaButton",
-                  button.boolState === true ? "isOn" : "",
-                  button.boolState === false ? "isOff" : "",
+                  "main2dClusterPrimary",
+                  item.boolState === true ? "isOn" : "",
+                  item.boolState === false ? "isOff" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
                 type="button"
-                title={button.title}
-                style={{ left: button.stageX + button.offsetX, top: button.stageY + button.offsetY }}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => triggerClick(button.id)}
-                onDoubleClick={() => triggerDoubleClick(button.id)}
+                onClick={() => onElementActivated?.(item.id, "click")}
               >
-                <Icon name={button.icon} />
+                <span className="main2dClusterIcon">
+                  <Icon name={item.icon} />
+                </span>
+                <span className="main2dClusterMeta">
+                  <span className="main2dClusterTitle">{item.title}</span>
+                  {item.subtitle ? <span className="main2dClusterSubtitle">{item.subtitle}</span> : null}
+                </span>
               </button>
-            ))}
-          </div>
+
+              <button
+                className="iconButton"
+                type="button"
+                aria-label={t("core.ui.action", {}, "Action")}
+                title={t("core.ui.action", {}, "Action")}
+                onClick={() => {
+                  setClusterModalButtons(null);
+                  onElementActivated?.(item.id, "dblclick");
+                }}
+              >
+                <Icon name="ellipsis" />
+              </button>
+            </div>
+          ))}
         </div>
-      ) : null}
+      </Modal>
     </div>
   );
 }

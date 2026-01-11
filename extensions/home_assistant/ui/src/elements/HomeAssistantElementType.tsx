@@ -196,6 +196,12 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
 
       const light = new THREE.PointLight(neonDefault, 0.9, 1.15, 2.2);
       light.position.set(0, topY * 0.6, 0);
+      light.castShadow = false;
+      light.shadow.mapSize.set(256, 256);
+      light.shadow.bias = -0.00035;
+      light.shadow.normalBias = 0.02;
+      light.shadow.camera.near = 0.05;
+      light.shadow.camera.far = 16;
       mountGroup.add(light);
 
       const houseGeometry = getIconGeometry("house");
@@ -305,6 +311,22 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
         sphereMaterial.color.setHex(domeBaseColorHex);
         cutMaterial.color.setHex(cutBaseColorHex);
 
+        const syncLightShadow = () => {
+          const wantsShadow = Boolean(view.ghostWalls) && light.intensity > 0.001 && light.distance > 0.001;
+          if (light.castShadow !== wantsShadow) {
+            light.castShadow = wantsShadow;
+            light.shadow.needsUpdate = true;
+          }
+
+          if (!wantsShadow) return;
+          const desiredFar = Math.max(2, light.distance);
+          if (Math.abs(light.shadow.camera.far - desiredFar) > 1e-3) {
+            light.shadow.camera.far = desiredFar;
+            light.shadow.camera.updateProjectionMatrix();
+            light.shadow.needsUpdate = true;
+          }
+        };
+
         if (canAirflow) {
           const flow = climateFlowFromLiveState(live, stateRaw);
           const amp = clamp(airflowIntensity, 0.2, 3.0) * clamp(flow.factor, 0, 1);
@@ -347,6 +369,7 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
           airflowVentMaterial.emissiveIntensity = active ? 0.22 + 0.08 * amp : 0.06;
           light.intensity = active ? 0.07 + 0.09 * amp : 0.0;
           light.distance = active ? 0.95 + 0.6 * amp : 0.0;
+          syncLightShadow();
           return;
         }
 
@@ -378,6 +401,7 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
             light.intensity = 0.0;
             light.distance = 0.0;
           }
+          syncLightShadow();
           return;
         }
 
@@ -408,6 +432,7 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
               : 0.16
           : 0.16;
         light.distance = 1.6;
+        syncLightShadow();
       }
 
       function applyViewMode(mode: HomeAssistantViewMode) {

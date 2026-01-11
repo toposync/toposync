@@ -100,17 +100,22 @@ textarea {
   mix-blend-mode: screen;
 }
 
-.main2dButtons {
+.main2dButtonsOverlay {
   position: absolute;
   inset: 0;
+  z-index: 12;
+  pointer-events: none;
+}
+
+.main2dButtonsOverlay .main2dHaButton {
   pointer-events: auto;
 }
 
 .main2dHaButton {
   position: absolute;
   transform: translate(-50%, -50%);
-  width: 34px;
-  height: 34px;
+  width: 44px;
+  height: 44px;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: rgba(12, 18, 37, 0.72);
@@ -137,7 +142,118 @@ textarea {
 }
 
 .main2dHaButton i {
-  font-size: 14px;
+  font-size: 16px;
+}
+
+.main2dHaCluster {
+  border-color: rgba(251, 191, 36, 0.55);
+  background: rgba(251, 191, 36, 0.10);
+}
+
+.main2dHaCluster:hover {
+  border-color: rgba(251, 191, 36, 0.72);
+  background: rgba(251, 191, 36, 0.15);
+}
+
+.main2dHaClusterCount {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  background: rgba(12, 18, 37, 0.95);
+  color: rgba(255, 244, 210, 0.95);
+  font-size: 12px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+}
+
+.main2dClusterList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.main2dClusterRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.main2dClusterPrimary {
+  flex: 1;
+  min-width: 0;
+  height: 52px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+    rgba(12, 18, 37, 0.56);
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+}
+
+.main2dClusterPrimary:hover {
+  border-color: var(--borderStrong);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.03)),
+    rgba(15, 23, 48, 0.70);
+}
+
+.main2dClusterPrimary.isOn {
+  border-color: rgba(34, 197, 94, 0.55);
+}
+
+.main2dClusterPrimary.isOff {
+  border-color: rgba(239, 68, 68, 0.55);
+}
+
+.main2dClusterIcon {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  display: grid;
+  place-items: center;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.main2dClusterIcon i {
+  font-size: 16px;
+}
+
+.main2dClusterMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.main2dClusterTitle {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.main2dClusterSubtitle {
+  font-size: 12px;
+  color: rgba(230, 232, 242, 0.72);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .overlayTopRight {

@@ -392,6 +392,8 @@ export function Viewport3D({
     const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.setClearColor(0x070a14, 1);
+    renderer.shadowMap.enabled = false;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.domElement.style.display = "block";
     renderer.domElement.style.touchAction = "none";
     containerEl.appendChild(renderer.domElement);
@@ -707,6 +709,11 @@ export function Viewport3D({
 	    const viewChanged = viewKeyRef.current !== viewKey;
 	    viewKeyRef.current = viewKey;
 	    const ghostWallsEnabled = Boolean(viewSettings.ghostWalls);
+    const shadowsEnabled = ghostWallsEnabled;
+    if (renderer.shadowMap.enabled !== shadowsEnabled) {
+      renderer.shadowMap.enabled = shadowsEnabled;
+      renderer.shadowMap.needsUpdate = true;
+    }
 
 	    const tracked = trackedRef.current;
 	    const elementsById = new Map(elements.map((e) => [e.id, e]));

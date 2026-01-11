@@ -105,6 +105,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.render_modal.option_2d.title": "2D (Snapshot)",
     "core.ui.render_modal.option_2d.desc": "Top-down snapshot with Home Assistant overlays.",
 
+    "core.ui.main2d.cluster.title": "Multiple items ({{count}})",
+    "core.ui.main2d.cluster.tooltip": "{{count}} items",
+
     "core.ui.action_unavailable": "No actions available for this element.",
 
     "core.compositions.modal.title": "Compositions",
@@ -216,6 +219,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.render_modal.option_3d.desc": "Visualização 3D interativa.",
     "core.ui.render_modal.option_2d.title": "2D (Captura)",
     "core.ui.render_modal.option_2d.desc": "Captura de cima com overlays do Home Assistant.",
+
+    "core.ui.main2d.cluster.title": "Vários itens ({{count}})",
+    "core.ui.main2d.cluster.tooltip": "{{count}} itens",
 
     "core.ui.action_unavailable": "Sem ações disponíveis para este elemento.",
 

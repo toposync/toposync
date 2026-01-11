@@ -197,9 +197,21 @@ export function createCameraElementType(host: TopoSyncHost): ElementType {
 
       const light = new THREE.PointLight(neonColor, 0.18, 0.9, 2.2);
       light.position.set(0, buttonRadius * 0.45, 0);
+      light.castShadow = false;
+      light.shadow.mapSize.set(128, 128);
+      light.shadow.bias = -0.00035;
+      light.shadow.normalBias = 0.02;
+      light.shadow.camera.near = 0.05;
+      light.shadow.camera.far = 2.0;
       mountGroup.add(light);
 
       function apply() {
+        const wantsShadow = Boolean(view.ghostWalls);
+        if (light.castShadow !== wantsShadow) {
+          light.castShadow = wantsShadow;
+          light.shadow.needsUpdate = true;
+        }
+
         // Ceiling-only for now.
         mountGroup.rotation.set(0, 0, 0);
         mountGroup.position.set(0, 0, 0);

@@ -24,31 +24,65 @@ type HomeAssistantSettingsProps = {
   updateSettings: (patch: Record<string, unknown>) => void;
 };
 
+function normalizeQuery(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function includesQuery(value: string, query: string): boolean {
+  const normalized = normalizeQuery(value);
+  if (!normalized) return false;
+  return normalized.includes(query);
+}
+
 function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistantSettingsProps): React.ReactElement {
   const { t } = i18n.useI18n();
-  const serversFromSettings = useMemo(() => readHomeAssistantServers(settings), [settings]);
+  const servers = useMemo(() => readHomeAssistantServers(settings), [settings]);
 
-  const [draftServers, setDraftServers] = useState<HomeAssistantServer[]>(serversFromSettings);
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [serverQuery, setServerQuery] = useState("");
+  const [activeServerId, setActiveServerId] = useState<string | null>(null);
+  const [confirmDeleteServerId, setConfirmDeleteServerId] = useState<string | null>(null);
   const [showTokensByServerId, setShowTokensByServerId] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    if (hasUnsavedChanges) return;
-    setDraftServers(serversFromSettings);
-  }, [hasUnsavedChanges, serversFromSettings]);
+    if (activeServerId && servers.some((server) => server.id === activeServerId)) return;
+    setActiveServerId(servers[0]?.id ?? null);
+  }, [activeServerId, servers]);
+
+  const filteredServers = useMemo(() => {
+    const q = normalizeQuery(serverQuery);
+    if (!q) return servers;
+    return servers.filter((server) => includesQuery(server.name || "", q) || includesQuery(server.id, q) || includesQuery(server.host, q));
+  }, [serverQuery, servers]);
 
   const hasInvalidHosts = useMemo(
-    () => draftServers.some((server) => server.host.trim() !== "" && !isValidUrl(server.host.trim())),
-    [draftServers],
+    () => servers.some((server) => server.host.trim() !== "" && !isValidUrl(server.host.trim())),
+    [servers],
   );
 
-  const canSave = useMemo(() => {
-    if (draftServers.length === 0) return true;
-    return draftServers.every(
-      (server) =>
-        Boolean(server.host.trim()) && Boolean(server.apiKey.trim()) && isValidUrl(server.host.trim()),
-    );
-  }, [draftServers]);
+  function addServer(): void {
+    const id = createUniqueId();
+    updateSettings({ servers: [{ id, name: "", host: "", apiKey: "" }, ...servers] });
+    setActiveServerId(id);
+    setConfirmDeleteServerId(null);
+  }
+
+  function updateServer(serverId: string, patch: Partial<HomeAssistantServer>): void {
+    updateSettings({ servers: servers.map((server) => (server.id === serverId ? { ...server, ...patch } : server)) });
+  }
+
+  function deleteServer(serverId: string): void {
+    updateSettings({ servers: servers.filter((server) => server.id !== serverId) });
+    setConfirmDeleteServerId(null);
+    if (activeServerId === serverId) setActiveServerId(null);
+    setShowTokensByServerId((prev) => {
+      if (!prev[serverId]) return prev;
+      const next = { ...prev };
+      delete next[serverId];
+      return next;
+    });
+  }
+
+  const activeServer = activeServerId ? servers.find((server) => server.id === activeServerId) ?? null : null;
 
   return (
     <div>
@@ -58,154 +92,181 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
 
       <div className="sectionDivider" />
 
-      <div className="rowWrap" style={{ justifyContent: "space-between", gap: 10 }}>
-        <div>
-          <div className="modalSectionTitle" style={{ marginBottom: 6 }}>
-            {t("ext.home_assistant.settings.servers")}
-          </div>
-          {hasUnsavedChanges ? <div className="label">{t("ext.home_assistant.settings.unsaved")}</div> : null}
-        </div>
-
-        <div className="row" style={{ gap: 10 }}>
-          <button
-            className="iconButton iconButtonPrimary"
-            type="button"
-            aria-label={t("ext.home_assistant.settings.add")}
-            onClick={() => {
-              setDraftServers((prev) => [{ id: createUniqueId(), name: "", host: "", apiKey: "" }, ...prev]);
-              setHasUnsavedChanges(true);
-            }}
-          >
-            <i className="fa-solid fa-plus" aria-hidden="true" />
-          </button>
-
-          <button
-            className="primaryButton"
-            type="button"
-            disabled={!canSave || !hasUnsavedChanges}
-            onClick={() => {
-              updateSettings({ servers: draftServers });
-              setHasUnsavedChanges(false);
-            }}
-          >
-            {t("core.actions.save")}
-          </button>
-
-          <button
-            className="chipButton"
-            type="button"
-            disabled={!hasUnsavedChanges}
-            onClick={() => {
-              setDraftServers(serversFromSettings);
-              setHasUnsavedChanges(false);
-            }}
-          >
-            {t("core.actions.cancel")}
-          </button>
-        </div>
-      </div>
-
       {hasInvalidHosts ? (
-        <div className="card" style={{ marginTop: 10 }}>
+        <div className="card">
           <div className="cardBody">{t("ext.home_assistant.settings.invalid_host")}</div>
         </div>
       ) : null}
 
-      <div style={{ height: 10 }} />
+      {hasInvalidHosts ? <div className="sectionDivider" /> : null}
 
-      {draftServers.length === 0 ? (
-        <div className="card">
-          <div className="cardBody">{t("ext.home_assistant.settings.empty")}</div>
+      <div className="settingsSplit">
+        <div className="settingsSplitSidebar">
+          <div className="settingsSplitToolbar">
+            <input
+              className="input"
+              placeholder={t("ext.home_assistant.settings.search_servers", {}, "Search servers…")}
+              value={serverQuery}
+              onChange={(event) => setServerQuery(event.target.value)}
+            />
+            <button
+              className="iconButton iconButtonPrimary"
+              type="button"
+              aria-label={t("ext.home_assistant.settings.add")}
+              onClick={addServer}
+            >
+              <i className="fa-solid fa-plus" aria-hidden="true" />
+            </button>
+          </div>
+
+          {filteredServers.length === 0 ? (
+            <div className="card" style={{ marginTop: 10 }}>
+              <div className="cardBody">
+                <div style={{ marginBottom: 10 }}>{t("ext.home_assistant.settings.empty")}</div>
+                <button className="primaryButton" type="button" onClick={addServer}>
+                  <i className="fa-solid fa-plus" aria-hidden="true" /> {t("ext.home_assistant.settings.add")}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="settingsList">
+              {filteredServers.map((server) => {
+                const selected = server.id === activeServerId;
+                const name = server.name.trim() || t("ext.home_assistant.settings.unnamed_server", {}, "Untitled server");
+                const meta = server.host.trim() || t("ext.home_assistant.settings.missing_host", {}, "Host URL missing");
+                return (
+                  <button
+                    key={server.id}
+                    type="button"
+                    className={["choiceItem", selected ? "isSelected" : ""].filter(Boolean).join(" ")}
+                    onClick={() => {
+                      setActiveServerId(server.id);
+                      setConfirmDeleteServerId(null);
+                    }}
+                  >
+                    <div className="settingsListItemRow">
+                      <div className="settingsListItemMain">
+                        <div className="settingsListItemTitle" title={name}>
+                          {name}
+                        </div>
+                        <div className="settingsListItemMeta" title={meta}>
+                          {meta}
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
-      ) : (
-        <div className="choiceList">
-          {draftServers.map((server) => {
-            const showToken = Boolean(showTokensByServerId[server.id]);
-            return (
-              <div className="card" key={server.id}>
+
+        <div className="settingsSplitMain">
+          {!activeServer ? (
+            <div className="card">
+              <div className="cardBody">
+                <div style={{ marginBottom: 10 }}>
+                  {t("ext.home_assistant.settings.select_server", {}, "Select a server to edit.")}
+                </div>
+                <button className="primaryButton" type="button" onClick={addServer}>
+                  <i className="fa-solid fa-plus" aria-hidden="true" /> {t("ext.home_assistant.settings.add")}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="settingsDetail">
+              <div className="settingsDetailHeader">
+                <div>
+                  <div className="modalSectionTitle" style={{ marginBottom: 4 }}>
+                    {activeServer.name.trim() || t("ext.home_assistant.settings.unnamed_server", {}, "Untitled server")}
+                  </div>
+                  <div className="cardMeta">{activeServer.host.trim() || activeServer.id}</div>
+                </div>
+
+                <div className="rowWrap" style={{ gap: 10, justifyContent: "flex-end" }}>
+                  <button
+                    className={confirmDeleteServerId === activeServer.id ? "dangerButton" : "iconButton iconButtonDanger"}
+                    type="button"
+                    aria-label={t("core.actions.delete")}
+                    title={t("core.actions.delete")}
+                    onClick={() => {
+                      if (confirmDeleteServerId === activeServer.id) {
+                        deleteServer(activeServer.id);
+                        return;
+                      }
+                      setConfirmDeleteServerId(activeServer.id);
+                    }}
+                  >
+                    {confirmDeleteServerId === activeServer.id ? (
+                      t("core.actions.delete")
+                    ) : (
+                      <i className="fa-solid fa-trash" aria-hidden="true" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div className="sectionDivider" />
+
+              <div className="card">
                 <div className="cardBody">
                   <div className="field">
                     <div className="label">{t("ext.home_assistant.settings.server_name")}</div>
                     <input
                       className="input"
-                      value={server.name}
-                      onChange={(e) => {
-                        const nextName = e.target.value.slice(0, 64);
-                        setDraftServers((prev) =>
-                          prev.map((x) => (x.id === server.id ? { ...x, name: nextName } : x)),
-                        );
-                        setHasUnsavedChanges(true);
-                      }}
+                      value={activeServer.name}
+                      onChange={(e) => updateServer(activeServer.id, { name: e.target.value.slice(0, 64) })}
                     />
                   </div>
 
-                  <div className="rowWrap">
-                    <div className="field" style={{ flex: 1, minWidth: 220 }}>
-                      <div className="label">{t("ext.home_assistant.settings.host")}</div>
+                  <div className="field">
+                    <div className="label">{t("ext.home_assistant.settings.host")}</div>
+                    <input
+                      className="input"
+                      value={activeServer.host}
+                      onChange={(e) => updateServer(activeServer.id, { host: e.target.value.slice(0, 256) })}
+                    />
+                  </div>
+
+                  <div className="field">
+                    <div className="label">{t("ext.home_assistant.settings.api_key")}</div>
+                    <div className="row" style={{ gap: 10 }}>
                       <input
                         className="input"
-                        value={server.host}
-                        onChange={(e) => {
-                          const nextHost = e.target.value.slice(0, 256);
-                          setDraftServers((prev) =>
-                            prev.map((x) => (x.id === server.id ? { ...x, host: nextHost } : x)),
-                          );
-                          setHasUnsavedChanges(true);
-                        }}
+                        style={{ flex: 1, minWidth: 0 }}
+                        type={showTokensByServerId[activeServer.id] ? "text" : "password"}
+                        value={activeServer.apiKey}
+                        onChange={(e) => updateServer(activeServer.id, { apiKey: e.target.value.slice(0, 512) })}
                       />
-                    </div>
 
-                    <div className="field" style={{ flex: 1, minWidth: 220 }}>
-                      <div className="label">{t("ext.home_assistant.settings.api_key")}</div>
-                      <div className="row" style={{ gap: 10 }}>
-                        <input
-                          className="input"
-                          style={{ flex: 1, minWidth: 0 }}
-                          type={showToken ? "text" : "password"}
-                          value={server.apiKey}
-                          onChange={(e) => {
-                            const nextToken = e.target.value.slice(0, 512);
-                            setDraftServers((prev) =>
-                              prev.map((x) => (x.id === server.id ? { ...x, apiKey: nextToken } : x)),
-                            );
-                            setHasUnsavedChanges(true);
-                          }}
+                      <button
+                        className="iconButton"
+                        type="button"
+                        aria-label={
+                          showTokensByServerId[activeServer.id]
+                            ? t("ext.home_assistant.settings.hide_key")
+                            : t("ext.home_assistant.settings.show_key")
+                        }
+                        onClick={() =>
+                          setShowTokensByServerId((prev) => ({
+                            ...prev,
+                            [activeServer.id]: !prev[activeServer.id],
+                          }))
+                        }
+                      >
+                        <i
+                          className={["fa-solid", showTokensByServerId[activeServer.id] ? "fa-eye-slash" : "fa-eye"].join(" ")}
+                          aria-hidden="true"
                         />
-
-                        <button
-                          className="iconButton"
-                          type="button"
-                          aria-label={showToken ? t("ext.home_assistant.settings.hide_key") : t("ext.home_assistant.settings.show_key")}
-                          onClick={() =>
-                            setShowTokensByServerId((prev) => ({
-                              ...prev,
-                              [server.id]: !prev[server.id],
-                            }))
-                          }
-                        >
-                          <i className={["fa-solid", showToken ? "fa-eye-slash" : "fa-eye"].join(" ")} aria-hidden="true" />
-                        </button>
-
-                        <button
-                          className="iconButton"
-                          type="button"
-                          aria-label={t("core.actions.delete")}
-                          onClick={() => {
-                            setDraftServers((prev) => prev.filter((x) => x.id !== server.id));
-                            setHasUnsavedChanges(true);
-                          }}
-                        >
-                          <i className="fa-solid fa-trash" aria-hidden="true" />
-                        </button>
-                      </div>
+                      </button>
                     </div>
                   </div>
                 </div>
               </div>
-            );
-          })}
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

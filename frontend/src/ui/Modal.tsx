@@ -8,9 +8,22 @@ type Props = {
   title: string;
   children: React.ReactNode;
   onClose: () => void;
+  panelClassName?: string;
+  panelStyle?: React.CSSProperties;
+  bodyClassName?: string;
+  bodyStyle?: React.CSSProperties;
 };
 
-export function Modal({ open, title, children, onClose }: Props): React.ReactElement | null {
+export function Modal({
+  open,
+  title,
+  children,
+  onClose,
+  panelClassName,
+  panelStyle,
+  bodyClassName,
+  bodyStyle,
+}: Props): React.ReactElement | null {
   const { t } = i18n.useI18n();
 
   useEffect(() => {
@@ -34,14 +47,22 @@ export function Modal({ open, title, children, onClose }: Props): React.ReactEle
       }}
       role="presentation"
     >
-      <div className="modalPanel" role="dialog" aria-modal="true" aria-label={title}>
+      <div
+        className={["modalPanel", panelClassName].filter(Boolean).join(" ")}
+        style={panelStyle}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
         <div className="modalHeader">
           <div className="modalTitle">{title}</div>
           <button className="iconButton" type="button" onClick={onClose} aria-label={t("core.modal.aria.close")}>
             <Icon name="xmark" />
           </button>
         </div>
-        <div className="modalBody">{children}</div>
+        <div className={["modalBody", bodyClassName].filter(Boolean).join(" ")} style={bodyStyle}>
+          {children}
+        </div>
       </div>
     </div>
   );

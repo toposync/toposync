@@ -255,7 +255,7 @@ export function CameraDetectionsModal({
               onClose();
             }}
           >
-            {t("core.actions.save")}
+            {t("core.actions.apply")}
           </button>
         </div>
       </div>

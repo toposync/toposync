@@ -271,27 +271,32 @@ export function MainScreen({
               const isActive = Boolean(activeNotificationId && n.id === activeNotificationId);
               return (
                 <button
-                  className={["card", "cardButton", isActive ? "isActive" : ""].filter(Boolean).join(" ")}
+                  className={["card", "cardButton", "notificationCard", isActive ? "isActive" : ""].filter(Boolean).join(" ")}
                   type="button"
                   key={n.id}
                   onClick={() => onSelectNotification(n.id)}
                 >
-                  <div className="cardHeaderRow">
-                    <div className="cardTitle">{title}</div>
-                    {time ? <div className="cardMeta">{time}</div> : null}
-                  </div>
-                  <div className="cardBody">
-                    {renderer ? (
-                      renderer.render(n)
-                    ) : (
-                      <>
-                        {n.description ? <div className="notificationText">{n.description}</div> : null}
-                        {n.imageUrl ? (
-                          <img className="notificationThumb" src={n.imageUrl} alt="" loading="lazy" />
+                  <div className="notificationCardGrid">
+                    <div className="notificationCardMain">
+                      <div className="notificationCardHeader">
+                        <div className="notificationCardTitle">{title}</div>
+                        {time ? <div className="notificationCardTime">{time}</div> : null}
+                      </div>
+
+                      <div className="notificationCardBody">
+                        {renderer ? (
+                          <div className="notificationCardRenderer">{renderer.render(n)}</div>
+                        ) : n.description ? (
+                          <div className="notificationCardDesc">{n.description}</div>
+                        ) : n.payload ? (
+                          <div className="notificationCardDesc">{JSON.stringify(n.payload)}</div>
                         ) : null}
-                        {!n.description && !n.imageUrl ? <div className="notificationText">{JSON.stringify(n.payload)}</div> : null}
-                      </>
-                    )}
+                      </div>
+                    </div>
+
+                    {n.imageUrl ? (
+                      <img className="notificationCardThumb" src={n.imageUrl} alt="" loading="lazy" draggable={false} />
+                    ) : null}
                   </div>
                 </button>
               );

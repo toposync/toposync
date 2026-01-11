@@ -744,23 +744,19 @@ export function App(): React.ReactElement {
   }, []);
 
   const updateExtensionSettings = useCallback(
-    async (extensionId: string, patch: Record<string, unknown>) => {
+    async (extensionId: string, patch: Record<string, unknown>): Promise<Record<string, unknown>> => {
       if (!backendAvailable) {
-        setSettings((prev) => {
-          const current = prev.extensions[extensionId] ?? {};
-          return { ...prev, extensions: { ...prev.extensions, [extensionId]: { ...current, ...patch } } };
-        });
-        return;
+        const current = settings.extensions?.[extensionId] ?? {};
+        const merged = { ...current, ...(patch ?? {}) };
+        setSettings((prev) => ({ ...prev, extensions: { ...prev.extensions, [extensionId]: merged } }));
+        return merged;
       }
 
-      try {
-        const next = await patchExtensionSettings(extensionId, patch);
-        setSettings((prev) => ({ ...prev, extensions: { ...prev.extensions, [extensionId]: next } }));
-      } catch (err) {
-        console.error("Failed to save extension settings", err);
-      }
+      const next = await patchExtensionSettings(extensionId, patch);
+      setSettings((prev) => ({ ...prev, extensions: { ...prev.extensions, [extensionId]: next } }));
+      return next;
     },
-    [backendAvailable],
+    [backendAvailable, settings.extensions],
   );
 
   useEffect(() => {

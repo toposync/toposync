@@ -1,5 +1,5 @@
 export type HomeAssistantViewMode = "floor" | "ceiling" | "wall";
-export type HomeAssistantSpecialView = "none" | "lamp" | "airflow";
+export type HomeAssistantSpecialView = "none" | "lamp" | "airflow" | "model" | "ceiling_fan";
 
 export type HomeAssistantServer = {
   id: string;

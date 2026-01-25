@@ -2,6 +2,60 @@ export type AirflowMode = "off" | "neutral" | "cool" | "heat";
 
 type Vec3 = { x: number; y: number; z: number };
 
+const EFFECT_IDLE_TIMEOUT_MS = 30_000;
+let pageActivityTrackingReady = false;
+let lastUserActivityMs = Date.now();
+let pageHidden = false;
+let pageFocused = true;
+
+function ensurePageActivityTracking(): void {
+  if (pageActivityTrackingReady) return;
+  pageActivityTrackingReady = true;
+
+  pageHidden = document.hidden;
+  pageFocused = document.hasFocus();
+
+  const bump = () => {
+    lastUserActivityMs = Date.now();
+  };
+
+  window.addEventListener("pointerdown", bump, { capture: true });
+  window.addEventListener("pointermove", bump, { capture: true });
+  window.addEventListener("keydown", bump, { capture: true });
+  window.addEventListener("wheel", bump, { capture: true, passive: true });
+  window.addEventListener("touchstart", bump, { capture: true, passive: true });
+  window.addEventListener(
+    "focus",
+    () => {
+      pageFocused = true;
+      bump();
+    },
+    { capture: true },
+  );
+  window.addEventListener(
+    "blur",
+    () => {
+      pageFocused = false;
+    },
+    { capture: true },
+  );
+  document.addEventListener(
+    "visibilitychange",
+    () => {
+      pageHidden = document.hidden;
+      if (!pageHidden) bump();
+    },
+    { capture: true },
+  );
+}
+
+function shouldPauseEffectsForIdlePage(): boolean {
+  ensurePageActivityTracking();
+  if (pageHidden) return true;
+  if (!pageFocused) return true;
+  return Date.now() - lastUserActivityMs > EFFECT_IDLE_TIMEOUT_MS;
+}
+
 export type AirflowConfig = {
   active: boolean;
   mode: AirflowMode;
@@ -217,6 +271,7 @@ export function createAirflowEffect(THREE: any, opts?: { particleCount?: number 
 
   function tick(dt: number): void {
     if (!active) return;
+    if (shouldPauseEffectsForIdlePage()) return;
 
     const d = Math.max(0.001, Math.min(0.05, dt));
     t += d;

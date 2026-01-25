@@ -52,6 +52,13 @@ def _default_data_dir() -> Path:
     if override:
         return Path(override).expanduser().resolve()
 
+    try:
+        cwd_data_dir = Path.cwd() / ".toposync-data"
+        if cwd_data_dir.exists() and cwd_data_dir.is_dir():
+            return cwd_data_dir.resolve()
+    except Exception:  # noqa: BLE001
+        pass
+
     if sys.platform.startswith("linux"):
         base = os.getenv("XDG_DATA_HOME")
         if base:

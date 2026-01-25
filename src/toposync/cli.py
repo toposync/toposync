@@ -19,12 +19,26 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Override TOPOSYNC_DATA_DIR (where config.json and user files live).",
     )
+    serve.add_argument(
+        "--frontend-dir",
+        default=None,
+        help="Serve the built frontend from this directory (expects index.html).",
+    )
+    serve.add_argument(
+        "--no-frontend",
+        action="store_true",
+        help="Disable serving the built frontend (even if TOPOSYNC_FRONTEND_DIR/frontend/dist is present).",
+    )
 
     args = parser.parse_args(argv)
 
     if args.command == "serve":
         if args.data_dir:
             os.environ["TOPOSYNC_DATA_DIR"] = args.data_dir
+        if args.frontend_dir:
+            os.environ["TOPOSYNC_FRONTEND_DIR"] = args.frontend_dir
+        if args.no_frontend:
+            os.environ["TOPOSYNC_NO_FRONTEND"] = "1"
         uvicorn.run(
             "toposync.app:create_app",
             factory=True,

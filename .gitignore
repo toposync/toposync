@@ -7,11 +7,16 @@ __pycache__/
 .ruff_cache/
 
 node_modules/
+yarn.lock
+.pnp.cjs
+.pnp.loader.mjs
+.yarn/
 dist/
 build/
 .parcel-cache/
 
 .toposync-data/
+toposync-data/
 
 *.log
 
@@ -22,4 +27,3 @@ ignore/
 test-results/
 playwright-report/
 yolo*.pt
-

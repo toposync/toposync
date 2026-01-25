@@ -35,6 +35,11 @@ import {
 import { fetchHomeAssistantRegistry, fetchHomeAssistantServers } from "../api/homeAssistantApi";
 import type { FontAwesomeIconFamilies, HomeAssistantItemOption, HomeAssistantItemRef, HomeAssistantRegistryResponse, HomeAssistantServerPublic } from "../types";
 
+import { uploadToFilesDir } from "../../../../models/ui/src/api/filesApi";
+import { MAXIMUM_MODEL_SCALE, MINIMUM_MODEL_SCALE } from "../../../../models/ui/src/constants";
+import { readScale as readModelScale, readString as readModelString } from "../../../../models/ui/src/parsing";
+import { generateModelTopDownPreview, suggestInitialScale } from "../../../../models/ui/src/preview/modelPreview";
+
 type HomeAssistantEditorProps = {
   element: CompositionElement;
   update: (patch: CompositionElementPatch) => void;
@@ -67,7 +72,14 @@ export function HomeAssistantEditor({
   const icon = sanitizeFontAwesomeIconName(readString(props.icon, "house")) || "house";
   const specialView = readHomeAssistantSpecialView(props.special_view);
   const viewModeRaw = readHomeAssistantViewMode(props.view_mode);
-  const viewMode = specialView === "airflow" ? (viewModeRaw === "ceiling" ? "ceiling" : "wall") : viewModeRaw;
+  const viewMode =
+    specialView === "airflow"
+      ? viewModeRaw === "ceiling"
+        ? "ceiling"
+        : "wall"
+      : specialView === "ceiling_fan"
+        ? "ceiling"
+        : viewModeRaw;
   const primaryEntityId = readString(props.primary_entity_id).trim();
   const lampIntensityValue = readLampIntensity(props.lamp_intensity);
   const lampColorValue = readHexColor(props.lamp_color, DEFAULT_LAMP_COLOR);
@@ -75,6 +87,13 @@ export function HomeAssistantEditor({
   const airflowWidthValue = readAirflowWidth(props.airflow_width, viewMode === "ceiling" ? 0.62 : 0.72);
   const airflowMountYValue = readOptionalFiniteNumber(props.airflow_mount_y);
   const items = useMemo(() => readHomeAssistantItemRefs(props.items), [props.items]);
+  const model3d = useMemo(() => readRecord(props.model3d), [props.model3d]);
+  const modelDir = readModelString(model3d.dir, "").trim();
+  const modelFile = readModelString(model3d.model, "").trim();
+  const modelPreviewFile = readModelString(model3d.preview, "").trim();
+  const modelScale = readModelScale(model3d.scale, 1);
+  const modelPreviewUrl =
+    modelDir && modelPreviewFile ? `/files/${encodeURIComponent(modelDir)}/${encodeURIComponent(modelPreviewFile)}` : "";
 
   const [servers, setServers] = useState<HomeAssistantServerPublic[]>([]);
   const [registry, setRegistry] = useState<HomeAssistantRegistryResponse | null>(null);
@@ -87,6 +106,18 @@ export function HomeAssistantEditor({
   const [iconLoadError, setIconLoadError] = useState<string | null>(null);
   const [iconLoading, setIconLoading] = useState(false);
   const iconSearchRef = useRef<HTMLInputElement | null>(null);
+
+  const modelInputRef = useRef<HTMLInputElement | null>(null);
+  const [modelBusy, setModelBusy] = useState<"idle" | "uploading" | "processing">("idle");
+  const [modelError, setModelError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -156,10 +187,24 @@ export function HomeAssistantEditor({
     return AIRFLOW_COMPATIBLE_DOMAINS.has(domain);
   }, [items.length, primaryEntityId]);
 
+  const canModel = useMemo(() => {
+    if (items.length !== 1) return false;
+    return Boolean(primaryEntityId);
+  }, [items.length, primaryEntityId]);
+
+  const canCeilingFan = useMemo(() => {
+    if (items.length !== 1) return false;
+    if (!primaryEntityId) return false;
+    const domain = domainFromEntityId(primaryEntityId).toLowerCase();
+    return domain === "fan";
+  }, [items.length, primaryEntityId]);
+
   useEffect(() => {
     if (specialView === "lamp" && !canLamp) update({ props: { special_view: "none" } });
     if (specialView === "airflow" && !canAirflow) update({ props: { special_view: "none" } });
-  }, [canAirflow, canLamp, specialView, update]);
+    if (specialView === "model" && !canModel) update({ props: { special_view: "none" } });
+    if (specialView === "ceiling_fan" && !canCeilingFan) update({ props: { special_view: "none" } });
+  }, [canAirflow, canCeilingFan, canLamp, canModel, specialView, update]);
 
   useEffect(() => {
     if (!serverId) {
@@ -422,8 +467,73 @@ export function HomeAssistantEditor({
     if (!currentIcon && suggestedIcon) update({ props: { icon: suggestedIcon } });
   }
 
+  async function handleModelFiles(files: File[]) {
+    if (files.length === 0) return;
+
+    setModelError(null);
+    setModelBusy("uploading");
+
+    try {
+      const entryFile =
+        files.find((file) => file.name.toLowerCase().endsWith(".glb")) ??
+        files.find((file) => file.name.toLowerCase().endsWith(".gltf"));
+      if (!entryFile) throw new Error(t("ext.home_assistant.editor.model.error.pick_entry"));
+
+      const entryUpload = await uploadToFilesDir(entryFile, { filename: entryFile.name });
+      const dir = entryUpload.dir;
+      const entryName = entryUpload.filename;
+
+      for (const file of files) {
+        if (file === entryFile) continue;
+        await uploadToFilesDir(file, { dir, filename: file.name });
+      }
+
+      const modelUrl = `/files/${encodeURIComponent(dir)}/${encodeURIComponent(entryName)}`;
+
+      setModelBusy("processing");
+      const preview = await generateModelTopDownPreview(modelUrl);
+      const previewBlob = await (await fetch(preview.dataUrl)).blob();
+      const previewUpload = await uploadToFilesDir(previewBlob, { dir, filename: "preview.png" });
+
+      const nextScale = suggestInitialScale(preview.size);
+
+      update({
+        props: {
+          special_view: "model",
+          model3d: {
+            dir,
+            model: entryName,
+            preview: previewUpload.filename,
+            size: preview.size,
+            center: preview.center,
+            min_y: preview.minY,
+            scale: nextScale,
+          },
+        },
+      });
+    } catch (e) {
+      if (mountedRef.current) setModelError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (mountedRef.current) setModelBusy("idle");
+    }
+  }
+
   return (
     <div>
+      <input
+        ref={modelInputRef}
+        type="file"
+        accept=".glb,.gltf,.bin,.png,.jpg,.jpeg,.webp"
+        multiple
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const input = e.currentTarget;
+          const files = input.files ? Array.from(input.files) : [];
+          input.value = "";
+          void handleModelFiles(files);
+        }}
+      />
+
       {errorMessage ? (
         <div className="card">
           <div className="cardBody" style={{ color: "rgba(252,165,165,0.92)" }}>
@@ -620,11 +730,16 @@ export function HomeAssistantEditor({
             <select
               className="input"
               value={viewMode}
+              disabled={specialView === "ceiling_fan"}
               onChange={(e) => update({ props: { view_mode: e.target.value } })}
             >
-              {specialView !== "airflow" ? <option value="floor">{t("ext.home_assistant.editor.view_mode.floor")}</option> : null}
+              {specialView !== "airflow" && specialView !== "ceiling_fan" ? (
+                <option value="floor">{t("ext.home_assistant.editor.view_mode.floor")}</option>
+              ) : null}
               <option value="ceiling">{t("ext.home_assistant.editor.view_mode.ceiling")}</option>
-              <option value="wall">{t("ext.home_assistant.editor.view_mode.wall")}</option>
+              {specialView !== "ceiling_fan" ? (
+                <option value="wall">{t("ext.home_assistant.editor.view_mode.wall")}</option>
+              ) : null}
             </select>
           </div>
 
@@ -652,6 +767,15 @@ export function HomeAssistantEditor({
                       view_mode: mountMode,
                     },
                   });
+                } else if (next === "model") {
+                  update({ props: { special_view: next } });
+                } else if (next === "ceiling_fan") {
+                  update({
+                    props: {
+                      special_view: next,
+                      view_mode: "ceiling",
+                    },
+                  });
                 } else {
                   update({ props: { special_view: "none" } });
                 }
@@ -664,6 +788,12 @@ export function HomeAssistantEditor({
               <option value="airflow" disabled={!canAirflow}>
                 {t("ext.home_assistant.editor.special_view.airflow")}
               </option>
+              <option value="model" disabled={!canModel}>
+                {t("ext.home_assistant.editor.special_view.model")}
+              </option>
+              <option value="ceiling_fan" disabled={!canCeilingFan}>
+                {t("ext.home_assistant.editor.special_view.ceiling_fan")}
+              </option>
             </select>
             {!canLamp ? (
               <div className="label" style={{ marginTop: 6 }}>
@@ -675,7 +805,105 @@ export function HomeAssistantEditor({
                 {t("ext.home_assistant.editor.special_view.hint_airflow")}
               </div>
             ) : null}
+            {!canModel ? (
+              <div className="label" style={{ marginTop: 6 }}>
+                {t("ext.home_assistant.editor.special_view.hint_model")}
+              </div>
+            ) : null}
+            {!canCeilingFan ? (
+              <div className="label" style={{ marginTop: 6 }}>
+                {t("ext.home_assistant.editor.special_view.hint_ceiling_fan")}
+              </div>
+            ) : null}
           </div>
+
+          {specialView === "model" && canModel ? (
+            <div className="card">
+              <div className="cardHeaderRow">
+                <div className="cardTitle">{t("ext.home_assistant.editor.model.title")}</div>
+                <div className="cardMeta">{modelDir || "-"}</div>
+              </div>
+              <div className="cardBody">
+                <div className="rowWrap" style={{ alignItems: "center", justifyContent: "space-between" }}>
+                  <div className="cardMeta" style={{ flex: 1, minWidth: 0 }}>
+                    {modelFile ? modelFile : t("ext.home_assistant.editor.model.none")}
+                  </div>
+                  <div className="rowWrap" style={{ justifyContent: "flex-end" }}>
+                    <button
+                      className="chipButton"
+                      type="button"
+                      disabled={modelBusy !== "idle"}
+                      onClick={() => modelInputRef.current?.click()}
+                    >
+                      {modelFile
+                        ? t("ext.home_assistant.editor.model.replace")
+                        : t("ext.home_assistant.editor.model.pick")}
+                    </button>
+                    <button
+                      className="chipButton"
+                      type="button"
+                      disabled={!modelFile || modelBusy !== "idle"}
+                      onClick={() => update({ props: { model3d: null } })}
+                    >
+                      {t("ext.home_assistant.editor.model.clear")}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="rowWrap" style={{ marginTop: 10 }}>
+                  <div className="field" style={{ flex: 1, minWidth: 180 }}>
+                    <div className="label">{t("ext.home_assistant.editor.model.scale")}</div>
+                    <input
+                      className="input"
+                      type="number"
+                      inputMode="decimal"
+                      min={MINIMUM_MODEL_SCALE}
+                      max={MAXIMUM_MODEL_SCALE}
+                      step={0.01}
+                      value={modelScale}
+                      onChange={(e) => {
+                        const next = Number.parseFloat(e.target.value);
+                        if (!Number.isFinite(next)) return;
+                        update({
+                          props: {
+                            model3d: {
+                              ...model3d,
+                              scale: Math.max(MINIMUM_MODEL_SCALE, Math.min(MAXIMUM_MODEL_SCALE, next)),
+                            },
+                          },
+                        });
+                      }}
+                      disabled={!modelFile || modelBusy !== "idle"}
+                    />
+                  </div>
+                  <div className="field" style={{ flex: 1, minWidth: 180 }}>
+                    <div className="label">
+                      {modelBusy === "uploading"
+                        ? t("ext.home_assistant.editor.model.uploading")
+                        : modelBusy === "processing"
+                          ? t("ext.home_assistant.editor.model.processing")
+                          : modelError
+                            ? modelError
+                            : t("ext.home_assistant.editor.model.anim_hint")}
+                    </div>
+                  </div>
+                </div>
+
+                {modelPreviewUrl ? (
+                  <img
+                    src={modelPreviewUrl}
+                    alt={t("ext.home_assistant.editor.model.title")}
+                    style={{
+                      marginTop: 10,
+                      width: "100%",
+                      borderRadius: 12,
+                      border: "1px solid rgba(255,255,255,0.10)",
+                    }}
+                  />
+                ) : null}
+              </div>
+            </div>
+          ) : null}
 
           {specialView === "lamp" && canLamp ? (
             <div className="rowWrap">

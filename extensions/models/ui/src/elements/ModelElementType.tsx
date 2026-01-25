@@ -1,11 +1,10 @@
 import React, { useMemo } from "react";
-import type * as ThreeTypes from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 import type { CompositionElement, CompositionElementPatch, ElementType, HostI18n } from "@toposync/plugin-api";
 
 import { MAXIMUM_MODEL_SCALE, MINIMUM_MODEL_SCALE, MODEL_ELEMENT_TYPE_ID } from "../constants";
 import { clamp, readNumber, readScale, readString, readVector3 } from "../parsing";
+import { createGltfModelRuntime } from "../runtime/gltfModel";
 import type { Vector3 } from "../types";
 
 export function createModelElementType(i18n: HostI18n): ElementType {
@@ -34,114 +33,14 @@ export function createModelElementType(i18n: HostI18n): ElementType {
       scale: 1,
     },
     create3D: ({ THREE }, element) => {
-      const group = new THREE.Group();
-
-      const loader = new GLTFLoader();
-      let disposed = false;
-      let lastUrl = "";
-      let current: ThreeTypes.Object3D | null = null;
-      let mixer: ThreeTypes.AnimationMixer | null = null;
-      let token = 0;
-
-      function disposeObject(obj: ThreeTypes.Object3D) {
-        obj.traverse((child) => {
-          const mesh = child as any;
-          if (mesh.geometry?.dispose) mesh.geometry.dispose();
-          const material = mesh.material;
-          if (Array.isArray(material)) material.forEach((m) => m?.dispose?.());
-          else material?.dispose?.();
-        });
-      }
-
-      function disposeMixer() {
-        if (!mixer) return;
-        try {
-          mixer.stopAllAction();
-        } catch {
-          // ignore
-        }
-        if (current) {
-          try {
-            mixer.uncacheRoot(current);
-          } catch {
-            // ignore
-          }
-        }
-        mixer = null;
-      }
-
-      async function load(url: string, meta: { center: Vector3; minY: number } | null) {
-        const myToken = ++token;
-        try {
-          const gltf = await loader.loadAsync(url);
-          if (disposed || myToken !== token) return;
-
-          const model = gltf.scene || gltf.scenes?.[0];
-          if (!model) throw new Error("Empty model");
-
-          model.traverse((obj) => {
-            const mesh = obj as any;
-            if (mesh.isMesh) {
-              mesh.castShadow = true;
-              mesh.receiveShadow = true;
-            }
-          });
-
-          const boundingBox = new THREE.Box3().setFromObject(model);
-          const centerVector = boundingBox.getCenter(new THREE.Vector3());
-          const minY = boundingBox.min.y;
-          const center = meta?.center ?? { x: centerVector.x, y: centerVector.y, z: centerVector.z };
-          const lift = meta?.minY ?? minY;
-
-          model.position.sub(new THREE.Vector3(center.x, lift, center.z));
-
-          if (current) {
-            group.remove(current);
-            disposeMixer();
-            disposeObject(current);
-            current = null;
-          }
-          current = model;
-          group.add(model);
-
-          if (Array.isArray(gltf.animations) && gltf.animations.length > 0) {
-            mixer = new THREE.AnimationMixer(model);
-            for (const clip of gltf.animations) mixer.clipAction(clip).play();
-          }
-        } catch (err) {
-          console.error("[models:create3D]", err);
-        }
-      }
-
-      function apply(el: CompositionElement) {
-        const dir = readString((el.props as any).dir, "");
-        const model = readString((el.props as any).model, "");
-        const scale = readScale((el.props as any).scale, 1);
-        const center = readVector3((el.props as any).center, { x: 0, y: 0, z: 0 });
-        const minY = readNumber((el.props as any).min_y, 0);
-
-        group.scale.setScalar(scale);
-
-        const url = dir && model ? `/files/${encodeURIComponent(dir)}/${encodeURIComponent(model)}` : "";
-        if (url && url !== lastUrl) {
-          lastUrl = url;
-          void load(url, { center, minY });
-        }
-      }
-
-      apply(element);
-
+      const runtime = createGltfModelRuntime(THREE, { autoplay: true });
+      runtime.updateFromProps(element.props);
+      runtime.setAnimated(true);
       return {
-        object: group,
-        update: apply,
-        tick: (dt) => {
-          mixer?.update(dt);
-        },
-        dispose: () => {
-          disposed = true;
-          disposeMixer();
-          if (current) disposeObject(current);
-        },
+        object: runtime.object,
+        update: (el) => runtime.updateFromProps(el.props),
+        tick: runtime.tick,
+        dispose: runtime.dispose,
       };
     },
     render2D: ({ ctx: canvasContext, element, viewport }) => {
@@ -343,4 +242,3 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
     </div>
   );
 }
-

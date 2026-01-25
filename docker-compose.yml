@@ -1,0 +1,9 @@
+services:
+  toposync:
+    image: toposync:local
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./toposync-data:/data
+    restart: unless-stopped

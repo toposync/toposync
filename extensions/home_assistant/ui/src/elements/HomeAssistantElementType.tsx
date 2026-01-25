@@ -3,6 +3,9 @@ import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
 
 import type { CompositionElement, ElementType, HostI18n } from "@toposync/plugin-api";
 
+import { readScale as readModelScale, readVector3 as readModelVector3 } from "../../../../models/ui/src/parsing";
+import { createGltfModelRuntime } from "../../../../models/ui/src/runtime/gltfModel";
+
 import { createAirflowEffect } from "../airflow";
 import {
   DEFAULT_AIRFLOW_INTENSITY,
@@ -42,8 +45,15 @@ import { HomeAssistantEditor } from "../ui/HomeAssistantEditor";
 
 import type { HomeAssistantLiveState, HomeAssistantSpecialView, HomeAssistantViewMode } from "../types";
 
+const CEILING_FAN_BLADE_COUNT = 5;
+const CEILING_FAN_HUB_RADIUS = 0.09;
+const CEILING_FAN_BLADE_LENGTH = 0.55;
+const CEILING_FAN_BLADE_ROOT_INSET = 0.07;
+const CEILING_FAN_RADIUS_WORLD = CEILING_FAN_HUB_RADIUS + CEILING_FAN_BLADE_LENGTH - CEILING_FAN_BLADE_ROOT_INSET;
+
 export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
   const iconGeometryCache = new Map<string, { geometry: any; scale: number }>();
+  const modelPreviewImageCache = new Map<string, HTMLImageElement>();
   const iconTargetSize = 0.14;
 
   const buttonRadius = 0.18;
@@ -65,6 +75,7 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
       lamp_intensity: DEFAULT_LAMP_INTENSITY,
       lamp_color: DEFAULT_LAMP_COLOR,
       airflow_intensity: DEFAULT_AIRFLOW_INTENSITY,
+      model3d: null,
     },
     primaryAction: async ({ element, api, update }) => {
       const props = readRecord(element.props);
@@ -129,6 +140,154 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
       group.add(mountGroup);
       const airflow = createAirflowEffect(THREE, { particleCount: 700 });
       group.add(airflow.object);
+      const modelMount = new THREE.Group();
+      modelMount.visible = false;
+      const model3d = createGltfModelRuntime(THREE, { autoplay: false });
+      model3d.setAnimated(false);
+      modelMount.add(model3d.object);
+      group.add(modelMount);
+
+      const detailedGeometry = (view.graphicsQuality ?? "simplified") === "detailed";
+
+      const fanMount = new THREE.Group();
+      fanMount.visible = false;
+      mountGroup.add(fanMount);
+
+      const fanSegments = detailedGeometry ? 28 : 18;
+      const fanBladeCount = CEILING_FAN_BLADE_COUNT;
+
+      const fanMetalMaterial = new THREE.MeshStandardMaterial({
+        color: 0x0f172a,
+        emissive: new THREE.Color(0x000000),
+        emissiveIntensity: 0.0,
+        roughness: 0.32,
+        metalness: 0.85,
+      });
+      const fanBodyMaterial = new THREE.MeshStandardMaterial({
+        color: 0x111827,
+        emissive: new THREE.Color(0x000000),
+        emissiveIntensity: 0.0,
+        roughness: 0.62,
+        metalness: 0.22,
+      });
+      const fanBladeMaterial = new THREE.MeshStandardMaterial({
+        color: 0x8b5e34,
+        emissive: new THREE.Color(0x000000),
+        emissiveIntensity: 0.0,
+        roughness: 0.78,
+        metalness: 0.05,
+      });
+      const fanAccentMaterial = new THREE.MeshStandardMaterial({
+        color: 0x0b1220,
+        emissive: new THREE.Color(neonDefault),
+        emissiveIntensity: 0.0,
+        roughness: 0.25,
+        metalness: 0.0,
+      });
+      const fanBlurMaterial = new THREE.MeshBasicMaterial({
+        color: neonDefault,
+        transparent: true,
+        opacity: 0.0,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+
+      const fanCeilingGap = 0.002;
+      const fanCanopyHeight = 0.042;
+      const fanDownrodHeight = 0.18;
+      const fanMotorHeight = 0.12;
+      const fanHubHeight = 0.026;
+      const fanBladeLength = CEILING_FAN_BLADE_LENGTH;
+      const fanBladeWidth = 0.115;
+      const fanBladeThickness = 0.009;
+      const fanBladeRootInset = CEILING_FAN_BLADE_ROOT_INSET;
+      const fanHubRadius = CEILING_FAN_HUB_RADIUS;
+
+      const fanCanopyY = -fanCeilingGap - fanCanopyHeight / 2;
+      const fanDownrodY = fanCanopyY - fanCanopyHeight / 2 - fanDownrodHeight / 2;
+      const fanMotorY = fanDownrodY - fanDownrodHeight / 2 - fanMotorHeight / 2;
+      const fanRotorY = fanMotorY - fanMotorHeight / 2 - fanHubHeight / 2 - 0.004;
+
+      const canopyGeometry = new THREE.CylinderGeometry(0.11, 0.085, fanCanopyHeight, fanSegments, 1, false);
+      const canopyMesh = new THREE.Mesh(canopyGeometry, fanMetalMaterial);
+      canopyMesh.position.y = fanCanopyY;
+      fanMount.add(canopyMesh);
+
+      const downrodGeometry = new THREE.CylinderGeometry(0.012, 0.012, fanDownrodHeight, Math.max(10, Math.floor(fanSegments / 2)), 1, false);
+      const downrodMesh = new THREE.Mesh(downrodGeometry, fanMetalMaterial);
+      downrodMesh.position.y = fanDownrodY;
+      fanMount.add(downrodMesh);
+
+      const motorGeometry = new THREE.CylinderGeometry(0.15, 0.17, fanMotorHeight, fanSegments, 1, false);
+      const motorMesh = new THREE.Mesh(motorGeometry, fanBodyMaterial);
+      motorMesh.position.y = fanMotorY;
+      fanMount.add(motorMesh);
+
+      const motorRingGeometry = new THREE.TorusGeometry(0.135, 0.007, Math.max(8, Math.floor(fanSegments / 3)), fanSegments * 2);
+      const motorRingMesh = new THREE.Mesh(motorRingGeometry, fanMetalMaterial);
+      motorRingMesh.rotation.x = Math.PI / 2;
+      motorRingMesh.position.y = fanMotorY + 0.01;
+      fanMount.add(motorRingMesh);
+
+      const lightRingGeometry = new THREE.RingGeometry(0.052, 0.108, fanSegments);
+      const lightRingMesh = new THREE.Mesh(lightRingGeometry, fanAccentMaterial);
+      lightRingMesh.rotation.x = Math.PI / 2;
+      lightRingMesh.position.y = fanMotorY - fanMotorHeight / 2 - 0.002;
+      lightRingMesh.renderOrder = 3;
+      (lightRingMesh.material as any).side = THREE.DoubleSide;
+      fanMount.add(lightRingMesh);
+
+      const fanRotor = new THREE.Group();
+      fanRotor.position.y = fanRotorY;
+      fanMount.add(fanRotor);
+
+      const hubGeometry = new THREE.CylinderGeometry(fanHubRadius, fanHubRadius * 0.92, fanHubHeight, fanSegments, 1, false);
+      const hubMesh = new THREE.Mesh(hubGeometry, fanMetalMaterial);
+      fanRotor.add(hubMesh);
+
+      const capGeometry = new THREE.SphereGeometry(fanHubRadius * 0.55, fanSegments, Math.max(10, Math.floor(fanSegments / 2)), 0, Math.PI * 2, 0, Math.PI / 2);
+      const capMesh = new THREE.Mesh(capGeometry, fanMetalMaterial);
+      capMesh.position.y = -fanHubHeight / 2 - 0.002;
+      fanRotor.add(capMesh);
+
+      const bladeGeometry = new THREE.BoxGeometry(
+        fanBladeLength,
+        fanBladeThickness,
+        fanBladeWidth,
+        detailedGeometry ? 10 : 6,
+        1,
+        detailedGeometry ? 4 : 2,
+      );
+      const bladePositions = bladeGeometry.attributes.position as any;
+      for (let i = 0; i < bladePositions.count; i += 1) {
+        const x = bladePositions.getX(i);
+        const t = clamp(x / fanBladeLength + 0.5, 0, 1);
+        const taper = 1 - 0.42 * t;
+        bladePositions.setZ(i, bladePositions.getZ(i) * taper);
+        bladePositions.setY(i, bladePositions.getY(i) + Math.sin(t * Math.PI) * 0.004);
+      }
+      bladePositions.needsUpdate = true;
+      bladeGeometry.computeVertexNormals();
+      bladeGeometry.translate(fanBladeLength / 2 - fanBladeRootInset, 0, 0);
+
+      const bladePitch = -0.24;
+      for (let i = 0; i < fanBladeCount; i += 1) {
+        const arm = new THREE.Group();
+        arm.rotation.y = (i / fanBladeCount) * Math.PI * 2;
+        const blade = new THREE.Mesh(bladeGeometry, fanBladeMaterial);
+        blade.position.x = fanHubRadius;
+        blade.rotation.x = bladePitch;
+        arm.add(blade);
+        fanRotor.add(arm);
+      }
+
+      const blurDiscGeometry = new THREE.CircleGeometry(fanHubRadius + fanBladeLength * 0.78, fanSegments);
+      const blurDiscMesh = new THREE.Mesh(blurDiscGeometry, fanBlurMaterial);
+      blurDiscMesh.rotation.x = Math.PI / 2;
+      blurDiscMesh.position.y = fanBladeThickness / 2 + 0.01;
+      blurDiscMesh.visible = detailedGeometry;
+      blurDiscMesh.renderOrder = 2;
+      fanRotor.add(blurDiscMesh);
 
       const topY = buttonRadius * Math.cos(buttonThetaTopCut);
       const topRadius = buttonRadius * Math.sin(buttonThetaTopCut);
@@ -286,6 +445,10 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
       let currentAirflowMount: "wall" | "ceiling" = "wall";
       let currentAirflowWallVentWidth = airflowWallVentWidth;
       let currentAirflowCassetteWidth = airflowCassetteWidth;
+      let fanTargetSpeed01 = 0;
+      let fanSpeed01 = 0;
+      let fanSpinY = 0;
+      let fanOn = false;
 
       let unwatch: (() => void) | null = null;
       let watchedServer = "";
@@ -293,6 +456,47 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
       let watchedDomain = "";
       let watchedIsToggle = false;
       let lastLiveSig = "";
+
+      type FanFlow = {
+        active: boolean;
+        speed01: number;
+        sig: string;
+      };
+
+      function fanFlowFromLiveState(live: HomeAssistantLiveState | null, fallbackStateRaw: string): FanFlow {
+        const state = readString(live?.state ?? fallbackStateRaw).trim().toLowerCase();
+        const attrs = live?.attributes && typeof live.attributes === "object" ? (live.attributes as Record<string, any>) : null;
+        const pctRaw = attrs ? Number(attrs.percentage) : NaN;
+        const pct = Number.isFinite(pctRaw) ? clamp(pctRaw, 0, 100) : NaN;
+        const speed = attrs ? readString(attrs.speed).trim().toLowerCase() : "";
+        const preset = attrs ? readString(attrs.preset_mode).trim().toLowerCase() : "";
+        const boolState = watchedEntity ? boolStateForDomain(watchedDomain, state) : null;
+
+        const sig = [
+          state || "",
+          Number.isFinite(pct) ? `pct:${Math.round(pct)}` : "",
+          speed ? `speed:${speed}` : "",
+          preset ? `preset:${preset}` : "",
+        ]
+          .filter(Boolean)
+          .join("|");
+
+        if (boolState !== true) return { active: false, speed01: 0, sig };
+
+        let speed01 = 0.65;
+        if (Number.isFinite(pct)) {
+          speed01 = clamp(pct / 100, 0, 1);
+        } else {
+          const tag = (speed || preset).trim();
+          if (tag.includes("low") || tag.includes("slow") || tag === "1") speed01 = 0.33;
+          else if (tag.includes("med") || tag.includes("mid") || tag === "2") speed01 = 0.66;
+          else if (tag.includes("high") || tag.includes("fast") || tag === "3") speed01 = 1.0;
+          else if (tag.includes("auto")) speed01 = 0.75;
+        }
+
+        if (!Number.isFinite(speed01) || speed01 <= 0.02) speed01 = 0.35;
+        return { active: true, speed01: clamp(speed01, 0, 1), sig };
+      }
 
       function applyNeonFromState(stateRaw: string, live: HomeAssistantLiveState | null) {
         const s = stateRaw.trim().toLowerCase();
@@ -502,8 +706,21 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
         ) {
           currentSpecialView = "none";
         }
+        if (currentSpecialView === "model" && !(itemCount === 1 && watchedEntity)) {
+          currentSpecialView = "none";
+        }
+        if (currentSpecialView === "ceiling_fan" && !(itemCount === 1 && watchedDomain && watchedDomain.toLowerCase() === "fan")) {
+          currentSpecialView = "none";
+        }
 
         if (currentSpecialView === "airflow") {
+          modelMount.visible = false;
+          model3d.setAnimated(false);
+          fanMount.visible = false;
+          fanTargetSpeed01 = 0;
+          fanSpeed01 = 0;
+          fanOn = false;
+
           currentAirflowMount = viewMode === "ceiling" ? "ceiling" : "wall";
 
           currentAirflowCassetteWidth = airflowCassetteWidthValue;
@@ -543,7 +760,64 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
             airflow.object.position.set(0, mountGroup.position.y, mountGroup.position.z);
             airflow.object.rotation.set(0, 0, 0);
           }
+        } else if (currentSpecialView === "model") {
+          modelMount.visible = true;
+          fanMount.visible = false;
+          fanTargetSpeed01 = 0;
+          fanSpeed01 = 0;
+          fanOn = false;
+
+          const modelProps = readRecord(p.model3d);
+          model3d.updateFromProps(modelProps);
+
+          dome.visible = false;
+          topCap.visible = false;
+          bottomCap.visible = false;
+          iconMesh.visible = false;
+          airflowWallVent.visible = false;
+          airflowCassette.visible = false;
+
+          mountGroup.rotation.set(0, 0, 0);
+          mountGroup.position.set(0, 0, 0);
+
+          modelMount.rotation.set(0, 0, 0);
+          modelMount.position.set(0, 0, 0);
+          model3d.object.position.set(0, 0, 0);
+
+          if (viewMode === "ceiling") {
+            modelMount.position.y = view.wallHeight;
+            const size = readModelVector3(modelProps.size, { x: 0, y: 0, z: 0 });
+            const scale = readModelScale(modelProps.scale, 1);
+            const height = Math.max(0, size.y * scale);
+            if (Number.isFinite(height) && height > 0) model3d.object.position.y = -height;
+          } else if (viewMode === "wall") {
+            modelMount.position.y = view.wallHeight / 2;
+            modelMount.rotation.x = Math.PI / 2;
+          }
+        } else if (currentSpecialView === "ceiling_fan") {
+          modelMount.visible = false;
+          model3d.setAnimated(false);
+          fanMount.visible = true;
+
+          dome.visible = false;
+          topCap.visible = false;
+          bottomCap.visible = false;
+          iconMesh.visible = false;
+          airflowWallVent.visible = false;
+          airflowCassette.visible = false;
+
+          mountGroup.rotation.set(0, 0, 0);
+          mountGroup.position.set(0, 0, 0);
+          mountGroup.position.y = view.wallHeight - 0.001;
+          light.position.set(0, fanRotorY - 0.06, 0);
         } else {
+          modelMount.visible = false;
+          model3d.setAnimated(false);
+          fanMount.visible = false;
+          fanTargetSpeed01 = 0;
+          fanSpeed01 = 0;
+          fanOn = false;
+
           airflowWallVent.visible = false;
           airflowCassette.visible = false;
           iconMesh.visible = true;
@@ -566,10 +840,26 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
         if (currentSpecialView === "airflow") {
           const flow = climateFlowFromLiveState(live, primaryState);
           lastLiveSig = flow.sig;
+        } else if (currentSpecialView === "ceiling_fan") {
+          const flow = fanFlowFromLiveState(live, primaryState);
+          lastLiveSig = flow.sig;
+          fanTargetSpeed01 = flow.speed01;
+          fanOn = flow.active;
         } else {
           lastLiveSig = primaryState.trim().toLowerCase();
         }
         applyNeonFromState(primaryState, live);
+        if (currentSpecialView === "model") {
+          const boolState = watchedEntity ? boolStateForDomain(watchedDomain, primaryState) : null;
+          model3d.setAnimated(boolState === true);
+        }
+        if (currentSpecialView === "ceiling_fan") {
+          fanAccentMaterial.emissiveIntensity = fanOn ? 0.12 + 0.75 * fanTargetSpeed01 : 0.0;
+          fanBlurMaterial.opacity = fanOn ? clamp((fanTargetSpeed01 - 0.35) / 0.65, 0, 1) * 0.18 : 0.0;
+        } else {
+          fanAccentMaterial.emissiveIntensity = 0.0;
+          fanBlurMaterial.opacity = 0.0;
+        }
       }
 
       apply(element);
@@ -579,14 +869,46 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
         update: apply,
         tick: (dt: number) => {
           airflow.tick(dt);
+          model3d.tick(dt);
           if (watchedServer && watchedEntity) {
             const live = getHomeAssistantLiveState(watchedServer, watchedEntity);
             const next = readString(live?.state).trim().toLowerCase();
-            const nextSig = currentSpecialView === "airflow" ? climateFlowFromLiveState(live, next).sig : next;
+            let nextSig = next;
+            let nextFanFlow: FanFlow | null = null;
+            if (currentSpecialView === "airflow") {
+              nextSig = climateFlowFromLiveState(live, next).sig;
+            } else if (currentSpecialView === "ceiling_fan") {
+              nextFanFlow = fanFlowFromLiveState(live, next);
+              nextSig = nextFanFlow.sig;
+            }
             if (next && nextSig !== lastLiveSig) {
               lastLiveSig = nextSig;
               applyNeonFromState(next, live);
+              if (currentSpecialView === "model") {
+                const boolState = watchedEntity ? boolStateForDomain(watchedDomain, next) : null;
+                model3d.setAnimated(boolState === true);
+              }
+              if (currentSpecialView === "ceiling_fan") {
+                const flow = nextFanFlow ?? fanFlowFromLiveState(live, next);
+                fanTargetSpeed01 = flow.speed01;
+                fanOn = flow.active;
+              }
             }
+          }
+
+          if (currentSpecialView === "ceiling_fan" && fanMount.visible) {
+            const d = Math.max(0.001, Math.min(0.05, dt));
+            const target = fanOn ? fanTargetSpeed01 : 0;
+            const accel = 1 - Math.exp(-d * 7);
+            fanSpeed01 += (target - fanSpeed01) * accel;
+
+            const maxRps = 2.4;
+            fanSpinY += fanSpeed01 * maxRps * Math.PI * 2 * d;
+            fanRotor.rotation.y = fanSpinY;
+
+            const blur = clamp((fanSpeed01 - 0.35) / 0.65, 0, 1);
+            fanBlurMaterial.opacity = fanOn ? blur * 0.18 : 0.0;
+            fanAccentMaterial.emissiveIntensity = fanOn ? 0.12 + 0.75 * fanSpeed01 + Math.sin(fanSpinY * 0.15) * 0.03 : 0.0;
           }
 
           if (wantedIconKey === currentIconKey) return;
@@ -609,12 +931,28 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
           airflowWallVentGeometry.dispose();
           airflowCassetteGeometry.dispose();
           airflowVentMaterial.dispose();
+          canopyGeometry.dispose();
+          downrodGeometry.dispose();
+          motorGeometry.dispose();
+          motorRingGeometry.dispose();
+          lightRingGeometry.dispose();
+          hubGeometry.dispose();
+          capGeometry.dispose();
+          bladeGeometry.dispose();
+          blurDiscGeometry.dispose();
+          fanMetalMaterial.dispose();
+          fanBodyMaterial.dispose();
+          fanBladeMaterial.dispose();
+          fanAccentMaterial.dispose();
+          fanBlurMaterial.dispose();
+          model3d.dispose();
           airflow.dispose();
         },
       };
     },
     render2D: ({ ctx, element, viewport }) => {
       const p = readRecord(element.props);
+      const specialView = readHomeAssistantSpecialView(p.special_view);
       const primaryEntityId = readString(p.primary_entity_id).trim();
       const serverId = readString(p.server_id).trim();
       const live = serverId && primaryEntityId ? getHomeAssistantLiveState(serverId, primaryEntityId) : null;
@@ -641,6 +979,104 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
             : "rgba(230,232,242,0.24)"
         : "rgba(230,232,242,0.24)";
 
+      if (specialView === "model") {
+        const modelProps = readRecord(p.model3d);
+        const dir = readString(modelProps.dir).trim();
+        const preview = readString(modelProps.preview).trim();
+        const previewUrl = dir && preview ? `/files/${encodeURIComponent(dir)}/${encodeURIComponent(preview)}` : "";
+        const size = readModelVector3(modelProps.size, { x: 1, y: 1, z: 1 });
+        const scale = readModelScale(modelProps.scale, 1);
+        const rotationY = element.rotation?.y ?? 0;
+
+        const widthPx = Math.max(20, size.x * scale * viewport.scale);
+        const heightPx = Math.max(20, size.z * scale * viewport.scale);
+
+        ctx.save();
+        ctx.translate(center.x, center.y);
+        ctx.rotate(-rotationY);
+
+        if (previewUrl) {
+          let image = modelPreviewImageCache.get(previewUrl) ?? null;
+          if (!image) {
+            image = new Image();
+            image.decoding = "async";
+            image.onload = () => viewport.canvas.dispatchEvent(new Event("toposync:invalidate"));
+            image.onerror = () => viewport.canvas.dispatchEvent(new Event("toposync:invalidate"));
+            image.src = previewUrl;
+            modelPreviewImageCache.set(previewUrl, image);
+          }
+
+          if (image.complete && image.naturalWidth > 0) {
+            ctx.globalAlpha = 0.94;
+            ctx.drawImage(image, -widthPx / 2, -heightPx / 2, widthPx, heightPx);
+            ctx.globalAlpha = 1;
+          } else {
+            ctx.fillStyle = fill;
+            ctx.fillRect(-widthPx / 2, -heightPx / 2, widthPx, heightPx);
+          }
+        } else {
+          ctx.fillStyle = fill;
+          ctx.fillRect(-widthPx / 2, -heightPx / 2, widthPx, heightPx);
+        }
+
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(-widthPx / 2, -heightPx / 2, widthPx, heightPx);
+
+        ctx.fillStyle = "rgba(230,232,242,0.92)";
+        ctx.font = "700 11px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        ctx.fillText("HA", 0, -heightPx / 2 - 3);
+
+        ctx.restore();
+        return;
+      }
+
+      if (specialView === "ceiling_fan") {
+        const rotationY = element.rotation?.y ?? 0;
+        const rPx = Math.max(18, CEILING_FAN_RADIUS_WORLD * viewport.scale);
+
+        ctx.save();
+        ctx.translate(center.x, center.y);
+        ctx.rotate(-rotationY);
+
+        ctx.beginPath();
+        ctx.arc(0, 0, rPx, 0, Math.PI * 2);
+        ctx.fillStyle = fill;
+        ctx.fill();
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        for (let i = 0; i < CEILING_FAN_BLADE_COUNT; i += 1) {
+          ctx.save();
+          ctx.rotate((i / CEILING_FAN_BLADE_COUNT) * Math.PI * 2);
+          ctx.fillStyle = "rgba(230,232,242,0.12)";
+          ctx.strokeStyle = "rgba(230,232,242,0.18)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.rect(rPx * 0.15, -rPx * 0.10, rPx * 0.72, rPx * 0.20);
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        ctx.beginPath();
+        ctx.arc(0, 0, Math.max(6, rPx * 0.14), 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(230,232,242,0.25)";
+        ctx.fill();
+
+        ctx.fillStyle = "rgba(230,232,242,0.92)";
+        ctx.font = "700 11px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("HA", 0, 0);
+
+        ctx.restore();
+        return;
+      }
+
       ctx.save();
       ctx.translate(center.x, center.y);
       ctx.beginPath();
@@ -658,6 +1094,27 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
       ctx.restore();
     },
     hitTest2D: ({ element, world }) => {
+      const p = readRecord(element.props);
+      const specialView = readHomeAssistantSpecialView(p.special_view);
+      if (specialView === "model") {
+        const modelProps = readRecord(p.model3d);
+        const size = readModelVector3(modelProps.size, { x: 1, y: 1, z: 1 });
+        const scale = readModelScale(modelProps.scale, 1);
+        const angle = element.rotation?.y ?? 0;
+        const dx = world.x - element.position.x;
+        const dz = world.z - element.position.z;
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        const localX = dx * cos - dz * sin;
+        const localZ = dx * sin + dz * cos;
+        return Math.abs(localX) <= (size.x * scale) / 2 && Math.abs(localZ) <= (size.z * scale) / 2;
+      }
+      if (specialView === "ceiling_fan") {
+        const dx = world.x - element.position.x;
+        const dz = world.z - element.position.z;
+        return dx * dx + dz * dz <= CEILING_FAN_RADIUS_WORLD * CEILING_FAN_RADIUS_WORLD;
+      }
+
       const dx = world.x - element.position.x;
       const dz = world.z - element.position.z;
       return dx * dx + dz * dz <= 0.25 * 0.25;

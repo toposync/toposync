@@ -13,7 +13,7 @@ export function readHomeAssistantViewMode(value: unknown): HomeAssistantViewMode
 }
 
 export function isHomeAssistantSpecialView(value: unknown): value is HomeAssistantSpecialView {
-  return value === "none" || value === "lamp" || value === "airflow";
+  return value === "none" || value === "lamp" || value === "airflow" || value === "model" || value === "ceiling_fan";
 }
 
 export function readHomeAssistantSpecialView(value: unknown): HomeAssistantSpecialView {
@@ -92,4 +92,3 @@ export function boolStateForDomain(domain: string, rawState: string): boolean | 
 
   return s === "on";
 }
-

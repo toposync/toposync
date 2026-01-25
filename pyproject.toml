@@ -2,7 +2,7 @@
 name = "toposync"
 version = "0.1.0"
 description = "Toposync core runtime (Python backend + extension host)."
-readme = "README.md"
+readme = "readme.md"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115",
@@ -19,6 +19,26 @@ dev = [
   "pytest>=8.3",
   "ruff>=0.8",
 ]
+extensions = [
+  "toposync-ext-structural",
+  "toposync-ext-models",
+  "toposync-ext-home-assistant",
+  "toposync-ext-images",
+  "toposync-ext-cameras",
+]
+
+# Heavy dependencies for object detection/tracking (YOLO). Install only when needed.
+cameras-yolo = ["toposync-ext-cameras[yolo]"]
+
+[tool.uv]
+default-groups = ["dev", "extensions"]
+
+[tool.uv.sources]
+toposync-ext-structural = { path = "extensions/structural", editable = true }
+toposync-ext-models = { path = "extensions/models", editable = true }
+toposync-ext-home-assistant = { path = "extensions/home_assistant", editable = true }
+toposync-ext-images = { path = "extensions/images", editable = true }
+toposync-ext-cameras = { path = "extensions/cameras", editable = true }
 
 [build-system]
 requires = ["hatchling>=1.25"]

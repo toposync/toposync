@@ -7,12 +7,14 @@ import mimetypes
 import os
 import re
 import uuid
+from pathlib import Path
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.responses import StreamingResponse
+from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from toposync.extensions.manager import ExtensionManager
@@ -107,6 +109,23 @@ def _safe_filename(value: str | None, *, fallback: str) -> str:
     if name in {"", ".", ".."}:
         return fallback
     return name[:255]
+
+
+def _resolve_frontend_dir() -> Path | None:
+    if os.getenv("TOPOSYNC_NO_FRONTEND"):
+        return None
+
+    override = os.getenv("TOPOSYNC_FRONTEND_DIR")
+    if override:
+        candidate = Path(override).expanduser().resolve()
+        if (candidate / "index.html").is_file():
+            return candidate
+        return None
+
+    candidate = (Path.cwd() / "frontend" / "dist").resolve()
+    if (candidate / "index.html").is_file():
+        return candidate
+    return None
 
 
 @asynccontextmanager
@@ -428,5 +447,33 @@ def create_app() -> FastAPI:
         if notif is None:
             raise HTTPException(status_code=404, detail="Unknown notification")
         return notif
+
+    frontend_dir = _resolve_frontend_dir()
+    if frontend_dir:
+        index_path = frontend_dir / "index.html"
+
+        @app.middleware("http")
+        async def spa_fallback(
+            request: Request,
+            call_next: Callable[[Request], Awaitable[Response]],
+        ) -> Response:
+            response = await call_next(request)
+            if response.status_code != 404:
+                return response
+
+            if request.method not in {"GET", "HEAD"}:
+                return response
+
+            path = request.url.path
+            if path.startswith(("/api", "/extensions", "/files")):
+                return response
+
+            accept = request.headers.get("accept", "")
+            if "text/html" not in accept:
+                return response
+
+            return FileResponse(index_path, media_type="text/html", headers={"Cache-Control": "no-store"})
+
+        app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 
     return app

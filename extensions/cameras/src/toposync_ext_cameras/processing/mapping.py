@@ -42,6 +42,7 @@ class ControlPointMapper:
             H = _solve_homography(src, dst)
 
         self._H = H
+        self._H_inv: Any | None = None
 
     def map(self, u: float, v: float) -> tuple[float, float] | None:
         if np is None:
@@ -56,6 +57,32 @@ class ControlPointMapper:
         if not (x == x and z == z):
             return None
         return x, z
+
+    def map_image_to_world(self, u: float, v: float) -> tuple[float, float] | None:
+        return self.map(u, v)
+
+    def map_world_to_image(self, x: float, z: float) -> tuple[float, float] | None:
+        if np is None:
+            return None
+
+        inv = self._H_inv
+        if inv is None:
+            try:
+                inv = np.linalg.inv(self._H)
+            except Exception:
+                return None
+            self._H_inv = inv
+
+        p = np.array([float(x), float(z), 1.0], dtype=np.float64)
+        out = inv @ p
+        w = float(out[2]) if out.shape[0] >= 3 else 0.0
+        if abs(w) < 1e-9:
+            return None
+        u = float(out[0]) / w
+        v = float(out[1]) / w
+        if not (u == u and v == v):
+            return None
+        return u, v
 
 
 def _solve_homography(src: Any, dst: Any) -> Any:
@@ -74,4 +101,3 @@ def _solve_homography(src: Any, dst: Any) -> Any:
     if abs(H[2, 2]) > 1e-12:
         H = H / H[2, 2]
     return H
-

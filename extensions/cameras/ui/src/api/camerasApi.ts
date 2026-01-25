@@ -1,6 +1,10 @@
 import type { CamerasIndex } from "../types";
 import { readRecord } from "../parsing";
 
+type ControlPointMapPair = { image: { x: number; y: number }; world: { x: number; z: number } };
+type ControlPointMapQuery = { kind: "image"; x: number; y: number } | { kind: "world"; x: number; z: number };
+type ControlPointMapResponse = { world?: { x: number; z: number } | null; image?: { x: number; y: number } | null };
+
 export async function fetchCamerasIndex(): Promise<CamerasIndex> {
   const response = await fetch("/api/cameras/index");
   if (!response.ok) throw new Error(`Failed to load cameras index: ${response.status}`);
@@ -38,3 +42,20 @@ export async function fetchCameraSnapshot(cameraId: string): Promise<Blob> {
   return response.blob();
 }
 
+export async function mapControlPoint(
+  pairs: ControlPointMapPair[],
+  query: ControlPointMapQuery,
+  signal?: AbortSignal,
+): Promise<ControlPointMapResponse> {
+  const response = await fetch("/api/cameras/control_points/map", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pairs, query }),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Mapping failed: ${response.status}`);
+  }
+  return response.json();
+}

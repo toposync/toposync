@@ -36,6 +36,8 @@ const FULL_WALL_HEIGHT = 2.7;
 const FOCUS_HIGHLIGHT_COLOR = 0xfbbf24;
 const GHOST_WALLS_OPACITY = 0.22;
 const GHOST_WALLS_MATERIAL_STATE_KEY = "__toposyncGhostWallsOriginal";
+const AUTO_FIT_GRACE_MS = 3500;
+const AUTO_FIT_THROTTLE_MS = 220;
 
 function expandBoundsByVisibleObject(target: THREE.Box3, root: THREE.Object3D): boolean {
   let added = false;
@@ -124,35 +126,87 @@ function fitCameraTopDown(camera: THREE.PerspectiveCamera, controls: OrbitContro
 }
 
 function fitCameraAngledOverview(camera: THREE.PerspectiveCamera, controls: OrbitControls, bounds: THREE.Box3): void {
-  const sphere = new THREE.Sphere();
-  bounds.getBoundingSphere(sphere);
+  const paddedBounds = bounds.clone();
+  const size = new THREE.Vector3();
+  paddedBounds.getSize(size);
 
-  const center = sphere.center.clone();
-  const targetY = Math.min(0.4, Math.max(0.2, bounds.max.y * 0.18));
+  const padXZ = Math.max(0.35, Math.max(size.x, size.z) * 0.08);
+  const padY = Math.max(0.08, size.y * 0.04);
+  paddedBounds.expandByVector(new THREE.Vector3(padXZ, padY, padXZ));
+
+  const center = new THREE.Vector3();
+  paddedBounds.getCenter(center);
+  paddedBounds.getSize(size);
+
+  // Keep the orbit target close to the ground, but fit using the real camera frustum
+  // so tall walls/models don't get clipped or appear shifted.
+  const targetY = paddedBounds.min.y + Math.min(0.4, size.y * 0.12);
   const target = new THREE.Vector3(center.x, targetY, center.z);
+
+  // Bird's-eye / 3-quarters view (from a corner) to give depth while keeping the full plan visible.
+  const polar = 0.68; // angle from +Y axis (0 = top-down, PI/2 = horizon)
+  const azimuth = Math.PI * 0.25; // 45° corner view
+
+  const direction = new THREE.Vector3();
+  direction.setFromSpherical(new THREE.Spherical(1, polar, azimuth));
+
+  const corners: THREE.Vector3[] = Array.from({ length: 8 }, () => new THREE.Vector3());
+  const min = paddedBounds.min;
+  const max = paddedBounds.max;
+  corners[0].set(min.x, min.y, min.z);
+  corners[1].set(min.x, min.y, max.z);
+  corners[2].set(min.x, max.y, min.z);
+  corners[3].set(min.x, max.y, max.z);
+  corners[4].set(max.x, min.y, min.z);
+  corners[5].set(max.x, min.y, max.z);
+  corners[6].set(max.x, max.y, min.z);
+  corners[7].set(max.x, max.y, max.z);
+
+  const projected = new THREE.Vector3();
+  const margin = 0.92;
 
   const vFov = THREE.MathUtils.degToRad(camera.fov);
   const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
-  const minFov = Math.min(vFov, hFov);
+  const minFov = Math.max(0.001, Math.min(vFov, hFov));
 
-  let distance = sphere.radius > 0 ? sphere.radius / Math.sin(Math.max(0.001, minFov / 2)) : 2.0;
-  if (!Number.isFinite(distance) || distance <= 0) distance = 2.0;
+  let maxRadius = 0;
+  for (const corner of corners) maxRadius = Math.max(maxRadius, corner.distanceTo(target));
+  let high = maxRadius > 0 ? maxRadius / Math.sin(minFov / 2) : 2.0;
+  if (!Number.isFinite(high) || high <= 0) high = 2.0;
+  high *= 1.15;
 
-  const padding = 1.25;
-  distance *= padding;
+  const fits = (distance: number) => {
+    camera.position.copy(target).addScaledVector(direction, distance);
+    camera.lookAt(target);
+    camera.updateMatrixWorld(true);
+    for (const corner of corners) {
+      projected.copy(corner).project(camera);
+      if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y) || !Number.isFinite(projected.z)) return false;
+      if (Math.abs(projected.x) > margin || Math.abs(projected.y) > margin) return false;
+      if (projected.z < -1 || projected.z > 1) return false;
+    }
+    return true;
+  };
 
-  // Bird's-eye / 3-quarters view (from a corner) to give depth while keeping the full plan visible.
-  const polar = 0.72; // angle from +Y axis (0 = top-down, PI/2 = horizon)
-  const azimuth = Math.PI * 0.25; // 45° corner view
+  if (!fits(high)) {
+    while (!fits(high) && high < 2000) high *= 1.25;
+  }
 
-  const offset = new THREE.Vector3();
-  offset.setFromSpherical(new THREE.Spherical(distance, polar, azimuth));
+  let low = 0;
+  for (let i = 0; i < 22; i += 1) {
+    const mid = (low + high) / 2;
+    if (fits(mid)) high = mid;
+    else low = mid;
+  }
+
+  const distance = high * 1.03;
 
   controls.target.copy(target);
-  camera.position.copy(target).add(offset);
+  camera.position.copy(target).addScaledVector(direction, distance);
+  camera.lookAt(target);
 
   controls.maxDistance = Math.max(controls.maxDistance, distance * 4);
-  controls.minDistance = Math.min(controls.minDistance, Math.max(0.5, distance * 0.15));
+  controls.minDistance = Math.min(controls.minDistance, Math.max(0.15, distance * 0.06));
   controls.update();
 }
 
@@ -278,6 +332,9 @@ export function Viewport3D({
   const compositionIdRef = useRef<string | undefined>(compositionId);
   const lastAutoFitCompositionIdRef = useRef<string | null>(null);
   const userInteractedWithCameraRef = useRef(false);
+  const autoFitUntilRef = useRef<number>(0);
+  const autoFitLastBoundsRef = useRef<THREE.Box3 | null>(null);
+  const autoFitLastCheckTsRef = useRef<number>(0);
 
   const [focusedElementId, setFocusedElementId] = useState<string | null>(null);
   const focusHelperRef = useRef<THREE.BoxHelper | null>(null);
@@ -394,6 +451,9 @@ export function Viewport3D({
     if (compositionId !== lastAutoFitCompositionIdRef.current) {
       lastAutoFitCompositionIdRef.current = null;
       userInteractedWithCameraRef.current = false;
+      autoFitUntilRef.current = Date.now() + AUTO_FIT_GRACE_MS;
+      autoFitLastBoundsRef.current = null;
+      autoFitLastCheckTsRef.current = 0;
     }
     syncNotificationOverlay();
   }, [compositionId]);
@@ -462,6 +522,7 @@ export function Viewport3D({
 
 	    const handleControlsStart = () => {
 	      userInteractedWithCameraRef.current = true;
+      autoFitUntilRef.current = 0;
 	    };
 	    controls.addEventListener("start", handleControlsStart);
 
@@ -485,6 +546,7 @@ export function Viewport3D({
 
     let raf = 0;
     const clock = new THREE.Clock();
+    const autoFitSize = new THREE.Vector3();
 
     function animate() {
       raf = requestAnimationFrame(animate);
@@ -492,6 +554,34 @@ export function Viewport3D({
       for (const tracked of trackedRef.current.values()) tracked.instance.tick?.(dt);
       notificationOverlayRef.current?.tick?.(dt);
       focusHelperRef.current?.update();
+
+      const now = Date.now();
+      const autoFitUntil = autoFitUntilRef.current;
+      if (autoFitUntil && now <= autoFitUntil && !userInteractedWithCameraRef.current) {
+        const lastCheckTs = autoFitLastCheckTsRef.current;
+        if (!lastCheckTs || now - lastCheckTs >= AUTO_FIT_THROTTLE_MS) {
+          autoFitLastCheckTsRef.current = now;
+          const bounds = computeTrackedBounds(trackedRef.current);
+          if (bounds) {
+            const prev = autoFitLastBoundsRef.current;
+            let changed = !prev;
+            if (prev) {
+              prev.getSize(autoFitSize);
+              const tol = Math.max(0.06, autoFitSize.length() * 0.01);
+              changed = bounds.min.distanceTo(prev.min) > tol || bounds.max.distanceTo(prev.max) > tol;
+            }
+
+            if (changed) {
+              fitCameraAngledOverview(camera, controls, bounds);
+              autoFitLastBoundsRef.current = bounds.clone();
+              lastAutoFitCompositionIdRef.current = compositionIdRef.current ?? null;
+            }
+          }
+        }
+      } else if (autoFitUntil && now > autoFitUntil) {
+        autoFitUntilRef.current = 0;
+      }
+
       controls.update();
       renderer.render(scene, camera);
       labelRenderer.render(scene, camera);
@@ -812,6 +902,9 @@ export function Viewport3D({
 	      if (bounds) {
 	        fitCameraAngledOverview(camera, controls, bounds);
 	        lastAutoFitCompositionIdRef.current = fitKey;
+          autoFitLastBoundsRef.current = bounds.clone();
+          autoFitUntilRef.current = Date.now() + AUTO_FIT_GRACE_MS;
+          autoFitLastCheckTsRef.current = 0;
 	      }
 	    }
 	  }, [

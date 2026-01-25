@@ -6,7 +6,7 @@ import re
 import shutil
 import urllib.parse
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
@@ -18,6 +18,7 @@ from toposync.runtime.config_store import ConfigStore
 from toposync.runtime.event_bus import EventBus
 from toposync.runtime.services import ServiceRegistry
 
+from .processing.mapping import ControlPointMapper, ControlPointPair
 from .processing.runtime import CamerasProcessingRuntime
 
 
@@ -29,6 +30,33 @@ class RtspSnapshotRequest(BaseModel):
     username: str = ""
     password: str = ""
     timeout_ms: int = Field(default=9000, ge=1500, le=30000)
+
+
+class ControlPointMapImage(BaseModel):
+    x: float = Field(ge=0.0, le=1.0)
+    y: float = Field(ge=0.0, le=1.0)
+
+
+class ControlPointMapWorld(BaseModel):
+    x: float
+    z: float
+
+
+class ControlPointMapPair(BaseModel):
+    image: ControlPointMapImage
+    world: ControlPointMapWorld
+
+
+class ControlPointMapQuery(BaseModel):
+    kind: Literal["image", "world"]
+    x: float
+    y: float | None = None
+    z: float | None = None
+
+
+class ControlPointMapRequest(BaseModel):
+    pairs: list[ControlPointMapPair]
+    query: ControlPointMapQuery
 
 
 def _rtsp_url_with_auth(url: str, username: str, password: str) -> str:
@@ -281,6 +309,52 @@ class CamerasExtension(BaseExtension):
                     runtime.broadcaster.unsubscribe(q)
 
             return StreamingResponse(gen(), media_type="text/event-stream")
+
+        @app.post("/api/cameras/control_points/map")
+        async def map_control_points(body: ControlPointMapRequest) -> dict[str, Any]:
+            pairs = [
+                ControlPointPair(
+                    image_u=float(p.image.x),
+                    image_v=float(p.image.y),
+                    world_x=float(p.world.x),
+                    world_z=float(p.world.z),
+                )
+                for p in body.pairs
+            ]
+            if len(pairs) < 4:
+                return {"world": None} if body.query.kind == "image" else {"image": None}
+
+            try:
+                mapper = ControlPointMapper(pairs)
+            except RuntimeError as exc:
+                raise HTTPException(status_code=501, detail=str(exc)) from exc
+            except Exception:
+                return {"world": None} if body.query.kind == "image" else {"image": None}
+
+            if body.query.kind == "image":
+                if body.query.y is None:
+                    raise HTTPException(status_code=400, detail="y is required for image mapping")
+                u = float(body.query.x)
+                v = float(body.query.y)
+                if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
+                    return {"world": None}
+                mapped = mapper.map(u, v)
+                if mapped is None:
+                    return {"world": None}
+                x, z = mapped
+                return {"world": {"x": x, "z": z}}
+
+            if body.query.z is None:
+                raise HTTPException(status_code=400, detail="z is required for world mapping")
+            x = float(body.query.x)
+            z = float(body.query.z)
+            mapped = mapper.map_world_to_image(x, z)
+            if mapped is None:
+                return {"image": None}
+            u, v = mapped
+            if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
+                return {"image": None}
+            return {"image": {"x": u, "y": v}}
 
         @app.post("/api/cameras/rtsp/snapshot")
         async def rtsp_snapshot(body: RtspSnapshotRequest) -> Response:

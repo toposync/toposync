@@ -14,7 +14,7 @@ import type {
   Viewport2DContext,
 } from "@toposync/plugin-api";
 
-import { fetchCameraSnapshot, fetchCamerasIndex } from "../api/camerasApi";
+import { fetchCameraSnapshot, fetchCamerasIndex, mapControlPoint } from "../api/camerasApi";
 import { CAMERA_ELEMENT_TYPE_ID, CONTROL_POINT_COLORS } from "../constants";
 import { createDefaultControlPoints, createUniqueId, labelForIndex, readControlPoints, readRecord, readString } from "../parsing";
 import type { CamerasIndex, ControlPoint } from "../types";
@@ -413,10 +413,20 @@ function ControlPointsModal({
 
   const [points, setPoints] = useState<ControlPoint[]>([]);
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
+  const [hoverImagePoint, setHoverImagePoint] = useState<{ x: number; y: number } | null>(null);
+  const [hoverWorldPoint, setHoverWorldPoint] = useState<{ x: number; z: number } | null>(null);
+  const [ghostWorldPoint, setGhostWorldPoint] = useState<{ x: number; z: number } | null>(null);
+  const [ghostImagePoint, setGhostImagePoint] = useState<{ x: number; y: number } | null>(null);
 
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
   const [snapshotErrorMessage, setSnapshotErrorMessage] = useState<string | null>(null);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
+
+  const mappingPairs = useMemo(() => {
+    return points
+      .filter((point) => Boolean(point.image) && Boolean(point.world))
+      .map((point) => ({ image: point.image as { x: number; y: number }, world: point.world as { x: number; z: number } }));
+  }, [points]);
 
   useEffect(() => {
     return () => {
@@ -434,6 +444,14 @@ function ControlPointsModal({
     setPoints(padded);
     setSelectedPointId(padded[0]?.id ?? null);
   }, [open, initialPoints]);
+
+  useEffect(() => {
+    if (open) return;
+    setHoverImagePoint(null);
+    setHoverWorldPoint(null);
+    setGhostWorldPoint(null);
+    setGhostImagePoint(null);
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -469,9 +487,104 @@ function ControlPointsModal({
 
   const completePairs = useMemo(() => points.filter((point) => Boolean(point.image) && Boolean(point.world)).length, [points]);
 
+  const imageToWorldAbortRef = React.useRef<AbortController | null>(null);
+  const worldToImageAbortRef = React.useRef<AbortController | null>(null);
+  const imageToWorldTimerRef = React.useRef<number | null>(null);
+  const worldToImageTimerRef = React.useRef<number | null>(null);
+  const mapDebounceMs = 80;
+
+  useEffect(() => {
+    if (!open) return;
+    if (!hoverImagePoint || completePairs < 4) {
+      if (imageToWorldTimerRef.current) {
+        window.clearTimeout(imageToWorldTimerRef.current);
+        imageToWorldTimerRef.current = null;
+      }
+      imageToWorldAbortRef.current?.abort();
+      setGhostWorldPoint(null);
+      return;
+    }
+
+    imageToWorldAbortRef.current?.abort();
+    if (imageToWorldTimerRef.current) window.clearTimeout(imageToWorldTimerRef.current);
+    imageToWorldTimerRef.current = window.setTimeout(() => {
+      imageToWorldTimerRef.current = null;
+      const controller = new AbortController();
+      imageToWorldAbortRef.current = controller;
+      void mapControlPoint(mappingPairs, { kind: "image", x: hoverImagePoint.x, y: hoverImagePoint.y }, controller.signal)
+        .then((result) => {
+          setGhostWorldPoint(result.world ?? null);
+        })
+        .catch((error) => {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+          console.warn("[cameras] hover map image->world failed", error);
+          setGhostWorldPoint(null);
+        });
+    }, mapDebounceMs);
+
+    return () => {
+      if (imageToWorldTimerRef.current) {
+        window.clearTimeout(imageToWorldTimerRef.current);
+        imageToWorldTimerRef.current = null;
+      }
+      imageToWorldAbortRef.current?.abort();
+    };
+  }, [open, hoverImagePoint, completePairs, mappingPairs]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (!hoverWorldPoint || completePairs < 4) {
+      if (worldToImageTimerRef.current) {
+        window.clearTimeout(worldToImageTimerRef.current);
+        worldToImageTimerRef.current = null;
+      }
+      worldToImageAbortRef.current?.abort();
+      setGhostImagePoint(null);
+      return;
+    }
+
+    worldToImageAbortRef.current?.abort();
+    if (worldToImageTimerRef.current) window.clearTimeout(worldToImageTimerRef.current);
+    worldToImageTimerRef.current = window.setTimeout(() => {
+      worldToImageTimerRef.current = null;
+      const controller = new AbortController();
+      worldToImageAbortRef.current = controller;
+      void mapControlPoint(mappingPairs, { kind: "world", x: hoverWorldPoint.x, z: hoverWorldPoint.z }, controller.signal)
+        .then((result) => {
+          setGhostImagePoint(result.image ?? null);
+        })
+        .catch((error) => {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+          console.warn("[cameras] hover map world->image failed", error);
+          setGhostImagePoint(null);
+        });
+    }, mapDebounceMs);
+
+    return () => {
+      if (worldToImageTimerRef.current) {
+        window.clearTimeout(worldToImageTimerRef.current);
+        worldToImageTimerRef.current = null;
+      }
+      worldToImageAbortRef.current?.abort();
+    };
+  }, [open, hoverWorldPoint, completePairs, mappingPairs]);
+
   const toolSession = useMemo<EditorToolSession>(() => {
     return {
       onPointerEvent: (event: EditorToolPointerEvent) => {
+        if (event.kind === "cancel") {
+          setHoverWorldPoint(null);
+          setGhostImagePoint(null);
+          return;
+        }
+        if (event.kind === "move") {
+          if (completePairs >= 4) {
+            setHoverWorldPoint({ x: event.world.x, z: event.world.z });
+            setHoverImagePoint(null);
+            setGhostWorldPoint(null);
+          }
+          return;
+        }
         if (event.kind !== "down") return;
         if (!selectedPointId) return;
         setPoints((previous) =>
@@ -512,11 +625,29 @@ function ControlPointsModal({
           canvasContext.fillText(point.label || labelForIndex(index), screen.x, screen.y + 0.5);
         }
 
+        if (ghostWorldPoint && completePairs >= 4) {
+          const screen = viewport.worldToScreen(ghostWorldPoint);
+          canvasContext.beginPath();
+          canvasContext.arc(screen.x, screen.y, 9, 0, Math.PI * 2);
+          canvasContext.fillStyle = "rgba(251,191,36,0.10)";
+          canvasContext.fill();
+          canvasContext.lineWidth = 2;
+          canvasContext.strokeStyle = "rgba(251,191,36,0.88)";
+          canvasContext.setLineDash([6, 4]);
+          canvasContext.stroke();
+          canvasContext.setLineDash([]);
+
+          canvasContext.beginPath();
+          canvasContext.arc(screen.x, screen.y, 2.6, 0, Math.PI * 2);
+          canvasContext.fillStyle = "rgba(251,191,36,0.95)";
+          canvasContext.fill();
+        }
+
         canvasContext.restore();
       },
       getCursor: () => "crosshair",
     };
-  }, [points, selectedPointId]);
+  }, [points, selectedPointId, ghostWorldPoint, completePairs]);
 
   function addPoint() {
     const id = createUniqueId();
@@ -524,13 +655,18 @@ function ControlPointsModal({
     setSelectedPointId(id);
   }
 
-  function setImagePointFromEvent(event: React.MouseEvent<HTMLImageElement>) {
-    if (!selectedPointId) return;
+  function getImagePointFromEvent(event: React.MouseEvent<HTMLImageElement>) {
     const rect = event.currentTarget.getBoundingClientRect();
     const normalizedX = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
     const normalizedY = Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)));
+    return { x: normalizedX, y: normalizedY };
+  }
+
+  function setImagePointFromEvent(event: React.MouseEvent<HTMLImageElement>) {
+    const imgPoint = getImagePointFromEvent(event);
+    if (!imgPoint || !selectedPointId) return;
     setPoints((previous) =>
-      previous.map((point) => (point.id === selectedPointId ? { ...point, image: { x: normalizedX, y: normalizedY } } : point)),
+      previous.map((point) => (point.id === selectedPointId ? { ...point, image: imgPoint } : point)),
     );
   }
 
@@ -639,6 +775,17 @@ function ControlPointsModal({
                       event.preventDefault();
                       setImagePointFromEvent(event);
                     }}
+                    onMouseMove={(event) => {
+                      const p = getImagePointFromEvent(event);
+                      if (!p || completePairs < 4) return;
+                      setHoverImagePoint(p);
+                      setHoverWorldPoint(null);
+                      setGhostImagePoint(null);
+                    }}
+                    onMouseLeave={() => {
+                      setHoverImagePoint(null);
+                      setGhostWorldPoint(null);
+                    }}
                   />
 
                   {points.map((point, index) => {
@@ -672,6 +819,25 @@ function ControlPointsModal({
                       </div>
                     );
                   })}
+
+                  {ghostImagePoint && completePairs >= 4 ? (
+                    <div
+                      aria-hidden="true"
+                      style={{
+                        position: "absolute",
+                        left: `${ghostImagePoint.x * 100}%`,
+                        top: `${ghostImagePoint.y * 100}%`,
+                        transform: "translate(-50%,-50%)",
+                        width: 18,
+                        height: 18,
+                        borderRadius: 999,
+                        background: "rgba(251,191,36,0.10)",
+                        border: "2px dashed rgba(251,191,36,0.88)",
+                        boxShadow: "0 8px 18px rgba(0,0,0,0.22)",
+                        pointerEvents: "none",
+                      }}
+                    />
+                  ) : null}
                 </div>
               ) : (
                 <div className="card">

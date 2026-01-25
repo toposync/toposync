@@ -1000,7 +1000,11 @@ export function Viewport2D({
       return toPlanePoint((screen.x - originX) / scale + cx, (screen.y - originY) / scale + cz);
     }
 
-    function toToolEvent(kind: "down" | "move" | "up" | "cancel" | "dblclick", e: PointerEvent): void {
+    function toToolEvent(
+      kind: "down" | "move" | "up" | "cancel" | "dblclick",
+      e: PointerEvent,
+      buttonsOverride?: number,
+    ): void {
       const session = toolSessionRef.current;
       if (!session?.onPointerEvent) return;
 
@@ -1017,7 +1021,7 @@ export function Viewport2D({
         world,
         screen,
         button: e.button,
-        buttons: e.buttons,
+        buttons: typeof buttonsOverride === "number" ? buttonsOverride : e.buttons,
         pointerType: e.pointerType,
         shiftKey: e.shiftKey,
         altKey: e.altKey,
@@ -1293,7 +1297,7 @@ export function Viewport2D({
         spacePressed ||
         e.button === 1 ||
         e.button === 2 ||
-        (mode === "navigate" && e.button === 0 && !session);
+        (mode === "navigate" && e.button === 0);
 
       const rect = canvasEl.getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -1800,6 +1804,10 @@ export function Viewport2D({
 
       if (interaction.kind === "pan") {
         if (interaction.pointerId !== e.pointerId) return;
+        if (interaction.startedByLeft && !interaction.moved && interactionModeRef.current === "navigate") {
+          toToolEvent("down", e, 1);
+          toToolEvent("up", e, 0);
+        }
         if (interaction.startedByLeft && !interaction.moved && interactionModeRef.current === "select") {
           selectedRef.current = [];
           onSelectRef.current?.([]);

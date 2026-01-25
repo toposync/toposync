@@ -147,6 +147,16 @@ function asVector3(v: unknown, fallback: Vector3): Vector3 {
   };
 }
 
+function parseIsoMillis(iso: string | undefined): number {
+  if (!iso) return 0;
+  const ts = Date.parse(iso);
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function notificationActivityMillis(notification: Notification): number {
+  return Math.max(parseIsoMillis(notification.updatedAt), parseIsoMillis(notification.createdAt));
+}
+
 function defaultComposition(): Composition {
   return { id: "ground", name: "Térreo", elements: [] };
 }
@@ -500,14 +510,27 @@ export function App(): React.ReactElement {
     };
   }, []);
 
-  const upsertNotification = useCallback((next: Notification, _op: "insert" | "update") => {
+  const upsertNotification = useCallback((next: Notification, op: "insert" | "update") => {
     setNotifications((prev) => {
       const idx = prev.findIndex((n) => n.id === next.id);
       if (idx === -1) return [next, ...prev];
 
-      const merged = { ...prev[idx], ...next };
+      const prevEntry = prev[idx];
+      const merged = { ...prevEntry, ...next };
       const out = prev.slice();
       out[idx] = merged;
+
+      const shouldBump =
+        idx > 0 &&
+        (op === "insert" ||
+          notificationActivityMillis(merged) > notificationActivityMillis(prevEntry) ||
+          (prevEntry.imageUrl ?? "") !== (merged.imageUrl ?? ""));
+
+      if (shouldBump) {
+        out.splice(idx, 1);
+        return [merged, ...out];
+      }
+
       return out;
     });
   }, []);
@@ -935,9 +958,6 @@ export function App(): React.ReactElement {
 	          elements={composition.elements}
 	          elementTypesById={elementTypesById}
 	          viewSettings={viewSettings}
-	          onSetWallHeightPreset={setWallHeightPreset}
-	          onSetGhostWalls={setGhostWalls}
-	          onSetGraphicsQuality={setGraphicsQuality}
 	          notificationRenderers={notificationRenderers}
 	          notifications={notifications}
 	          activeNotificationId={activeNotificationId}
@@ -984,6 +1004,12 @@ export function App(): React.ReactElement {
         open={isSettingsOpen}
         backendAvailable={backendAvailable}
         api={host.api}
+        wallHeightPreset={wallHeightPreset}
+        ghostWalls={ghostWalls}
+        graphicsQuality={graphicsQuality}
+        onSetWallHeightPreset={setWallHeightPreset}
+        onSetGhostWalls={setGhostWalls}
+        onSetGraphicsQuality={setGraphicsQuality}
         panels={Object.values(settingsPanelsById)}
         themes={themeOptions}
         themeId={themeId}

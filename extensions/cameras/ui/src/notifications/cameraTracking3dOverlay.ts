@@ -1,10 +1,13 @@
 import type {
+  CompositionElement,
   Notification,
   Notification3DOverlay,
   NotificationOverlayActions,
   Scene3DContext,
 } from "@toposync/plugin-api";
 import type { Mesh, Object3D } from "three";
+
+import { CAMERA_ELEMENT_TYPE_ID } from "../constants";
 
 type CamerasTrackingPayload = {
   camera_id?: string;
@@ -26,6 +29,8 @@ type CaptureUserData = {
   title?: string;
   subtitle?: string;
 };
+
+type CameraAnchor = { x: number; z: number };
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
@@ -87,6 +92,28 @@ function parseDetectionEvent(value: unknown): DetectionEvent | null {
   return { ts, tracking_id: trackingId, composition_id: compositionId, world, image_path: imagePath };
 }
 
+function parseCameraAnchorFromComposition(value: unknown, cameraId: string): CameraAnchor | null {
+  const root = asRecord(value);
+  const elements = Array.isArray(root.elements) ? root.elements : [];
+
+  for (const raw of elements) {
+    const el = asRecord(raw) as unknown as Partial<CompositionElement>;
+    if (typeof el.type !== "string" || el.type !== CAMERA_ELEMENT_TYPE_ID) continue;
+
+    const props = asRecord(el.props);
+    const elementCameraId = asString(props.camera_id).trim();
+    if (!elementCameraId || elementCameraId !== cameraId) continue;
+
+    const pos = asRecord(el.position);
+    const x = asNumber(pos.x);
+    const z = asNumber(pos.z);
+    if (x == null || z == null) continue;
+    return { x, z };
+  }
+
+  return null;
+}
+
 export function createCameraTracking3dOverlay(
   ctx: Scene3DContext,
   notification: Notification,
@@ -95,6 +122,7 @@ export function createCameraTracking3dOverlay(
   const THREE = ctx.THREE;
 
   const payload = parsePayload(notification);
+  const cameraId = (payload.camera_id ?? "").trim();
   const trackingId = (payload.tracking_id ?? "").trim();
   if (!trackingId) return null;
 
@@ -157,6 +185,7 @@ export function createCameraTracking3dOverlay(
 
   const pointsByTs = new Map<number, { x: number; z: number }>();
   const capturesByTs = new Map<number, Mesh>();
+  const pendingNoWorldCaptures = new Map<number, string>();
   const MAX_TRAIL_POINTS = 800;
 
   function rebuildTrailGeometry() {
@@ -182,11 +211,11 @@ export function createCameraTracking3dOverlay(
     trailGeometry.attributes.position.needsUpdate = true;
   }
 
-  function addCapturePoint(ts: number, world: { x: number; z: number }, imagePath: string) {
+  function addCapturePoint(ts: number, pos: { x: number; z: number }, imagePath: string) {
     if (capturesByTs.has(ts)) return;
     const url = `/files/${encodeFilesPath(imagePath)}`;
     const mesh = new THREE.Mesh(captureGeometry, captureMaterial);
-    mesh.position.set(world.x, captureY, world.z);
+    mesh.position.set(pos.x, captureY, pos.z);
     mesh.userData.capture = {
       url,
       title: payload.camera_name?.trim() || payload.camera_id?.trim() || notification.title,
@@ -197,20 +226,81 @@ export function createCameraTracking3dOverlay(
     capturesByTs.set(ts, mesh);
   }
 
+  function fallbackCapturePosition(anchor: CameraAnchor, ts: number): { x: number; z: number } {
+    const seed = Math.floor(ts * 1000);
+    const t1 = seed * 0.61803398875;
+    const t2 = seed * 0.41421356237;
+    const frac1 = t1 - Math.floor(t1);
+    const frac2 = t2 - Math.floor(t2);
+    const angle = frac1 * Math.PI * 2;
+    const radius = 0.12 + frac2 * 0.3;
+    return {
+      x: anchor.x + Math.cos(angle) * radius,
+      z: anchor.z + Math.sin(angle) * radius,
+    };
+  }
+
+  let cameraAnchor: CameraAnchor | null = null;
+  let cameraAnchorLoaded = false;
+
+  function flushPendingNoWorldCaptures(): void {
+    if (!cameraAnchorLoaded) return;
+    const anchor = cameraAnchor ?? { x: 0, z: 0 };
+    for (const [ts, imagePath] of pendingNoWorldCaptures.entries()) {
+      addCapturePoint(ts, fallbackCapturePosition(anchor, ts), imagePath);
+    }
+    pendingNoWorldCaptures.clear();
+  }
+
   function ingest(ev: DetectionEvent) {
     if (ev.tracking_id !== trackingId) return;
     if (wantedCompositionId && ev.composition_id !== wantedCompositionId) return;
-    if (!ev.world) return;
 
-    if (!pointsByTs.has(ev.ts)) pointsByTs.set(ev.ts, { x: ev.world.x, z: ev.world.z });
-    rebuildTrailGeometry();
+    if (ev.world) {
+      if (!pointsByTs.has(ev.ts)) pointsByTs.set(ev.ts, { x: ev.world.x, z: ev.world.z });
+      rebuildTrailGeometry();
 
-    if (ev.image_path) addCapturePoint(ev.ts, ev.world, ev.image_path);
+      if (ev.image_path) addCapturePoint(ev.ts, ev.world, ev.image_path);
+      return;
+    }
+
+    if (!ev.image_path) return;
+    if (!cameraAnchorLoaded) {
+      pendingNoWorldCaptures.set(ev.ts, ev.image_path);
+      return;
+    }
+
+    const anchor = cameraAnchor ?? { x: 0, z: 0 };
+    addCapturePoint(ev.ts, fallbackCapturePosition(anchor, ev.ts), ev.image_path);
   }
 
   let disposed = false;
   const abort = new AbortController();
   let stream: EventSource | null = null;
+
+  async function loadCameraAnchor() {
+    if (cameraAnchorLoaded) return;
+    if (!cameraId) {
+      cameraAnchor = { x: 0, z: 0 };
+      cameraAnchorLoaded = true;
+      flushPendingNoWorldCaptures();
+      return;
+    }
+    try {
+      const res = await fetch("/api/composition", { signal: abort.signal });
+      if (res.ok) {
+        const body = (await res.json()) as unknown;
+        cameraAnchor = parseCameraAnchorFromComposition(body, cameraId) ?? { x: 0, z: 0 };
+      } else {
+        cameraAnchor = { x: 0, z: 0 };
+      }
+    } catch {
+      cameraAnchor = { x: 0, z: 0 };
+    } finally {
+      cameraAnchorLoaded = true;
+      flushPendingNoWorldCaptures();
+    }
+  }
 
   async function loadInitial() {
     try {
@@ -253,6 +343,8 @@ export function createCameraTracking3dOverlay(
       // ignore
     }
   }
+
+  void loadCameraAnchor();
 
   void loadInitial().finally(() => {
     if (!disposed) startStream();

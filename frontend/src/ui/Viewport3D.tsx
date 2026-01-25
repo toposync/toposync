@@ -123,6 +123,39 @@ function fitCameraTopDown(camera: THREE.PerspectiveCamera, controls: OrbitContro
   controls.update();
 }
 
+function fitCameraAngledOverview(camera: THREE.PerspectiveCamera, controls: OrbitControls, bounds: THREE.Box3): void {
+  const sphere = new THREE.Sphere();
+  bounds.getBoundingSphere(sphere);
+
+  const center = sphere.center.clone();
+  const targetY = Math.min(0.4, Math.max(0.2, bounds.max.y * 0.18));
+  const target = new THREE.Vector3(center.x, targetY, center.z);
+
+  const vFov = THREE.MathUtils.degToRad(camera.fov);
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+  const minFov = Math.min(vFov, hFov);
+
+  let distance = sphere.radius > 0 ? sphere.radius / Math.sin(Math.max(0.001, minFov / 2)) : 2.0;
+  if (!Number.isFinite(distance) || distance <= 0) distance = 2.0;
+
+  const padding = 1.25;
+  distance *= padding;
+
+  // Bird's-eye / 3-quarters view (from a corner) to give depth while keeping the full plan visible.
+  const polar = 0.72; // angle from +Y axis (0 = top-down, PI/2 = horizon)
+  const azimuth = Math.PI * 0.25; // 45° corner view
+
+  const offset = new THREE.Vector3();
+  offset.setFromSpherical(new THREE.Spherical(distance, polar, azimuth));
+
+  controls.target.copy(target);
+  camera.position.copy(target).add(offset);
+
+  controls.maxDistance = Math.max(controls.maxDistance, distance * 4);
+  controls.minDistance = Math.min(controls.minDistance, Math.max(0.5, distance * 0.15));
+  controls.update();
+}
+
 function applyGhostWalls(object: THREE.Object3D, enabled: boolean): void {
   object.traverse((node) => {
     const matRaw = (node as any).material as unknown;
@@ -421,7 +454,7 @@ export function Viewport3D({
     controls.zoomSpeed = 0.9;
     controls.panSpeed = 0.8;
     controls.target.set(0, 0.2, 0);
-    controls.minDistance = 1.2;
+    controls.minDistance = 0.3;
     controls.maxDistance = 40;
 	    controls.maxPolarAngle = Math.PI / 2 - 0.02;
 	    controls.update();
@@ -777,7 +810,7 @@ export function Viewport3D({
 	    if (controls && !userInteractedWithCameraRef.current && lastAutoFitCompositionIdRef.current !== fitKey) {
 	      const bounds = computeTrackedBounds(tracked);
 	      if (bounds) {
-	        fitCameraTopDown(camera, controls, bounds);
+	        fitCameraAngledOverview(camera, controls, bounds);
 	        lastAutoFitCompositionIdRef.current = fitKey;
 	      }
 	    }

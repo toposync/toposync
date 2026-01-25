@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-import type { HostApi, SettingsPanel, ThemeDefinition } from "@toposync/plugin-api";
+import type { GraphicsQuality, HostApi, SettingsPanel, ThemeDefinition, WallHeightPreset } from "@toposync/plugin-api";
 
 import type { AppSettings } from "../util/api";
 import { i18n, resolveLocalizedString } from "../util/i18n";
@@ -12,6 +12,12 @@ type Props = {
   open: boolean;
   backendAvailable: boolean;
   api: HostApi;
+  wallHeightPreset: WallHeightPreset;
+  ghostWalls: boolean;
+  graphicsQuality: GraphicsQuality;
+  onSetWallHeightPreset: (preset: WallHeightPreset) => void;
+  onSetGhostWalls: (enabled: boolean) => void;
+  onSetGraphicsQuality: (quality: GraphicsQuality) => void;
   panels: SettingsPanel[];
   themes: ThemeDefinition[];
   themeId: string;
@@ -21,16 +27,18 @@ type Props = {
   onClose: () => void;
 };
 
+const VIEW_PANEL_ID = "__view__";
 const CORE_PANEL_ID = "__core__";
-const ACTIVE_PANEL_STORAGE_KEY = "toposync.settings.active_panel.v2";
+const ACTIVE_PANEL_STORAGE_KEY = "toposync.settings.active_panel.v3";
 
 type SettingsEntry =
   | {
       kind: "core";
-      id: typeof CORE_PANEL_ID;
+      id: string;
       icon: string;
       title: string;
       desc: string;
+      render: () => React.ReactNode;
     }
   | {
       kind: "extension";
@@ -55,6 +63,12 @@ export function SettingsModal({
   open,
   backendAvailable,
   api,
+  wallHeightPreset,
+  ghostWalls,
+  graphicsQuality,
+  onSetWallHeightPreset,
+  onSetGhostWalls,
+  onSetGraphicsQuality,
   panels,
   themes,
   themeId,
@@ -64,7 +78,7 @@ export function SettingsModal({
   onClose,
 }: Props): React.ReactElement | null {
   const { t, locale, setLocale } = i18n.useI18n();
-  const [activePanelId, setActivePanelId] = useState<string>(() => loadActivePanelId(CORE_PANEL_ID));
+  const [activePanelId, setActivePanelId] = useState<string>(() => loadActivePanelId(VIEW_PANEL_ID));
   const [draftExtensions, setDraftExtensions] = useState<Record<string, Record<string, unknown>>>(() => settings.extensions ?? {});
   const [dirtyExtensions, setDirtyExtensions] = useState<Record<string, boolean>>({});
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -84,8 +98,8 @@ export function SettingsModal({
     setDraftExtensions(settings.extensions ?? {});
     setDirtyExtensions({});
 
-    const availableIds = new Set<string>([CORE_PANEL_ID, ...panels.map((p) => p.id)]);
-    setActivePanelId((prev) => (availableIds.has(prev) ? prev : CORE_PANEL_ID));
+    // Open "View options" by default, since it's the most common entry point.
+    setActivePanelId(VIEW_PANEL_ID);
   }, [open]);
 
   const orderedPanels = useMemo(() => {
@@ -94,18 +108,171 @@ export function SettingsModal({
     return list;
   }, [panels, locale]);
 
-  const coreEntry = useMemo(
-    (): SettingsEntry => ({
+  const entries = useMemo<SettingsEntry[]>(() => {
+    const viewEntry: SettingsEntry = {
       kind: "core",
-      id: CORE_PANEL_ID as const,
+      id: VIEW_PANEL_ID,
+      icon: "sliders",
+      title: t("core.ui.settings.sections.view"),
+      desc: t("core.ui.settings.sections.view_desc"),
+      render: () => (
+        <div>
+          <div className="modalSectionTitle">{t("core.ui.view_settings.wall_height")}</div>
+          <div className="choiceList">
+            {(
+              [
+                { id: "low", title: t("core.ui.wall_height.low"), desc: t("core.ui.wall_height.low_desc") },
+                { id: "medium", title: t("core.ui.wall_height.medium"), desc: t("core.ui.wall_height.medium_desc") },
+                { id: "high", title: t("core.ui.wall_height.high"), desc: t("core.ui.wall_height.high_desc") },
+              ] as const
+            ).map((opt) => {
+              const selected = wallHeightPreset === opt.id;
+              return (
+                <div
+                  key={opt.id}
+                  className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSetWallHeightPreset(opt.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") onSetWallHeightPreset(opt.id);
+                  }}
+                >
+                  <div className="choiceTitle">{opt.title}</div>
+                  <div className="choiceDesc">{opt.desc}</div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="sectionDivider" />
+
+          <div className="modalSectionTitle">{t("core.ui.view_settings.interactivity")}</div>
+          <div className="choiceList">
+            {(() => {
+              const selected = Boolean(ghostWalls);
+              return (
+                <div
+                  className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSetGhostWalls(!selected)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") onSetGhostWalls(!selected);
+                  }}
+                >
+                  <div className="choiceTitle">{t("core.ui.view_settings.ghost_walls")}</div>
+                  <div className="choiceDesc">{t("core.ui.view_settings.ghost_walls_desc")}</div>
+                </div>
+              );
+            })()}
+          </div>
+
+          <div className="sectionDivider" />
+
+          <div className="modalSectionTitle">{t("core.ui.view_settings.graphics_quality")}</div>
+          <div className="choiceList">
+            {(
+              [
+                { id: "simplified", title: t("core.ui.graphics_quality.simplified"), desc: t("core.ui.graphics_quality.simplified_desc") },
+                { id: "detailed", title: t("core.ui.graphics_quality.detailed"), desc: t("core.ui.graphics_quality.detailed_desc") },
+              ] as const
+            ).map((opt) => {
+              const selected = (graphicsQuality ?? "simplified") === opt.id;
+              return (
+                <div
+                  key={opt.id}
+                  className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSetGraphicsQuality(opt.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") onSetGraphicsQuality(opt.id);
+                  }}
+                >
+                  <div className="choiceTitle">{opt.title}</div>
+                  <div className="choiceDesc">{opt.desc}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ),
+    };
+
+    const coreEntry: SettingsEntry = {
+      kind: "core",
+      id: CORE_PANEL_ID,
       icon: "gear",
       title: t("core.ui.settings.sections.core"),
       desc: t("core.ui.settings.sections.core_desc"),
-    }),
-    [t],
-  );
+      render: () => (
+        <div>
+          {!backendAvailable ? (
+            <div className="card">
+              <div className="cardTitle">{t("core.ui.settings.backend_offline_title")}</div>
+              <div className="cardBody">{t("core.ui.settings.backend_offline_desc")}</div>
+            </div>
+          ) : null}
 
-  const entries = useMemo<SettingsEntry[]>(() => {
+          <div className="sectionDivider" />
+
+          <div className="modalSectionTitle">{t("core.ui.settings.language")}</div>
+          <div className="choiceList">
+            {(
+              [
+                { id: "pt-BR", title: t("core.ui.settings.language.pt"), desc: t("core.ui.settings.language.pt_desc") },
+                { id: "en", title: t("core.ui.settings.language.en"), desc: t("core.ui.settings.language.en_desc") },
+              ] as const
+            ).map((opt) => {
+              const selected = locale === opt.id;
+              return (
+                <div
+                  key={opt.id}
+                  className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setLocale(opt.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") setLocale(opt.id);
+                  }}
+                >
+                  <div className="choiceTitle">{opt.title}</div>
+                  <div className="choiceDesc">{opt.desc}</div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="sectionDivider" />
+
+          <div className="modalSectionTitle">{t("core.ui.settings.theme")}</div>
+          <div className="choiceList">
+            {themes.map((opt) => {
+              const selected = themeId === opt.id;
+              const title = resolveLocalizedString(opt.name);
+              const desc = opt.description ? resolveLocalizedString(opt.description) : "";
+              return (
+                <div
+                  key={opt.id}
+                  className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSetThemeId(opt.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") onSetThemeId(opt.id);
+                  }}
+                >
+                  <div className="choiceTitle">{title}</div>
+                  {desc ? <div className="choiceDesc">{desc}</div> : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ),
+    };
+
     const extEntries: SettingsEntry[] = orderedPanels.map((panel) => ({
       kind: "extension",
       id: panel.id,
@@ -114,10 +281,28 @@ export function SettingsModal({
       desc: panel.description ? resolveLocalizedString(panel.description) : "",
       panel,
     }));
-    return [coreEntry, ...extEntries];
-  }, [coreEntry, orderedPanels]);
+    return [viewEntry, coreEntry, ...extEntries];
+  }, [
+    backendAvailable,
+    ghostWalls,
+    graphicsQuality,
+    locale,
+    onSetGhostWalls,
+    onSetGraphicsQuality,
+    onSetThemeId,
+    onSetWallHeightPreset,
+    orderedPanels,
+    t,
+    themeId,
+    themes,
+    wallHeightPreset,
+    setLocale,
+  ]);
 
-  const activeEntry = useMemo(() => entries.find((entry) => entry.id === activePanelId) ?? coreEntry, [activePanelId, coreEntry, entries]);
+  const activeEntry = useMemo(
+    () => entries.find((entry) => entry.id === activePanelId) ?? entries[0],
+    [activePanelId, entries],
+  );
 
   const dirtyExtensionIds = useMemo(() => {
     return Object.entries(dirtyExtensions)
@@ -162,74 +347,6 @@ export function SettingsModal({
     });
   }, [dirtyExtensions, open, settings]);
 
-  function renderCore(): React.ReactNode {
-    return (
-      <div>
-        {!backendAvailable ? (
-          <div className="card">
-            <div className="cardTitle">{t("core.ui.settings.backend_offline_title")}</div>
-            <div className="cardBody">{t("core.ui.settings.backend_offline_desc")}</div>
-          </div>
-        ) : null}
-
-        <div className="sectionDivider" />
-
-        <div className="modalSectionTitle">{t("core.ui.settings.language")}</div>
-        <div className="choiceList">
-          {(
-            [
-              { id: "pt-BR", title: t("core.ui.settings.language.pt"), desc: t("core.ui.settings.language.pt_desc") },
-              { id: "en", title: t("core.ui.settings.language.en"), desc: t("core.ui.settings.language.en_desc") },
-            ] as const
-          ).map((opt) => {
-            const selected = locale === opt.id;
-            return (
-              <div
-                key={opt.id}
-                className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
-                role="button"
-                tabIndex={0}
-                onClick={() => setLocale(opt.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") setLocale(opt.id);
-                }}
-              >
-                <div className="choiceTitle">{opt.title}</div>
-                <div className="choiceDesc">{opt.desc}</div>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="sectionDivider" />
-
-        <div className="modalSectionTitle">{t("core.ui.settings.theme")}</div>
-        <div className="choiceList">
-          {themes.map((opt) => {
-            const selected = themeId === opt.id;
-            const title = resolveLocalizedString(opt.name);
-            const desc = opt.description ? resolveLocalizedString(opt.description) : "";
-            return (
-              <div
-                key={opt.id}
-                className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
-                role="button"
-                tabIndex={0}
-                onClick={() => onSetThemeId(opt.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") onSetThemeId(opt.id);
-                }}
-              >
-                <div className="choiceTitle">{title}</div>
-                {desc ? <div className="choiceDesc">{desc}</div> : null}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
   function updateDraftExtensionSettings(extensionId: string, patch: Record<string, unknown>): void {
     setDraftExtensions((prev) => {
       const current = prev[extensionId] ?? {};
@@ -240,11 +357,11 @@ export function SettingsModal({
 
   function renderExtensionPanel(panel: SettingsPanel): React.ReactNode {
     const extSettings = draftExtensions?.[panel.id] ?? settings.extensions?.[panel.id] ?? {};
-    return panel.render({
-      i18n,
-      api,
-      settings: extSettings,
-      updateSettings: (patch) => updateDraftExtensionSettings(panel.id, patch ?? {}),
+      return panel.render({
+        i18n,
+        api,
+        settings: extSettings,
+        updateSettings: (patch) => updateDraftExtensionSettings(panel.id, patch ?? {}),
     });
   }
 
@@ -330,7 +447,7 @@ export function SettingsModal({
 
           <div className="settingsContent">
             {activeEntry.kind === "core" ? (
-              renderCore()
+              activeEntry.render()
             ) : activeEntry.kind === "extension" ? (
               <div>{renderExtensionPanel(activeEntry.panel)}</div>
             ) : null}

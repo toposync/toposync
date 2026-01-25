@@ -642,30 +642,34 @@ export function CompositionEditorScreen({
               <div className="cardBody">{t("core.ui.element_types_empty")}</div>
             </div>
           ) : (
-            <div className="elementButtonGrid">
-              {tools.map((tool) => {
-                const isSelected = selectedToolId === tool.id;
-                return (
-                  <button
-                    className={["elementTypeButton", isSelected ? "isSelected" : ""].join(" ")}
-                    key={tool.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedToolId((prev) => {
-                        if (tool.id === CORE_TOOL_NAVIGATE_ID) return CORE_TOOL_NAVIGATE_ID;
-                        if (tool.id === CORE_TOOL_SELECT_ID) return CORE_TOOL_SELECT_ID;
-                        return prev === tool.id ? CORE_TOOL_NAVIGATE_ID : tool.id;
-                      });
-                    }}
-                  >
-                    <span className="toolLabel">
-                      {tool.icon ? <Icon name={tool.icon} className="toolIcon" /> : null}
-                      <span>{resolveLocalizedString(tool.name)}</span>
-                    </span>
-                    <span className="elementTypeButtonHint">{isSelected ? <Icon name="check" /> : null}</span>
-                  </button>
-                );
-              })}
+            <div className="railScroll railScrollTools">
+              <div className="elementButtonGrid">
+                {tools.map((tool) => {
+                  const isSelected = selectedToolId === tool.id;
+                  const toolName = resolveLocalizedString(tool.name);
+                  return (
+                    <button
+                      className={["elementTypeButton", isSelected ? "isSelected" : ""].join(" ")}
+                      key={tool.id}
+                      type="button"
+                      title={toolName}
+                      onClick={() => {
+                        setSelectedToolId((prev) => {
+                          if (tool.id === CORE_TOOL_NAVIGATE_ID) return CORE_TOOL_NAVIGATE_ID;
+                          if (tool.id === CORE_TOOL_SELECT_ID) return CORE_TOOL_SELECT_ID;
+                          return prev === tool.id ? CORE_TOOL_NAVIGATE_ID : tool.id;
+                        });
+                      }}
+                    >
+                      <span className="toolLabel">
+                        {tool.icon ? <Icon name={tool.icon} className="toolIcon" /> : null}
+                        <span>{toolName}</span>
+                      </span>
+                      <span className="elementTypeButtonHint">{isSelected ? <Icon name="check" /> : null}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
 

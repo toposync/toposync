@@ -171,6 +171,16 @@ async def _lifespan(app: FastAPI):
     await ext_manager.load(app=app, bus=bus, services=services)
     app.state.extensions = ext_manager
 
+    # Serve the built frontend *after* extensions register their API routes.
+    #
+    # Extensions register routes during startup (lifespan). If we mount StaticFiles on "/"
+    # before that, the mount matches every request and "shadows" routes added later,
+    # causing extension APIs (e.g. /api/cameras/*) to return 404 even though the extension
+    # is loaded.
+    frontend_dir = getattr(app.state, "frontend_dir", None)
+    if frontend_dir:
+        app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
+
     yield
 
 
@@ -451,6 +461,7 @@ def create_app() -> FastAPI:
     frontend_dir = _resolve_frontend_dir()
     if frontend_dir:
         index_path = frontend_dir / "index.html"
+        app.state.frontend_dir = frontend_dir
 
         @app.middleware("http")
         async def spa_fallback(
@@ -473,7 +484,5 @@ def create_app() -> FastAPI:
                 return response
 
             return FileResponse(index_path, media_type="text/html", headers={"Cache-Control": "no-store"})
-
-        app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 
     return app

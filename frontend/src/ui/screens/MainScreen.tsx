@@ -4,12 +4,10 @@ import type {
   CompositionElement,
   CompositionElementPatch,
   ElementType,
-  GraphicsQuality,
   HostApi,
   Notification,
   NotificationRenderer,
   ViewSettings,
-  WallHeightPreset,
 } from "@toposync/plugin-api";
 
 import type { Composition, CompositionSummary } from "../../util/api";
@@ -28,9 +26,6 @@ type Props = {
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
   viewSettings: ViewSettings;
-  onSetWallHeightPreset: (preset: WallHeightPreset) => void;
-  onSetGhostWalls: (enabled: boolean) => void;
-  onSetGraphicsQuality: (quality: GraphicsQuality) => void;
   notificationRenderers: NotificationRenderer[];
   notifications: Notification[];
   activeNotificationId: string | null;
@@ -116,9 +111,6 @@ export function MainScreen({
   elements,
   elementTypesById,
   viewSettings,
-  onSetWallHeightPreset,
-  onSetGhostWalls,
-  onSetGraphicsQuality,
   notificationRenderers,
   notifications,
   activeNotificationId,
@@ -137,7 +129,6 @@ export function MainScreen({
   const { t, locale } = i18n.useI18n();
   const [isRenderModalOpen, setIsRenderModalOpen] = useState(false);
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
-  const [isViewSettingsOpen, setIsViewSettingsOpen] = useState(false);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
   const [imageModal, setImageModal] = useState<{ url: string; title: string; subtitle?: string } | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(() => loadNotificationsOpen());
@@ -269,14 +260,6 @@ export function MainScreen({
         <button
           className="iconButton"
           type="button"
-          aria-label={t("core.ui.view_settings.aria")}
-          onClick={() => setIsViewSettingsOpen(true)}
-        >
-          <Icon name="sliders" />
-        </button>
-        <button
-          className="iconButton"
-          type="button"
           aria-label={t("core.ui.settings.aria")}
           onClick={onOpenSettings}
         >
@@ -317,7 +300,7 @@ export function MainScreen({
               ) : null}
               {notifications.map((n) => {
                 const renderer = notificationRenderers.find((r) => r.type === n.type);
-                const time = formatDateTimeShort(locale, n.createdAt);
+                const time = formatDateTimeShort(locale, n.updatedAt ?? n.createdAt);
                 const title = formatCameraTrackingTitle(t, n) ?? n.title;
                 const isActive = Boolean(activeNotificationId && n.id === activeNotificationId);
                 return (
@@ -430,94 +413,6 @@ export function MainScreen({
             <div className="choiceTitle">{t("core.ui.render_modal.option_2d.title")}</div>
             <div className="choiceDesc">{t("core.ui.render_modal.option_2d.desc")}</div>
           </div>
-        </div>
-      </Modal>
-
-      <Modal
-        open={isViewSettingsOpen}
-        title={t("core.ui.view_settings.title")}
-        onClose={() => setIsViewSettingsOpen(false)}
-      >
-        <div className="modalSectionTitle">{t("core.ui.view_settings.wall_height")}</div>
-        <div className="choiceList">
-          {(
-            [
-              { id: "low", title: t("core.ui.wall_height.low"), desc: t("core.ui.wall_height.low_desc") },
-              { id: "medium", title: t("core.ui.wall_height.medium"), desc: t("core.ui.wall_height.medium_desc") },
-              { id: "high", title: t("core.ui.wall_height.high"), desc: t("core.ui.wall_height.high_desc") },
-            ] as const
-          ).map((opt) => {
-            const selected = viewSettings.wallHeightPreset === opt.id;
-            return (
-              <div
-                key={opt.id}
-                className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  onSetWallHeightPreset(opt.id);
-                  setIsViewSettingsOpen(false);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    onSetWallHeightPreset(opt.id);
-                    setIsViewSettingsOpen(false);
-                  }
-                }}
-              >
-                <div className="choiceTitle">{opt.title}</div>
-                <div className="choiceDesc">{opt.desc}</div>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="modalSectionTitle">{t("core.ui.view_settings.interactivity")}</div>
-        <div className="choiceList">
-          {(() => {
-            const selected = Boolean(viewSettings.ghostWalls);
-            return (
-              <div
-                className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
-                role="button"
-                tabIndex={0}
-                onClick={() => onSetGhostWalls(!selected)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") onSetGhostWalls(!selected);
-                }}
-              >
-                <div className="choiceTitle">{t("core.ui.view_settings.ghost_walls")}</div>
-                <div className="choiceDesc">{t("core.ui.view_settings.ghost_walls_desc")}</div>
-              </div>
-            );
-          })()}
-        </div>
-
-        <div className="modalSectionTitle">{t("core.ui.view_settings.graphics_quality")}</div>
-        <div className="choiceList">
-          {(
-            [
-              { id: "simplified", title: t("core.ui.graphics_quality.simplified"), desc: t("core.ui.graphics_quality.simplified_desc") },
-              { id: "detailed", title: t("core.ui.graphics_quality.detailed"), desc: t("core.ui.graphics_quality.detailed_desc") },
-            ] as const
-          ).map((opt) => {
-            const selected = (viewSettings.graphicsQuality ?? "simplified") === opt.id;
-            return (
-              <div
-                key={opt.id}
-                className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
-                role="button"
-                tabIndex={0}
-                onClick={() => onSetGraphicsQuality(opt.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") onSetGraphicsQuality(opt.id);
-                }}
-              >
-                <div className="choiceTitle">{opt.title}</div>
-                <div className="choiceDesc">{opt.desc}</div>
-              </div>
-            );
-          })}
         </div>
       </Modal>
 

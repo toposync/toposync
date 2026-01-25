@@ -428,6 +428,11 @@ textarea {
   scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
 }
 
+.railScrollTools {
+  flex: 0 0 auto;
+  max-height: 50%;
+}
+
 .railTitle {
   font-size: 12px;
   letter-spacing: 0.12em;
@@ -843,8 +848,15 @@ textarea {
   width: min(1120px, calc(100vw - 28px));
 }
 
+.settingsModalBody {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 .settingsLayout {
-  height: 100%;
+  flex: 1;
   min-height: 0;
   display: flex;
   overflow: hidden;
@@ -1376,6 +1388,7 @@ textarea {
 
 .elementButtonGrid {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -1419,6 +1432,13 @@ textarea {
   align-items: center;
   gap: 10px;
   min-width: 0;
+}
+
+.toolLabel > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .toolIcon {

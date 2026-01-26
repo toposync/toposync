@@ -5,11 +5,13 @@ import asyncio
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
@@ -194,6 +196,10 @@ class ProcessorRuntime:
 def create_app(*, data_dir: Path, files_dir: Path) -> FastAPI:
     app = FastAPI(title="Toposync Cameras Processor", version="0.1.0")
     runtime = ProcessorRuntime(data_dir=data_dir, files_dir=files_dir)
+    snapshot_cache: dict[str, tuple[float, float, bytes]] = {}
+    snapshot_locks: dict[str, asyncio.Lock] = {}
+    snapshot_cache_ttl_s = float(os.getenv("TOPOSYNC_PROCESSOR_SNAPSHOT_TTL_S", "0.8") or "0.8")
+    snapshot_max_frame_age_s = float(os.getenv("TOPOSYNC_PROCESSOR_SNAPSHOT_MAX_FRAME_AGE_S", "5.0") or "5.0")
 
     @app.on_event("startup")
     async def _startup() -> None:
@@ -206,6 +212,78 @@ def create_app(*, data_dir: Path, files_dir: Path) -> FastAPI:
     @app.get("/api/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    def _get_lock(key: str) -> asyncio.Lock:
+        lock = snapshot_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            snapshot_locks[key] = lock
+        return lock
+
+    async def _encode_jpeg(frame: Any) -> bytes | None:
+        def _work() -> bytes | None:
+            try:
+                import cv2  # type: ignore
+            except Exception:
+                return None
+            try:
+                ok, buf = cv2.imencode(".jpg", frame)
+            except Exception:
+                return None
+            if not ok or buf is None:
+                return None
+            try:
+                return buf.tobytes()
+            except Exception:
+                return None
+
+        return await asyncio.to_thread(_work)
+
+    @app.get("/api/processor/cameras/{camera_id}/snapshot")
+    async def camera_snapshot(camera_id: str) -> Response:
+        cid = camera_id.strip()
+        if not cid:
+            raise HTTPException(status_code=400, detail="camera_id is required")
+
+        lock = _get_lock(cid)
+        async with lock:
+            now = time.time()
+            cached = snapshot_cache.get(cid)
+            if cached and (now - cached[0]) <= snapshot_cache_ttl_s:
+                return Response(
+                    content=cached[2],
+                    media_type="image/jpeg",
+                    headers={
+                        "Cache-Control": "no-store",
+                        "X-Toposync-Snapshot-Source": "processor_cache",
+                    },
+                )
+
+            worker = runtime._workers.get(cid)
+            if worker is None:
+                raise HTTPException(status_code=404, detail="Unknown camera")
+
+            frame, ts = worker.get_latest_frame()
+            if frame is None or not ts:
+                raise HTTPException(status_code=503, detail="No frame available yet")
+            age_s = max(0.0, now - float(ts))
+            if age_s > snapshot_max_frame_age_s:
+                raise HTTPException(status_code=503, detail="Camera frame is stale")
+
+            blob = await _encode_jpeg(frame)
+            if not blob:
+                raise HTTPException(status_code=501, detail="Failed to encode JPEG snapshot")
+
+            snapshot_cache[cid] = (now, float(ts), blob)
+            return Response(
+                content=blob,
+                media_type="image/jpeg",
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Toposync-Snapshot-Source": "processor",
+                    "X-Toposync-Snapshot-Frame-Age-Ms": str(int(age_s * 1000)),
+                },
+            )
 
     @app.post("/api/processor/config")
     async def set_config(body: ProcessorConfig) -> dict[str, Any]:

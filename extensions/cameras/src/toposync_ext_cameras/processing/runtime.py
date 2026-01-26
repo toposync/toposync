@@ -192,6 +192,9 @@ class CameraWorker:
             pass
         self._thread.join(timeout=1.5)
 
+    def get_latest_frame(self) -> tuple[Any | None, float]:
+        return self._grabber.get_latest()
+
     def _maybe_capture(self, frame: Any, ts: float, *, force: bool = False) -> str | None:
         if not force and ts and (ts - self._last_capture_ts) < self._capture_min_interval_s:
             return None
@@ -681,6 +684,18 @@ class CamerasProcessingRuntime:
                 {"server_id": sid, "url": client.server.url} for sid, client in sorted(self._remote_clients.items())
             ],
         }
+
+    def get_latest_frame(self, camera_id: str) -> tuple[Any | None, float]:
+        cid = str(camera_id or "").strip()
+        if not cid:
+            return None, 0.0
+        worker = self._workers.get(cid)
+        if worker is None:
+            return None, 0.0
+        try:
+            return worker.get_latest_frame()
+        except Exception:
+            return None, 0.0
 
     def _maybe_publish_notification(self, event: dict[str, Any]) -> None:
         if self._services is None:

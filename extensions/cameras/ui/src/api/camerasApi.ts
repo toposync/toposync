@@ -16,7 +16,10 @@ export async function fetchCamerasIndex(): Promise<CamerasIndex> {
   };
 }
 
-export async function fetchRtspSnapshot(options: { url: string; username?: string; password?: string }): Promise<Blob> {
+export async function fetchRtspSnapshot(
+  options: { url: string; username?: string; password?: string },
+  signal?: AbortSignal,
+): Promise<Blob> {
   const response = await fetch("/api/cameras/rtsp/snapshot", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -25,6 +28,7 @@ export async function fetchRtspSnapshot(options: { url: string; username?: strin
       username: options.username ?? "",
       password: options.password ?? "",
     }),
+    signal,
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
@@ -33,8 +37,8 @@ export async function fetchRtspSnapshot(options: { url: string; username?: strin
   return response.blob();
 }
 
-export async function fetchCameraSnapshot(cameraId: string): Promise<Blob> {
-  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/snapshot`);
+export async function fetchCameraSnapshot(cameraId: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/snapshot`, { signal });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Snapshot failed: ${response.status}`);

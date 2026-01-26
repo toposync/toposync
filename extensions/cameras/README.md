@@ -62,6 +62,30 @@ Then restart `toposync serve`. If you run the remote processing server, install 
 If installing `torch` fails for your current Python version, the recommended approach is to run the **remote processing server**
 in a separate environment/machine with a supported Python + Torch build, and point the camera to that server.
 
+## Snapshots (load shedding)
+
+Both the UI and integrations can request camera snapshots. To avoid hammering devices, Toposync prefers:
+
+1) **Local processing frame** (reuse `FrameGrabber` last frame, no new RTSP connection)
+2) **Remote processing server snapshot** (when `processing_server_id` is set)
+3) **ffmpeg fallback** (opens RTSP on-demand)
+
+Toposync also applies a short cache + de-duplication lock per camera/URL to absorb bursts (e.g. multiple UI panels requesting the same image).
+
+### Snapshot tuning (env vars)
+
+Backend (`toposync serve`):
+
+- `TOPOSYNC_CAMERA_SNAPSHOT_TTL_S` (default: `0.8`) - cache TTL + request de-dupe window
+- `TOPOSYNC_CAMERA_SNAPSHOT_MAX_FRAME_AGE_S` (default: `5.0`) - max acceptable age for a processing frame
+- `TOPOSYNC_CAMERA_SNAPSHOT_FFMPEG_CONCURRENCY` (default: `2`) - max parallel ffmpeg snapshot processes
+- `TOPOSYNC_CAMERA_REMOTE_SNAPSHOT_TIMEOUT_S` (default: `5.0`) - timeout when fetching snapshots from processing servers
+
+Remote processing server (`toposync_ext_cameras.processor_server`):
+
+- `TOPOSYNC_PROCESSOR_SNAPSHOT_TTL_S` (default: `0.8`) - cache TTL + request de-dupe window
+- `TOPOSYNC_PROCESSOR_SNAPSHOT_MAX_FRAME_AGE_S` (default: `5.0`) - max acceptable age for a processing frame
+
 ## Tracking + mapping (compositions)
 
 The processor emits **events** that can include:
@@ -95,11 +119,20 @@ Then, in **Settings → Cameras → Processing servers**, set the server URL to 
 
 ## API
 
+Toposync backend:
+
 - `GET /api/cameras/index`
 - `POST /api/cameras/rtsp/snapshot`
 - `GET /api/cameras/cameras/{camera_id}/snapshot`
 - `GET /api/cameras/detections/recent` (filters: `camera_id`, `composition_id`, `tracking_id`)
 - `GET /api/cameras/detections/stream` (SSE)
+
+Remote processing server:
+
+- `GET /api/processor/cameras/{camera_id}/snapshot`
+- `POST /api/processor/config`
+- `GET /api/processor/detections/recent`
+- `GET /api/processor/detections/stream` (SSE)
 
 ## Notes (RTSP quirks)
 

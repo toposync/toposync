@@ -67,6 +67,7 @@ function CamerasSettingsPanelContent({
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
   const [snapshotErrorMessage, setSnapshotErrorMessage] = useState<string | null>(null);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const snapshotAbortRef = React.useRef<AbortController | null>(null);
 
   const [detectionsModalOpen, setDetectionsModalOpen] = useState(false);
   const [detectionsCameraId, setDetectionsCameraId] = useState<string | null>(null);
@@ -76,6 +77,13 @@ function CamerasSettingsPanelContent({
       if (snapshotUrl) URL.revokeObjectURL(snapshotUrl);
     };
   }, [snapshotUrl]);
+
+  useEffect(() => {
+    return () => {
+      snapshotAbortRef.current?.abort();
+      snapshotAbortRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (activeCameraId && cameras.some((camera) => camera.id === activeCameraId)) return;
@@ -102,6 +110,8 @@ function CamerasSettingsPanelContent({
   }, [processingServers, serverQuery]);
 
   function closeSnapshotModal(): void {
+    snapshotAbortRef.current?.abort();
+    snapshotAbortRef.current = null;
     setSnapshotModalOpen(false);
     setSnapshotTitle("");
     setSnapshotErrorMessage(null);
@@ -124,23 +134,31 @@ function CamerasSettingsPanelContent({
   }
 
   async function testCameraConnection(camera: CameraConfig): Promise<void> {
+    snapshotAbortRef.current?.abort();
+    const controller = new AbortController();
+    snapshotAbortRef.current = controller;
     setSnapshotLoading(true);
     setSnapshotErrorMessage(null);
     try {
-      const blob = await fetchRtspSnapshot({ url: camera.rtsp_url, username: camera.username, password: camera.password });
+      const blob = await fetchRtspSnapshot(
+        { url: camera.rtsp_url, username: camera.username, password: camera.password },
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
       const url = URL.createObjectURL(blob);
       setSnapshotUrl((previous) => {
         if (previous) URL.revokeObjectURL(previous);
         return url;
       });
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
       setSnapshotErrorMessage(error instanceof Error ? error.message : String(error));
       setSnapshotUrl((previous) => {
         if (previous) URL.revokeObjectURL(previous);
         return null;
       });
     } finally {
-      setSnapshotLoading(false);
+      if (!controller.signal.aborted) setSnapshotLoading(false);
     }
   }
 

@@ -463,9 +463,10 @@ function ControlPointsModal({
     if (!cameraId) return;
 
     let cancelled = false;
+    const controller = new AbortController();
     setSnapshotLoading(true);
     setSnapshotErrorMessage(null);
-    fetchCameraSnapshot(cameraId)
+    fetchCameraSnapshot(cameraId, controller.signal)
       .then((blob) => {
         if (cancelled) return;
         const url = URL.createObjectURL(blob);
@@ -473,6 +474,7 @@ function ControlPointsModal({
       })
       .catch((error) => {
         if (cancelled) return;
+        if (error instanceof DOMException && error.name === "AbortError") return;
         setSnapshotErrorMessage(error instanceof Error ? error.message : String(error));
         setSnapshotUrl(null);
       })
@@ -482,6 +484,7 @@ function ControlPointsModal({
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [open, cameraId]);
 
@@ -894,11 +897,15 @@ function CameraAction({ element, i18n }: { element: CompositionElement; i18n: Ho
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const refreshAbortRef = React.useRef<AbortController | null>(null);
 
   const refresh = () => {
+    refreshAbortRef.current?.abort();
+    const controller = new AbortController();
+    refreshAbortRef.current = controller;
     setLoading(true);
     setErrorMessage(null);
-    fetchCameraSnapshot(cameraId)
+    fetchCameraSnapshot(cameraId, controller.signal)
       .then((blob) => {
         const url = URL.createObjectURL(blob);
         setImageUrl((previous) => {
@@ -907,6 +914,7 @@ function CameraAction({ element, i18n }: { element: CompositionElement; i18n: Ho
         });
       })
       .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
         setErrorMessage(error instanceof Error ? error.message : String(error));
       })
       .finally(() => {
@@ -918,6 +926,8 @@ function CameraAction({ element, i18n }: { element: CompositionElement; i18n: Ho
     if (!cameraId) return;
     refresh();
     return () => {
+      refreshAbortRef.current?.abort();
+      refreshAbortRef.current = null;
       setImageUrl((previous) => {
         if (previous) URL.revokeObjectURL(previous);
         return null;

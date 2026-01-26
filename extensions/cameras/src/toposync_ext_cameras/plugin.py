@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import os
 import re
 import shutil
+import time
 import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Literal
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 from starlette.responses import StreamingResponse
@@ -113,6 +117,14 @@ class RtspSnapshotResult:
     blob: bytes
     source: str
     transport: str
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotCacheEntry:
+    blob: bytes
+    created_ts: float
+    frame_ts: float
+    headers: dict[str, str]
 
 
 async def _ffmpeg_snapshot(rtsp_url: str, *, timeout_ms: int) -> RtspSnapshotResult:
@@ -224,6 +236,59 @@ class CamerasExtension(BaseExtension):
             app.state.cameras_processing = runtime
         else:
             runtime = None
+
+        snapshot_cache: dict[str, SnapshotCacheEntry] = {}
+        snapshot_locks: dict[str, asyncio.Lock] = {}
+        snapshot_cache_ttl_s = float(os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_TTL_S", "0.8") or "0.8")
+        snapshot_max_frame_age_s = float(os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_MAX_FRAME_AGE_S", "5.0") or "5.0")
+        snapshot_ffmpeg_concurrency = int(os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_FFMPEG_CONCURRENCY", "2") or "2")
+        snapshot_ffmpeg_sema = asyncio.Semaphore(max(1, snapshot_ffmpeg_concurrency))
+        remote_snapshot_timeout_s = float(os.getenv("TOPOSYNC_CAMERA_REMOTE_SNAPSHOT_TIMEOUT_S", "5.0") or "5.0")
+        remote_http = httpx.AsyncClient(timeout=remote_snapshot_timeout_s)
+        app.add_event_handler("shutdown", remote_http.aclose)
+
+        def _get_lock(key: str) -> asyncio.Lock:
+            lock = snapshot_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                snapshot_locks[key] = lock
+            return lock
+
+        async def _encode_jpeg(frame: Any) -> bytes | None:
+            def _work() -> bytes | None:
+                try:
+                    import cv2  # type: ignore
+                except Exception:
+                    return None
+                try:
+                    ok, buf = cv2.imencode(".jpg", frame)
+                except Exception:
+                    return None
+                if not ok or buf is None:
+                    return None
+                try:
+                    return buf.tobytes()
+                except Exception:
+                    return None
+
+            return await asyncio.to_thread(_work)
+
+        async def _fetch_remote_snapshot(server_url: str, camera_id: str) -> bytes | None:
+            base = str(server_url or "").strip().rstrip("/")
+            if not base:
+                return None
+            cid = str(camera_id or "").strip()
+            if not cid:
+                return None
+            url = f"{base}/api/processor/cameras/{urllib.parse.quote(cid)}/snapshot"
+            try:
+                res = await remote_http.get(url)
+            except Exception:
+                return None
+            if res.status_code != 200:
+                return None
+            content = res.content
+            return content if content else None
 
         @app.get("/api/cameras/index")
         async def cameras_index(request: Request) -> dict[str, Any]:
@@ -363,12 +428,28 @@ class CamerasExtension(BaseExtension):
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-            result = await _ffmpeg_snapshot(url, timeout_ms=body.timeout_ms)
+            key = hashlib.sha256(url.encode("utf-8", errors="ignore")).hexdigest()[:24]
+            cache_key = f"rtsp:{key}"
+            lock = _get_lock(cache_key)
+            async with lock:
+                now = time.time()
+                cached = snapshot_cache.get(cache_key)
+                if cached and (now - cached.created_ts) <= snapshot_cache_ttl_s:
+                    return Response(content=cached.blob, media_type="image/jpeg", headers=cached.headers)
+
+                async with snapshot_ffmpeg_sema:
+                    result = await _ffmpeg_snapshot(url, timeout_ms=body.timeout_ms)
             headers = {
                 "Cache-Control": "no-store",
                 "X-Toposync-Snapshot-Source": result.source,
                 "X-Toposync-Snapshot-Transport": result.transport,
             }
+            snapshot_cache[cache_key] = SnapshotCacheEntry(
+                blob=result.blob,
+                created_ts=time.time(),
+                frame_ts=time.time(),
+                headers=headers,
+            )
             return Response(content=result.blob, media_type="image/jpeg", headers=headers)
 
         @app.get("/api/cameras/cameras/{camera_id}/snapshot")
@@ -396,21 +477,82 @@ class CamerasExtension(BaseExtension):
             if ctype != "rtsp":
                 raise HTTPException(status_code=400, detail="Only RTSP cameras are supported for now")
 
-            url_raw = str(camera.get("rtsp_url", "")).strip()
-            username = str(camera.get("username", "")).strip()
-            password = str(camera.get("password", "")).strip()
-            if not url_raw:
-                raise HTTPException(status_code=400, detail="Camera RTSP URL is not configured")
+            cache_key = f"cam:{cid}"
+            lock = _get_lock(cache_key)
+            async with lock:
+                now = time.time()
+                cached = snapshot_cache.get(cache_key)
+                if cached and (now - cached.created_ts) <= snapshot_cache_ttl_s:
+                    return Response(content=cached.blob, media_type="image/jpeg", headers=cached.headers)
 
-            try:
-                url = _rtsp_url_with_auth(url_raw, username, password)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                if runtime is not None:
+                    frame, frame_ts = runtime.get_latest_frame(cid)
+                    if frame is not None and frame_ts:
+                        age_s = max(0.0, now - float(frame_ts))
+                        if age_s <= snapshot_max_frame_age_s:
+                            blob = await _encode_jpeg(frame)
+                            if blob:
+                                headers = {
+                                    "Cache-Control": "no-store",
+                                    "X-Toposync-Snapshot-Source": "local_grabber",
+                                    "X-Toposync-Snapshot-Frame-Age-Ms": str(int(age_s * 1000)),
+                                }
+                                snapshot_cache[cache_key] = SnapshotCacheEntry(
+                                    blob=blob,
+                                    created_ts=time.time(),
+                                    frame_ts=float(frame_ts),
+                                    headers=headers,
+                                )
+                                return Response(content=blob, media_type="image/jpeg", headers=headers)
 
-            result = await _ffmpeg_snapshot(url, timeout_ms=9000)
-            headers = {
-                "Cache-Control": "no-store",
-                "X-Toposync-Snapshot-Source": result.source,
-                "X-Toposync-Snapshot-Transport": result.transport,
-            }
-            return Response(content=result.blob, media_type="image/jpeg", headers=headers)
+                processing_server_id = str(camera.get("processing_server_id", "")).strip()
+                if processing_server_id:
+                    servers_raw = ext.get("processing_servers", [])
+                    server_url = ""
+                    if isinstance(servers_raw, list):
+                        for s in servers_raw:
+                            if not isinstance(s, dict):
+                                continue
+                            if str(s.get("id", "")).strip() == processing_server_id:
+                                server_url = str(s.get("url", "")).strip()
+                                break
+
+                    remote_blob = await _fetch_remote_snapshot(server_url, cid)
+                    if remote_blob:
+                        headers = {
+                            "Cache-Control": "no-store",
+                            "X-Toposync-Snapshot-Source": f"remote[{processing_server_id}]",
+                        }
+                        snapshot_cache[cache_key] = SnapshotCacheEntry(
+                            blob=remote_blob,
+                            created_ts=time.time(),
+                            frame_ts=time.time(),
+                            headers=headers,
+                        )
+                        return Response(content=remote_blob, media_type="image/jpeg", headers=headers)
+
+                url_raw = str(camera.get("rtsp_url", "")).strip()
+                username = str(camera.get("username", "")).strip()
+                password = str(camera.get("password", "")).strip()
+                if not url_raw:
+                    raise HTTPException(status_code=400, detail="Camera RTSP URL is not configured")
+
+                try:
+                    url = _rtsp_url_with_auth(url_raw, username, password)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+                async with snapshot_ffmpeg_sema:
+                    result = await _ffmpeg_snapshot(url, timeout_ms=9000)
+                headers = {
+                    "Cache-Control": "no-store",
+                    "X-Toposync-Snapshot-Source": result.source,
+                    "X-Toposync-Snapshot-Transport": result.transport,
+                }
+                snapshot_cache[cache_key] = SnapshotCacheEntry(
+                    blob=result.blob,
+                    created_ts=time.time(),
+                    frame_ts=time.time(),
+                    headers=headers,
+                )
+                return Response(content=result.blob, media_type="image/jpeg", headers=headers)

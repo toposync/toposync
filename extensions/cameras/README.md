@@ -41,7 +41,7 @@ uv pip install opencv-python
 
 Then restart `toposync serve`.
 
-#### Dependency: YOLO (Ultralytics)
+#### Dependency: YOLO (Ultralytics + LAP)
 
 Object tracking uses Ultralytics (YOLO + ByteTrack/BOTSort). It is optional because it pulls heavy deps (e.g. Torch).
 
@@ -51,13 +51,27 @@ Install it in the same environment where Toposync runs:
 uv pip install -e "extensions/cameras[yolo]"
 ```
 
+The `yolo` extra installs both `ultralytics` and `lap` (required by ByteTrack/BOTSort).
+
 Or directly:
 
 ```bash
-uv pip install ultralytics
+uv pip install ultralytics lap
 ```
 
 Then restart `toposync serve`. If you run the remote processing server, install it there too.
+
+Quick verification (same environment where `toposync serve` or `toposync_ext_cameras.processor_server` runs):
+
+```bash
+uv run python -c "import ultralytics, lap; print('ultralytics+lap: ok')"
+```
+
+If you still see messages about missing `lap`, reinstall in that exact environment and restart:
+
+```bash
+uv pip install --upgrade --force-reinstall ultralytics lap
+```
 
 If installing `torch` fails for your current Python version, the recommended approach is to run the **remote processing server**
 in a separate environment/machine with a supported Python + Torch build, and point the camera to that server.

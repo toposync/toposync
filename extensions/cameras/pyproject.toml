@@ -8,7 +8,7 @@ dependencies = ["toposync>=0.1.0", "numpy>=1.26", "opencv-python-headless>=4.10"
 
 [project.optional-dependencies]
 # Heavy dependencies for object detection/tracking (YOLO). Install only when needed.
-yolo = ["ultralytics>=8.3.0"]
+yolo = ["ultralytics>=8.3.0", "lap>=0.5.12"]
 
 [project.entry-points."toposync.extensions"]
 cameras = "toposync_ext_cameras.plugin:CamerasExtension"

@@ -15,7 +15,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
-from .processing.runtime import CameraSpec, CameraWorker, _parse_detections  # noqa: PLC2701
+from .processing.runtime import CameraSpec, CameraWorker, _parse_detections, summarize_capacity_estimate  # noqa: PLC2701
 from .processing.tracking_db import TrackingDatabase
 from .processing.events import EventBroadcaster
 
@@ -62,6 +62,18 @@ class ProcessorRuntime:
                 pass
         self._workers.clear()
         self._worker_sigs.clear()
+
+    def status(self) -> dict[str, Any]:
+        workers: list[dict[str, Any]] = []
+        for cid, worker in sorted(self._workers.items()):
+            try:
+                workers.append(worker.status())
+            except Exception:
+                workers.append({"camera_id": cid})
+        return {
+            "workers": workers,
+            "capacity_estimate": summarize_capacity_estimate(workers),
+        }
 
     def apply_config(self, config: ProcessorConfig) -> None:
         desired: dict[str, CameraSpec] = {}
@@ -212,6 +224,10 @@ def create_app(*, data_dir: Path, files_dir: Path) -> FastAPI:
     @app.get("/api/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/processor/status")
+    async def status() -> dict[str, Any]:
+        return runtime.status()
 
     def _get_lock(key: str) -> asyncio.Lock:
         lock = snapshot_locks.get(key)

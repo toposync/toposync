@@ -62,6 +62,39 @@ Then restart `toposync serve`. If you run the remote processing server, install 
 If installing `torch` fails for your current Python version, the recommended approach is to run the **remote processing server**
 in a separate environment/machine with a supported Python + Torch build, and point the camera to that server.
 
+#### GPU usage, Windows, and auto device selection
+
+- The remote processor works on Windows, Linux, and macOS (same Python service + HTTP API).
+- YOLO device selection is automatic by default:
+  - `CUDA/ROCm` (when available in the installed `torch` build)
+  - `MPS` (Apple Silicon)
+  - `CPU` fallback
+- You can force a device via env var: `TOPOSYNC_YOLO_DEVICE` (examples: `0`, `cuda:0`, `mps`, `cpu`).
+- If inference fails on a non-CPU device, Toposync retries on CPU and logs the fallback.
+
+Important for Windows GPU:
+
+- For NVIDIA GPU acceleration, install a CUDA-enabled `torch` wheel in that environment.
+- If `torch` is CPU-only, YOLO will run on CPU even if a GPU exists.
+- AMD on Windows may require a different runtime stack than default PyTorch wheels; without a compatible stack, CPU fallback is used.
+
+How to confirm what is actually being used:
+
+- Processor logs include: requested device, selected device, and effective device used by YOLO tensors.
+- API status:
+  - `GET /api/cameras/processing/status` (Toposync backend local workers)
+  - `GET /api/processor/status` (remote processor workers)
+  - Both expose `capacity_estimate` with lightweight usage hints from runtime metrics:
+    - `estimated_motion_cpu_load_pct`
+    - `estimated_yolo_device_load_pct`
+    - `estimated_bottleneck_load_pct`
+    - `estimated_headroom_pct`
+- Detection event payload (`kind=object`) also includes:
+  - `device_requested`
+  - `device_selected`
+  - `device_effective`
+  - `device_reason`
+
 ## Snapshots (load shedding)
 
 Both the UI and integrations can request camera snapshots. To avoid hammering devices, Toposync prefers:
@@ -85,6 +118,7 @@ Remote processing server (`toposync_ext_cameras.processor_server`):
 
 - `TOPOSYNC_PROCESSOR_SNAPSHOT_TTL_S` (default: `0.8`) - cache TTL + request de-dupe window
 - `TOPOSYNC_PROCESSOR_SNAPSHOT_MAX_FRAME_AGE_S` (default: `5.0`) - max acceptable age for a processing frame
+- `TOPOSYNC_YOLO_DEVICE` (default: auto) - optional device override for YOLO (`0`, `cuda:0`, `mps`, `cpu`)
 
 ## Tracking + mapping (compositions)
 
@@ -133,6 +167,7 @@ Remote processing server:
 - `POST /api/processor/config`
 - `GET /api/processor/detections/recent`
 - `GET /api/processor/detections/stream` (SSE)
+- `GET /api/processor/status`
 
 ## Notes (RTSP quirks)
 

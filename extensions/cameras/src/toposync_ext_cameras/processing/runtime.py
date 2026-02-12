@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from toposync.runtime.config_store import Composition, ConfigStore
+from toposync.runtime.config_store import ConfigStore
 from toposync.runtime.services import ServiceRegistry
 
 from .events import EventBroadcaster
@@ -58,6 +58,59 @@ def _as_bool(v: Any, fallback: bool) -> bool:
     if isinstance(v, bool):
         return v
     return fallback
+
+
+def _estimate_load_pct(*, fps: float, latency_ms: float) -> float:
+    f = max(0.0, _as_float(fps, 0.0))
+    latency = max(0.0, _as_float(latency_ms, 0.0))
+    return max(0.0, f * (latency / 1000.0) * 100.0)
+
+
+def summarize_capacity_estimate(workers: list[dict[str, Any]]) -> dict[str, Any]:
+    total_cameras = len(workers)
+    cameras_with_object_rules = 0
+    target_fps_sum = 0.0
+    motion_cpu_load_pct = 0.0
+    yolo_by_device: dict[str, float] = {}
+
+    for worker in workers:
+        if not isinstance(worker, dict):
+            continue
+
+        yolo = worker.get("yolo") if isinstance(worker.get("yolo"), dict) else {}
+        perf = worker.get("performance") if isinstance(worker.get("performance"), dict) else {}
+        load = perf.get("estimated_load") if isinstance(perf.get("estimated_load"), dict) else {}
+
+        if bool(yolo.get("configured")):
+            cameras_with_object_rules += 1
+
+        target_fps_sum += max(0.0, _as_float(perf.get("target_fps"), 0.0))
+        motion_cpu_load_pct += max(0.0, _as_float(load.get("motion_cpu_pct"), 0.0))
+
+        yolo_device_load_pct = max(0.0, _as_float(load.get("yolo_device_pct"), 0.0))
+        if yolo_device_load_pct <= 0.0:
+            continue
+
+        device = _as_str(yolo.get("device_effective")).strip() or _as_str(yolo.get("device_selected")).strip() or "unknown"
+        yolo_by_device[device] = yolo_by_device.get(device, 0.0) + yolo_device_load_pct
+
+    yolo_by_device_list = [
+        {"device": dev, "estimated_load_pct": round(load, 2)}
+        for dev, load in sorted(yolo_by_device.items(), key=lambda item: item[0])
+    ]
+    bottleneck = max([0.0, motion_cpu_load_pct, *yolo_by_device.values()])
+
+    return {
+        "method": "fps_x_latency",
+        "note": "Estimated from runtime FPS and latency (not OS-level CPU/GPU telemetry).",
+        "cameras_total": total_cameras,
+        "cameras_with_object_rules": cameras_with_object_rules,
+        "target_fps_sum": round(target_fps_sum, 2),
+        "estimated_motion_cpu_load_pct": round(motion_cpu_load_pct, 2),
+        "estimated_yolo_device_load_pct": yolo_by_device_list,
+        "estimated_bottleneck_load_pct": round(bottleneck, 2),
+        "estimated_headroom_pct": round(max(0.0, 100.0 - min(100.0, bottleneck)), 2),
+    }
 
 
 def _safe_rtsp_url_with_auth(url: str, username: str, password: str) -> str:
@@ -194,6 +247,55 @@ class CameraWorker:
 
     def get_latest_frame(self) -> tuple[Any | None, float]:
         return self._grabber.get_latest()
+
+    def status(self) -> dict[str, Any]:
+        object_rules_configured = any(
+            (r.trigger.kind == "object") or any(f.kind == "object" for f in r.filters)
+            for r in self._spec.detections
+        )
+        motion: dict[str, Any] = {}
+        try:
+            motion.update(self._motion.diagnostics())
+        except Exception as exc:  # noqa: BLE001
+            motion["diagnostics_error"] = str(exc)
+
+        yolo: dict[str, Any] = {
+            "configured": object_rules_configured,
+            "failed": self._yolo_failed,
+        }
+        if self._yolo is not None:
+            try:
+                yolo.update(self._yolo.diagnostics())
+            except Exception as exc:  # noqa: BLE001
+                yolo["diagnostics_error"] = str(exc)
+
+        motion_fps = max(0.0, _as_float(motion.get("fps"), 0.0))
+        motion_latency_ms = max(0.0, _as_float(motion.get("last_latency_ms"), 0.0))
+        motion_load_pct = _estimate_load_pct(fps=motion_fps, latency_ms=motion_latency_ms)
+
+        yolo_fps = max(0.0, _as_float(yolo.get("fps"), 0.0))
+        yolo_latency_ms = max(0.0, _as_float(yolo.get("last_latency_ms"), 0.0))
+        yolo_load_pct = _estimate_load_pct(fps=yolo_fps, latency_ms=yolo_latency_ms)
+
+        yolo_device = _as_str(yolo.get("device_effective")).strip() or _as_str(yolo.get("device_selected")).strip()
+        yolo_on_cpu = yolo_device.startswith("cpu")
+        bottleneck_load_pct = (motion_load_pct + yolo_load_pct) if yolo_on_cpu else max(motion_load_pct, yolo_load_pct)
+
+        return {
+            "camera_id": self.camera_id,
+            "yolo": yolo,
+            "motion": motion,
+            "performance": {
+                "target_fps": round(float(self._spec.fps), 3),
+                "estimated_load": {
+                    "formula": "fps * latency_ms / 1000 * 100",
+                    "motion_cpu_pct": round(motion_load_pct, 2),
+                    "yolo_device_pct": round(yolo_load_pct, 2),
+                    "bottleneck_pct": round(bottleneck_load_pct, 2),
+                    "headroom_pct": round(max(0.0, 100.0 - min(100.0, bottleneck_load_pct)), 2),
+                },
+            },
+        }
 
     def _maybe_capture(self, frame: Any, ts: float, *, force: bool = False) -> str | None:
         if not force and ts and (ts - self._last_capture_ts) < self._capture_min_interval_s:
@@ -471,6 +573,10 @@ class CameraWorker:
                         "confidence": obj.confidence,
                         "model": yolo_output.model,
                         "tracker": yolo_output.tracker,
+                        "device_requested": yolo_output.device_requested,
+                        "device_selected": yolo_output.device_selected,
+                        "device_effective": yolo_output.device_effective,
+                        "device_reason": yolo_output.device_reason,
                         "latency_ms": yolo_output.last_latency_ms,
                         "fps": yolo_output.fps,
                     }
@@ -678,11 +784,18 @@ class CamerasProcessingRuntime:
             self._maybe_publish_notification(enriched)
 
     def status(self) -> dict[str, Any]:
+        workers: list[dict[str, Any]] = []
+        for cid, worker in sorted(self._workers.items()):
+            try:
+                workers.append(worker.status())
+            except Exception:
+                workers.append({"camera_id": cid})
         return {
-            "local_workers": [{"camera_id": cid} for cid in sorted(self._workers.keys())],
+            "local_workers": workers,
             "remote_servers": [
                 {"server_id": sid, "url": client.server.url} for sid, client in sorted(self._remote_clients.items())
             ],
+            "capacity_estimate": summarize_capacity_estimate(workers),
         }
 
     def get_latest_frame(self, camera_id: str) -> tuple[Any | None, float]:

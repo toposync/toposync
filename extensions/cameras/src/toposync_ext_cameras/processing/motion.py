@@ -47,6 +47,13 @@ class MotionDetector:
     def threshold(self) -> float:
         return self._threshold
 
+    def diagnostics(self) -> dict[str, float]:
+        return {
+            "threshold": float(self._threshold),
+            "fps": float(self._fps),
+            "last_latency_ms": float(self._last_latency_ms),
+        }
+
     def process(self, frame: Any) -> MotionResult:
         if cv2 is None:
             raise RuntimeError(

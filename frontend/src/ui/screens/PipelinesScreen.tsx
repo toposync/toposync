@@ -1,14 +1,24 @@
 import Editor from "@monaco-editor/react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import Select, { type MultiValue, type SingleValue, type StylesConfig } from "react-select";
+import CreatableSelect from "react-select/creatable";
 
 import { i18n } from "../../util/i18n";
-import type { Pipeline, PipelineOperatorDefinition, ProcessingServer } from "../../util/api";
+import type {
+  CameraContextsResponse,
+  CamerasIndexResponse,
+  Pipeline,
+  PipelineOperatorDefinition,
+  ProcessingServer,
+} from "../../util/api";
 import {
   compilePipeline,
   createPipeline,
   deletePipeline,
   deleteProcessingServer,
+  getCameraContexts,
   getPipelinesFeatureFlag,
+  listCamerasIndex,
   listPipelineOperators,
   listPipelines,
   listProcessingServers,
@@ -30,6 +40,7 @@ type InteractiveStep = {
   operatorId: string;
   configText: string;
   collapsed: boolean;
+  showAdvanced: boolean;
 };
 
 type InteractiveBuildResult = {
@@ -60,6 +71,139 @@ const PIPELINE_PRESET_OPERATOR_IDS = [
 ];
 
 const NODE_ID_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
+type SelectOption = { value: string; label: string };
+
+const pipelinesReactSelectStyles: StylesConfig<SelectOption, boolean> = {
+  container: (base) => ({ ...base }),
+  control: (base, state) => ({
+    ...base,
+    minHeight: 34,
+    borderRadius: 10,
+    border: `1px solid ${state.isFocused ? "rgba(251,191,36,0.38)" : "rgba(255,255,255,0.12)"}`,
+    backgroundColor: "rgba(15, 23, 48, 0.85)",
+    boxShadow: state.isFocused ? "0 0 0 1px rgba(251,191,36,0.22)" : "none",
+    cursor: "text",
+  }),
+  menu: (base) => ({
+    ...base,
+    backgroundColor: "rgba(12, 18, 37, 0.98)",
+    border: "1px solid rgba(255,255,255,0.12)",
+    borderRadius: 12,
+    overflow: "hidden",
+    boxShadow: "0 22px 70px rgba(0, 0, 0, 0.60)",
+    zIndex: 50,
+  }),
+  option: (base, state) => ({
+    ...base,
+    backgroundColor: state.isSelected
+      ? "rgba(251, 191, 36, 0.16)"
+      : state.isFocused
+        ? "rgba(255, 255, 255, 0.06)"
+        : "transparent",
+    color: "rgba(230,232,242,0.96)",
+    cursor: "pointer",
+  }),
+  multiValue: (base) => ({
+    ...base,
+    backgroundColor: "rgba(251, 191, 36, 0.14)",
+    border: "1px solid rgba(251, 191, 36, 0.22)",
+    borderRadius: 999,
+  }),
+  multiValueLabel: (base) => ({ ...base, color: "rgba(255, 244, 210, 0.95)", fontWeight: 650 }),
+  multiValueRemove: (base) => ({ ...base, color: "rgba(255, 244, 210, 0.85)" }),
+  input: (base) => ({ ...base, color: "rgba(230,232,242,0.96)" }),
+  placeholder: (base) => ({ ...base, color: "rgba(160,167,189,0.85)" }),
+  singleValue: (base) => ({ ...base, color: "rgba(230,232,242,0.96)" }),
+  indicatorSeparator: (base) => ({ ...base, backgroundColor: "rgba(255,255,255,0.10)" }),
+  dropdownIndicator: (base) => ({ ...base, color: "rgba(160,167,189,0.9)" }),
+  clearIndicator: (base) => ({ ...base, color: "rgba(160,167,189,0.9)" }),
+};
+
+const YOLO_CATEGORY_VALUES = [
+  "person",
+  "bicycle",
+  "car",
+  "motorcycle",
+  "airplane",
+  "bus",
+  "train",
+  "truck",
+  "boat",
+  "traffic light",
+  "fire hydrant",
+  "stop sign",
+  "parking meter",
+  "bench",
+  "bird",
+  "cat",
+  "dog",
+  "horse",
+  "sheep",
+  "cow",
+  "elephant",
+  "bear",
+  "zebra",
+  "giraffe",
+  "backpack",
+  "umbrella",
+  "handbag",
+  "tie",
+  "suitcase",
+  "frisbee",
+  "skis",
+  "snowboard",
+  "sports ball",
+  "kite",
+  "baseball bat",
+  "baseball glove",
+  "skateboard",
+  "surfboard",
+  "tennis racket",
+  "bottle",
+  "wine glass",
+  "cup",
+  "fork",
+  "knife",
+  "spoon",
+  "bowl",
+  "banana",
+  "apple",
+  "sandwich",
+  "orange",
+  "broccoli",
+  "carrot",
+  "hot dog",
+  "pizza",
+  "donut",
+  "cake",
+  "chair",
+  "couch",
+  "potted plant",
+  "bed",
+  "dining table",
+  "toilet",
+  "tv",
+  "laptop",
+  "mouse",
+  "remote",
+  "keyboard",
+  "cell phone",
+  "microwave",
+  "oven",
+  "toaster",
+  "sink",
+  "refrigerator",
+  "book",
+  "clock",
+  "vase",
+  "scissors",
+  "teddy bear",
+  "hair drier",
+  "toothbrush",
+];
+
+const YOLO_CATEGORY_OPTIONS: SelectOption[] = YOLO_CATEGORY_VALUES.map((value) => ({ value, label: value }));
 
 let interactiveStepCounter = 0;
 
@@ -140,6 +284,7 @@ function createInteractiveStep(
     operatorId,
     configText: jsonPretty(defaults),
     collapsed: false,
+    showAdvanced: false,
   };
 }
 
@@ -332,6 +477,7 @@ function buildInteractiveStepsFromGraph(
       operatorId,
       configText: jsonPretty(config),
       collapsed: false,
+      showAdvanced: false,
     });
   }
 
@@ -381,6 +527,9 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
   const [operators, setOperators] = useState<PipelineOperatorDefinition[]>([]);
   const [featureFlag, setFeatureFlag] = useState<boolean>(false);
   const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [camerasIndex, setCamerasIndex] = useState<CamerasIndexResponse>({ cameras: [] });
+  const [cameraContextsById, setCameraContextsById] = useState<Record<string, CameraContextsResponse>>({});
+  const [cameraContextsErrorById, setCameraContextsErrorById] = useState<Record<string, string>>({});
 
   const [createName, setCreateName] = useState("");
   const [createType, setCreateType] = useState<"reuse" | "final">("final");
@@ -407,6 +556,61 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
     [operatorsById],
   );
 
+  const interactiveCameraId = useMemo(() => {
+    const sourceStep = interactiveSteps.find((step) => step.operatorId === "camera.source");
+    if (!sourceStep) return "";
+    const parsed = safeJsonParse(sourceStep.configText || "{}");
+    if (!parsed.ok) return "";
+    if (!isRecord(parsed.data)) return "";
+    return String((parsed.data as any).camera_id ?? "").trim();
+  }, [interactiveSteps]);
+
+  const cameraSelectOptions = useMemo<SelectOption[]>(() => {
+    const cameras = Array.isArray(camerasIndex.cameras) ? camerasIndex.cameras : [];
+    return cameras
+      .map((camera) => {
+        const name = String(camera.name || "").trim();
+        const id = String(camera.id || "").trim();
+        return { value: id, label: name ? `${name} (${id})` : id };
+      })
+      .filter((option) => option.value.length > 0)
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [camerasIndex]);
+
+  const cameraSelectOptionById = useMemo(() => {
+    const map = new Map<string, SelectOption>();
+    for (const option of cameraSelectOptions) map.set(option.value, option);
+    return map;
+  }, [cameraSelectOptions]);
+
+  const activeCameraContexts = useMemo(() => {
+    const cameraId = interactiveCameraId;
+    if (!cameraId) return null;
+    return cameraContextsById[cameraId] ?? null;
+  }, [interactiveCameraId, cameraContextsById]);
+
+  const activeCameraContextsError = useMemo(() => {
+    const cameraId = interactiveCameraId;
+    if (!cameraId) return null;
+    return cameraContextsErrorById[cameraId] ?? null;
+  }, [interactiveCameraId, cameraContextsErrorById]);
+
+  const cameraAreaOptions = useMemo<SelectOption[]>(() => {
+    const contexts = activeCameraContexts;
+    if (!contexts) return [];
+    const options: SelectOption[] = [];
+    for (const composition of contexts.compositions ?? []) {
+      for (const area of composition.areas ?? []) {
+        options.push({
+          value: `${composition.id}:${area.id}`,
+          label: `${composition.name} / ${area.name}`,
+        });
+      }
+    }
+    options.sort((a, b) => a.label.localeCompare(b.label));
+    return options;
+  }, [activeCameraContexts]);
+
   const selected = useMemo(() => {
     if (!selectedName) return null;
     return pipelines.find((pipeline) => pipeline.name === selectedName) ?? null;
@@ -421,16 +625,18 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
     setLoading(true);
     setError(null);
     try {
-      const [flag, pipelineList, serverList, operatorList] = await Promise.all([
+      const [flag, pipelineList, serverList, operatorList, cameras] = await Promise.all([
         getPipelinesFeatureFlag(),
         listPipelines(),
         listProcessingServers(),
         listPipelineOperators(),
+        listCamerasIndex().catch(() => ({ cameras: [] })),
       ]);
       setFeatureFlag(Boolean(flag?.enabled));
       setPipelines(pipelineList);
       setServers(serverList);
       setOperators(operatorList);
+      setCamerasIndex(cameras);
       if (!selectedName && pipelineList.length > 0) setSelectedName(pipelineList[0].name);
     } catch (err: any) {
       setError(String(err?.message ?? err));
@@ -476,6 +682,29 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
     if (!interactiveGraph.graph) return;
     setGraphText(jsonPretty(interactiveGraph.graph));
   }, [mode, interactiveGraph.graph]);
+
+  useEffect(() => {
+    if (mode !== "interactive") return;
+    const cameraId = interactiveCameraId;
+    if (!cameraId) return;
+    if (cameraContextsById[cameraId]) return;
+    if (cameraContextsErrorById[cameraId]) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const contexts = await getCameraContexts(cameraId);
+        if (cancelled) return;
+        setCameraContextsById((prev) => ({ ...prev, [cameraId]: contexts }));
+      } catch (err: any) {
+        if (cancelled) return;
+        setCameraContextsErrorById((prev) => ({ ...prev, [cameraId]: String(err?.message ?? err) }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, interactiveCameraId, cameraContextsById, cameraContextsErrorById]);
 
   const isPythonLocked = Boolean(draft && draft.editor_mode === "python");
 
@@ -659,6 +888,18 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
         const nextConfig = isRecord(parsed.ok ? parsed.data : null) ? { ...(parsed.data as Record<string, unknown>) } : {};
         nextConfig[key] = value;
         return { ...step, configText: jsonPretty(nextConfig) };
+      }),
+    );
+  };
+
+  const updateInteractiveStepConfig = (uid: string, updater: (config: Record<string, unknown>) => Record<string, unknown>) => {
+    setInteractiveSteps((prev) =>
+      prev.map((step) => {
+        if (step.uid !== uid) return step;
+        const parsed = safeJsonParse(step.configText || "{}");
+        const base = isRecord(parsed.ok ? parsed.data : null) ? { ...(parsed.data as Record<string, unknown>) } : {};
+        const next = updater(base);
+        return { ...step, configText: jsonPretty(next) };
       }),
     );
   };
@@ -962,31 +1203,62 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
                         </div>
                       ) : null}
 
-                      <div className="pipelinesStepsList">
-                        {interactiveSteps.map((step, index) => {
-                          const operator = operatorsById[step.operatorId];
-                          const configParsed = safeJsonParse(step.configText || "{}");
-                          const scalarEntries = isRecord(configParsed.ok ? configParsed.data : null)
-                            ? Object.entries(configParsed.data as Record<string, unknown>).filter(([, value]) => {
-                                const valueType = typeof value;
-                                return valueType === "string" || valueType === "number" || valueType === "boolean";
-                              })
-                            : [];
+	                      <div className="pipelinesStepsList">
+	                        {interactiveSteps.map((step, index) => {
+	                          const operator = operatorsById[step.operatorId];
+	                          const configParsed = safeJsonParse(step.configText || "{}");
+	                          const configRecordOk = configParsed.ok && isRecord(configParsed.data);
+	                          const config = configRecordOk ? (configParsed.data as Record<string, unknown>) : {};
+	                          const configObjectError = !configParsed.ok
+	                            ? `Invalid config JSON: ${configParsed.error}`
+	                            : !configRecordOk
+	                              ? "Config must be a JSON object."
+	                              : null;
 
-                          const rowClass = ["pipelinesStepCard"];
-                          if (draggingStepUid === step.uid) rowClass.push("isDragSource");
-                          if (dragOverStep?.uid === step.uid) {
-                            rowClass.push(dragOverStep.position === "before" ? "isDropBefore" : "isDropAfter");
-                          }
+	                          const scalarEntries = Object.entries(config).filter(([, value]) => {
+	                            const valueType = typeof value;
+	                            return valueType === "string" || valueType === "number" || valueType === "boolean";
+	                          });
 
-                          return (
-                            <div
-                              key={step.uid}
-                              className={rowClass.join(" ")}
-                              onDragOver={(event) => updateStepDragOver(event, step.uid)}
-                              onDrop={(event) => dropStep(event, step.uid)}
-                            >
-                              <div className="pipelinesStepHeader">
+	                          const isConfigScalarGridHidden =
+	                            step.operatorId === "camera.source" ||
+	                            step.operatorId === "camera.camera_mapping" ||
+	                            step.operatorId === "camera.area_restriction" ||
+	                            step.operatorId === "camera.velocity_estimation" ||
+	                            step.operatorId === "vision.object_tracking_yolo" ||
+	                            step.operatorId === "vision.object_detection_yolo";
+	                          const shouldShowScalarGrid = scalarEntries.length > 0 && (!isConfigScalarGridHidden || step.showAdvanced);
+
+	                          const rowClass = ["pipelinesStepCard"];
+	                          if (draggingStepUid === step.uid) rowClass.push("isDragSource");
+	                          if (dragOverStep?.uid === step.uid) {
+	                            rowClass.push(dragOverStep.position === "before" ? "isDropBefore" : "isDropAfter");
+	                          }
+
+	                          const cameraIdInConfig = String((config as any).camera_id ?? "").trim();
+	                          const selectedCameraOption = cameraIdInConfig
+	                            ? (cameraSelectOptionById.get(cameraIdInConfig) ?? { value: cameraIdInConfig, label: cameraIdInConfig })
+	                            : null;
+
+	                          const yoloCategoriesRaw = (config as any).categories;
+	                          const yoloCategories = Array.isArray(yoloCategoriesRaw)
+	                            ? yoloCategoriesRaw.map((value: any) => String(value || "").trim().toLowerCase()).filter((value: string) => value.length > 0)
+	                            : [];
+
+	                          const areaNamesRaw = (config as any).include_area_names;
+	                          const selectedAreaKeys = Array.isArray(areaNamesRaw)
+	                            ? areaNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
+	                            : [];
+	                          const selectedAreaOptions = selectedAreaKeys.map((value) => cameraAreaOptions.find((option) => option.value === value) ?? { value, label: value });
+
+	                          return (
+	                            <div
+	                              key={step.uid}
+	                              className={rowClass.join(" ")}
+	                              onDragOver={(event) => updateStepDragOver(event, step.uid)}
+	                              onDrop={(event) => dropStep(event, step.uid)}
+	                            >
+	                              <div className="pipelinesStepHeader">
                                 <button
                                   className="layerDragHandle"
                                   type="button"
@@ -1027,14 +1299,24 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
                                   ))}
                                 </select>
 
-                                <button
-                                  className="iconButton"
-                                  type="button"
-                                  aria-label={step.collapsed ? "Expand step" : "Collapse step"}
-                                  onClick={() => updateInteractiveStep(step.uid, { collapsed: !step.collapsed })}
-                                >
-                                  <i className={`fa-solid ${step.collapsed ? "fa-chevron-down" : "fa-chevron-up"}`} aria-hidden="true" />
-                                </button>
+	                                <button
+	                                  className="iconButton"
+	                                  type="button"
+	                                  aria-label={step.showAdvanced ? "Hide advanced config" : "Show advanced config"}
+	                                  title={step.showAdvanced ? "Hide advanced" : "Advanced"}
+	                                  onClick={() => updateInteractiveStep(step.uid, { showAdvanced: !step.showAdvanced })}
+	                                >
+	                                  <i className="fa-solid fa-gear" aria-hidden="true" />
+	                                </button>
+
+	                                <button
+	                                  className="iconButton"
+	                                  type="button"
+	                                  aria-label={step.collapsed ? "Expand step" : "Collapse step"}
+	                                  onClick={() => updateInteractiveStep(step.uid, { collapsed: !step.collapsed })}
+	                                >
+	                                  <i className={`fa-solid ${step.collapsed ? "fa-chevron-down" : "fa-chevron-up"}`} aria-hidden="true" />
+	                                </button>
 
                                 <button
                                   className="iconButton"
@@ -1046,18 +1328,214 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
                                 </button>
                               </div>
 
-                              {!step.collapsed ? (
-                                <div className="pipelinesStepBody">
-                                  {operator ? <div className="pipelinesStepDescription">{operator.description || operator.id}</div> : null}
-                                  {operator && operator.capabilities.length > 0 ? (
-                                    <div className="pipelinesStepCapabilities">caps: {operator.capabilities.join(", ")}</div>
-                                  ) : null}
+	                              {!step.collapsed ? (
+	                                <div className="pipelinesStepBody">
+	                                  {operator ? <div className="pipelinesStepDescription">{operator.description || operator.id}</div> : null}
+	                                  {operator && operator.capabilities.length > 0 && step.showAdvanced ? (
+	                                    <div className="pipelinesStepCapabilities">caps: {operator.capabilities.join(", ")}</div>
+	                                  ) : null}
 
-                                  {scalarEntries.length > 0 ? (
-                                    <div className="pipelinesScalarGrid">
-                                      {scalarEntries.map(([key, value]) => (
-                                        <label key={`${step.uid}:${key}`} className="pipelinesLabel pipelinesScalarLabel">
-                                          <span>{key}</span>
+	                                  {step.operatorId === "camera.source" ? (
+	                                    <div className="pipelinesOperatorConfigCard">
+	                                      <label className="pipelinesLabel">
+	                                        <span>Camera</span>
+	                                        <Select<SelectOption, false>
+	                                          styles={pipelinesReactSelectStyles}
+	                                          options={cameraSelectOptions}
+	                                          value={selectedCameraOption}
+	                                          isClearable
+	                                          placeholder="Select a camera…"
+	                                          onChange={(value: SingleValue<SelectOption>) => {
+	                                            updateInteractiveStepConfig(step.uid, (prev) => {
+	                                              const next = { ...prev };
+	                                              next.camera_id = value?.value ?? "";
+	                                              if (value?.value) {
+	                                                next.rtsp_url = "";
+	                                                next.username = "";
+	                                                next.password = "";
+	                                              }
+	                                              return next;
+	                                            });
+	                                          }}
+	                                        />
+	                                      </label>
+	                                      <div className="pipelinesStepHint">
+	                                        RTSP URL, credentials, and FPS are inferred from the camera registry. Toggle Advanced to override.
+	                                      </div>
+	                                      {cameraSelectOptions.length === 0 ? (
+	                                        <div className="pipelinesStepHint">No cameras found. Configure cameras in the Cameras extension settings.</div>
+	                                      ) : null}
+	                                    </div>
+	                                  ) : null}
+
+	                                  {step.operatorId === "vision.object_tracking_yolo" || step.operatorId === "vision.object_detection_yolo" ? (
+	                                    <div className="pipelinesOperatorConfigCard">
+	                                      <label className="pipelinesLabel">
+	                                        <span>Categories</span>
+	                                        <CreatableSelect<SelectOption, true>
+	                                          isMulti
+	                                          styles={pipelinesReactSelectStyles}
+	                                          options={YOLO_CATEGORY_OPTIONS}
+	                                          value={yoloCategories.map((value) => YOLO_CATEGORY_OPTIONS.find((opt) => opt.value === value) ?? { value, label: value })}
+	                                          placeholder="All categories"
+	                                          onChange={(value: MultiValue<SelectOption>) => {
+	                                            updateInteractiveStepConfig(step.uid, (prev) => ({
+	                                              ...prev,
+	                                              categories: value.map((item) => item.value),
+	                                            }));
+	                                          }}
+	                                        />
+	                                      </label>
+	                                      <div className="pipelinesStepHint">Empty selection means “all categories”.</div>
+	                                    </div>
+	                                  ) : null}
+
+	                                  {step.operatorId === "camera.camera_mapping" ? (
+	                                    <div className="pipelinesOperatorConfigCard">
+	                                      <div className="pipelinesStepHint">
+	                                        Uses control points defined in your compositions to map image → world coordinates. Configure control points in the Composition editor.
+	                                      </div>
+	                                      {!interactiveCameraId ? (
+	                                        <div className="pipelinesInlineError">Select a camera in the Camera Source step to show mapping status.</div>
+	                                      ) : activeCameraContexts ? (
+	                                        <div className="pipelinesContextList">
+	                                          {activeCameraContexts.compositions.map((composition) => {
+	                                            const hasMapping = composition.camera_elements.some((element) => element.has_mapping);
+	                                            const areasCount = composition.areas.length;
+	                                            const elementNames = composition.camera_elements.map((item) => item.name).filter((value) => value.length > 0);
+	                                            return (
+	                                              <div key={composition.id} className="pipelinesContextRow">
+	                                                <div className="pipelinesContextMain">
+	                                                  <div className="pipelinesContextName">{composition.name}</div>
+	                                                  <div className="pipelinesContextMeta">
+	                                                    {hasMapping ? "mapping ready" : "missing mapping"}
+	                                                    {areasCount ? ` • areas: ${areasCount}` : ""}
+	                                                    {elementNames.length ? ` • camera nodes: ${elementNames.join(", ")}` : ""}
+	                                                  </div>
+	                                                </div>
+	                                              </div>
+	                                            );
+	                                          })}
+	                                        </div>
+	                                      ) : activeCameraContextsError ? (
+	                                        <div className="pipelinesInlineError">Failed to load camera contexts: {activeCameraContextsError}</div>
+	                                      ) : (
+	                                        <div className="pipelinesStepHint">Loading camera contexts…</div>
+	                                      )}
+	                                    </div>
+	                                  ) : null}
+
+	                                  {step.operatorId === "camera.area_restriction" ? (
+	                                    <div className="pipelinesOperatorConfigCard">
+	                                      <label className="pipelinesLabel">
+	                                        <span>Areas</span>
+	                                        <Select<SelectOption, true>
+	                                          isMulti
+	                                          styles={pipelinesReactSelectStyles}
+	                                          options={cameraAreaOptions}
+	                                          value={selectedAreaOptions}
+	                                          isDisabled={
+	                                            !interactiveCameraId || !activeCameraContexts || Boolean(activeCameraContextsError) || cameraAreaOptions.length === 0
+	                                          }
+	                                          placeholder={!interactiveCameraId ? "Select a camera first…" : "Select areas…"}
+	                                          onChange={(value: MultiValue<SelectOption>) => {
+	                                            updateInteractiveStepConfig(step.uid, (prev) => ({
+	                                              ...prev,
+	                                              areas: [],
+	                                              exclude_area_names: [],
+	                                              include_area_names: value.map((item) => item.value),
+	                                            }));
+	                                          }}
+	                                        />
+	                                      </label>
+	                                      {!interactiveCameraId ? (
+	                                        <div className="pipelinesInlineError">Select a camera in the Camera Source step first.</div>
+	                                      ) : activeCameraContextsError ? (
+	                                        <div className="pipelinesInlineError">Failed to load camera contexts: {activeCameraContextsError}</div>
+	                                      ) : !activeCameraContexts ? (
+	                                        <div className="pipelinesStepHint">Loading camera contexts…</div>
+	                                      ) : cameraAreaOptions.length === 0 ? (
+	                                        <div className="pipelinesStepHint">No areas found in compositions for this camera.</div>
+	                                      ) : (
+	                                        <div className="pipelinesStepHint">Uses areas from the compositions where the selected camera is present.</div>
+	                                      )}
+	                                    </div>
+	                                  ) : null}
+
+	                                  {step.operatorId === "camera.velocity_estimation" ? (
+	                                    <div className="pipelinesOperatorConfigCard">
+	                                      {(() => {
+	                                        const modeRaw = String((config as any).filter_mode ?? "annotate").trim().toLowerCase() || "annotate";
+	                                        const stoppedMpsRaw = Number((config as any).stopped_speed_threshold ?? 0.04);
+	                                        const stoppedKmh = Number.isFinite(stoppedMpsRaw) ? stoppedMpsRaw * 3.6 : 0.0;
+	                                        const hasMappingBefore = interactiveSteps.slice(0, index).some((item) => item.operatorId === "camera.camera_mapping");
+	                                        const modeOptions: Array<{ value: string; label: string; hint: string }> = [
+	                                          { value: "annotate", label: "Annotate only", hint: "Always emit packets; adds velocity payload." },
+	                                          { value: "stopped_now", label: "Only when stopped", hint: "Emit packets only while the object is stopped." },
+	                                          { value: "moving_now", label: "Only when moving", hint: "Emit packets only while the object is moving." },
+	                                        ];
+	                                        if (step.showAdvanced) {
+	                                          modeOptions.push(
+	                                            { value: "stopped_once", label: "Only after it stopped once", hint: "Drops packets until it stops at least once, then passes all." },
+	                                            { value: "always_moving", label: "Only while it never stopped", hint: "Passes packets until it stops once, then drops the rest." },
+	                                          );
+	                                        }
+	                                        const selected = modeOptions.find((item) => item.value === modeRaw) ?? modeOptions[0];
+
+	                                        return (
+	                                          <>
+	                                            <label className="pipelinesLabel">
+	                                              <span>Flow mode</span>
+	                                              <select
+	                                                className="pipelinesSelect"
+	                                                value={selected.value}
+	                                                onChange={(event) => {
+	                                                  const nextMode = String(event.target.value || "annotate").trim().toLowerCase();
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, filter_mode: nextMode }));
+	                                                }}
+	                                              >
+	                                                {modeOptions.map((item) => (
+	                                                  <option key={item.value} value={item.value}>
+	                                                    {item.label}
+	                                                  </option>
+	                                                ))}
+	                                              </select>
+	                                            </label>
+	                                            <div className="pipelinesStepHint">{selected.hint}</div>
+
+	                                            <label className="pipelinesLabel">
+	                                              <span>Stopped threshold (km/h)</span>
+	                                              <input
+	                                                className="pipelinesInput"
+	                                                type="number"
+	                                                min={0}
+	                                                max={4000}
+	                                                step={0.05}
+	                                                value={Number.isFinite(stoppedKmh) ? String(Math.max(0, stoppedKmh)) : "0"}
+	                                                onChange={(event) => {
+	                                                  const kmh = Number(event.target.value || 0);
+	                                                  const mps = Number.isFinite(kmh) ? Math.max(0, kmh) / 3.6 : 0;
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, stopped_speed_threshold: mps }));
+	                                                }}
+	                                              />
+	                                            </label>
+	                                            <div className="pipelinesStepHint">
+	                                              Computes speed from mapped world coordinates (`camera.camera_mapping`). Uses m/s internally and outputs both m/s and km/h.
+	                                            </div>
+	                                            {!hasMappingBefore ? (
+	                                              <div className="pipelinesInlineError">Add `camera.camera_mapping` before this step to get world speed.</div>
+	                                            ) : null}
+	                                          </>
+	                                        );
+	                                      })()}
+	                                    </div>
+	                                  ) : null}
+
+	                                  {shouldShowScalarGrid ? (
+	                                    <div className="pipelinesScalarGrid">
+	                                      {scalarEntries.map(([key, value]) => (
+	                                        <label key={`${step.uid}:${key}`} className="pipelinesLabel pipelinesScalarLabel">
+	                                          <span>{key}</span>
                                           {typeof value === "boolean" ? (
                                             <input
                                               type="checkbox"
@@ -1079,29 +1557,29 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
                                               onChange={(event) => updateInteractiveStepScalar(step.uid, key, event.target.value)}
                                             />
                                           )}
-                                        </label>
-                                      ))}
-                                    </div>
-                                  ) : null}
+	                                        </label>
+	                                      ))}
+	                                    </div>
+	                                  ) : null}
 
-                                  <label className="pipelinesLabel">
-                                    <span>Config JSON</span>
-                                    <textarea
-                                      className="pipelinesStepConfigTextarea"
-                                      value={step.configText}
-                                      onChange={(event) => updateInteractiveStep(step.uid, { configText: event.target.value })}
-                                      spellCheck={false}
-                                    />
-                                  </label>
+	                                  {step.showAdvanced ? (
+	                                    <label className="pipelinesLabel">
+	                                      <span>Config JSON</span>
+	                                      <textarea
+	                                        className="pipelinesStepConfigTextarea"
+	                                        value={step.configText}
+	                                        onChange={(event) => updateInteractiveStep(step.uid, { configText: event.target.value })}
+	                                        spellCheck={false}
+	                                      />
+	                                    </label>
+	                                  ) : null}
 
-                                  {!configParsed.ok ? (
-                                    <div className="pipelinesInlineError">Invalid config JSON: {configParsed.error}</div>
-                                  ) : null}
-                                </div>
-                              ) : null}
-                            </div>
-                          );
-                        })}
+	                                  {configObjectError ? <div className="pipelinesInlineError">{configObjectError}</div> : null}
+	                                </div>
+	                              ) : null}
+	                            </div>
+	                          );
+	                        })}
 
                         {interactiveSteps.length === 0 ? (
                           <div className="card">

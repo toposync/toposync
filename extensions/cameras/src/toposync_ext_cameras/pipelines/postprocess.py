@@ -130,8 +130,8 @@ class VelocityEstimationConfig(BaseModel):
     @classmethod
     def _validate_filter_mode(cls, value: str) -> str:
         mode = str(value or "").strip().lower()
-        if mode not in {"annotate", "stopped_once", "always_moving"}:
-            raise ValueError("filter_mode must be annotate, stopped_once, or always_moving")
+        if mode not in {"annotate", "stopped_once", "always_moving", "stopped_now", "moving_now"}:
+            raise ValueError("filter_mode must be annotate, stopped_once, always_moving, stopped_now, or moving_now")
         return mode
 
     @field_validator("key_field", "world_field", "time_field", "output_field")
@@ -359,27 +359,54 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         key = _resolve_key(packet, self._config.key_field)
+        now_ts = _resolve_packet_time(packet, time_field=self._config.time_field)
+        state = self._state_by_key.get(key)
+        ever_stopped = state.ever_stopped if state is not None else False
+
         world = packet.payload.get(self._config.world_field)
         if not isinstance(world, dict):
-            return [packet]
+            out_packet = self._annotate_packet(
+                packet,
+                speed=0.0,
+                distance=0.0,
+                elapsed=0.0,
+                moving=False,
+                valid=False,
+                ever_stopped=ever_stopped,
+            )
+            if packet.lifecycle == Lifecycle.CLOSE:
+                self._state_by_key.pop(key, None)
+                return [out_packet]
+            return self._apply_filter_mode(out_packet, valid=False, moving=False, ever_stopped=ever_stopped)
 
         try:
             x = float(world.get("x"))
             z = float(world.get("z"))
         except Exception:
-            return [packet]
+            out_packet = self._annotate_packet(
+                packet,
+                speed=0.0,
+                distance=0.0,
+                elapsed=0.0,
+                moving=False,
+                valid=False,
+                ever_stopped=ever_stopped,
+            )
+            if packet.lifecycle == Lifecycle.CLOSE:
+                self._state_by_key.pop(key, None)
+                return [out_packet]
+            return self._apply_filter_mode(out_packet, valid=False, moving=False, ever_stopped=ever_stopped)
 
-        now_ts = _resolve_packet_time(packet, time_field=self._config.time_field)
-        state = self._state_by_key.get(key)
         distance = 0.0
         elapsed = 0.0
         speed = 0.0
         moving = False
-        ever_stopped = state.ever_stopped if state is not None else False
+        valid = False
 
         if state is not None:
             elapsed = max(0.0, now_ts - state.last_ts)
             if elapsed >= self._config.min_elapsed_seconds:
+                valid = True
                 dx = x - state.last_x
                 dz = z - state.last_z
                 distance = math.sqrt((dx * dx) + (dz * dz))
@@ -393,26 +420,61 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
             moving = False
 
         self._state_by_key[key] = _VelocityState(last_x=x, last_z=z, last_ts=now_ts, ever_stopped=ever_stopped)
-        payload = dict(packet.payload)
-        payload[self._config.output_field] = {
-            "speed": float(speed),
-            "distance": float(distance),
-            "elapsed_seconds": float(elapsed),
-            "moving": bool(moving),
-            "ever_stopped": bool(ever_stopped),
-        }
-        out_packet = replace(packet, payload=payload)
+        out_packet = self._annotate_packet(
+            packet,
+            speed=speed,
+            distance=distance,
+            elapsed=elapsed,
+            moving=moving,
+            valid=valid,
+            ever_stopped=ever_stopped,
+        )
 
         if packet.lifecycle == Lifecycle.CLOSE:
             self._state_by_key.pop(key, None)
             return [out_packet]
 
+        return self._apply_filter_mode(out_packet, valid=valid, moving=moving, ever_stopped=ever_stopped)
+
+    def _annotate_packet(
+        self,
+        packet: Packet,
+        *,
+        speed: float,
+        distance: float,
+        elapsed: float,
+        moving: bool,
+        valid: bool,
+        ever_stopped: bool,
+    ) -> Packet:
+        payload = dict(packet.payload)
+        payload[self._config.output_field] = {
+            "speed": float(speed),
+            "speed_mps": float(speed),
+            "speed_kmh": float(speed * 3.6),
+            "distance": float(distance),
+            "distance_m": float(distance),
+            "elapsed_seconds": float(elapsed),
+            "moving": bool(moving),
+            "stopped": bool(valid and not moving),
+            "valid": bool(valid),
+            "ever_stopped": bool(ever_stopped),
+        }
+        return replace(packet, payload=payload)
+
+    def _apply_filter_mode(self, packet: Packet, *, valid: bool, moving: bool, ever_stopped: bool) -> list[Packet]:
         mode = self._config.filter_mode
         if mode == "stopped_once" and not ever_stopped:
             return []
         if mode == "always_moving" and ever_stopped:
             return []
-        return [out_packet]
+        if mode == "stopped_now":
+            if not valid or moving:
+                return []
+        if mode == "moving_now":
+            if not valid or not moving:
+                return []
+        return [packet]
 
 
 @dataclass(frozen=True, slots=True)

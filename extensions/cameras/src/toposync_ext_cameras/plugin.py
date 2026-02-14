@@ -22,6 +22,7 @@ from toposync.runtime.services import ServiceRegistry
 
 from .pipelines import register_camera_pipeline_operators
 from .processing.mapping import ControlPointMapper, ControlPointPair
+from .pipelines.postprocess import _parse_control_point_pairs  # noqa: PLC2701
 
 
 EXTENSION_ID = "com.toposync.cameras"
@@ -391,3 +392,60 @@ class CamerasExtension(BaseExtension):
                     headers=headers,
                 )
                 return Response(content=result.blob, media_type="image/jpeg", headers=headers)
+
+        @app.get("/api/cameras/cameras/{camera_id}/contexts")
+        async def camera_contexts(request: Request, camera_id: str) -> dict[str, Any]:
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            store = _config_store(request)
+            cfg = await store.get_config()
+
+            compositions_out: list[dict[str, Any]] = []
+            for composition in cfg.compositions:
+                camera_elements: list[dict[str, Any]] = []
+                for element in composition.elements:
+                    props = element.props if isinstance(element.props, dict) else {}
+                    if str(props.get("camera_id", "")).strip() != cid:
+                        continue
+                    pairs = _parse_control_point_pairs(props.get("control_points"))
+                    camera_elements.append(
+                        {
+                            "id": element.id,
+                            "name": str(element.name or "").strip() or element.id,
+                            "control_points_pairs": len(pairs),
+                            "has_mapping": len(pairs) >= 4,
+                        }
+                    )
+
+                if not camera_elements:
+                    continue
+
+                areas: list[dict[str, Any]] = []
+                for element in composition.elements:
+                    if str(element.type or "").strip() != "com.toposync.structural.area":
+                        continue
+                    props = element.props if isinstance(element.props, dict) else {}
+                    vertices = props.get("vertices")
+                    if not isinstance(vertices, list) or len(vertices) < 3:
+                        continue
+                    name = str(element.name or "").strip()
+                    areas.append(
+                        {
+                            "id": element.id,
+                            "name": name or element.id,
+                            "vertices_count": len(vertices),
+                        }
+                    )
+
+                compositions_out.append(
+                    {
+                        "id": composition.id,
+                        "name": composition.name,
+                        "camera_elements": camera_elements,
+                        "areas": areas,
+                    }
+                )
+
+            return {"camera_id": cid, "compositions": compositions_out}

@@ -457,7 +457,7 @@ textarea {
 
 .pipelinesStepHeader {
   display: grid;
-  grid-template-columns: auto auto 180px 1fr auto auto;
+  grid-template-columns: auto auto 180px 1fr auto auto auto;
   gap: 8px;
   align-items: center;
   padding: 10px;
@@ -496,6 +496,48 @@ textarea {
   color: var(--muted);
 }
 
+.pipelinesOperatorConfigCard {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(15, 23, 48, 0.55);
+  display: grid;
+  gap: 8px;
+}
+
+.pipelinesStepHint {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.pipelinesContextList {
+  display: grid;
+  gap: 8px;
+}
+
+.pipelinesContextRow {
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(12, 18, 37, 0.35);
+}
+
+.pipelinesContextMain {
+  display: grid;
+  gap: 2px;
+}
+
+.pipelinesContextName {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.pipelinesContextMeta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .pipelinesScalarGrid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -530,7 +572,7 @@ textarea {
   }
 
   .pipelinesStepHeader {
-    grid-template-columns: auto auto 1fr auto auto;
+    grid-template-columns: auto auto 1fr auto auto auto;
   }
 
   .pipelinesStepNodeId {

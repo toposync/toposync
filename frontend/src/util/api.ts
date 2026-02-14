@@ -52,6 +52,41 @@ export type ProcessingServer = {
   url: string;
 };
 
+export type CameraSummary = {
+  id: string;
+  name: string;
+  connection_type: string;
+};
+
+export type CamerasIndexResponse = {
+  cameras: CameraSummary[];
+};
+
+export type CameraContextArea = {
+  id: string;
+  name: string;
+  vertices_count: number;
+};
+
+export type CameraContextCameraElement = {
+  id: string;
+  name: string;
+  control_points_pairs: number;
+  has_mapping: boolean;
+};
+
+export type CameraContextComposition = {
+  id: string;
+  name: string;
+  camera_elements: CameraContextCameraElement[];
+  areas: CameraContextArea[];
+};
+
+export type CameraContextsResponse = {
+  camera_id: string;
+  compositions: CameraContextComposition[];
+};
+
 export type PipelineOperatorPort = {
   name: string;
   required: boolean;
@@ -269,6 +304,19 @@ export async function compilePipeline(pipeline: Pipeline): Promise<any> {
     const detail = (body as any)?.detail ? String((body as any).detail) : String(res.status);
     throw new Error(detail);
   }
+  return res.json();
+}
+
+export async function listCamerasIndex(): Promise<CamerasIndexResponse> {
+  const res = await fetch("/api/cameras/index");
+  if (!res.ok) throw new Error(`Failed to list cameras index: ${res.status}`);
+  const body = (await res.json()) as { cameras?: CameraSummary[] };
+  return { cameras: Array.isArray(body.cameras) ? body.cameras : [] };
+}
+
+export async function getCameraContexts(cameraId: string): Promise<CameraContextsResponse> {
+  const res = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/contexts`);
+  if (!res.ok) throw new Error(`Failed to fetch camera contexts: ${res.status}`);
   return res.json();
 }
 

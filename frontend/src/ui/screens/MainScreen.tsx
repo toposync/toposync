@@ -18,6 +18,7 @@ import { CompositionSelectorModal } from "../CompositionSelectorModal";
 import { Icon } from "../Icon";
 import { Viewport3D } from "../Viewport3D";
 import { MainViewport2D } from "../main2d/MainViewport2D";
+import { notificationPriority, notificationThumbnailUrl } from "../notifications/pipelinesNotifications";
 
 type Props = {
   compositionName: string;
@@ -55,6 +56,7 @@ function formatDateTimeShort(locale: string, iso: string | undefined): string | 
 }
 
 const NOTIFICATIONS_OPEN_STORAGE_KEY = "toposync.notifications_open.v1";
+const NOTIFICATIONS_SHOW_LOW_STORAGE_KEY = "toposync.notifications_show_low.v1";
 
 function loadNotificationsOpen(): boolean {
   if (typeof window === "undefined") return true;
@@ -80,6 +82,16 @@ function shouldAutoCloseNotificationsAfterSelect(): boolean {
     return window.matchMedia("(max-width: 720px)").matches;
   } catch {
     return window.innerWidth <= 720;
+  }
+}
+
+function loadNotificationsShowLow(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const raw = localStorage.getItem(NOTIFICATIONS_SHOW_LOW_STORAGE_KEY);
+    return raw === "1";
+  } catch {
+    return false;
   }
 }
 
@@ -112,6 +124,7 @@ export function MainScreen({
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
   const [imageModal, setImageModal] = useState<{ url: string; title: string; subtitle?: string } | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(() => loadNotificationsOpen());
+  const [showLowPriority, setShowLowPriority] = useState(() => loadNotificationsShowLow());
   const [renderMode, setRenderMode] = useState<"3d" | "2d">(() => {
     try {
       const saved = localStorage.getItem("toposync.render_mode.v1");
@@ -159,6 +172,14 @@ export function MainScreen({
   }, [notificationsOpen]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(NOTIFICATIONS_SHOW_LOW_STORAGE_KEY, showLowPriority ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [showLowPriority]);
+
+  useEffect(() => {
     const root = notificationScrollRef.current;
     const sentinel = notificationSentinelRef.current;
     if (!root || !sentinel) return;
@@ -201,6 +222,20 @@ export function MainScreen({
 
     setActiveElementId(elementId);
   };
+
+  const lowPriorityHiddenCount = useMemo(() => {
+    if (showLowPriority) return 0;
+    return notifications.filter((n) => notificationPriority(n) === "low" && (!activeNotificationId || n.id !== activeNotificationId)).length;
+  }, [activeNotificationId, notifications, showLowPriority]);
+
+  const visibleNotifications = useMemo(() => {
+    if (showLowPriority) return notifications;
+    return notifications.filter((n) => {
+      const prio = notificationPriority(n);
+      if (prio !== "low") return true;
+      return Boolean(activeNotificationId && n.id === activeNotificationId);
+    });
+  }, [activeNotificationId, notifications, showLowPriority]);
 
   return (
     <div className="screenRoot">
@@ -264,28 +299,53 @@ export function MainScreen({
           <div className="rail railNotifications">
             <div className="railHeader">
               <div className="railTitle">{t("core.ui.notifications")}</div>
-              <button
-                className="iconButton notificationsCollapseButton"
-                type="button"
-                aria-label={t("core.ui.notifications.aria_close", {}, "Close notifications")}
-                title={t("core.ui.notifications.aria_close", {}, "Close notifications")}
-                onClick={() => setNotificationsOpen(false)}
-              >
-                <Icon name="chevron-left" />
-              </button>
+              <div className="row">
+                <button
+                  className={["iconButton", showLowPriority ? "iconButtonPrimary" : ""].filter(Boolean).join(" ")}
+                  type="button"
+                  aria-label={
+                    showLowPriority
+                      ? t("core.ui.notifications.hide_low", {}, "Hide low priority")
+                      : t("core.ui.notifications.show_low", {}, "Show low priority")
+                  }
+                  title={
+                    showLowPriority
+                      ? t("core.ui.notifications.hide_low", {}, "Hide low priority")
+                      : t("core.ui.notifications.show_low", {}, "Show low priority")
+                  }
+                  onClick={() => setShowLowPriority((prev) => !prev)}
+                >
+                  <Icon name={showLowPriority ? "eye" : "eye-slash"} />
+                </button>
+
+                <button
+                  className="iconButton notificationsCollapseButton"
+                  type="button"
+                  aria-label={t("core.ui.notifications.aria_close", {}, "Close notifications")}
+                  title={t("core.ui.notifications.aria_close", {}, "Close notifications")}
+                  onClick={() => setNotificationsOpen(false)}
+                >
+                  <Icon name="chevron-left" />
+                </button>
+              </div>
             </div>
 
             <div className="railScroll" ref={notificationScrollRef}>
-              {notifications.length === 0 ? (
+              {visibleNotifications.length === 0 ? (
                 <div className="card">
-                  <div className="cardBody">{t("core.ui.notifications_empty")}</div>
+                  <div className="cardBody">
+                    {lowPriorityHiddenCount
+                      ? t("core.ui.notifications.low_hidden", { count: lowPriorityHiddenCount }, "{{count}} low priority notifications hidden.")
+                      : t("core.ui.notifications_empty")}
+                  </div>
                 </div>
               ) : null}
-              {notifications.map((n) => {
+              {visibleNotifications.map((n) => {
                 const renderer = notificationRenderers.find((r) => r.type === n.type);
                 const time = formatDateTimeShort(locale, n.updatedAt ?? n.createdAt);
                 const title = n.title;
                 const isActive = Boolean(activeNotificationId && n.id === activeNotificationId);
+                const thumbUrl = notificationThumbnailUrl(n);
                 return (
                   <button
                     className={["card", "cardButton", "notificationCard", isActive ? "isActive" : ""].filter(Boolean).join(" ")}
@@ -314,8 +374,8 @@ export function MainScreen({
                         </div>
                       </div>
 
-                      {n.imageUrl ? (
-                        <img className="notificationCardThumb" src={n.imageUrl} alt="" loading="lazy" draggable={false} />
+                      {thumbUrl ? (
+                        <img className="notificationCardThumb" src={thumbUrl} alt="" loading="lazy" draggable={false} />
                       ) : null}
                     </div>
                   </button>
@@ -339,7 +399,9 @@ export function MainScreen({
               onClick={() => setNotificationsOpen(true)}
             >
               <Icon name="bell" />
-              {notifications.length > 0 ? <span className="notificationsToggleBadge">{notifications.length}</span> : null}
+              {visibleNotifications.length > 0 ? (
+                <span className="notificationsToggleBadge">{visibleNotifications.length}</span>
+              ) : null}
             </button>
           </div>
         )}

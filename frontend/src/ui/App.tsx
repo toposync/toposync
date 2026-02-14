@@ -39,6 +39,7 @@ import { loadRemoteActivate } from "../util/moduleFederation";
 import { applyTheme, loadThemeId, saveThemeId } from "../util/theme";
 import { SettingsModal } from "./SettingsModal";
 import { Viewport2D } from "./Viewport2D";
+import { builtinNotificationRenderers } from "./notifications/pipelinesNotifications";
 import { CompositionEditorScreen } from "./screens/CompositionEditorScreen";
 import { MainScreen } from "./screens/MainScreen";
 import { PipelinesScreen } from "./screens/PipelinesScreen";
@@ -277,7 +278,7 @@ export function App(): React.ReactElement {
   }, [resetHistory, screen, composition.id]);
 
   const notificationRenderers = useMemo(
-    () => Object.values(notificationRenderersById),
+    () => [...Object.values(notificationRenderersById), ...builtinNotificationRenderers],
     [notificationRenderersById],
   );
 

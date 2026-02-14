@@ -10,10 +10,11 @@ from typing import Any
 from toposync.runtime.config_store import ConfigStore, Pipeline, ProcessingServer
 from toposync.runtime.notifications import NotificationsRuntime
 
-from ..compiler import GraphCompileError, PipelineGraphCompiler
+from ..compiler import CompilationReport, CompiledPipeline, GraphCompileError, PipelineGraphCompiler, SharedNodeOccurrence
 from ..execution import PipelineRuntime, PipelineRuntimeDependencies
 from ..operator_registry import OperatorRegistry
 from ..runtime import BoundedChannel, DropPolicy
+from ..shared_runtime import PipelineBundleRuntime, SharedRuntimeBuildError
 from .plan import build_distributed_graphs
 from .transport import HttpProcessingTransport, ProcessingTransport
 
@@ -27,6 +28,13 @@ class _PipelineHandle:
     runtime: PipelineRuntime
     started_at: float
     mode: str
+
+
+@dataclass(slots=True)
+class _BundleHandle:
+    pipelines: list[Pipeline]
+    runtime: PipelineBundleRuntime
+    started_at: float
 
 
 @dataclass(slots=True)
@@ -48,6 +56,7 @@ class PipelinesOrchestrator:
         notifications: NotificationsRuntime,
         files_dir,
         poll_interval_s: float = 1.0,
+        runtime_dependencies: PipelineRuntimeDependencies | None = None,
     ) -> None:
         self._config_store = config_store
         self._registry = operator_registry
@@ -55,12 +64,14 @@ class PipelinesOrchestrator:
         self._notifications = notifications
         self._files_dir = files_dir
         self._poll_interval_s = float(poll_interval_s)
+        self._runtime_deps_base = runtime_dependencies or PipelineRuntimeDependencies()
 
         self._stop = asyncio.Event()
         self._reload = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
 
         self._pipelines: dict[str, _PipelineHandle] = {}
+        self._local_bundle: _BundleHandle | None = None
         self._inboxes: dict[str, BoundedChannel[dict[str, Any]]] = {}
         self._servers: dict[str, _ServerHandle] = {}
         self._last_sig: str = ""
@@ -86,16 +97,37 @@ class PipelinesOrchestrator:
         self._reload.set()
 
     def status(self) -> dict[str, Any]:
-        pipelines = [
-            {
-                "name": name,
-                "mode": handle.mode,
-                "processing_server_id": getattr(handle.pipeline, "processing_server_id", "local"),
-                "started_at": handle.started_at,
-                "snapshot": handle.runtime.snapshot(),
-            }
-            for name, handle in sorted(self._pipelines.items(), key=lambda item: item[0])
-        ]
+        pipelines: list[dict[str, Any]] = []
+        local_bundle: dict[str, Any] | None = None
+
+        if self._local_bundle is not None:
+            try:
+                local_bundle = self._local_bundle.runtime.snapshot()
+            except Exception as exc:  # noqa: BLE001
+                local_bundle = {"error": str(exc)}
+            for pipeline in self._local_bundle.pipelines:
+                pipelines.append(
+                    {
+                        "name": pipeline.name,
+                        "mode": "bundle",
+                        "processing_server_id": "local",
+                        "started_at": self._local_bundle.started_at,
+                        "bundle_name": getattr(self._local_bundle.runtime, "bundle_name", "local_bundle"),
+                    },
+                )
+
+        pipelines.extend(
+            [
+                {
+                    "name": name,
+                    "mode": handle.mode,
+                    "processing_server_id": getattr(handle.pipeline, "processing_server_id", "local"),
+                    "started_at": handle.started_at,
+                    "snapshot": handle.runtime.snapshot(),
+                }
+                for name, handle in sorted(self._pipelines.items(), key=lambda item: item[0])
+            ],
+        )
         servers = [
             {
                 "id": sid,
@@ -108,6 +140,7 @@ class PipelinesOrchestrator:
         ]
         return {
             "running": self._task is not None and not self._stop.is_set(),
+            "local_bundle": local_bundle,
             "pipelines": pipelines,
             "servers": servers,
             "last_error": self._last_error,
@@ -169,8 +202,13 @@ class PipelinesOrchestrator:
             else:
                 remote_groups.setdefault(sid, []).append(p)
 
-        for p in local:
-            await self._start_local_pipeline(p)
+        if len(local) > 1:
+            started = await self._start_local_bundle(local)
+            if not started:
+                for p in local:
+                    await self._start_local_pipeline(p)
+        elif local:
+            await self._start_local_pipeline(local[0])
 
         for sid, group in remote_groups.items():
             server = servers_by_id.get(sid)
@@ -182,6 +220,13 @@ class PipelinesOrchestrator:
             await self._start_remote_server(server, group)
 
     async def _stop_all(self) -> None:
+        if self._local_bundle is not None:
+            try:
+                await self._local_bundle.runtime.stop()
+            except Exception:
+                pass
+            self._local_bundle = None
+
         for handle in list(self._pipelines.values()):
             try:
                 await handle.runtime.stop()
@@ -208,6 +253,83 @@ class PipelinesOrchestrator:
                 pass
         self._servers.clear()
 
+    def _build_runtime_dependencies(
+        self,
+        *,
+        origin_inbox: BoundedChannel[dict[str, Any]] | None,
+    ) -> PipelineRuntimeDependencies:
+        base = self._runtime_deps_base
+        return PipelineRuntimeDependencies(
+            config_store=self._config_store,
+            files_dir=self._files_dir,
+            notifications_upsert=self._notifications.upsert,
+            origin_inbox=origin_inbox,
+            yolo_backend_factory=base.yolo_backend_factory,
+            processing_emit_projected_event=base.processing_emit_projected_event,
+            logger=logger,
+        )
+
+    async def _start_local_bundle(self, pipelines: list[Pipeline]) -> bool:
+        compiled: list[CompiledPipeline] = []
+        valid_pipelines: list[Pipeline] = []
+        for pipeline in pipelines:
+            try:
+                compiled_pipeline = self._compiler.compile_pipeline(pipeline)
+            except GraphCompileError as exc:
+                logger.warning("pipeline compile failed name=%s: %s", pipeline.name, exc)
+                continue
+            compiled.append(compiled_pipeline)
+            valid_pipelines.append(pipeline)
+
+        if not compiled:
+            return False
+
+        grouped: dict[str, list[SharedNodeOccurrence]] = {}
+        for compiled_pipeline in compiled:
+            for node in compiled_pipeline.nodes:
+                if not node.shareable:
+                    continue
+                grouped.setdefault(node.signature, []).append(
+                    SharedNodeOccurrence(
+                        pipeline_name=compiled_pipeline.name,
+                        node_id=node.node_id,
+                        signature=node.signature,
+                    ),
+                )
+        shared = {
+            signature: tuple(occurrences)
+            for signature, occurrences in grouped.items()
+            if len(occurrences) > 1
+        }
+        report = CompilationReport(
+            pipelines=tuple(compiled),
+            shared_signatures=shared,
+        )
+
+        deps = self._build_runtime_dependencies(origin_inbox=None)
+        try:
+            runtime = PipelineBundleRuntime(
+                report=report,
+                registry=self._registry,
+                dependencies=deps,
+                bundle_name="local_bundle",
+            )
+        except SharedRuntimeBuildError as exc:
+            logger.warning("local bundle build failed: %s", exc)
+            return False
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("local bundle init failed: %s", exc)
+            return False
+
+        try:
+            await runtime.start()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("local bundle start failed: %s", exc)
+            return False
+
+        self._local_bundle = _BundleHandle(pipelines=valid_pipelines, runtime=runtime, started_at=time.time())
+        return True
+
     async def _start_local_pipeline(self, pipeline: Pipeline) -> None:
         try:
             compiled = self._compiler.compile_pipeline(pipeline)
@@ -215,12 +337,7 @@ class PipelinesOrchestrator:
             logger.warning("pipeline compile failed name=%s: %s", pipeline.name, exc)
             return
 
-        deps = PipelineRuntimeDependencies(
-            config_store=self._config_store,
-            files_dir=self._files_dir,
-            notifications_upsert=self._notifications.upsert,
-            logger=logger,
-        )
+        deps = self._build_runtime_dependencies(origin_inbox=None)
         runtime = PipelineRuntime(compiled=compiled, registry=self._registry, dependencies=deps)
         await runtime.start()
         self._pipelines[pipeline.name] = _PipelineHandle(pipeline=pipeline, runtime=runtime, started_at=time.time(), mode="local")
@@ -244,13 +361,7 @@ class PipelinesOrchestrator:
             logger.warning("origin pipeline compile failed name=%s: %s", pipeline.name, exc)
             return
 
-        deps = PipelineRuntimeDependencies(
-            config_store=self._config_store,
-            files_dir=self._files_dir,
-            notifications_upsert=self._notifications.upsert,
-            origin_inbox=inbox,
-            logger=logger,
-        )
+        deps = self._build_runtime_dependencies(origin_inbox=inbox)
         runtime = PipelineRuntime(compiled=compiled, registry=self._registry, dependencies=deps)
         await runtime.start()
         self._pipelines[pipeline.name] = _PipelineHandle(pipeline=pipeline, runtime=runtime, started_at=time.time(), mode="origin")

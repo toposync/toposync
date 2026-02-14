@@ -221,22 +221,6 @@ export async function getNotification(notificationId: string): Promise<Notificat
   return res.json();
 }
 
-export async function getPipelinesFeatureFlag(): Promise<{ enabled: boolean }> {
-  const res = await fetch("/api/pipelines/feature-flag");
-  if (!res.ok) throw new Error(`Failed to fetch pipelines feature flag: ${res.status}`);
-  return res.json();
-}
-
-export async function setPipelinesFeatureFlag(enabled: boolean): Promise<{ enabled: boolean }> {
-  const res = await fetch("/api/pipelines/feature-flag", {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ enabled }),
-  });
-  if (!res.ok) throw new Error(`Failed to set pipelines feature flag: ${res.status}`);
-  return res.json();
-}
-
 export async function listProcessingServers(): Promise<ProcessingServer[]> {
   const res = await fetch("/api/processing-servers");
   if (!res.ok) throw new Error(`Failed to list processing servers: ${res.status}`);

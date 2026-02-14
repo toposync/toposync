@@ -16,7 +16,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 
-PIPELINES_FEATURE_FLAG_KEY = "pipelines_v1_enabled"
 PIPELINE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PIPELINE_GRAPH_SCHEMA_VERSION_KEY = "schema_version"
 PROCESSING_SERVERS_KEY = "processing_servers"
@@ -190,23 +189,10 @@ def _normalize_pipeline_name(name: str) -> str:
     return value
 
 
-def _normalize_pipelines_feature_flag(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and value in {0, 1}:
-        return bool(value)
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "off"}:
-            return False
-    return False
-
-
 def _normalize_settings(settings: AppSettings) -> AppSettings:
     core = dict(settings.core)
-    core[PIPELINES_FEATURE_FLAG_KEY] = _normalize_pipelines_feature_flag(core.get(PIPELINES_FEATURE_FLAG_KEY))
+    # Legacy: previous versions used a pipelines feature flag for gradual rollout.
+    core.pop("pipelines_v1_enabled", None)
     core[PROCESSING_SERVERS_KEY] = _normalize_processing_servers(core.get(PROCESSING_SERVERS_KEY))
     return AppSettings(core=core, extensions=dict(settings.extensions))
 
@@ -591,24 +577,6 @@ class ConfigStore:
             await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
             self._config = cfg2
             return removed
-
-    async def get_pipelines_feature_flag(self) -> bool:
-        cfg = await self.get_config()
-        return _normalize_pipelines_feature_flag(cfg.settings.core.get(PIPELINES_FEATURE_FLAG_KEY))
-
-    async def set_pipelines_feature_flag(self, *, enabled: bool) -> bool:
-        await self.load()
-        async with self._lock:
-            cfg = self._config or _default_config()
-            core = dict(cfg.settings.core)
-            core[PIPELINES_FEATURE_FLAG_KEY] = bool(enabled)
-            settings = AppSettings(core=core, extensions=dict(cfg.settings.extensions))
-
-            cfg2 = _build_config(cfg, settings=settings)
-            cfg2 = _normalize_config(cfg2)
-            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
-            self._config = cfg2
-            return _normalize_pipelines_feature_flag(cfg2.settings.core.get(PIPELINES_FEATURE_FLAG_KEY))
 
     async def list_processing_servers(self) -> list[ProcessingServer]:
         settings = await self.get_settings()

@@ -63,6 +63,16 @@ class DebounceConfig(BaseModel):
         return mode
 
 
+class LifecycleFromBooleanConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    field: str = Field(
+        default="metadata.motion_gate_open",
+        description="Boolean field that defines open/closed state (payload.* or metadata.* with dotted paths).",
+    )
+    key_field: str = Field(default="stream_id", description="Key used to track open/closed state per stream.")
+    drop_updates_when_closed: bool = Field(default=True, description="When closed, drop UPDATE packets instead of passing them through.")
+
+
 _DEBUG_SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
@@ -481,6 +491,88 @@ class DebounceRuntime(TransformOperatorRuntime):
         return [packet]
 
 
+def _deep_get(container: Any, dotted_key: str) -> Any:
+    if not dotted_key:
+        return None
+    parts = [p for p in str(dotted_key).split(".") if p]
+    cur: Any = container
+    for part in parts:
+        if not isinstance(cur, dict):
+            return None
+        if part not in cur:
+            return None
+        cur = cur.get(part)
+    return cur
+
+
+def _resolve_bool_field(packet: Packet, field: str) -> bool | None:
+    token = str(field or "").strip()
+    if not token:
+        return None
+    if token.startswith("payload."):
+        value = _deep_get(packet.payload, token[len("payload.") :])
+    elif token.startswith("metadata."):
+        value = _deep_get(packet.metadata, token[len("metadata.") :])
+    else:
+        value = _deep_get(packet.payload, token)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in {0, 1}:
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+class LifecycleFromBooleanRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        parsed = LifecycleFromBooleanConfig.model_validate(config)
+        self._field = str(parsed.field or "").strip()
+        self._key_field = str(parsed.key_field or "").strip() or "stream_id"
+        self._drop_updates_when_closed = bool(parsed.drop_updates_when_closed)
+        self._is_open_by_key: dict[str, bool] = {}
+        self._last_open_packet_by_key: dict[str, Packet] = {}
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        value = _resolve_bool_field(packet, self._field)
+        if value is None:
+            return [packet]
+
+        key = _resolve_key(packet, self._key_field)
+        was_open = bool(self._is_open_by_key.get(key, False))
+
+        if value:
+            lifecycle = Lifecycle.OPEN if not was_open else Lifecycle.UPDATE
+            out = packet.with_lifecycle(lifecycle) if packet.lifecycle != lifecycle else packet
+            self._is_open_by_key[key] = True
+            self._last_open_packet_by_key[key] = out
+            return [out]
+
+        if was_open:
+            last = self._last_open_packet_by_key.get(key) or packet
+            close_packet = Packet.create(
+                stream_id=last.stream_id,
+                lifecycle=Lifecycle.CLOSE,
+                payload=last.payload,
+                artifacts=last.artifacts,
+                metadata=last.metadata,
+                parent_packet_id=last.packet_id,
+            )
+            self._is_open_by_key[key] = False
+            self._last_open_packet_by_key.pop(key, None)
+            return [close_packet]
+
+        self._is_open_by_key[key] = False
+        self._last_open_packet_by_key.pop(key, None)
+        if self._drop_updates_when_closed and packet.lifecycle == Lifecycle.UPDATE:
+            return []
+        return [packet.with_lifecycle(Lifecycle.UPDATE)] if packet.lifecycle != Lifecycle.UPDATE else [packet]
+
+
 def register_core_operators(registry: OperatorRegistry) -> None:
     registry.register_operator(
         operator_id="core.synthetic_source",
@@ -541,6 +633,18 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         share_strategy="by_signature",
         owner="core",
         runtime_factory=lambda config, _deps: DebounceRuntime(config),
+    )
+    registry.register_operator(
+        operator_id="core.lifecycle_from_boolean",
+        description="Converts a boolean field into OPEN/UPDATE/CLOSE lifecycle packets (e.g. motion gate -> finite events).",
+        config_model=LifecycleFromBooleanConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["lifecycle", "realtime", "event"],
+        defaults=LifecycleFromBooleanConfig().model_dump(),
+        share_strategy="by_signature",
+        owner="core",
+        runtime_factory=lambda config, _deps: LifecycleFromBooleanRuntime(config),
     )
     registry.register_operator(
         operator_id="core.debug",

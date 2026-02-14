@@ -17,14 +17,12 @@ import {
   deletePipeline,
   deleteProcessingServer,
   getCameraContexts,
-  getPipelinesFeatureFlag,
   listCamerasIndex,
   listPipelineOperators,
   listPipelines,
   listProcessingServers,
   putPipeline,
   putProcessingServer,
-  setPipelinesFeatureFlag,
 } from "../../util/api";
 
 type Props = {
@@ -57,6 +55,7 @@ const PIPELINE_PRESET_OPERATOR_IDS = [
   "camera.source",
   "core.schedule_gate",
   "camera.motion_gate",
+  "core.lifecycle_from_boolean",
   "core.fps_reducer",
   "vision.object_tracking_yolo",
   "vision.object_detection_yolo",
@@ -82,6 +81,7 @@ const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "core.schedule_gate": "Schedule gate",
   "camera.source": "Camera source",
   "camera.motion_gate": "Motion detection gate",
+  "core.lifecycle_from_boolean": "Lifecycle from boolean",
   "core.fps_reducer": "FPS reducer",
   "vision.object_tracking_yolo": "YOLO tracking",
   "vision.object_detection_yolo": "YOLO detection",
@@ -652,7 +652,6 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [servers, setServers] = useState<ProcessingServer[]>([]);
   const [operators, setOperators] = useState<PipelineOperatorDefinition[]>([]);
-  const [featureFlag, setFeatureFlag] = useState<boolean>(false);
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [camerasIndex, setCamerasIndex] = useState<CamerasIndexResponse>({ cameras: [] });
   const [cameraContextsById, setCameraContextsById] = useState<Record<string, CameraContextsResponse>>({});
@@ -752,14 +751,12 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
     setLoading(true);
     setError(null);
     try {
-      const [flag, pipelineList, serverList, operatorList, cameras] = await Promise.all([
-        getPipelinesFeatureFlag(),
+      const [pipelineList, serverList, operatorList, cameras] = await Promise.all([
         listPipelines(),
         listProcessingServers(),
         listPipelineOperators(),
         listCamerasIndex().catch(() => ({ cameras: [] })),
       ]);
-      setFeatureFlag(Boolean(flag?.enabled));
       setPipelines(pipelineList);
       setServers(serverList);
       setOperators(operatorList);
@@ -957,16 +954,6 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
     }
   };
 
-  const handleToggleFlag = async () => {
-    setError(null);
-    try {
-      const next = await setPipelinesFeatureFlag(!featureFlag);
-      setFeatureFlag(Boolean(next?.enabled));
-    } catch (err: any) {
-      setError(String(err?.message ?? err));
-    }
-  };
-
   const handleSaveServer = async (server: ProcessingServer) => {
     setError(null);
     try {
@@ -1085,12 +1072,6 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
           <i className="fa-solid fa-arrow-left" aria-hidden="true" />
         </button>
         <div className="pipelinesTitle">Pipelines</div>
-        <div className="pipelinesTopbarRight">
-          <label className="pipelinesFlag">
-            <input type="checkbox" checked={featureFlag} onChange={() => void handleToggleFlag()} />
-            <span>Enable pipelines</span>
-          </label>
-        </div>
       </div>
 
       <div className="pipelinesBody">

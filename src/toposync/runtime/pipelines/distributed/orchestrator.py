@@ -169,14 +169,12 @@ class PipelinesOrchestrator:
                 raise
 
     async def _reconcile(self) -> None:
-        enabled = bool(await self._config_store.get_pipelines_feature_flag())
         pipelines = await self._config_store.list_pipelines()
         servers = await self._config_store.list_processing_servers()
 
         desired = [p for p in pipelines if p.type == "final" and getattr(p, "enabled", True) is not False]
         desired_sig = json.dumps(
             {
-                "enabled": enabled,
                 "pipelines": [p.model_dump(mode="json") for p in desired],
                 "servers": [s.model_dump(mode="json") for s in servers],
             },
@@ -189,8 +187,6 @@ class PipelinesOrchestrator:
         self._last_sig = desired_sig
 
         await self._stop_all()
-        if not enabled:
-            return
 
         servers_by_id = {s.id: s for s in servers}
         local: list[Pipeline] = []

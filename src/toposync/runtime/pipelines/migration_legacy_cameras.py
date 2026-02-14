@@ -70,7 +70,7 @@ def extract_legacy_camera_rules(settings: dict[str, Any]) -> list[LegacyCameraRu
             if not rule_id:
                 continue
             trigger = _as_record(rule.get("trigger"))
-            trigger_kind = _as_str(trigger.get("kind")).strip() or "motion"
+            trigger_kind = (_as_str(trigger.get("kind")).strip() or "motion").lower()
             category = _as_str(trigger.get("category")).strip().lower()
             rules.append(
                 LegacyCameraRule(
@@ -87,9 +87,7 @@ def extract_legacy_camera_rules(settings: dict[str, Any]) -> list[LegacyCameraRu
 
 
 def build_pipeline_from_legacy_camera_rule(rule: LegacyCameraRule, *, existing_names: set[str]) -> Pipeline | None:
-    if rule.trigger_kind != "object":
-        return None
-
+    trigger_kind = str(rule.trigger_kind or "").strip().lower() or "motion"
     base_name = _safe_pipeline_name(f"legacy_{rule.camera_id}_{rule.rule_id}")
     name = base_name
     suffix = 2
@@ -97,6 +95,100 @@ def build_pipeline_from_legacy_camera_rule(rule: LegacyCameraRule, *, existing_n
         name = _safe_pipeline_name(f"{base_name}_{suffix}")
         suffix += 1
     existing_names.add(name)
+
+    if trigger_kind == "motion":
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {
+                    "id": "source",
+                    "operator": "camera.source",
+                    "config": {"camera_id": rule.camera_id},
+                },
+                {
+                    "id": "motion",
+                    "operator": "camera.motion_gate",
+                    "config": {"emit_when_idle": True},
+                },
+                {
+                    "id": "lifecycle",
+                    "operator": "core.lifecycle_from_boolean",
+                    "config": {"field": "metadata.motion_gate_open"},
+                },
+                {
+                    "id": "best",
+                    "operator": "camera.best_frame_selector",
+                    "config": {},
+                },
+                {
+                    "id": "store",
+                    "operator": "core.store_images",
+                    "config": {
+                        "artifact_names": ["best_frame", "frame_original"],
+                        "subdir": "pipelines",
+                        "format": "png",
+                        "keep_data": False,
+                    },
+                },
+                {
+                    "id": "notify",
+                    "operator": "core.notify",
+                    "config": {
+                        "notification_type": "pipelines.event",
+                        "title": "Motion detected!",
+                        "description": "{{camera_name}}",
+                        "priority": "medium",
+                        "update_interval_seconds": 1.0,
+                        "thumbnail_with_fallback": ["best_frame", "frame_original"],
+                    },
+                },
+            ],
+            "edges": [
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "motion", "port": "in"},
+                    "maxsize": 2,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "motion", "port": "out"},
+                    "to": {"node": "lifecycle", "port": "in"},
+                    "maxsize": 2,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "lifecycle", "port": "out"},
+                    "to": {"node": "best", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "best", "port": "out"},
+                    "to": {"node": "store", "port": "in"},
+                    "maxsize": 16,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "store", "port": "out"},
+                    "to": {"node": "notify", "port": "in"},
+                    "maxsize": 16,
+                    "drop_policy": "drop_oldest",
+                },
+            ],
+        }
+
+        return Pipeline(
+            name=name,
+            type="final",
+            enabled=True,
+            processing_server_id=rule.processing_server_id or "local",
+            editor_mode="json",
+            python_source="",
+            graph=graph,
+        )
+
+    if trigger_kind != "object":
+        return None
 
     categories = [rule.category] if rule.category else []
 

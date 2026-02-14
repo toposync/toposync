@@ -104,14 +104,6 @@ class ExtensionSettingsResponse(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
-class PipelineFeatureFlagRequest(BaseModel):
-    enabled: bool
-
-
-class PipelineFeatureFlagResponse(BaseModel):
-    enabled: bool
-
-
 class PipelinesListResponse(BaseModel):
     pipelines: list[Pipeline]
 
@@ -314,27 +306,6 @@ def create_app() -> FastAPI:
         config_store: ConfigStore = request.app.state.config_store
         settings = await config_store.patch_extension_settings(extension_id, patch)
         return ExtensionSettingsResponse(extension_id=extension_id, settings=settings)
-
-    @app.get("/api/pipelines/feature-flag", response_model=PipelineFeatureFlagResponse)
-    async def get_pipelines_feature_flag(request: Request) -> PipelineFeatureFlagResponse:
-        config_store: ConfigStore = request.app.state.config_store
-        enabled = await config_store.get_pipelines_feature_flag()
-        return PipelineFeatureFlagResponse(enabled=enabled)
-
-    @app.patch("/api/pipelines/feature-flag", response_model=PipelineFeatureFlagResponse)
-    async def patch_pipelines_feature_flag(
-        request: Request,
-        body: PipelineFeatureFlagRequest,
-    ) -> PipelineFeatureFlagResponse:
-        config_store: ConfigStore = request.app.state.config_store
-        enabled = await config_store.set_pipelines_feature_flag(enabled=body.enabled)
-        orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
-        if orchestrator is not None:
-            try:
-                orchestrator.trigger_reload()
-            except Exception:
-                pass
-        return PipelineFeatureFlagResponse(enabled=enabled)
 
     @app.get("/api/pipelines/runtime/status", response_model=PipelineRuntimeStatusResponse)
     async def pipelines_runtime_status(request: Request) -> PipelineRuntimeStatusResponse:

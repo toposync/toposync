@@ -231,38 +231,4 @@ test("wall tool can create a wall and persist to backend", async ({ page, reques
   }
 });
 
-test("camera detections are persisted in backend settings", async ({ page, request }) => {
-  const dialog = await openSettings(page);
-
-  await expect(dialog.getByRole("button", { name: "Cameras" })).toBeVisible();
-  await dialog.getByRole("button", { name: "Cameras" }).click();
-
-  await dialog.getByRole("button", { name: "Add camera" }).click();
-
-  await dialog.getByRole("button", { name: "Detections" }).first().click();
-
-  await expect(page.getByRole("dialog", { name: /Detections/ })).toBeVisible();
-  const detDialog = page.getByRole("dialog", { name: /Detections/ });
-
-  await detDialog.getByRole("button", { name: "Add" }).click();
-
-  await detDialog.getByRole("combobox").first().selectOption("object");
-  await detDialog.getByRole("combobox").nth(1).selectOption("cat");
-
-  await detDialog.getByRole("button", { name: "Save" }).click();
-
-  await dialog.getByRole("button", { name: "Save" }).click();
-
-  const res = await request.get("http://127.0.0.1:8000/api/settings");
-  expect(res.ok()).toBeTruthy();
-  const data = await res.json();
-  const cameras = data?.extensions?.["com.toposync.cameras"]?.cameras ?? [];
-  expect(Array.isArray(cameras)).toBeTruthy();
-  expect(cameras.length).toBeGreaterThan(0);
-  const camWithCat = cameras.find((cam) => {
-    const detections = cam?.detections ?? [];
-    if (!Array.isArray(detections)) return false;
-    return detections.some((det) => det?.trigger?.kind === "object" && det?.trigger?.category === "cat");
-  });
-  expect(camWithCat).toBeTruthy();
-});
+ 

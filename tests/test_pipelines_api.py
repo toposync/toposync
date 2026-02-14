@@ -17,16 +17,8 @@ def _create_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClien
     return TestClient(create_app())
 
 
-def test_pipelines_api_crud_and_feature_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pipelines_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
-        res = client.get("/api/pipelines/feature-flag")
-        assert res.status_code == 200
-        assert res.json() == {"enabled": False}
-
-        res = client.patch("/api/pipelines/feature-flag", json={"enabled": True})
-        assert res.status_code == 200
-        assert res.json() == {"enabled": True}
-
         res = client.get("/api/pipelines")
         assert res.status_code == 200
         assert res.json() == {"pipelines": []}

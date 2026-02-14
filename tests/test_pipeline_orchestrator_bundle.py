@@ -185,7 +185,6 @@ def test_orchestrator_runs_local_bundle_and_shares_yolo(tmp_path: Path) -> None:
             files_dir=tmp_path / "data" / "files",
         )
         store = ConfigStore(paths=paths)
-        await store.set_pipelines_feature_flag(enabled=True)
 
         graph_a = _tracking_pipeline_graph(source_id="source_a", yolo_id="yolo_a", sink_id="sink_a", sink_name="sink_a")
         graph_b = _tracking_pipeline_graph(source_id="source_b", yolo_id="yolo_b", sink_id="sink_b", sink_name="sink_b")
@@ -229,4 +228,3 @@ def test_orchestrator_runs_local_bundle_and_shares_yolo(tmp_path: Path) -> None:
         await orchestrator.stop()
 
     asyncio.run(scenario())
-

@@ -5,6 +5,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+import cv2  # type: ignore
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 
@@ -151,6 +152,82 @@ def test_store_images_writes_files_and_sets_references(tmp_path: Path) -> None:
         assert "camera-main" in str(art.reference)
         assert "track-1" in str(art.reference)
         assert (files_dir / str(art.reference)).is_file()
+
+    asyncio.run(scenario())
+
+
+def test_store_images_saves_with_correct_color_channels(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        files_dir = tmp_path / "files"
+        deps = PipelineRuntimeDependencies(files_dir=files_dir)
+
+        # OpenCV frames are BGR. This regression test ensures stored images look correct when opened by standard tools.
+        frame = np.zeros((2, 2, 3), dtype=np.uint8)
+        frame[0, 0] = [255, 0, 0]  # blue in BGR
+        frame[0, 1] = [0, 255, 255]  # yellow in BGR
+        frame[1, 0] = [0, 0, 255]  # red in BGR
+        frame[1, 1] = [0, 255, 0]  # green in BGR
+
+        sequence = [
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {
+                    "frame": frame,
+                    "frame_ts": 123.456,
+                    "camera_id": "camera-main",
+                    "tracking_id": "track-1",
+                },
+            },
+        ]
+        collector: dict[str, list[Packet]] = {}
+
+        registry = OperatorRegistry()
+        register_builtin_operators(registry)
+        _register_test_source_and_sink(registry, sequence=sequence, collector=collector)
+
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "store",
+                    "operator": "core.store_images",
+                    "config": {
+                        "artifact_names": ["frame_original"],
+                        "subdir": "pipelines",
+                        "format": "png",
+                        "keep_data": False,
+                        "overwrite": False,
+                    },
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                {"from": {"node": "store", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+            ],
+        }
+
+        pipeline = Pipeline(name="stage7_store_images_colors", type="final", graph=graph)
+        compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+        runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
+        await runtime.run_for(0.25)
+
+        packets = collector.get("sink", [])
+        assert len(packets) == 1
+        out_packet = packets[0]
+        rel = out_packet.artifacts["frame_original"].reference
+        assert rel
+        abs_path = files_dir / str(rel)
+        assert abs_path.is_file()
+
+        img = cv2.imread(str(abs_path), cv2.IMREAD_COLOR)
+        assert img is not None
+        assert img.shape[:2] == (2, 2)
+        assert img.dtype == np.uint8
+
+        # cv2.imread returns BGR; it should match the original BGR frame.
+        assert (img == frame).all()
 
     asyncio.run(scenario())
 

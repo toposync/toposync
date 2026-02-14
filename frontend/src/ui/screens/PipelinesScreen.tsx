@@ -222,7 +222,7 @@ const YOLO_CATEGORY_VALUES = [
 
 const YOLO_CATEGORY_OPTIONS: SelectOption[] = YOLO_CATEGORY_VALUES.map((value) => ({ value, label: value }));
 
-const STORE_IMAGE_ARTIFACT_SUGGESTIONS: SelectOption[] = [
+const ARTIFACT_SUGGESTIONS: SelectOption[] = [
   { value: "frame_original", label: "Full frame" },
   { value: "best_frame", label: "Best frame" },
   { value: "segmented", label: "Segmented" },
@@ -1295,10 +1295,25 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                              ? "Config must be a JSON object."
 	                              : null;
 
-	                          const scalarEntries = Object.entries(config).filter(([, value]) => {
-	                            const valueType = typeof value;
-	                            return valueType === "string" || valueType === "number" || valueType === "boolean";
-	                          });
+	                          const scalarEntries = Object.entries(config)
+	                            .filter(([, value]) => {
+	                              const valueType = typeof value;
+	                              return valueType === "string" || valueType === "number" || valueType === "boolean";
+	                            })
+	                            .filter(([key]) => {
+	                              if (step.operatorId === "core.notify") {
+	                                return ![
+	                                  "title",
+	                                  "description",
+	                                  "priority",
+	                                  "realtime",
+	                                  "update_interval_seconds",
+	                                  "notification_type",
+	                                  "dedupe_key_template",
+	                                ].includes(key);
+	                              }
+	                              return true;
+	                            });
 
 	                          const isConfigScalarGridHidden =
 	                            step.operatorId === "camera.source" ||
@@ -1307,6 +1322,7 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                            step.operatorId === "camera.velocity_estimation" ||
 	                            step.operatorId === "core.throttle" ||
 	                            step.operatorId === "core.debounce" ||
+	                            step.operatorId === "core.notify" ||
 	                            step.operatorId === "core.store_images" ||
 	                            step.operatorId === "vision.object_tracking_yolo" ||
 	                            step.operatorId === "vision.object_detection_yolo";
@@ -1339,7 +1355,16 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                            ? storeImageArtifactsRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
 	                            : [];
 	                          const storeImageSelectedOptions = storeImageArtifactNames.map((value) => {
-	                            const known = STORE_IMAGE_ARTIFACT_SUGGESTIONS.find((option) => option.value === value);
+	                            const known = ARTIFACT_SUGGESTIONS.find((option) => option.value === value);
+	                            return known ?? { value, label: humanizeIdentifier(value) || value };
+	                          });
+
+	                          const notifyFallbackRaw = (config as any).thumbnail_with_fallback;
+	                          const notifyFallbackNames = Array.isArray(notifyFallbackRaw)
+	                            ? notifyFallbackRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
+	                            : [];
+	                          const notifySelectedFallbackOptions = notifyFallbackNames.map((value) => {
+	                            const known = ARTIFACT_SUGGESTIONS.find((option) => option.value === value);
 	                            return known ?? { value, label: humanizeIdentifier(value) || value };
 	                          });
 
@@ -1782,7 +1807,7 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                                        <CreatableSelect<SelectOption, true>
 	                                          isMulti
 	                                          styles={pipelinesReactSelectStyles}
-	                                          options={STORE_IMAGE_ARTIFACT_SUGGESTIONS}
+	                                          options={ARTIFACT_SUGGESTIONS}
 	                                          value={storeImageSelectedOptions}
 	                                          placeholder="Full frame (default)"
 	                                          onChange={(value: MultiValue<SelectOption>) => {
@@ -1796,6 +1821,159 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                                      <div className="pipelinesStepHint">
 	                                        Stores image artifacts already present in the payload (default: Full frame). Type a custom artifact name to match future steps.
 	                                      </div>
+	                                    </div>
+	                                  ) : null}
+
+	                                  {step.operatorId === "core.notify" ? (
+	                                    <div className="pipelinesOperatorConfigCard">
+	                                      {(() => {
+	                                        const title = String((config as any).title ?? "{{object_category_label}} detected");
+	                                        const description = String((config as any).description ?? "");
+	                                        const priorityRaw = String((config as any).priority ?? "medium").trim().toLowerCase() || "medium";
+	                                        const realtime = Boolean((config as any).realtime ?? true);
+	                                        const updateIntervalSeconds = Number((config as any).update_interval_seconds ?? 1.0);
+	                                        const notificationType = String((config as any).notification_type ?? "pipelines.event");
+	                                        const dedupeKeyTemplate = String((config as any).dedupe_key_template ?? "");
+	                                        const priority = ["low", "medium", "high"].includes(priorityRaw) ? priorityRaw : "medium";
+
+	                                        return (
+	                                          <>
+	                                            <label className="pipelinesLabel">
+	                                              <span>Title</span>
+	                                              <input
+	                                                className="pipelinesInput"
+	                                                type="text"
+	                                                value={title}
+	                                                placeholder="Person detected!"
+	                                                onChange={(event) => {
+	                                                  const nextTitle = String(event.target.value ?? "");
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, title: nextTitle }));
+	                                                }}
+	                                              />
+	                                            </label>
+	                                            <div className="pipelinesStepHint">
+	                                              Supports templates like <code>{"{{object_category_label}}"}</code>, <code>{"{{area_label}}"}</code>,{" "}
+	                                              <code>{"{{pose_label}}"}</code>.
+	                                            </div>
+
+	                                            <label className="pipelinesLabel">
+	                                              <span>Description</span>
+	                                              <textarea
+	                                                className="pipelinesInputTextarea"
+	                                                value={description}
+	                                                placeholder="Front yard • Standing"
+	                                                onChange={(event) => {
+	                                                  const nextDescription = String(event.target.value ?? "");
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, description: nextDescription }));
+	                                                }}
+	                                              />
+	                                            </label>
+
+	                                            <label className="pipelinesLabel">
+	                                              <span>Priority</span>
+	                                              <select
+	                                                className="pipelinesSelect"
+	                                                value={priority}
+	                                                onChange={(event) => {
+	                                                  const nextPriority = String(event.target.value || "medium").trim().toLowerCase();
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, priority: nextPriority }));
+	                                                }}
+	                                              >
+	                                                <option value="low">Low</option>
+	                                                <option value="medium">Medium</option>
+	                                                <option value="high">High</option>
+	                                              </select>
+	                                            </label>
+
+	                                            <label className="pipelinesLabel">
+	                                              <span>Realtime updates</span>
+	                                              <input
+	                                                type="checkbox"
+	                                                checked={realtime}
+	                                                onChange={(event) => {
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, realtime: event.target.checked }));
+	                                                }}
+	                                              />
+	                                            </label>
+
+	                                            <label className="pipelinesLabel">
+	                                              <span>Update interval (seconds)</span>
+	                                              <input
+	                                                className="pipelinesInput"
+	                                                type="number"
+	                                                min={0}
+	                                                max={60}
+	                                                step={0.1}
+	                                                value={Number.isFinite(updateIntervalSeconds) ? String(updateIntervalSeconds) : "1.0"}
+	                                                onChange={(event) => {
+	                                                  const nextValue = Number(event.target.value || 0);
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({
+	                                                    ...prev,
+	                                                    update_interval_seconds: Number.isFinite(nextValue) ? Math.max(0, Math.min(60, nextValue)) : 1.0,
+	                                                  }));
+	                                                }}
+	                                              />
+	                                            </label>
+	                                            <div className="pipelinesStepHint">Avoids spamming UI updates while an event is open. Set to 0 to emit every change.</div>
+
+	                                            <label className="pipelinesLabel">
+	                                              <span>Thumbnail fallback</span>
+	                                              <CreatableSelect<SelectOption, true>
+	                                                isMulti
+	                                                styles={pipelinesReactSelectStyles}
+	                                                options={ARTIFACT_SUGGESTIONS}
+	                                                value={notifySelectedFallbackOptions}
+	                                                placeholder="Best frame → Face → Segmented → Full frame"
+	                                                onChange={(value: MultiValue<SelectOption>) => {
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({
+	                                                    ...prev,
+	                                                    thumbnail_with_fallback: value.map((item) => item.value),
+	                                                  }));
+	                                                }}
+	                                              />
+	                                            </label>
+	                                            <div className="pipelinesStepHint">
+	                                              Registers notifications only (never stores images). To include images, add Store Images before this step.
+	                                            </div>
+
+	                                            {step.showAdvanced ? (
+	                                              <>
+	                                                <label className="pipelinesLabel">
+	                                                  <span>Notification type</span>
+	                                                  <input
+	                                                    className="pipelinesInput"
+	                                                    type="text"
+	                                                    value={notificationType}
+	                                                    placeholder="pipelines.event"
+	                                                    onChange={(event) => {
+	                                                      const nextType = String(event.target.value ?? "");
+	                                                      updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, notification_type: nextType }));
+	                                                    }}
+	                                                  />
+	                                                </label>
+
+	                                                <label className="pipelinesLabel">
+	                                                  <span>Dedupe key template</span>
+	                                                  <input
+	                                                    className="pipelinesInput"
+	                                                    type="text"
+	                                                    value={dedupeKeyTemplate}
+	                                                    placeholder="Leave empty for default"
+	                                                    onChange={(event) => {
+	                                                      const nextValue = String(event.target.value ?? "");
+	                                                      updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, dedupe_key_template: nextValue }));
+	                                                    }}
+	                                                  />
+	                                                </label>
+	                                                <div className="pipelinesStepHint">
+	                                                  Use templates like <code>{"{{tracking_id}}"}</code>, <code>{"{{camera_id}}"}</code>,{" "}
+	                                                  <code>{"{{object_category_label}}"}</code>.
+	                                                </div>
+	                                              </>
+	                                            ) : null}
+	                                          </>
+	                                        );
+	                                      })()}
 	                                    </div>
 	                                  ) : null}
 

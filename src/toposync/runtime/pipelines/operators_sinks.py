@@ -358,14 +358,22 @@ class NotifyConfig(BaseModel):
     thumbnail_with_fallback: list[str] = Field(
         default_factory=lambda: ["best_frame", "face", "segmented", "frame_original"],
     )
-    store_thumbnail_if_needed: bool = True
-    thumbnail_subdir: str = "pipelines"
-    thumbnail_format: Literal["jpg", "png"] = "png"
-    thumbnail_jpeg_quality: int = Field(default=82, ge=1, le=100)
-    timestamp_field: str = "frame_ts"
-    camera_id_field: str = "camera_id"
-    tracking_id_field: str = "tracking_id"
     dedupe_key_template: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_fields(cls, values: Any) -> Any:
+        # Keep backwards compatibility with older graphs. Notifications must not store images.
+        if isinstance(values, dict):
+            values = dict(values)
+            values.pop("store_thumbnail_if_needed", None)
+            values.pop("thumbnail_subdir", None)
+            values.pop("thumbnail_format", None)
+            values.pop("thumbnail_jpeg_quality", None)
+            values.pop("timestamp_field", None)
+            values.pop("camera_id_field", None)
+            values.pop("tracking_id_field", None)
+        return values
 
     @field_validator("thumbnail_with_fallback", mode="after")
     @classmethod
@@ -380,15 +388,7 @@ class NotifyConfig(BaseModel):
             seen.add(name)
         return out
 
-    @field_validator("thumbnail_subdir")
-    @classmethod
-    def _validate_subdir(cls, value: str) -> str:
-        subdir = str(value or "").strip()
-        if not subdir or not _SAFE_DIR_RE.match(subdir):
-            raise ValueError("thumbnail_subdir must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-        return subdir
-
-    @field_validator("notification_type", "timestamp_field", "camera_id_field", "tracking_id_field", "dedupe_key_template")
+    @field_validator("notification_type", "title", "description", "dedupe_key_template")
     @classmethod
     def _trim_fields(cls, value: str) -> str:
         return str(value or "").strip()
@@ -415,7 +415,7 @@ class NotifyRuntime(SinkRuntime):
 
         dedupe_key = self._dedupe_key(packet, context)
         now_monotonic = time.monotonic()
-        ts = _resolve_ts(packet, self._config.timestamp_field)
+        ts = _resolve_ts(packet, "frame_ts")
 
         state = self._state.get(dedupe_key)
         if state is None:
@@ -499,8 +499,8 @@ class NotifyRuntime(SinkRuntime):
                 return rendered[:512]
 
         node_id = getattr(context, "node_id", "") or "node"
-        camera_id = _resolve_string(packet, self._config.camera_id_field) or "-"
-        token = _resolve_string(packet, "correlation_id") or _resolve_string(packet, self._config.tracking_id_field) or packet.stream_id
+        camera_id = _resolve_string(packet, "camera_id") or "-"
+        token = _resolve_string(packet, "correlation_id") or _resolve_string(packet, "tracking_id") or packet.stream_id
         raw = f"pipeline:{node_id}:camera:{camera_id}:token:{token}"
         if len(raw) <= 240:
             return raw
@@ -515,39 +515,6 @@ class NotifyRuntime(SinkRuntime):
                 continue
             if artifact.reference:
                 return str(artifact.reference)
-            if not self._config.store_thumbnail_if_needed:
-                continue
-            if artifact.data is None:
-                continue
-
-            files_dir = _resolve_files_dir(self._dependencies)
-            pipeline_name = getattr(context, "pipeline_name", "") or "pipeline"
-            node_id = getattr(context, "node_id", "") or "node"
-            camera_id = _resolve_string(packet, self._config.camera_id_field) or "no_camera"
-            tracking_id = _resolve_string(packet, self._config.tracking_id_field) or _resolve_string(packet, "correlation_id")
-            token = tracking_id or packet.stream_id
-            ts = _resolve_ts(packet, self._config.timestamp_field)
-            ts_ms = int(max(0.0, float(ts)) * 1000)
-
-            blob, ext, _mime = _encode_image_bytes(
-                artifact.data,
-                fmt=self._config.thumbnail_format,
-                jpeg_quality=int(self._config.thumbnail_jpeg_quality),
-            )
-            filename = f"{ts_ms}_{packet.packet_id[:8]}_{_safe_component(name)}_thumb{ext}"
-            abs_path, rel = _build_rel_path(
-                files_dir=files_dir,
-                components=[
-                    self._config.thumbnail_subdir,
-                    pipeline_name,
-                    node_id,
-                    camera_id,
-                    token,
-                ],
-                filename=filename,
-            )
-            await _write_bytes(abs_path, blob, overwrite=False)
-            return rel
         return None
 
 
@@ -571,7 +538,7 @@ def register_sink_operators(registry: OperatorRegistry) -> None:
     )
     registry.register_operator(
         operator_id="core.notify",
-        description="Creates or updates notifications with lifecycle semantics (open/update/close) using dedupe keys.",
+        description="Registers notifications with lifecycle semantics (open/update/close) using dedupe keys and existing artifacts.",
         config_model=NotifyConfig,
         inputs=[{"name": "in", "required": True}],
         outputs=[],

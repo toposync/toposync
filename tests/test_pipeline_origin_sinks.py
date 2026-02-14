@@ -223,6 +223,17 @@ def test_notify_upserts_single_notification_with_templates_and_no_spam(tmp_path:
             "nodes": [
                 {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
                 {
+                    "id": "store",
+                    "operator": "core.store_images",
+                    "config": {
+                        "artifact_names": ["frame_original"],
+                        "subdir": "pipelines",
+                        "format": "png",
+                        "keep_data": False,
+                        "overwrite": False,
+                    },
+                },
+                {
                     "id": "notify",
                     "operator": "core.notify",
                     "config": {
@@ -232,13 +243,12 @@ def test_notify_upserts_single_notification_with_templates_and_no_spam(tmp_path:
                         "priority": "high",
                         "update_interval_seconds": 60.0,
                         "thumbnail_with_fallback": ["frame_original"],
-                        "store_thumbnail_if_needed": True,
-                        "thumbnail_subdir": "pipelines",
                     },
                 },
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "notify", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
+                {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
             ],
         }
 

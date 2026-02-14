@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator
 
@@ -92,6 +92,7 @@ class RegisteredOperator:
     config_model: type[BaseModel]
     config_signature: str
     owner: str | None
+    runtime_factory: Callable[[dict[str, Any], Any], Any] | None = None
 
 
 class OperatorRegistry:
@@ -110,6 +111,7 @@ class OperatorRegistry:
         description: str = "",
         share_strategy: Literal["by_signature", "never"] = "by_signature",
         owner: str | None = None,
+        runtime_factory: Callable[[dict[str, Any], Any], Any] | None = None,
     ) -> OperatorDefinition:
         normalized_operator_id = str(operator_id or "").strip()
         if normalized_operator_id in self._items:
@@ -142,6 +144,7 @@ class OperatorRegistry:
             config_model=cfg_model,
             config_signature=config_signature,
             owner=str(owner or "").strip() or None,
+            runtime_factory=runtime_factory,
         )
         return definition
 

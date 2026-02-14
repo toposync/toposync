@@ -20,8 +20,10 @@ from pydantic import BaseModel, Field
 from toposync.extensions import BaseExtension
 from toposync.runtime.config_store import ConfigStore
 from toposync.runtime.event_bus import EventBus
+from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.services import ServiceRegistry
 
+from .pipelines import register_camera_pipeline_operators
 from .processing.mapping import ControlPointMapper, ControlPointPair
 from .processing.runtime import CamerasProcessingRuntime
 
@@ -207,6 +209,10 @@ class CamerasExtension(BaseExtension):
         super().__init__(package="toposync_ext_cameras")
 
     async def setup(self, app: FastAPI, *, bus: EventBus, services: ServiceRegistry) -> None:  # noqa: ARG002
+        registry = getattr(app.state, "pipeline_operator_registry", None)
+        if isinstance(registry, OperatorRegistry):
+            register_camera_pipeline_operators(registry)
+
         def _config_store(request: Request) -> ConfigStore:
             store = getattr(request.app.state, "config_store", None)
             if store is None:

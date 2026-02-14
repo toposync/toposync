@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 from toposync.runtime.config_store import Pipeline
 
 from .operator_registry import OperatorRegistry
+from .runtime import DropPolicy
 
 
 class GraphCompileError(ValueError):
@@ -63,6 +64,8 @@ class PipelineGraphNode(BaseModel):
 class PipelineGraphEdge(BaseModel):
     source: GraphEndpoint = Field(alias="from")
     target: GraphEndpoint = Field(alias="to")
+    channel_maxsize: int = Field(default=1, alias="maxsize", ge=1, le=4096)
+    channel_drop_policy: DropPolicy = Field(default=DropPolicy.LATEST_ONLY, alias="drop_policy")
 
 
 class PipelineGraphSpec(BaseModel):
@@ -81,11 +84,22 @@ class CompiledNode:
 
 
 @dataclass(frozen=True, slots=True)
+class CompiledEdge:
+    source_node_id: str
+    source_port: str
+    target_node_id: str
+    target_port: str
+    channel_maxsize: int
+    channel_drop_policy: DropPolicy
+
+
+@dataclass(frozen=True, slots=True)
 class CompiledPipeline:
     name: str
     pipeline_type: str
     schema_version: int
     nodes: tuple[CompiledNode, ...]
+    edges: tuple[CompiledEdge, ...]
     topological_order: tuple[str, ...]
 
 
@@ -122,6 +136,7 @@ class PipelineGraphCompiler:
         adjacency: dict[str, set[str]] = defaultdict(set)
         indegree: dict[str, int] = {node_id: 0 for node_id in node_map}
         incoming_edges: dict[str, list[PipelineGraphEdge]] = defaultdict(list)
+        target_port_seen: set[tuple[str, str]] = set()
 
         for edge in edge_list:
             src = edge.source.node
@@ -134,6 +149,12 @@ class PipelineGraphCompiler:
                 adjacency[src].add(dst)
                 indegree[dst] += 1
             incoming_edges[dst].append(edge)
+            target_port_key = (dst, edge.target.port)
+            if target_port_key in target_port_seen:
+                raise GraphCompileError(
+                    f"Node '{dst}' has multiple incoming edges for input port '{edge.target.port}'",
+                )
+            target_port_seen.add(target_port_key)
 
         normalized_config_by_node: dict[str, dict[str, Any]] = {}
         share_strategy_by_node: dict[str, str] = {}
@@ -178,6 +199,7 @@ class PipelineGraphCompiler:
         topological_order = _topological_sort(node_map=node_map, adjacency=adjacency, indegree=indegree)
         signature_by_node: dict[str, str] = {}
         compiled_nodes: list[CompiledNode] = []
+        compiled_edges: list[CompiledEdge] = []
 
         for node_id in topological_order:
             node = node_map[node_id]
@@ -186,7 +208,6 @@ class PipelineGraphCompiler:
                 [
                     {
                         "target_port": edge.target.port,
-                        "source_node": edge.source.node,
                         "source_port": edge.source.port,
                         "source_signature": signature_by_node.get(edge.source.node, ""),
                     }
@@ -194,7 +215,6 @@ class PipelineGraphCompiler:
                 ],
                 key=lambda item: (
                     item["target_port"],
-                    item["source_node"],
                     item["source_port"],
                     item["source_signature"],
                 ),
@@ -221,11 +241,24 @@ class PipelineGraphCompiler:
                 ),
             )
 
+        for edge in edge_list:
+            compiled_edges.append(
+                CompiledEdge(
+                    source_node_id=edge.source.node,
+                    source_port=edge.source.port,
+                    target_node_id=edge.target.node,
+                    target_port=edge.target.port,
+                    channel_maxsize=int(edge.channel_maxsize),
+                    channel_drop_policy=edge.channel_drop_policy,
+                ),
+            )
+
         return CompiledPipeline(
             name=pipeline.name,
             pipeline_type=pipeline.type,
             schema_version=graph.schema_version,
             nodes=tuple(compiled_nodes),
+            edges=tuple(compiled_edges),
             topological_order=tuple(topological_order),
         )
 

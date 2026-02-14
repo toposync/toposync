@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
+from .operators_core import register_core_operators
 from .operator_registry import OperatorRegistry
 
 
@@ -21,25 +22,4 @@ def register_builtin_operators(registry: OperatorRegistry) -> None:
         share_strategy="by_signature",
         owner="core",
     )
-    registry.register_operator(
-        operator_id="core.passthrough",
-        description="Core pass-through placeholder operator for graph modeling.",
-        config_model=_EmptyConfig,
-        inputs=[{"name": "in", "required": True}],
-        outputs=[{"name": "out"}],
-        capabilities=["core"],
-        defaults={},
-        share_strategy="by_signature",
-        owner="core",
-    )
-    registry.register_operator(
-        operator_id="core.sink",
-        description="Core sink placeholder operator for graph modeling.",
-        config_model=_EmptyConfig,
-        inputs=[{"name": "in", "required": True}],
-        outputs=[],
-        capabilities=["sink", "core"],
-        defaults={},
-        share_strategy="never",
-        owner="core",
-    )
+    register_core_operators(registry)

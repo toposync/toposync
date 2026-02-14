@@ -325,6 +325,17 @@ def create_app() -> FastAPI:
                 }
                 for node in pipeline.nodes
             ],
+            "edges": [
+                {
+                    "source_node_id": edge.source_node_id,
+                    "source_port": edge.source_port,
+                    "target_node_id": edge.target_node_id,
+                    "target_port": edge.target_port,
+                    "channel_maxsize": edge.channel_maxsize,
+                    "channel_drop_policy": edge.channel_drop_policy.value,
+                }
+                for edge in pipeline.edges
+            ],
         }
         shared_signatures = {
             signature: [

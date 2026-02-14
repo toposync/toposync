@@ -19,12 +19,31 @@ from .operator_registry import (
 )
 from .compiler import (
     CompilationReport,
+    CompiledEdge,
     CompiledNode,
     CompiledPipeline,
     GraphCompileError,
     PipelineGraphCompiler,
 )
 from .builtins import register_builtin_operators
+from .operators_core import register_core_operators
+from .execution import (
+    BaseOperatorRuntime,
+    NodeRuntimeMetrics,
+    PipelineExecutionError,
+    PipelineRuntime,
+    PipelineRuntimeDependencies,
+    SinkRuntime,
+    SourceOperatorRuntime,
+    TransformOperatorRuntime,
+)
+from .shared_runtime import (
+    MergedNodeOccurrence,
+    MergedPipelinePlan,
+    PipelineBundleRuntime,
+    SharedRuntimeBuildError,
+    build_merged_pipeline_plan,
+)
 
 __all__ = [
     "Artifact",
@@ -43,9 +62,24 @@ __all__ = [
     "OperatorRegistry",
     "create_config_model",
     "CompilationReport",
+    "CompiledEdge",
     "CompiledNode",
     "CompiledPipeline",
     "GraphCompileError",
     "PipelineGraphCompiler",
     "register_builtin_operators",
+    "register_core_operators",
+    "BaseOperatorRuntime",
+    "NodeRuntimeMetrics",
+    "PipelineExecutionError",
+    "PipelineRuntime",
+    "PipelineRuntimeDependencies",
+    "SinkRuntime",
+    "SourceOperatorRuntime",
+    "TransformOperatorRuntime",
+    "MergedNodeOccurrence",
+    "MergedPipelinePlan",
+    "PipelineBundleRuntime",
+    "SharedRuntimeBuildError",
+    "build_merged_pipeline_plan",
 ]

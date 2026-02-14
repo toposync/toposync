@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+import asyncio
+
+from toposync.runtime.pipelines import Artifact, BoundedChannel, DropPolicy, Lifecycle, Packet, QueueOperationStatus
+
+
+def test_packet_creation_and_artifact_attachment() -> None:
+    packet = Packet.create(stream_id="camera_1", lifecycle=Lifecycle.OPEN, payload={"kind": "object"})
+    assert packet.stream_id == "camera_1"
+    assert packet.lifecycle == Lifecycle.OPEN
+    assert packet.packet_id
+
+    enriched = packet.with_artifact(Artifact(name="frame_original", reference="files/cam/1.jpg"))
+    assert "frame_original" in enriched.artifacts
+    assert enriched.artifacts["frame_original"].reference == "files/cam/1.jpg"
+    assert enriched.packet_id == packet.packet_id
+
+
+def test_channel_drop_oldest_keeps_recent_items() -> None:
+    async def scenario() -> None:
+        channel = BoundedChannel[int](name="oldest", maxsize=2, drop_policy=DropPolicy.DROP_OLDEST)
+        assert (await channel.put(1)).status == QueueOperationStatus.ACCEPTED
+        assert (await channel.put(2)).status == QueueOperationStatus.ACCEPTED
+        result = await channel.put(3)
+        assert result.status == QueueOperationStatus.ACCEPTED
+        first = await channel.get()
+        second = await channel.get()
+        assert first.item == 2
+        assert second.item == 3
+        metrics = channel.metrics_snapshot()
+        assert metrics.dropped_oldest == 1
+        assert metrics.max_depth_seen <= metrics.maxsize
+
+    asyncio.run(scenario())
+
+
+def test_channel_drop_newest_preserves_buffer() -> None:
+    async def scenario() -> None:
+        channel = BoundedChannel[int](name="newest", maxsize=2, drop_policy=DropPolicy.DROP_NEWEST)
+        assert (await channel.put(10)).status == QueueOperationStatus.ACCEPTED
+        assert (await channel.put(20)).status == QueueOperationStatus.ACCEPTED
+        dropped = await channel.put(30)
+        assert dropped.status == QueueOperationStatus.DROPPED
+        first = await channel.get()
+        second = await channel.get()
+        assert first.item == 10
+        assert second.item == 20
+        metrics = channel.metrics_snapshot()
+        assert metrics.dropped_newest == 1
+        assert metrics.max_depth_seen <= metrics.maxsize
+
+    asyncio.run(scenario())
+
+
+def test_channel_latest_only_keeps_last_value() -> None:
+    async def scenario() -> None:
+        channel = BoundedChannel[int](name="latest", maxsize=3, drop_policy=DropPolicy.LATEST_ONLY)
+        await channel.put(1)
+        await channel.put(2)
+        await channel.put(3)
+        await channel.put(4)
+        assert channel.depth == 1
+        result = await channel.get()
+        assert result.item == 4
+        metrics = channel.metrics_snapshot()
+        assert metrics.dropped_oldest >= 3
+        assert metrics.max_depth_seen <= metrics.maxsize
+
+    asyncio.run(scenario())
+
+
+def test_channel_block_timeout_and_cancel() -> None:
+    async def scenario() -> None:
+        channel = BoundedChannel[int](name="blocking", maxsize=1, drop_policy=DropPolicy.BLOCK)
+        await channel.put(1)
+        timeout_result = await channel.put(2, timeout_s=0.02)
+        assert timeout_result.status == QueueOperationStatus.TIMEOUT
+
+        cancel_event = asyncio.Event()
+        put_task = asyncio.create_task(channel.put(3, timeout_s=0.5, cancel_event=cancel_event))
+        await asyncio.sleep(0.02)
+        cancel_event.set()
+        canceled_result = await put_task
+        assert canceled_result.status == QueueOperationStatus.CANCELED
+
+        first = await channel.get(timeout_s=0.02)
+        assert first.item == 1
+        metrics = channel.metrics_snapshot()
+        assert metrics.timed_out >= 1
+        assert metrics.canceled >= 1
+        assert metrics.max_depth_seen <= metrics.maxsize
+
+    asyncio.run(scenario())

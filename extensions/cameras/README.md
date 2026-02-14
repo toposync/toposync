@@ -119,6 +119,21 @@ Both the UI and integrations can request camera snapshots. To avoid hammering de
 
 Toposync also applies a short cache + de-duplication lock per camera/URL to absorb bursts (e.g. multiple UI panels requesting the same image).
 
+### Remote capture files via `/files/...` (global instance)
+
+Remote processing servers are **stateless**: they do not persist tracking data and do not own a capture files directory.
+
+When a remote processor emits a detection event that includes an inline JPEG (`image_jpeg_b64`), the global Toposync backend:
+
+1) decodes and stores the image under its own `files_dir` (`files/cameras/<camera_id>/<ts>.jpg`)
+2) rewrites `image_path` to the stored local path (so the UI can keep using `/files/<image_path>`)
+
+This means `/files/...` is always served by the global instance, and remote processors never need a `/files` endpoint.
+
+For reliability across short disconnects, remote processor events include a monotonic `event_id` and the SSE endpoint supports
+replay via the `Last-Event-ID` header. The global instance also sends periodic acks to `/api/processor/detections/ack` so the
+processor can drop buffered events without touching disk.
+
 ### Snapshot tuning (env vars)
 
 Backend (`toposync serve`):
@@ -160,7 +175,7 @@ If a camera is assigned to a **processing server**, Toposync will:
 To run a processing server (on another machine):
 
 ```bash
-uv run python -m toposync_ext_cameras.processor_server --host 0.0.0.0 --port 9001 --data-dir /path/to/camera-processor-data
+uv run python -m toposync_ext_cameras.processor_server --host 0.0.0.0 --port 9001
 ```
 
 Then, in **Settings → Cameras → Processing servers**, set the server URL to `http://<host>:9001` and pick it in the camera config.
@@ -181,6 +196,7 @@ Remote processing server:
 - `POST /api/processor/config`
 - `GET /api/processor/detections/recent`
 - `GET /api/processor/detections/stream` (SSE)
+- `POST /api/processor/detections/ack`
 - `GET /api/processor/status`
 
 ## Notes (RTSP quirks)

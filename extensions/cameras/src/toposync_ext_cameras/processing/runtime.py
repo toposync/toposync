@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import math
@@ -140,6 +142,51 @@ def _condition_to_dict(cond: "DetectionCondition") -> dict[str, Any]:
     }
 
 
+def _decode_jpeg_b64(value: str) -> bytes | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("data:"):
+        _, _, raw = raw.partition(",")
+    raw = "".join(raw.split())
+    if not raw:
+        return None
+    try:
+        return base64.b64decode(raw, validate=True)
+    except (binascii.Error, ValueError):
+        try:
+            return base64.b64decode(raw)
+        except Exception:
+            return None
+
+
+def _store_inline_capture(
+    *,
+    files_dir: Path,
+    camera_id: str,
+    ts: float,
+    image_jpeg_b64: str,
+) -> str | None:
+    cid = str(camera_id or "").strip()
+    if not cid:
+        return None
+    folder = files_dir / "cameras" / cid
+    filename = f"{int(max(0.0, float(ts)) * 1000)}.jpg"
+    path = folder / filename
+    rel = f"cameras/{cid}/{filename}"
+    if path.is_file():
+        return rel
+    blob = _decode_jpeg_b64(image_jpeg_b64)
+    if not blob:
+        return None
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(blob)
+        return rel
+    except Exception:
+        return None
+
+
 @dataclass(frozen=True, slots=True)
 class DetectionCondition:
     kind: str
@@ -195,15 +242,17 @@ class CameraWorker:
         self,
         *,
         spec: CameraSpec,
-        files_dir: Path,
+        files_dir: Path | None,
         on_event: callable,
         motion_threshold: float = 0.010,
+        emit_image_jpeg_b64: bool = False,
     ) -> None:
         self.camera_id = spec.id
         self._spec = spec
         self._signature = spec.signature()
         self._files_dir = files_dir
         self._on_event = on_event
+        self._emit_image_jpeg_b64 = bool(emit_image_jpeg_b64)
         self._last_processed_ts = 0.0
         self._last_capture_ts = 0.0
         self._capture_min_interval_s = 2.0
@@ -297,28 +346,34 @@ class CameraWorker:
             },
         }
 
-    def _maybe_capture(self, frame: Any, ts: float, *, force: bool = False) -> str | None:
+    def _maybe_capture(self, frame: Any, ts: float, *, force: bool = False) -> tuple[str | None, str | None]:
         if not force and ts and (ts - self._last_capture_ts) < self._capture_min_interval_s:
-            return None
+            return None, None
         try:
             import cv2  # type: ignore
 
             ok, buf = cv2.imencode(".jpg", frame)
             if not ok or buf is None:
-                return None
-            folder = self._files_dir / "cameras" / self.camera_id
-            folder.mkdir(parents=True, exist_ok=True)
-            filename = f"{int(ts * 1000)}.jpg"
-            path = folder / filename
-            path.write_bytes(buf.tobytes())
+                return None, None
+            blob = buf.tobytes()
+            image_path: str | None = None
+            if self._files_dir is not None:
+                folder = self._files_dir / "cameras" / self.camera_id
+                folder.mkdir(parents=True, exist_ok=True)
+                filename = f"{int(ts * 1000)}.jpg"
+                path = folder / filename
+                path.write_bytes(blob)
+                image_path = f"cameras/{self.camera_id}/{filename}"
+            image_jpeg_b64: str | None = None
+            if self._emit_image_jpeg_b64:
+                image_jpeg_b64 = base64.b64encode(blob).decode("ascii")
             self._last_capture_ts = ts
-            # Stored as a /files relative path so the UI can fetch later.
-            return f"cameras/{self.camera_id}/{filename}"
+            return image_path, image_jpeg_b64
         except Exception as exc:  # noqa: BLE001
             if not self._capture_error_logged:
                 self._capture_error_logged = True
                 logger.warning("failed to capture detection image camera_id=%s: %s", self.camera_id, exc)
-            return None
+            return None, None
 
     def _loop(self) -> None:
         while not self._stopped.is_set():
@@ -486,9 +541,9 @@ class CameraWorker:
                         state["last_capture_try_ts"] = ts
 
             force_capture = bool(capture_targets)
-            image_path = self._maybe_capture(frame, ts, force=force_capture)
+            image_path, image_jpeg_b64 = self._maybe_capture(frame, ts, force=force_capture)
 
-            if image_path and motion_rules:
+            if (image_path or image_jpeg_b64) and motion_rules:
                 for rule in motion_rules:
                     state = self._motion_rule_state.get(rule.id)
                     if state and state.get("needs_capture"):
@@ -519,6 +574,8 @@ class CameraWorker:
                         "composition_id": None,
                         "world": None,
                     }
+                    if image_jpeg_b64:
+                        base["image_jpeg_b64"] = image_jpeg_b64
 
                     for rule in motion_rules:
                         if not _rule_ok(rule):
@@ -593,6 +650,8 @@ class CameraWorker:
                         "composition_id": None,
                         "world": None,
                     }
+                    if image_jpeg_b64:
+                        base["image_jpeg_b64"] = image_jpeg_b64
 
                     emitted = False
                     for rule in object_rules:
@@ -709,6 +768,16 @@ class CamerasProcessingRuntime:
         tracking_id = str(event.get("tracking_id") or "").strip() or None
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         image_path = str(event.get("image_path") or "").strip() or None
+        inline_b64 = str(event.get("image_jpeg_b64") or "").strip()
+        if inline_b64 and not image_path:
+            stored = _store_inline_capture(
+                files_dir=self._files_dir,
+                camera_id=camera_id,
+                ts=ts,
+                image_jpeg_b64=inline_b64,
+            )
+            if stored:
+                image_path = stored
 
         image = event.get("image") if isinstance(event.get("image"), dict) else {}
         image_u = image.get("u")
@@ -778,6 +847,10 @@ class CamerasProcessingRuntime:
             enriched = dict(event)
             enriched["composition_id"] = comp_id
             enriched["world"] = world
+            if "image_jpeg_b64" in enriched:
+                enriched.pop("image_jpeg_b64", None)
+            if image_path:
+                enriched["image_path"] = image_path
             if camera_name:
                 enriched["camera_name"] = camera_name
             self.broadcaster.publish(enriched)

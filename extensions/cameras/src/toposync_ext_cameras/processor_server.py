@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import deque
 import json
 import logging
 import os
 import time
-from pathlib import Path
 from typing import Any
 
 import uvicorn
@@ -16,11 +16,30 @@ from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from .processing.runtime import CameraSpec, CameraWorker, _parse_detections, summarize_capacity_estimate  # noqa: PLC2701
-from .processing.tracking_db import TrackingDatabase
 from .processing.events import EventBroadcaster
 
 
 logger = logging.getLogger("toposync.cameras.processor")
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return float(default)
+    try:
+        return float(raw)
+    except Exception:
+        return float(default)
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return int(default)
+    try:
+        return int(raw)
+    except Exception:
+        return int(default)
 
 
 class ProcessorCamera(BaseModel):
@@ -38,16 +57,28 @@ class ProcessorConfig(BaseModel):
     cameras: list[ProcessorCamera] = Field(default_factory=list)
 
 
+class ProcessorAck(BaseModel):
+    last_event_id: int = Field(default=0, ge=0)
+
+
 class ProcessorRuntime:
-    def __init__(self, *, data_dir: Path, files_dir: Path) -> None:
-        self._data_dir = data_dir
-        self._files_dir = files_dir
-        self.db = TrackingDatabase(data_dir / "tracking.sqlite3")
+    def __init__(
+        self,
+        *,
+        max_recent_events: int = 1200,
+        max_replay_events: int = 250,
+    ) -> None:
         self.broadcaster = EventBroadcaster()
         self._loop: asyncio.AbstractEventLoop | None = None
 
         self._workers: dict[str, CameraWorker] = {}
         self._worker_sigs: dict[str, str] = {}
+        self._recent_events: deque[dict[str, Any]] = deque(maxlen=max(100, int(max_recent_events)))
+        # Replay buffer keeps full events (including optional inline image bytes) to allow
+        # the client to resume after short disconnects without relying on disk persistence.
+        self._replay_events: deque[dict[str, Any]] = deque(maxlen=max(25, int(max_replay_events)))
+        self._event_seq: int = 0
+        self._last_acked_event_id: int = 0
 
     def start(self) -> None:
         if self._loop is not None:
@@ -62,6 +93,8 @@ class ProcessorRuntime:
                 pass
         self._workers.clear()
         self._worker_sigs.clear()
+        self._replay_events.clear()
+        self._recent_events.clear()
 
     def status(self) -> dict[str, Any]:
         workers: list[dict[str, Any]] = []
@@ -121,8 +154,9 @@ class ProcessorRuntime:
             try:
                 worker = CameraWorker(
                     spec=spec,
-                    files_dir=self._files_dir,
+                    files_dir=None,
                     on_event=self._publish_from_thread,
+                    emit_image_jpeg_b64=True,
                 )
             except Exception as exc:
                 logger.warning("failed to start camera worker camera_id=%s: %s", cid, exc)
@@ -143,75 +177,84 @@ class ProcessorRuntime:
         kind = str(event.get("kind") or "").strip()
         if not camera_id or not kind:
             return
+        # Assign a monotonic event_id so clients can resume from disconnects.
+        self._event_seq += 1
+        enriched = dict(event)
+        enriched["event_id"] = self._event_seq
 
-        try:
-            ts = float(event.get("ts") or 0.0) or None
-        except Exception:
-            ts = None
+        compact = dict(enriched)
+        compact.pop("image_jpeg_b64", None)
+        self._recent_events.append(compact)
+        self._replay_events.append(enriched)
+        self.broadcaster.publish(enriched)
 
-        detection_id = str(event.get("detection_id") or "").strip() or None
-        tracking_id = str(event.get("tracking_id") or "").strip() or None
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        image_path = str(event.get("image_path") or "").strip() or None
+    def list_recent_events(
+        self,
+        *,
+        camera_id: str | None = None,
+        composition_id: str | None = None,
+        tracking_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        cam = str(camera_id or "").strip() or None
+        comp = str(composition_id or "").strip() or None
+        track = str(tracking_id or "").strip() or None
+        out: list[dict[str, Any]] = []
+        wanted = max(1, min(2000, int(limit)))
+        for rec in reversed(self._recent_events):
+            if cam and str(rec.get("camera_id") or "").strip() != cam:
+                continue
+            if comp and str(rec.get("composition_id") or "").strip() != comp:
+                continue
+            if track and str(rec.get("tracking_id") or "").strip() != track:
+                continue
+            out.append(rec)
+            if len(out) >= wanted:
+                break
+        return out
 
-        image = event.get("image") if isinstance(event.get("image"), dict) else {}
-        image_u = image.get("u")
-        image_v = image.get("v")
-        try:
-            image_u_f = float(image_u) if image_u is not None else None
-            image_v_f = float(image_v) if image_v is not None else None
-        except Exception:
-            image_u_f = None
-            image_v_f = None
-
-        bbox = event.get("bbox") if isinstance(event.get("bbox"), dict) else {}
-        bbox01 = None
-        try:
-            if all(k in bbox for k in ("x1", "y1", "x2", "y2")):
-                bbox01 = (float(bbox["x1"]), float(bbox["y1"]), float(bbox["x2"]), float(bbox["y2"]))
-        except Exception:
-            bbox01 = None
-
-        world = event.get("world") if isinstance(event.get("world"), dict) else None
-        world_x = world_z = None
-        if world and world.get("x") is not None and world.get("z") is not None:
+    def replay_after(self, last_event_id: int) -> list[dict[str, Any]]:
+        after = max(0, int(last_event_id))
+        if after <= 0:
+            return list(self._replay_events)
+        out: list[dict[str, Any]] = []
+        for rec in self._replay_events:
             try:
-                world_x = float(world.get("x"))
-                world_z = float(world.get("z"))
+                rid = int(rec.get("event_id") or 0)
             except Exception:
-                world_x = world_z = None
+                rid = 0
+            if rid > after:
+                out.append(rec)
+        return out
 
-        composition_id = str(event.get("composition_id") or "").strip() or None
+    def ack(self, last_event_id: int) -> None:
+        acked = max(0, int(last_event_id))
+        if acked <= self._last_acked_event_id:
+            return
+        self._last_acked_event_id = acked
+        while self._replay_events:
+            try:
+                rid = int(self._replay_events[0].get("event_id") or 0)
+            except Exception:
+                rid = 0
+            if rid <= acked:
+                self._replay_events.popleft()
+                continue
+            break
 
-        try:
-            self.db.insert_event(
-                camera_id=camera_id,
-                composition_id=composition_id,
-                tracking_id=tracking_id,
-                detection_id=detection_id,
-                kind=kind,
-                payload=payload,
-                ts=ts,
-                image_path=image_path,
-                image_u=image_u_f,
-                image_v=image_v_f,
-                bbox01=bbox01,
-                world_x=world_x,
-                world_z=world_z,
-            )
-        except Exception:
-            pass
-
-        self.broadcaster.publish(event)
+    @property
+    def last_acked_event_id(self) -> int:
+        return self._last_acked_event_id
 
 
-def create_app(*, data_dir: Path, files_dir: Path) -> FastAPI:
-    app = FastAPI(title="Toposync Cameras Processor", version="0.1.0")
-    runtime = ProcessorRuntime(data_dir=data_dir, files_dir=files_dir)
+def create_app(*, max_recent_events: int = 1200, max_replay_events: int = 250) -> FastAPI:
+    app = FastAPI(title="Toposync Cameras Processor", version="0.2.0")
+    runtime = ProcessorRuntime(max_recent_events=max_recent_events, max_replay_events=max_replay_events)
     snapshot_cache: dict[str, tuple[float, float, bytes]] = {}
     snapshot_locks: dict[str, asyncio.Lock] = {}
-    snapshot_cache_ttl_s = float(os.getenv("TOPOSYNC_PROCESSOR_SNAPSHOT_TTL_S", "0.8") or "0.8")
-    snapshot_max_frame_age_s = float(os.getenv("TOPOSYNC_PROCESSOR_SNAPSHOT_MAX_FRAME_AGE_S", "5.0") or "5.0")
+    snapshot_cache_ttl_s = _env_float("TOPOSYNC_PROCESSOR_SNAPSHOT_TTL_S", 0.8)
+    snapshot_max_frame_age_s = _env_float("TOPOSYNC_PROCESSOR_SNAPSHOT_MAX_FRAME_AGE_S", 5.0)
+    sse_ping_interval_s = _env_float("TOPOSYNC_PROCESSOR_SSE_PING_S", 15.0)
 
     @app.on_event("startup")
     async def _startup() -> None:
@@ -313,20 +356,61 @@ def create_app(*, data_dir: Path, files_dir: Path) -> FastAPI:
         tracking_id: str | None = None,
         limit: int = 200,
     ) -> dict[str, Any]:
-        cam = (camera_id or "").strip() or None
-        comp = (composition_id or "").strip() or None
-        track = (tracking_id or "").strip() or None
-        return {"events": runtime.db.list_events(camera_id=cam, composition_id=comp, tracking_id=track, limit=limit)}
+        return {
+            "events": runtime.list_recent_events(
+                camera_id=camera_id,
+                composition_id=composition_id,
+                tracking_id=tracking_id,
+                limit=limit,
+            )
+        }
+
+    @app.post("/api/processor/detections/ack")
+    async def ack(body: ProcessorAck) -> dict[str, Any]:
+        runtime.ack(body.last_event_id)
+        return {"ok": True, "last_event_id": runtime.last_acked_event_id}
 
     @app.get("/api/processor/detections/stream")
     async def stream(request: Request) -> StreamingResponse:
         q = runtime.broadcaster.subscribe()
+        raw_last = str(request.headers.get("Last-Event-ID") or request.query_params.get("last_event_id") or "").strip()
+        try:
+            last_event_id = int(raw_last) if raw_last else 0
+        except Exception:
+            last_event_id = 0
+        replay = runtime.replay_after(last_event_id)
 
         async def gen():
+            last_sent_event_id = last_event_id
+            if replay:
+                try:
+                    last_sent_event_id = int(replay[-1].get("event_id") or last_event_id)
+                except Exception:
+                    last_sent_event_id = last_event_id
             try:
                 yield "retry: 1000\n\n"
+                for event in replay:
+                    eid = event.get("event_id")
+                    if eid is not None:
+                        yield f"id: {eid}\n"
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 while True:
-                    event = await q.get()
+                    try:
+                        event = await asyncio.wait_for(q.get(), timeout=max(1.0, sse_ping_interval_s))
+                    except asyncio.TimeoutError:
+                        yield ": ping\n\n"
+                        continue
+                    eid = event.get("event_id")
+                    if eid is not None:
+                        try:
+                            eid_i = int(eid)
+                        except Exception:
+                            eid_i = 0
+                        if eid_i and eid_i <= last_sent_event_id:
+                            continue
+                        if eid_i:
+                            last_sent_event_id = eid_i
+                        yield f"id: {eid}\n"
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             except asyncio.CancelledError:
                 raise
@@ -335,10 +419,6 @@ def create_app(*, data_dir: Path, files_dir: Path) -> FastAPI:
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
-    @app.exception_handler(HTTPException)
-    async def _http_error(_request: Request, exc: HTTPException):
-        return {"detail": exc.detail}
-
     return app
 
 
@@ -346,17 +426,28 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="toposync-cameras-processor")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9001)
-    parser.add_argument("--data-dir", default=None)
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="Deprecated/ignored: processor is stateless (captures + tracking are persisted by the global instance).",
+    )
     parser.add_argument("--log-level", default="info")
+    parser.add_argument(
+        "--max-recent-events",
+        type=int,
+        default=_env_int("TOPOSYNC_PROCESSOR_MAX_RECENT_EVENTS", 1200),
+        help="Max recent events kept in memory for /api/processor/detections/recent.",
+    )
+    parser.add_argument(
+        "--max-replay-events",
+        type=int,
+        default=_env_int("TOPOSYNC_PROCESSOR_MAX_REPLAY_EVENTS", 250),
+        help="Max events kept in memory for SSE replay (includes inline JPEG, if present).",
+    )
     args = parser.parse_args(argv)
 
-    base = Path(args.data_dir).expanduser().resolve() if args.data_dir else Path.cwd() / ".camera-processor"
-    base.mkdir(parents=True, exist_ok=True)
-    files = base / "files"
-    files.mkdir(parents=True, exist_ok=True)
-
     uvicorn.run(
-        create_app(data_dir=base, files_dir=files),
+        create_app(max_recent_events=args.max_recent_events, max_replay_events=args.max_replay_events),
         host=args.host,
         port=args.port,
         log_level=args.log_level,

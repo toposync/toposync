@@ -67,6 +67,7 @@ const PIPELINE_PRESET_OPERATOR_IDS = [
   "camera.image_resize",
   "core.throttle",
   "core.debounce",
+  "core.debug",
   "core.store_images",
   "core.notify",
 ];
@@ -89,6 +90,7 @@ const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "camera.image_resize": "Resize images",
   "core.throttle": "Throttle",
   "core.debounce": "Debounce",
+  "core.debug": "Debug",
   "core.store_images": "Store images",
   "core.notify": "Notification",
 };
@@ -1325,6 +1327,7 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                            step.operatorId === "camera.velocity_estimation" ||
 	                            step.operatorId === "core.throttle" ||
 	                            step.operatorId === "core.debounce" ||
+	                            step.operatorId === "core.debug" ||
 	                            step.operatorId === "core.notify" ||
 	                            step.operatorId === "core.store_images" ||
 	                            step.operatorId === "vision.object_tracking_yolo" ||
@@ -1861,6 +1864,119 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                                                  }}
 	                                                />
 	                                              </label>
+	                                            ) : null}
+	                                          </>
+	                                        );
+	                                      })()}
+	                                    </div>
+	                                  ) : null}
+
+	                                  {step.operatorId === "core.debug" ? (
+	                                    <div className="pipelinesOperatorConfigCard">
+	                                      {(() => {
+	                                        const enabled = Boolean((config as any).enabled ?? true);
+	                                        const saveImages = Boolean((config as any).save_images ?? true);
+	                                        const maxImages = Number((config as any).max_images_per_packet ?? 12);
+	                                        const outputDir = String((config as any).output_dir ?? "");
+	                                        const printPayload = Boolean((config as any).print_payload ?? true);
+	                                        const printMetadata = Boolean((config as any).print_metadata ?? true);
+	                                        const printArtifacts = Boolean((config as any).print_artifacts ?? true);
+
+	                                        return (
+	                                          <>
+	                                            <label className="pipelinesLabel">
+	                                              <span>Enabled</span>
+	                                              <input
+	                                                type="checkbox"
+	                                                checked={enabled}
+	                                                onChange={(event) => {
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, enabled: event.target.checked }));
+	                                                }}
+	                                              />
+	                                            </label>
+
+	                                            <label className="pipelinesLabel">
+	                                              <span>Save images to temp</span>
+	                                              <input
+	                                                type="checkbox"
+	                                                checked={saveImages}
+	                                                onChange={(event) => {
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, save_images: event.target.checked }));
+	                                                }}
+	                                              />
+	                                            </label>
+
+	                                            <label className="pipelinesLabel">
+	                                              <span>Max images per packet</span>
+	                                              <input
+	                                                className="pipelinesInput"
+	                                                type="number"
+	                                                min={0}
+	                                                max={256}
+	                                                step={1}
+	                                                value={Number.isFinite(maxImages) ? String(Math.max(0, maxImages)) : "12"}
+	                                                onChange={(event) => {
+	                                                  const nextValue = Number(event.target.value || 0);
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({
+	                                                    ...prev,
+	                                                    max_images_per_packet: Number.isFinite(nextValue) ? Math.max(0, Math.min(256, nextValue)) : 12,
+	                                                  }));
+	                                                }}
+	                                              />
+	                                            </label>
+	                                            <div className="pipelinesStepHint">
+	                                              Prints packets to server stdout. When saving is enabled, it dumps any image-like payload/artifacts to a temporary directory and prints paths.
+	                                            </div>
+
+	                                            {step.showAdvanced ? (
+	                                              <>
+	                                                <label className="pipelinesLabel">
+	                                                  <span>Output directory override</span>
+	                                                  <input
+	                                                    className="pipelinesInput"
+	                                                    type="text"
+	                                                    value={outputDir}
+	                                                    placeholder="Leave empty for system temp"
+	                                                    onChange={(event) => {
+	                                                      const nextValue = String(event.target.value ?? "");
+	                                                      updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, output_dir: nextValue }));
+	                                                    }}
+	                                                  />
+	                                                </label>
+
+	                                                <label className="pipelinesLabel">
+	                                                  <span>Print payload</span>
+	                                                  <input
+	                                                    type="checkbox"
+	                                                    checked={printPayload}
+	                                                    onChange={(event) => {
+	                                                      updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, print_payload: event.target.checked }));
+	                                                    }}
+	                                                  />
+	                                                </label>
+
+	                                                <label className="pipelinesLabel">
+	                                                  <span>Print metadata</span>
+	                                                  <input
+	                                                    type="checkbox"
+	                                                    checked={printMetadata}
+	                                                    onChange={(event) => {
+	                                                      updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, print_metadata: event.target.checked }));
+	                                                    }}
+	                                                  />
+	                                                </label>
+
+	                                                <label className="pipelinesLabel">
+	                                                  <span>Print artifacts</span>
+	                                                  <input
+	                                                    type="checkbox"
+	                                                    checked={printArtifacts}
+	                                                    onChange={(event) => {
+	                                                      updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, print_artifacts: event.target.checked }));
+	                                                    }}
+	                                                  />
+	                                                </label>
+	                                              </>
 	                                            ) : null}
 	                                          </>
 	                                        );

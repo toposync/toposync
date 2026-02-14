@@ -14,6 +14,7 @@ from .execution import PassThroughRuntime, SinkRuntime, SourceOperatorRuntime, T
 from .operator_registry import OperatorRegistry
 from .runtime import Lifecycle, Packet
 from .operators_distributed import register_distributed_operators
+from .operators_gates import register_gate_operators
 from .operators_sinks import _encode_image_bytes, _write_bytes, register_sink_operators
 
 
@@ -577,6 +578,7 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         owner="core",
         runtime_factory=lambda _config, _deps: SinkRuntime(),
     )
+    register_gate_operators(registry)
     register_sink_operators(registry)
     register_distributed_operators(registry)
 

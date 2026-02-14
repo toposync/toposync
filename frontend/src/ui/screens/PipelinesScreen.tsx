@@ -55,10 +55,12 @@ type InteractiveFromGraphResult = {
 
 const PIPELINE_PRESET_OPERATOR_IDS = [
   "camera.source",
+  "core.schedule_gate",
   "camera.motion_gate",
   "core.fps_reducer",
   "vision.object_tracking_yolo",
   "vision.object_detection_yolo",
+  "core.category_gate",
   "camera.object_segmentation",
   "camera.camera_mapping",
   "camera.area_restriction",
@@ -77,11 +79,13 @@ const NODE_ID_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 type SelectOption = { value: string; label: string };
 
 const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
+  "core.schedule_gate": "Schedule gate",
   "camera.source": "Camera source",
   "camera.motion_gate": "Motion detection gate",
   "core.fps_reducer": "FPS reducer",
   "vision.object_tracking_yolo": "YOLO tracking",
   "vision.object_detection_yolo": "YOLO detection",
+  "core.category_gate": "Category gate",
   "camera.object_segmentation": "Object segmentation",
   "camera.camera_mapping": "Camera mapping",
   "camera.area_restriction": "Area restriction",
@@ -232,6 +236,16 @@ const ARTIFACT_SUGGESTIONS: SelectOption[] = [
   { value: "segmented", label: "Segmented" },
   { value: "face", label: "Face" },
   { value: "pose", label: "Pose" },
+];
+
+const SCHEDULE_WEEKDAY_OPTIONS: SelectOption[] = [
+  { value: "mon", label: "Mon" },
+  { value: "tue", label: "Tue" },
+  { value: "wed", label: "Wed" },
+  { value: "thu", label: "Thu" },
+  { value: "fri", label: "Fri" },
+  { value: "sat", label: "Sat" },
+  { value: "sun", label: "Sun" },
 ];
 
 let interactiveStepCounter = 0;
@@ -436,11 +450,40 @@ function buildGraphFromInteractiveSteps(
     const targetNode = nodes[index + 1];
     const sourceOperatorId = String(sourceNode.operator || "");
     const targetOperatorId = String(targetNode.operator || "");
-    const policy = edgePolicyFor(operatorsById[sourceOperatorId] ?? null, operatorsById[targetOperatorId] ?? null);
+    const sourceOperator = operatorsById[sourceOperatorId] ?? null;
+    const targetOperator = operatorsById[targetOperatorId] ?? null;
+    const policy = edgePolicyFor(sourceOperator, targetOperator);
+
+    const sourceCaps = new Set((sourceOperator?.capabilities ?? []).map((value) => String(value).trim().toLowerCase()));
+    const isGateControl = sourceCaps.has("gate_control");
+
+    let targetPort = "in";
+    if (targetOperatorId === "camera.source") {
+      if (!isGateControl) {
+        return {
+          graph: null,
+          error: "Camera source must be the first step or be preceded by a gate control step (Schedule gate).",
+        };
+      }
+      targetPort = "gate";
+    } else if (isGateControl) {
+      return {
+        graph: null,
+        error: "Gate control steps (Schedule gate) must be followed by a Camera source in interactive mode.",
+      };
+    }
+
+    const targetInputs = new Set((targetOperator?.inputs ?? []).map((port) => String(port.name || "").trim()).filter((value) => value.length > 0));
+    if (targetInputs.size > 0 && !targetInputs.has(targetPort)) {
+      return {
+        graph: null,
+        error: `Step ${index + 2} (${prettyOperatorName(targetOperatorId)}) has no input port '${targetPort}'.`,
+      };
+    }
 
     edges.push({
       from: { node: sourceNode.id, port: "out" },
-      to: { node: targetNode.id, port: "in" },
+      to: { node: targetNode.id, port: targetPort },
       maxsize: policy.maxsize,
       drop_policy: policy.drop_policy,
     });
@@ -951,6 +994,15 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
     setInteractiveSteps((prev) => {
       const used = new Set(prev.map((item) => item.nodeId));
       const next = createInteractiveStep(operatorId, op.defaults ?? {}, used);
+      if (operatorId === "core.schedule_gate") {
+        const cameraIndex = prev.findIndex((item) => item.operatorId === "camera.source");
+        if (cameraIndex >= 0) {
+          const copy = prev.slice();
+          copy.splice(cameraIndex, 0, next);
+          return copy;
+        }
+        return [next, ...prev];
+      }
       return [...prev, next];
     });
     setInteractiveWarning(null);
@@ -1320,6 +1372,7 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                            });
 
 	                          const isConfigScalarGridHidden =
+	                            step.operatorId === "core.schedule_gate" ||
 	                            step.operatorId === "camera.source" ||
 	                            step.operatorId === "camera.image_resize" ||
 	                            step.operatorId === "camera.camera_mapping" ||
@@ -1330,6 +1383,7 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                            step.operatorId === "core.debug" ||
 	                            step.operatorId === "core.notify" ||
 	                            step.operatorId === "core.store_images" ||
+	                            step.operatorId === "core.category_gate" ||
 	                            step.operatorId === "vision.object_tracking_yolo" ||
 	                            step.operatorId === "vision.object_detection_yolo";
 	                          const shouldShowScalarGrid = scalarEntries.length > 0 && (!isConfigScalarGridHidden || step.showAdvanced);
@@ -1472,6 +1526,110 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                                    </div>
 	                                  ) : null}
 
+	                                  {step.operatorId === "core.schedule_gate" ? (
+	                                    <div className="pipelinesOperatorConfigCard">
+	                                      {(() => {
+	                                        const enabled = Boolean((config as any).enabled ?? true);
+	                                        const timezone = String((config as any).timezone ?? "").trim();
+	                                        const weekdaysRaw = (config as any).weekdays;
+	                                        const weekdayValues = Array.isArray(weekdaysRaw)
+	                                          ? weekdaysRaw
+	                                              .map((value: any) => String(value || "").trim().toLowerCase())
+	                                              .filter((value: string) => value.length > 0)
+	                                          : ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+	                                        const uniqueWeekdayValues = [...new Set(weekdayValues)];
+	                                        const selectedWeekdayOptions = uniqueWeekdayValues.map((value) => {
+	                                          const known = SCHEDULE_WEEKDAY_OPTIONS.find((option) => option.value === value);
+	                                          return known ?? { value, label: value };
+	                                        });
+
+	                                        const startTimeRaw = String((config as any).start_time ?? "00:00").trim() || "00:00";
+	                                        const endTimeRaw = String((config as any).end_time ?? "00:00").trim() || "00:00";
+	                                        const startTimeValue = startTimeRaw.length >= 5 ? startTimeRaw.slice(0, 5) : "00:00";
+	                                        const endTimeValue = endTimeRaw.length >= 5 ? endTimeRaw.slice(0, 5) : "00:00";
+
+	                                        return (
+	                                          <>
+	                                            <label className="pipelinesLabel">
+	                                              <span>Enabled</span>
+	                                              <input
+	                                                type="checkbox"
+	                                                checked={enabled}
+	                                                onChange={(event) => {
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, enabled: event.target.checked }));
+	                                                }}
+	                                              />
+	                                            </label>
+
+	                                            <label className="pipelinesLabel">
+	                                              <span>Days</span>
+	                                              <Select<SelectOption, true>
+	                                                isMulti
+	                                                styles={pipelinesReactSelectStyles}
+	                                                options={SCHEDULE_WEEKDAY_OPTIONS}
+	                                                value={selectedWeekdayOptions}
+	                                                placeholder="No days (closed)"
+	                                                onChange={(value: MultiValue<SelectOption>) => {
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({
+	                                                    ...prev,
+	                                                    weekdays: value.map((item) => item.value),
+	                                                  }));
+	                                                }}
+	                                              />
+	                                            </label>
+
+	                                            <label className="pipelinesLabel">
+	                                              <span>Start time</span>
+	                                              <input
+	                                                className="pipelinesInput"
+	                                                type="time"
+	                                                step={60}
+	                                                value={startTimeValue}
+	                                                onChange={(event) => {
+	                                                  const nextValue = String(event.target.value || "00:00");
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, start_time: nextValue }));
+	                                                }}
+	                                              />
+	                                            </label>
+
+	                                            <label className="pipelinesLabel">
+	                                              <span>End time</span>
+	                                              <input
+	                                                className="pipelinesInput"
+	                                                type="time"
+	                                                step={60}
+	                                                value={endTimeValue}
+	                                                onChange={(event) => {
+	                                                  const nextValue = String(event.target.value || "00:00");
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, end_time: nextValue }));
+	                                                }}
+	                                              />
+	                                            </label>
+	                                            <div className="pipelinesStepHint">
+	                                              Place this before Camera source to pause RTSP reads while the gate is closed.
+	                                            </div>
+
+	                                            {step.showAdvanced ? (
+	                                              <label className="pipelinesLabel">
+	                                                <span>Time zone (optional)</span>
+	                                                <input
+	                                                  className="pipelinesInput"
+	                                                  type="text"
+	                                                  value={timezone}
+	                                                  placeholder="Leave empty for local time"
+	                                                  onChange={(event) => {
+	                                                    const nextValue = String(event.target.value ?? "");
+	                                                    updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, timezone: nextValue }));
+	                                                  }}
+	                                                />
+	                                              </label>
+	                                            ) : null}
+	                                          </>
+	                                        );
+	                                      })()}
+	                                    </div>
+	                                  ) : null}
+
 	                                  {step.operatorId === "camera.source" ? (
 	                                    <div className="pipelinesOperatorConfigCard">
 	                                      <label className="pipelinesLabel">
@@ -1544,6 +1702,61 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                                        />
 	                                      </label>
 	                                      <div className="pipelinesStepHint">Empty selection means “all categories”.</div>
+	                                    </div>
+	                                  ) : null}
+
+	                                  {step.operatorId === "core.category_gate" ? (
+	                                    <div className="pipelinesOperatorConfigCard">
+	                                      {(() => {
+	                                        const modeRaw = String((config as any).mode ?? "include").trim().toLowerCase() || "include";
+	                                        const mode = modeRaw === "exclude" ? "exclude" : "include";
+	                                        const categoriesRaw = (config as any).categories;
+	                                        const categories = Array.isArray(categoriesRaw)
+	                                          ? categoriesRaw
+	                                              .map((value: any) => String(value || "").trim().toLowerCase())
+	                                              .filter((value: string) => value.length > 0)
+	                                          : [];
+	                                        const selectedCategoryOptions = categories.map((value) => YOLO_CATEGORY_OPTIONS.find((opt) => opt.value === value) ?? { value, label: value });
+
+	                                        return (
+	                                          <>
+	                                            <label className="pipelinesLabel">
+	                                              <span>Mode</span>
+	                                              <select
+	                                                className="pipelinesSelect"
+	                                                value={mode}
+	                                                onChange={(event) => {
+	                                                  const nextMode = String(event.target.value || "include").trim().toLowerCase();
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, mode: nextMode === "exclude" ? "exclude" : "include" }));
+	                                                }}
+	                                              >
+	                                                <option value="include">Include only</option>
+	                                                <option value="exclude">Exclude</option>
+	                                              </select>
+	                                            </label>
+
+	                                            <label className="pipelinesLabel">
+	                                              <span>Categories</span>
+	                                              <CreatableSelect<SelectOption, true>
+	                                                isMulti
+	                                                styles={pipelinesReactSelectStyles}
+	                                                options={YOLO_CATEGORY_OPTIONS}
+	                                                value={selectedCategoryOptions}
+	                                                placeholder="All categories"
+	                                                onChange={(value: MultiValue<SelectOption>) => {
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({
+	                                                    ...prev,
+	                                                    categories: value.map((item) => item.value),
+	                                                  }));
+	                                                }}
+	                                              />
+	                                            </label>
+	                                            <div className="pipelinesStepHint">
+	                                              Matches <code>payload.object_category_label</code> (set by YOLO operators). Empty selection means “all categories”.
+	                                            </div>
+	                                          </>
+	                                        );
+	                                      })()}
 	                                    </div>
 	                                  ) : null}
 

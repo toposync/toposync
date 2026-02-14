@@ -147,6 +147,8 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._last_ts = 0.0
         self._camera_name = ""
         self._camera_id = ""
+        self._gate_open = True
+        self._gate_known = False
 
     async def _ensure_grabber(self) -> None:
         if self._grabber is not None:
@@ -156,7 +158,55 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._camera_name = camera_name
         self._grabber = FrameGrabber(rtsp_url, target_fps=fps).start()
 
+    async def _consume_gate_packets(self, context) -> None:  # noqa: ANN001
+        gate_channel = context.inputs.get("gate")
+        if gate_channel is None:
+            self._gate_open = True
+            self._gate_known = True
+            return
+
+        # Quando existe um gate ligado, default seguro é "fechado" até recebermos o primeiro sinal.
+        if not self._gate_known:
+            self._gate_open = False
+
+        while True:
+            result = await gate_channel.get(timeout_s=0.0, cancel_event=context.cancel_event)
+            if not result.accepted:
+                break
+            packet = result.item
+            if packet is None:
+                continue
+
+            value = packet.payload.get("gate_open")
+            if isinstance(value, bool):
+                self._gate_open = value
+                self._gate_known = True
+                continue
+            if packet.lifecycle == Lifecycle.OPEN:
+                self._gate_open = True
+                self._gate_known = True
+                continue
+            if packet.lifecycle == Lifecycle.CLOSE:
+                self._gate_open = False
+                self._gate_known = True
+                continue
+
+    async def _stop_grabber_if_needed(self) -> None:
+        if self._grabber is None:
+            return
+        try:
+            self._grabber.stop()
+        except Exception:
+            pass
+        self._grabber = None
+        self._last_ts = 0.0
+
     async def produce(self, context) -> Packet | None:  # noqa: ANN001
+        await self._consume_gate_packets(context)
+        if not self._gate_open:
+            await self._stop_grabber_if_needed()
+            return None
+
         await self._ensure_grabber()
         if self._grabber is None:
             return None
@@ -189,15 +239,14 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         )
 
     async def idle_sleep(self, context) -> None:  # noqa: ANN001
+        if not self._gate_open:
+            # Evita ficar em loop apertado quando o gate está fechado.
+            await context.sleep(max(0.05, float(self._config.poll_interval_ms) / 1000.0))
+            return
         await context.sleep(max(0.001, float(self._config.poll_interval_ms) / 1000.0))
 
     async def shutdown(self) -> None:
-        if self._grabber is not None:
-            try:
-                self._grabber.stop()
-            except Exception:
-                pass
-            self._grabber = None
+        await self._stop_grabber_if_needed()
 
 
 class MotionGateRuntime(TransformOperatorRuntime):
@@ -539,7 +588,7 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
         operator_id="camera.source",
         description="Camera frame source using the existing camera extension frame grabber.",
         config_model=CameraSourceConfig,
-        inputs=[],
+        inputs=[{"name": "gate", "required": False}],
         outputs=[{"name": "out"}],
         capabilities=["source", "camera", "realtime"],
         defaults=CameraSourceConfig().model_dump(),

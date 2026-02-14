@@ -32,6 +32,13 @@ from toposync.runtime.config_store import (
 )
 from toposync.runtime.notifications import NotificationsRuntime
 from toposync.runtime.services import ServiceRegistry
+from toposync.runtime.pipelines import (
+    GraphCompileError,
+    OperatorDefinition,
+    OperatorRegistry,
+    PipelineGraphCompiler,
+    register_builtin_operators,
+)
 
 logger = logging.getLogger("toposync")
 
@@ -103,6 +110,19 @@ class PipelinesListResponse(BaseModel):
     pipelines: list[Pipeline]
 
 
+class OperatorsListResponse(BaseModel):
+    operators: list[OperatorDefinition]
+
+
+class PipelineCompileRequest(BaseModel):
+    pipeline: Pipeline
+
+
+class PipelineCompileResponse(BaseModel):
+    pipeline: dict[str, Any]
+    shared_signatures: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+
+
 def _guess_media_type(path: str) -> str:
     lower = path.lower()
     if lower.endswith(".glb"):
@@ -154,6 +174,9 @@ async def _lifespan(app: FastAPI):
     store = DeviceStore()
     bus = EventBus()
     services = ServiceRegistry()
+    operator_registry = OperatorRegistry()
+    register_builtin_operators(operator_registry)
+    pipeline_compiler = PipelineGraphCompiler(operator_registry)
     config_store = ConfigStore(paths=UserDataPaths.resolve())
     await config_store.load()
     logger.info(
@@ -169,6 +192,8 @@ async def _lifespan(app: FastAPI):
     services.register("devices.get_state", store.get_state)
     services.register("devices.set_state", store.set_state)
     services.register("devices.toggle", store.toggle)
+    services.register("pipelines.register_operator", operator_registry.register_operator)
+    services.register("pipelines.list_operators", operator_registry.list_operators)
 
     async def _default_device_action(payload: dict[str, Any]) -> dict[str, Any]:
         device_id = str(payload.get("device_id", ""))
@@ -187,6 +212,8 @@ async def _lifespan(app: FastAPI):
     app.state.services = services
     app.state.config_store = config_store
     app.state.notifications = notifications
+    app.state.pipeline_operator_registry = operator_registry
+    app.state.pipeline_graph_compiler = pipeline_compiler
 
     ext_manager = ExtensionManager(group="toposync.extensions")
     await ext_manager.load(app=app, bus=bus, services=services)
@@ -268,11 +295,59 @@ def create_app() -> FastAPI:
         pipelines = await config_store.list_pipelines()
         return PipelinesListResponse(pipelines=pipelines)
 
+    @app.get("/api/pipelines/operators", response_model=OperatorsListResponse)
+    async def list_pipeline_operators(request: Request) -> OperatorsListResponse:
+        registry: OperatorRegistry = request.app.state.pipeline_operator_registry
+        return OperatorsListResponse(operators=registry.list_operators())
+
+    @app.post("/api/pipelines/compile", response_model=PipelineCompileResponse)
+    async def compile_pipeline_graph(request: Request, body: PipelineCompileRequest) -> PipelineCompileResponse:
+        compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
+        try:
+            compiled = compiler.compile_many([body.pipeline])
+        except GraphCompileError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not compiled.pipelines:
+            return PipelineCompileResponse(pipeline={}, shared_signatures={})
+        pipeline = compiled.pipelines[0]
+        compiled_dict = {
+            "name": pipeline.name,
+            "type": pipeline.pipeline_type,
+            "schema_version": pipeline.schema_version,
+            "topological_order": list(pipeline.topological_order),
+            "nodes": [
+                {
+                    "id": node.node_id,
+                    "operator_id": node.operator_id,
+                    "normalized_config": node.normalized_config,
+                    "signature": node.signature,
+                    "shareable": node.shareable,
+                }
+                for node in pipeline.nodes
+            ],
+        }
+        shared_signatures = {
+            signature: [
+                {
+                    "pipeline_name": occ.pipeline_name,
+                    "node_id": occ.node_id,
+                    "signature": occ.signature,
+                }
+                for occ in occurrences
+            ]
+            for signature, occurrences in compiled.shared_signatures.items()
+        }
+        return PipelineCompileResponse(pipeline=compiled_dict, shared_signatures=shared_signatures)
+
     @app.post("/api/pipelines", response_model=Pipeline, status_code=201)
     async def create_pipeline(request: Request, body: Pipeline) -> Pipeline:
         config_store: ConfigStore = request.app.state.config_store
+        compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         try:
+            compiler.compile_pipeline(body)
             return await config_store.create_pipeline(body)
+        except GraphCompileError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PipelineAlreadyExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -290,8 +365,12 @@ def create_app() -> FastAPI:
     @app.put("/api/pipelines/{pipeline_name}", response_model=Pipeline)
     async def replace_pipeline(request: Request, pipeline_name: str, body: Pipeline) -> Pipeline:
         config_store: ConfigStore = request.app.state.config_store
+        compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         try:
+            compiler.compile_pipeline(body)
             return await config_store.replace_pipeline(pipeline_name, body)
+        except GraphCompileError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PipelineValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PipelineAlreadyExistsError as exc:

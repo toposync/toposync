@@ -121,6 +121,11 @@ def test_camera_extension_operators_are_registered_with_runtime_factories() -> N
     required_ids = {
         "camera.source",
         "camera.motion_gate",
+        "camera.object_segmentation",
+        "camera.camera_mapping",
+        "camera.area_restriction",
+        "camera.velocity_estimation",
+        "camera.best_frame_selector",
         "vision.object_tracking_yolo",
         "vision.object_detection_yolo",
     }

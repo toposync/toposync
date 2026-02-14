@@ -21,6 +21,7 @@ from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 from ..processing.frame_grabber import FrameGrabber
 from ..processing.motion import MotionDetector
 from ..processing.yolo import YoloTracker
+from .postprocess import register_camera_postprocess_operators
 
 
 class CameraSourceConfig(BaseModel):
@@ -575,6 +576,7 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
         owner="com.toposync.cameras",
         runtime_factory=lambda config, deps: ObjectDetectionYOLORuntime(config, deps),
     )
+    register_camera_postprocess_operators(registry)
 
 
 def _default_yolo_backend_factory(config: YoloBackendConfig) -> YoloBackend:

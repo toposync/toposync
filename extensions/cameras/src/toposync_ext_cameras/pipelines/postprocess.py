@@ -22,6 +22,7 @@ class ObjectSegmentationConfig(BaseModel):
     fallback_to_payload_frame: bool = True
     output_artifact_name: str = "segmented"
     bbox_field: str = "object_bbox01"
+    padding_ratio: float = Field(default=0.08, ge=0.0, le=1.0)
     min_crop_size_px: int = Field(default=8, ge=1, le=4096)
 
     @field_validator("input_artifact_names", mode="after")
@@ -215,7 +216,19 @@ class ObjectSegmentationRuntime(TransformOperatorRuntime):
             )
             return [replace(packet, payload=payload)]
 
-        bbox01 = _read_bbox01(packet, bbox_field=self._config.bbox_field)
+        bbox01: tuple[float, float, float, float] | None = None
+        bbox_source = ""
+        if selected_name and selected_name != "payload.frame":
+            selected_artifact = packet.artifacts.get(selected_name)
+            if selected_artifact is not None:
+                bbox01 = _read_bbox01_from_artifact(selected_artifact)
+                if bbox01 is not None:
+                    bbox_source = f"artifact:{selected_name}"
+
+        if bbox01 is None:
+            bbox01 = _read_bbox01(packet, bbox_field=self._config.bbox_field)
+            if bbox01 is not None:
+                bbox_source = f"payload:{self._config.bbox_field}"
         if bbox01 is None:
             payload = _annotate_artifact_contract(
                 packet.payload,
@@ -225,7 +238,8 @@ class ObjectSegmentationRuntime(TransformOperatorRuntime):
             )
             return [replace(packet, payload=payload)]
 
-        crop = _crop_bbox01(image=image, bbox01=bbox01, min_crop_size_px=self._config.min_crop_size_px)
+        bbox01_used = _expand_bbox01(bbox01, padding_ratio=float(self._config.padding_ratio))
+        crop = _crop_bbox01(image=image, bbox01=bbox01_used, min_crop_size_px=self._config.min_crop_size_px)
         if crop is None:
             payload = _annotate_artifact_contract(
                 packet.payload,
@@ -242,7 +256,10 @@ class ObjectSegmentationRuntime(TransformOperatorRuntime):
                 mime_type="image/raw",
                 metadata={
                     "source_artifact_name": selected_name,
-                    "bbox01": list(bbox01),
+                    "bbox01": list(bbox01_used),
+                    "bbox01_original": list(bbox01),
+                    "bbox_source": bbox_source,
+                    "padding_ratio": float(self._config.padding_ratio),
                 },
             ),
         )
@@ -589,6 +606,7 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
 class _BestFrameCandidate:
     image: Any
     source_artifact_name: str | None
+    bbox01: tuple[float, float, float, float] | None
     score: float
     created_monotonic: float
 
@@ -608,6 +626,7 @@ class BestFrameSelectorRuntime(TransformOperatorRuntime):
         )
         candidates = self._candidates_by_key.setdefault(key, deque(maxlen=int(self._config.buffer_size)))
         if selected_image is not None:
+            bbox01 = _read_bbox01(packet, bbox_field="object_bbox01")
             score = _score_packet_for_best_frame(
                 packet=packet,
                 score_field=self._config.score_field,
@@ -618,6 +637,7 @@ class BestFrameSelectorRuntime(TransformOperatorRuntime):
                 _BestFrameCandidate(
                     image=selected_image,
                     source_artifact_name=selected_name,
+                    bbox01=bbox01,
                     score=score,
                     created_monotonic=time.monotonic(),
                 ),
@@ -629,15 +649,18 @@ class BestFrameSelectorRuntime(TransformOperatorRuntime):
         out = packet
         if should_emit and candidates:
             best = max(candidates, key=lambda item: (item.score, item.created_monotonic))
+            metadata = {
+                "best_score": float(best.score),
+                "source_artifact_name": best.source_artifact_name,
+            }
+            if best.bbox01 is not None:
+                metadata["bbox01"] = list(best.bbox01)
             out = out.with_artifact(
                 Artifact(
                     name=self._config.output_artifact_name,
                     data=best.image,
                     mime_type="image/raw",
-                    metadata={
-                        "best_score": float(best.score),
-                        "source_artifact_name": best.source_artifact_name,
-                    },
+                    metadata=metadata,
                 ),
             )
 
@@ -797,6 +820,31 @@ def _read_bbox01(packet: Packet, *, bbox_field: str) -> tuple[float, float, floa
             if values:
                 return _normalize_bbox01((values[0], values[1], values[2], values[3]))
     return None
+
+
+def _read_bbox01_from_artifact(artifact: Artifact) -> tuple[float, float, float, float] | None:
+    meta = artifact.metadata if isinstance(artifact.metadata, dict) else {}
+    raw = meta.get("bbox01")
+    if isinstance(raw, (list, tuple)) and len(raw) >= 4:
+        try:
+            values = [float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3])]
+        except Exception:
+            values = []
+        if values:
+            return _normalize_bbox01((values[0], values[1], values[2], values[3]))
+    return None
+
+
+def _expand_bbox01(bbox01: tuple[float, float, float, float], *, padding_ratio: float) -> tuple[float, float, float, float]:
+    ratio = float(padding_ratio)
+    if ratio <= 0.0:
+        return bbox01
+    x1, y1, x2, y2 = bbox01
+    width = max(0.0, float(x2) - float(x1))
+    height = max(0.0, float(y2) - float(y1))
+    pad_x = width * ratio
+    pad_y = height * ratio
+    return _normalize_bbox01((x1 - pad_x, y1 - pad_y, x2 + pad_x, y2 + pad_y))
 
 
 def _crop_bbox01(

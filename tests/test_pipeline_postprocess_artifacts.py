@@ -199,6 +199,110 @@ def test_segmentation_and_best_frame_selection_are_deterministic() -> None:
     asyncio.run(scenario())
 
 
+def test_segmentation_uses_bbox_from_best_frame_metadata() -> None:
+    async def scenario() -> None:
+        frame1 = np.zeros((100, 100, 3), dtype=np.uint8)
+        frame2 = np.zeros((100, 100, 3), dtype=np.uint8)
+
+        # bbox1 region in frame1 is "50", bbox2 region is "80" in frame2.
+        frame1[10:30, 10:30] = 50
+        frame2[70:90, 70:90] = 80
+
+        bbox1 = [0.10, 0.10, 0.30, 0.30]
+        bbox2 = [0.70, 0.70, 0.90, 0.90]
+
+        sequence: list[dict[str, Any]] = [
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {
+                    "frame": frame1,
+                    "frame_ts": 1.0,
+                    "tracking_id": "trk-1",
+                    "object_confidence": 0.9,
+                    "object_bbox01": bbox1,
+                },
+            },
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {
+                    "frame": frame2,
+                    "frame_ts": 2.0,
+                    "tracking_id": "trk-1",
+                    "object_confidence": 0.1,
+                    "object_bbox01": bbox2,
+                },
+            },
+            {
+                "lifecycle": Lifecycle.CLOSE,
+                "payload": {
+                    "frame": frame2,
+                    "frame_ts": 3.0,
+                    "tracking_id": "trk-1",
+                    "object_confidence": 0.1,
+                    "object_bbox01": bbox2,
+                },
+            },
+        ]
+
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "best",
+                    "operator": "camera.best_frame_selector",
+                    "config": {
+                        "input_artifact_names": ["frame_original"],
+                        "buffer_size": 8,
+                        "emit_on_update": False,
+                        "emit_on_close": True,
+                        "output_artifact_name": "best_frame",
+                    },
+                },
+                {
+                    "id": "segment",
+                    "operator": "camera.object_segmentation",
+                    "config": {
+                        "input_artifact_names": ["best_frame"],
+                        "fallback_to_payload_frame": False,
+                        "output_artifact_name": "segmented",
+                        "bbox_field": "object_bbox01",
+                        "padding_ratio": 0.0,
+                        "min_crop_size_px": 4,
+                    },
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "best", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+                {"from": {"node": "best", "port": "out"}, "to": {"node": "segment", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+                {"from": {"node": "segment", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+            ],
+        }
+
+        collector: dict[str, list[Packet]] = {}
+        runtime = _pipeline_runtime(graph=graph, sequence=sequence, collector=collector)
+        await runtime.run_for(0.25)
+
+        packets = collector.get("sink", [])
+        close_packets = [packet for packet in packets if packet.lifecycle == Lifecycle.CLOSE]
+        assert len(close_packets) == 1
+        close_packet = close_packets[0]
+        assert "best_frame" in close_packet.artifacts
+        assert "segmented" in close_packet.artifacts
+
+        best_meta = close_packet.artifacts["best_frame"].metadata
+        assert best_meta.get("bbox01") == bbox1
+
+        segmented = close_packet.artifacts["segmented"].data
+        assert segmented is not None
+        assert segmented.shape[0] == 20
+        assert segmented.shape[1] == 20
+        assert int(segmented[0, 0, 0]) == 50
+
+    asyncio.run(scenario())
+
+
 def test_image_resize_downscales_selected_artifacts_in_place() -> None:
     async def scenario() -> None:
         frame = np.zeros((100, 200, 3), dtype=np.uint8)

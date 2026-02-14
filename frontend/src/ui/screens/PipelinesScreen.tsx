@@ -1349,6 +1349,8 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                          const yoloCategories = Array.isArray(yoloCategoriesRaw)
 	                            ? yoloCategoriesRaw.map((value: any) => String(value || "").trim().toLowerCase()).filter((value: string) => value.length > 0)
 	                            : [];
+	                          const yoloConfidenceRaw = Number((config as any).confidence_threshold ?? 0.4);
+	                          const yoloConfidence = Number.isFinite(yoloConfidenceRaw) ? Math.max(0, Math.min(1, yoloConfidenceRaw)) : 0.4;
 
 	                          const areaNamesRaw = (config as any).include_area_names;
 	                          const selectedAreaKeys = Array.isArray(areaNamesRaw)
@@ -1505,6 +1507,26 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 
 	                                  {step.operatorId === "vision.object_tracking_yolo" || step.operatorId === "vision.object_detection_yolo" ? (
 	                                    <div className="pipelinesOperatorConfigCard">
+	                                      <label className="pipelinesLabel">
+	                                        <span>Min confidence</span>
+	                                        <input
+	                                          className="pipelinesInput"
+	                                          type="number"
+	                                          min={0}
+	                                          max={1}
+	                                          step={0.01}
+	                                          value={String(yoloConfidence)}
+	                                          onChange={(event) => {
+	                                            const nextValue = Number(event.target.value || 0);
+	                                            updateInteractiveStepConfig(step.uid, (prev) => ({
+	                                              ...prev,
+	                                              confidence_threshold: Number.isFinite(nextValue) ? Math.max(0, Math.min(1, nextValue)) : 0.4,
+	                                            }));
+	                                          }}
+	                                        />
+	                                      </label>
+	                                      <div className="pipelinesStepHint">Filters low-confidence detections/tracks (default: 0.40).</div>
+
 	                                      <label className="pipelinesLabel">
 	                                        <span>Categories</span>
 	                                        <CreatableSelect<SelectOption, true>

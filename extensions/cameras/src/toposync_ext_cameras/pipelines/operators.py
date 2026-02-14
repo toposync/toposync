@@ -85,7 +85,7 @@ class YoloBackendConfig:
 class _YoloBaseConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model_name: str = "yolo11n"
-    confidence_threshold: float = Field(default=0.25, ge=0.0, le=1.0)
+    confidence_threshold: float = Field(default=0.4, ge=0.0, le=1.0)
     iou_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
     image_size: int = Field(default=640, ge=64, le=2048)
     device: str = ""

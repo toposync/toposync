@@ -6,6 +6,7 @@ import math
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from .compiler import CompiledPipeline
@@ -27,6 +28,8 @@ class PipelineRuntimeDependencies:
     config_store: Any | None = None
     logger: logging.Logger | None = None
     yolo_backend_factory: Callable[[Any], Any] | None = None
+    files_dir: Path | None = None
+    notifications_upsert: Callable[..., Any] | None = None
 
 
 @dataclass(slots=True)
@@ -69,6 +72,7 @@ class OperatorRuntime(Protocol):
 @dataclass(slots=True)
 class NodeExecutionContext:
     node_id: str
+    pipeline_name: str
     inputs: dict[str, BoundedChannel[Packet]]
     outputs: dict[str, list[BoundedChannel[Packet]]]
     cancel_event: asyncio.Event
@@ -308,6 +312,7 @@ class PipelineRuntime:
             self.node_metrics[node_id] = metrics
             context = NodeExecutionContext(
                 node_id=node_id,
+                pipeline_name=self.compiled.name,
                 inputs=node_inputs,
                 outputs=node_outputs,
                 cancel_event=self._cancel_event,

@@ -104,6 +104,8 @@ def test_builtin_core_operators_are_registered_with_runtime_factories() -> None:
         "core.synthetic_source",
         "core.passthrough",
         "core.sink",
+        "core.store_images",
+        "core.notify",
     }
     registered_ids = {definition.id for definition in registry.list_operators()}
     assert required_ids.issubset(registered_ids)

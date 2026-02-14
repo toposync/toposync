@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .execution import PassThroughRuntime, SinkRuntime, SourceOperatorRuntime, TransformOperatorRuntime
 from .operator_registry import OperatorRegistry
 from .runtime import Lifecycle, Packet
+from .operators_sinks import register_sink_operators
 
 
 class _EmptyConfig(BaseModel):
@@ -216,6 +217,7 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         owner="core",
         runtime_factory=lambda _config, _deps: SinkRuntime(),
     )
+    register_sink_operators(registry)
 
 
 def _resolve_key(packet: Packet, key_field: str) -> str:

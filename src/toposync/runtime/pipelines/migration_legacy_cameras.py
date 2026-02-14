@@ -143,7 +143,6 @@ def build_pipeline_from_legacy_camera_rule(rule: LegacyCameraRule, *, existing_n
                     "priority": "medium",
                     "update_interval_seconds": 1.0,
                     "thumbnail_with_fallback": ["best_frame", "frame_original"],
-                    "store_thumbnail_if_needed": False,
                 },
             },
         ],
@@ -190,4 +189,3 @@ def build_pipeline_from_legacy_camera_rule(rule: LegacyCameraRule, *, existing_n
         python_source="",
         graph=graph,
     )
-

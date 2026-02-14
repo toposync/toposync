@@ -64,6 +64,7 @@ const PIPELINE_PRESET_OPERATOR_IDS = [
   "camera.area_restriction",
   "camera.velocity_estimation",
   "camera.best_frame_selector",
+  "camera.image_resize",
   "core.throttle",
   "core.debounce",
   "core.store_images",
@@ -85,6 +86,7 @@ const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "camera.area_restriction": "Area restriction",
   "camera.velocity_estimation": "Velocity estimation",
   "camera.best_frame_selector": "Best frame selector",
+  "camera.image_resize": "Resize images",
   "core.throttle": "Throttle",
   "core.debounce": "Debounce",
   "core.store_images": "Store images",
@@ -1317,6 +1319,7 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 
 	                          const isConfigScalarGridHidden =
 	                            step.operatorId === "camera.source" ||
+	                            step.operatorId === "camera.image_resize" ||
 	                            step.operatorId === "camera.camera_mapping" ||
 	                            step.operatorId === "camera.area_restriction" ||
 	                            step.operatorId === "camera.velocity_estimation" ||
@@ -1350,11 +1353,11 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                            : [];
 	                          const selectedAreaOptions = selectedAreaKeys.map((value) => cameraAreaOptions.find((option) => option.value === value) ?? { value, label: value });
 
-	                          const storeImageArtifactsRaw = (config as any).artifact_names;
-	                          const storeImageArtifactNames = Array.isArray(storeImageArtifactsRaw)
-	                            ? storeImageArtifactsRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
+	                          const artifactNamesRaw = (config as any).artifact_names;
+	                          const artifactNames = Array.isArray(artifactNamesRaw)
+	                            ? artifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
 	                            : [];
-	                          const storeImageSelectedOptions = storeImageArtifactNames.map((value) => {
+	                          const selectedArtifactOptions = artifactNames.map((value) => {
 	                            const known = ARTIFACT_SUGGESTIONS.find((option) => option.value === value);
 	                            return known ?? { value, label: humanizeIdentifier(value) || value };
 	                          });
@@ -1800,6 +1803,71 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                                    </div>
 	                                  ) : null}
 
+	                                  {step.operatorId === "camera.image_resize" ? (
+	                                    <div className="pipelinesOperatorConfigCard">
+	                                      {(() => {
+	                                        const maxEdgePx = Number((config as any).max_edge_px ?? 1280);
+	                                        const allowUpscale = Boolean((config as any).allow_upscale ?? false);
+
+	                                        return (
+	                                          <>
+	                                            <label className="pipelinesLabel">
+	                                              <span>Artifacts</span>
+	                                              <CreatableSelect<SelectOption, true>
+	                                                isMulti
+	                                                styles={pipelinesReactSelectStyles}
+	                                                options={ARTIFACT_SUGGESTIONS}
+	                                                value={selectedArtifactOptions}
+	                                                placeholder="Full frame (default)"
+	                                                onChange={(value: MultiValue<SelectOption>) => {
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({
+	                                                    ...prev,
+	                                                    artifact_names: value.map((item) => item.value),
+	                                                  }));
+	                                                }}
+	                                              />
+	                                            </label>
+
+	                                            <label className="pipelinesLabel">
+	                                              <span>Max edge (px)</span>
+	                                              <input
+	                                                className="pipelinesInput"
+	                                                type="number"
+	                                                min={16}
+	                                                max={16384}
+	                                                step={1}
+	                                                value={Number.isFinite(maxEdgePx) ? String(Math.max(16, maxEdgePx)) : "1280"}
+	                                                onChange={(event) => {
+	                                                  const nextValue = Number(event.target.value || 1280);
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({
+	                                                    ...prev,
+	                                                    max_edge_px: Number.isFinite(nextValue) ? Math.max(16, Math.min(16384, nextValue)) : 1280,
+	                                                  }));
+	                                                }}
+	                                              />
+	                                            </label>
+	                                            <div className="pipelinesStepHint">
+	                                              Downscales selected artifacts in-memory (in-place). Add this before Store Images to reduce file sizes.
+	                                            </div>
+
+	                                            {step.showAdvanced ? (
+	                                              <label className="pipelinesLabel">
+	                                                <span>Allow upscaling</span>
+	                                                <input
+	                                                  type="checkbox"
+	                                                  checked={allowUpscale}
+	                                                  onChange={(event) => {
+	                                                    updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, allow_upscale: event.target.checked }));
+	                                                  }}
+	                                                />
+	                                              </label>
+	                                            ) : null}
+	                                          </>
+	                                        );
+	                                      })()}
+	                                    </div>
+	                                  ) : null}
+
 	                                  {step.operatorId === "core.store_images" ? (
 	                                    <div className="pipelinesOperatorConfigCard">
 	                                      <label className="pipelinesLabel">
@@ -1808,7 +1876,7 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                                          isMulti
 	                                          styles={pipelinesReactSelectStyles}
 	                                          options={ARTIFACT_SUGGESTIONS}
-	                                          value={storeImageSelectedOptions}
+	                                          value={selectedArtifactOptions}
 	                                          placeholder="Full frame (default)"
 	                                          onChange={(value: MultiValue<SelectOption>) => {
 	                                            updateInteractiveStepConfig(step.uid, (prev) => ({

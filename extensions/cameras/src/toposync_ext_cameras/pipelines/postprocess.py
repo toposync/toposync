@@ -38,6 +38,18 @@ class ObjectSegmentationConfig(BaseModel):
         return name
 
 
+class ImageResizeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    artifact_names: list[str] = Field(default_factory=lambda: ["frame_original"])
+    max_edge_px: int = Field(default=1280, ge=16, le=16384)
+    allow_upscale: bool = False
+
+    @field_validator("artifact_names", mode="after")
+    @classmethod
+    def _normalize_config_artifact_names(cls, value: list[str]) -> list[str]:
+        return _normalize_artifact_names(value)
+
+
 class CameraMappingControlPointImage(BaseModel):
     x: float = Field(ge=0.0, le=1.0)
     y: float = Field(ge=0.0, le=1.0)
@@ -242,6 +254,85 @@ class ObjectSegmentationRuntime(TransformOperatorRuntime):
             latest_artifact_name=self._config.output_artifact_name,
         )
         return [replace(out, payload=payload)]
+
+
+class ImageResizeRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = ImageResizeConfig.model_validate(config)
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        packet = _ensure_original_artifact(packet)
+        out = packet
+        try:
+            import cv2  # type: ignore
+            import numpy as np  # type: ignore
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("camera.image_resize requires opencv-python-headless and numpy") from exc
+
+        for name in self._config.artifact_names:
+            artifact = out.artifacts.get(name)
+            if artifact is None:
+                continue
+            if artifact.reference:
+                # Evita inconsistência: artifact já persistido e referenciado (o resize é em memória).
+                continue
+            if artifact.data is None:
+                continue
+            if isinstance(artifact.data, (bytes, bytearray, memoryview)):
+                continue
+
+            shape = getattr(artifact.data, "shape", None)
+            if not shape or len(shape) < 2:
+                continue
+
+            try:
+                height = int(shape[0])
+                width = int(shape[1])
+            except Exception:
+                continue
+            if height <= 0 or width <= 0:
+                continue
+
+            max_edge = max(height, width)
+            if max_edge <= 0:
+                continue
+
+            target_edge = int(self._config.max_edge_px)
+            if target_edge <= 0:
+                continue
+
+            if not self._config.allow_upscale and max_edge <= target_edge:
+                continue
+
+            scale = float(target_edge) / float(max_edge)
+            if not self._config.allow_upscale and scale >= 1.0:
+                continue
+
+            new_width = max(1, int(round(float(width) * scale)))
+            new_height = max(1, int(round(float(height) * scale)))
+            if new_width == width and new_height == height:
+                continue
+
+            arr = np.asarray(artifact.data)
+            if arr.size == 0:
+                continue
+            arr = np.ascontiguousarray(arr)
+            interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+            resized = cv2.resize(arr, (new_width, new_height), interpolation=interpolation)
+
+            metadata = dict(artifact.metadata)
+            metadata["resized_from"] = {"width": width, "height": height}
+            metadata["resized_to"] = {"width": new_width, "height": new_height}
+            out = out.with_artifact(
+                Artifact(
+                    name=artifact.name,
+                    data=resized,
+                    mime_type=artifact.mime_type,
+                    metadata=metadata,
+                ),
+            )
+
+        return [out]
 
 
 class CameraMappingRuntime(TransformOperatorRuntime):
@@ -575,6 +666,18 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: ObjectSegmentationRuntime(config),
+    )
+    registry.register_operator(
+        operator_id="camera.image_resize",
+        description="Resizes image artifacts in-memory (in-place) to reduce file sizes before storage.",
+        config_model=ImageResizeConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["camera", "artifact"],
+        defaults=ImageResizeConfig().model_dump(),
+        share_strategy="by_signature",
+        owner="com.toposync.cameras",
+        runtime_factory=lambda config, _deps: ImageResizeRuntime(config),
     )
     registry.register_operator(
         operator_id="camera.camera_mapping",

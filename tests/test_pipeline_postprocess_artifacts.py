@@ -199,6 +199,58 @@ def test_segmentation_and_best_frame_selection_are_deterministic() -> None:
     asyncio.run(scenario())
 
 
+def test_image_resize_downscales_selected_artifacts_in_place() -> None:
+    async def scenario() -> None:
+        frame = np.zeros((100, 200, 3), dtype=np.uint8)
+        sequence = [
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {
+                    "frame": frame,
+                    "frame_ts": 1.0,
+                    "tracking_id": "trk-resize",
+                },
+            },
+        ]
+
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "resize",
+                    "operator": "camera.image_resize",
+                    "config": {
+                        "artifact_names": ["frame_original"],
+                        "max_edge_px": 50,
+                    },
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "resize", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                {"from": {"node": "resize", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+            ],
+        }
+
+        collector: dict[str, list[Packet]] = {}
+        runtime = _pipeline_runtime(graph=graph, sequence=sequence, collector=collector)
+        await runtime.run_for(0.2)
+
+        packets = collector.get("sink", [])
+        assert len(packets) == 1
+        packet = packets[0]
+        assert "frame_original" in packet.artifacts
+        image = packet.artifacts["frame_original"].data
+        assert image is not None
+        assert tuple(image.shape[:2]) == (25, 50)
+        meta = packet.artifacts["frame_original"].metadata
+        assert meta.get("resized_from") == {"width": 200, "height": 100}
+        assert meta.get("resized_to") == {"width": 50, "height": 25}
+
+    asyncio.run(scenario())
+
+
 def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
     async def scenario() -> None:
         frame = np.zeros((50, 50, 3), dtype=np.uint8)

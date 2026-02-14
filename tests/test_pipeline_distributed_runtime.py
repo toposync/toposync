@@ -54,7 +54,6 @@ def test_distributed_projection_runs_processing_and_origin_with_same_definition(
                         "priority": "high",
                         "update_interval_seconds": 60.0,
                         "thumbnail_with_fallback": ["frame_original"],
-                        "store_thumbnail_if_needed": False,
                     },
                 },
             ],
@@ -106,4 +105,3 @@ def test_distributed_projection_runs_processing_and_origin_with_same_definition(
         assert (files_dir / rel).is_file()
 
     asyncio.run(scenario())
-

@@ -146,6 +146,10 @@ def _encode_image_bytes(image: Any, *, fmt: Literal["jpg", "png"], jpeg_quality:
     arr = np.asarray(image)
     if arr.dtype != np.uint8:
         arr = arr.astype(np.uint8, copy=False)
+    if arr.ndim == 3 and int(arr.shape[2]) == 3:
+        arr = arr[..., ::-1]
+    elif arr.ndim == 3 and int(arr.shape[2]) == 4:
+        arr = arr[..., [2, 1, 0]]
     im = Image.fromarray(arr)
     out = bytearray()
     import io
@@ -178,6 +182,11 @@ def _encode_png(image: Any) -> bytes:
         height, width = int(arr.shape[0]), int(arr.shape[1])
         channels = int(arr.shape[2])
         color_type = 2 if channels == 3 else 6
+        # OpenCV uses BGR/BGRA; PNG expects RGB/RGBA.
+        if channels == 3:
+            arr = arr[..., ::-1]
+        else:
+            arr = arr[..., [2, 1, 0, 3]]
     else:
         raise ValueError("Unsupported image shape for PNG encoding")
 

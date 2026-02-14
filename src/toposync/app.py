@@ -20,7 +20,16 @@ from pydantic import BaseModel, Field
 from toposync.extensions.manager import ExtensionManager
 from toposync.runtime.device_store import DeviceStore
 from toposync.runtime.event_bus import EventBus, EventOutcome
-from toposync.runtime.config_store import AppConfig, AppSettings, Composition, ConfigStore, UserDataPaths
+from toposync.runtime.config_store import (
+    AppConfig,
+    AppSettings,
+    Composition,
+    ConfigStore,
+    Pipeline,
+    PipelineAlreadyExistsError,
+    PipelineValidationError,
+    UserDataPaths,
+)
 from toposync.runtime.notifications import NotificationsRuntime
 from toposync.runtime.services import ServiceRegistry
 
@@ -80,6 +89,18 @@ class FileExistsResponse(BaseModel):
 class ExtensionSettingsResponse(BaseModel):
     extension_id: str
     settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class PipelineFeatureFlagRequest(BaseModel):
+    enabled: bool
+
+
+class PipelineFeatureFlagResponse(BaseModel):
+    enabled: bool
+
+
+class PipelinesListResponse(BaseModel):
+    pipelines: list[Pipeline]
 
 
 def _guess_media_type(path: str) -> str:
@@ -225,6 +246,68 @@ def create_app() -> FastAPI:
         config_store: ConfigStore = request.app.state.config_store
         settings = await config_store.patch_extension_settings(extension_id, patch)
         return ExtensionSettingsResponse(extension_id=extension_id, settings=settings)
+
+    @app.get("/api/pipelines/feature-flag", response_model=PipelineFeatureFlagResponse)
+    async def get_pipelines_feature_flag(request: Request) -> PipelineFeatureFlagResponse:
+        config_store: ConfigStore = request.app.state.config_store
+        enabled = await config_store.get_pipelines_feature_flag()
+        return PipelineFeatureFlagResponse(enabled=enabled)
+
+    @app.patch("/api/pipelines/feature-flag", response_model=PipelineFeatureFlagResponse)
+    async def patch_pipelines_feature_flag(
+        request: Request,
+        body: PipelineFeatureFlagRequest,
+    ) -> PipelineFeatureFlagResponse:
+        config_store: ConfigStore = request.app.state.config_store
+        enabled = await config_store.set_pipelines_feature_flag(enabled=body.enabled)
+        return PipelineFeatureFlagResponse(enabled=enabled)
+
+    @app.get("/api/pipelines", response_model=PipelinesListResponse)
+    async def list_pipelines(request: Request) -> PipelinesListResponse:
+        config_store: ConfigStore = request.app.state.config_store
+        pipelines = await config_store.list_pipelines()
+        return PipelinesListResponse(pipelines=pipelines)
+
+    @app.post("/api/pipelines", response_model=Pipeline, status_code=201)
+    async def create_pipeline(request: Request, body: Pipeline) -> Pipeline:
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            return await config_store.create_pipeline(body)
+        except PipelineAlreadyExistsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/api/pipelines/{pipeline_name}", response_model=Pipeline)
+    async def get_pipeline(request: Request, pipeline_name: str) -> Pipeline:
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            pipeline = await config_store.get_pipeline(pipeline_name)
+        except PipelineValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if pipeline is None:
+            raise HTTPException(status_code=404, detail="Unknown pipeline")
+        return pipeline
+
+    @app.put("/api/pipelines/{pipeline_name}", response_model=Pipeline)
+    async def replace_pipeline(request: Request, pipeline_name: str, body: Pipeline) -> Pipeline:
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            return await config_store.replace_pipeline(pipeline_name, body)
+        except PipelineValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except PipelineAlreadyExistsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown pipeline") from exc
+
+    @app.delete("/api/pipelines/{pipeline_name}", response_model=Pipeline)
+    async def delete_pipeline(request: Request, pipeline_name: str) -> Pipeline:
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            return await config_store.delete_pipeline(pipeline_name)
+        except PipelineValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown pipeline") from exc
 
     @app.get("/api/composition", response_model=Composition)
     async def get_composition(request: Request) -> Composition:

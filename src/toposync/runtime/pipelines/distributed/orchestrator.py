@@ -366,7 +366,11 @@ class PipelinesOrchestrator:
         if server.kind != "http":
             logger.warning("processing server kind=%s not supported yet (id=%s)", server.kind, server.id)
             return
-        transport = HttpProcessingTransport(base_url=server.url)
+        transport = HttpProcessingTransport(
+            base_url=server.url,
+            username=getattr(server, "username", ""),
+            password=getattr(server, "password", ""),
+        )
 
         async def pump() -> None:
             last_event_id = 0

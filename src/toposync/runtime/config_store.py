@@ -114,6 +114,8 @@ class ProcessingServer(BaseModel):
     name: str = ""
     kind: Literal["inprocess", "http"] = "inprocess"
     url: str = ""
+    username: str = ""
+    password: str = ""
 
     @field_validator("id")
     @classmethod
@@ -125,7 +127,7 @@ class ProcessingServer(BaseModel):
             raise ValueError("Processing server id must match ^[a-z][a-z0-9_-]{0,63}$")
         return server_id
 
-    @field_validator("name", "url", mode="before")
+    @field_validator("name", "url", "username", "password", mode="before")
     @classmethod
     def _trim_strings(cls, value: Any) -> str:
         return str(value or "").strip()

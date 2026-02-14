@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hmac
 import json
 import logging
 import os
@@ -10,7 +12,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from pydantic import BaseModel, Field
-from starlette.responses import StreamingResponse
+from starlette.responses import Response, StreamingResponse
 
 from toposync.extensions.manager import ExtensionManager
 from toposync.runtime.config_store import ConfigStore, Pipeline, UserDataPaths
@@ -217,6 +219,34 @@ def create_processing_app() -> FastAPI:
         operator_registry=operator_registry,
         compiler=pipeline_compiler,
     )
+
+    def _processing_basic_auth() -> tuple[str, str] | None:
+        username = str(os.getenv("TOPOSYNC_PROCESSING_USERNAME") or "").strip()
+        password = str(os.getenv("TOPOSYNC_PROCESSING_PASSWORD") or "").strip()
+        if not username and not password:
+            return None
+        return (username, password)
+
+    @app.middleware("http")
+    async def _basic_auth(request: Request, call_next):  # noqa: ANN001
+        expected = _processing_basic_auth()
+        if expected is None:
+            return await call_next(request)
+
+        expected_user, expected_pass = expected
+        header = str(request.headers.get("authorization") or "")
+        if header.lower().startswith("basic "):
+            token = header.split(" ", 1)[1].strip()
+            decoded = ""
+            try:
+                decoded = base64.b64decode(token).decode("utf-8")
+            except Exception:
+                decoded = ""
+            provided_user, _, provided_pass = decoded.partition(":")
+            if hmac.compare_digest(provided_user, expected_user) and hmac.compare_digest(provided_pass, expected_pass):
+                return await call_next(request)
+
+        return Response(status_code=401, headers={"WWW-Authenticate": "Basic"}, content="Unauthorized")
 
     @app.on_event("startup")
     async def _startup() -> None:

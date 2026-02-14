@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from toposync.app import create_app
-from toposync.runtime.config_store import Pipeline
+from toposync.runtime.config_store import Pipeline, ProcessingServer
 import toposync.extensions.manager as ext_manager_mod
 
 
@@ -81,3 +81,40 @@ def test_pipeline_payload_validation(tmp_path: Path, monkeypatch: pytest.MonkeyP
         }
         res = client.post("/api/pipelines", json=missing_graph_schema_version)
         assert res.status_code == 422
+
+
+def test_processing_servers_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        res = client.get("/api/processing-servers")
+        assert res.status_code == 200
+        body = res.json()
+        assert isinstance(body.get("servers"), list)
+        assert any(item.get("id") == "local" for item in body["servers"])
+
+        server = ProcessingServer(
+            id="remote_gpu",
+            name="Garage GPU",
+            kind="http",
+            url="http://192.168.1.50:9001",
+            username="mateus",
+            password="secret",
+        ).model_dump()
+        res = client.put("/api/processing-servers/remote_gpu", json=server)
+        assert res.status_code == 200
+        assert res.json()["id"] == "remote_gpu"
+        assert res.json()["url"] == "http://192.168.1.50:9001"
+        assert res.json()["username"] == "mateus"
+        assert res.json()["password"] == "secret"
+
+        res = client.get("/api/processing-servers")
+        assert res.status_code == 200
+        servers = res.json()["servers"]
+        assert any(item.get("id") == "remote_gpu" for item in servers)
+
+        res = client.get("/api/processing-servers/local/status")
+        assert res.status_code == 200
+        assert res.json()["ok"] is True
+
+        res = client.delete("/api/processing-servers/remote_gpu")
+        assert res.status_code == 200
+        assert res.json()["id"] == "remote_gpu"

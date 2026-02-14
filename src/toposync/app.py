@@ -41,6 +41,7 @@ from toposync.runtime.pipelines import (
     register_builtin_operators,
 )
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
+from toposync.runtime.pipelines.distributed.transport import HttpProcessingTransport, ProcessingTransportError
 from toposync.runtime.pipelines.migration_legacy_cameras import (
     build_pipeline_from_legacy_camera_rule,
     extract_legacy_camera_rules,
@@ -110,6 +111,12 @@ class PipelinesListResponse(BaseModel):
 
 class ProcessingServersListResponse(BaseModel):
     servers: list[ProcessingServer]
+
+
+class ProcessingServerStatusResponse(BaseModel):
+    ok: bool
+    status: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
 
 
 class OperatorsListResponse(BaseModel):
@@ -368,6 +375,39 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Unknown processing server") from exc
+
+    @app.get("/api/processing-servers/{server_id}/status", response_model=ProcessingServerStatusResponse)
+    async def get_processing_server_status(request: Request, server_id: str) -> ProcessingServerStatusResponse:
+        config_store: ConfigStore = request.app.state.config_store
+        sid = str(server_id or "").strip().lower()
+        servers = await config_store.list_processing_servers()
+        server = next((item for item in servers if item.id == sid), None)
+        if server is None:
+            raise HTTPException(status_code=404, detail="Unknown processing server")
+
+        if server.kind != "http":
+            return ProcessingServerStatusResponse(ok=True, status={"kind": server.kind, "id": server.id})
+
+        try:
+            transport = HttpProcessingTransport(
+                base_url=server.url,
+                username=getattr(server, "username", ""),
+                password=getattr(server, "password", ""),
+                timeout_s=5.0,
+            )
+        except ProcessingTransportError as exc:
+            return ProcessingServerStatusResponse(ok=False, error=str(exc))
+
+        try:
+            status = await transport.status()
+            return ProcessingServerStatusResponse(ok=True, status=status)
+        except Exception as exc:  # noqa: BLE001
+            return ProcessingServerStatusResponse(ok=False, error=str(exc))
+        finally:
+            try:
+                await transport.close()
+            except Exception:
+                pass
 
     @app.get("/api/pipelines", response_model=PipelinesListResponse)
     async def list_pipelines(request: Request) -> PipelinesListResponse:

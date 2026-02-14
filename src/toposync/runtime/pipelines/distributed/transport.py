@@ -85,12 +85,21 @@ class InProcessProcessingTransport:
 
 
 class HttpProcessingTransport:
-    def __init__(self, *, base_url: str, timeout_s: float = 30.0) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        timeout_s: float = 30.0,
+        username: str = "",
+        password: str = "",
+    ) -> None:
         base = str(base_url or "").strip().rstrip("/")
         if not base:
             raise ProcessingTransportError("Missing processing server base_url")
         self._base = base
         self._timeout_s = float(timeout_s)
+        self._username = str(username or "").strip()
+        self._password = str(password or "").strip()
         self._client = None
 
     async def _ensure_client(self):
@@ -100,7 +109,10 @@ class HttpProcessingTransport:
             import httpx  # type: ignore
         except Exception as exc:  # noqa: BLE001
             raise ProcessingTransportError("HttpProcessingTransport requires httpx") from exc
-        self._client = httpx.AsyncClient(timeout=None)
+        auth = None
+        if self._username or self._password:
+            auth = httpx.BasicAuth(self._username, self._password)
+        self._client = httpx.AsyncClient(timeout=None, auth=auth)
         return self._client
 
     async def push_config(self, payload: dict[str, Any]) -> None:
@@ -157,4 +169,3 @@ class HttpProcessingTransport:
         except Exception:
             pass
         self._client = None
-

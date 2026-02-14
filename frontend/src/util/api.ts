@@ -50,6 +50,14 @@ export type ProcessingServer = {
   name: string;
   kind: "inprocess" | "http";
   url: string;
+  username?: string;
+  password?: string;
+};
+
+export type ProcessingServerStatus = {
+  ok: boolean;
+  status?: Record<string, unknown>;
+  error?: string | null;
 };
 
 export type CameraSummary = {
@@ -241,6 +249,12 @@ export async function putProcessingServer(server: ProcessingServer): Promise<Pro
 export async function deleteProcessingServer(serverId: string): Promise<ProcessingServer> {
   const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`Failed to delete processing server ${serverId}: ${res.status}`);
+  return res.json();
+}
+
+export async function getProcessingServerStatus(serverId: string): Promise<ProcessingServerStatus> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/status`);
+  if (!res.ok) throw new Error(`Failed to fetch processing server status ${serverId}: ${res.status}`);
   return res.json();
 }
 

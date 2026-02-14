@@ -10,6 +10,7 @@ import type {
   Pipeline,
   PipelineOperatorDefinition,
   ProcessingServer,
+  ProcessingServerStatus,
 } from "../../util/api";
 import {
   compilePipeline,
@@ -17,6 +18,7 @@ import {
   deletePipeline,
   deleteProcessingServer,
   getCameraContexts,
+  getProcessingServerStatus,
   listCamerasIndex,
   listPipelineOperators,
   listPipelines,
@@ -24,6 +26,7 @@ import {
   putPipeline,
   putProcessingServer,
 } from "../../util/api";
+import { ProcessingServerModal } from "../ProcessingServerModal";
 
 type Props = {
   onClose: () => void;
@@ -651,6 +654,10 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [servers, setServers] = useState<ProcessingServer[]>([]);
+  const [serverModalOpen, setServerModalOpen] = useState(false);
+  const [serverModalTarget, setServerModalTarget] = useState<ProcessingServer | null>(null);
+  const [serverStatusById, setServerStatusById] = useState<Record<string, ProcessingServerStatus>>({});
+  const [serverTestingById, setServerTestingById] = useState<Record<string, boolean>>({});
   const [operators, setOperators] = useState<PipelineOperatorDefinition[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [camerasIndex, setCamerasIndex] = useState<CamerasIndexResponse>({ cameras: [] });
@@ -964,14 +971,31 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
     }
   };
 
-  const handleDeleteServer = async (serverId: string) => {
-    if (!confirm(`Delete processing server '${serverId}'?`)) return;
+  const handleDeleteServer = async (serverId: string, confirmDelete = true) => {
+    if (confirmDelete && !confirm(`Delete processing server '${serverId}'?`)) return;
     setError(null);
     try {
       await deleteProcessingServer(serverId);
       await reload();
     } catch (err: any) {
       setError(String(err?.message ?? err));
+    }
+  };
+
+  const handleTestServer = async (serverId: string): Promise<ProcessingServerStatus> => {
+    const sid = String(serverId || "").trim().toLowerCase();
+    if (!sid) return { ok: false, error: "Missing server id" };
+    setServerTestingById((prev) => ({ ...prev, [sid]: true }));
+    try {
+      const status = await getProcessingServerStatus(sid);
+      setServerStatusById((prev) => ({ ...prev, [sid]: status }));
+      return status;
+    } catch (err: any) {
+      const failed = { ok: false, error: String(err?.message ?? err) };
+      setServerStatusById((prev) => ({ ...prev, [sid]: failed }));
+      return failed;
+    } finally {
+      setServerTestingById((prev) => ({ ...prev, [sid]: false }));
     }
   };
 
@@ -1111,39 +1135,83 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
           </div>
 
           <div className="pipelinesSidebarFooter">
-            <div className="pipelinesSidebarTitle">Processing</div>
+            <div className="pipelinesSidebarTitle">Processing servers</div>
             <div className="pipelinesServers">
-              {servers.map((server) => (
-                <div key={server.id} className="pipelinesServerRow">
-                  <div className="pipelinesServerMain">
-                    <div className="pipelinesServerId">{server.id}</div>
-                    <div className="pipelinesServerMeta">
-                      {server.kind}
-                      {server.url ? ` • ${server.url}` : ""}
-                    </div>
-                  </div>
-                  {server.id !== "local" ? (
-                    <button className="iconButton" type="button" onClick={() => void handleDeleteServer(server.id)} title="Delete server">
-                      <i className="fa-solid fa-trash" aria-hidden="true" />
+              {servers.map((server) => {
+                const probe = serverStatusById[server.id] ?? null;
+                const testing = !!serverTestingById[server.id];
+                const statusLabel = testing ? " • testing…" : probe ? (probe.ok ? " • online" : " • offline") : "";
+                const statusTitle = testing ? "Testing…" : probe && !probe.ok ? String(probe.error || "Offline") : "";
+                return (
+                  <div key={server.id} className="pipelinesServerRow">
+                    <button
+                      className="pipelinesServerMain"
+                      type="button"
+                      onClick={() => {
+                        if (server.id === "local") return;
+                        setServerModalTarget(server);
+                        setServerModalOpen(true);
+                      }}
+                      style={{ background: "transparent", border: "none", padding: 0, textAlign: "left", cursor: server.id === "local" ? "default" : "pointer" }}
+                    >
+                      <div className="pipelinesServerId">{server.id}</div>
+                      <div className="pipelinesServerMeta" title={statusTitle}>
+                        {server.kind}
+                        {server.url ? ` • ${server.url}` : ""}
+                        {statusLabel}
+                      </div>
                     </button>
-                  ) : null}
-                </div>
-              ))}
+
+                    {server.kind === "http" ? (
+                      <button
+                        className="iconButton"
+                        type="button"
+                        disabled={testing}
+                        onClick={() => void handleTestServer(server.id)}
+                        title="Test connection"
+                      >
+                        <i className="fa-solid fa-plug" aria-hidden="true" />
+                      </button>
+                    ) : null}
+
+                    {server.id !== "local" ? (
+                      <>
+                        <button
+                          className="iconButton"
+                          type="button"
+                          onClick={() => {
+                            setServerModalTarget(server);
+                            setServerModalOpen(true);
+                          }}
+                          title="Edit server"
+                        >
+                          <i className="fa-solid fa-pen-to-square" aria-hidden="true" />
+                        </button>
+
+                        <button
+                          className="iconButton"
+                          type="button"
+                          onClick={() => void handleDeleteServer(server.id)}
+                          title="Delete server"
+                        >
+                          <i className="fa-solid fa-trash" aria-hidden="true" />
+                        </button>
+                      </>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
 
             <button
               className="pillButton"
               type="button"
-              onClick={() =>
-                void handleSaveServer({
-                  id: `srv_${Math.random().toString(16).slice(2, 8)}`,
-                  name: "",
-                  kind: "http",
-                  url: "http://127.0.0.1:9001",
-                })
-              }
+              onClick={() => {
+                setServerModalTarget(null);
+                setServerModalOpen(true);
+              }}
             >
-              Add HTTP server (stub)
+              Add processing server
             </button>
           </div>
         </div>
@@ -2454,6 +2522,18 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
           )}
         </div>
       </div>
+
+      <ProcessingServerModal
+        open={serverModalOpen}
+        server={serverModalTarget}
+        onClose={() => {
+          setServerModalOpen(false);
+          setServerModalTarget(null);
+        }}
+        onSave={handleSaveServer}
+        onDelete={(serverId) => handleDeleteServer(serverId, false)}
+        onTest={handleTestServer}
+      />
     </div>
   );
 }

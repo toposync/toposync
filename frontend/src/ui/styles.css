@@ -318,6 +318,33 @@ textarea {
   white-space: nowrap;
 }
 
+.processingServerForm {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.processingServerEndpointRow {
+  display: grid;
+  grid-template-columns: 110px 1fr 110px;
+  gap: 10px;
+  align-items: end;
+}
+
+.processingServerAuthRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: end;
+}
+
+.modalFooter {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 .pipelinesEditor {
   padding: 14px;
   overflow: auto;

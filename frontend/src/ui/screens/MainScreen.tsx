@@ -35,6 +35,7 @@ type Props = {
   api: HostApi;
   updateElement: (elementId: string, patch: CompositionElementPatch) => void;
   onEditComposition: () => void;
+  onOpenPipelines: () => void;
   onOpenSettings: () => void;
   onActivateComposition: (compositionId: string) => Promise<Composition>;
   onCreateComposition: (name: string) => Promise<Composition>;
@@ -120,6 +121,7 @@ export function MainScreen({
   api,
   updateElement,
   onEditComposition,
+  onOpenPipelines,
   onOpenSettings,
   onActivateComposition,
   onCreateComposition,
@@ -264,6 +266,9 @@ export function MainScreen({
           onClick={onOpenSettings}
         >
           <Icon name="gear" />
+        </button>
+        <button className="iconButton" type="button" aria-label="Pipelines" title="Pipelines" onClick={onOpenPipelines}>
+          <Icon name="diagram-project" />
         </button>
         <button
           className="iconButton iconButtonPrimary"

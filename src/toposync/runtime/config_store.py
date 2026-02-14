@@ -19,6 +19,8 @@ from pydantic import BaseModel, Field, field_validator
 PIPELINES_FEATURE_FLAG_KEY = "pipelines_v1_enabled"
 PIPELINE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PIPELINE_GRAPH_SCHEMA_VERSION_KEY = "schema_version"
+PROCESSING_SERVERS_KEY = "processing_servers"
+PROCESSING_SERVER_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
 class PipelineValidationError(ValueError):
@@ -58,6 +60,10 @@ class AppSettings(BaseModel):
 class Pipeline(BaseModel):
     name: str
     type: Literal["reuse", "final"]
+    enabled: bool = True
+    processing_server_id: str = "local"
+    editor_mode: Literal["interactive", "json", "python"] = "json"
+    python_source: str = ""
     graph: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("name", mode="before")
@@ -83,6 +89,56 @@ class Pipeline(BaseModel):
         if type(schema_version) is not int or int(schema_version) < 1:
             raise ValueError("Pipeline graph must include schema_version >= 1")
         return value
+
+    @field_validator("processing_server_id", mode="before")
+    @classmethod
+    def _normalize_processing_server_id(cls, value: Any) -> str:
+        raw = str(value or "").strip()
+        return raw or "local"
+
+    @field_validator("editor_mode", mode="before")
+    @classmethod
+    def _normalize_editor_mode(cls, value: Any) -> str:
+        mode = str(value or "").strip().lower()
+        if mode not in {"interactive", "json", "python"}:
+            return "json"
+        return mode
+
+    @field_validator("python_source", mode="before")
+    @classmethod
+    def _normalize_python_source(cls, value: Any) -> str:
+        return str(value or "")
+
+
+class ProcessingServer(BaseModel):
+    id: str
+    name: str = ""
+    kind: Literal["inprocess", "http"] = "inprocess"
+    url: str = ""
+
+    @field_validator("id")
+    @classmethod
+    def _validate_id(cls, value: str) -> str:
+        server_id = str(value or "").strip().lower()
+        if not server_id:
+            raise ValueError("Processing server id is required")
+        if not PROCESSING_SERVER_ID_RE.match(server_id):
+            raise ValueError("Processing server id must match ^[a-z][a-z0-9_-]{0,63}$")
+        return server_id
+
+    @field_validator("name", "url", mode="before")
+    @classmethod
+    def _trim_strings(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, value: str, info) -> str:  # noqa: ANN001
+        url = str(value or "").strip()
+        kind = str(getattr(info, "data", {}).get("kind") or "").strip()
+        if kind == "http" and not url:
+            raise ValueError("Processing server url is required when kind='http'")
+        return url
 
 
 class AppConfig(BaseModel):
@@ -151,7 +207,26 @@ def _normalize_pipelines_feature_flag(value: Any) -> bool:
 def _normalize_settings(settings: AppSettings) -> AppSettings:
     core = dict(settings.core)
     core[PIPELINES_FEATURE_FLAG_KEY] = _normalize_pipelines_feature_flag(core.get(PIPELINES_FEATURE_FLAG_KEY))
+    core[PROCESSING_SERVERS_KEY] = _normalize_processing_servers(core.get(PROCESSING_SERVERS_KEY))
     return AppSettings(core=core, extensions=dict(settings.extensions))
+
+
+def _normalize_processing_servers(value: Any) -> list[dict[str, Any]]:
+    raw = value if isinstance(value, list) else []
+    out: list[ProcessingServer] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            server = ProcessingServer.model_validate(item)
+        except Exception:
+            continue
+        if server.id in seen:
+            continue
+        seen.add(server.id)
+        out.append(server)
+    return [s.model_dump(mode="json") for s in out]
 
 
 def _default_composition() -> Composition:
@@ -469,12 +544,21 @@ class ConfigStore:
         async with self._lock:
             cfg = self._config or _default_config()
             idx = -1
+            existing_pipeline: Pipeline | None = None
             for i, existing in enumerate(cfg.pipelines):
                 if existing.name == name:
                     idx = i
+                    existing_pipeline = existing
                     break
             if idx < 0:
                 raise KeyError(name)
+
+            if (
+                existing_pipeline is not None
+                and str(getattr(existing_pipeline, "editor_mode", "json")) == "python"
+                and str(getattr(pipeline, "editor_mode", "json")) != "python"
+            ):
+                raise PipelineValidationError("Pipeline is in python mode and cannot be converted back to json/ui modes")
 
             if pipeline.name != name and any(existing.name == pipeline.name for existing in cfg.pipelines):
                 raise PipelineAlreadyExistsError(f"Pipeline already exists: {pipeline.name}")
@@ -525,3 +609,74 @@ class ConfigStore:
             await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
             self._config = cfg2
             return _normalize_pipelines_feature_flag(cfg2.settings.core.get(PIPELINES_FEATURE_FLAG_KEY))
+
+    async def list_processing_servers(self) -> list[ProcessingServer]:
+        settings = await self.get_settings()
+        core = dict(settings.core)
+        servers_raw = core.get(PROCESSING_SERVERS_KEY)
+        servers = _normalize_processing_servers(servers_raw)
+        parsed = [ProcessingServer.model_validate(item) for item in servers]
+        if not any(s.id == "local" for s in parsed):
+            parsed.insert(0, ProcessingServer(id="local", name="Local", kind="inprocess", url=""))
+        return parsed
+
+    async def upsert_processing_server(self, server: ProcessingServer) -> ProcessingServer:
+        if server.id == "local":
+            raise ValueError("Cannot modify the reserved processing server id 'local'")
+        await self.load()
+        async with self._lock:
+            cfg = self._config or _default_config()
+            core = dict(cfg.settings.core)
+            servers = _normalize_processing_servers(core.get(PROCESSING_SERVERS_KEY))
+            parsed = [ProcessingServer.model_validate(item) for item in servers]
+
+            replaced = False
+            for i, existing in enumerate(parsed):
+                if existing.id == server.id:
+                    parsed[i] = server
+                    replaced = True
+                    break
+            if not replaced:
+                parsed.append(server)
+
+            core[PROCESSING_SERVERS_KEY] = [s.model_dump(mode="json") for s in parsed]
+            settings = AppSettings(core=core, extensions=dict(cfg.settings.extensions))
+            cfg2 = _build_config(cfg, settings=settings)
+            cfg2 = _normalize_config(cfg2)
+            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
+            self._config = cfg2
+            return server
+
+    async def delete_processing_server(self, server_id: str) -> ProcessingServer:
+        sid = str(server_id or "").strip().lower()
+        if not sid:
+            raise ValueError("processing_server_id is required")
+        if sid == "local":
+            raise ValueError("Cannot delete the reserved processing server id 'local'")
+        if not PROCESSING_SERVER_ID_RE.match(sid):
+            raise ValueError("Invalid processing_server_id")
+
+        await self.load()
+        async with self._lock:
+            cfg = self._config or _default_config()
+            core = dict(cfg.settings.core)
+            servers = _normalize_processing_servers(core.get(PROCESSING_SERVERS_KEY))
+            parsed = [ProcessingServer.model_validate(item) for item in servers]
+
+            kept: list[ProcessingServer] = []
+            removed: ProcessingServer | None = None
+            for existing in parsed:
+                if existing.id == sid and removed is None:
+                    removed = existing
+                    continue
+                kept.append(existing)
+            if removed is None:
+                raise KeyError(sid)
+
+            core[PROCESSING_SERVERS_KEY] = [s.model_dump(mode="json") for s in kept]
+            settings = AppSettings(core=core, extensions=dict(cfg.settings.extensions))
+            cfg2 = _build_config(cfg, settings=settings)
+            cfg2 = _normalize_config(cfg2)
+            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
+            self._config = cfg2
+            return removed

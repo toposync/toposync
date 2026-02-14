@@ -35,6 +35,23 @@ export type AppSettings = {
   extensions: Record<string, Record<string, unknown>>;
 };
 
+export type Pipeline = {
+  name: string;
+  type: "reuse" | "final";
+  enabled?: boolean;
+  processing_server_id?: string;
+  editor_mode?: "interactive" | "json" | "python";
+  python_source?: string;
+  graph: unknown;
+};
+
+export type ProcessingServer = {
+  id: string;
+  name: string;
+  kind: "inprocess" | "http";
+  url: string;
+};
+
 export type NotificationsPage = {
   notifications: Notification[];
   next_cursor: number | null;
@@ -149,5 +166,91 @@ export async function listNotifications(before: number | null = null, limit = 40
 export async function getNotification(notificationId: string): Promise<Notification> {
   const res = await fetch(`/api/notifications/${encodeURIComponent(notificationId)}`);
   if (!res.ok) throw new Error(`Failed to fetch notification ${notificationId}: ${res.status}`);
+  return res.json();
+}
+
+export async function getPipelinesFeatureFlag(): Promise<{ enabled: boolean }> {
+  const res = await fetch("/api/pipelines/feature-flag");
+  if (!res.ok) throw new Error(`Failed to fetch pipelines feature flag: ${res.status}`);
+  return res.json();
+}
+
+export async function setPipelinesFeatureFlag(enabled: boolean): Promise<{ enabled: boolean }> {
+  const res = await fetch("/api/pipelines/feature-flag", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw new Error(`Failed to set pipelines feature flag: ${res.status}`);
+  return res.json();
+}
+
+export async function listProcessingServers(): Promise<ProcessingServer[]> {
+  const res = await fetch("/api/processing-servers");
+  if (!res.ok) throw new Error(`Failed to list processing servers: ${res.status}`);
+  const body = (await res.json()) as { servers?: ProcessingServer[] };
+  return body.servers ?? [];
+}
+
+export async function putProcessingServer(server: ProcessingServer): Promise<ProcessingServer> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(server.id)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(server),
+  });
+  if (!res.ok) throw new Error(`Failed to save processing server ${server.id}: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteProcessingServer(serverId: string): Promise<ProcessingServer> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Failed to delete processing server ${serverId}: ${res.status}`);
+  return res.json();
+}
+
+export async function listPipelines(): Promise<Pipeline[]> {
+  const res = await fetch("/api/pipelines");
+  if (!res.ok) throw new Error(`Failed to list pipelines: ${res.status}`);
+  const body = (await res.json()) as { pipelines?: Pipeline[] };
+  return body.pipelines ?? [];
+}
+
+export async function createPipeline(pipeline: Pipeline): Promise<Pipeline> {
+  const res = await fetch("/api/pipelines", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(pipeline),
+  });
+  if (!res.ok) throw new Error(`Failed to create pipeline: ${res.status}`);
+  return res.json();
+}
+
+export async function putPipeline(name: string, pipeline: Pipeline): Promise<Pipeline> {
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(pipeline),
+  });
+  if (!res.ok) throw new Error(`Failed to save pipeline ${name}: ${res.status}`);
+  return res.json();
+}
+
+export async function deletePipeline(name: string): Promise<Pipeline> {
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Failed to delete pipeline ${name}: ${res.status}`);
+  return res.json();
+}
+
+export async function compilePipeline(pipeline: Pipeline): Promise<any> {
+  const res = await fetch("/api/pipelines/compile", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pipeline }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const detail = (body as any)?.detail ? String((body as any).detail) : String(res.status);
+    throw new Error(detail);
+  }
   return res.json();
 }

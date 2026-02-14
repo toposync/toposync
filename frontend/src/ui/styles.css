@@ -141,6 +141,253 @@ textarea {
   background: rgba(239, 68, 68, 0.12);
 }
 
+/* Pipelines editor */
+.pipelinesRoot {
+  display: flex;
+  flex-direction: column;
+  background: radial-gradient(1200px 900px at 30% 10%, rgba(251, 191, 36, 0.06), transparent 55%),
+    radial-gradient(1200px 900px at 70% 40%, rgba(56, 189, 248, 0.06), transparent 55%),
+    var(--bg);
+}
+
+.pipelinesTopbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(12, 18, 37, 0.55);
+  backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+}
+
+.pipelinesTitle {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.pipelinesTopbarRight {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pipelinesFlag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.pipelinesBody {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  min-height: 0;
+}
+
+.pipelinesSidebar {
+  border-right: 1px solid var(--border);
+  background: rgba(12, 18, 37, 0.45);
+  backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pipelinesSidebarHeader {
+  padding: 12px 12px 8px;
+}
+
+.pipelinesSidebarTitle {
+  font-weight: 700;
+}
+
+.pipelinesCreate {
+  padding: 8px 12px 10px;
+  display: grid;
+  grid-template-columns: 1fr 92px auto;
+  gap: 8px;
+}
+
+.pipelinesInput,
+.pipelinesSelect {
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(15, 23, 48, 0.85);
+  color: var(--text);
+}
+
+.pipelinesList {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px;
+}
+
+.pipelinesListItem {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 10px 10px;
+  background: transparent;
+  color: var(--text);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.pipelinesListItem:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.pipelinesListItem.isActive {
+  background: rgba(251, 191, 36, 0.10);
+  border-color: rgba(251, 191, 36, 0.28);
+}
+
+.pipelinesListItemName {
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pipelinesListItemMeta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pipelinesSidebarFooter {
+  border-top: 1px solid var(--border);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.pipelinesServers {
+  display: grid;
+  gap: 8px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.pipelinesServerRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(15, 23, 48, 0.70);
+}
+
+.pipelinesServerMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.pipelinesServerId {
+  font-weight: 650;
+}
+
+.pipelinesServerMeta {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipelinesEditor {
+  padding: 14px;
+  overflow: auto;
+}
+
+.pipelinesEditorInner {
+  display: grid;
+  gap: 12px;
+}
+
+.pipelinesEditorHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pipelinesEditorTitle {
+  font-weight: 800;
+  font-size: 18px;
+}
+
+.pipelinesEditorActions {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+}
+
+.pipelinesEditorGrid {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 12px;
+  min-height: 0;
+}
+
+.pipelinesForm {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 12px;
+  background: rgba(12, 18, 37, 0.55);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.pipelinesLabel {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.pipelinesModes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pipelinesEditorPanel {
+  min-height: 360px;
+}
+
+.pipelinesTextarea {
+  width: 100%;
+  height: 520px;
+  resize: vertical;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: rgba(12, 18, 37, 0.55);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  box-shadow: var(--shadow);
+}
+
+.pipelinesPre {
+  margin: 0;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
 .main2dHaButton i {
   font-size: 16px;
 }

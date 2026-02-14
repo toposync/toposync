@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .execution import PassThroughRuntime, SinkRuntime, SourceOperatorRuntime, TransformOperatorRuntime
 from .operator_registry import OperatorRegistry
 from .runtime import Lifecycle, Packet
+from .operators_distributed import register_distributed_operators
 from .operators_sinks import register_sink_operators
 
 
@@ -76,6 +77,76 @@ class SyntheticSourceRuntime(SourceOperatorRuntime):
         )
         self._sequence += 1
         return packet
+
+
+class DemoFrameSequenceSourceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    stream_id: str = "camera:demo"
+    camera_id: str = "camera-main"
+    camera_name: str = "Demo Camera"
+    tracking_id: str = "trk-demo-1"
+    object_category_label: str = "person"
+    object_confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    frames: int = Field(default=5, ge=1, le=1000)
+    interval_seconds: float = Field(default=0.05, ge=0.0, le=10.0)
+    width: int = Field(default=64, ge=8, le=4096)
+    height: int = Field(default=64, ge=8, le=4096)
+
+    @field_validator("stream_id", "camera_id", "camera_name", "tracking_id", "object_category_label")
+    @classmethod
+    def _trim(cls, value: str) -> str:
+        return str(value or "").strip()
+
+
+class DemoFrameSequenceSourceRuntime(SourceOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        parsed = DemoFrameSequenceSourceConfig.model_validate(config)
+        self._stream_id = parsed.stream_id or "camera:demo"
+        self._camera_id = parsed.camera_id or "camera-main"
+        self._camera_name = parsed.camera_name or "Demo Camera"
+        self._tracking_id = parsed.tracking_id or "trk-demo-1"
+        self._category = parsed.object_category_label or "person"
+        self._confidence = float(parsed.object_confidence)
+        self._frames = int(parsed.frames)
+        self._interval_s = float(parsed.interval_seconds)
+        self._width = int(parsed.width)
+        self._height = int(parsed.height)
+        self._index = 0
+        self._next_tick = time.monotonic()
+
+    async def produce(self, context) -> Packet | None:  # noqa: ANN001
+        if self._index >= self._frames:
+            return None
+        now = time.monotonic()
+        if now < self._next_tick:
+            await context.sleep(self._next_tick - now)
+        self._next_tick = max(self._next_tick + self._interval_s, time.monotonic())
+
+        lifecycle = Lifecycle.UPDATE
+        if self._index == 0:
+            lifecycle = Lifecycle.OPEN
+        elif self._index == (self._frames - 1):
+            lifecycle = Lifecycle.CLOSE
+
+        try:
+            import numpy as np  # type: ignore
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("core.demo_frame_sequence_source requires numpy") from exc
+
+        value = 180 + (self._index % 3) * 15
+        frame = np.full((self._height, self._width, 3), value, dtype=np.uint8)
+        payload = {
+            "frame": frame,
+            "frame_ts": time.time(),
+            "camera_id": self._camera_id,
+            "camera_name": self._camera_name,
+            "tracking_id": self._tracking_id,
+            "object_category_label": self._category,
+            "object_confidence": self._confidence,
+            "area_label": "demo",
+        }
+        self._index += 1
+        return Packet.create(stream_id=self._stream_id, lifecycle=lifecycle, payload=payload)
 
 
 class FPSReducerRuntime(TransformOperatorRuntime):
@@ -158,6 +229,18 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         runtime_factory=lambda config, _deps: SyntheticSourceRuntime(config),
     )
     registry.register_operator(
+        operator_id="core.demo_frame_sequence_source",
+        description="Demo source that emits OPEN/UPDATE/CLOSE packets with a synthetic frame payload.",
+        config_model=DemoFrameSequenceSourceConfig,
+        inputs=[],
+        outputs=[{"name": "out"}],
+        capabilities=["source", "demo", "frame"],
+        defaults=DemoFrameSequenceSourceConfig().model_dump(),
+        share_strategy="never",
+        owner="core",
+        runtime_factory=lambda config, _deps: DemoFrameSequenceSourceRuntime(config),
+    )
+    registry.register_operator(
         operator_id="core.fps_reducer",
         description="Reduces packet rate to target FPS while preserving open/close lifecycle packets.",
         config_model=FPSReducerConfig,
@@ -218,6 +301,7 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         runtime_factory=lambda _config, _deps: SinkRuntime(),
     )
     register_sink_operators(registry)
+    register_distributed_operators(registry)
 
 
 def _resolve_key(packet: Packet, key_field: str) -> str:

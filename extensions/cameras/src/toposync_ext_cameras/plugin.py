@@ -226,20 +226,32 @@ class CamerasExtension(BaseExtension):
 
         config_store = getattr(app.state, "config_store", None)
         if isinstance(config_store, ConfigStore):
-            runtime = CamerasProcessingRuntime(
-                config_store=config_store,
-                extension_id=EXTENSION_ID,
-                data_dir=config_store.paths.data_dir,
-                files_dir=config_store.paths.files_dir,
-                services=services,
-            )
-            runtime.start()
+            start_legacy_runtime = True
+            if str(os.getenv("TOPOSYNC_ROLE") or "").strip().lower() == "processing":
+                start_legacy_runtime = False
+            else:
+                try:
+                    start_legacy_runtime = not bool(await config_store.get_pipelines_feature_flag())
+                except Exception:
+                    start_legacy_runtime = True
 
-            async def _stop_runtime() -> None:
-                await runtime.stop()
+            if start_legacy_runtime:
+                runtime = CamerasProcessingRuntime(
+                    config_store=config_store,
+                    extension_id=EXTENSION_ID,
+                    data_dir=config_store.paths.data_dir,
+                    files_dir=config_store.paths.files_dir,
+                    services=services,
+                )
+                runtime.start()
 
-            app.add_event_handler("shutdown", _stop_runtime)
-            app.state.cameras_processing = runtime
+                async def _stop_runtime() -> None:
+                    await runtime.stop()
+
+                app.add_event_handler("shutdown", _stop_runtime)
+                app.state.cameras_processing = runtime
+            else:
+                runtime = None
         else:
             runtime = None
 

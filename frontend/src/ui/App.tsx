@@ -41,6 +41,7 @@ import { SettingsModal } from "./SettingsModal";
 import { Viewport2D } from "./Viewport2D";
 import { CompositionEditorScreen } from "./screens/CompositionEditorScreen";
 import { MainScreen } from "./screens/MainScreen";
+import { PipelinesScreen } from "./screens/PipelinesScreen";
 
 type ExtensionRecord = {
   id: string;
@@ -54,7 +55,7 @@ type ExtensionRecord = {
   };
 };
 
-type Screen = "main" | "editor";
+type Screen = "main" | "editor" | "pipelines";
 
 type Composition = {
   id: string;
@@ -950,46 +951,47 @@ export function App(): React.ReactElement {
 
   return (
     <div className="appShell">
-	      {screen === "main" ? (
-	        <MainScreen
-	          compositionName={composition.name}
-	          compositions={compositions}
-	          activeCompositionId={activeCompositionId}
-	          elements={composition.elements}
-	          elementTypesById={elementTypesById}
-	          viewSettings={viewSettings}
-	          notificationRenderers={notificationRenderers}
-	          notifications={notifications}
-	          activeNotificationId={activeNotificationId}
-	          notificationsLoading={notificationsLoading}
-	          onSelectNotification={selectNotification}
+      {screen === "main" ? (
+        <MainScreen
+          compositionName={composition.name}
+          compositions={compositions}
+          activeCompositionId={activeCompositionId}
+          elements={composition.elements}
+          elementTypesById={elementTypesById}
+          viewSettings={viewSettings}
+          notificationRenderers={notificationRenderers}
+          notifications={notifications}
+          activeNotificationId={activeNotificationId}
+          notificationsLoading={notificationsLoading}
+          onSelectNotification={selectNotification}
           onLoadMoreNotifications={loadMoreNotifications}
           api={host.api}
           updateElement={updateElement}
           onEditComposition={() => setScreen("editor")}
+          onOpenPipelines={() => setScreen("pipelines")}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onActivateComposition={activateCompositionById}
           onCreateComposition={createNewComposition}
           onRenameComposition={renameExistingComposition}
           onDeleteComposition={deleteExistingComposition}
         />
-      ) : (
-	        <CompositionEditorScreen
-	          compositionName={composition.name}
-	          compositions={compositions}
-	          activeCompositionId={activeCompositionId}
-	          elements={composition.elements}
-	          elementTypesById={elementTypesById}
-	          api={host.api}
-	          fileDropHandlers={fileDropHandlers}
-	          createElement={createElement}
-	          editorTools={Object.values(editorToolsById)}
-	          updateElement={updateElement}
-	          reorderElements={reorderElements}
-	          removeElement={removeElement}
-	          onBeginUndoGroup={beginUndoGroup}
-	          onEndUndoGroup={endUndoGroup}
-	          onUndo={undo}
+      ) : screen === "editor" ? (
+        <CompositionEditorScreen
+          compositionName={composition.name}
+          compositions={compositions}
+          activeCompositionId={activeCompositionId}
+          elements={composition.elements}
+          elementTypesById={elementTypesById}
+          api={host.api}
+          fileDropHandlers={fileDropHandlers}
+          createElement={createElement}
+          editorTools={Object.values(editorToolsById)}
+          updateElement={updateElement}
+          reorderElements={reorderElements}
+          removeElement={removeElement}
+          onBeginUndoGroup={beginUndoGroup}
+          onEndUndoGroup={endUndoGroup}
+          onUndo={undo}
           onRedo={redo}
           onExit={() => setScreen("main")}
           onOpenSettings={() => setIsSettingsOpen(true)}
@@ -998,6 +1000,8 @@ export function App(): React.ReactElement {
           onRenameComposition={renameExistingComposition}
           onDeleteComposition={deleteExistingComposition}
         />
+      ) : (
+        <PipelinesScreen onClose={() => setScreen("main")} />
       )}
 
       <SettingsModal

@@ -28,6 +28,7 @@ from toposync.runtime.config_store import (
     Pipeline,
     PipelineAlreadyExistsError,
     PipelineValidationError,
+    ProcessingServer,
     UserDataPaths,
 )
 from toposync.runtime.notifications import NotificationsRuntime
@@ -38,6 +39,11 @@ from toposync.runtime.pipelines import (
     OperatorRegistry,
     PipelineGraphCompiler,
     register_builtin_operators,
+)
+from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
+from toposync.runtime.pipelines.migration_legacy_cameras import (
+    build_pipeline_from_legacy_camera_rule,
+    extract_legacy_camera_rules,
 )
 
 logger = logging.getLogger("toposync")
@@ -110,6 +116,10 @@ class PipelinesListResponse(BaseModel):
     pipelines: list[Pipeline]
 
 
+class ProcessingServersListResponse(BaseModel):
+    servers: list[ProcessingServer]
+
+
 class OperatorsListResponse(BaseModel):
     operators: list[OperatorDefinition]
 
@@ -121,6 +131,20 @@ class PipelineCompileRequest(BaseModel):
 class PipelineCompileResponse(BaseModel):
     pipeline: dict[str, Any]
     shared_signatures: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+
+
+class LegacyCamerasMigrationRequest(BaseModel):
+    dry_run: bool = True
+
+
+class LegacyCamerasMigrationResponse(BaseModel):
+    dry_run: bool
+    created: list[str] = Field(default_factory=list)
+    skipped: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PipelineRuntimeStatusResponse(BaseModel):
+    status: dict[str, Any] = Field(default_factory=dict)
 
 
 def _guess_media_type(path: str) -> str:
@@ -219,6 +243,17 @@ async def _lifespan(app: FastAPI):
     await ext_manager.load(app=app, bus=bus, services=services)
     app.state.extensions = ext_manager
 
+    orchestrator = PipelinesOrchestrator(
+        config_store=config_store,
+        operator_registry=operator_registry,
+        compiler=pipeline_compiler,
+        notifications=notifications,
+        files_dir=config_store.paths.files_dir,
+        poll_interval_s=1.0,
+    )
+    orchestrator.start()
+    app.state.pipelines_orchestrator = orchestrator
+
     # Serve the built frontend *after* extensions register their API routes.
     #
     # Extensions register routes during startup (lifespan). If we mount StaticFiles on "/"
@@ -229,7 +264,13 @@ async def _lifespan(app: FastAPI):
     if frontend_dir:
         app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 
-    yield
+    try:
+        yield
+    finally:
+        try:
+            await orchestrator.stop()
+        except Exception:
+            pass
 
 
 def create_app() -> FastAPI:
@@ -287,7 +328,75 @@ def create_app() -> FastAPI:
     ) -> PipelineFeatureFlagResponse:
         config_store: ConfigStore = request.app.state.config_store
         enabled = await config_store.set_pipelines_feature_flag(enabled=body.enabled)
+        orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+        if orchestrator is not None:
+            try:
+                orchestrator.trigger_reload()
+            except Exception:
+                pass
         return PipelineFeatureFlagResponse(enabled=enabled)
+
+    @app.get("/api/pipelines/runtime/status", response_model=PipelineRuntimeStatusResponse)
+    async def pipelines_runtime_status(request: Request) -> PipelineRuntimeStatusResponse:
+        orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+        if orchestrator is None:
+            return PipelineRuntimeStatusResponse(status={"running": False})
+        try:
+            status = orchestrator.status()
+        except Exception as exc:  # noqa: BLE001
+            status = {"running": False, "error": str(exc)}
+        return PipelineRuntimeStatusResponse(status=status)
+
+    @app.post("/api/pipelines/runtime/reload", response_model=PipelineRuntimeStatusResponse)
+    async def pipelines_runtime_reload(request: Request) -> PipelineRuntimeStatusResponse:
+        orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+        if orchestrator is None:
+            return PipelineRuntimeStatusResponse(status={"running": False})
+        try:
+            orchestrator.trigger_reload()
+        except Exception as exc:  # noqa: BLE001
+            return PipelineRuntimeStatusResponse(status={"running": False, "error": str(exc)})
+        return PipelineRuntimeStatusResponse(status=orchestrator.status())
+
+    @app.get("/api/processing-servers", response_model=ProcessingServersListResponse)
+    async def list_processing_servers(request: Request) -> ProcessingServersListResponse:
+        config_store: ConfigStore = request.app.state.config_store
+        servers = await config_store.list_processing_servers()
+        return ProcessingServersListResponse(servers=servers)
+
+    @app.put("/api/processing-servers/{server_id}", response_model=ProcessingServer)
+    async def put_processing_server(request: Request, server_id: str, body: ProcessingServer) -> ProcessingServer:
+        if body.id != server_id:
+            raise HTTPException(status_code=400, detail="server_id mismatch")
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            saved = await config_store.upsert_processing_server(body)
+            orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+            if orchestrator is not None:
+                try:
+                    orchestrator.trigger_reload()
+                except Exception:
+                    pass
+            return saved
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/processing-servers/{server_id}", response_model=ProcessingServer)
+    async def delete_processing_server(request: Request, server_id: str) -> ProcessingServer:
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            removed = await config_store.delete_processing_server(server_id)
+            orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+            if orchestrator is not None:
+                try:
+                    orchestrator.trigger_reload()
+                except Exception:
+                    pass
+            return removed
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown processing server") from exc
 
     @app.get("/api/pipelines", response_model=PipelinesListResponse)
     async def list_pipelines(request: Request) -> PipelinesListResponse:
@@ -356,7 +465,14 @@ def create_app() -> FastAPI:
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         try:
             compiler.compile_pipeline(body)
-            return await config_store.create_pipeline(body)
+            saved = await config_store.create_pipeline(body)
+            orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+            if orchestrator is not None:
+                try:
+                    orchestrator.trigger_reload()
+                except Exception:
+                    pass
+            return saved
         except GraphCompileError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PipelineAlreadyExistsError as exc:
@@ -379,7 +495,14 @@ def create_app() -> FastAPI:
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         try:
             compiler.compile_pipeline(body)
-            return await config_store.replace_pipeline(pipeline_name, body)
+            saved = await config_store.replace_pipeline(pipeline_name, body)
+            orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+            if orchestrator is not None:
+                try:
+                    orchestrator.trigger_reload()
+                except Exception:
+                    pass
+            return saved
         except GraphCompileError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PipelineValidationError as exc:
@@ -393,11 +516,66 @@ def create_app() -> FastAPI:
     async def delete_pipeline(request: Request, pipeline_name: str) -> Pipeline:
         config_store: ConfigStore = request.app.state.config_store
         try:
-            return await config_store.delete_pipeline(pipeline_name)
+            removed = await config_store.delete_pipeline(pipeline_name)
+            orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+            if orchestrator is not None:
+                try:
+                    orchestrator.trigger_reload()
+                except Exception:
+                    pass
+            return removed
         except PipelineValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Unknown pipeline") from exc
+
+    @app.post("/api/pipelines/migrate-legacy/cameras", response_model=LegacyCamerasMigrationResponse)
+    async def migrate_legacy_cameras(request: Request, body: LegacyCamerasMigrationRequest) -> LegacyCamerasMigrationResponse:
+        config_store: ConfigStore = request.app.state.config_store
+        compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
+
+        settings = await config_store.get_settings()
+        rules = extract_legacy_camera_rules(settings.model_dump(mode="json"))
+        existing = {p.name for p in await config_store.list_pipelines()}
+
+        created: list[str] = []
+        skipped: list[dict[str, Any]] = []
+        for rule in rules:
+            pipeline = build_pipeline_from_legacy_camera_rule(rule, existing_names=existing)
+            if pipeline is None:
+                skipped.append(
+                    {
+                        "camera_id": rule.camera_id,
+                        "rule_id": rule.rule_id,
+                        "trigger_kind": rule.trigger_kind,
+                        "reason": "unsupported_trigger",
+                    },
+                )
+                continue
+            try:
+                compiler.compile_pipeline(pipeline)
+            except GraphCompileError as exc:
+                skipped.append(
+                    {
+                        "camera_id": rule.camera_id,
+                        "rule_id": rule.rule_id,
+                        "trigger_kind": rule.trigger_kind,
+                        "reason": f"compile_error: {exc}",
+                        "pipeline_name": pipeline.name,
+                    },
+                )
+                continue
+
+            created.append(pipeline.name)
+            if body.dry_run:
+                continue
+            try:
+                await config_store.create_pipeline(pipeline)
+            except PipelineAlreadyExistsError:
+                # Name collisions should be rare due to suffixing, but keep it safe.
+                await config_store.replace_pipeline(pipeline.name, pipeline)
+
+        return LegacyCamerasMigrationResponse(dry_run=bool(body.dry_run), created=created, skipped=skipped)
 
     @app.get("/api/composition", response_model=Composition)
     async def get_composition(request: Request) -> Composition:

@@ -7,7 +7,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Awaitable, Callable, Protocol
 
 from .compiler import CompiledPipeline
 from .operator_registry import OperatorRegistry
@@ -30,6 +30,8 @@ class PipelineRuntimeDependencies:
     yolo_backend_factory: Callable[[Any], Any] | None = None
     files_dir: Path | None = None
     notifications_upsert: Callable[..., Any] | None = None
+    origin_inbox: BoundedChannel[dict[str, Any]] | None = None
+    processing_emit_projected_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None
 
 
 @dataclass(slots=True)

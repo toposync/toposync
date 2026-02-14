@@ -367,6 +367,13 @@ textarea {
   min-height: 360px;
 }
 
+.pipelinesMonacoWrap {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
 .pipelinesTextarea {
   width: 100%;
   height: 520px;
@@ -386,6 +393,153 @@ textarea {
   margin: 0;
   white-space: pre-wrap;
   user-select: text;
+}
+
+.pipelinesHint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pipelinesInteractiveRoot {
+  display: grid;
+  gap: 12px;
+}
+
+.pipelinesInteractiveToolbar {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 12px;
+  background: rgba(12, 18, 37, 0.55);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 10px;
+}
+
+.pipelinesInteractiveLabel {
+  font-weight: 650;
+}
+
+.pipelinesPresetButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pipelinesInlineAddRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.pipelinesStepsList {
+  display: grid;
+  gap: 10px;
+}
+
+.pipelinesStepCard {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(12, 18, 37, 0.55);
+  box-shadow: var(--shadow);
+}
+
+.pipelinesStepCard.isDragSource {
+  opacity: 0.6;
+}
+
+.pipelinesStepCard.isDropBefore {
+  border-top: 2px solid rgba(251, 191, 36, 0.85);
+}
+
+.pipelinesStepCard.isDropAfter {
+  border-bottom: 2px solid rgba(251, 191, 36, 0.85);
+}
+
+.pipelinesStepHeader {
+  display: grid;
+  grid-template-columns: auto auto 180px 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+}
+
+.pipelinesStepIndex {
+  min-width: 22px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pipelinesStepNodeId {
+  min-width: 0;
+}
+
+.pipelinesStepOperator {
+  min-width: 0;
+}
+
+.pipelinesStepBody {
+  border-top: 1px solid var(--border);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.pipelinesStepDescription {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.pipelinesStepCapabilities {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pipelinesScalarGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.pipelinesScalarLabel {
+  gap: 4px;
+}
+
+.pipelinesStepConfigTextarea {
+  min-height: 180px;
+  resize: vertical;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(15, 23, 48, 0.80);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.pipelinesInlineError {
+  color: #ef4444;
+  font-size: 12px;
+}
+
+@media (max-width: 1100px) {
+  .pipelinesEditorGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .pipelinesStepHeader {
+    grid-template-columns: auto auto 1fr auto auto;
+  }
+
+  .pipelinesStepNodeId {
+    grid-column: 1 / -1;
+  }
+
+  .pipelinesStepOperator {
+    grid-column: 1 / -1;
+  }
 }
 
 .main2dHaButton i {

@@ -52,6 +52,23 @@ export type ProcessingServer = {
   url: string;
 };
 
+export type PipelineOperatorPort = {
+  name: string;
+  required: boolean;
+  description: string;
+};
+
+export type PipelineOperatorDefinition = {
+  id: string;
+  description: string;
+  inputs: PipelineOperatorPort[];
+  outputs: PipelineOperatorPort[];
+  capabilities: string[];
+  defaults: Record<string, unknown>;
+  config_schema: Record<string, unknown>;
+  share_strategy: "by_signature" | "never";
+};
+
 export type NotificationsPage = {
   notifications: Notification[];
   next_cursor: number | null;
@@ -253,4 +270,11 @@ export async function compilePipeline(pipeline: Pipeline): Promise<any> {
     throw new Error(detail);
   }
   return res.json();
+}
+
+export async function listPipelineOperators(): Promise<PipelineOperatorDefinition[]> {
+  const res = await fetch("/api/pipelines/operators");
+  if (!res.ok) throw new Error(`Failed to list pipeline operators: ${res.status}`);
+  const body = (await res.json()) as { operators?: PipelineOperatorDefinition[] };
+  return body.operators ?? [];
 }

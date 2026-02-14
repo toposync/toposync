@@ -11,7 +11,6 @@ export async function fetchCamerasIndex(): Promise<CamerasIndex> {
   const data = await response.json();
   const record = readRecord(data);
   return {
-    processing_servers: Array.isArray(record.processing_servers) ? (record.processing_servers as any[]).filter(Boolean) : [],
     cameras: Array.isArray(record.cameras) ? (record.cameras as any[]).filter(Boolean) : [],
   };
 }

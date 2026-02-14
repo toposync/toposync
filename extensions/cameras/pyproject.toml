@@ -1,10 +1,10 @@
 [project]
 name = "toposync-ext-cameras"
 version = "0.1.0"
-description = "Toposync first-party extension: Cameras (RTSP) and processing servers (scaffold)."
+description = "Toposync first-party extension: RTSP cameras and camera/vision pipeline operators."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["toposync>=0.1.0", "numpy>=1.26", "opencv-python-headless>=4.10", "httpx>=0.27"]
+dependencies = ["toposync>=0.1.0", "numpy>=1.26", "opencv-python-headless>=4.10"]
 
 [project.optional-dependencies]
 # Heavy dependencies for object detection/tracking (YOLO). Install only when needed.

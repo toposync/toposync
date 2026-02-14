@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import os
 import re
 import shutil
@@ -11,10 +10,8 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
-from starlette.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from toposync.extensions import BaseExtension
@@ -25,7 +22,6 @@ from toposync.runtime.services import ServiceRegistry
 
 from .pipelines import register_camera_pipeline_operators
 from .processing.mapping import ControlPointMapper, ControlPointPair
-from .processing.runtime import CamerasProcessingRuntime
 
 
 EXTENSION_ID = "com.toposync.cameras"
@@ -224,46 +220,11 @@ class CamerasExtension(BaseExtension):
             ext = settings.extensions.get(EXTENSION_ID, {})
             return ext if isinstance(ext, dict) else {}
 
-        config_store = getattr(app.state, "config_store", None)
-        if isinstance(config_store, ConfigStore):
-            start_legacy_runtime = True
-            if str(os.getenv("TOPOSYNC_ROLE") or "").strip().lower() == "processing":
-                start_legacy_runtime = False
-            else:
-                try:
-                    start_legacy_runtime = not bool(await config_store.get_pipelines_feature_flag())
-                except Exception:
-                    start_legacy_runtime = True
-
-            if start_legacy_runtime:
-                runtime = CamerasProcessingRuntime(
-                    config_store=config_store,
-                    extension_id=EXTENSION_ID,
-                    data_dir=config_store.paths.data_dir,
-                    files_dir=config_store.paths.files_dir,
-                    services=services,
-                )
-                runtime.start()
-
-                async def _stop_runtime() -> None:
-                    await runtime.stop()
-
-                app.add_event_handler("shutdown", _stop_runtime)
-                app.state.cameras_processing = runtime
-            else:
-                runtime = None
-        else:
-            runtime = None
-
         snapshot_cache: dict[str, SnapshotCacheEntry] = {}
         snapshot_locks: dict[str, asyncio.Lock] = {}
         snapshot_cache_ttl_s = float(os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_TTL_S", "0.8") or "0.8")
-        snapshot_max_frame_age_s = float(os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_MAX_FRAME_AGE_S", "5.0") or "5.0")
         snapshot_ffmpeg_concurrency = int(os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_FFMPEG_CONCURRENCY", "2") or "2")
         snapshot_ffmpeg_sema = asyncio.Semaphore(max(1, snapshot_ffmpeg_concurrency))
-        remote_snapshot_timeout_s = float(os.getenv("TOPOSYNC_CAMERA_REMOTE_SNAPSHOT_TIMEOUT_S", "5.0") or "5.0")
-        remote_http = httpx.AsyncClient(timeout=remote_snapshot_timeout_s)
-        app.add_event_handler("shutdown", remote_http.aclose)
 
         def _get_lock(key: str) -> asyncio.Lock:
             lock = snapshot_locks.get(key)
@@ -272,64 +233,10 @@ class CamerasExtension(BaseExtension):
                 snapshot_locks[key] = lock
             return lock
 
-        async def _encode_jpeg(frame: Any) -> bytes | None:
-            def _work() -> bytes | None:
-                try:
-                    import cv2  # type: ignore
-                except Exception:
-                    return None
-                try:
-                    ok, buf = cv2.imencode(".jpg", frame)
-                except Exception:
-                    return None
-                if not ok or buf is None:
-                    return None
-                try:
-                    return buf.tobytes()
-                except Exception:
-                    return None
-
-            return await asyncio.to_thread(_work)
-
-        async def _fetch_remote_snapshot(server_url: str, camera_id: str) -> bytes | None:
-            base = str(server_url or "").strip().rstrip("/")
-            if not base:
-                return None
-            cid = str(camera_id or "").strip()
-            if not cid:
-                return None
-            url = f"{base}/api/processor/cameras/{urllib.parse.quote(cid)}/snapshot"
-            try:
-                res = await remote_http.get(url)
-            except Exception:
-                return None
-            if res.status_code != 200:
-                return None
-            content = res.content
-            return content if content else None
-
         @app.get("/api/cameras/index")
         async def cameras_index(request: Request) -> dict[str, Any]:
             ext = await _read_ext_settings(request)
-
-            raw_servers = ext.get("processing_servers", [])
             raw_cameras = ext.get("cameras", [])
-
-            servers: list[dict[str, Any]] = []
-            if isinstance(raw_servers, list):
-                for s in raw_servers:
-                    if not isinstance(s, dict):
-                        continue
-                    sid = str(s.get("id", "")).strip()
-                    if not sid:
-                        continue
-                    servers.append(
-                        {
-                            "id": sid,
-                            "name": str(s.get("name", "")).strip(),
-                            "url": str(s.get("url", "")).strip(),
-                        }
-                    )
 
             cameras: list[dict[str, Any]] = []
             if isinstance(raw_cameras, list):
@@ -344,54 +251,10 @@ class CamerasExtension(BaseExtension):
                             "id": cid,
                             "name": str(c.get("name", "")).strip(),
                             "connection_type": str(c.get("connection_type", "rtsp")).strip() or "rtsp",
-                            "processing_server_id": str(c.get("processing_server_id", "")).strip(),
                         }
                     )
 
-            return {"processing_servers": servers, "cameras": cameras}
-
-        @app.get("/api/cameras/detections/recent")
-        async def recent_detections(
-            request: Request,
-            camera_id: str | None = None,
-            composition_id: str | None = None,
-            tracking_id: str | None = None,
-            limit: int = 200,
-        ) -> dict[str, Any]:
-            if runtime is None:
-                return {"events": []}
-            cam = (camera_id or "").strip() or None
-            comp = (composition_id or "").strip() or None
-            track = (tracking_id or "").strip() or None
-            return {"events": runtime.db.list_events(camera_id=cam, composition_id=comp, tracking_id=track, limit=limit)}
-
-        @app.get("/api/cameras/processing/status")
-        async def processing_status() -> dict[str, Any]:
-            if runtime is None:
-                return {"local_workers": [], "remote_servers": []}
-            return runtime.status()
-
-        @app.get("/api/cameras/detections/stream")
-        async def detections_stream(request: Request) -> StreamingResponse:
-            if runtime is None:
-                async def empty_stream():
-                    yield "event: ready\ndata: {}\n\n"
-                return StreamingResponse(empty_stream(), media_type="text/event-stream")
-
-            q = runtime.broadcaster.subscribe()
-
-            async def gen():
-                try:
-                    yield "retry: 1000\n\n"
-                    while True:
-                        event = await q.get()
-                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                except asyncio.CancelledError:
-                    raise
-                finally:
-                    runtime.broadcaster.unsubscribe(q)
-
-            return StreamingResponse(gen(), media_type="text/event-stream")
+            return {"cameras": cameras}
 
         @app.post("/api/cameras/control_points/map")
         async def map_control_points(body: ControlPointMapRequest) -> dict[str, Any]:
@@ -502,52 +365,6 @@ class CamerasExtension(BaseExtension):
                 cached = snapshot_cache.get(cache_key)
                 if cached and (now - cached.created_ts) <= snapshot_cache_ttl_s:
                     return Response(content=cached.blob, media_type="image/jpeg", headers=cached.headers)
-
-                if runtime is not None:
-                    frame, frame_ts = runtime.get_latest_frame(cid)
-                    if frame is not None and frame_ts:
-                        age_s = max(0.0, now - float(frame_ts))
-                        if age_s <= snapshot_max_frame_age_s:
-                            blob = await _encode_jpeg(frame)
-                            if blob:
-                                headers = {
-                                    "Cache-Control": "no-store",
-                                    "X-Toposync-Snapshot-Source": "local_grabber",
-                                    "X-Toposync-Snapshot-Frame-Age-Ms": str(int(age_s * 1000)),
-                                }
-                                snapshot_cache[cache_key] = SnapshotCacheEntry(
-                                    blob=blob,
-                                    created_ts=time.time(),
-                                    frame_ts=float(frame_ts),
-                                    headers=headers,
-                                )
-                                return Response(content=blob, media_type="image/jpeg", headers=headers)
-
-                processing_server_id = str(camera.get("processing_server_id", "")).strip()
-                if processing_server_id:
-                    servers_raw = ext.get("processing_servers", [])
-                    server_url = ""
-                    if isinstance(servers_raw, list):
-                        for s in servers_raw:
-                            if not isinstance(s, dict):
-                                continue
-                            if str(s.get("id", "")).strip() == processing_server_id:
-                                server_url = str(s.get("url", "")).strip()
-                                break
-
-                    remote_blob = await _fetch_remote_snapshot(server_url, cid)
-                    if remote_blob:
-                        headers = {
-                            "Cache-Control": "no-store",
-                            "X-Toposync-Snapshot-Source": f"remote[{processing_server_id}]",
-                        }
-                        snapshot_cache[cache_key] = SnapshotCacheEntry(
-                            blob=remote_blob,
-                            created_ts=time.time(),
-                            frame_ts=time.time(),
-                            headers=headers,
-                        )
-                        return Response(content=remote_blob, media_type="image/jpeg", headers=headers)
 
                 url_raw = str(camera.get("rtsp_url", "")).strip()
                 username = str(camera.get("username", "")).strip()

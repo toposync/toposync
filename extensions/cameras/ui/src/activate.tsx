@@ -1,7 +1,6 @@
 import type { TopoSyncHost } from "@toposync/plugin-api";
 
 import { createCameraElementType } from "./elements/CameraElementType";
-import { createCameraTrackingNotificationRenderer } from "./notifications/CameraTrackingNotificationRenderer";
 import { createCamerasSettingsPanel } from "./settings/CamerasSettingsPanel";
 import { createAddCameraTool } from "./tools/addCameraTool";
 import { camerasNeonBlueTheme } from "./theme";
@@ -12,6 +11,5 @@ export function activate(host: TopoSyncHost): void {
   host.registerTheme(camerasNeonBlueTheme);
   host.registerSettingsPanel(createCamerasSettingsPanel());
   host.registerElementType(createCameraElementType(host));
-  host.registerNotificationRenderer(createCameraTrackingNotificationRenderer(host));
   host.registerEditorTool(createAddCameraTool(host.i18n));
 }

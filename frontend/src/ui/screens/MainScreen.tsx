@@ -43,15 +43,6 @@ type Props = {
   onDeleteComposition: (compositionId: string) => Promise<void>;
 };
 
-function asRecord(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
-  return {};
-}
-
-function asString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
 function formatDateTimeShort(locale: string, iso: string | undefined): string | null {
   if (!iso) return null;
   const d = new Date(iso);
@@ -61,19 +52,6 @@ function formatDateTimeShort(locale: string, iso: string | undefined): string | 
   } catch {
     return d.toLocaleString();
   }
-}
-
-function formatCameraTrackingTitle(
-  t: (key: string, params?: Record<string, unknown>, fallback?: string) => string,
-  notification: Notification,
-): string | null {
-  if (notification.type !== "cameras.tracking") return null;
-  const payload = asRecord(notification.payload);
-  const rawLabel = asString(payload.label).trim();
-  if (!rawLabel) return null;
-  const key = `ext.cameras.yolo.${rawLabel.toLowerCase().replace(/\\s+/g, "_")}`;
-  const label = t(key, {}, rawLabel);
-  return t("ext.cameras.notification.object_detected", { label }, `Object detected: ${label}`);
 }
 
 const NOTIFICATIONS_OPEN_STORAGE_KEY = "toposync.notifications_open.v1";
@@ -306,7 +284,7 @@ export function MainScreen({
               {notifications.map((n) => {
                 const renderer = notificationRenderers.find((r) => r.type === n.type);
                 const time = formatDateTimeShort(locale, n.updatedAt ?? n.createdAt);
-                const title = formatCameraTrackingTitle(t, n) ?? n.title;
+                const title = n.title;
                 const isActive = Boolean(activeNotificationId && n.id === activeNotificationId);
                 return (
                   <button

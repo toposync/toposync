@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from toposync.runtime.config_store import ConfigStore
 
@@ -249,11 +249,19 @@ class StoreImagesConfig(BaseModel):
     subdir: str = "pipelines"
     format: Literal["jpg", "png"] = "png"
     jpeg_quality: int = Field(default=85, ge=1, le=100)
-    timestamp_field: str = "frame_ts"
-    camera_id_field: str = "camera_id"
-    tracking_id_field: str = "tracking_id"
     keep_data: bool = False
     overwrite: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_fields(cls, values: Any) -> Any:
+        # Keep backwards compatibility with older graphs, but don't expose these knobs in the UX.
+        if isinstance(values, dict):
+            values = dict(values)
+            values.pop("timestamp_field", None)
+            values.pop("camera_id_field", None)
+            values.pop("tracking_id_field", None)
+        return values
 
     @field_validator("artifact_names", mode="after")
     @classmethod
@@ -276,11 +284,6 @@ class StoreImagesConfig(BaseModel):
             raise ValueError("subdir must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
         return subdir
 
-    @field_validator("timestamp_field", "camera_id_field", "tracking_id_field")
-    @classmethod
-    def _trim_fields(cls, value: str) -> str:
-        return str(value or "").strip()
-
 
 class StoreImagesRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
@@ -293,11 +296,11 @@ class StoreImagesRuntime(TransformOperatorRuntime):
 
         pipeline_name = getattr(context, "pipeline_name", "") or "pipeline"
         node_id = getattr(context, "node_id", "") or "node"
-        camera_id = _resolve_string(packet, self._config.camera_id_field) or "no_camera"
-        tracking_id = _resolve_string(packet, self._config.tracking_id_field) or _resolve_string(packet, "correlation_id")
+        camera_id = _resolve_string(packet, "camera_id") or "no_camera"
+        tracking_id = _resolve_string(packet, "tracking_id") or _resolve_string(packet, "correlation_id")
         token = tracking_id or packet.stream_id
 
-        ts = _resolve_ts(packet, self._config.timestamp_field)
+        ts = _resolve_ts(packet, "frame_ts")
         ts_ms = int(max(0.0, float(ts)) * 1000)
 
         for artifact_name in self._config.artifact_names:

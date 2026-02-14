@@ -74,6 +74,23 @@ const NODE_ID_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 type SelectOption = { value: string; label: string };
 
+const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
+  "camera.source": "Camera source",
+  "camera.motion_gate": "Motion detection gate",
+  "core.fps_reducer": "FPS reducer",
+  "vision.object_tracking_yolo": "YOLO tracking",
+  "vision.object_detection_yolo": "YOLO detection",
+  "camera.object_segmentation": "Object segmentation",
+  "camera.camera_mapping": "Camera mapping",
+  "camera.area_restriction": "Area restriction",
+  "camera.velocity_estimation": "Velocity estimation",
+  "camera.best_frame_selector": "Best frame selector",
+  "core.throttle": "Throttle",
+  "core.debounce": "Debounce",
+  "core.store_images": "Store images",
+  "core.notify": "Notification",
+};
+
 const pipelinesReactSelectStyles: StylesConfig<SelectOption, boolean> = {
   container: (base) => ({ ...base }),
   control: (base, state) => ({
@@ -205,6 +222,14 @@ const YOLO_CATEGORY_VALUES = [
 
 const YOLO_CATEGORY_OPTIONS: SelectOption[] = YOLO_CATEGORY_VALUES.map((value) => ({ value, label: value }));
 
+const STORE_IMAGE_ARTIFACT_SUGGESTIONS: SelectOption[] = [
+  { value: "frame_original", label: "Full frame" },
+  { value: "best_frame", label: "Best frame" },
+  { value: "segmented", label: "Segmented" },
+  { value: "face", label: "Face" },
+  { value: "pose", label: "Pose" },
+];
+
 let interactiveStepCounter = 0;
 
 function nextInteractiveStepUid(): string {
@@ -230,6 +255,62 @@ function jsonPretty(value: unknown): string {
   } catch {
     return "{}";
   }
+}
+
+const HUMANIZE_ACRONYMS: Record<string, string> = {
+  id: "ID",
+  fps: "FPS",
+  rtsp: "RTSP",
+  url: "URL",
+  jpeg: "JPEG",
+  png: "PNG",
+  yolo: "YOLO",
+  api: "API",
+  ui: "UI",
+  sse: "SSE",
+  ts: "TS",
+};
+
+function humanizeIdentifier(raw: string): string {
+  const normalized = String(raw || "").trim();
+  if (!normalized) return "";
+
+  const tokens = normalized
+    .replace(/[.-]+/g, "_")
+    .split("_")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+
+  return tokens
+    .map((token) => {
+      const lower = token.toLowerCase();
+      const acronym = HUMANIZE_ACRONYMS[lower];
+      if (acronym) return acronym;
+      if (!lower) return token;
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
+}
+
+function prettyConfigKeyLabel(key: string): string {
+  const raw = String(key || "").trim();
+  const lower = raw.toLowerCase();
+
+  if (lower.endsWith("_seconds")) return `${humanizeIdentifier(raw.slice(0, -8))} (seconds)`;
+  if (lower.endsWith("_ms")) return `${humanizeIdentifier(raw.slice(0, -3))} (ms)`;
+  if (lower.endsWith("_kmh")) return `${humanizeIdentifier(raw.slice(0, -4))} (km/h)`;
+  if (lower.endsWith("_mps")) return `${humanizeIdentifier(raw.slice(0, -4))} (m/s)`;
+
+  return humanizeIdentifier(raw);
+}
+
+function prettyOperatorName(operatorId: string): string {
+  const raw = String(operatorId || "").trim();
+  if (!raw) return "";
+  const fromMap = OPERATOR_FRIENDLY_NAMES[raw];
+  if (fromMap) return fromMap;
+  const tail = raw.split(".").pop() || raw;
+  return humanizeIdentifier(tail) || raw;
 }
 
 function emptyGraph(): Record<string, unknown> {
@@ -494,8 +575,7 @@ function pickDefaultOperatorId(operators: PipelineOperatorDefinition[]): string 
 }
 
 function prettyOperatorLabel(operator: PipelineOperatorDefinition): string {
-  const tail = operator.id.split(".").pop() || operator.id;
-  return `${tail} (${operator.id})`;
+  return prettyOperatorName(operator.id);
 }
 
 function moveStep(
@@ -966,7 +1046,7 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
           <div className="pipelinesCreate">
             <input
               className="pipelinesInput"
-              placeholder="pipeline_name"
+              placeholder="Pipeline name"
               value={createName}
               onChange={(event) => setCreateName(event.target.value)}
             />
@@ -1227,6 +1307,7 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                            step.operatorId === "camera.velocity_estimation" ||
 	                            step.operatorId === "core.throttle" ||
 	                            step.operatorId === "core.debounce" ||
+	                            step.operatorId === "core.store_images" ||
 	                            step.operatorId === "vision.object_tracking_yolo" ||
 	                            step.operatorId === "vision.object_detection_yolo";
 	                          const shouldShowScalarGrid = scalarEntries.length > 0 && (!isConfigScalarGridHidden || step.showAdvanced);
@@ -1253,6 +1334,15 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                            : [];
 	                          const selectedAreaOptions = selectedAreaKeys.map((value) => cameraAreaOptions.find((option) => option.value === value) ?? { value, label: value });
 
+	                          const storeImageArtifactsRaw = (config as any).artifact_names;
+	                          const storeImageArtifactNames = Array.isArray(storeImageArtifactsRaw)
+	                            ? storeImageArtifactsRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
+	                            : [];
+	                          const storeImageSelectedOptions = storeImageArtifactNames.map((value) => {
+	                            const known = STORE_IMAGE_ARTIFACT_SUGGESTIONS.find((option) => option.value === value);
+	                            return known ?? { value, label: humanizeIdentifier(value) || value };
+	                          });
+
 	                          return (
 	                            <div
 	                              key={step.uid}
@@ -1274,13 +1364,6 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
                                 </button>
 
                                 <span className="pipelinesStepIndex">{index + 1}</span>
-
-                                <input
-                                  className="pipelinesInput pipelinesStepNodeId"
-                                  value={step.nodeId}
-                                  onChange={(event) => updateInteractiveStep(step.uid, { nodeId: event.target.value })}
-                                  placeholder="node_id"
-                                />
 
                                 <select
                                   className="pipelinesSelect pipelinesStepOperator"
@@ -1332,9 +1415,28 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 
 	                              {!step.collapsed ? (
 	                                <div className="pipelinesStepBody">
-	                                  {operator ? <div className="pipelinesStepDescription">{operator.description || operator.id}</div> : null}
+	                                  {operator ? (
+	                                    <div className="pipelinesStepDescription">{operator.description || prettyOperatorName(operator.id)}</div>
+	                                  ) : null}
 	                                  {operator && operator.capabilities.length > 0 && step.showAdvanced ? (
-	                                    <div className="pipelinesStepCapabilities">caps: {operator.capabilities.join(", ")}</div>
+	                                    <div className="pipelinesStepCapabilities">
+	                                      caps: {operator.capabilities.map((cap) => humanizeIdentifier(cap) || cap).join(", ")}
+	                                    </div>
+	                                  ) : null}
+
+	                                  {step.showAdvanced ? (
+	                                    <div className="pipelinesOperatorConfigCard">
+	                                      <label className="pipelinesLabel">
+	                                        <span>Step ID</span>
+	                                        <input
+	                                          className="pipelinesInput"
+	                                          value={step.nodeId}
+	                                          onChange={(event) => updateInteractiveStep(step.uid, { nodeId: event.target.value })}
+	                                          placeholder="stepId"
+	                                        />
+	                                      </label>
+	                                      <div className="pipelinesStepHint">Internal identifier used in storage paths, logs, and diagnostics.</div>
+	                                    </div>
 	                                  ) : null}
 
 	                                  {step.operatorId === "camera.source" ? (
@@ -1522,10 +1624,10 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                                              />
 	                                            </label>
 	                                            <div className="pipelinesStepHint">
-	                                              Computes speed from mapped world coordinates (`camera.camera_mapping`). Uses m/s internally and outputs both m/s and km/h.
+	                                              Computes speed from mapped world coordinates (Camera Mapping step). Uses m/s internally and also displays km/h.
 	                                            </div>
 	                                            {!hasMappingBefore ? (
-	                                              <div className="pipelinesInlineError">Add `camera.camera_mapping` before this step to get world speed.</div>
+	                                              <div className="pipelinesInlineError">Add Camera Mapping before this step to get world speed.</div>
 	                                            ) : null}
 	                                          </>
 	                                        );
@@ -1586,10 +1688,10 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                                                    updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, key_field: nextKey }));
 	                                                  }}
 	                                                >
-	                                                  <option value="stream_id">stream (per object/camera)</option>
-	                                                  <option value="payload.tracking_id">tracking_id</option>
-	                                                  <option value="payload.correlation_id">correlation_id</option>
-	                                                  <option value="payload.camera_id">camera_id</option>
+	                                                  <option value="stream_id">Stream (per object/camera)</option>
+	                                                  <option value="payload.tracking_id">Tracking ID</option>
+	                                                  <option value="payload.correlation_id">Correlation ID</option>
+	                                                  <option value="payload.camera_id">Camera ID</option>
 	                                                </select>
 	                                              </label>
 	                                            ) : null}
@@ -1656,10 +1758,10 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                                                    updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, key_field: nextKey }));
 	                                                  }}
 	                                                >
-	                                                  <option value="stream_id">stream (per object/camera)</option>
-	                                                  <option value="payload.tracking_id">tracking_id</option>
-	                                                  <option value="payload.correlation_id">correlation_id</option>
-	                                                  <option value="payload.camera_id">camera_id</option>
+	                                                  <option value="stream_id">Stream (per object/camera)</option>
+	                                                  <option value="payload.tracking_id">Tracking ID</option>
+	                                                  <option value="payload.correlation_id">Correlation ID</option>
+	                                                  <option value="payload.camera_id">Camera ID</option>
 	                                                </select>
 	                                              </label>
 	                                            ) : null}
@@ -1673,11 +1775,35 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                                    </div>
 	                                  ) : null}
 
+	                                  {step.operatorId === "core.store_images" ? (
+	                                    <div className="pipelinesOperatorConfigCard">
+	                                      <label className="pipelinesLabel">
+	                                        <span>Artifacts to store</span>
+	                                        <CreatableSelect<SelectOption, true>
+	                                          isMulti
+	                                          styles={pipelinesReactSelectStyles}
+	                                          options={STORE_IMAGE_ARTIFACT_SUGGESTIONS}
+	                                          value={storeImageSelectedOptions}
+	                                          placeholder="Full frame (default)"
+	                                          onChange={(value: MultiValue<SelectOption>) => {
+	                                            updateInteractiveStepConfig(step.uid, (prev) => ({
+	                                              ...prev,
+	                                              artifact_names: value.map((item) => item.value),
+	                                            }));
+	                                          }}
+	                                        />
+	                                      </label>
+	                                      <div className="pipelinesStepHint">
+	                                        Stores image artifacts already present in the payload (default: Full frame). Type a custom artifact name to match future steps.
+	                                      </div>
+	                                    </div>
+	                                  ) : null}
+
 	                                  {shouldShowScalarGrid ? (
 	                                    <div className="pipelinesScalarGrid">
 	                                      {scalarEntries.map(([key, value]) => (
 	                                        <label key={`${step.uid}:${key}`} className="pipelinesLabel pipelinesScalarLabel">
-	                                          <span>{key}</span>
+	                                          <span>{prettyConfigKeyLabel(key)}</span>
                                           {typeof value === "boolean" ? (
                                             <input
                                               type="checkbox"
@@ -1702,18 +1828,6 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                                        </label>
 	                                      ))}
 	                                    </div>
-	                                  ) : null}
-
-	                                  {step.showAdvanced ? (
-	                                    <label className="pipelinesLabel">
-	                                      <span>Config JSON</span>
-	                                      <textarea
-	                                        className="pipelinesStepConfigTextarea"
-	                                        value={step.configText}
-	                                        onChange={(event) => updateInteractiveStep(step.uid, { configText: event.target.value })}
-	                                        spellCheck={false}
-	                                      />
-	                                    </label>
 	                                  ) : null}
 
 	                                  {configObjectError ? <div className="pipelinesInlineError">{configObjectError}</div> : null}

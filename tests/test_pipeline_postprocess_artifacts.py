@@ -153,7 +153,6 @@ def test_segmentation_and_best_frame_selection_are_deterministic() -> None:
                     "id": "best",
                     "operator": "camera.best_frame_selector",
                     "config": {
-                        "key_field": "tracking_id",
                         "input_artifact_names": ["segmented", "frame_original"],
                         "buffer_size": 2,
                         "emit_on_update": False,
@@ -275,9 +274,6 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
                     "id": "velocity",
                     "operator": "camera.velocity_estimation",
                     "config": {
-                        "key_field": "tracking_id",
-                        "world_field": "world",
-                        "time_field": "frame_ts",
                         "stopped_speed_threshold": 0.15,
                         "filter_mode": "annotate",
                     },
@@ -316,7 +312,6 @@ def test_best_frame_selector_keeps_bounded_buffer_per_tracking_id() -> None:
     async def scenario() -> None:
         runtime = BestFrameSelectorRuntime(
             {
-                "key_field": "tracking_id",
                 "input_artifact_names": ["segmented"],
                 "fallback_to_payload_frame": False,
                 "output_artifact_name": "best_frame",
@@ -375,9 +370,6 @@ def test_velocity_filter_mode_stopped_once_emits_only_after_object_stops() -> No
     async def scenario() -> None:
         runtime = VelocityEstimationRuntime(
             {
-                "key_field": "tracking_id",
-                "world_field": "world",
-                "time_field": "frame_ts",
                 "stopped_speed_threshold": 0.2,
                 "filter_mode": "stopped_once",
             },

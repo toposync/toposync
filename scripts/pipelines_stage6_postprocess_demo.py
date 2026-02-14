@@ -145,8 +145,6 @@ def build_graph(args: argparse.Namespace) -> dict[str, Any]:
                 "id": "velocity",
                 "operator": "camera.velocity_estimation",
                 "config": {
-                    "key_field": "tracking_id",
-                    "time_field": "frame_ts",
                     "stopped_speed_threshold": 0.15,
                     "filter_mode": "annotate",
                 },
@@ -155,7 +153,6 @@ def build_graph(args: argparse.Namespace) -> dict[str, Any]:
                 "id": "best",
                 "operator": "camera.best_frame_selector",
                 "config": {
-                    "key_field": "tracking_id",
                     "input_artifact_names": ["segmented", "frame_original"],
                     "buffer_size": int(args.buffer_size),
                     "emit_on_update": False,

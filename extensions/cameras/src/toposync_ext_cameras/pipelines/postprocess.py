@@ -6,7 +6,7 @@ from collections import deque
 from dataclasses import dataclass, replace
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from toposync.runtime.config_store import ConfigStore
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
@@ -118,13 +118,21 @@ class AreaRestrictionConfig(BaseModel):
 
 class VelocityEstimationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    key_field: str = "tracking_id"
-    world_field: str = "world"
-    time_field: str = "frame_ts"
     stopped_speed_threshold: float = Field(default=0.04, ge=0.0, le=1000.0)
     min_elapsed_seconds: float = Field(default=0.001, ge=0.0001, le=10.0)
     filter_mode: str = "annotate"
-    output_field: str = "velocity"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_fields(cls, values: Any) -> Any:
+        # Aceita graphs antigos sem expor esses campos no schema atual
+        if isinstance(values, dict):
+            values = dict(values)
+            values.pop("key_field", None)
+            values.pop("world_field", None)
+            values.pop("time_field", None)
+            values.pop("output_field", None)
+        return values
 
     @field_validator("filter_mode")
     @classmethod
@@ -134,15 +142,14 @@ class VelocityEstimationConfig(BaseModel):
             raise ValueError("filter_mode must be annotate, stopped_once, always_moving, stopped_now, or moving_now")
         return mode
 
-    @field_validator("key_field", "world_field", "time_field", "output_field")
+    @field_validator("min_elapsed_seconds")
     @classmethod
-    def _trim(cls, value: str) -> str:
-        return str(value or "").strip()
+    def _normalize_min_elapsed_seconds(cls, value: float) -> float:
+        return float(value)
 
 
 class BestFrameSelectorConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    key_field: str = "tracking_id"
     input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "frame_original"])
     fallback_to_payload_frame: bool = True
     output_artifact_name: str = "best_frame"
@@ -153,12 +160,21 @@ class BestFrameSelectorConfig(BaseModel):
     emit_on_update: bool = True
     emit_on_close: bool = True
 
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_fields(cls, values: Any) -> Any:
+        # Aceita graphs antigos sem expor esses campos no schema atual
+        if isinstance(values, dict):
+            values = dict(values)
+            values.pop("key_field", None)
+        return values
+
     @field_validator("input_artifact_names", mode="after")
     @classmethod
     def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
         return _normalize_artifact_names(value)
 
-    @field_validator("key_field", "output_artifact_name", "score_field")
+    @field_validator("output_artifact_name", "score_field")
     @classmethod
     def _trim(cls, value: str) -> str:
         name = str(value or "").strip()
@@ -358,12 +374,13 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
         self._state_by_key: dict[str, _VelocityState] = {}
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
-        key = _resolve_key(packet, self._config.key_field)
-        now_ts = _resolve_packet_time(packet, time_field=self._config.time_field)
+        key = _resolve_tracking_key(packet)
+
+        now_ts = _resolve_packet_time(packet, time_field="frame_ts")
         state = self._state_by_key.get(key)
         ever_stopped = state.ever_stopped if state is not None else False
 
-        world = packet.payload.get(self._config.world_field)
+        world = packet.payload.get("world")
         if not isinstance(world, dict):
             out_packet = self._annotate_packet(
                 packet,
@@ -448,7 +465,7 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
         ever_stopped: bool,
     ) -> Packet:
         payload = dict(packet.payload)
-        payload[self._config.output_field] = {
+        payload["velocity"] = {
             "speed": float(speed),
             "speed_mps": float(speed),
             "speed_kmh": float(speed * 3.6),
@@ -492,7 +509,7 @@ class BestFrameSelectorRuntime(TransformOperatorRuntime):
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         packet = _ensure_original_artifact(packet)
-        key = _resolve_key(packet, self._config.key_field)
+        key = _resolve_tracking_key(packet)
         selected_name, selected_image = _resolve_input_image(
             packet,
             preferred_artifact_names=self._config.input_artifact_names,
@@ -821,19 +838,10 @@ def _normalize_bbox01(bbox: tuple[float, float, float, float]) -> tuple[float, f
     return (x1, y1, x2, y2)
 
 
-def _resolve_key(packet: Packet, key_field: str) -> str:
-    if key_field == "stream_id":
-        key = packet.stream_id
-    elif key_field == "packet_id":
-        key = packet.packet_id
-    elif key_field.startswith("payload."):
-        key = str(packet.payload.get(key_field[len("payload.") :], "")).strip()
-    elif key_field.startswith("metadata."):
-        key = str(packet.metadata.get(key_field[len("metadata.") :], "")).strip()
-    else:
-        key = str(packet.payload.get(key_field, "")).strip() or str(packet.metadata.get(key_field, "")).strip()
+def _resolve_tracking_key(packet: Packet) -> str:
+    key = str(packet.payload.get("tracking_id") or "").strip()
     if not key:
-        key = str(packet.payload.get("tracking_id", "")).strip()
+        key = str(packet.payload.get("correlation_id") or "").strip()
     if not key:
         key = packet.stream_id
     return key

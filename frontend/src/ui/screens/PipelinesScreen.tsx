@@ -1225,6 +1225,8 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                            step.operatorId === "camera.camera_mapping" ||
 	                            step.operatorId === "camera.area_restriction" ||
 	                            step.operatorId === "camera.velocity_estimation" ||
+	                            step.operatorId === "core.throttle" ||
+	                            step.operatorId === "core.debounce" ||
 	                            step.operatorId === "vision.object_tracking_yolo" ||
 	                            step.operatorId === "vision.object_detection_yolo";
 	                          const shouldShowScalarGrid = scalarEntries.length > 0 && (!isConfigScalarGridHidden || step.showAdvanced);
@@ -1525,6 +1527,146 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 	                                            {!hasMappingBefore ? (
 	                                              <div className="pipelinesInlineError">Add `camera.camera_mapping` before this step to get world speed.</div>
 	                                            ) : null}
+	                                          </>
+	                                        );
+	                                      })()}
+	                                    </div>
+	                                  ) : null}
+
+	                                  {step.operatorId === "core.throttle" ? (
+	                                    <div className="pipelinesOperatorConfigCard">
+	                                      {(() => {
+	                                        const intervalSeconds = Number((config as any).interval_seconds ?? 1.0);
+	                                        const modeRaw = String((config as any).mode ?? "first").trim().toLowerCase() || "first";
+	                                        const keyFieldRaw = String((config as any).key_field ?? "stream_id").trim() || "stream_id";
+
+	                                        return (
+	                                          <>
+	                                            <label className="pipelinesLabel">
+	                                              <span>Interval (seconds)</span>
+	                                              <input
+	                                                className="pipelinesInput"
+	                                                type="number"
+	                                                min={0.01}
+	                                                max={120}
+	                                                step={0.05}
+	                                                value={Number.isFinite(intervalSeconds) ? String(intervalSeconds) : "1.0"}
+	                                                onChange={(event) => {
+	                                                  const nextValue = Number(event.target.value || 1);
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({
+	                                                    ...prev,
+	                                                    interval_seconds: Number.isFinite(nextValue) ? nextValue : 1.0,
+	                                                  }));
+	                                                }}
+	                                              />
+	                                            </label>
+
+	                                            <label className="pipelinesLabel">
+	                                              <span>Mode</span>
+	                                              <select
+	                                                className="pipelinesSelect"
+	                                                value={modeRaw}
+	                                                onChange={(event) => {
+	                                                  const nextMode = String(event.target.value || "first").trim().toLowerCase();
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, mode: nextMode }));
+	                                                }}
+	                                              >
+	                                                <option value="first">First (recommended)</option>
+	                                              </select>
+	                                            </label>
+
+	                                            {step.showAdvanced ? (
+	                                              <label className="pipelinesLabel">
+	                                                <span>Key</span>
+	                                                <select
+	                                                  className="pipelinesSelect"
+	                                                  value={keyFieldRaw}
+	                                                  onChange={(event) => {
+	                                                    const nextKey = String(event.target.value || "stream_id").trim() || "stream_id";
+	                                                    updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, key_field: nextKey }));
+	                                                  }}
+	                                                >
+	                                                  <option value="stream_id">stream (per object/camera)</option>
+	                                                  <option value="payload.tracking_id">tracking_id</option>
+	                                                  <option value="payload.correlation_id">correlation_id</option>
+	                                                  <option value="payload.camera_id">camera_id</option>
+	                                                </select>
+	                                              </label>
+	                                            ) : null}
+
+	                                            <div className="pipelinesStepHint">
+	                                              Emits OPEN/CLOSE packets always. Mode “first” emits the first UPDATE in each interval window (keyed).
+	                                            </div>
+	                                          </>
+	                                        );
+	                                      })()}
+	                                    </div>
+	                                  ) : null}
+
+	                                  {step.operatorId === "core.debounce" ? (
+	                                    <div className="pipelinesOperatorConfigCard">
+	                                      {(() => {
+	                                        const quietSeconds = Number((config as any).quiet_period_seconds ?? 1.0);
+	                                        const modeRaw = String((config as any).mode ?? "first").trim().toLowerCase() || "first";
+	                                        const keyFieldRaw = String((config as any).key_field ?? "stream_id").trim() || "stream_id";
+
+	                                        return (
+	                                          <>
+	                                            <label className="pipelinesLabel">
+	                                              <span>Quiet period (seconds)</span>
+	                                              <input
+	                                                className="pipelinesInput"
+	                                                type="number"
+	                                                min={0.01}
+	                                                max={120}
+	                                                step={0.05}
+	                                                value={Number.isFinite(quietSeconds) ? String(quietSeconds) : "1.0"}
+	                                                onChange={(event) => {
+	                                                  const nextValue = Number(event.target.value || 1);
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({
+	                                                    ...prev,
+	                                                    quiet_period_seconds: Number.isFinite(nextValue) ? nextValue : 1.0,
+	                                                  }));
+	                                                }}
+	                                              />
+	                                            </label>
+
+	                                            <label className="pipelinesLabel">
+	                                              <span>Mode</span>
+	                                              <select
+	                                                className="pipelinesSelect"
+	                                                value={modeRaw}
+	                                                onChange={(event) => {
+	                                                  const nextMode = String(event.target.value || "first").trim().toLowerCase();
+	                                                  updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, mode: nextMode }));
+	                                                }}
+	                                              >
+	                                                <option value="first">First (recommended)</option>
+	                                              </select>
+	                                            </label>
+
+	                                            {step.showAdvanced ? (
+	                                              <label className="pipelinesLabel">
+	                                                <span>Key</span>
+	                                                <select
+	                                                  className="pipelinesSelect"
+	                                                  value={keyFieldRaw}
+	                                                  onChange={(event) => {
+	                                                    const nextKey = String(event.target.value || "stream_id").trim() || "stream_id";
+	                                                    updateInteractiveStepConfig(step.uid, (prev) => ({ ...prev, key_field: nextKey }));
+	                                                  }}
+	                                                >
+	                                                  <option value="stream_id">stream (per object/camera)</option>
+	                                                  <option value="payload.tracking_id">tracking_id</option>
+	                                                  <option value="payload.correlation_id">correlation_id</option>
+	                                                  <option value="payload.camera_id">camera_id</option>
+	                                                </select>
+	                                              </label>
+	                                            ) : null}
+
+	                                            <div className="pipelinesStepHint">
+	                                              Emits OPEN/CLOSE packets always. Mode “first” emits the first UPDATE after an idle gap of at least the quiet period (keyed).
+	                                            </div>
 	                                          </>
 	                                        );
 	                                      })()}

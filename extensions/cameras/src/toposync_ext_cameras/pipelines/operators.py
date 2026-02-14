@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from toposync.runtime.config_store import ConfigStore
 from toposync.runtime.pipelines.execution import (
@@ -45,7 +45,15 @@ class MotionGateConfig(BaseModel):
     hold_seconds: float = Field(default=2.5, ge=0.0, le=120.0)
     activation_frames: int = Field(default=1, ge=1, le=100)
     emit_when_idle: bool = False
-    key_field: str = Field(default="stream_id")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_fields(cls, values: Any) -> Any:
+        # Aceita graphs antigos sem expor esses campos no schema atual
+        if isinstance(values, dict):
+            values = dict(values)
+            values.pop("key_field", None)
+        return values
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,7 +207,6 @@ class MotionGateRuntime(TransformOperatorRuntime):
         self._hold_seconds = float(parsed.hold_seconds)
         self._activation_frames = int(parsed.activation_frames)
         self._emit_when_idle = bool(parsed.emit_when_idle)
-        self._key_field = parsed.key_field.strip() or "stream_id"
         self._detector_by_key: dict[str, MotionDetector] = {}
         self._state_by_key: dict[str, dict[str, Any]] = {}
 
@@ -208,7 +215,7 @@ class MotionGateRuntime(TransformOperatorRuntime):
         if frame is None:
             return []
 
-        key = _resolve_key(packet, self._key_field)
+        key = packet.stream_id
         detector = self._detector_by_key.get(key)
         if detector is None:
             detector = MotionDetector(threshold=self._threshold)
@@ -621,23 +628,6 @@ class _UltralyticsYoloBackend:
             )
             for item in tracked
         ]
-
-
-def _resolve_key(packet: Packet, key_field: str) -> str:
-    key = ""
-    if key_field == "stream_id":
-        key = packet.stream_id
-    elif key_field == "packet_id":
-        key = packet.packet_id
-    elif key_field.startswith("payload."):
-        field_name = key_field[len("payload.") :]
-        key = str(packet.payload.get(field_name, ""))
-    elif key_field.startswith("metadata."):
-        field_name = key_field[len("metadata.") :]
-        key = str(packet.metadata.get(field_name, ""))
-    if not key:
-        key = packet.stream_id
-    return key
 
 
 async def _resolve_camera_source(

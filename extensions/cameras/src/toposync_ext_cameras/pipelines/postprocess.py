@@ -11,6 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from toposync.runtime.config_store import ConfigStore
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
+from toposync.runtime.pipelines.images import (
+    ensure_packet_image_keys,
+    resolve_image_artifact_for_data,
+    resolve_image_artifact_name,
+    set_image_key,
+)
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 
@@ -19,7 +25,7 @@ from ..processing.mapping import ControlPointMapper, ControlPointPair
 
 class ObjectSegmentationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["frame_original"])
+    input_artifact_names: list[str] = Field(default_factory=lambda: ["treated", "original"])
     fallback_to_stream_frame: bool = True
     output_artifact_name: str = "segmented"
     bbox_field: str = "object_bbox01"
@@ -52,7 +58,7 @@ class ObjectSegmentationConfig(BaseModel):
 
 class ImageResizeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    artifact_names: list[str] = Field(default_factory=lambda: ["frame_original"])
+    artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "frame"])
     max_edge_px: int = Field(default=1280, ge=16, le=16384)
     allow_upscale: bool = False
 
@@ -64,13 +70,15 @@ class ImageResizeConfig(BaseModel):
 
 class ImageCropConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
+    fallback_to_stream_frame: bool = True
     units: Literal["percent", "pixels"] = "percent"
     left: float = Field(default=0.0, ge=0.0)
     top: float = Field(default=0.0, ge=0.0)
     right: float = Field(default=100.0, ge=0.0)
     bottom: float = Field(default=100.0, ge=0.0)
 
-    output_artifact_name: str = "frame_cropped"
+    output_artifact_name: str = "frame"
     min_crop_size_px: int = Field(default=8, ge=1, le=4096)
     set_stream_frame: bool = True
 
@@ -84,6 +92,11 @@ class ImageCropConfig(BaseModel):
                 values["set_stream_frame"] = values.pop("set_payload_frame")
         return values
 
+    @field_validator("input_artifact_names", mode="after")
+    @classmethod
+    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
+        return _normalize_artifact_names(value)
+
     @field_validator("output_artifact_name")
     @classmethod
     def _validate_output_artifact_name(cls, value: str) -> str:
@@ -95,9 +108,9 @@ class ImageCropConfig(BaseModel):
 
 class ImageAdjustConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["frame_original"])
+    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
     fallback_to_stream_frame: bool = True
-    output_artifact_name: str = "frame_adjusted"
+    output_artifact_name: str = "frame"
 
     saturation: float = Field(default=1.0, ge=0.0, le=3.0)
     brightness: float = Field(default=0.0, ge=-1.0, le=1.0)
@@ -245,7 +258,7 @@ class VelocityEstimationConfig(BaseModel):
 
 class BestFrameSelectorConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "frame_original"])
+    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
     fallback_to_stream_frame: bool = True
     output_artifact_name: str = "best_frame"
     buffer_size: int = Field(default=8, ge=1, le=128)
@@ -347,6 +360,7 @@ class ObjectSegmentationRuntime(TransformOperatorRuntime):
                 },
             ),
         )
+        out = set_image_key(out, key="segmented", artifact_name=self._config.output_artifact_name)
         payload = _annotate_artifact_contract(
             out.payload,
             packet=out,
@@ -363,10 +377,11 @@ class ImageCropRuntime(TransformOperatorRuntime):
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         packet = _ensure_original_artifact(packet)
-        frame_artifact = packet.artifacts.get("frame")
-        if frame_artifact is None or frame_artifact.data is None:
-            frame_artifact = packet.artifacts.get("frame_original")
-        frame = frame_artifact.data if frame_artifact is not None else None
+        selected_name, frame = _resolve_input_image(
+            packet,
+            preferred_artifact_names=self._config.input_artifact_names,
+            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+        )
         if frame is None:
             return [packet]
 
@@ -436,6 +451,7 @@ class ImageCropRuntime(TransformOperatorRuntime):
 
         artifact_meta: dict[str, Any] = {
             "source": "camera.image_crop",
+            "source_artifact_name": selected_name,
             "bbox01_current": list(bbox01_current),
             "bbox01_total": list(bbox01_total),
             "units": str(self._config.units),
@@ -481,7 +497,7 @@ class ImageCropRuntime(TransformOperatorRuntime):
             "output_artifact_name": self._config.output_artifact_name,
         }
 
-        if self._config.set_stream_frame:
+        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
             out = out.with_artifact(
                 Artifact(
                     name="frame",
@@ -497,12 +513,20 @@ class ImageCropRuntime(TransformOperatorRuntime):
                     payload["frame_width"] = int(cshape[1])
                 except Exception:
                     pass
+        elif self._config.output_artifact_name == "frame":
+            cshape = getattr(crop, "shape", None)
+            if cshape and len(cshape) >= 2:
+                try:
+                    payload["frame_height"] = int(cshape[0])
+                    payload["frame_width"] = int(cshape[1])
+                except Exception:
+                    pass
 
         payload = _annotate_artifact_contract(
             payload,
             packet=out,
-            preferred_input_artifact_names=["frame_original"],
-            selected_input_artifact_name="frame",
+            preferred_input_artifact_names=self._config.input_artifact_names,
+            selected_input_artifact_name=selected_name,
             latest_artifact_name=self._config.output_artifact_name,
         )
         return [replace(out, payload=payload)]
@@ -576,7 +600,7 @@ class ImageAdjustRuntime(TransformOperatorRuntime):
         )
 
         payload = dict(out.payload)
-        if self._config.set_stream_frame:
+        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
             out = out.with_artifact(
                 Artifact(
                     name="frame",
@@ -585,6 +609,14 @@ class ImageAdjustRuntime(TransformOperatorRuntime):
                     metadata={"source": "camera.image_adjust", "derived_from": self._config.output_artifact_name},
                 ),
             )
+            shape = getattr(bgr, "shape", None)
+            if shape and len(shape) >= 2:
+                try:
+                    payload["frame_height"] = int(shape[0])
+                    payload["frame_width"] = int(shape[1])
+                except Exception:
+                    pass
+        elif self._config.output_artifact_name == "frame":
             shape = getattr(bgr, "shape", None)
             if shape and len(shape) >= 2:
                 try:
@@ -705,7 +737,9 @@ def _resize_packet_artifacts_opencv(
     if target_edge <= 0:
         return out
 
-    for name in artifact_names:
+    for name_raw in artifact_names:
+        resolved = resolve_image_artifact_name(out, name_raw)
+        name = resolved[1] if resolved is not None else str(name_raw or "").strip()
         artifact = out.artifacts.get(name)
         if artifact is None:
             continue
@@ -909,6 +943,25 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
         self._state_by_key: dict[str, _VelocityState] = {}
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        event_id = str(packet.payload.get("event_id") or "").strip()
+        if not event_id:
+            out_packet = self._annotate_packet(
+                packet,
+                speed=0.0,
+                distance=0.0,
+                elapsed=0.0,
+                moving=False,
+                valid=False,
+                ever_stopped=False,
+                raw_speed=0.0,
+                raw_distance=0.0,
+                raw_elapsed=0.0,
+                raw_valid=False,
+                window_seconds=_VELOCITY_WINDOW_SECONDS,
+                reason="missing_event_id",
+            )
+            return self._apply_filter_mode(out_packet, valid=False, moving=False, ever_stopped=False)
+
         key = _resolve_tracking_key(packet)
 
         now_ts = _resolve_packet_time(packet, time_field="frame_ts")
@@ -1184,6 +1237,7 @@ class BestFrameSelectorRuntime(TransformOperatorRuntime):
                     metadata=metadata,
                 ),
             )
+            out = set_image_key(out, key="best_frame", artifact_name=self._config.output_artifact_name)
 
         payload = _annotate_artifact_contract(
             out.payload,
@@ -1225,7 +1279,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         defaults=ImageCropConfig().model_dump(),
         requires_artifacts=["frame_original"],
         produces_payload_keys=["frame_crop", "artifact_contract", "artifact_names"],
-        produces_artifacts=["frame_cropped"],
+        produces_artifacts=["frame"],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: ImageCropRuntime(config),
@@ -1241,7 +1295,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         execution_mode="thread_pool",
         requires_artifacts=["frame_original"],
         produces_payload_keys=["artifact_contract", "artifact_names"],
-        produces_artifacts=["frame_adjusted"],
+        produces_artifacts=["frame"],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: ImageAdjustRuntime(config),
@@ -1386,9 +1440,8 @@ def _ensure_original_artifact(packet: Packet) -> Packet:
             )
             changed = True
 
-    if not changed:
-        return packet
-    return replace(packet, payload=dict(payload), artifacts=artifacts)
+    out = packet if not changed else replace(packet, payload=dict(payload), artifacts=artifacts)
+    return ensure_packet_image_keys(out)
 
 
 def _resolve_input_image(
@@ -1397,20 +1450,12 @@ def _resolve_input_image(
     preferred_artifact_names: list[str],
     fallback_to_stream_frame: bool,
 ) -> tuple[str | None, Any | None]:
-    for name in preferred_artifact_names:
-        artifact = packet.artifacts.get(name)
-        if artifact is None:
-            continue
-        if artifact.data is None:
-            continue
-        return name, artifact.data
-    if fallback_to_stream_frame:
-        for name in ("frame", "frame_original"):
-            artifact = packet.artifacts.get(name)
-            if artifact is None or artifact.data is None:
-                continue
-            return name, artifact.data
-    return None, None
+    _key, artifact_name, data = resolve_image_artifact_for_data(
+        packet,
+        input_with_fallback=list(preferred_artifact_names),
+        fallback_to_stream_frame=bool(fallback_to_stream_frame),
+    )
+    return artifact_name, data
 
 
 def _read_bbox01(packet: Packet, *, bbox_field: str) -> tuple[float, float, float, float] | None:
@@ -1625,6 +1670,12 @@ def _resolve_tracking_key(packet: Packet) -> str:
     # Evita colisões quando operadores são "shared" entre múltiplas câmeras/streams:
     # - `tracking_id` (ex: ByteTrack) pode se repetir entre fontes.
     # - `correlation_id` (uuid por evento/track) é o identificador mais seguro para estado por objeto.
+    event_id = str(packet.payload.get("event_id") or "").strip()
+    if event_id:
+        source_stream_id = str(packet.payload.get("source_stream_id") or packet.metadata.get("source_stream_id") or "").strip()
+        prefix = source_stream_id or packet.stream_id
+        return f"{prefix}|{event_id}"
+
     correlation_id = str(packet.payload.get("correlation_id") or "").strip()
     if correlation_id:
         return correlation_id

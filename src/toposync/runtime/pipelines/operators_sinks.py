@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import re
 import time
 import struct
 import zlib
-from collections import OrderedDict
-from dataclasses import dataclass, replace
+from collections import OrderedDict, deque
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -17,6 +18,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from toposync.runtime.config_store import ConfigStore
 
 from .execution import PipelineRuntimeDependencies, SinkRuntime, TransformOperatorRuntime
+from .images import (
+    add_stored_image_entry,
+    ensure_packet_image_keys,
+    resolve_image_artifact_for_data,
+    resolve_image_artifact_for_reference,
+    resolve_image_artifact_name,
+)
 from .operator_registry import OperatorRegistry
 from .runtime import Artifact, Lifecycle, Packet
 
@@ -159,9 +167,8 @@ def _ensure_original_artifact(packet: Packet) -> Packet:
             )
             changed = True
 
-    if not changed:
-        return packet
-    return replace(packet, payload=dict(payload), artifacts=artifacts)
+    out = packet if not changed else replace(packet, payload=dict(payload), artifacts=artifacts)
+    return ensure_packet_image_keys(out)
 
 
 def _encode_image_bytes(image: Any, *, fmt: Literal["jpg", "png"], jpeg_quality: int) -> tuple[bytes, str, str]:
@@ -296,7 +303,10 @@ async def _write_bytes(path: Path, blob: bytes, *, overwrite: bool) -> None:
 
 class StoreImagesConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    artifact_names: list[str] = Field(default_factory=lambda: ["frame_original"])
+    # New UX: store a single image selected by fallback order (recommended).
+    image_with_fallback: str = "segmented,treated,original"
+    # Legacy/advanced: store multiple artifacts explicitly.
+    artifact_names: list[str] = Field(default_factory=list)
     subdir: str = "pipelines"
     format: Literal["jpg", "png"] = "png"
     jpeg_quality: int = Field(default=85, ge=1, le=100)
@@ -332,6 +342,11 @@ class StoreImagesConfig(BaseModel):
             seen.add(name)
         return out
 
+    @field_validator("image_with_fallback")
+    @classmethod
+    def _trim_fallback(cls, value: str) -> str:
+        return str(value or "").strip()
+
     @field_validator("subdir")
     @classmethod
     def _validate_subdir(cls, value: str) -> str:
@@ -353,53 +368,92 @@ class StoreImagesRuntime(TransformOperatorRuntime):
         pipeline_name = getattr(context, "pipeline_name", "") or "pipeline"
         node_id = getattr(context, "node_id", "") or "node"
         camera_id = _resolve_string(packet, "camera_id") or "no_camera"
-        tracking_id = _resolve_string(packet, "tracking_id") or _resolve_string(packet, "correlation_id")
-        token = tracking_id or packet.stream_id
+        token = (
+            _resolve_string(packet, "event_id")
+            or _resolve_string(packet, "tracking_id")
+            or _resolve_string(packet, "correlation_id")
+            or packet.stream_id
+        )
 
         ts = _resolve_ts(packet, "frame_ts")
         ts_ms = int(max(0.0, float(ts)) * 1000)
 
-        for artifact_name in self._config.artifact_names:
+        targets: list[tuple[str, str]] = []
+
+        if self._config.artifact_names:
+            for name_raw in self._config.artifact_names:
+                resolved = resolve_image_artifact_name(packet, name_raw)
+                if resolved is None:
+                    continue
+                key, artifact_name = resolved
+                targets.append((key, artifact_name))
+        else:
+            candidates = [p.strip() for p in str(self._config.image_with_fallback or "").split(",") if p.strip()]
+            for candidate in candidates:
+                resolved = resolve_image_artifact_name(packet, candidate)
+                if resolved is None:
+                    continue
+                key, artifact_name = resolved
+                artifact = packet.artifacts.get(artifact_name)
+                if artifact is None:
+                    continue
+                if artifact.data is None and not artifact.reference:
+                    continue
+                targets.append((key or artifact_name, artifact_name))
+                break
+
+        for key, artifact_name in targets:
             artifact = packet.artifacts.get(artifact_name)
             if artifact is None:
                 continue
-            if artifact.reference and not self._config.overwrite:
-                continue
-            if artifact.data is None:
-                continue
 
-            blob, ext, mime = await context.run_blocking(
-                _encode_image_bytes,
-                artifact.data,
-                fmt=self._config.format,
-                jpeg_quality=int(self._config.jpeg_quality),
-            )
-            filename = f"{ts_ms}_{packet.packet_id[:8]}_{_safe_component(artifact_name)}{ext}"
-            abs_path, rel = _build_rel_path(
-                files_dir=files_dir,
-                components=[
-                    self._config.subdir,
-                    pipeline_name,
-                    node_id,
-                    camera_id,
-                    token,
-                ],
-                filename=filename,
-            )
-            await _write_bytes(abs_path, blob, overwrite=bool(self._config.overwrite))
+            rel: str | None = str(artifact.reference) if artifact.reference else None
+            mime: str | None = str(artifact.mime_type) if artifact.mime_type else None
 
-            meta = dict(artifact.metadata)
-            meta["stored_rel_path"] = rel
-            meta["stored_ts_ms"] = ts_ms
-            packet = packet.with_artifact(
-                Artifact(
-                    name=artifact.name,
-                    data=None if bool(self._config.drop_data_after_store) else artifact.data,
-                    reference=rel,
-                    mime_type=mime,
-                    metadata=meta,
-                ),
-            )
+            should_write = bool(artifact.data is not None) and (bool(self._config.overwrite) or not bool(artifact.reference))
+            if should_write:
+                blob, ext, mime = await context.run_blocking(
+                    _encode_image_bytes,
+                    artifact.data,
+                    fmt=self._config.format,
+                    jpeg_quality=int(self._config.jpeg_quality),
+                )
+                filename = f"{ts_ms}_{packet.packet_id[:8]}_{_safe_component(artifact_name)}{ext}"
+                abs_path, rel_path = _build_rel_path(
+                    files_dir=files_dir,
+                    components=[
+                        self._config.subdir,
+                        pipeline_name,
+                        node_id,
+                        camera_id,
+                        token,
+                    ],
+                    filename=filename,
+                )
+                await _write_bytes(abs_path, blob, overwrite=bool(self._config.overwrite))
+                rel = rel_path
+
+                meta = dict(artifact.metadata)
+                meta["stored_rel_path"] = rel
+                meta["stored_ts_ms"] = ts_ms
+                packet = packet.with_artifact(
+                    Artifact(
+                        name=artifact.name,
+                        data=None if bool(self._config.drop_data_after_store) else artifact.data,
+                        reference=rel,
+                        mime_type=mime,
+                        metadata=meta,
+                    ),
+                )
+
+            if rel:
+                packet = add_stored_image_entry(
+                    packet,
+                    key=str(key or "").strip() or artifact_name,
+                    artifact=packet.artifacts.get(artifact_name) or artifact,
+                    rel_path=rel,
+                    stored_ts_ms=ts_ms,
+                )
 
         return [packet]
 
@@ -413,7 +467,7 @@ class NotifyConfig(BaseModel):
     realtime: bool = True
     update_interval_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
     thumbnail_with_fallback: list[str] = Field(
-        default_factory=lambda: ["best_frame", "face", "segmented", "frame_original"],
+        default_factory=lambda: ["best_frame", "segmented", "treated", "original"],
     )
     dedupe_key_template: str = ""
 
@@ -459,6 +513,9 @@ class _NotifyState:
     last_title: str = ""
     last_description: str = ""
     last_image_path: str | None = None
+    revision: int = 0
+    trail: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=512))
+    stored_images: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
 
 class NotifyRuntime(SinkRuntime):
@@ -485,6 +542,68 @@ class NotifyRuntime(SinkRuntime):
             self._state[dedupe_key] = state
         self._state.move_to_end(dedupe_key)
 
+        changed = False
+        world = packet.payload.get("world")
+        if isinstance(world, dict):
+            try:
+                x = float(world.get("x"))
+                z = float(world.get("z"))
+            except Exception:
+                x = 0.0
+                z = 0.0
+            if math.isfinite(x) and math.isfinite(z):
+                mapping = packet.payload.get("mapping") if isinstance(packet.payload.get("mapping"), dict) else {}
+                composition_id = str(mapping.get("composition_id") or "").strip() if isinstance(mapping, dict) else ""
+                point = {
+                    "ts": float(ts),
+                    "x": float(x),
+                    "z": float(z),
+                    "composition_id": composition_id or None,
+                    "area_label": packet.payload.get("area_label"),
+                }
+                if state.trail:
+                    prev = state.trail[-1]
+                    try:
+                        dx = float(point["x"]) - float(prev.get("x", 0.0))
+                        dz = float(point["z"]) - float(prev.get("z", 0.0))
+                        if (dx * dx + dz * dz) > 0.000_001:
+                            state.trail.append(point)
+                            changed = True
+                    except Exception:
+                        state.trail.append(point)
+                        changed = True
+                else:
+                    state.trail.append(point)
+                    changed = True
+
+        stored = packet.payload.get("stored_images")
+        if isinstance(stored, dict):
+            for key_raw, entries_raw in stored.items():
+                key = str(key_raw or "").strip()
+                if not key:
+                    continue
+                entries = entries_raw if isinstance(entries_raw, list) else []
+                if not entries:
+                    continue
+                current = state.stored_images.get(key, [])
+                known_paths = {str(item.get("rel_path") or "") for item in current if isinstance(item, dict)}
+                next_list = list(current)
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    rel_path = str(entry.get("rel_path") or "").strip()
+                    if not rel_path or rel_path in known_paths:
+                        continue
+                    known_paths.add(rel_path)
+                    next_list.append(entry)
+                    changed = True
+                if len(next_list) > 64:
+                    next_list = next_list[-64:]
+                state.stored_images[key] = next_list
+
+        if changed:
+            state.revision = int(state.revision) + 1
+
         interval = float(self._config.update_interval_seconds)
         lifecycle = packet.lifecycle
         if lifecycle == Lifecycle.UPDATE and interval > 0.0 and state.last_emit_monotonic:
@@ -502,6 +621,7 @@ class NotifyRuntime(SinkRuntime):
                 "image_path": image_path,
                 "lifecycle": lifecycle.value,
                 "priority": self._config.priority,
+                "revision": int(state.revision),
             },
         )
         if lifecycle == Lifecycle.UPDATE and state.last_signature and signature == state.last_signature:
@@ -531,12 +651,16 @@ class NotifyRuntime(SinkRuntime):
                 "ts": float(ts),
                 "duration_seconds": max(0.0, float(ts) - float(state.started_ts)),
             },
+            "event_id": _resolve_string(packet, "event_id") or None,
+            "tracking_id": _resolve_string(packet, "tracking_id") or None,
             "artifacts": {
                 name: art.reference
                 for name, art in packet.artifacts.items()
                 if art.reference
             },
-            "data": _sanitize_for_json({k: v for k, v in packet.payload.items() if k != "frame"}),
+            "trail": list(state.trail),
+            "stored_images": state.stored_images,
+            "data": _select_notification_data(packet),
         }
 
         try:
@@ -601,7 +725,12 @@ class NotifyRuntime(SinkRuntime):
 
         node_id = getattr(context, "node_id", "") or "node"
         camera_id = _resolve_string(packet, "camera_id") or "-"
-        token = _resolve_string(packet, "correlation_id") or _resolve_string(packet, "tracking_id") or packet.stream_id
+        token = (
+            _resolve_string(packet, "event_id")
+            or _resolve_string(packet, "correlation_id")
+            or _resolve_string(packet, "tracking_id")
+            or packet.stream_id
+        )
         raw = f"pipeline:{node_id}:camera:{camera_id}:token:{token}"
         if len(raw) <= 240:
             return raw
@@ -610,18 +739,48 @@ class NotifyRuntime(SinkRuntime):
 
     async def _select_thumbnail_path(self, packet: Packet, context) -> str | None:
         packet = _ensure_original_artifact(packet)
-        for name in self._config.thumbnail_with_fallback:
-            artifact = packet.artifacts.get(name)
-            if artifact is None:
-                continue
-            if artifact.reference:
-                return str(artifact.reference)
-        return None
+        _key, _artifact_name, rel = resolve_image_artifact_for_reference(
+            packet,
+            input_with_fallback=list(self._config.thumbnail_with_fallback),
+        )
+        return rel
 
 
 def _signature_payload(payload: dict[str, Any]) -> str:
     raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _select_notification_data(packet: Packet) -> dict[str, Any]:
+    payload = packet.payload
+    allow = {
+        "camera_id",
+        "camera_name",
+        "frame_ts",
+        "frame_width",
+        "frame_height",
+        "capture",
+        "motion",
+        "event_id",
+        "tracking_id",
+        "tracker_track_id",
+        "correlation_id",
+        "source_stream_id",
+        "object_category_label",
+        "object_confidence",
+        "object_bbox01",
+        "detected_object",
+        "world",
+        "mapping",
+        "area_label",
+        "area_labels",
+        "velocity",
+        "images",
+        "stored_images",
+        "frame_crop",
+    }
+    selected = {k: v for k, v in payload.items() if k in allow}
+    return _sanitize_for_json(selected)
 
 
 def register_sink_operators(registry: OperatorRegistry) -> None:

@@ -277,8 +277,10 @@ def test_object_tracking_yolo_splits_two_objects_and_closes_lifecycle() -> None:
             tracking_id = str(packet.payload.get("tracking_id") or "")
             grouped_by_tracking[tracking_id].append(packet)
 
-        assert "17" in grouped_by_tracking
-        assert "42" in grouped_by_tracking
+        grouped_by_tracking.pop("", None)
+        assert len(grouped_by_tracking) == 2
+        tracker_track_ids = {str(items[0].payload.get("tracker_track_id") or "") for items in grouped_by_tracking.values()}
+        assert tracker_track_ids == {"17", "42"}
         for tracking_id, tracking_packets in grouped_by_tracking.items():
             assert tracking_packets[0].lifecycle == Lifecycle.OPEN
             assert any(item.lifecycle == Lifecycle.CLOSE for item in tracking_packets), tracking_id
@@ -286,6 +288,7 @@ def test_object_tracking_yolo_splits_two_objects_and_closes_lifecycle() -> None:
             assert len(stream_ids) == 1
             correlation_ids = {str(item.payload.get("correlation_id") or "") for item in tracking_packets}
             assert len(correlation_ids) == 1
+            assert all(item.payload.get("event_id") == tracking_id for item in tracking_packets)
 
         source_frames = int(counters.get("source_frames", 0))
         track_calls = int(counters.get("track_calls", 0))
@@ -326,7 +329,8 @@ def test_object_tracking_yolo_assigns_stable_synthetic_id_when_tracker_id_missin
         tracking_ids.discard("")
         assert len(tracking_ids) == 1
         tracking_id = next(iter(tracking_ids))
-        assert tracking_id.startswith("syn:camera:test:")
+        assert tracking_id.startswith("trk:camera:test:")
+        assert all(packet.payload.get("event_id") == tracking_id for packet in packets)
 
         tracking_packets = [packet for packet in packets if str(packet.payload.get("tracking_id") or "") == tracking_id]
         assert tracking_packets[0].lifecycle == Lifecycle.OPEN
@@ -368,9 +372,14 @@ def test_object_tracking_yolo_continues_when_tracker_id_missing_for_one_frame() 
         assert packets
 
         tracking_ids = {str(packet.payload.get("tracking_id") or "") for packet in packets}
-        assert tracking_ids == {"17"}
+        tracking_ids.discard("")
+        assert len(tracking_ids) == 1
+        tracking_id = next(iter(tracking_ids))
+        assert tracking_id.startswith("trk:camera:test:")
+        assert all(str(packet.payload.get("tracker_track_id") or "") == "17" for packet in packets)
+        assert all(packet.payload.get("event_id") == tracking_id for packet in packets)
 
-        tracking_packets = [packet for packet in packets if str(packet.payload.get("tracking_id") or "") == "17"]
+        tracking_packets = [packet for packet in packets if str(packet.payload.get("tracking_id") or "") == tracking_id]
         assert tracking_packets[0].lifecycle == Lifecycle.OPEN
         assert any(packet.lifecycle == Lifecycle.CLOSE for packet in tracking_packets)
 

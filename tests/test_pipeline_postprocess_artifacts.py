@@ -371,6 +371,7 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
                 "lifecycle": Lifecycle.UPDATE,
                 "payload": {
                     "camera_id": "camera-main",
+                    "event_id": "velocity-1",
                     "tracking_id": "velocity-1",
                     "frame_ts": 1.0,
                     "object_bbox01": [0.48, 0.48, 0.52, 0.52],
@@ -381,6 +382,7 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
                 "lifecycle": Lifecycle.UPDATE,
                 "payload": {
                     "camera_id": "camera-main",
+                    "event_id": "velocity-1",
                     "tracking_id": "velocity-1",
                     "frame_ts": 2.0,
                     "object_bbox01": [0.70, 0.48, 0.74, 0.52],
@@ -391,6 +393,7 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
                 "lifecycle": Lifecycle.UPDATE,
                 "payload": {
                     "camera_id": "camera-main",
+                    "event_id": "velocity-1",
                     "tracking_id": "velocity-1",
                     "frame_ts": 3.0,
                     "object_bbox01": [0.70, 0.48, 0.74, 0.52],
@@ -544,6 +547,7 @@ def test_velocity_filter_mode_stopped_once_emits_only_after_object_stops() -> No
                 stream_id="obj:velocity",
                 lifecycle=Lifecycle.UPDATE,
                 payload={
+                    "event_id": "velocity-track",
                     "tracking_id": "velocity-track",
                     "frame_ts": frame_ts,
                     "world": {"x": world_x, "z": 0.0},
@@ -578,6 +582,7 @@ def test_velocity_state_is_namespaced_when_tracking_id_repeats_across_streams() 
                 stream_id=stream_id,
                 lifecycle=Lifecycle.UPDATE,
                 payload={
+                    "event_id": "1",
                     "tracking_id": "1",
                     "frame_ts": frame_ts,
                     "world": {"x": world_x, "z": 0.0},

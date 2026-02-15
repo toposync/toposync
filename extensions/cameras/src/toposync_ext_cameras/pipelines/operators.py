@@ -17,6 +17,7 @@ from toposync.runtime.pipelines.execution import (
     SourceOperatorRuntime,
     TransformOperatorRuntime,
 )
+from toposync.runtime.pipelines.images import resolve_image_artifact_for_data
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 
@@ -72,6 +73,8 @@ class CameraSourceConfig(BaseModel):
 
 class MotionGateConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    input_with_fallback: str = "segmented,treated,original"
+    fallback_to_stream_frame: bool = True
     threshold: float = Field(default=0.010, ge=0.0, le=1.0)
     hold_seconds: float = Field(default=2.5, ge=0.0, le=120.0)
     activation_frames: int = Field(default=1, ge=1, le=100)
@@ -296,6 +299,10 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 "frame_width": width,
                 "frame_height": height,
                 "capture": capture_metrics,
+                "images": {
+                    "original": "frame_original",
+                    "treated": "frame",
+                },
             },
             artifacts=frame_artifacts,
             metadata={
@@ -320,6 +327,8 @@ class CameraSourceRuntime(SourceOperatorRuntime):
 class MotionGateRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any]) -> None:
         parsed = MotionGateConfig.model_validate(config)
+        self._input_with_fallback = str(parsed.input_with_fallback or "").strip() or "segmented,treated,original"
+        self._fallback_to_stream_frame = bool(parsed.fallback_to_stream_frame)
         self._threshold = float(parsed.threshold)
         self._hold_seconds = float(parsed.hold_seconds)
         self._activation_frames = int(parsed.activation_frames)
@@ -328,10 +337,11 @@ class MotionGateRuntime(TransformOperatorRuntime):
         self._state_by_key: dict[str, dict[str, Any]] = {}
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
-        artifact = packet.artifacts.get("frame")
-        if artifact is None or artifact.data is None:
-            artifact = packet.artifacts.get("frame_original")
-        frame = artifact.data if artifact is not None else None
+        _key, _artifact_name, frame = resolve_image_artifact_for_data(
+            packet,
+            input_with_fallback=self._input_with_fallback,
+            fallback_to_stream_frame=self._fallback_to_stream_frame,
+        )
         if frame is None:
             return []
 
@@ -464,10 +474,11 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         return True
 
     async def _track_objects(self, packet: Packet, context) -> list[YoloObject]:  # noqa: ANN001
-        artifact = packet.artifacts.get("frame")
-        if artifact is None or artifact.data is None:
-            artifact = packet.artifacts.get("frame_original")
-        frame = artifact.data if artifact is not None else None
+        _key, _artifact_name, frame = resolve_image_artifact_for_data(
+            packet,
+            input_with_fallback="treated,original",
+            fallback_to_stream_frame=True,
+        )
         if frame is None:
             return []
         now_monotonic = time.monotonic()
@@ -485,10 +496,11 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         return self._normalize_objects(raw, packet=packet)
 
     async def _detect_objects(self, packet: Packet, context) -> list[YoloObject]:  # noqa: ANN001
-        artifact = packet.artifacts.get("frame")
-        if artifact is None or artifact.data is None:
-            artifact = packet.artifacts.get("frame_original")
-        frame = artifact.data if artifact is not None else None
+        _key, _artifact_name, frame = resolve_image_artifact_for_data(
+            packet,
+            input_with_fallback="treated,original",
+            fallback_to_stream_frame=True,
+        )
         if frame is None:
             return []
         now_monotonic = time.monotonic()
@@ -509,6 +521,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         payload = dict(packet.payload)
         payload.update(
             {
+                "event_id": object_data.get("tracking_id") or None,
                 "tracking_id": object_data.get("tracking_id"),
                 "tracker_track_id": object_data.get("tracker_track_id"),
                 "correlation_id": object_data.get("correlation_id"),
@@ -527,6 +540,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
             {
                 "operator_id": operator_id,
                 "source_stream_id": object_data.get("source_stream_id"),
+                "event_id": object_data.get("tracking_id") or None,
                 "tracking_id": object_data.get("tracking_id"),
                 "tracker_track_id": object_data.get("tracker_track_id"),
                 "correlation_id": object_data.get("correlation_id"),
@@ -547,7 +561,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
 
     def _next_synthetic_tracking_key(self, source_stream_id: str) -> str:
         self._synthetic_tracking_counter += 1
-        return f"syn:{source_stream_id}:{self._synthetic_tracking_counter}"
+        return f"trk:{source_stream_id}:{self._synthetic_tracking_counter}"
 
     def _match_tracking_key_by_iou(
         self,
@@ -583,14 +597,14 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
         now_monotonic: float,
         used_keys: set[str],
     ) -> str:
-        requested = str(detection.tracking_id or "").strip()
+        tracker_track_id = str(detection.tracking_id or "").strip()
+        if tracker_track_id:
+            for key, state in self._state_by_tracking_key.items():
+                if key in used_keys:
+                    continue
+                if state.tracker_track_id == tracker_track_id:
+                    return key
 
-        # Prefer tracker-provided ids when available and not already used in this frame.
-        if requested and requested not in used_keys and requested in self._state_by_tracking_key:
-            return requested
-
-        # When ids start appearing late (or flip), keep continuity by matching.
-        if requested:
             matched = self._match_tracking_key_by_iou(
                 detection=detection,
                 now_monotonic=now_monotonic,
@@ -599,7 +613,6 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
             )
             if matched is not None:
                 return matched
-            return requested
 
         matched = self._match_tracking_key_by_iou(
             detection=detection,
@@ -647,7 +660,8 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
                 )
                 self._state_by_tracking_key[tracking_key] = state
 
-            state.tracker_track_id = str(detection.tracking_id).strip() if detection.tracking_id else None
+            if detection.tracking_id:
+                state.tracker_track_id = str(detection.tracking_id).strip() or state.tracker_track_id
             state.category = detection.category
             state.confidence = detection.confidence
             state.bbox01 = detection.bbox01
@@ -773,7 +787,7 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["source", "camera", "realtime"],
         defaults=CameraSourceConfig().model_dump(),
-        produces_payload_keys=["camera_id", "camera_name", "frame_ts", "frame_width", "frame_height", "capture"],
+        produces_payload_keys=["camera_id", "camera_name", "frame_ts", "frame_width", "frame_height", "capture", "images"],
         produces_artifacts=["frame_original", "frame"],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
@@ -806,6 +820,7 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
         max_concurrency=1,
         requires_artifacts=["frame_original"],
         produces_payload_keys=[
+            "event_id",
             "tracking_id",
             "tracker_track_id",
             "correlation_id",
@@ -831,6 +846,7 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
         max_concurrency=1,
         requires_artifacts=["frame_original"],
         produces_payload_keys=[
+            "event_id",
             "tracking_id",
             "tracker_track_id",
             "correlation_id",

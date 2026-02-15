@@ -56,6 +56,7 @@ def build_merged_pipeline_plan(
                         (
                             edge.target_port,
                             edge.source_port,
+                            occurrence_to_merged.get((pipeline.name, edge.source_node_id), f"unmerged:{pipeline.name}:{edge.source_node_id}"),
                             int(edge.channel_maxsize),
                             str(edge.channel_drop_policy.value),
                         )

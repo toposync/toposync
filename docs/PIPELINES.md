@@ -258,14 +258,26 @@ Extensão `com.toposync.cameras`:
   - output: `out`
 - Backpressure: idealmente `maxsize=1 latest_only` logo após a source.
 
-Implementação: `extensions/cameras/src/toposync_ext_cameras/pipelines/operators.py` (`CameraSourceRuntime`, `FrameGrabber`).
+Implementação: `extensions/cameras/src/toposync_ext_cameras/pipelines/operators.py` (`CameraSourceRuntime`), `extensions/cameras/src/toposync_ext_cameras/processing/camera_hub.py` (`CameraHub`), `extensions/cameras/src/toposync_ext_cameras/processing/frame_grabber.py` (`FrameGrabber`).
 
 ### Gates “antes da câmera”
 
 Conecte `core.schedule_gate.out -> camera.source.gate`.
-Quando o gate fecha, o `camera.source` **para de ler RTSP** (e fecha o grabber), preservando CPU/I/O.
+Quando o gate fecha, o `camera.source` **para de consumir** a câmera, preservando CPU/I/O.
 
-Implementação: `src/toposync/runtime/pipelines/operators_gates.py` + `camera.source`.
+**Estratégia escolhida (recomendada): CameraHub por câmera.**
+
+- O processo mantém um **hub por câmera** que gerencia a conexão RTSP (1x) e fornece “latest frame wins”.
+- Cada `camera.source` é um consumidor do hub. O hub **só lê RTSP quando há pelo menos um consumidor ativo** (agrega demanda).
+- Isso evita:
+  - **múltiplas conexões RTSP** quando há dois pipelines para a mesma câmera (ex.: schedules diferentes);
+  - um pipeline “desligar” a câmera para o outro (cada consumidor abre/fecha sua própria demanda).
+
+Trade-off:
+- **CameraHub por câmera (escolhido):** 1 conexão RTSP por câmera no processo, com demanda agregada por refcount; gates não causam interferência entre pipelines.
+- **Share-by-signature apenas:** pode multiplicar conexões RTSP e/ou causar interferência se a source for compartilhada sem agregação correta de gates.
+
+Implementação: `src/toposync/runtime/pipelines/operators_gates.py` + `extensions/cameras/src/toposync_ext_cameras/processing/camera_hub.py` + `camera.source`.
 
 ### `camera.motion_gate` (não encerra evento)
 

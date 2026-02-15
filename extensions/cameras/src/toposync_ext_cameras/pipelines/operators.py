@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 import math
 import time
 import uuid
@@ -20,9 +21,27 @@ from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 
 from ..processing.frame_grabber import FrameGrabber
+from ..processing.camera_hub import CameraHub
 from ..processing.motion import MotionDetector
 from ..processing.yolo import YoloTracker
 from .postprocess import register_camera_postprocess_operators
+
+
+def _camera_hub_key(*, camera_id: str, rtsp_url: str, backend: str) -> str:
+    cid = str(camera_id or "").strip()
+    backend_key = str(backend or "").strip().lower() or "auto"
+    if cid:
+        return f"camera:{cid}:{backend_key}"
+    raw = str(rtsp_url or "").strip().encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()[:16]
+    return f"camera:adhoc:{digest}:{backend_key}"
+
+
+def _frame_grabber_factory(rtsp_url: str, *, target_fps: float, backend: str) -> FrameGrabber:
+    return FrameGrabber(rtsp_url, target_fps=float(target_fps), backend=str(backend))
+
+
+_GLOBAL_CAMERA_HUB = CameraHub(frame_grabber_factory=_frame_grabber_factory)
 
 
 class CameraSourceConfig(BaseModel):
@@ -156,6 +175,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._config = CameraSourceConfig.model_validate(config)
         self._dependencies = dependencies
         self._grabber: FrameGrabber | None = None
+        self._hub_key: str = ""
         self._last_ts = 0.0
         self._camera_name = ""
         self._camera_id = ""
@@ -168,7 +188,13 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         rtsp_url, fps, camera_id, camera_name = await _resolve_camera_source(self._config, self._dependencies)
         self._camera_id = camera_id
         self._camera_name = camera_name
-        self._grabber = FrameGrabber(rtsp_url, target_fps=fps, backend=self._config.backend).start()
+        self._hub_key = _camera_hub_key(camera_id=camera_id, rtsp_url=rtsp_url, backend=self._config.backend)
+        self._grabber = await _GLOBAL_CAMERA_HUB.acquire(
+            key=self._hub_key,
+            rtsp_url=rtsp_url,
+            target_fps=float(fps),
+            backend=self._config.backend,
+        )
 
     async def _consume_gate_packets(self, context) -> None:  # noqa: ANN001
         gate_channel = context.inputs.get("gate")
@@ -206,11 +232,11 @@ class CameraSourceRuntime(SourceOperatorRuntime):
     async def _stop_grabber_if_needed(self) -> None:
         if self._grabber is None:
             return
-        try:
-            self._grabber.stop()
-        except Exception:
-            pass
+        hub_key = self._hub_key
         self._grabber = None
+        self._hub_key = ""
+        if hub_key:
+            await _GLOBAL_CAMERA_HUB.release(key=hub_key)
         self._last_ts = 0.0
 
     async def produce(self, context) -> Packet | None:  # noqa: ANN001

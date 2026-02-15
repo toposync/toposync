@@ -12,6 +12,7 @@ from toposync.runtime.pipelines import (
     Lifecycle,
     OperatorRegistry,
     Packet,
+    PipelineBundleRuntime,
     PipelineGraphCompiler,
     PipelineRuntime,
     SinkRuntime,
@@ -169,3 +170,85 @@ def test_schedule_gate_pauses_camera_source(monkeypatch: pytest.MonkeyPatch) -> 
     start_calls, stop_calls = asyncio.run(scenario({"enabled": False}))
     assert start_calls == 1
     assert stop_calls == 1
+
+
+def test_camera_hub_aggregates_demand_across_pipelines_with_different_schedules(monkeypatch: pytest.MonkeyPatch) -> None:
+    import toposync_ext_cameras.pipelines.operators as camera_ops
+
+    class _FakeFrameGrabber:
+        start_calls = 0
+        stop_calls = 0
+
+        def __init__(self, rtsp_url: str, *, target_fps: float = 15.0, backend: str = "auto", **_kwargs: Any) -> None:
+            self.rtsp_url = rtsp_url
+            self.target_fps = float(target_fps)
+            self.backend = str(backend)
+
+        def start(self) -> "_FakeFrameGrabber":
+            type(self).start_calls += 1
+            return self
+
+        def get_latest(self) -> tuple[None, float]:
+            return None, 0.0
+
+        def metrics_snapshot(self) -> Any:
+            return {"backend": self.backend}
+
+        def stop(self) -> None:
+            type(self).stop_calls += 1
+
+    monkeypatch.setattr(camera_ops, "FrameGrabber", _FakeFrameGrabber)
+
+    async def scenario() -> tuple[int, int, dict[str, Any]]:
+        _FakeFrameGrabber.start_calls = 0
+        _FakeFrameGrabber.stop_calls = 0
+
+        registry = OperatorRegistry()
+        register_builtin_operators(registry)
+        register_camera_pipeline_operators(registry)
+
+        graph_a = {
+            "schema_version": 1,
+            "nodes": [
+                {"id": "gate", "operator": "core.schedule_gate", "config": {"enabled": False}},
+                {"id": "camera", "operator": "camera.source", "config": {"rtsp_url": "rtsp://example", "fps": 5.0}},
+                {"id": "sink", "operator": "core.sink", "config": {}},
+            ],
+            "edges": [
+                {"from": {"node": "gate", "port": "out"}, "to": {"node": "camera", "port": "gate"}},
+                {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"}},
+            ],
+        }
+        graph_b = {
+            "schema_version": 1,
+            "nodes": [
+                # Enabled=true with default 24h window keeps the gate open, but differs from graph_a config.
+                {"id": "gate", "operator": "core.schedule_gate", "config": {}},
+                {"id": "camera", "operator": "camera.source", "config": {"rtsp_url": "rtsp://example", "fps": 5.0}},
+                {"id": "sink", "operator": "core.sink", "config": {}},
+            ],
+            "edges": [
+                {"from": {"node": "gate", "port": "out"}, "to": {"node": "camera", "port": "gate"}},
+                {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"}},
+            ],
+        }
+
+        report = PipelineGraphCompiler(registry).compile_many(
+            [
+                Pipeline(name="final_a", type="final", graph=graph_a),
+                Pipeline(name="final_b", type="final", graph=graph_b),
+            ],
+        )
+        runtime = PipelineBundleRuntime(report=report, registry=registry)
+        snapshot = await runtime.run_for(0.35)
+        return _FakeFrameGrabber.start_calls, _FakeFrameGrabber.stop_calls, snapshot
+
+    start_calls, stop_calls, snapshot = asyncio.run(scenario())
+    assert start_calls == 1
+    assert stop_calls == 1
+    # Different schedule nodes must not be allowed to "merge" the camera source in the bundle, otherwise one gate
+    # would effectively override the other. The hub is responsible for aggregating RTSP demand across consumers.
+    shared_nodes = snapshot.get("shared_nodes") or {}
+    for occurrences in shared_nodes.values():
+        occurrence_set = {(item.get("pipeline_name"), item.get("node_id")) for item in occurrences}
+        assert ("final_a", "camera") not in occurrence_set or ("final_b", "camera") not in occurrence_set

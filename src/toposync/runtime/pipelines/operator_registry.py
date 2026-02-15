@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 OPERATOR_ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 PORT_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 CAPABILITY_NAME_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+CONTRACT_ITEM_RE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
 
 
 class OperatorRegistrationError(ValueError):
@@ -45,6 +46,10 @@ class OperatorDefinition(BaseModel):
     defaults: dict[str, Any] = Field(default_factory=dict)
     config_schema: dict[str, Any] = Field(default_factory=dict)
     share_strategy: Literal["by_signature", "never"] = "by_signature"
+    requires_payload_keys: list[str] = Field(default_factory=list)
+    requires_artifacts: list[str] = Field(default_factory=list)
+    produces_payload_keys: list[str] = Field(default_factory=list)
+    produces_artifacts: list[str] = Field(default_factory=list)
 
     @field_validator("id")
     @classmethod
@@ -81,6 +86,23 @@ class OperatorDefinition(BaseModel):
             names.add(port.name)
         return ports
 
+    @field_validator("requires_payload_keys", "requires_artifacts", "produces_payload_keys", "produces_artifacts")
+    @classmethod
+    def _validate_contract_items(cls, values: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in values:
+            name = str(item or "").strip()
+            if not name:
+                continue
+            if not CONTRACT_ITEM_RE.match(name):
+                raise ValueError(f"Invalid contract item: {name}")
+            if name in seen:
+                continue
+            out.append(name)
+            seen.add(name)
+        return out
+
 
 class _LooseConfigModel(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -110,6 +132,10 @@ class OperatorRegistry:
         defaults: dict[str, Any] | None = None,
         description: str = "",
         share_strategy: Literal["by_signature", "never"] = "by_signature",
+        requires_payload_keys: list[str] | None = None,
+        requires_artifacts: list[str] | None = None,
+        produces_payload_keys: list[str] | None = None,
+        produces_artifacts: list[str] | None = None,
         owner: str | None = None,
         runtime_factory: Callable[[dict[str, Any], Any], Any] | None = None,
     ) -> OperatorDefinition:
@@ -137,6 +163,10 @@ class OperatorRegistry:
             defaults=normalized_defaults,
             config_schema=config_schema,
             share_strategy=share_strategy,
+            requires_payload_keys=list(requires_payload_keys or []),
+            requires_artifacts=list(requires_artifacts or []),
+            produces_payload_keys=list(produces_payload_keys or []),
+            produces_artifacts=list(produces_artifacts or []),
         )
 
         self._items[definition.id] = RegisteredOperator(

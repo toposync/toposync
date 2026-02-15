@@ -102,6 +102,59 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
 
     alerts: list[PipelineAlert] = []
 
+    # Operator contracts (lightweight requires/produces) for UX guidance.
+    available_payload_keys_out: dict[str, set[str]] = {}
+    available_artifacts_out: dict[str, set[str]] = {}
+    for node_id in pipeline.topological_order:
+        node = nodes_by_id.get(node_id)
+        if node is None:
+            continue
+        upstream_payload_keys: set[str] = set()
+        upstream_artifacts: set[str] = set()
+        for edge in incoming.get(node_id, []):
+            upstream_payload_keys.update(available_payload_keys_out.get(str(edge.source_node_id), set()))
+            upstream_artifacts.update(available_artifacts_out.get(str(edge.source_node_id), set()))
+
+        registered = registry.get(node.operator_id)
+        if registered is not None:
+            missing_payload_keys = [key for key in registered.definition.requires_payload_keys if key not in upstream_payload_keys]
+            if missing_payload_keys:
+                alerts.append(
+                    PipelineAlert(
+                        severity="warning",
+                        code="missing_required_payload_keys",
+                        node_id=node_id,
+                        operator_id=node.operator_id,
+                        message=(
+                            "This step expects payload keys that are not guaranteed upstream: "
+                            f"{', '.join(sorted(missing_payload_keys))}."
+                        ),
+                        suggestion="Move this step after the producer, or add a step that produces these keys upstream.",
+                    )
+                )
+
+            missing_artifacts = [name for name in registered.definition.requires_artifacts if name not in upstream_artifacts]
+            if missing_artifacts:
+                alerts.append(
+                    PipelineAlert(
+                        severity="warning",
+                        code="missing_required_artifacts",
+                        node_id=node_id,
+                        operator_id=node.operator_id,
+                        message=(
+                            "This step expects artifacts that are not guaranteed upstream: "
+                            f"{', '.join(sorted(missing_artifacts))}."
+                        ),
+                        suggestion="Move this step after the producer, or add a step that produces these artifacts upstream.",
+                    )
+                )
+
+            upstream_payload_keys.update(registered.definition.produces_payload_keys)
+            upstream_artifacts.update(registered.definition.produces_artifacts)
+
+        available_payload_keys_out[node_id] = upstream_payload_keys
+        available_artifacts_out[node_id] = upstream_artifacts
+
     # Tracking defaults: too-aggressive closing and unthrottled update emission cause flicker under drops.
     for tracking_node_id in _node_ids_by_operator("vision.object_tracking_yolo"):
         cfg = _resolve_config(tracking_node_id)

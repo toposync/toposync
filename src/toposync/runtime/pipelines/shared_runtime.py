@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any
@@ -36,15 +38,33 @@ def build_merged_pipeline_plan(
     if not pipelines:
         raise SharedRuntimeBuildError("Compilation report does not contain pipelines")
 
-    merged_node_by_key: dict[tuple[str, str], CompiledNode] = {}
-    node_id_by_key: dict[tuple[str, str], str] = {}
+    merged_node_by_key: dict[tuple[Any, ...], CompiledNode] = {}
+    node_id_by_key: dict[tuple[Any, ...], str] = {}
     occurrence_to_merged: dict[tuple[str, str], str] = {}
     occurrences_by_merged_id: dict[str, list[MergedNodeOccurrence]] = defaultdict(list)
     edge_by_key: dict[tuple[str, str, str, str], CompiledEdge] = {}
 
     for pipeline in pipelines:
+        incoming_by_node_id: dict[str, list[CompiledEdge]] = defaultdict(list)
+        for edge in pipeline.edges:
+            incoming_by_node_id[edge.target_node_id].append(edge)
         for node in pipeline.nodes:
-            merge_key = ("shared", node.signature) if node.shareable else ("isolated", f"{pipeline.name}:{node.node_id}")
+            if node.shareable:
+                incoming = incoming_by_node_id.get(node.node_id) or []
+                incoming_policy_key = tuple(
+                    sorted(
+                        (
+                            edge.target_port,
+                            edge.source_port,
+                            int(edge.channel_maxsize),
+                            str(edge.channel_drop_policy.value),
+                        )
+                        for edge in incoming
+                    ),
+                )
+                merge_key = ("shared", node.signature, incoming_policy_key)
+            else:
+                merge_key = ("isolated", f"{pipeline.name}:{node.node_id}")
             if merge_key not in node_id_by_key:
                 merged_node_id = _merged_node_id_for_key(node=node, merge_key=merge_key)
                 node_id_by_key[merge_key] = merged_node_id
@@ -162,11 +182,14 @@ class PipelineBundleRuntime:
         }
 
 
-def _merged_node_id_for_key(*, node: CompiledNode, merge_key: tuple[str, str]) -> str:
+def _merged_node_id_for_key(*, node: CompiledNode, merge_key: tuple[Any, ...]) -> str:
     if merge_key[0] == "shared":
         base = node.operator_id.replace(".", "_").replace("-", "_")
-        return f"shared_{base}_{node.signature[:12]}"
-    isolated_suffix = merge_key[1].replace(":", "__").replace(".", "_").replace("-", "_")
+        incoming_key = merge_key[2] if len(merge_key) > 2 else ()
+        incoming_encoded = json.dumps(incoming_key, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+        incoming_digest = hashlib.sha256(incoming_encoded.encode("utf-8")).hexdigest()[:8]
+        return f"shared_{base}_{node.signature[:12]}_{incoming_digest}"
+    isolated_suffix = str(merge_key[1]).replace(":", "__").replace(".", "_").replace("-", "_")
     return f"isolated_{isolated_suffix}"
 
 

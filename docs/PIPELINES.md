@@ -164,7 +164,12 @@ Implementação:
 - merge: `src/toposync/runtime/pipelines/shared_runtime.py`
 - orquestração: `src/toposync/runtime/pipelines/distributed/orchestrator.py`
 
-Observação importante: para um edge compartilhado ser unificado, `maxsize` e `drop_policy` precisam ser compatíveis; senão o bundle falha e o orquestrador cai para runtimes separados.
+Observação importante: o sharing é **node-level**.
+
+- Um nó `shareable` (ex.: YOLO) é executado **1x** e sua saída é tratada como um **broadcast interno**: cada consumidor downstream recebe **seu próprio canal bounded** com seu `maxsize/drop_policy`.
+- Diferenças de canal downstream **não impedem** que um nó pesado seja compartilhado.
+- O que não pode ser compartilhado é um nó `shareable` cuja **entrada** teria políticas de canal diferentes (porque um nó tem um único input buffer). Nesse caso, o bundle **isola o nó downstream** (uma instância por pipeline) e mantém o upstream (ex.: YOLO) compartilhado.
+- “Edge-level unify” é uma otimização interna apenas para conexões **entre nós já compartilhados** (onde as políticas de canal necessariamente coincidem).
 
 ---
 

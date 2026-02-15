@@ -19,6 +19,7 @@ from toposync.runtime.pipelines import (
     PipelineRuntimeDependencies,
     SinkRuntime,
     SourceOperatorRuntime,
+    TransformOperatorRuntime,
     register_builtin_operators,
 )
 from toposync_ext_cameras.pipelines import YoloObject, register_camera_pipeline_operators
@@ -34,6 +35,10 @@ class _FrameSourceConfig(BaseModel):
 class _CollectSinkConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     sink_name: str = "sink"
+
+
+class _IdentityConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 class _FrameSourceRuntime(SourceOperatorRuntime):
@@ -83,6 +88,14 @@ class _CollectSinkRuntime(SinkRuntime):
         return []
 
 
+class _IdentityRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        _IdentityConfig.model_validate(config)
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        return [packet]
+
+
 class _SequenceYoloBackend:
     def __init__(self, sequence: list[list[YoloObject]], counters: dict[str, Any]) -> None:
         self._sequence = sequence
@@ -120,6 +133,15 @@ def _register_test_source_and_sink(registry: OperatorRegistry, counters: dict[st
         runtime_factory=lambda config, _deps: _FrameSourceRuntime(config, counters),
     )
     registry.register_operator(
+        operator_id="test.identity",
+        config_model=_IdentityConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        defaults=_IdentityConfig().model_dump(),
+        share_strategy="by_signature",
+        runtime_factory=lambda config, _deps: _IdentityRuntime(config),
+    )
+    registry.register_operator(
         operator_id="test.collect_sink",
         config_model=_CollectSinkConfig,
         inputs=[{"name": "in", "required": True}],
@@ -155,6 +177,50 @@ def _tracking_pipeline_graph(*, source_id: str, yolo_id: str, sink_id: str, sink
         "edges": [
             {"from": {"node": source_id, "port": "out"}, "to": {"node": yolo_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
             {"from": {"node": yolo_id, "port": "out"}, "to": {"node": sink_id, "port": "in"}, "maxsize": 64, "drop_policy": "drop_oldest"},
+        ],
+    }
+
+
+def _tracking_pipeline_graph_with_shareable_transform(
+    *,
+    source_id: str,
+    yolo_id: str,
+    transform_id: str,
+    sink_id: str,
+    sink_name: str,
+    yolo_to_transform_maxsize: int,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "nodes": [
+            {
+                "id": source_id,
+                "operator": "test.frame_source",
+                "config": {"stream_id": "camera:test", "max_frames": 10, "interval_ms": 15},
+            },
+            {
+                "id": yolo_id,
+                "operator": "vision.object_tracking_yolo",
+                "config": {
+                    "categories": ["person"],
+                    "default_interval_seconds": 0.0,
+                    "close_after_seconds": 0.05,
+                    "emit_open_on_first": True,
+                    "emit_close_on_lost": True,
+                },
+            },
+            {"id": transform_id, "operator": "test.identity", "config": {}},
+            {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
+        ],
+        "edges": [
+            {"from": {"node": source_id, "port": "out"}, "to": {"node": yolo_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
+            {
+                "from": {"node": yolo_id, "port": "out"},
+                "to": {"node": transform_id, "port": "in"},
+                "maxsize": int(yolo_to_transform_maxsize),
+                "drop_policy": "drop_oldest",
+            },
+            {"from": {"node": transform_id, "port": "out"}, "to": {"node": sink_id, "port": "in"}, "maxsize": 64, "drop_policy": "drop_oldest"},
         ],
     }
 
@@ -431,6 +497,82 @@ def test_bundle_runtime_shares_single_yolo_across_two_final_pipelines() -> None:
             if node.operator_id == "vision.object_tracking_yolo"
         )
         assert yolo_node_count == 1
+        source_frames = int(counters.get("source_frames", 0))
+        track_calls = int(counters.get("track_calls", 0))
+        assert 0 <= (source_frames - track_calls) <= 1
+        sink_counts = counters.get("sink_counts", {})
+        assert int(sink_counts.get("sink_a", 0)) > 0
+        assert int(sink_counts.get("sink_b", 0)) > 0
+
+        runtime_snapshot = snapshot["runtime"]
+        for channel in runtime_snapshot["channels"].values():
+            assert int(channel["max_depth_seen"]) <= int(channel["maxsize"])
+
+    asyncio.run(scenario())
+
+
+def test_bundle_runtime_shares_yolo_even_when_downstream_channel_policies_differ() -> None:
+    async def scenario() -> None:
+        counters: dict[str, Any] = {}
+        registry = OperatorRegistry()
+        register_builtin_operators(registry)
+        register_camera_pipeline_operators(registry)
+        _register_test_source_and_sink(registry, counters, source_shareable=True)
+
+        sequence = [
+            [
+                YoloObject(tracking_id="17", category="person", confidence=0.95, bbox01=(0.1, 0.1, 0.2, 0.4)),
+                YoloObject(tracking_id="42", category="person", confidence=0.90, bbox01=(0.5, 0.2, 0.7, 0.6)),
+            ],
+            [
+                YoloObject(tracking_id="17", category="person", confidence=0.90, bbox01=(0.11, 0.1, 0.22, 0.4)),
+            ],
+            [],
+            [],
+        ]
+        dependencies = PipelineRuntimeDependencies(
+            yolo_backend_factory=_build_backend_factory(sequence, counters),
+        )
+
+        graph_one = _tracking_pipeline_graph_with_shareable_transform(
+            source_id="source_a",
+            yolo_id="yolo_a",
+            transform_id="identity_a",
+            sink_id="sink_a",
+            sink_name="sink_a",
+            yolo_to_transform_maxsize=16,
+        )
+        graph_two = _tracking_pipeline_graph_with_shareable_transform(
+            source_id="source_b",
+            yolo_id="yolo_b",
+            transform_id="identity_b",
+            sink_id="sink_b",
+            sink_name="sink_b",
+            yolo_to_transform_maxsize=64,
+        )
+        report = PipelineGraphCompiler(registry).compile_many(
+            [
+                Pipeline(name="final_a", type="final", graph=graph_one),
+                Pipeline(name="final_b", type="final", graph=graph_two),
+            ],
+        )
+        bundle_runtime = PipelineBundleRuntime(report=report, registry=registry, dependencies=dependencies)
+        snapshot = await bundle_runtime.run_for(0.35)
+
+        yolo_node_count = sum(
+            1
+            for node in bundle_runtime.plan.merged_pipeline.nodes
+            if node.operator_id == "vision.object_tracking_yolo"
+        )
+        assert yolo_node_count == 1
+
+        identity_node_count = sum(
+            1
+            for node in bundle_runtime.plan.merged_pipeline.nodes
+            if node.operator_id == "test.identity"
+        )
+        assert identity_node_count == 2
+
         source_frames = int(counters.get("source_frames", 0))
         track_calls = int(counters.get("track_calls", 0))
         assert 0 <= (source_frames - track_calls) <= 1

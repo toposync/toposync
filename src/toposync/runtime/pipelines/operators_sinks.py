@@ -450,6 +450,8 @@ class _NotifyState:
     started_ts: float
     last_emit_monotonic: float = 0.0
     last_signature: str = ""
+    last_title: str = ""
+    last_description: str = ""
     last_image_path: str | None = None
 
 
@@ -458,8 +460,11 @@ class NotifyRuntime(SinkRuntime):
         self._config = NotifyConfig.model_validate(config)
         self._dependencies = dependencies
         self._state: OrderedDict[str, _NotifyState] = OrderedDict()
+        self._shutting_down = False
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        if self._shutting_down:
+            return []
         upsert = getattr(self._dependencies, "notifications_upsert", None)
         if not callable(upsert):
             raise RuntimeError("core.notify requires PipelineRuntimeDependencies.notifications_upsert")
@@ -498,6 +503,8 @@ class NotifyRuntime(SinkRuntime):
 
         state.last_emit_monotonic = now_monotonic
         state.last_signature = signature
+        state.last_title = title
+        state.last_description = description
         if image_path:
             state.last_image_path = image_path
 
@@ -541,6 +548,43 @@ class NotifyRuntime(SinkRuntime):
                 return []
 
         return []
+
+    async def shutdown(self) -> None:
+        # Garante invariant "close must happen" para notificações abertas quando o runtime for encerrado.
+        self._shutting_down = True
+        upsert = getattr(self._dependencies, "notifications_upsert", None)
+        if not callable(upsert):
+            return
+        if not self._state:
+            return
+
+        now_ts = time.time()
+        for dedupe_key, state in list(self._state.items()):
+            try:
+                await upsert(
+                    type=self._config.notification_type,
+                    title=state.last_title or "Pipeline event",
+                    description=state.last_description or "",
+                    image_path=state.last_image_path,
+                    payload={
+                        "source": "pipelines",
+                        "lifecycle": Lifecycle.CLOSE.value,
+                        "status": "closed",
+                        "priority": self._config.priority,
+                        "realtime": bool(self._config.realtime),
+                        "reason": "shutdown_synthesized",
+                        "event": {
+                            "started_ts": float(state.started_ts),
+                            "ts": float(now_ts),
+                            "duration_seconds": max(0.0, float(now_ts) - float(state.started_ts)),
+                        },
+                    },
+                    dedupe_key=dedupe_key,
+                )
+            except Exception:
+                # Best-effort: o pipeline pode estar encerrando por erro/cancel.
+                continue
+        self._state.clear()
 
     def _dedupe_key(self, packet: Packet, context) -> str:
         if self._config.dedupe_key_template:

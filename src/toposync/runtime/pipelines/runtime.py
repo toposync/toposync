@@ -211,6 +211,11 @@ class BoundedChannel(Generic[T]):
         cancel_event: asyncio.Event | None = None,
     ) -> ChannelPutResult:
         timeout = _normalize_timeout(timeout_s)
+        structural = _is_structural_item(item)
+        if structural:
+            # OPEN/CLOSE are structural: never drop due to queue pressure.
+            # We also ignore timeouts for these so NodeExecutionContext.emit doesn't lose lifecycle edges.
+            timeout = None
         deadline = time.monotonic() + timeout if timeout is not None else None
         envelope = _Envelope(item=item, enqueued_monotonic_ns=time.monotonic_ns())
         self._metrics.put_attempts += 1
@@ -227,18 +232,21 @@ class BoundedChannel(Generic[T]):
             except asyncio.QueueFull:
                 pass
 
-            if self.drop_policy == DropPolicy.DROP_NEWEST:
+            if self.drop_policy == DropPolicy.DROP_NEWEST and not structural:
                 self._metrics.dropped_newest += 1
                 return ChannelPutResult(status=QueueOperationStatus.DROPPED)
 
             if self.drop_policy in {DropPolicy.DROP_OLDEST, DropPolicy.LATEST_ONLY}:
-                dropped = self._drop_oldest(clear_all=self.drop_policy == DropPolicy.LATEST_ONLY)
-                if dropped <= 0:
-                    await asyncio.sleep(0)
-                self._metrics.dropped_oldest += dropped
-                continue
+                dropped = self._drop_droppable(clear_all=self.drop_policy == DropPolicy.LATEST_ONLY)
+                if dropped > 0:
+                    self._metrics.dropped_oldest += dropped
+                    continue
+                if not structural:
+                    # Queue is full of structural items, so we can't drop anything safely.
+                    self._metrics.dropped_newest += 1
+                    return ChannelPutResult(status=QueueOperationStatus.DROPPED)
 
-            if self.drop_policy != DropPolicy.BLOCK:
+            if self.drop_policy != DropPolicy.BLOCK and not structural:
                 self._metrics.dropped_newest += 1
                 return ChannelPutResult(status=QueueOperationStatus.DROPPED)
 
@@ -310,6 +318,35 @@ class BoundedChannel(Generic[T]):
                 break
             if not clear_all:
                 break
+        return dropped
+
+    def _drop_droppable(self, *, clear_all: bool) -> int:
+        # Remove UPDATE packets first; never drop structural lifecycle packets.
+        kept: list[_Envelope[T]] = []
+        dropped = 0
+        while True:
+            try:
+                env = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+            if _is_structural_item(env.item):
+                kept.append(env)
+                continue
+
+            if clear_all:
+                dropped += 1
+                continue
+
+            if dropped == 0:
+                dropped += 1
+                continue
+
+            kept.append(env)
+
+        for env in kept:
+            self._queue.put_nowait(env)
+
         return dropped
 
     def _on_put_accepted(self) -> None:
@@ -384,6 +421,17 @@ def _normalize_timeout(timeout_s: float | None) -> float | None:
     if not math.isfinite(timeout) or timeout < 0:
         raise ValueError("timeout_s must be >= 0 and finite")
     return timeout
+
+
+def _is_structural_item(item: Any) -> bool:
+    if not isinstance(item, Packet):
+        return False
+    lifecycle = item.lifecycle
+    if lifecycle == Lifecycle.OPEN or lifecycle == Lifecycle.CLOSE:
+        return True
+    if isinstance(lifecycle, str):
+        return lifecycle.lower() in {"open", "close"}
+    return str(lifecycle).lower() in {"open", "close"}
 
 
 def _remaining_timeout(deadline: float | None) -> float | None:

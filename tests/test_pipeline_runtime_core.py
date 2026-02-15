@@ -92,3 +92,78 @@ def test_channel_block_timeout_and_cancel() -> None:
         assert metrics.max_depth_seen <= metrics.maxsize
 
     asyncio.run(scenario())
+
+
+def test_channel_never_drops_open_close_packets() -> None:
+    async def scenario() -> None:
+        channel = BoundedChannel[Packet](name="lifecycle", maxsize=1, drop_policy=DropPolicy.LATEST_ONLY)
+
+        open_packet = Packet.create(stream_id="stream", lifecycle=Lifecycle.OPEN, payload={"kind": "event"})
+        assert (await channel.put(open_packet)).status == QueueOperationStatus.ACCEPTED
+
+        update_packet = Packet.create(stream_id="stream", lifecycle=Lifecycle.UPDATE, payload={"seq": 1})
+        dropped = await channel.put(update_packet)
+        assert dropped.status == QueueOperationStatus.DROPPED
+
+        first = await channel.get(timeout_s=0.05)
+        assert first.item is not None
+        assert first.item.lifecycle == Lifecycle.OPEN
+
+        close_packet = Packet.create(stream_id="stream", lifecycle=Lifecycle.CLOSE, payload={"seq": 2})
+        assert (await channel.put(close_packet)).status == QueueOperationStatus.ACCEPTED
+        second = await channel.get(timeout_s=0.05)
+        assert second.item is not None
+        assert second.item.lifecycle == Lifecycle.CLOSE
+
+        metrics = channel.metrics_snapshot()
+        assert metrics.dropped_newest >= 1
+
+    asyncio.run(scenario())
+
+
+def test_channel_latest_only_preserves_open_and_latest_update() -> None:
+    async def scenario() -> None:
+        channel = BoundedChannel[Packet](name="latest_lifecycle", maxsize=2, drop_policy=DropPolicy.LATEST_ONLY)
+
+        open_packet = Packet.create(stream_id="stream", lifecycle=Lifecycle.OPEN)
+        update_1 = Packet.create(stream_id="stream", lifecycle=Lifecycle.UPDATE, payload={"seq": 1})
+        update_2 = Packet.create(stream_id="stream", lifecycle=Lifecycle.UPDATE, payload={"seq": 2})
+
+        await channel.put(open_packet)
+        await channel.put(update_1)
+        await channel.put(update_2)
+
+        first = await channel.get(timeout_s=0.05)
+        second = await channel.get(timeout_s=0.05)
+        assert first.item is not None
+        assert second.item is not None
+        assert first.item.lifecycle == Lifecycle.OPEN
+        assert second.item.payload.get("seq") == 2
+
+    asyncio.run(scenario())
+
+
+def test_channel_blocks_close_until_open_is_consumed() -> None:
+    async def scenario() -> None:
+        channel = BoundedChannel[Packet](name="close_block", maxsize=1, drop_policy=DropPolicy.DROP_OLDEST)
+
+        open_packet = Packet.create(stream_id="stream", lifecycle=Lifecycle.OPEN)
+        close_packet = Packet.create(stream_id="stream", lifecycle=Lifecycle.CLOSE)
+        await channel.put(open_packet)
+
+        put_close = asyncio.create_task(channel.put(close_packet, timeout_s=0.01))
+        await asyncio.sleep(0.02)
+        assert not put_close.done()
+
+        first = await channel.get(timeout_s=0.05)
+        assert first.item is not None
+        assert first.item.lifecycle == Lifecycle.OPEN
+
+        result = await asyncio.wait_for(put_close, timeout=0.2)
+        assert result.status == QueueOperationStatus.ACCEPTED
+
+        second = await channel.get(timeout_s=0.05)
+        assert second.item is not None
+        assert second.item.lifecycle == Lifecycle.CLOSE
+
+    asyncio.run(scenario())

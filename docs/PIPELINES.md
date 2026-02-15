@@ -48,6 +48,16 @@ Implementação: `src/toposync/runtime/pipelines/runtime.py` (`Packet`, `Artifac
   - `artifacts["frame_original"]`: frame “imutável” de origem (full frame).
   - `artifacts["frame"]`: frame “corrente” do stream (pode ser alterado por operadores como crop/adjust).
 
+### Lifecycle invariants (sob drop/backpressure)
+
+Para manter previsibilidade sob carga (e evitar “update sem open” ou “stream aberto para sempre”), o runtime segue invariantes:
+
+- Para um mesmo `stream_id`, **`open` deve preceder `update`**.
+- Para um mesmo `stream_id`, **`close` deve sempre ocorrer** (ou ser **sintetizado no shutdown/reload** por operadores stateful, como notificações).
+- **`update` pode ser dropado**, mas o estado downstream deve ser “reparável” (ex.: reconstituível a partir do último update recebido).
+- **`open`/`close` são mensagens estruturais e não são descartadas** por políticas de drop destinadas a `update`.
+  - Na prática: `BoundedChannel` protege `open`/`close` e **descarta apenas `update` quando precisar liberar espaço**.
+
 ### Split (2 pessoas simultâneas)
 
 Operadores como `vision.object_tracking_yolo` **dividem o stream**: de um `stream_id` da câmera surgem múltiplos `stream_id` (um por objeto). Isso permite:

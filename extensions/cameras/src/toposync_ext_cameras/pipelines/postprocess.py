@@ -4,7 +4,7 @@ import math
 import time
 from collections import deque
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -49,6 +49,27 @@ class ImageResizeConfig(BaseModel):
     @classmethod
     def _normalize_config_artifact_names(cls, value: list[str]) -> list[str]:
         return _normalize_artifact_names(value)
+
+
+class ImageCropConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    units: Literal["percent", "pixels"] = "percent"
+    left: float = Field(default=0.0, ge=0.0)
+    top: float = Field(default=0.0, ge=0.0)
+    right: float = Field(default=100.0, ge=0.0)
+    bottom: float = Field(default=100.0, ge=0.0)
+
+    output_artifact_name: str = "frame_cropped"
+    min_crop_size_px: int = Field(default=8, ge=1, le=4096)
+    set_payload_frame: bool = True
+
+    @field_validator("output_artifact_name")
+    @classmethod
+    def _validate_output_artifact_name(cls, value: str) -> str:
+        name = str(value or "").strip()
+        if not name:
+            raise ValueError("output_artifact_name is required")
+        return name
 
 
 class CameraMappingControlPointImage(BaseModel):
@@ -268,6 +289,146 @@ class ObjectSegmentationRuntime(TransformOperatorRuntime):
             packet=out,
             preferred_input_artifact_names=self._config.input_artifact_names,
             selected_input_artifact_name=selected_name,
+            latest_artifact_name=self._config.output_artifact_name,
+        )
+        return [replace(out, payload=payload)]
+
+
+class ImageCropRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = ImageCropConfig.model_validate(config)
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        packet = _ensure_original_artifact(packet)
+        frame = packet.payload.get("frame")
+        if frame is None:
+            return [packet]
+
+        shape = getattr(frame, "shape", None)
+        if not shape or len(shape) < 2:
+            return [packet]
+        try:
+            height = int(shape[0])
+            width = int(shape[1])
+        except Exception:
+            return [packet]
+        if height <= 1 or width <= 1:
+            return [packet]
+
+        left = float(self._config.left)
+        top = float(self._config.top)
+        right = float(self._config.right)
+        bottom = float(self._config.bottom)
+
+        if self._config.units == "pixels":
+            bbox01_current = _normalize_bbox01(
+                (
+                    left / float(width),
+                    top / float(height),
+                    right / float(width),
+                    bottom / float(height),
+                ),
+            )
+        else:
+            bbox01_current = _normalize_bbox01(
+                (
+                    left / 100.0,
+                    top / 100.0,
+                    right / 100.0,
+                    bottom / 100.0,
+                ),
+            )
+
+        crop = _crop_bbox01(image=frame, bbox01=bbox01_current, min_crop_size_px=self._config.min_crop_size_px)
+        if crop is None:
+            return [packet]
+
+        base_bbox01 = (0.0, 0.0, 1.0, 1.0)
+        existing_crop = packet.payload.get("frame_crop")
+        if isinstance(existing_crop, dict):
+            raw = existing_crop.get("bbox01")
+            if isinstance(raw, (list, tuple)) and len(raw) >= 4:
+                try:
+                    values = [float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3])]
+                except Exception:
+                    values = []
+                if values:
+                    base_bbox01 = _normalize_bbox01((values[0], values[1], values[2], values[3]))
+
+        base_x1, base_y1, base_x2, base_y2 = base_bbox01
+        base_w = max(0.0, base_x2 - base_x1)
+        base_h = max(0.0, base_y2 - base_y1)
+        cur_x1, cur_y1, cur_x2, cur_y2 = bbox01_current
+        bbox01_total = _normalize_bbox01(
+            (
+                base_x1 + (cur_x1 * base_w),
+                base_y1 + (cur_y1 * base_h),
+                base_x1 + (cur_x2 * base_w),
+                base_y1 + (cur_y2 * base_h),
+            ),
+        )
+
+        artifact_meta: dict[str, Any] = {
+            "source": "camera.image_crop",
+            "bbox01_current": list(bbox01_current),
+            "bbox01_total": list(bbox01_total),
+            "units": str(self._config.units),
+            "left": float(self._config.left),
+            "top": float(self._config.top),
+            "right": float(self._config.right),
+            "bottom": float(self._config.bottom),
+        }
+
+        original = packet.artifacts.get("frame_original")
+        if original is not None and original.data is not None:
+            oshape = getattr(original.data, "shape", None)
+            if oshape and len(oshape) >= 2:
+                try:
+                    oh = int(oshape[0])
+                    ow = int(oshape[1])
+                except Exception:
+                    oh = 0
+                    ow = 0
+                if oh > 1 and ow > 1:
+                    artifact_meta["bbox_px_total"] = list(_bbox01_to_px(bbox01_total, width=ow, height=oh))
+
+        out = packet.with_artifact(
+            Artifact(
+                name=self._config.output_artifact_name,
+                data=crop,
+                mime_type="image/raw",
+                metadata=artifact_meta,
+            ),
+        )
+
+        payload = dict(out.payload)
+        payload["frame_crop"] = {
+            "bbox01": list(bbox01_total),
+            "bbox01_current": list(bbox01_current),
+            "units": str(self._config.units),
+            "left": float(self._config.left),
+            "top": float(self._config.top),
+            "right": float(self._config.right),
+            "bottom": float(self._config.bottom),
+            "set_payload_frame": bool(self._config.set_payload_frame),
+            "output_artifact_name": self._config.output_artifact_name,
+        }
+
+        if self._config.set_payload_frame:
+            payload["frame"] = crop
+            cshape = getattr(crop, "shape", None)
+            if cshape and len(cshape) >= 2:
+                try:
+                    payload["frame_height"] = int(cshape[0])
+                    payload["frame_width"] = int(cshape[1])
+                except Exception:
+                    pass
+
+        payload = _annotate_artifact_contract(
+            payload,
+            packet=out,
+            preferred_input_artifact_names=["frame_original"],
+            selected_input_artifact_name="payload.frame",
             latest_artifact_name=self._config.output_artifact_name,
         )
         return [replace(out, payload=payload)]
@@ -797,6 +958,18 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         runtime_factory=lambda config, _deps: ObjectSegmentationRuntime(config),
     )
     registry.register_operator(
+        operator_id="camera.image_crop",
+        description="Crops payload frame by a configured rectangle and writes a cropped artifact.",
+        config_model=ImageCropConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["camera", "artifact", "crop"],
+        defaults=ImageCropConfig().model_dump(),
+        share_strategy="by_signature",
+        owner="com.toposync.cameras",
+        runtime_factory=lambda config, _deps: ImageCropRuntime(config),
+    )
+    registry.register_operator(
         operator_id="camera.image_resize",
         description="Resizes image artifacts in-memory (in-place) to reduce file sizes before storage.",
         config_model=ImageResizeConfig,
@@ -951,6 +1124,24 @@ def _expand_bbox01(bbox01: tuple[float, float, float, float], *, padding_ratio: 
     pad_x = width * ratio
     pad_y = height * ratio
     return _normalize_bbox01((x1 - pad_x, y1 - pad_y, x2 + pad_x, y2 + pad_y))
+
+
+def _bbox01_to_px(
+    bbox01: tuple[float, float, float, float],
+    *,
+    width: int,
+    height: int,
+) -> tuple[int, int, int, int]:
+    w = int(width)
+    h = int(height)
+    if w <= 1 or h <= 1:
+        return (0, 0, 0, 0)
+    x1, y1, x2, y2 = bbox01
+    px1 = max(0, min(w - 1, int(x1 * w)))
+    py1 = max(0, min(h - 1, int(y1 * h)))
+    px2 = max(px1 + 1, min(w, int(math.ceil(x2 * w))))
+    py2 = max(py1 + 1, min(h, int(math.ceil(y2 * h))))
+    return (px1, py1, px2, py2)
 
 
 def _crop_bbox01(

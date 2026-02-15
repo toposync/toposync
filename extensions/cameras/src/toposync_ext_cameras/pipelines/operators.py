@@ -370,7 +370,8 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
     def _throttle_key(self, *, source_stream_id: str, category: str) -> str:
         return f"{source_stream_id}|{str(category or '').strip().lower()}"
 
-    def _normalize_objects(self, raw_objects: list[YoloObject]) -> list[YoloObject]:
+    def _normalize_objects(self, raw_objects: list[YoloObject], *, packet: Packet) -> list[YoloObject]:
+        crop_bbox01 = _read_frame_crop_bbox01(packet)
         objects: list[YoloObject] = []
         for raw in raw_objects:
             category = str(raw.category or "").strip().lower()
@@ -378,7 +379,10 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
                 continue
             if self._categories_set and category not in self._categories_set:
                 continue
-            bbox = _normalize_bbox01(raw.bbox01)
+            bbox = raw.bbox01
+            if crop_bbox01 is not None:
+                bbox = _uncrop_bbox01(bbox, crop_bbox01)
+            bbox = _normalize_bbox01(bbox)
             confidence = max(0.0, min(1.0, float(raw.confidence)))
             tracking_id = str(raw.tracking_id).strip() if raw.tracking_id is not None else None
             objects.append(
@@ -412,7 +416,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
             return []
         backend = self._ensure_backend()
         raw = await asyncio.to_thread(backend.track_objects, frame, categories=self._categories_set or None)
-        return self._normalize_objects(raw)
+        return self._normalize_objects(raw, packet=packet)
 
     async def _detect_objects(self, packet: Packet) -> list[YoloObject]:
         frame = packet.payload.get("frame")
@@ -423,7 +427,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
             return []
         backend = self._ensure_backend()
         raw = await asyncio.to_thread(backend.detect_objects, frame, categories=self._categories_set or None)
-        return self._normalize_objects(raw)
+        return self._normalize_objects(raw, packet=packet)
 
     def _copy_payload_with_object(self, packet: Packet, *, object_data: dict[str, Any]) -> dict[str, Any]:
         payload = dict(packet.payload)
@@ -861,6 +865,40 @@ def _normalize_bbox01(bbox: tuple[float, float, float, float]) -> tuple[float, f
     if y2 < y1:
         y1, y2 = y2, y1
     return (x1, y1, x2, y2)
+
+
+def _read_frame_crop_bbox01(packet: Packet) -> tuple[float, float, float, float] | None:
+    crop = packet.payload.get("frame_crop")
+    if not isinstance(crop, dict):
+        return None
+    if crop.get("set_payload_frame") is False:
+        return None
+    raw = crop.get("bbox01")
+    if isinstance(raw, (list, tuple)) and len(raw) >= 4:
+        try:
+            values = [float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3])]
+        except Exception:
+            values = []
+        if values:
+            return _normalize_bbox01((values[0], values[1], values[2], values[3]))
+    return None
+
+
+def _uncrop_bbox01(
+    bbox01: tuple[float, float, float, float],
+    crop_bbox01: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    # Converte bbox relativo ao frame "cropped" para o espaço do frame original.
+    x1, y1, x2, y2 = [float(v) for v in bbox01]
+    cx1, cy1, cx2, cy2 = [float(v) for v in crop_bbox01]
+    cw = max(0.0, cx2 - cx1)
+    ch = max(0.0, cy2 - cy1)
+    return (
+        cx1 + (x1 * cw),
+        cy1 + (y1 * ch),
+        cx1 + (x2 * cw),
+        cy1 + (y2 * ch),
+    )
 
 
 def _bbox_iou01(

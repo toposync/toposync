@@ -270,6 +270,170 @@ export function VelocityEstimationConfigCard({
   );
 }
 
+type ImageCropProps = {
+  config: Record<string, unknown>;
+  showAdvanced: boolean;
+  onUpdateConfig: UpdateConfig;
+};
+
+export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: ImageCropProps): React.ReactElement {
+  const unitsRaw = String((config as any).units ?? "percent").trim().toLowerCase();
+  const units = unitsRaw === "pixels" ? "pixels" : "percent";
+  const left = Number((config as any).left ?? 0);
+  const top = Number((config as any).top ?? 0);
+  const right = Number((config as any).right ?? 100);
+  const bottom = Number((config as any).bottom ?? 100);
+  const outputArtifactName = String((config as any).output_artifact_name ?? "frame_cropped").trim() || "frame_cropped";
+  const minCropSizePx = Number((config as any).min_crop_size_px ?? 8);
+  const setPayloadFrame = (config as any).set_payload_frame !== false;
+
+  const percentMax = 100;
+  const clampPercent = (value: number) => Math.max(0, Math.min(percentMax, value));
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <div className="pipelinesStepHint">
+        Crops the frame for downstream analysis (YOLO). The original full frame is preserved as <code>frame_original</code>.
+      </div>
+
+      <label className="pipelinesLabel">
+        <span>Units</span>
+        <select
+          className="pipelinesSelect"
+          value={units}
+          onChange={(event) => {
+            const next = String(event.target.value || "percent").trim().toLowerCase();
+            onUpdateConfig((prev) => ({ ...prev, units: next === "pixels" ? "pixels" : "percent" }));
+          }}
+        >
+          <option value="percent">Percent (0–100)</option>
+          <option value="pixels">Pixels</option>
+        </select>
+      </label>
+
+      <div className="pipelinesScalarGrid" style={{ marginTop: 8 }}>
+        <label className="pipelinesLabel pipelinesScalarLabel">
+          <span>Left</span>
+          <input
+            className="pipelinesInput"
+            type="number"
+            min={0}
+            max={units === "percent" ? percentMax : undefined}
+            step={units === "percent" ? 0.5 : 1}
+            value={Number.isFinite(left) ? String(units === "percent" ? clampPercent(left) : Math.max(0, left)) : "0"}
+            onChange={(event) => {
+              const nextValue = Number(event.target.value || 0);
+              onUpdateConfig((prev) => ({ ...prev, left: units === "percent" ? clampPercent(nextValue) : Math.max(0, nextValue) }));
+            }}
+          />
+        </label>
+
+        <label className="pipelinesLabel pipelinesScalarLabel">
+          <span>Top</span>
+          <input
+            className="pipelinesInput"
+            type="number"
+            min={0}
+            max={units === "percent" ? percentMax : undefined}
+            step={units === "percent" ? 0.5 : 1}
+            value={Number.isFinite(top) ? String(units === "percent" ? clampPercent(top) : Math.max(0, top)) : "0"}
+            onChange={(event) => {
+              const nextValue = Number(event.target.value || 0);
+              onUpdateConfig((prev) => ({ ...prev, top: units === "percent" ? clampPercent(nextValue) : Math.max(0, nextValue) }));
+            }}
+          />
+        </label>
+
+        <label className="pipelinesLabel pipelinesScalarLabel">
+          <span>Right</span>
+          <input
+            className="pipelinesInput"
+            type="number"
+            min={0}
+            max={units === "percent" ? percentMax : undefined}
+            step={units === "percent" ? 0.5 : 1}
+            value={Number.isFinite(right) ? String(units === "percent" ? clampPercent(right) : Math.max(0, right)) : "100"}
+            onChange={(event) => {
+              const nextValue = Number(event.target.value || 0);
+              onUpdateConfig((prev) => ({ ...prev, right: units === "percent" ? clampPercent(nextValue) : Math.max(0, nextValue) }));
+            }}
+          />
+        </label>
+
+        <label className="pipelinesLabel pipelinesScalarLabel">
+          <span>Bottom</span>
+          <input
+            className="pipelinesInput"
+            type="number"
+            min={0}
+            max={units === "percent" ? percentMax : undefined}
+            step={units === "percent" ? 0.5 : 1}
+            value={Number.isFinite(bottom) ? String(units === "percent" ? clampPercent(bottom) : Math.max(0, bottom)) : "100"}
+            onChange={(event) => {
+              const nextValue = Number(event.target.value || 0);
+              onUpdateConfig((prev) => ({ ...prev, bottom: units === "percent" ? clampPercent(nextValue) : Math.max(0, nextValue) }));
+            }}
+          />
+        </label>
+      </div>
+
+      <div className="rowWrap" style={{ marginTop: 10, justifyContent: "space-between" }}>
+        <div className="pipelinesStepHint">
+          Rectangle is defined as Left/Top/Right/Bottom (percent of frame or pixels from top-left).
+        </div>
+        <button
+          className="chipButton"
+          type="button"
+          onClick={() => onUpdateConfig((prev) => ({ ...prev, left: 0, top: 0, right: 100, bottom: 100, units: "percent" }))}
+        >
+          Reset
+        </button>
+      </div>
+
+      {showAdvanced ? (
+        <>
+          <div className="sectionDivider" />
+          <label className="pipelinesLabel">
+            <span>Cropped artifact name</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={outputArtifactName}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, output_artifact_name: event.target.value }))}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>Min crop size (px)</span>
+            <input
+              className="pipelinesInput"
+              type="number"
+              min={1}
+              max={4096}
+              step={1}
+              value={Number.isFinite(minCropSizePx) ? String(Math.max(1, Math.min(4096, minCropSizePx))) : "8"}
+              onChange={(event) => {
+                const nextValue = Number(event.target.value || 0);
+                const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(4096, nextValue)) : 8;
+                onUpdateConfig((prev) => ({ ...prev, min_crop_size_px: normalized }));
+              }}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>Use cropped frame for downstream</span>
+            <input
+              type="checkbox"
+              checked={setPayloadFrame}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, set_payload_frame: event.target.checked }))}
+            />
+          </label>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 type ImageResizeProps = {
   config: Record<string, unknown>;
   onUpdateConfig: UpdateConfig;

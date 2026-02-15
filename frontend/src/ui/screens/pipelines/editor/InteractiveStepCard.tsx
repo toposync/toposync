@@ -38,6 +38,7 @@ function shouldHideScalarGrid(operatorId: string): boolean {
   return (
     operatorId === "core.schedule_gate" ||
     operatorId === "camera.source" ||
+    operatorId === "camera.image_crop" ||
     operatorId === "camera.image_resize" ||
     operatorId === "camera.camera_mapping" ||
     operatorId === "camera.area_restriction" ||

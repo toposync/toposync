@@ -5,6 +5,7 @@ import CreatableSelect from "react-select/creatable";
 import { buildArtifactSuggestions, buildScheduleWeekdayOptions, pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constants";
 import type { SelectOption } from "../../types";
 import { i18n } from "../../../../../util/i18n";
+import { PipelinesNumberInput } from "../PipelinesNumberInput";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
 
@@ -349,18 +350,16 @@ export function ThrottleConfigCard({ config, showAdvanced, onUpdateConfig }: Thr
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.throttle.interval_seconds")}</span>
-        <input
+        <PipelinesNumberInput
           className="pipelinesInput"
-          type="number"
           min={0.01}
           max={120}
           step={0.05}
-          value={Number.isFinite(intervalSeconds) ? String(intervalSeconds) : "1.0"}
-          onChange={(event) => {
-            const nextValue = Number(event.target.value || 1);
+          value={Number.isFinite(intervalSeconds) ? intervalSeconds : 1.0}
+          onChange={(nextValue) => {
             onUpdateConfig((prev) => ({
               ...prev,
-              interval_seconds: Number.isFinite(nextValue) ? nextValue : 1.0,
+              interval_seconds: Math.max(0.01, Math.min(120, nextValue)),
             }));
           }}
         />
@@ -422,18 +421,16 @@ export function DebounceConfigCard({ config, showAdvanced, onUpdateConfig }: Deb
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.debounce.quiet_period_seconds")}</span>
-        <input
+        <PipelinesNumberInput
           className="pipelinesInput"
-          type="number"
           min={0.01}
           max={120}
           step={0.05}
-          value={Number.isFinite(quietSeconds) ? String(quietSeconds) : "1.0"}
-          onChange={(event) => {
-            const nextValue = Number(event.target.value || 1);
+          value={Number.isFinite(quietSeconds) ? quietSeconds : 1.0}
+          onChange={(nextValue) => {
             onUpdateConfig((prev) => ({
               ...prev,
-              quiet_period_seconds: Number.isFinite(nextValue) ? nextValue : 1.0,
+              quiet_period_seconds: Math.max(0.01, Math.min(120, nextValue)),
             }));
           }}
         />
@@ -509,18 +506,16 @@ export function DebugConfigCard({ config, onUpdateConfig }: DebugProps): React.R
 
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.debug.max_images_per_packet")}</span>
-        <input
+        <PipelinesNumberInput
           className="pipelinesInput"
-          type="number"
           min={0}
           max={64}
           step={1}
-          value={Number.isFinite(maxImagesPerPacket) ? String(maxImagesPerPacket) : "4"}
-          onChange={(event) => {
-            const nextValue = Number(event.target.value || 0);
+          value={Number.isFinite(maxImagesPerPacket) ? maxImagesPerPacket : 4}
+          onChange={(nextValue) => {
             onUpdateConfig((prev) => ({
               ...prev,
-              max_images_per_packet: Number.isFinite(nextValue) ? Math.max(0, Math.min(64, nextValue)) : 4,
+              max_images_per_packet: Math.max(0, Math.min(64, nextValue)),
             }));
           }}
         />
@@ -716,18 +711,16 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
 
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.notify.update_interval_seconds")}</span>
-        <input
+        <PipelinesNumberInput
           className="pipelinesInput"
-          type="number"
           min={0}
           max={60}
           step={0.1}
-          value={Number.isFinite(updateIntervalSeconds) ? String(updateIntervalSeconds) : "1.0"}
-          onChange={(event) => {
-            const nextValue = Number(event.target.value || 0);
+          value={Number.isFinite(updateIntervalSeconds) ? updateIntervalSeconds : 1.0}
+          onChange={(nextValue) => {
             onUpdateConfig((prev) => ({
               ...prev,
-              update_interval_seconds: Number.isFinite(nextValue) ? Math.max(0, Math.min(60, nextValue)) : 1.0,
+              update_interval_seconds: Math.max(0, Math.min(60, nextValue)),
             }));
           }}
         />

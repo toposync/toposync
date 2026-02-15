@@ -5,6 +5,7 @@ import { type MultiValue } from "react-select";
 import { pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constants";
 import type { SelectOption } from "../../types";
 import { i18n } from "../../../../../util/i18n";
+import { PipelinesNumberInput } from "../PipelinesNumberInput";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
 
@@ -33,18 +34,16 @@ export function YoloVisionConfigCard({ operatorId, config, onUpdateConfig }: Pro
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.yolo.min_confidence")}</span>
-        <input
+        <PipelinesNumberInput
           className="pipelinesInput"
-          type="number"
           min={0}
           max={1}
           step={0.01}
-          value={String(yoloConfidence)}
-          onChange={(event) => {
-            const nextValue = Number(event.target.value || 0);
+          value={yoloConfidence}
+          onChange={(nextValue) => {
             onUpdateConfig((prev) => ({
               ...prev,
-              confidence_threshold: Number.isFinite(nextValue) ? Math.max(0, Math.min(1, nextValue)) : 0.4,
+              confidence_threshold: Math.max(0, Math.min(1, nextValue)),
             }));
           }}
         />
@@ -71,18 +70,16 @@ export function YoloVisionConfigCard({ operatorId, config, onUpdateConfig }: Pro
 
       <label className="pipelinesLabel">
         <span>{isTracking ? t("core.ui.pipelines.panels.yolo.update_interval_tracking") : t("core.ui.pipelines.panels.yolo.update_interval_detection")}</span>
-        <input
+        <PipelinesNumberInput
           className="pipelinesInput"
-          type="number"
           min={0}
           max={120}
           step={0.05}
-          value={String(defaultInterval)}
-          onChange={(event) => {
-            const nextValue = Number(event.target.value || 0);
+          value={defaultInterval}
+          onChange={(nextValue) => {
             onUpdateConfig((prev) => ({
               ...prev,
-              default_interval_seconds: Number.isFinite(nextValue) ? Math.max(0, Math.min(120, nextValue)) : 0.2,
+              default_interval_seconds: Math.max(0, Math.min(120, nextValue)),
             }));
           }}
         />
@@ -95,18 +92,16 @@ export function YoloVisionConfigCard({ operatorId, config, onUpdateConfig }: Pro
         <>
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.yolo.close_after_seconds")}</span>
-            <input
+            <PipelinesNumberInput
               className="pipelinesInput"
-              type="number"
               min={0.05}
               max={300}
               step={0.1}
-              value={String(closeAfter)}
-              onChange={(event) => {
-                const nextValue = Number(event.target.value || 0);
+              value={closeAfter}
+              onChange={(nextValue) => {
                 onUpdateConfig((prev) => ({
                   ...prev,
-                  close_after_seconds: Number.isFinite(nextValue) ? Math.max(0.05, Math.min(300, nextValue)) : 4.0,
+                  close_after_seconds: Math.max(0.05, Math.min(300, nextValue)),
                 }));
               }}
             />

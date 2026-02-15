@@ -6,6 +6,7 @@ import { i18n } from "../../../../util/i18n";
 import type { DragInsertPosition, InteractiveStep, SelectOption } from "../types";
 import { humanizeIdentifier, isRecord, prettyConfigKeyLabel, prettyOperatorName, safeJsonParse } from "../utils";
 
+import { PipelinesNumberInput } from "./PipelinesNumberInput";
 import { OperatorConfigPanel } from "./panels/OperatorConfigPanel";
 
 type Props = {
@@ -56,6 +57,15 @@ function shouldHideScalarGrid(operatorId: string): boolean {
     operatorId === "vision.object_tracking_yolo" ||
     operatorId === "vision.object_detection_yolo"
   );
+}
+
+function guessScalarNumberStep(configKey: string, value: number): number | "any" {
+  const key = String(configKey || "").trim().toLowerCase();
+  if (!key) return "any";
+  if (Number.isInteger(value)) return 1;
+  if (key.includes("threshold") || key.includes("confidence") || key.includes("iou")) return 0.001;
+  if (key.includes("seconds") || key.includes("interval") || key.includes("timeout")) return 0.05;
+  return "any";
 }
 
 export function InteractiveStepCard({
@@ -219,11 +229,11 @@ export function InteractiveStepCard({
                   {typeof value === "boolean" ? (
                     <input type="checkbox" checked={value} onChange={(event) => onUpdateStepScalar(step.uid, key, event.target.checked)} />
                   ) : typeof value === "number" ? (
-                    <input
+                    <PipelinesNumberInput
                       className="pipelinesInput"
-                      type="number"
-                      value={Number.isFinite(value) ? String(value) : "0"}
-                      onChange={(event) => onUpdateStepScalar(step.uid, key, Number(event.target.value || 0))}
+                      value={Number.isFinite(value) ? value : 0}
+                      step={guessScalarNumberStep(key, value)}
+                      onChange={(nextValue) => onUpdateStepScalar(step.uid, key, nextValue)}
                     />
                   ) : (
                     <input className="pipelinesInput" type="text" value={String(value)} onChange={(event) => onUpdateStepScalar(step.uid, key, event.target.value)} />

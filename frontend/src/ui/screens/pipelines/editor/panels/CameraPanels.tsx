@@ -7,6 +7,7 @@ import { i18n } from "../../../../../util/i18n";
 
 import { buildArtifactSuggestions, pipelinesReactSelectStyles } from "../../constants";
 import type { InteractiveStep, SelectOption } from "../../types";
+import { PipelinesNumberInput } from "../PipelinesNumberInput";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
 
@@ -257,15 +258,13 @@ export function VelocityEstimationConfigCard({
 
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.velocity.stopped_threshold")}</span>
-        <input
+        <PipelinesNumberInput
           className="pipelinesInput"
-          type="number"
           min={0}
           max={4000}
           step={0.05}
-          value={Number.isFinite(stoppedKmh) ? String(Math.max(0, stoppedKmh)) : "0"}
-          onChange={(event) => {
-            const kmh = Number(event.target.value || 0);
+          value={Number.isFinite(stoppedKmh) ? Math.max(0, stoppedKmh) : 0}
+          onChange={(kmh) => {
             const mps = Number.isFinite(kmh) ? Math.max(0, kmh) / 3.6 : 0;
             onUpdateConfig((prev) => ({ ...prev, stopped_speed_threshold: mps }));
           }}
@@ -320,15 +319,13 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
       <div className="pipelinesScalarGrid" style={{ marginTop: 8 }}>
         <label className="pipelinesLabel pipelinesScalarLabel">
           <span>{t("core.ui.pipelines.panels.image_crop.left")}</span>
-          <input
+          <PipelinesNumberInput
             className="pipelinesInput"
-            type="number"
             min={0}
             max={units === "percent" ? percentMax : undefined}
             step={units === "percent" ? 0.5 : 1}
-            value={Number.isFinite(left) ? String(units === "percent" ? clampPercent(left) : Math.max(0, left)) : "0"}
-            onChange={(event) => {
-              const nextValue = Number(event.target.value || 0);
+            value={Number.isFinite(left) ? (units === "percent" ? clampPercent(left) : Math.max(0, left)) : 0}
+            onChange={(nextValue) => {
               onUpdateConfig((prev) => ({ ...prev, left: units === "percent" ? clampPercent(nextValue) : Math.max(0, nextValue) }));
             }}
           />
@@ -336,15 +333,13 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
 
         <label className="pipelinesLabel pipelinesScalarLabel">
           <span>{t("core.ui.pipelines.panels.image_crop.top")}</span>
-          <input
+          <PipelinesNumberInput
             className="pipelinesInput"
-            type="number"
             min={0}
             max={units === "percent" ? percentMax : undefined}
             step={units === "percent" ? 0.5 : 1}
-            value={Number.isFinite(top) ? String(units === "percent" ? clampPercent(top) : Math.max(0, top)) : "0"}
-            onChange={(event) => {
-              const nextValue = Number(event.target.value || 0);
+            value={Number.isFinite(top) ? (units === "percent" ? clampPercent(top) : Math.max(0, top)) : 0}
+            onChange={(nextValue) => {
               onUpdateConfig((prev) => ({ ...prev, top: units === "percent" ? clampPercent(nextValue) : Math.max(0, nextValue) }));
             }}
           />
@@ -352,15 +347,13 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
 
         <label className="pipelinesLabel pipelinesScalarLabel">
           <span>{t("core.ui.pipelines.panels.image_crop.right")}</span>
-          <input
+          <PipelinesNumberInput
             className="pipelinesInput"
-            type="number"
             min={0}
             max={units === "percent" ? percentMax : undefined}
             step={units === "percent" ? 0.5 : 1}
-            value={Number.isFinite(right) ? String(units === "percent" ? clampPercent(right) : Math.max(0, right)) : "100"}
-            onChange={(event) => {
-              const nextValue = Number(event.target.value || 0);
+            value={Number.isFinite(right) ? (units === "percent" ? clampPercent(right) : Math.max(0, right)) : 100}
+            onChange={(nextValue) => {
               onUpdateConfig((prev) => ({ ...prev, right: units === "percent" ? clampPercent(nextValue) : Math.max(0, nextValue) }));
             }}
           />
@@ -368,15 +361,13 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
 
         <label className="pipelinesLabel pipelinesScalarLabel">
           <span>{t("core.ui.pipelines.panels.image_crop.bottom")}</span>
-          <input
+          <PipelinesNumberInput
             className="pipelinesInput"
-            type="number"
             min={0}
             max={units === "percent" ? percentMax : undefined}
             step={units === "percent" ? 0.5 : 1}
-            value={Number.isFinite(bottom) ? String(units === "percent" ? clampPercent(bottom) : Math.max(0, bottom)) : "100"}
-            onChange={(event) => {
-              const nextValue = Number(event.target.value || 0);
+            value={Number.isFinite(bottom) ? (units === "percent" ? clampPercent(bottom) : Math.max(0, bottom)) : 100}
+            onChange={(nextValue) => {
               onUpdateConfig((prev) => ({ ...prev, bottom: units === "percent" ? clampPercent(nextValue) : Math.max(0, nextValue) }));
             }}
           />
@@ -411,15 +402,13 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
 
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.image_crop.min_crop_size_px")}</span>
-            <input
+            <PipelinesNumberInput
               className="pipelinesInput"
-              type="number"
               min={1}
               max={4096}
               step={1}
-              value={Number.isFinite(minCropSizePx) ? String(Math.max(1, Math.min(4096, minCropSizePx))) : "8"}
-              onChange={(event) => {
-                const nextValue = Number(event.target.value || 0);
+              value={Number.isFinite(minCropSizePx) ? Math.max(1, Math.min(4096, minCropSizePx)) : 8}
+              onChange={(nextValue) => {
                 const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(4096, nextValue)) : 8;
                 onUpdateConfig((prev) => ({ ...prev, min_crop_size_px: normalized }));
               }}
@@ -495,15 +484,13 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
       <div className="pipelinesScalarGrid" style={{ marginTop: 8 }}>
         <label className="pipelinesLabel pipelinesScalarLabel">
           <span>{t("core.ui.pipelines.panels.image_adjust.saturation")}</span>
-          <input
+          <PipelinesNumberInput
             className="pipelinesInput"
-            type="number"
             min={0}
             max={3}
             step={0.05}
-            value={String(clamp(saturation, 0, 3, 1))}
-            onChange={(event) => {
-              const nextValue = Number(event.target.value);
+            value={clamp(saturation, 0, 3, 1)}
+            onChange={(nextValue) => {
               onUpdateConfig((prev) => ({ ...prev, saturation: clamp(nextValue, 0, 3, 1) }));
             }}
           />
@@ -511,15 +498,13 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
 
         <label className="pipelinesLabel pipelinesScalarLabel">
           <span>{t("core.ui.pipelines.panels.image_adjust.brightness")}</span>
-          <input
+          <PipelinesNumberInput
             className="pipelinesInput"
-            type="number"
             min={-1}
             max={1}
             step={0.02}
-            value={String(clamp(brightness, -1, 1, 0))}
-            onChange={(event) => {
-              const nextValue = Number(event.target.value);
+            value={clamp(brightness, -1, 1, 0)}
+            onChange={(nextValue) => {
               onUpdateConfig((prev) => ({ ...prev, brightness: clamp(nextValue, -1, 1, 0) }));
             }}
           />
@@ -527,15 +512,13 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
 
         <label className="pipelinesLabel pipelinesScalarLabel">
           <span>{t("core.ui.pipelines.panels.image_adjust.contrast")}</span>
-          <input
+          <PipelinesNumberInput
             className="pipelinesInput"
-            type="number"
             min={0}
             max={3}
             step={0.05}
-            value={String(clamp(contrast, 0, 3, 1))}
-            onChange={(event) => {
-              const nextValue = Number(event.target.value);
+            value={clamp(contrast, 0, 3, 1)}
+            onChange={(nextValue) => {
               onUpdateConfig((prev) => ({ ...prev, contrast: clamp(nextValue, 0, 3, 1) }));
             }}
           />
@@ -543,15 +526,13 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
 
         <label className="pipelinesLabel pipelinesScalarLabel">
           <span>{t("core.ui.pipelines.panels.image_adjust.gamma")}</span>
-          <input
+          <PipelinesNumberInput
             className="pipelinesInput"
-            type="number"
             min={0.1}
             max={5}
             step={0.05}
-            value={String(clamp(gamma, 0.1, 5, 1))}
-            onChange={(event) => {
-              const nextValue = Number(event.target.value);
+            value={clamp(gamma, 0.1, 5, 1)}
+            onChange={(nextValue) => {
               onUpdateConfig((prev) => ({ ...prev, gamma: clamp(nextValue, 0.1, 5, 1) }));
             }}
           />
@@ -648,15 +629,13 @@ export function ImageResizeConfigCard({ config, onUpdateConfig }: ImageResizePro
 
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.image_resize.max_edge_px")}</span>
-        <input
+        <PipelinesNumberInput
           className="pipelinesInput"
-          type="number"
           min={16}
           max={16384}
           step={1}
-          value={Number.isFinite(maxEdgePx) ? String(maxEdgePx) : "1280"}
-          onChange={(event) => {
-            const nextValue = Number(event.target.value || 0);
+          value={Number.isFinite(maxEdgePx) ? maxEdgePx : 1280}
+          onChange={(nextValue) => {
             onUpdateConfig((prev) => ({
               ...prev,
               max_edge_px: Number.isFinite(nextValue) ? Math.max(16, Math.min(16384, nextValue)) : 1280,

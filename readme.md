@@ -9,6 +9,7 @@ O objetivo dessa base é resolver o “maior nó”: **extensões com backend Py
 - Índice: `docs/README.md`
 - Self‑hosting (produção): `docs/SELF_HOSTING.md`
 - Rodar em dev: `docs/DEVELOPMENT.md`
+- Pipelines (DAG): `docs/PIPELINES.md`
 - Extensões (runtime): `docs/EXTENSIONS_RUNTIME.md`
 - Contrato TS / plugin API: `docs/PLUGIN_API.md`
 - Criar uma extensão: `docs/EXTENSION_AUTHORING.md`
@@ -25,4 +26,3 @@ npm run dev
 ```
 
 Abra `http://localhost:5173`.
-

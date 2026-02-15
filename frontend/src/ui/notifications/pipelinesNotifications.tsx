@@ -1,6 +1,12 @@
 import React from "react";
 
-import type { Notification, NotificationRenderer } from "@toposync/plugin-api";
+import type {
+  Notification,
+  Notification3DOverlay,
+  NotificationOverlayActions,
+  NotificationRenderer,
+  Scene3DContext,
+} from "@toposync/plugin-api";
 
 type Priority = "low" | "medium" | "high";
 
@@ -57,6 +63,147 @@ function resolveThumbnailFromArtifacts(artifacts: Record<string, string>): { art
   const first = Object.entries(artifacts)[0];
   if (!first) return null;
   return { artifactName: first[0], url: `/files/${encodeURI(first[1])}` };
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return value;
+}
+
+function resolveWorldPoint(notification: Notification): { x: number; z: number; compositionId: string | null } | null {
+  const payload = asRecord(notification.payload);
+  const data = asRecord(payload.data);
+  const world = asRecord(data.world);
+  let x = asFiniteNumber(world.x);
+  let z = asFiniteNumber(world.z);
+  if (x == null || z == null) {
+    for (const value of Object.values(data)) {
+      const candidate = asRecord(value);
+      const cx = asFiniteNumber(candidate.x);
+      const cz = asFiniteNumber(candidate.z);
+      if (cx == null || cz == null) continue;
+      x = cx;
+      z = cz;
+      break;
+    }
+  }
+  if (x == null || z == null) return null;
+
+  const mapping = asRecord(data.mapping);
+  const comp = asString(mapping.composition_id, "").trim();
+  return { x, z, compositionId: comp || null };
+}
+
+function createPipelines3DOverlay(
+  ctx: Scene3DContext,
+  notification: Notification,
+  actions: NotificationOverlayActions,
+): Notification3DOverlay | null {
+  const point = resolveWorldPoint(notification);
+  if (!point) return null;
+  if (ctx.compositionId && point.compositionId && point.compositionId !== ctx.compositionId) return null;
+
+  const { THREE } = ctx;
+  const group = new THREE.Group();
+
+  const maxPoints = 512;
+  const positions = new Float32Array(maxPoints * 3);
+  let pointCount = 0;
+  let lastX: number | null = null;
+  let lastZ: number | null = null;
+
+  const geometry = new THREE.BufferGeometry();
+  const positionAttr = new THREE.BufferAttribute(positions, 3);
+  geometry.setAttribute("position", positionAttr);
+  geometry.setDrawRange(0, 0);
+
+  const material = new THREE.LineBasicMaterial({ color: 0x00d1ff, transparent: true, opacity: 0.9 });
+  material.depthTest = false;
+  material.depthWrite = false;
+  const line = new THREE.Line(geometry, material);
+  line.frustumCulled = false;
+  line.renderOrder = 10_000;
+  group.add(line);
+
+  const markerMat = new THREE.MeshBasicMaterial({ color: 0xff3b81 });
+  markerMat.depthTest = false;
+  markerMat.depthWrite = false;
+  const marker = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 12), markerMat);
+  marker.frustumCulled = false;
+  marker.renderOrder = 10_001;
+  group.add(marker);
+
+  function append(x: number, z: number): void {
+    const eps2 = 0.000_001;
+    if (lastX != null && lastZ != null) {
+      const dx = x - lastX;
+      const dz = z - lastZ;
+      if (dx * dx + dz * dz <= eps2) return;
+    }
+    lastX = x;
+    lastZ = z;
+
+    if (pointCount >= maxPoints) {
+      positions.copyWithin(0, 3, positions.length);
+      pointCount = maxPoints - 1;
+    }
+
+    const base = pointCount * 3;
+    positions[base] = x;
+    positions[base + 1] = 0.05;
+    positions[base + 2] = z;
+    pointCount += 1;
+
+    positionAttr.needsUpdate = true;
+    geometry.setDrawRange(0, pointCount);
+    geometry.computeBoundingSphere();
+
+    marker.position.set(x, 0.06, z);
+  }
+
+  function applyStyleFromNotification(next: Notification): void {
+    const payload = asRecord(next.payload);
+    const prio = normalizePriority(payload.priority);
+    const lifecycle = asString(payload.lifecycle, "").trim().toLowerCase();
+    const closed = lifecycle === "close" || asString(payload.status, "").trim().toLowerCase() === "closed";
+    if (prio === "high") material.color.setHex(0xff3b3b);
+    else if (prio === "low") material.color.setHex(0x9aa4b2);
+    else material.color.setHex(0x00d1ff);
+    material.opacity = closed ? 0.35 : 0.9;
+    markerMat.opacity = closed ? 0.4 : 1.0;
+    markerMat.transparent = closed;
+  }
+
+  append(point.x, point.z);
+  applyStyleFromNotification(notification);
+
+  return {
+    object: group,
+    update: (next) => {
+      const nextPoint = resolveWorldPoint(next);
+      if (nextPoint) {
+        if (!ctx.compositionId || !nextPoint.compositionId || nextPoint.compositionId === ctx.compositionId) {
+          append(nextPoint.x, nextPoint.z);
+        }
+      }
+      applyStyleFromNotification(next);
+    },
+    onPointerEvent: (event) => {
+      if (event.kind !== "click") return false;
+      const payload = asRecord(event.notification.payload);
+      const artifacts = resolveArtifacts(payload);
+      const thumb = resolveThumbnailFromArtifacts(artifacts);
+      if (!thumb) return false;
+      actions.openImage({ url: thumb.url, title: event.notification.title, subtitle: `thumb: ${thumb.artifactName}` });
+      return true;
+    },
+    dispose: () => {
+      geometry.dispose();
+      material.dispose();
+      marker.geometry.dispose();
+      markerMat.dispose();
+    },
+  };
 }
 
 export function notificationPriority(notification: Notification): Priority {
@@ -140,11 +287,12 @@ export const builtinNotificationRenderers: NotificationRenderer[] = [
     id: "core.pipelines_event_renderer.v1",
     type: "pipelines.event",
     render: renderPipelinesNotification,
+    create3DOverlay: createPipelines3DOverlay,
   },
   {
     id: "core.pipelines_tracking_renderer.v1",
     type: "pipelines.tracking",
     render: renderPipelinesNotification,
+    create3DOverlay: createPipelines3DOverlay,
   },
 ];
-

@@ -51,6 +51,15 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
   const [error, setError] = useState<string | null>(null);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [servers, setServers] = useState<ProcessingServer[]>([]);
+  const [compactLayout, setCompactLayout] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.matchMedia("(max-width: 960px)").matches;
+    } catch {
+      return false;
+    }
+  });
+  const [sidebarOpen, setSidebarOpen] = useState(() => !compactLayout);
   const [templateApplyOpen, setTemplateApplyOpen] = useState(false);
   const [operators, setOperators] = useState<PipelineOperatorDefinition[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
@@ -116,6 +125,34 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let mql: MediaQueryList | null = null;
+    try {
+      mql = window.matchMedia("(max-width: 960px)");
+    } catch {
+      return;
+    }
+
+    const apply = () => setCompactLayout(Boolean(mql?.matches));
+    apply();
+    mql.addEventListener("change", apply);
+    return () => mql?.removeEventListener("change", apply);
+  }, []);
+
+  useEffect(() => {
+    setSidebarOpen(!compactLayout);
+  }, [compactLayout]);
+
+  useEffect(() => {
+    if (!compactLayout || !sidebarOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSidebarOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [compactLayout, sidebarOpen]);
 
   useEffect(() => {
     if (!selected) {
@@ -296,6 +333,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
       const created = await createPipeline(defaultPipeline(name, createType));
       setPipelines((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
       setSelectedName(created.name);
+      if (compactLayout) setSidebarOpen(false);
       setCreateName("");
     } catch (err: any) {
       setError(String(err?.message ?? err));
@@ -411,9 +449,39 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
           <i className="fa-solid fa-arrow-left" aria-hidden="true" />
         </button>
         <div className="pipelinesTitle">Pipelines</div>
+        <div className="pipelinesTopbarRight">
+          {draft ? <div className="pipelinesFlag">{draft.name}</div> : null}
+          {compactLayout ? (
+            <button
+              className={["iconButton", sidebarOpen ? "isActive" : ""].filter(Boolean).join(" ")}
+              type="button"
+              onClick={() => setSidebarOpen((prev) => !prev)}
+              aria-label="Toggle pipelines list"
+              title="Toggle pipelines list"
+            >
+              <i className="fa-solid fa-list" aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
       </div>
 
-      <div className="pipelinesBody">
+      <div
+        className={[
+          "pipelinesBody",
+          compactLayout ? "isCompact" : "",
+          compactLayout && sidebarOpen ? "isSidebarOpen" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        {compactLayout ? (
+          <button
+            className="pipelinesSidebarBackdrop"
+            type="button"
+            aria-label="Close pipelines list"
+            onClick={() => setSidebarOpen(false)}
+          />
+        ) : null}
         <div className="pipelinesSidebar">
           <div className="pipelinesSidebarHeader">
             <div className="pipelinesSidebarTitle">Pipelines</div>
@@ -442,7 +510,10 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                 key={pipeline.name}
                 type="button"
                 className={["pipelinesListItem", selectedName === pipeline.name ? "isActive" : ""].filter(Boolean).join(" ")}
-                onClick={() => setSelectedName(pipeline.name)}
+                onClick={() => {
+                  setSelectedName(pipeline.name);
+                  if (compactLayout) setSidebarOpen(false);
+                }}
               >
                 <div className="pipelinesListItemName">{pipeline.name}</div>
                 <div className="pipelinesListItemMeta">{pipeline.type}</div>

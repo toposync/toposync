@@ -195,6 +195,7 @@ textarea {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .pipelinesFlag {
@@ -203,6 +204,11 @@ textarea {
   gap: 8px;
   color: var(--muted);
   font-size: 14px;
+  min-width: 0;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pipelinesBody {
@@ -210,6 +216,12 @@ textarea {
   display: grid;
   grid-template-columns: 320px 1fr;
   min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.pipelinesSidebarBackdrop {
+  display: none;
 }
 
 .pipelinesSidebar {
@@ -471,6 +483,7 @@ textarea {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .pipelinesEditorTitle {
@@ -482,6 +495,8 @@ textarea {
   margin-left: auto;
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .pipelinesEditorGrid {
@@ -673,10 +688,10 @@ textarea {
 }
 
 .pipelinesStepHeader {
-  display: grid;
-  grid-template-columns: auto auto 180px 1fr auto auto auto;
-  gap: 8px;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   padding: 10px;
 }
 
@@ -686,6 +701,28 @@ textarea {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
+}
+
+.pipelinesStepHeaderMain {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pipelinesStepTitle {
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.pipelinesStepHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
 .pipelinesStepNodeId {
@@ -765,7 +802,9 @@ textarea {
   gap: 4px;
 }
 
+.pipelinesTextArea,
 .pipelinesStepConfigTextarea {
+  width: 100%;
   min-height: 180px;
   resize: vertical;
   padding: 10px;
@@ -783,21 +822,101 @@ textarea {
   font-size: 12px;
 }
 
+@media (max-width: 960px) {
+  .pipelinesBody {
+    grid-template-columns: 1fr;
+  }
+
+  .pipelinesSidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(380px, calc(100vw - 44px));
+    border-right: 1px solid rgba(255, 255, 255, 0.18);
+    transform: translateX(-102%);
+    transition: transform 160ms ease;
+    z-index: 4;
+    box-shadow: 0 22px 70px rgba(0, 0, 0, 0.72);
+  }
+
+  .pipelinesBody.isSidebarOpen .pipelinesSidebar {
+    transform: translateX(0);
+  }
+
+  .pipelinesSidebarBackdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    border: none;
+    padding: 0;
+    margin: 0;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    z-index: 3;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .pipelinesBody.isSidebarOpen .pipelinesSidebarBackdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .pipelinesCreate {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .pipelinesCreate > input {
+    grid-column: 1 / -1;
+  }
+
+  .pipelinesCreate > button {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 1100px) {
   .pipelinesEditorGrid {
     grid-template-columns: 1fr;
   }
 
+  .pipelinesEditorActions {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 520px) {
+  .pipelinesCreate {
+    grid-template-columns: 1fr;
+  }
+
   .pipelinesStepHeader {
-    grid-template-columns: auto auto 1fr auto auto auto;
+    flex-direction: column;
+    align-items: stretch;
   }
 
-  .pipelinesStepNodeId {
-    grid-column: 1 / -1;
+  .pipelinesStepHeaderActions {
+    justify-content: flex-end;
   }
 
-  .pipelinesStepOperator {
-    grid-column: 1 / -1;
+  .pipelinesStepTitle {
+    white-space: normal;
+  }
+
+  .pipelinesFlag {
+    max-width: 220px;
+  }
+
+  .pipelinesEditorActions {
+    gap: 8px;
+  }
+
+  .pipelinesEditorActions .pillButton {
+    flex: 1 1 auto;
   }
 }
 

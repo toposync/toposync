@@ -308,8 +308,8 @@ function readLinearNodeOrder(graphValue: unknown): { order: string[]; warning: s
     }
     visited.add(current);
     order.push(current);
-    const next = outEdges.get(current) ?? [];
-    current = next.length > 0 ? next[0] : undefined;
+    const nextNodes: string[] = outEdges.get(current) ?? [];
+    current = nextNodes.length > 0 ? nextNodes[0] : undefined;
   }
 
   if (order.length !== nodeIds.length) {
@@ -395,4 +395,3 @@ export function moveStep(
   next.splice(insertIndex, 0, byUid.get(draggedUid)!);
   return next;
 }
-

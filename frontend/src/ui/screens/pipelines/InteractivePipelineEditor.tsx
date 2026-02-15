@@ -174,7 +174,7 @@ export function InteractivePipelineEditor({
       prev.map((step) => {
         if (step.uid !== uid) return step;
         const parsed = safeJsonParse(step.configText || "{}");
-        const nextConfig = isRecord(parsed.ok ? parsed.data : null) ? { ...(parsed.data as Record<string, unknown>) } : {};
+        const nextConfig = parsed.ok && isRecord(parsed.data) ? { ...(parsed.data as Record<string, unknown>) } : {};
         nextConfig[key] = value;
         return { ...step, configText: jsonPretty(nextConfig) };
       }),
@@ -186,7 +186,7 @@ export function InteractivePipelineEditor({
       prev.map((step) => {
         if (step.uid !== uid) return step;
         const parsed = safeJsonParse(step.configText || "{}");
-        const base = isRecord(parsed.ok ? parsed.data : null) ? { ...(parsed.data as Record<string, unknown>) } : {};
+        const base = parsed.ok && isRecord(parsed.data) ? { ...(parsed.data as Record<string, unknown>) } : {};
         const next = updater(base);
         return { ...step, configText: jsonPretty(next) };
       }),

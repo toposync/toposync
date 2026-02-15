@@ -1,6 +1,7 @@
 import React from "react";
 
 import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../../../util/api";
+import { i18n } from "../../../../util/i18n";
 
 import type { DragInsertPosition, InteractiveStep, SelectOption } from "../types";
 
@@ -33,6 +34,7 @@ type Props = {
 
 export function InteractiveStepsList(props: Props): React.ReactElement {
   const { steps } = props;
+  const { t } = i18n.useI18n();
 
   return (
     <div className="pipelinesStepsList">
@@ -42,10 +44,9 @@ export function InteractiveStepsList(props: Props): React.ReactElement {
 
       {steps.length === 0 ? (
         <div className="card">
-          <div className="cardBody">No steps yet. Add operators to build the pipeline chain.</div>
+          <div className="cardBody">{t("core.ui.pipelines.editor.no_steps")}</div>
         </div>
       ) : null}
     </div>
   );
 }
-

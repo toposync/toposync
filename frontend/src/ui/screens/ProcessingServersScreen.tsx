@@ -55,7 +55,7 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
   };
 
   const handleDeleteServer = async (serverId: string, confirmDelete = true) => {
-    if (confirmDelete && !confirm(`Delete processing server '${serverId}'?`)) return;
+    if (confirmDelete && !confirm(t("core.ui.processing_servers.confirm_delete", { id: serverId }))) return;
     setError(null);
     try {
       await deleteProcessingServer(serverId);
@@ -88,7 +88,7 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
         <button className="iconButton" type="button" onClick={onClose} aria-label={t("core.actions.back", {}, "Back")}>
           <i className="fa-solid fa-arrow-left" aria-hidden="true" />
         </button>
-        <div className="pipelinesTitle">Processing servers</div>
+        <div className="pipelinesTitle">{t("core.ui.processing_servers.title")}</div>
         <div className="pipelinesTopbarRight">
           <button
             className="pillButton pillButtonPrimary"
@@ -100,21 +100,19 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
             }}
           >
             <i className="fa-solid fa-plus" aria-hidden="true" />
-            Add server
+            {t("core.ui.processing_servers.add_server")}
           </button>
         </div>
       </div>
 
       <div className="processingServersBody">
         <div className="card">
-          <div className="cardBody">
-            Configure remote processing servers to run heavy operators (YOLO). Storage and notifications still happen on the origin server.
-          </div>
+          <div className="cardBody">{t("core.ui.processing_servers.description")}</div>
         </div>
 
         {loading ? (
           <div className="card">
-            <div className="cardBody">Loading…</div>
+            <div className="cardBody">{t("core.ui.loading")}</div>
           </div>
         ) : null}
 
@@ -128,8 +126,14 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
           {servers.map((server) => {
             const probe = serverStatusById[server.id] ?? null;
             const testing = !!serverTestingById[server.id];
-            const statusLabel = testing ? " • testing…" : probe ? (probe.ok ? " • online" : " • offline") : "";
-            const statusTitle = testing ? "Testing…" : probe && !probe.ok ? String(probe.error || "Offline") : "";
+            const statusLabel = testing
+              ? ` • ${t("core.ui.processing_servers.status.testing")}`
+              : probe
+                ? probe.ok
+                  ? ` • ${t("core.ui.processing_servers.status.online")}`
+                  : ` • ${t("core.ui.processing_servers.status.offline")}`
+                : "";
+            const statusTitle = testing ? t("core.ui.processing_servers.status.testing") : probe && !probe.ok ? String(probe.error || "") : "";
             return (
               <div key={server.id} className="pipelinesServerRow">
                 <button
@@ -144,7 +148,7 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
                 >
                   <div className="pipelinesServerId">
                     {server.id}
-                    {server.id === "local" ? " (built-in)" : ""}
+                    {server.id === "local" ? ` ${t("core.ui.processing_servers.built_in")}` : ""}
                   </div>
                   <div className="pipelinesServerMeta" title={statusTitle}>
                     {server.kind}
@@ -159,7 +163,7 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
                     type="button"
                     disabled={testing}
                     onClick={() => void handleTestServer(server.id)}
-                    title="Test connection"
+                    title={t("core.ui.processing_servers.actions.test_connection")}
                   >
                     <i className="fa-solid fa-plug" aria-hidden="true" />
                   </button>
@@ -174,7 +178,7 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
                         setServerModalTarget(server);
                         setServerModalOpen(true);
                       }}
-                      title="Edit server"
+                      title={t("core.ui.processing_servers.actions.edit_server")}
                     >
                       <i className="fa-solid fa-pen-to-square" aria-hidden="true" />
                     </button>
@@ -183,7 +187,7 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
                       className="iconButton iconButtonDanger"
                       type="button"
                       onClick={() => void handleDeleteServer(server.id)}
-                      title="Delete server"
+                      title={t("core.ui.processing_servers.actions.delete_server")}
                     >
                       <i className="fa-solid fa-trash" aria-hidden="true" />
                     </button>
@@ -195,7 +199,7 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
 
           {!loading && servers.length === 0 ? (
             <div className="card">
-              <div className="cardBody">No processing servers configured.</div>
+              <div className="cardBody">{t("core.ui.processing_servers.none")}</div>
             </div>
           ) : null}
         </div>
@@ -215,4 +219,3 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
     </div>
   );
 }
-

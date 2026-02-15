@@ -3,8 +3,9 @@ import Select, { type MultiValue, type SingleValue } from "react-select";
 import CreatableSelect from "react-select/creatable";
 
 import type { CameraContextsResponse } from "../../../../../util/api";
+import { i18n } from "../../../../../util/i18n";
 
-import { ARTIFACT_SUGGESTIONS, pipelinesReactSelectStyles } from "../../constants";
+import { buildArtifactSuggestions, pipelinesReactSelectStyles } from "../../constants";
 import type { InteractiveStep, SelectOption } from "../../types";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
@@ -22,6 +23,7 @@ export function CameraSourceConfigCard({
   cameraSelectOptionById,
   onUpdateConfig,
 }: CameraSourceProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const cameraIdInConfig = String((config as any).camera_id ?? "").trim();
   const backendRaw = String((config as any).backend ?? "auto").trim().toLowerCase() || "auto";
   const backend = backendRaw === "opencv" || backendRaw === "ffmpeg" ? backendRaw : "auto";
@@ -32,13 +34,13 @@ export function CameraSourceConfigCard({
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>Camera</span>
+        <span>{t("core.ui.pipelines.panels.camera_source.camera")}</span>
         <Select<SelectOption, false>
           styles={pipelinesReactSelectStyles}
           options={cameraSelectOptions}
           value={selectedCameraOption}
           isClearable
-          placeholder="Select a camera…"
+          placeholder={t("core.ui.pipelines.panels.camera_source.camera_placeholder")}
           onChange={(value: SingleValue<SelectOption>) => {
             onUpdateConfig((prev) => {
               const next = { ...prev };
@@ -53,13 +55,13 @@ export function CameraSourceConfigCard({
           }}
         />
       </label>
-      <div className="pipelinesStepHint">RTSP URL, credentials, and FPS are inferred from the camera registry. Toggle Advanced to override.</div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.camera_source.hint_infer")}</div>
       {cameraSelectOptions.length === 0 ? (
-        <div className="pipelinesStepHint">No cameras found. Configure cameras in the Cameras extension settings.</div>
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.camera_source.hint_no_cameras")}</div>
       ) : null}
 
       <label className="pipelinesLabel">
-        <span>Backend</span>
+        <span>{t("core.ui.pipelines.panels.camera_source.backend")}</span>
         <select
           className="pipelinesSelect"
           value={backend}
@@ -68,12 +70,12 @@ export function CameraSourceConfigCard({
             onUpdateConfig((prev) => ({ ...prev, backend: next || "auto" }));
           }}
         >
-          <option value="auto">Auto (recommended)</option>
+          <option value="auto">{t("core.ui.pipelines.panels.camera_source.backend.auto")}</option>
           <option value="opencv">OpenCV</option>
           <option value="ffmpeg">FFmpeg</option>
         </select>
       </label>
-      <div className="pipelinesStepHint">Auto selects the best available backend and falls back automatically if one fails to initialize.</div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.camera_source.hint_backend")}</div>
     </div>
   );
 }
@@ -89,13 +91,14 @@ export function CameraMappingConfigCard({
   activeCameraContexts,
   activeCameraContextsError,
 }: CameraMappingProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   return (
     <div className="pipelinesOperatorConfigCard">
       <div className="pipelinesStepHint">
-        Uses control points defined in your compositions to map image → world coordinates. Configure control points in the Composition editor.
+        {t("core.ui.pipelines.panels.camera_mapping.hint")}
       </div>
       {!interactiveCameraId ? (
-        <div className="pipelinesInlineError">Select a camera in the Camera Source step to show mapping status.</div>
+        <div className="pipelinesInlineError">{t("core.ui.pipelines.panels.camera_mapping.select_camera_error")}</div>
       ) : activeCameraContexts ? (
         <div className="pipelinesContextList">
           {activeCameraContexts.compositions.map((composition) => {
@@ -107,9 +110,9 @@ export function CameraMappingConfigCard({
                 <div className="pipelinesContextMain">
                   <div className="pipelinesContextName">{composition.name}</div>
                   <div className="pipelinesContextMeta">
-                    {hasMapping ? "mapping ready" : "missing mapping"}
-                    {areasCount ? ` • areas: ${areasCount}` : ""}
-                    {elementNames.length ? ` • camera nodes: ${elementNames.join(", ")}` : ""}
+                    {hasMapping ? t("core.ui.pipelines.panels.camera_mapping.mapping_ready") : t("core.ui.pipelines.panels.camera_mapping.mapping_missing")}
+                    {areasCount ? ` • ${t("core.ui.pipelines.panels.camera_mapping.areas_count", { count: areasCount })}` : ""}
+                    {elementNames.length ? ` • ${t("core.ui.pipelines.panels.camera_mapping.camera_nodes", { names: elementNames.join(", ") })}` : ""}
                   </div>
                 </div>
               </div>
@@ -117,9 +120,9 @@ export function CameraMappingConfigCard({
           })}
         </div>
       ) : activeCameraContextsError ? (
-        <div className="pipelinesInlineError">Failed to load camera contexts: {activeCameraContextsError}</div>
+        <div className="pipelinesInlineError">{t("core.ui.pipelines.panels.camera_mapping.load_failed", { error: activeCameraContextsError })}</div>
       ) : (
-        <div className="pipelinesStepHint">Loading camera contexts…</div>
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.camera_mapping.loading")}</div>
       )}
     </div>
   );
@@ -142,6 +145,7 @@ export function AreaRestrictionConfigCard({
   cameraAreaOptions,
   onUpdateConfig,
 }: AreaRestrictionProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const areaNamesRaw = (config as any).include_area_names;
   const selectedAreaKeys = Array.isArray(areaNamesRaw)
     ? areaNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
@@ -154,14 +158,16 @@ export function AreaRestrictionConfigCard({
     <>
       <div className="pipelinesOperatorConfigCard">
         <label className="pipelinesLabel">
-          <span>Areas</span>
+          <span>{t("core.ui.pipelines.panels.area_restriction.areas")}</span>
           <Select<SelectOption, true>
             isMulti
             styles={pipelinesReactSelectStyles}
             options={cameraAreaOptions}
             value={selectedAreaOptions}
             isDisabled={!interactiveCameraId || !activeCameraContexts || Boolean(activeCameraContextsError) || cameraAreaOptions.length === 0}
-            placeholder={!interactiveCameraId ? "Select a camera first…" : "Select areas…"}
+            placeholder={
+              !interactiveCameraId ? t("core.ui.pipelines.panels.area_restriction.select_camera_first") : t("core.ui.pipelines.panels.area_restriction.select_areas")
+            }
             onChange={(value: MultiValue<SelectOption>) => {
               onUpdateConfig((prev) => ({
                 ...prev,
@@ -173,21 +179,21 @@ export function AreaRestrictionConfigCard({
           />
         </label>
         {!interactiveCameraId ? (
-          <div className="pipelinesInlineError">Select a camera in the Camera Source step first.</div>
+          <div className="pipelinesInlineError">{t("core.ui.pipelines.panels.area_restriction.select_camera_step_error")}</div>
         ) : activeCameraContextsError ? (
-          <div className="pipelinesInlineError">Failed to load camera contexts: {activeCameraContextsError}</div>
+          <div className="pipelinesInlineError">{t("core.ui.pipelines.panels.area_restriction.load_failed", { error: activeCameraContextsError })}</div>
         ) : !activeCameraContexts ? (
-          <div className="pipelinesStepHint">Loading camera contexts…</div>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.area_restriction.loading")}</div>
         ) : cameraAreaOptions.length === 0 ? (
-          <div className="pipelinesStepHint">No areas found in compositions for this camera.</div>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.area_restriction.no_areas")}</div>
         ) : (
-          <div className="pipelinesStepHint">Uses areas from the compositions where the selected camera is present.</div>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.area_restriction.hint_areas")}</div>
         )}
       </div>
 
       {invalidAreaSelections.length > 0 ? (
         <div className="pipelinesInlineError">
-          Some selected areas are not available for this camera: {invalidAreaSelections.map((opt) => opt.label).join(", ")}
+          {t("core.ui.pipelines.panels.area_restriction.invalid_areas", { areas: invalidAreaSelections.map((opt) => opt.label).join(", ") })}
         </div>
       ) : null}
     </>
@@ -209,20 +215,21 @@ export function VelocityEstimationConfigCard({
   showAdvanced,
   onUpdateConfig,
 }: VelocityProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const modeRaw = String((config as any).filter_mode ?? "annotate").trim().toLowerCase() || "annotate";
   const stoppedMpsRaw = Number((config as any).stopped_speed_threshold ?? 0.04);
   const stoppedKmh = Number.isFinite(stoppedMpsRaw) ? stoppedMpsRaw * 3.6 : 0.0;
   const hasMappingBefore = steps.slice(0, index).some((item) => item.operatorId === "camera.camera_mapping");
 
   const modeOptions: Array<{ value: string; label: string; hint: string }> = [
-    { value: "annotate", label: "Annotate only", hint: "Always emit packets; adds velocity payload." },
-    { value: "stopped_now", label: "Only when stopped", hint: "Emit packets only while the object is stopped." },
-    { value: "moving_now", label: "Only when moving", hint: "Emit packets only while the object is moving." },
+    { value: "annotate", label: t("core.ui.pipelines.panels.velocity.mode.annotate.label"), hint: t("core.ui.pipelines.panels.velocity.mode.annotate.hint") },
+    { value: "stopped_now", label: t("core.ui.pipelines.panels.velocity.mode.stopped_now.label"), hint: t("core.ui.pipelines.panels.velocity.mode.stopped_now.hint") },
+    { value: "moving_now", label: t("core.ui.pipelines.panels.velocity.mode.moving_now.label"), hint: t("core.ui.pipelines.panels.velocity.mode.moving_now.hint") },
   ];
   if (showAdvanced) {
     modeOptions.push(
-      { value: "stopped_once", label: "Only after it stopped once", hint: "Drops packets until it stops at least once, then passes all." },
-      { value: "always_moving", label: "Only while it never stopped", hint: "Passes packets until it stops once, then drops the rest." },
+      { value: "stopped_once", label: t("core.ui.pipelines.panels.velocity.mode.stopped_once.label"), hint: t("core.ui.pipelines.panels.velocity.mode.stopped_once.hint") },
+      { value: "always_moving", label: t("core.ui.pipelines.panels.velocity.mode.always_moving.label"), hint: t("core.ui.pipelines.panels.velocity.mode.always_moving.hint") },
     );
   }
   const selected = modeOptions.find((item) => item.value === modeRaw) ?? modeOptions[0];
@@ -230,7 +237,7 @@ export function VelocityEstimationConfigCard({
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>Flow mode</span>
+        <span>{t("core.ui.pipelines.panels.velocity.flow_mode")}</span>
         <select
           className="pipelinesSelect"
           value={selected.value}
@@ -249,7 +256,7 @@ export function VelocityEstimationConfigCard({
       <div className="pipelinesStepHint">{selected.hint}</div>
 
       <label className="pipelinesLabel">
-        <span>Stopped threshold (km/h)</span>
+        <span>{t("core.ui.pipelines.panels.velocity.stopped_threshold")}</span>
         <input
           className="pipelinesInput"
           type="number"
@@ -264,8 +271,8 @@ export function VelocityEstimationConfigCard({
           }}
         />
       </label>
-      <div className="pipelinesStepHint">Computes speed from mapped world coordinates (Camera Mapping step). Uses m/s internally and also displays km/h.</div>
-      {!hasMappingBefore ? <div className="pipelinesInlineError">Add Camera Mapping before this step to get world speed.</div> : null}
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.velocity.hint")}</div>
+      {!hasMappingBefore ? <div className="pipelinesInlineError">{t("core.ui.pipelines.panels.velocity.mapping_required")}</div> : null}
     </div>
   );
 }
@@ -277,6 +284,7 @@ type ImageCropProps = {
 };
 
 export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: ImageCropProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const unitsRaw = String((config as any).units ?? "percent").trim().toLowerCase();
   const units = unitsRaw === "pixels" ? "pixels" : "percent";
   const left = Number((config as any).left ?? 0);
@@ -292,12 +300,10 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
 
   return (
     <div className="pipelinesOperatorConfigCard">
-      <div className="pipelinesStepHint">
-        Crops the frame for downstream analysis (YOLO). The original full frame is preserved as <code>frame_original</code>.
-      </div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_crop.hint")}</div>
 
       <label className="pipelinesLabel">
-        <span>Units</span>
+        <span>{t("core.ui.pipelines.panels.image_crop.units")}</span>
         <select
           className="pipelinesSelect"
           value={units}
@@ -306,14 +312,14 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
             onUpdateConfig((prev) => ({ ...prev, units: next === "pixels" ? "pixels" : "percent" }));
           }}
         >
-          <option value="percent">Percent (0–100)</option>
-          <option value="pixels">Pixels</option>
+          <option value="percent">{t("core.ui.pipelines.panels.image_crop.units.percent")}</option>
+          <option value="pixels">{t("core.ui.pipelines.panels.image_crop.units.pixels")}</option>
         </select>
       </label>
 
       <div className="pipelinesScalarGrid" style={{ marginTop: 8 }}>
         <label className="pipelinesLabel pipelinesScalarLabel">
-          <span>Left</span>
+          <span>{t("core.ui.pipelines.panels.image_crop.left")}</span>
           <input
             className="pipelinesInput"
             type="number"
@@ -329,7 +335,7 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
         </label>
 
         <label className="pipelinesLabel pipelinesScalarLabel">
-          <span>Top</span>
+          <span>{t("core.ui.pipelines.panels.image_crop.top")}</span>
           <input
             className="pipelinesInput"
             type="number"
@@ -345,7 +351,7 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
         </label>
 
         <label className="pipelinesLabel pipelinesScalarLabel">
-          <span>Right</span>
+          <span>{t("core.ui.pipelines.panels.image_crop.right")}</span>
           <input
             className="pipelinesInput"
             type="number"
@@ -361,7 +367,7 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
         </label>
 
         <label className="pipelinesLabel pipelinesScalarLabel">
-          <span>Bottom</span>
+          <span>{t("core.ui.pipelines.panels.image_crop.bottom")}</span>
           <input
             className="pipelinesInput"
             type="number"
@@ -379,14 +385,14 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
 
       <div className="rowWrap" style={{ marginTop: 10, justifyContent: "space-between" }}>
         <div className="pipelinesStepHint">
-          Rectangle is defined as Left/Top/Right/Bottom (percent of frame or pixels from top-left).
+          {t("core.ui.pipelines.panels.image_crop.rectangle_hint")}
         </div>
         <button
           className="chipButton"
           type="button"
           onClick={() => onUpdateConfig((prev) => ({ ...prev, left: 0, top: 0, right: 100, bottom: 100, units: "percent" }))}
         >
-          Reset
+          {t("core.ui.pipelines.panels.image_crop.reset")}
         </button>
       </div>
 
@@ -394,7 +400,7 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
         <>
           <div className="sectionDivider" />
           <label className="pipelinesLabel">
-            <span>Cropped artifact name</span>
+            <span>{t("core.ui.pipelines.panels.image_crop.output_artifact_name")}</span>
             <input
               className="pipelinesInput"
               type="text"
@@ -404,7 +410,7 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
           </label>
 
           <label className="pipelinesLabel">
-            <span>Min crop size (px)</span>
+            <span>{t("core.ui.pipelines.panels.image_crop.min_crop_size_px")}</span>
             <input
               className="pipelinesInput"
               type="number"
@@ -421,7 +427,7 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
           </label>
 
           <label className="pipelinesLabel">
-            <span>Use cropped frame for downstream</span>
+            <span>{t("core.ui.pipelines.panels.image_crop.use_cropped_frame")}</span>
             <input
               type="checkbox"
               checked={Boolean(setStreamFrame)}
@@ -441,12 +447,14 @@ type ImageAdjustProps = {
 };
 
 export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: ImageAdjustProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const inputArtifactNamesRaw = (config as any).input_artifact_names;
   const inputArtifactNames = Array.isArray(inputArtifactNamesRaw)
     ? inputArtifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
     : ["frame_original"];
+  const artifactSuggestions = buildArtifactSuggestions(t);
   const selectedInputOptions = inputArtifactNames.map(
-    (value) => ARTIFACT_SUGGESTIONS.find((opt) => opt.value === value) ?? { value, label: value },
+    (value) => artifactSuggestions.find((opt) => opt.value === value) ?? { value, label: value },
   );
 
   const saturation = Number((config as any).saturation ?? 1.0);
@@ -467,13 +475,13 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>Input artifacts (fallback order)</span>
+        <span>{t("core.ui.pipelines.panels.image_adjust.input_artifacts")}</span>
         <CreatableSelect<SelectOption, true>
           isMulti
           styles={pipelinesReactSelectStyles}
-          options={ARTIFACT_SUGGESTIONS}
+          options={artifactSuggestions}
           value={selectedInputOptions}
-          placeholder="Full frame"
+          placeholder={t("core.ui.pipelines.panels.image_adjust.input_artifacts_placeholder")}
           onChange={(value: MultiValue<SelectOption>) => {
             onUpdateConfig((prev) => ({
               ...prev,
@@ -482,11 +490,11 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
           }}
         />
       </label>
-      <div className="pipelinesStepHint">Uses the first available artifact. Keep <code>frame_original</code> as fallback.</div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_adjust.input_artifacts_hint")}</div>
 
       <div className="pipelinesScalarGrid" style={{ marginTop: 8 }}>
         <label className="pipelinesLabel pipelinesScalarLabel">
-          <span>Saturation</span>
+          <span>{t("core.ui.pipelines.panels.image_adjust.saturation")}</span>
           <input
             className="pipelinesInput"
             type="number"
@@ -502,7 +510,7 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
         </label>
 
         <label className="pipelinesLabel pipelinesScalarLabel">
-          <span>Brightness</span>
+          <span>{t("core.ui.pipelines.panels.image_adjust.brightness")}</span>
           <input
             className="pipelinesInput"
             type="number"
@@ -518,7 +526,7 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
         </label>
 
         <label className="pipelinesLabel pipelinesScalarLabel">
-          <span>Contrast</span>
+          <span>{t("core.ui.pipelines.panels.image_adjust.contrast")}</span>
           <input
             className="pipelinesInput"
             type="number"
@@ -534,7 +542,7 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
         </label>
 
         <label className="pipelinesLabel pipelinesScalarLabel">
-          <span>Gamma</span>
+          <span>{t("core.ui.pipelines.panels.image_adjust.gamma")}</span>
           <input
             className="pipelinesInput"
             type="number"
@@ -551,7 +559,7 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
       </div>
 
       <div className="pipelinesStepHint" style={{ marginTop: 8 }}>
-        Brightness is an additive offset in normalized space (e.g. <code>0.10</code> = +10%).
+        {t("core.ui.pipelines.panels.image_adjust.brightness_hint")}
       </div>
 
       {showAdvanced ? (
@@ -559,7 +567,7 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
           <div className="sectionDivider" />
 
           <label className="pipelinesLabel">
-            <span>Output artifact name</span>
+            <span>{t("core.ui.pipelines.panels.image_adjust.output_artifact_name")}</span>
             <input
               className="pipelinesInput"
               type="text"
@@ -569,7 +577,7 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
           </label>
 
           <label className="pipelinesLabel">
-            <span>Apply to stream frame</span>
+            <span>{t("core.ui.pipelines.panels.image_adjust.apply_stream_frame")}</span>
             <input
               type="checkbox"
               checked={Boolean(setStreamFrame)}
@@ -578,7 +586,7 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
           </label>
 
           <label className="pipelinesLabel">
-            <span>Fallback to stream frame</span>
+            <span>{t("core.ui.pipelines.panels.image_adjust.fallback_stream_frame")}</span>
             <input
               type="checkbox"
               checked={Boolean(fallbackToStreamFrame)}
@@ -589,7 +597,7 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
           </label>
 
           <label className="pipelinesLabel">
-            <span>Preserve alpha channel</span>
+            <span>{t("core.ui.pipelines.panels.image_adjust.preserve_alpha")}</span>
             <input
               type="checkbox"
               checked={preserveAlpha}
@@ -608,24 +616,26 @@ type ImageResizeProps = {
 };
 
 export function ImageResizeConfigCard({ config, onUpdateConfig }: ImageResizeProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const maxEdgePx = Number((config as any).max_edge_px ?? 1280);
   const allowUpscale = Boolean((config as any).allow_upscale ?? false);
   const artifactNamesRaw = (config as any).artifact_names;
   const artifactNames = Array.isArray(artifactNamesRaw)
     ? artifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
     : ["frame_original"];
-  const selectedOptions = artifactNames.map((value) => ARTIFACT_SUGGESTIONS.find((opt) => opt.value === value) ?? { value, label: value });
+  const artifactSuggestions = buildArtifactSuggestions(t);
+  const selectedOptions = artifactNames.map((value) => artifactSuggestions.find((opt) => opt.value === value) ?? { value, label: value });
 
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>Artifacts</span>
+        <span>{t("core.ui.pipelines.panels.image_resize.artifacts")}</span>
         <CreatableSelect<SelectOption, true>
           isMulti
           styles={pipelinesReactSelectStyles}
-          options={ARTIFACT_SUGGESTIONS}
+          options={artifactSuggestions}
           value={selectedOptions}
-          placeholder="Full frame"
+          placeholder={t("core.ui.pipelines.panels.image_resize.artifacts_placeholder")}
           onChange={(value: MultiValue<SelectOption>) => {
             onUpdateConfig((prev) => ({
               ...prev,
@@ -634,10 +644,10 @@ export function ImageResizeConfigCard({ config, onUpdateConfig }: ImageResizePro
           }}
         />
       </label>
-      <div className="pipelinesStepHint">Resizes artifacts in-memory before storage to keep file sizes reasonable.</div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_resize.hint")}</div>
 
       <label className="pipelinesLabel">
-        <span>Max edge (px)</span>
+        <span>{t("core.ui.pipelines.panels.image_resize.max_edge_px")}</span>
         <input
           className="pipelinesInput"
           type="number"
@@ -656,7 +666,7 @@ export function ImageResizeConfigCard({ config, onUpdateConfig }: ImageResizePro
       </label>
 
       <label className="pipelinesLabel">
-        <span>Allow upscale</span>
+        <span>{t("core.ui.pipelines.panels.image_resize.allow_upscale")}</span>
         <input type="checkbox" checked={allowUpscale} onChange={(event) => onUpdateConfig((prev) => ({ ...prev, allow_upscale: event.target.checked }))} />
       </label>
     </div>

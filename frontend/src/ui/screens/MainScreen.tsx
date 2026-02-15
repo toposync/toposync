@@ -280,7 +280,13 @@ export function MainScreen({
         >
           <Icon name="gear" />
         </button>
-        <button className="iconButton" type="button" aria-label="Pipelines" title="Pipelines" onClick={onOpenPipelines}>
+        <button
+          className="iconButton"
+          type="button"
+          aria-label={t("core.ui.pipelines.title")}
+          title={t("core.ui.pipelines.title")}
+          onClick={onOpenPipelines}
+        >
           <Icon name="diagram-project" />
         </button>
         <button

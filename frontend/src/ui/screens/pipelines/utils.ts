@@ -1,4 +1,5 @@
 import type { Pipeline, PipelineOperatorDefinition } from "../../../util/api";
+import { i18n } from "../../../util/i18n";
 
 import { HUMANIZE_ACRONYMS, NODE_ID_RE, OPERATOR_FRIENDLY_NAMES, PIPELINE_PRESET_OPERATOR_IDS } from "./constants";
 import type { DragInsertPosition, InteractiveBuildResult, InteractiveFromGraphResult, InteractiveStep } from "./types";
@@ -66,6 +67,8 @@ export function prettyConfigKeyLabel(key: string): string {
 export function prettyOperatorName(operatorId: string): string {
   const raw = String(operatorId || "").trim();
   if (!raw) return "";
+  const localized = i18n.t(`core.ui.pipelines.operator_name.${raw}`, {}, "");
+  if (localized) return localized;
   const fromMap = OPERATOR_FRIENDLY_NAMES[raw];
   if (fromMap) return fromMap;
   const tail = raw.split(".").pop() || raw;

@@ -2,8 +2,9 @@ import React from "react";
 import Select, { type MultiValue } from "react-select";
 import CreatableSelect from "react-select/creatable";
 
-import { ARTIFACT_SUGGESTIONS, pipelinesReactSelectStyles, SCHEDULE_WEEKDAY_OPTIONS, YOLO_CATEGORY_OPTIONS } from "../../constants";
+import { buildArtifactSuggestions, buildScheduleWeekdayOptions, pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constants";
 import type { SelectOption } from "../../types";
+import { i18n } from "../../../../../util/i18n";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
 
@@ -14,6 +15,7 @@ type ScheduleGateProps = {
 };
 
 export function ScheduleGateConfigCard({ config, showAdvanced, onUpdateConfig }: ScheduleGateProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const enabled = Boolean((config as any).enabled ?? true);
   const timezone = String((config as any).timezone ?? "").trim();
   const weekdaysRaw = (config as any).weekdays;
@@ -21,7 +23,8 @@ export function ScheduleGateConfigCard({ config, showAdvanced, onUpdateConfig }:
     ? weekdaysRaw.map((value: any) => String(value || "").trim().toLowerCase()).filter((value: string) => value.length > 0)
     : ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
   const uniqueWeekdayValues = [...new Set(weekdayValues)];
-  const selectedWeekdayOptions = uniqueWeekdayValues.map((value) => SCHEDULE_WEEKDAY_OPTIONS.find((option) => option.value === value) ?? { value, label: value });
+  const weekdayOptions = buildScheduleWeekdayOptions(t);
+  const selectedWeekdayOptions = uniqueWeekdayValues.map((value) => weekdayOptions.find((option) => option.value === value) ?? { value, label: value });
 
   const startTimeRaw = String((config as any).start_time ?? "00:00").trim() || "00:00";
   const endTimeRaw = String((config as any).end_time ?? "00:00").trim() || "00:00";
@@ -31,7 +34,7 @@ export function ScheduleGateConfigCard({ config, showAdvanced, onUpdateConfig }:
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>Enabled</span>
+        <span>{t("core.ui.pipelines.panels.schedule_gate.enabled")}</span>
         <input
           type="checkbox"
           checked={enabled}
@@ -42,13 +45,13 @@ export function ScheduleGateConfigCard({ config, showAdvanced, onUpdateConfig }:
       </label>
 
       <label className="pipelinesLabel">
-        <span>Days</span>
+        <span>{t("core.ui.pipelines.panels.schedule_gate.days")}</span>
         <Select<SelectOption, true>
           isMulti
           styles={pipelinesReactSelectStyles}
-          options={SCHEDULE_WEEKDAY_OPTIONS}
+          options={weekdayOptions}
           value={selectedWeekdayOptions}
-          placeholder="No days (closed)"
+          placeholder={t("core.ui.pipelines.panels.schedule_gate.days_placeholder")}
           onChange={(value: MultiValue<SelectOption>) => {
             onUpdateConfig((prev) => ({
               ...prev,
@@ -59,7 +62,7 @@ export function ScheduleGateConfigCard({ config, showAdvanced, onUpdateConfig }:
       </label>
 
       <label className="pipelinesLabel">
-        <span>Start time</span>
+        <span>{t("core.ui.pipelines.panels.schedule_gate.start_time")}</span>
         <input
           className="pipelinesInput"
           type="time"
@@ -73,7 +76,7 @@ export function ScheduleGateConfigCard({ config, showAdvanced, onUpdateConfig }:
       </label>
 
       <label className="pipelinesLabel">
-        <span>End time</span>
+        <span>{t("core.ui.pipelines.panels.schedule_gate.end_time")}</span>
         <input
           className="pipelinesInput"
           type="time"
@@ -85,16 +88,16 @@ export function ScheduleGateConfigCard({ config, showAdvanced, onUpdateConfig }:
           }}
         />
       </label>
-      <div className="pipelinesStepHint">Place this before Camera source to pause RTSP reads while the gate is closed.</div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.schedule_gate.hint")}</div>
 
       {showAdvanced ? (
         <label className="pipelinesLabel">
-          <span>Time zone (optional)</span>
+          <span>{t("core.ui.pipelines.panels.schedule_gate.timezone_optional")}</span>
           <input
             className="pipelinesInput"
             type="text"
             value={timezone}
-            placeholder="Leave empty for local time"
+            placeholder={t("core.ui.pipelines.panels.schedule_gate.timezone_placeholder")}
             onChange={(event) => {
               const nextValue = String(event.target.value ?? "");
               onUpdateConfig((prev) => ({ ...prev, timezone: nextValue }));
@@ -112,6 +115,7 @@ type CategoryGateProps = {
 };
 
 export function CategoryGateConfigCard({ config, onUpdateConfig }: CategoryGateProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const modeRaw = String((config as any).mode ?? "include").trim().toLowerCase() || "include";
   const mode = modeRaw === "exclude" ? "exclude" : "include";
   const categoriesRaw = (config as any).categories;
@@ -123,7 +127,7 @@ export function CategoryGateConfigCard({ config, onUpdateConfig }: CategoryGateP
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>Mode</span>
+        <span>{t("core.ui.pipelines.panels.category_gate.mode")}</span>
         <select
           className="pipelinesSelect"
           value={mode}
@@ -132,19 +136,19 @@ export function CategoryGateConfigCard({ config, onUpdateConfig }: CategoryGateP
             onUpdateConfig((prev) => ({ ...prev, mode: nextMode === "exclude" ? "exclude" : "include" }));
           }}
         >
-          <option value="include">Include only</option>
-          <option value="exclude">Exclude</option>
+          <option value="include">{t("core.ui.pipelines.panels.category_gate.mode.include_only")}</option>
+          <option value="exclude">{t("core.ui.pipelines.panels.category_gate.mode.exclude")}</option>
         </select>
       </label>
 
       <label className="pipelinesLabel">
-        <span>Categories</span>
+        <span>{t("core.ui.pipelines.panels.category_gate.categories")}</span>
         <CreatableSelect<SelectOption, true>
           isMulti
           styles={pipelinesReactSelectStyles}
           options={YOLO_CATEGORY_OPTIONS}
           value={selectedCategoryOptions}
-          placeholder="All categories"
+          placeholder={t("core.ui.pipelines.panels.category_gate.categories_placeholder")}
           onChange={(value: MultiValue<SelectOption>) => {
             onUpdateConfig((prev) => ({
               ...prev,
@@ -154,7 +158,7 @@ export function CategoryGateConfigCard({ config, onUpdateConfig }: CategoryGateP
         />
       </label>
       <div className="pipelinesStepHint">
-        Matches <code>payload.object_category_label</code> (set by YOLO operators). Empty selection means “all categories”.
+        {t("core.ui.pipelines.panels.category_gate.hint")}
       </div>
     </div>
   );
@@ -166,6 +170,7 @@ type FilterProps = {
 };
 
 export function FilterConfigCard({ config, onUpdateConfig }: FilterProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const presetId = String((config as any).preset_id ?? "").trim();
   const expression = String((config as any).expression ?? "").trim();
   const invert = Boolean((config as any).invert ?? false);
@@ -191,21 +196,42 @@ export function FilterConfigCard({ config, onUpdateConfig }: FilterProps): React
   const artifactNames = Array.isArray(artifactNamesRaw)
     ? artifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
     : [];
-  const selectedArtifactOptions = artifactNames.map((value) => ARTIFACT_SUGGESTIONS.find((opt) => opt.value === value) ?? { value, label: value });
+  const artifactSuggestions = buildArtifactSuggestions(t);
+  const selectedArtifactOptions = artifactNames.map((value) => artifactSuggestions.find((opt) => opt.value === value) ?? { value, label: value });
 
   const presetOptions: Array<{ value: string; label: string; hint: string }> = [
-    { value: "", label: "Custom expression", hint: "Write a safe expression referencing payload/metadata." },
-    { value: "object_category_in", label: "Object category in list", hint: "Matches payload.object_category_label (YOLO)." },
-    { value: "object_category_not_in", label: "Object category not in list", hint: "Excludes payload.object_category_label (YOLO)." },
-    { value: "lifecycle_is", label: "Lifecycle is", hint: "Filters by packet lifecycle (open/update/close)." },
-    { value: "has_artifact", label: "Has artifact", hint: "Requires at least one artifact name to be present." },
+    {
+      value: "",
+      label: t("core.ui.pipelines.panels.filter.preset.custom.label"),
+      hint: t("core.ui.pipelines.panels.filter.preset.custom.hint"),
+    },
+    {
+      value: "object_category_in",
+      label: t("core.ui.pipelines.panels.filter.preset.object_category_in.label"),
+      hint: t("core.ui.pipelines.panels.filter.preset.object_category_in.hint"),
+    },
+    {
+      value: "object_category_not_in",
+      label: t("core.ui.pipelines.panels.filter.preset.object_category_not_in.label"),
+      hint: t("core.ui.pipelines.panels.filter.preset.object_category_not_in.hint"),
+    },
+    {
+      value: "lifecycle_is",
+      label: t("core.ui.pipelines.panels.filter.preset.lifecycle_is.label"),
+      hint: t("core.ui.pipelines.panels.filter.preset.lifecycle_is.hint"),
+    },
+    {
+      value: "has_artifact",
+      label: t("core.ui.pipelines.panels.filter.preset.has_artifact.label"),
+      hint: t("core.ui.pipelines.panels.filter.preset.has_artifact.hint"),
+    },
   ];
   const presetSelected = presetOptions.find((opt) => opt.value === presetId) ?? presetOptions[0];
 
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>Preset</span>
+        <span>{t("core.ui.pipelines.panels.filter.preset")}</span>
         <select
           className="pipelinesSelect"
           value={presetSelected.value}
@@ -231,7 +257,7 @@ export function FilterConfigCard({ config, onUpdateConfig }: FilterProps): React
       {presetSelected.value === "" ? (
         <>
           <label className="pipelinesLabel">
-            <span>Expression</span>
+            <span>{t("core.ui.pipelines.panels.filter.expression")}</span>
             <textarea
               className="pipelinesTextArea"
               rows={4}
@@ -243,20 +269,17 @@ export function FilterConfigCard({ config, onUpdateConfig }: FilterProps): React
               }}
             />
           </label>
-          <div className="pipelinesStepHint">
-            Available names: <code>payload</code>, <code>metadata</code>, <code>stream_id</code>, <code>lifecycle</code>, <code>artifacts</code>.
-            No function calls; only boolean logic, comparisons, and literals.
-          </div>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.filter.expression_hint")}</div>
         </>
       ) : presetSelected.value === "object_category_in" || presetSelected.value === "object_category_not_in" ? (
         <label className="pipelinesLabel">
-          <span>Categories</span>
+          <span>{t("core.ui.pipelines.panels.filter.categories")}</span>
           <CreatableSelect<SelectOption, true>
             isMulti
             styles={pipelinesReactSelectStyles}
             options={YOLO_CATEGORY_OPTIONS}
             value={selectedCategoryOptions}
-            placeholder="All categories"
+            placeholder={t("core.ui.pipelines.panels.filter.categories_placeholder")}
             onChange={(value: MultiValue<SelectOption>) => {
               onUpdateConfig((prev) => ({
                 ...prev,
@@ -267,13 +290,13 @@ export function FilterConfigCard({ config, onUpdateConfig }: FilterProps): React
         </label>
       ) : presetSelected.value === "lifecycle_is" ? (
         <label className="pipelinesLabel">
-          <span>Lifecycles</span>
+          <span>{t("core.ui.pipelines.panels.filter.lifecycles")}</span>
           <Select<SelectOption, true>
             isMulti
             styles={pipelinesReactSelectStyles}
             options={lifecycleOptions}
             value={selectedLifecycleOptions}
-            placeholder="All lifecycles"
+            placeholder={t("core.ui.pipelines.panels.filter.lifecycles_placeholder")}
             onChange={(value: MultiValue<SelectOption>) => {
               onUpdateConfig((prev) => ({
                 ...prev,
@@ -284,13 +307,13 @@ export function FilterConfigCard({ config, onUpdateConfig }: FilterProps): React
         </label>
       ) : presetSelected.value === "has_artifact" ? (
         <label className="pipelinesLabel">
-          <span>Artifacts</span>
+          <span>{t("core.ui.pipelines.panels.filter.artifacts")}</span>
           <CreatableSelect<SelectOption, true>
             isMulti
             styles={pipelinesReactSelectStyles}
-            options={ARTIFACT_SUGGESTIONS}
+            options={artifactSuggestions}
             value={selectedArtifactOptions}
-            placeholder="Select artifacts…"
+            placeholder={t("core.ui.pipelines.panels.filter.artifacts_placeholder")}
             onChange={(value: MultiValue<SelectOption>) => {
               onUpdateConfig((prev) => ({
                 ...prev,
@@ -302,10 +325,10 @@ export function FilterConfigCard({ config, onUpdateConfig }: FilterProps): React
       ) : null}
 
       <label className="pipelinesLabel">
-        <span>Invert</span>
+        <span>{t("core.ui.pipelines.panels.filter.invert")}</span>
         <input type="checkbox" checked={invert} onChange={(event) => onUpdateConfig((prev) => ({ ...prev, invert: event.target.checked }))} />
       </label>
-      <div className="pipelinesStepHint">Tip: place Filter before camera.source only when you are filtering gate packets (schedule, HA, etc.).</div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.filter.hint")}</div>
     </div>
   );
 }
@@ -317,6 +340,7 @@ type ThrottleProps = {
 };
 
 export function ThrottleConfigCard({ config, showAdvanced, onUpdateConfig }: ThrottleProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const intervalSeconds = Number((config as any).interval_seconds ?? 1.0);
   const modeRaw = String((config as any).mode ?? "first").trim().toLowerCase() || "first";
   const keyFieldRaw = String((config as any).key_field ?? "stream_id").trim() || "stream_id";
@@ -324,7 +348,7 @@ export function ThrottleConfigCard({ config, showAdvanced, onUpdateConfig }: Thr
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>Interval (seconds)</span>
+        <span>{t("core.ui.pipelines.panels.throttle.interval_seconds")}</span>
         <input
           className="pipelinesInput"
           type="number"
@@ -343,7 +367,7 @@ export function ThrottleConfigCard({ config, showAdvanced, onUpdateConfig }: Thr
       </label>
 
       <label className="pipelinesLabel">
-        <span>Mode</span>
+        <span>{t("core.ui.pipelines.panels.throttle.mode")}</span>
         <select
           className="pipelinesSelect"
           value={modeRaw}
@@ -352,13 +376,13 @@ export function ThrottleConfigCard({ config, showAdvanced, onUpdateConfig }: Thr
             onUpdateConfig((prev) => ({ ...prev, mode: nextMode }));
           }}
         >
-          <option value="first">First (recommended)</option>
+          <option value="first">{t("core.ui.pipelines.panels.throttle.mode.first")}</option>
         </select>
       </label>
 
       {showAdvanced ? (
         <label className="pipelinesLabel">
-          <span>Key</span>
+          <span>{t("core.ui.pipelines.panels.throttle.key")}</span>
           <select
             className="pipelinesSelect"
             value={keyFieldRaw}
@@ -367,16 +391,16 @@ export function ThrottleConfigCard({ config, showAdvanced, onUpdateConfig }: Thr
               onUpdateConfig((prev) => ({ ...prev, key_field: nextKey }));
             }}
           >
-            <option value="stream_id">Stream (per object/camera)</option>
-            <option value="payload.tracking_id">Tracking ID</option>
-            <option value="payload.correlation_id">Correlation ID</option>
-            <option value="payload.camera_id">Camera ID</option>
+            <option value="stream_id">{t("core.ui.pipelines.panels.throttle.key.stream_id")}</option>
+            <option value="payload.tracking_id">{t("core.ui.pipelines.panels.throttle.key.tracking_id")}</option>
+            <option value="payload.correlation_id">{t("core.ui.pipelines.panels.throttle.key.correlation_id")}</option>
+            <option value="payload.camera_id">{t("core.ui.pipelines.panels.throttle.key.camera_id")}</option>
           </select>
         </label>
       ) : null}
 
       <div className="pipelinesStepHint">
-        Emits OPEN/CLOSE packets always. Mode “first” emits the first UPDATE in each interval window (keyed).
+        {t("core.ui.pipelines.panels.throttle.hint")}
       </div>
     </div>
   );
@@ -389,6 +413,7 @@ type DebounceProps = {
 };
 
 export function DebounceConfigCard({ config, showAdvanced, onUpdateConfig }: DebounceProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const quietSeconds = Number((config as any).quiet_period_seconds ?? 1.0);
   const modeRaw = String((config as any).mode ?? "first").trim().toLowerCase() || "first";
   const keyFieldRaw = String((config as any).key_field ?? "stream_id").trim() || "stream_id";
@@ -396,7 +421,7 @@ export function DebounceConfigCard({ config, showAdvanced, onUpdateConfig }: Deb
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>Quiet period (seconds)</span>
+        <span>{t("core.ui.pipelines.panels.debounce.quiet_period_seconds")}</span>
         <input
           className="pipelinesInput"
           type="number"
@@ -415,7 +440,7 @@ export function DebounceConfigCard({ config, showAdvanced, onUpdateConfig }: Deb
       </label>
 
       <label className="pipelinesLabel">
-        <span>Mode</span>
+        <span>{t("core.ui.pipelines.panels.debounce.mode")}</span>
         <select
           className="pipelinesSelect"
           value={modeRaw}
@@ -424,13 +449,13 @@ export function DebounceConfigCard({ config, showAdvanced, onUpdateConfig }: Deb
             onUpdateConfig((prev) => ({ ...prev, mode: nextMode }));
           }}
         >
-          <option value="first">First (recommended)</option>
+          <option value="first">{t("core.ui.pipelines.panels.debounce.mode.first")}</option>
         </select>
       </label>
 
       {showAdvanced ? (
         <label className="pipelinesLabel">
-          <span>Key</span>
+          <span>{t("core.ui.pipelines.panels.debounce.key")}</span>
           <select
             className="pipelinesSelect"
             value={keyFieldRaw}
@@ -439,16 +464,16 @@ export function DebounceConfigCard({ config, showAdvanced, onUpdateConfig }: Deb
               onUpdateConfig((prev) => ({ ...prev, key_field: nextKey }));
             }}
           >
-            <option value="stream_id">Stream (per object/camera)</option>
-            <option value="payload.tracking_id">Tracking ID</option>
-            <option value="payload.correlation_id">Correlation ID</option>
-            <option value="payload.camera_id">Camera ID</option>
+            <option value="stream_id">{t("core.ui.pipelines.panels.debounce.key.stream_id")}</option>
+            <option value="payload.tracking_id">{t("core.ui.pipelines.panels.debounce.key.tracking_id")}</option>
+            <option value="payload.correlation_id">{t("core.ui.pipelines.panels.debounce.key.correlation_id")}</option>
+            <option value="payload.camera_id">{t("core.ui.pipelines.panels.debounce.key.camera_id")}</option>
           </select>
         </label>
       ) : null}
 
       <div className="pipelinesStepHint">
-        Emits OPEN/CLOSE packets always. Mode “first” emits the first UPDATE right away, then debounces subsequent updates.
+        {t("core.ui.pipelines.panels.debounce.hint")}
       </div>
     </div>
   );
@@ -460,6 +485,7 @@ type DebugProps = {
 };
 
 export function DebugConfigCard({ config, onUpdateConfig }: DebugProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const enabled = Boolean((config as any).enabled ?? true);
   const saveImages = Boolean((config as any).save_images ?? true);
   const printPayload = Boolean((config as any).print_payload ?? true);
@@ -471,18 +497,18 @@ export function DebugConfigCard({ config, onUpdateConfig }: DebugProps): React.R
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>Enabled</span>
+        <span>{t("core.ui.pipelines.panels.debug.enabled")}</span>
         <input type="checkbox" checked={enabled} onChange={(event) => onUpdateConfig((prev) => ({ ...prev, enabled: event.target.checked }))} />
       </label>
-      <div className="pipelinesStepHint">Prints packets to stdout and optionally writes images to a temporary folder.</div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.debug.hint")}</div>
 
       <label className="pipelinesLabel">
-        <span>Save images</span>
+        <span>{t("core.ui.pipelines.panels.debug.save_images")}</span>
         <input type="checkbox" checked={saveImages} onChange={(event) => onUpdateConfig((prev) => ({ ...prev, save_images: event.target.checked }))} />
       </label>
 
       <label className="pipelinesLabel">
-        <span>Max images per packet</span>
+        <span>{t("core.ui.pipelines.panels.debug.max_images_per_packet")}</span>
         <input
           className="pipelinesInput"
           type="number"
@@ -501,12 +527,12 @@ export function DebugConfigCard({ config, onUpdateConfig }: DebugProps): React.R
       </label>
 
       <label className="pipelinesLabel">
-        <span>Output dir (optional)</span>
+        <span>{t("core.ui.pipelines.panels.debug.output_dir")}</span>
         <input
           className="pipelinesInput"
           type="text"
           value={outputDir}
-          placeholder="System temp"
+          placeholder={t("core.ui.pipelines.panels.debug.output_dir_placeholder")}
           onChange={(event) => {
             const nextValue = String(event.target.value ?? "");
             onUpdateConfig((prev) => ({ ...prev, output_dir: nextValue }));
@@ -515,17 +541,17 @@ export function DebugConfigCard({ config, onUpdateConfig }: DebugProps): React.R
       </label>
 
       <label className="pipelinesLabel">
-        <span>Print payload</span>
+        <span>{t("core.ui.pipelines.panels.debug.print_payload")}</span>
         <input type="checkbox" checked={printPayload} onChange={(event) => onUpdateConfig((prev) => ({ ...prev, print_payload: event.target.checked }))} />
       </label>
 
       <label className="pipelinesLabel">
-        <span>Print metadata</span>
+        <span>{t("core.ui.pipelines.panels.debug.print_metadata")}</span>
         <input type="checkbox" checked={printMetadata} onChange={(event) => onUpdateConfig((prev) => ({ ...prev, print_metadata: event.target.checked }))} />
       </label>
 
       <label className="pipelinesLabel">
-        <span>Print artifacts</span>
+        <span>{t("core.ui.pipelines.panels.debug.print_artifacts")}</span>
         <input type="checkbox" checked={printArtifacts} onChange={(event) => onUpdateConfig((prev) => ({ ...prev, print_artifacts: event.target.checked }))} />
       </label>
     </div>
@@ -538,6 +564,7 @@ type StoreImagesProps = {
 };
 
 export function StoreImagesConfigCard({ config, onUpdateConfig }: StoreImagesProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const formatRaw = String((config as any).format ?? "png").trim().toLowerCase() || "png";
   const format = formatRaw === "jpeg" ? "jpeg" : "png";
   const subdir = String((config as any).subdir ?? "pipelines").trim() || "pipelines";
@@ -547,18 +574,19 @@ export function StoreImagesConfigCard({ config, onUpdateConfig }: StoreImagesPro
   const artifactNames = Array.isArray(artifactNamesRaw)
     ? artifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
     : [];
-  const selectedArtifactOptions = artifactNames.map((value) => ARTIFACT_SUGGESTIONS.find((option) => option.value === value) ?? { value, label: value });
+  const artifactSuggestions = buildArtifactSuggestions(t);
+  const selectedArtifactOptions = artifactNames.map((value) => artifactSuggestions.find((option) => option.value === value) ?? { value, label: value });
 
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>Artifacts</span>
+        <span>{t("core.ui.pipelines.panels.store_images.artifacts")}</span>
         <CreatableSelect<SelectOption, true>
           isMulti
           styles={pipelinesReactSelectStyles}
-          options={ARTIFACT_SUGGESTIONS}
+          options={artifactSuggestions}
           value={selectedArtifactOptions}
-          placeholder="Full frame"
+          placeholder={t("core.ui.pipelines.panels.store_images.artifacts_placeholder")}
           onChange={(value: MultiValue<SelectOption>) => {
             onUpdateConfig((prev) => ({
               ...prev,
@@ -567,10 +595,10 @@ export function StoreImagesConfigCard({ config, onUpdateConfig }: StoreImagesPro
           }}
         />
       </label>
-      <div className="pipelinesStepHint">Stores artifacts locally on the origin. Notify uses stored references only.</div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.store_images.hint")}</div>
 
       <label className="pipelinesLabel">
-        <span>Subdir</span>
+        <span>{t("core.ui.pipelines.panels.store_images.subdir")}</span>
         <input
           className="pipelinesInput"
           type="text"
@@ -584,7 +612,7 @@ export function StoreImagesConfigCard({ config, onUpdateConfig }: StoreImagesPro
       </label>
 
       <label className="pipelinesLabel">
-        <span>Format</span>
+        <span>{t("core.ui.pipelines.panels.store_images.format")}</span>
         <select
           className="pipelinesSelect"
           value={format}
@@ -599,10 +627,10 @@ export function StoreImagesConfigCard({ config, onUpdateConfig }: StoreImagesPro
       </label>
 
       <label className="pipelinesLabel">
-        <span>Keep data in memory</span>
+        <span>{t("core.ui.pipelines.panels.store_images.keep_data")}</span>
         <input type="checkbox" checked={keepData} onChange={(event) => onUpdateConfig((prev) => ({ ...prev, keep_data: event.target.checked }))} />
       </label>
-      <div className="pipelinesStepHint">If disabled, pixel data is dropped after storing to keep memory stable.</div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.store_images.keep_data_hint")}</div>
     </div>
   );
 }
@@ -614,6 +642,7 @@ type NotifyProps = {
 };
 
 export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: NotifyProps): React.ReactElement {
+  const { t } = i18n.useI18n();
   const title = String((config as any).title ?? "").trim();
   const description = String((config as any).description ?? "").trim();
   const priority = String((config as any).priority ?? "medium").trim().toLowerCase() || "medium";
@@ -628,16 +657,17 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
     ? notifyFallbackRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
     : ["best_frame", "frame_original"];
   const notifySelectedFallbackOptions = notifyFallback.map((value: string) => ({ value, label: value }));
+  const artifactSuggestions = buildArtifactSuggestions(t);
 
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>Title template</span>
+        <span>{t("core.ui.pipelines.panels.notify.title_template")}</span>
         <input
           className="pipelinesInput"
           type="text"
           value={title}
-          placeholder="{{object_category_label}} detected"
+          placeholder={t("core.ui.pipelines.panels.notify.title_placeholder", { object_category_label: "{{object_category_label}}" })}
           onChange={(event) => {
             const nextValue = String(event.target.value ?? "");
             onUpdateConfig((prev) => ({ ...prev, title: nextValue }));
@@ -645,16 +675,17 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
         />
       </label>
       <div className="pipelinesStepHint">
-        Use templates like <code>{"{{object_category_label}}"}</code>, <code>{"{{area_label}}"}</code>, <code>{"{{pose_label}}"}</code>.
+        {t("core.ui.pipelines.panels.notify.template_hint_prefix")} <code>{"{{object_category_label}}"}</code>, <code>{"{{area_label}}"}</code>,{" "}
+        <code>{"{{pose_label}}"}</code>.
       </div>
 
       <label className="pipelinesLabel">
-        <span>Description template</span>
+        <span>{t("core.ui.pipelines.panels.notify.description_template")}</span>
         <input
           className="pipelinesInput"
           type="text"
           value={description}
-          placeholder="Optional"
+          placeholder={t("core.ui.pipelines.panels.notify.description_placeholder")}
           onChange={(event) => {
             const nextValue = String(event.target.value ?? "");
             onUpdateConfig((prev) => ({ ...prev, description: nextValue }));
@@ -663,7 +694,7 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
       </label>
 
       <label className="pipelinesLabel">
-        <span>Priority</span>
+        <span>{t("core.ui.pipelines.panels.notify.priority")}</span>
         <select
           className="pipelinesSelect"
           value={priority}
@@ -672,19 +703,19 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
             onUpdateConfig((prev) => ({ ...prev, priority: nextPriority }));
           }}
         >
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
+          <option value="low">{t("core.ui.pipelines.panels.notify.priority.low")}</option>
+          <option value="medium">{t("core.ui.pipelines.panels.notify.priority.medium")}</option>
+          <option value="high">{t("core.ui.pipelines.panels.notify.priority.high")}</option>
         </select>
       </label>
 
       <label className="pipelinesLabel">
-        <span>Realtime updates</span>
+        <span>{t("core.ui.pipelines.panels.notify.realtime")}</span>
         <input type="checkbox" checked={realtime} onChange={(event) => onUpdateConfig((prev) => ({ ...prev, realtime: event.target.checked }))} />
       </label>
 
       <label className="pipelinesLabel">
-        <span>Update interval (seconds)</span>
+        <span>{t("core.ui.pipelines.panels.notify.update_interval_seconds")}</span>
         <input
           className="pipelinesInput"
           type="number"
@@ -701,16 +732,16 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
           }}
         />
       </label>
-      <div className="pipelinesStepHint">Avoids spamming UI updates while an event is open. Set to 0 to emit every change.</div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.notify.update_interval_hint")}</div>
 
       <label className="pipelinesLabel">
-        <span>Thumbnail fallback</span>
+        <span>{t("core.ui.pipelines.panels.notify.thumbnail_fallback")}</span>
         <CreatableSelect<SelectOption, true>
           isMulti
           styles={pipelinesReactSelectStyles}
-          options={ARTIFACT_SUGGESTIONS}
+          options={artifactSuggestions}
           value={notifySelectedFallbackOptions}
-          placeholder="Best frame → Face → Segmented → Full frame"
+          placeholder={t("core.ui.pipelines.panels.notify.thumbnail_placeholder")}
           onChange={(value: MultiValue<SelectOption>) => {
             onUpdateConfig((prev) => ({
               ...prev,
@@ -720,13 +751,13 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
         />
       </label>
       <div className="pipelinesStepHint">
-        Registers notifications only (never stores images). To include images, add Store Images before this step.
+        {t("core.ui.pipelines.panels.notify.thumbnail_hint")}
       </div>
 
       {showAdvanced ? (
         <>
           <label className="pipelinesLabel">
-            <span>Notification type</span>
+            <span>{t("core.ui.pipelines.panels.notify.notification_type")}</span>
             <input
               className="pipelinesInput"
               type="text"
@@ -740,12 +771,12 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
           </label>
 
           <label className="pipelinesLabel">
-            <span>Dedupe key template</span>
+            <span>{t("core.ui.pipelines.panels.notify.dedupe_key_template")}</span>
             <input
               className="pipelinesInput"
               type="text"
               value={dedupeKeyTemplate}
-              placeholder="Leave empty for default"
+              placeholder={t("core.ui.pipelines.panels.notify.dedupe_key_placeholder")}
               onChange={(event) => {
                 const nextValue = String(event.target.value ?? "");
                 onUpdateConfig((prev) => ({ ...prev, dedupe_key_template: nextValue }));
@@ -753,7 +784,8 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
             />
           </label>
           <div className="pipelinesStepHint">
-            Use templates like <code>{"{{tracking_id}}"}</code>, <code>{"{{camera_id}}"}</code>, <code>{"{{object_category_label}}"}</code>.
+            {t("core.ui.pipelines.panels.notify.dedupe_key_hint_prefix")} <code>{"{{tracking_id}}"}</code>, <code>{"{{camera_id}}"}</code>,{" "}
+            <code>{"{{object_category_label}}"}</code>.
           </div>
         </>
       ) : null}

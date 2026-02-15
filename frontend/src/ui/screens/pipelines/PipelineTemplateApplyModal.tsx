@@ -8,6 +8,7 @@ import type {
   PipelineTemplateApplyCamerasResponse,
   ProcessingServer,
 } from "../../../util/api";
+import { i18n } from "../../../util/i18n";
 import { Modal } from "../../Modal";
 import { pipelinesReactSelectStyles } from "./constants";
 import type { SelectOption } from "./types";
@@ -29,6 +30,7 @@ export function PipelineTemplateApplyModal({
   onClose,
   onApply,
 }: Props): React.ReactElement | null {
+  const { t } = i18n.useI18n();
   const [enabled, setEnabled] = useState(false);
   const [processingServerId, setProcessingServerId] = useState("local");
   const [conflict, setConflict] = useState<"skip" | "replace" | "error">("skip");
@@ -93,9 +95,9 @@ export function PipelineTemplateApplyModal({
   };
 
   const title = useMemo(() => {
-    if (!template) return "Apply template";
-    return `Apply template: ${template.name}`;
-  }, [template]);
+    if (!template) return t("core.ui.pipelines.template_apply.title");
+    return t("core.ui.pipelines.template_apply.title_with_name", { name: template.name });
+  }, [template, t]);
 
   if (!open) return null;
 
@@ -107,29 +109,29 @@ export function PipelineTemplateApplyModal({
         </div>
       ) : null}
 
-      {!template ? <div className="pipelinesHint">Select a template pipeline first.</div> : null}
+      {!template ? <div className="pipelinesHint">{t("core.ui.pipelines.template_apply.select_first")}</div> : null}
 
       {template && template.type !== "reuse" ? (
-        <div className="pipelinesInlineError">Only reuse pipelines can be applied as templates.</div>
+        <div className="pipelinesInlineError">{t("core.ui.pipelines.template_apply.only_reuse")}</div>
       ) : null}
 
       <div className="pipelinesOperatorConfigCard">
         <label className="pipelinesLabel">
-          <span>Cameras</span>
+          <span>{t("core.ui.pipelines.template_apply.cameras")}</span>
           <Select<SelectOption, true>
             isMulti
             styles={pipelinesReactSelectStyles}
             options={cameraOptions}
             value={selectedCameras}
             isDisabled={!template || template.type !== "reuse"}
-            placeholder={cameraOptions.length ? "Select cameras…" : "No cameras found…"}
+            placeholder={cameraOptions.length ? t("core.ui.pipelines.template_apply.cameras.placeholder") : t("core.ui.pipelines.template_apply.cameras.empty")}
             onChange={(value: MultiValue<SelectOption>) => setSelectedCameras(value as SelectOption[])}
           />
         </label>
-        <div className="pipelinesStepHint">Creates one final pipeline per camera (same graph, only camera_id changes).</div>
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.template_apply.hint")}</div>
 
         <label className="pipelinesLabel">
-          <span>Processing server</span>
+          <span>{t("core.ui.pipelines.template_apply.processing_server")}</span>
           <select
             className="pipelinesSelect"
             value={processingServerId}
@@ -145,7 +147,7 @@ export function PipelineTemplateApplyModal({
         </label>
 
         <label className="pipelinesLabel">
-          <span>Enable created pipelines</span>
+          <span>{t("core.ui.pipelines.template_apply.enable_created")}</span>
           <input
             type="checkbox"
             checked={enabled}
@@ -155,31 +157,32 @@ export function PipelineTemplateApplyModal({
         </label>
 
         <label className="pipelinesLabel">
-          <span>When name exists</span>
+          <span>{t("core.ui.pipelines.template_apply.conflict")}</span>
           <select
             className="pipelinesSelect"
             value={conflict}
             onChange={(event) => setConflict(event.target.value as any)}
             disabled={!template || template.type !== "reuse"}
           >
-            <option value="skip">Skip</option>
-            <option value="replace">Replace</option>
-            <option value="error">Error</option>
+            <option value="skip">{t("core.ui.pipelines.template_apply.conflict.skip")}</option>
+            <option value="replace">{t("core.ui.pipelines.template_apply.conflict.replace")}</option>
+            <option value="error">{t("core.ui.pipelines.template_apply.conflict.error")}</option>
           </select>
         </label>
 
         <button className="pillButton pillButtonPrimary" type="button" disabled={!canApply || applying} onClick={() => void applyNow()}>
           <i className="fa-solid fa-wand-magic-sparkles" aria-hidden="true" />
-          {applying ? "Applying…" : "Apply"}
+          {applying ? t("core.ui.pipelines.template_apply.applying") : t("core.ui.pipelines.template_apply.apply")}
         </button>
       </div>
 
       {result ? (
         <div className="card">
-          <div className="cardTitle">Result</div>
+          <div className="cardTitle">{t("core.ui.pipelines.template_apply.result.title")}</div>
           <div className="cardBody">
             <div className="pipelinesHint">
-              Created: {result.created?.length ?? 0} • Updated: {result.updated?.length ?? 0} • Skipped: {result.skipped?.length ?? 0}
+              {t("core.ui.pipelines.template_apply.result.created")}: {result.created?.length ?? 0} • {t("core.ui.pipelines.template_apply.result.updated")}:{" "}
+              {result.updated?.length ?? 0} • {t("core.ui.pipelines.template_apply.result.skipped")}: {result.skipped?.length ?? 0}
             </div>
             <pre className="pipelinesPre">{JSON.stringify(result, null, 2)}</pre>
           </div>

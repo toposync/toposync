@@ -175,7 +175,7 @@ export function ProcessingServerModal({ open, server, onClose, onSave, onDelete,
 
   const deleteNow = async () => {
     if (!serverId.trim() || serverId.trim() === "local") return;
-    if (!confirm(`Delete processing server '${serverId.trim()}'?`)) return;
+    if (!confirm(t("core.ui.processing_servers.confirm_delete", { id: serverId.trim() }))) return;
     setLocalError(null);
     setSaving(true);
     try {
@@ -189,20 +189,22 @@ export function ProcessingServerModal({ open, server, onClose, onSave, onDelete,
   };
 
   return (
-    <Modal open={open} title={editing ? "Edit processing server" : "Add processing server"} onClose={onClose}>
+    <Modal
+      open={open}
+      title={editing ? t("core.ui.processing_server_modal.title_edit") : t("core.ui.processing_server_modal.title_add")}
+      onClose={onClose}
+    >
       {localError ? (
         <div className="card cardDanger">
           <div className="cardBody">{localError}</div>
         </div>
       ) : null}
 
-      <div className="pipelinesHint">
-        Run the processing server on another machine and connect it here. Storage and notifications still happen on the origin server.
-      </div>
+      <div className="pipelinesHint">{t("core.ui.processing_server_modal.hint")}</div>
 
       <div className="processingServerForm">
         <label className="pipelinesLabel">
-          <span>ID</span>
+          <span>{t("core.ui.processing_server_modal.field.id")}</span>
           <input
             className="pipelinesInput"
             value={serverId}
@@ -212,16 +214,16 @@ export function ProcessingServerModal({ open, server, onClose, onSave, onDelete,
           />
         </label>
 
-        {showSuggestedIdHint ? <div className="pipelinesHint">Suggested id: {suggestedId}</div> : null}
+        {showSuggestedIdHint ? <div className="pipelinesHint">{t("core.ui.processing_server_modal.suggested_id", { id: suggestedId })}</div> : null}
 
         <label className="pipelinesLabel">
-          <span>Name (optional)</span>
+          <span>{t("core.ui.processing_server_modal.field.name")}</span>
           <input className="pipelinesInput" value={name} onChange={(event) => setName(event.target.value)} placeholder="Garage GPU" />
         </label>
 
         <div className="processingServerEndpointRow">
           <label className="pipelinesLabel">
-            <span>Scheme</span>
+            <span>{t("core.ui.processing_server_modal.field.scheme")}</span>
             <select className="pipelinesSelect" value={scheme} onChange={(event) => setScheme(event.target.value as any)}>
               <option value="http">http</option>
               <option value="https">https</option>
@@ -229,26 +231,26 @@ export function ProcessingServerModal({ open, server, onClose, onSave, onDelete,
           </label>
 
           <label className="pipelinesLabel">
-            <span>Host / IP</span>
+            <span>{t("core.ui.processing_server_modal.field.host")}</span>
             <input className="pipelinesInput" value={host} onChange={(event) => setHost(event.target.value)} placeholder="192.168.1.50" />
           </label>
 
           <label className="pipelinesLabel">
-            <span>Port</span>
+            <span>{t("core.ui.processing_server_modal.field.port")}</span>
             <input className="pipelinesInput" value={port} onChange={(event) => setPort(event.target.value)} placeholder="9001" />
           </label>
         </div>
 
-        <div className="pipelinesHint">URL preview: {urlPreview || "—"}</div>
+        <div className="pipelinesHint">{t("core.ui.processing_server_modal.url_preview", { url: urlPreview || "—" })}</div>
 
         <div className="processingServerAuthRow">
           <label className="pipelinesLabel">
-            <span>Username (optional)</span>
+            <span>{t("core.ui.processing_server_modal.field.username")}</span>
             <input className="pipelinesInput" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="mateus" />
           </label>
 
           <label className="pipelinesLabel">
-            <span>Password (optional)</span>
+            <span>{t("core.ui.processing_server_modal.field.password")}</span>
             <input
               className="pipelinesInput"
               type="password"
@@ -261,7 +263,7 @@ export function ProcessingServerModal({ open, server, onClose, onSave, onDelete,
         </div>
 
         <div className="pipelinesHint">
-          Remote command: <pre className="pipelinesPre">{processingServeCommand}</pre>
+          {t("core.ui.processing_server_modal.remote_command")} <pre className="pipelinesPre">{processingServeCommand}</pre>
         </div>
       </div>
 
@@ -270,11 +272,11 @@ export function ProcessingServerModal({ open, server, onClose, onSave, onDelete,
           <div className="cardBody">
             {testResult.ok ? (
               <>
-                <div>Connection: OK</div>
+                <div>{t("core.ui.processing_server_modal.connection_ok")}</div>
                 <pre className="pipelinesPre">{JSON.stringify(testResult.status ?? {}, null, 2)}</pre>
               </>
             ) : (
-              <div>Connection: {testResult.error || "failed"}</div>
+              <div>{t("core.ui.processing_server_modal.connection_failed", { error: testResult.error || "failed" })}</div>
             )}
           </div>
         </div>
@@ -283,16 +285,16 @@ export function ProcessingServerModal({ open, server, onClose, onSave, onDelete,
       <div className="modalFooter">
         {editing ? (
           <button className="pillButton pillButtonDanger" type="button" disabled={saving} onClick={() => void deleteNow()}>
-            Delete
+            {t("core.actions.delete")}
           </button>
         ) : null}
 
         <button className="pillButton" type="button" disabled={testing || saving || !editing} onClick={() => void testNow()}>
-          {testing ? t("core.ui.loading") : "Test connection"}
+          {testing ? t("core.ui.loading") : t("core.ui.processing_server_modal.actions.test_connection")}
         </button>
 
         <button className="pillButton pillButtonPrimary" type="button" disabled={saving || !canSave} onClick={() => void saveNow()}>
-          {saving ? t("core.ui.loading") : "Save"}
+          {saving ? t("core.ui.loading") : t("core.actions.save")}
         </button>
       </div>
     </Modal>

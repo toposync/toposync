@@ -1,6 +1,7 @@
 import React from "react";
 
 import type { PipelineOperatorDefinition } from "../../../../util/api";
+import { i18n } from "../../../../util/i18n";
 
 import { prettyOperatorLabel } from "../utils";
 
@@ -13,9 +14,10 @@ export function InteractiveStepsToolbar({
   presetOperators,
   onAddStep,
 }: Props): React.ReactElement {
+  const { t } = i18n.useI18n();
   return (
     <div className="pipelinesInteractiveToolbar">
-      <div className="pipelinesInteractiveLabel">Add step</div>
+      <div className="pipelinesInteractiveLabel">{t("core.ui.pipelines.editor.add_step")}</div>
       <div className="pipelinesPresetButtons">
         {presetOperators.map((operator) => (
           <button

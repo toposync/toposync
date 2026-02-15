@@ -4,6 +4,7 @@ import { type MultiValue } from "react-select";
 
 import { pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constants";
 import type { SelectOption } from "../../types";
+import { i18n } from "../../../../../util/i18n";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
 
@@ -14,6 +15,7 @@ type Props = {
 };
 
 export function YoloVisionConfigCard({ operatorId, config, onUpdateConfig }: Props): React.ReactElement {
+  const { t } = i18n.useI18n();
   const yoloCategoriesRaw = (config as any).categories;
   const yoloCategories = Array.isArray(yoloCategoriesRaw)
     ? yoloCategoriesRaw.map((value: any) => String(value || "").trim().toLowerCase()).filter((value: string) => value.length > 0)
@@ -30,7 +32,7 @@ export function YoloVisionConfigCard({ operatorId, config, onUpdateConfig }: Pro
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>Min confidence</span>
+        <span>{t("core.ui.pipelines.panels.yolo.min_confidence")}</span>
         <input
           className="pipelinesInput"
           type="number"
@@ -47,16 +49,16 @@ export function YoloVisionConfigCard({ operatorId, config, onUpdateConfig }: Pro
           }}
         />
       </label>
-      <div className="pipelinesStepHint">Filters low-confidence detections/tracks (default: 0.40).</div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.min_confidence_hint")}</div>
 
       <label className="pipelinesLabel">
-        <span>Categories</span>
+        <span>{t("core.ui.pipelines.panels.yolo.categories")}</span>
         <CreatableSelect<SelectOption, true>
           isMulti
           styles={pipelinesReactSelectStyles}
           options={YOLO_CATEGORY_OPTIONS}
           value={yoloCategories.map((value) => YOLO_CATEGORY_OPTIONS.find((opt) => opt.value === value) ?? { value, label: value })}
-          placeholder="All categories"
+          placeholder={t("core.ui.pipelines.panels.yolo.categories_placeholder")}
           onChange={(value: MultiValue<SelectOption>) => {
             onUpdateConfig((prev) => ({
               ...prev,
@@ -65,10 +67,10 @@ export function YoloVisionConfigCard({ operatorId, config, onUpdateConfig }: Pro
           }}
         />
       </label>
-      <div className="pipelinesStepHint">Empty selection means “all categories”.</div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.categories_hint")}</div>
 
       <label className="pipelinesLabel">
-        <span>{isTracking ? "Update interval (seconds)" : "Event interval (seconds)"}</span>
+        <span>{isTracking ? t("core.ui.pipelines.panels.yolo.update_interval_tracking") : t("core.ui.pipelines.panels.yolo.update_interval_detection")}</span>
         <input
           className="pipelinesInput"
           type="number"
@@ -86,13 +88,13 @@ export function YoloVisionConfigCard({ operatorId, config, onUpdateConfig }: Pro
         />
       </label>
       <div className="pipelinesStepHint">
-        Min seconds between emits per camera + category. Use 0 only if you really want “every frame” (can overload notify/storage/debug).
+        {t("core.ui.pipelines.panels.yolo.update_interval_hint")}
       </div>
 
       {isTracking ? (
         <>
           <label className="pipelinesLabel">
-            <span>Close after (seconds)</span>
+            <span>{t("core.ui.pipelines.panels.yolo.close_after_seconds")}</span>
             <input
               className="pipelinesInput"
               type="number"
@@ -109,7 +111,7 @@ export function YoloVisionConfigCard({ operatorId, config, onUpdateConfig }: Pro
               }}
             />
           </label>
-          <div className="pipelinesStepHint">Closes a track if the object is not seen for this long (higher = more stable, slower close).</div>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.close_after_hint")}</div>
         </>
       ) : null}
     </div>

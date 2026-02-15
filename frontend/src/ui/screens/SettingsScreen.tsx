@@ -388,21 +388,21 @@ export function SettingsScreen({
   }
 
   const exitTitle = useMemo(() => {
-    if (pendingExitAction === "pipelines") return "Discard changes and open Pipelines?";
-    if (pendingExitAction === "processing_servers") return "Discard changes and open Processing servers?";
+    if (pendingExitAction === "pipelines") return t("core.ui.settings.confirm_open_pipelines_title");
+    if (pendingExitAction === "processing_servers") return t("core.ui.settings.confirm_open_processing_servers_title");
     return t("core.ui.settings.confirm_close_title");
   }, [pendingExitAction, t]);
 
   const exitDesc = useMemo(() => {
     if (pendingExitAction === "pipelines" || pendingExitAction === "processing_servers") {
       const suffix = unsavedSectionsLabel ? ` (${unsavedSectionsLabel})` : "";
-      return `You have unsaved settings${suffix}. Discard them and continue?`;
+      return t("core.ui.settings.confirm_discard_continue_desc", { suffix });
     }
     return t("core.ui.settings.confirm_close_desc");
   }, [pendingExitAction, t, unsavedSectionsLabel]);
 
   const exitConfirmLabel = useMemo(() => {
-    if (pendingExitAction === "pipelines" || pendingExitAction === "processing_servers") return "Discard and continue";
+    if (pendingExitAction === "pipelines" || pendingExitAction === "processing_servers") return t("core.ui.settings.confirm_discard_continue");
     return t("core.ui.settings.discard_and_close");
   }, [pendingExitAction, t]);
 
@@ -424,9 +424,9 @@ export function SettingsScreen({
               </span>
               <span className="settingsNavText">
                 <span className="settingsNavTitleRow">
-                  <span className="settingsNavTitle">Pipelines</span>
+                  <span className="settingsNavTitle">{t("core.ui.settings.nav.pipelines.title")}</span>
                 </span>
-                <span className="settingsNavDesc">Create and edit pipelines.</span>
+                <span className="settingsNavDesc">{t("core.ui.settings.nav.pipelines.desc")}</span>
               </span>
             </button>
 
@@ -436,9 +436,9 @@ export function SettingsScreen({
               </span>
               <span className="settingsNavText">
                 <span className="settingsNavTitleRow">
-                  <span className="settingsNavTitle">Processing servers</span>
+                  <span className="settingsNavTitle">{t("core.ui.settings.nav.processing_servers.title")}</span>
                 </span>
-                <span className="settingsNavDesc">Manage remote processing servers.</span>
+                <span className="settingsNavDesc">{t("core.ui.settings.nav.processing_servers.desc")}</span>
               </span>
             </button>
 
@@ -584,4 +584,3 @@ export function SettingsScreen({
     </div>
   );
 }
-

@@ -421,7 +421,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
 
   const handleDelete = async () => {
     if (!draft) return;
-    if (!confirm(`Delete pipeline '${draft.name}'?`)) return;
+    if (!confirm(t("core.ui.pipelines.confirm_delete", { name: draft.name }))) return;
     setError(null);
     try {
       await deletePipeline(draft.name);
@@ -448,7 +448,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
         <button className="iconButton" type="button" onClick={onClose} aria-label={t("core.actions.back", {}, "Back")}>
           <i className="fa-solid fa-arrow-left" aria-hidden="true" />
         </button>
-        <div className="pipelinesTitle">Pipelines</div>
+        <div className="pipelinesTitle">{t("core.ui.pipelines.title")}</div>
         <div className="pipelinesTopbarRight">
           {draft ? <div className="pipelinesFlag">{draft.name}</div> : null}
           {compactLayout ? (
@@ -456,8 +456,8 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
               className={["iconButton", sidebarOpen ? "isActive" : ""].filter(Boolean).join(" ")}
               type="button"
               onClick={() => setSidebarOpen((prev) => !prev)}
-              aria-label="Toggle pipelines list"
-              title="Toggle pipelines list"
+              aria-label={t("core.ui.pipelines.aria.toggle_list")}
+              title={t("core.ui.pipelines.aria.toggle_list")}
             >
               <i className="fa-solid fa-list" aria-hidden="true" />
             </button>
@@ -478,29 +478,29 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
           <button
             className="pipelinesSidebarBackdrop"
             type="button"
-            aria-label="Close pipelines list"
+            aria-label={t("core.ui.pipelines.aria.close_list")}
             onClick={() => setSidebarOpen(false)}
           />
         ) : null}
         <div className="pipelinesSidebar">
           <div className="pipelinesSidebarHeader">
-            <div className="pipelinesSidebarTitle">Pipelines</div>
+            <div className="pipelinesSidebarTitle">{t("core.ui.pipelines.title")}</div>
           </div>
 
           <div className="pipelinesCreate">
             <input
               className="pipelinesInput"
-              placeholder="Pipeline name"
+              placeholder={t("core.ui.pipelines.create.placeholder_name")}
               value={createName}
               onChange={(event) => setCreateName(event.target.value)}
             />
             <select className="pipelinesSelect" value={createType} onChange={(event) => setCreateType(event.target.value as any)}>
-              <option value="final">final</option>
-              <option value="reuse">reuse</option>
+              <option value="final">{t("core.ui.pipelines.type.final")}</option>
+              <option value="reuse">{t("core.ui.pipelines.type.reuse")}</option>
             </select>
             <button className="pillButton" type="button" onClick={() => void handleCreate()}>
               <i className="fa-solid fa-plus" aria-hidden="true" />
-              Create
+              {t("core.ui.pipelines.create.button")}
             </button>
           </div>
 
@@ -516,18 +516,20 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                 }}
               >
                 <div className="pipelinesListItemName">{pipeline.name}</div>
-                <div className="pipelinesListItemMeta">{pipeline.type}</div>
+                <div className="pipelinesListItemMeta">
+                  {pipeline.type === "reuse" ? t("core.ui.pipelines.type.reuse") : t("core.ui.pipelines.type.final")}
+                </div>
               </button>
             ))}
           </div>
 
           <div className="pipelinesSidebarFooter">
-            <div className="pipelinesSidebarTitle">Processing servers</div>
-            <div className="pipelinesHint">Configure remote servers in Settings.</div>
+            <div className="pipelinesSidebarTitle">{t("core.ui.pipelines.sidebar.processing_servers.title")}</div>
+            <div className="pipelinesHint">{t("core.ui.pipelines.sidebar.processing_servers.desc")}</div>
             {onOpenProcessingServers ? (
               <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
                 <i className="fa-solid fa-server" aria-hidden="true" />
-                Manage servers
+                {t("core.ui.pipelines.sidebar.processing_servers.manage")}
               </button>
             ) : null}
           </div>
@@ -536,7 +538,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
         <div className="pipelinesEditor">
           {loading ? (
             <div className="card">
-              <div className="cardBody">Loading…</div>
+              <div className="cardBody">{t("core.ui.loading")}</div>
             </div>
           ) : null}
 
@@ -548,7 +550,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
 
           {!draft ? (
             <div className="card">
-              <div className="cardBody">Select or create a pipeline.</div>
+              <div className="cardBody">{t("core.ui.pipelines.empty")}</div>
             </div>
           ) : (
             <div className="pipelinesEditorInner">
@@ -558,59 +560,59 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                   {draft.type === "reuse" ? (
                     <button className="pillButton" type="button" onClick={() => setTemplateApplyOpen(true)}>
                       <i className="fa-solid fa-wand-magic-sparkles" aria-hidden="true" />
-                      Apply template
+                      {t("core.ui.pipelines.actions.apply_template")}
                     </button>
                   ) : null}
                   <button className="pillButton" type="button" onClick={() => void handleCompile()}>
                     <i className="fa-solid fa-gears" aria-hidden="true" />
-                    Compile
+                    {t("core.ui.pipelines.actions.compile")}
                   </button>
                   <button className="pillButton pillButtonPrimary" type="button" onClick={() => void handleSave()}>
                     <i className="fa-solid fa-floppy-disk" aria-hidden="true" />
-                    Save
+                    {t("core.actions.save")}
                   </button>
                   <button className="pillButton pillButtonDanger" type="button" onClick={() => void handleDelete()}>
                     <i className="fa-solid fa-trash" aria-hidden="true" />
-                    Delete
+                    {t("core.actions.delete")}
                   </button>
                 </div>
               </div>
 
               <div className="card">
-                <div className="cardTitle">Stats (last 24h)</div>
+                <div className="cardTitle">{t("core.ui.pipelines.stats.title")}</div>
                 <div className="cardBody">
                   {pipelineStatsLoading ? (
-                    <div className="pipelinesHint">Loading stats…</div>
+                    <div className="pipelinesHint">{t("core.ui.pipelines.stats.loading")}</div>
                   ) : pipelineStatsError ? (
-                    <div className="pipelinesHint">Stats unavailable: {pipelineStatsError}</div>
+                    <div className="pipelinesHint">{t("core.ui.pipelines.stats.unavailable", { error: pipelineStatsError })}</div>
                   ) : pipelineStats ? (
                     <div className="pipelinesStatsRow">
                       <div className="pipelinesStatsItem">
-                        <div className="pipelinesHint">Inputs</div>
+                        <div className="pipelinesHint">{t("core.ui.pipelines.stats.inputs")}</div>
                         <div className="pipelinesStatsValue">{Number(pipelineStats.inputs_24h ?? 0).toLocaleString()}</div>
                       </div>
                       <div className="pipelinesStatsItem">
-                        <div className="pipelinesHint">Outputs</div>
+                        <div className="pipelinesHint">{t("core.ui.pipelines.stats.outputs")}</div>
                         <div className="pipelinesStatsValue">{Number(pipelineStats.outputs_24h ?? 0).toLocaleString()}</div>
                       </div>
                     </div>
                   ) : (
-                    <div className="pipelinesHint">No data yet.</div>
+                    <div className="pipelinesHint">{t("core.ui.pipelines.stats.no_data")}</div>
                   )}
                 </div>
               </div>
 
               {recommendationsError ? (
                 <div className="card cardDanger">
-                  <div className="cardBody">Pipeline analysis failed: {recommendationsError}</div>
+                  <div className="cardBody">{t("core.ui.pipelines.analysis.failed", { error: recommendationsError })}</div>
                 </div>
               ) : null}
 
-              {recommendationsLoading ? <div className="pipelinesHint">Analyzing pipeline…</div> : null}
+              {recommendationsLoading ? <div className="pipelinesHint">{t("core.ui.pipelines.analysis.loading")}</div> : null}
 
               {recommendations.length > 0 ? (
                 <div className="card">
-                  <div className="cardTitle">Recommendations</div>
+                  <div className="cardTitle">{t("core.ui.pipelines.recommendations.title")}</div>
                   <div className="cardBody">
                     <div className="pipelinesAlerts">
                       {recommendations.map((alert, index) => (
@@ -624,7 +626,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                           <div className="pipelinesAlertText">
                             <div className="pipelinesAlertMessage">{alert.message}</div>
                             {alert.suggestion ? <div className="pipelinesAlertSuggestion">{alert.suggestion}</div> : null}
-                            {alert.node_id ? <div className="pipelinesHint">Node: {alert.node_id}</div> : null}
+                            {alert.node_id ? <div className="pipelinesHint">{t("core.ui.pipelines.recommendations.node", { node_id: alert.node_id })}</div> : null}
                             {alert.edge ? <pre className="pipelinesPre">{JSON.stringify(alert.edge, null, 2)}</pre> : null}
                           </div>
                         </div>
@@ -637,22 +639,22 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
               <div className="pipelinesEditorGrid">
                 <div className="pipelinesForm">
                   <label className="pipelinesLabel">
-                    <span>Type</span>
+                    <span>{t("core.ui.pipelines.form.type")}</span>
                     <select
                       className="pipelinesSelect"
                       value={draft.type}
                       onChange={(event) => setDraft((prev) => (prev ? { ...prev, type: event.target.value as any } : prev))}
                       disabled={isPythonLocked}
                     >
-                      <option value="final">final</option>
-                      <option value="reuse">reuse</option>
+                      <option value="final">{t("core.ui.pipelines.type.final")}</option>
+                      <option value="reuse">{t("core.ui.pipelines.type.reuse")}</option>
                     </select>
                   </label>
 
                   {draft.type === "final" ? (
                     <>
                       <label className="pipelinesLabel">
-                        <span>Enabled</span>
+                        <span>{t("core.ui.pipelines.form.enabled")}</span>
                         <input
                           type="checkbox"
                           checked={draft.enabled !== false}
@@ -661,7 +663,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                       </label>
 
                       <label className="pipelinesLabel">
-                        <span>Processing server</span>
+                        <span>{t("core.ui.pipelines.form.processing_server")}</span>
                         <div className="row">
                           <select
                             className="pipelinesSelect"
@@ -678,7 +680,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                           </select>
                           {onOpenProcessingServers ? (
                             <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
-                              Manage…
+                              {t("core.ui.pipelines.form.processing_server.manage")}
                             </button>
                           ) : null}
                         </div>
@@ -693,7 +695,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                       disabled={isPythonLocked}
                       onClick={() => switchMode("interactive")}
                     >
-                      Interactive
+                      {t("core.ui.pipelines.modes.interactive")}
                     </button>
                     <button
                       className={["pillButton", mode === "json" ? "isActive" : ""].filter(Boolean).join(" ")}
@@ -701,18 +703,18 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                       disabled={isPythonLocked}
                       onClick={() => switchMode("json")}
                     >
-                      JSON
+                      {t("core.ui.pipelines.modes.json")}
                     </button>
                     <button
                       className={["pillButton", mode === "python" ? "isActive" : ""].filter(Boolean).join(" ")}
                       type="button"
                       onClick={() => switchMode("python")}
                     >
-                      Python (one-way)
+                      {t("core.ui.pipelines.modes.python_one_way")}
                     </button>
                   </div>
 
-                  <div className="pipelinesHint">Operators available: {operators.length}</div>
+                  <div className="pipelinesHint">{t("core.ui.pipelines.operator_count", { count: operators.length })}</div>
                 </div>
 
                 <div className="pipelinesEditorPanel">
@@ -764,7 +766,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
 
               {compileOutput ? (
                 <div className="card">
-                  <div className="cardTitle">Compile output</div>
+                  <div className="cardTitle">{t("core.ui.pipelines.compile_output.title")}</div>
                   <div className="cardBody">
                     <pre className="pipelinesPre">{JSON.stringify(compileOutput, null, 2)}</pre>
                   </div>

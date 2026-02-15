@@ -185,25 +185,35 @@ const YOLO_CATEGORY_VALUES = [
 
 export const YOLO_CATEGORY_OPTIONS: SelectOption[] = YOLO_CATEGORY_VALUES.map((value) => ({ value, label: value }));
 
-export const ARTIFACT_SUGGESTIONS: SelectOption[] = [
-  { value: "frame_original", label: "Full frame" },
-  { value: "frame_cropped", label: "Cropped frame" },
-  { value: "frame_adjusted", label: "Adjusted frame" },
-  { value: "best_frame", label: "Best frame" },
-  { value: "segmented", label: "Segmented" },
-  { value: "face", label: "Face" },
-  { value: "pose", label: "Pose" },
+type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: string) => string;
+
+const ARTIFACT_SUGGESTION_DEFS: Array<{ value: string; labelKey: string; fallback: string }> = [
+  { value: "frame_original", labelKey: "core.ui.pipelines.artifacts.frame_original", fallback: "Full frame" },
+  { value: "frame_cropped", labelKey: "core.ui.pipelines.artifacts.frame_cropped", fallback: "Cropped frame" },
+  { value: "frame_adjusted", labelKey: "core.ui.pipelines.artifacts.frame_adjusted", fallback: "Adjusted frame" },
+  { value: "best_frame", labelKey: "core.ui.pipelines.artifacts.best_frame", fallback: "Best frame" },
+  { value: "segmented", labelKey: "core.ui.pipelines.artifacts.segmented", fallback: "Segmented" },
+  { value: "face", labelKey: "core.ui.pipelines.artifacts.face", fallback: "Face" },
+  { value: "pose", labelKey: "core.ui.pipelines.artifacts.pose", fallback: "Pose" },
 ];
 
-export const SCHEDULE_WEEKDAY_OPTIONS: SelectOption[] = [
-  { value: "mon", label: "Mon" },
-  { value: "tue", label: "Tue" },
-  { value: "wed", label: "Wed" },
-  { value: "thu", label: "Thu" },
-  { value: "fri", label: "Fri" },
-  { value: "sat", label: "Sat" },
-  { value: "sun", label: "Sun" },
+export function buildArtifactSuggestions(t: TranslateFn): SelectOption[] {
+  return ARTIFACT_SUGGESTION_DEFS.map((item) => ({ value: item.value, label: t(item.labelKey, {}, item.fallback) }));
+}
+
+const WEEKDAY_DEFS: Array<{ value: string; labelKey: string; fallback: string }> = [
+  { value: "mon", labelKey: "core.ui.pipelines.weekday.mon", fallback: "Mon" },
+  { value: "tue", labelKey: "core.ui.pipelines.weekday.tue", fallback: "Tue" },
+  { value: "wed", labelKey: "core.ui.pipelines.weekday.wed", fallback: "Wed" },
+  { value: "thu", labelKey: "core.ui.pipelines.weekday.thu", fallback: "Thu" },
+  { value: "fri", labelKey: "core.ui.pipelines.weekday.fri", fallback: "Fri" },
+  { value: "sat", labelKey: "core.ui.pipelines.weekday.sat", fallback: "Sat" },
+  { value: "sun", labelKey: "core.ui.pipelines.weekday.sun", fallback: "Sun" },
 ];
+
+export function buildScheduleWeekdayOptions(t: TranslateFn): SelectOption[] {
+  return WEEKDAY_DEFS.map((item) => ({ value: item.value, label: t(item.labelKey, {}, item.fallback) }));
+}
 
 export const HUMANIZE_ACRONYMS: Record<string, string> = {
   id: "ID",

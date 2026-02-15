@@ -1,6 +1,7 @@
 import React from "react";
 
 import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../../../util/api";
+import { i18n } from "../../../../util/i18n";
 
 import type { DragInsertPosition, InteractiveStep, SelectOption } from "../types";
 import { humanizeIdentifier, isRecord, prettyConfigKeyLabel, prettyOperatorName, safeJsonParse } from "../utils";
@@ -78,12 +79,17 @@ export function InteractiveStepCard({
   onUpdateStepScalar,
   onUpdateStepConfig,
 }: Props): React.ReactElement {
+  const { t } = i18n.useI18n();
   const operator = operatorsById[step.operatorId];
 
   const configParsed = safeJsonParse(step.configText || "{}");
   const configRecordOk = configParsed.ok && isRecord(configParsed.data);
   const config = configRecordOk ? (configParsed.data as Record<string, unknown>) : {};
-  const configObjectError = !configParsed.ok ? `Invalid config JSON: ${configParsed.error}` : !configRecordOk ? "Config must be a JSON object." : null;
+  const configObjectError = !configParsed.ok
+    ? t("core.ui.pipelines.editor.step.invalid_config_json", { error: configParsed.error })
+    : !configRecordOk
+      ? t("core.ui.pipelines.editor.step.config_must_be_object")
+      : null;
 
   const scalarEntries = Object.entries(config)
     .filter(([, value]) => {
@@ -129,7 +135,7 @@ export function InteractiveStepCard({
             className="iconButton"
             type="button"
             onClick={() => onUpdateStep(step.uid, { collapsed: !step.collapsed })}
-            title={step.collapsed ? "Expand" : "Collapse"}
+            title={step.collapsed ? t("core.ui.pipelines.editor.step.expand") : t("core.ui.pipelines.editor.step.collapse")}
           >
             <i className={step.collapsed ? "fa-solid fa-chevron-down" : "fa-solid fa-chevron-up"} aria-hidden="true" />
           </button>
@@ -138,12 +144,19 @@ export function InteractiveStepCard({
             className={["iconButton", step.showAdvanced ? "isActive" : ""].filter(Boolean).join(" ")}
             type="button"
             onClick={() => onUpdateStep(step.uid, { showAdvanced: !step.showAdvanced })}
-            title={step.showAdvanced ? "Hide advanced" : "Show advanced"}
+            title={
+              step.showAdvanced ? t("core.ui.pipelines.editor.step.hide_advanced") : t("core.ui.pipelines.editor.step.show_advanced")
+            }
           >
             <i className="fa-solid fa-sliders" aria-hidden="true" />
           </button>
 
-          <button className="iconButton" type="button" onClick={() => onRemoveStep(step.uid)} title="Remove step">
+          <button
+            className="iconButton"
+            type="button"
+            onClick={() => onRemoveStep(step.uid)}
+            title={t("core.ui.pipelines.editor.step.remove")}
+          >
             <i className="fa-solid fa-trash" aria-hidden="true" />
           </button>
         </div>
@@ -154,22 +167,23 @@ export function InteractiveStepCard({
           {operator ? <div className="pipelinesStepDescription">{operator.description || prettyOperatorName(operator.id)}</div> : null}
           {operator && operator.capabilities.length > 0 && step.showAdvanced ? (
             <div className="pipelinesStepCapabilities">
-              caps: {operator.capabilities.map((cap) => humanizeIdentifier(cap) || cap).join(", ")}
+              {t("core.ui.pipelines.editor.step.capabilities_prefix")}{" "}
+              {operator.capabilities.map((cap) => humanizeIdentifier(cap) || cap).join(", ")}
             </div>
           ) : null}
 
           {step.showAdvanced ? (
             <div className="pipelinesOperatorConfigCard">
               <label className="pipelinesLabel">
-                <span>Step ID</span>
+                <span>{t("core.ui.pipelines.editor.step.step_id")}</span>
                 <input
                   className="pipelinesInput"
                   value={step.nodeId}
                   onChange={(event) => onUpdateStep(step.uid, { nodeId: event.target.value })}
-                  placeholder="stepId"
+                  placeholder={t("core.ui.pipelines.editor.step.step_id_placeholder")}
                 />
               </label>
-              <div className="pipelinesStepHint">Internal identifier used in storage paths, logs, and diagnostics.</div>
+              <div className="pipelinesStepHint">{t("core.ui.pipelines.editor.step.step_id_hint")}</div>
             </div>
           ) : null}
 
@@ -213,7 +227,7 @@ export function InteractiveStepCard({
           {shouldShowConfigJson ? (
             <div className="pipelinesOperatorConfigCard">
               <label className="pipelinesLabel">
-                <span>Config (JSON)</span>
+                <span>{t("core.ui.pipelines.editor.step.config_json")}</span>
                 <textarea
                   className="pipelinesTextArea"
                   value={step.configText}
@@ -222,7 +236,7 @@ export function InteractiveStepCard({
                   onChange={(event) => onUpdateStep(step.uid, { configText: event.target.value })}
                 />
               </label>
-              <div className="pipelinesStepHint">Use Advanced only when needed; most fields should be inferred from previous steps.</div>
+              <div className="pipelinesStepHint">{t("core.ui.pipelines.editor.step.config_json_hint")}</div>
             </div>
           ) : null}
 

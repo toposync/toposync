@@ -40,6 +40,7 @@ from toposync.runtime.pipelines import (
     PipelineGraphCompiler,
     register_builtin_operators,
 )
+from toposync.runtime.pipelines.python_dsl import PythonDslCompileError, compile_python_source_to_graph
 from toposync.runtime.pipelines.recommendations import PipelineAlert, analyze_compiled_pipeline
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
 from toposync.runtime.pipelines.distributed.transport import HttpProcessingTransport, ProcessingTransportError
@@ -129,6 +130,13 @@ class PipelineCompileRequest(BaseModel):
 
 
 class PipelineCompileResponse(BaseModel):
+    pipeline: dict[str, Any]
+    shared_signatures: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    alerts: list[PipelineAlert] = Field(default_factory=list)
+
+
+class PipelineCompilePythonResponse(BaseModel):
+    graph: dict[str, Any] = Field(default_factory=dict)
     pipeline: dict[str, Any]
     shared_signatures: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     alerts: list[PipelineAlert] = Field(default_factory=list)
@@ -426,8 +434,23 @@ def create_app() -> FastAPI:
     async def compile_pipeline_graph(request: Request, body: PipelineCompileRequest) -> PipelineCompileResponse:
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
+        pipeline = body.pipeline
+        if str(getattr(pipeline, "editor_mode", "json")) == "python":
+            source = str(getattr(pipeline, "python_source", "") or "")
+            if not source.strip():
+                raise HTTPException(status_code=400, detail="python_source is required when editor_mode='python'")
+            try:
+                graph = compile_python_source_to_graph(
+                    python_source=source,
+                    pipeline_name=pipeline.name,
+                    registry=registry,
+                    filename=f"<pipeline:{pipeline.name}>",
+                )
+            except PythonDslCompileError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            pipeline = pipeline.model_copy(update={"graph": graph})
         try:
-            compiled = compiler.compile_many([body.pipeline])
+            compiled = compiler.compile_many([pipeline])
         except GraphCompileError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not compiled.pipelines:
@@ -474,11 +497,101 @@ def create_app() -> FastAPI:
         alerts = analyze_compiled_pipeline(pipeline=pipeline, registry=registry)
         return PipelineCompileResponse(pipeline=compiled_dict, shared_signatures=shared_signatures, alerts=alerts)
 
+    @app.post("/api/pipelines/compile-python", response_model=PipelineCompilePythonResponse)
+    async def compile_pipeline_python(request: Request, body: PipelineCompileRequest) -> PipelineCompilePythonResponse:
+        compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
+        registry: OperatorRegistry = request.app.state.pipeline_operator_registry
+
+        pipeline = body.pipeline
+        source = str(getattr(pipeline, "python_source", "") or "")
+        if not source.strip():
+            raise HTTPException(status_code=400, detail="python_source is required")
+
+        try:
+            graph = compile_python_source_to_graph(
+                python_source=source,
+                pipeline_name=pipeline.name,
+                registry=registry,
+                filename=f"<pipeline:{pipeline.name}>",
+            )
+        except PythonDslCompileError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            compiled = compiler.compile_many([pipeline.model_copy(update={"graph": graph})])
+        except GraphCompileError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if not compiled.pipelines:
+            return PipelineCompilePythonResponse(graph=graph, pipeline={}, shared_signatures={})
+
+        compiled_pipeline = compiled.pipelines[0]
+        compiled_dict = {
+            "name": compiled_pipeline.name,
+            "type": compiled_pipeline.pipeline_type,
+            "schema_version": compiled_pipeline.schema_version,
+            "topological_order": list(compiled_pipeline.topological_order),
+            "nodes": [
+                {
+                    "id": node.node_id,
+                    "operator_id": node.operator_id,
+                    "normalized_config": node.normalized_config,
+                    "signature": node.signature,
+                    "shareable": node.shareable,
+                }
+                for node in compiled_pipeline.nodes
+            ],
+            "edges": [
+                {
+                    "source_node_id": edge.source_node_id,
+                    "source_port": edge.source_port,
+                    "target_node_id": edge.target_node_id,
+                    "target_port": edge.target_port,
+                    "channel_maxsize": edge.channel_maxsize,
+                    "channel_drop_policy": edge.channel_drop_policy.value,
+                }
+                for edge in compiled_pipeline.edges
+            ],
+        }
+        shared_signatures = {
+            signature: [
+                {
+                    "pipeline_name": occ.pipeline_name,
+                    "node_id": occ.node_id,
+                    "signature": occ.signature,
+                }
+                for occ in occurrences
+            ]
+            for signature, occurrences in compiled.shared_signatures.items()
+        }
+        alerts = analyze_compiled_pipeline(pipeline=compiled_pipeline, registry=registry)
+        return PipelineCompilePythonResponse(
+            graph=graph,
+            pipeline=compiled_dict,
+            shared_signatures=shared_signatures,
+            alerts=alerts,
+        )
+
     @app.post("/api/pipelines", response_model=Pipeline, status_code=201)
     async def create_pipeline(request: Request, body: Pipeline) -> Pipeline:
         config_store: ConfigStore = request.app.state.config_store
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
+        registry: OperatorRegistry = request.app.state.pipeline_operator_registry
         try:
+            if str(getattr(body, "editor_mode", "json")) == "python":
+                source = str(getattr(body, "python_source", "") or "")
+                if not source.strip():
+                    raise HTTPException(status_code=400, detail="python_source is required when editor_mode='python'")
+                try:
+                    graph = compile_python_source_to_graph(
+                        python_source=source,
+                        pipeline_name=body.name,
+                        registry=registry,
+                        filename=f"<pipeline:{body.name}>",
+                    )
+                except PythonDslCompileError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                body = body.model_copy(update={"graph": graph})
             compiler.compile_pipeline(body)
             saved = await config_store.create_pipeline(body)
             orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
@@ -508,7 +621,22 @@ def create_app() -> FastAPI:
     async def replace_pipeline(request: Request, pipeline_name: str, body: Pipeline) -> Pipeline:
         config_store: ConfigStore = request.app.state.config_store
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
+        registry: OperatorRegistry = request.app.state.pipeline_operator_registry
         try:
+            if str(getattr(body, "editor_mode", "json")) == "python":
+                source = str(getattr(body, "python_source", "") or "")
+                if not source.strip():
+                    raise HTTPException(status_code=400, detail="python_source is required when editor_mode='python'")
+                try:
+                    graph = compile_python_source_to_graph(
+                        python_source=source,
+                        pipeline_name=body.name,
+                        registry=registry,
+                        filename=f"<pipeline:{body.name}>",
+                    )
+                except PythonDslCompileError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                body = body.model_copy(update={"graph": graph})
             compiler.compile_pipeline(body)
             saved = await config_store.replace_pipeline(pipeline_name, body)
             orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)

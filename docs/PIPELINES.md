@@ -344,13 +344,31 @@ Tela fullscreen de pipelines:
 - modos de edição:
   - **Interactive**: lista reordenável de steps, com forms (selects etc.)
   - **JSON**: edição direta do graph
-  - **Python (one-way)**: texto livre armazenado; após salvar em Python, não volta para Interactive/JSON
+  - **Python (one-way)**: DSL Python com `|` que **compila para graph**; após salvar em Python, não volta para Interactive/JSON
 
 Frontend:
 - tela: `frontend/src/ui/screens/PipelinesScreen.tsx`
 - editor interativo: `frontend/src/ui/screens/pipelines/InteractivePipelineEditor.tsx`
 
-Importante: hoje o runtime executa o **graph JSON**; `python_source` é armazenado para flexibilidade e futura compilação (ver Roadmap).
+### Python DSL (`|`) → Graph (determinístico)
+
+No modo Python, o backend executa a DSL e gera um graph v1 canônico (com defaults normalizados, canais bounded e drop policies).
+
+Regras atuais:
+- o código deve definir `PIPELINE` (ou uma variável com o mesmo nome do pipeline)
+- o `PIPELINE` deve ser uma expressão de stream construída com o DSL (`camera.*`, `core.*`, `vision.*`, `dist.*`, ou `op("...")`)
+
+Exemplo mínimo:
+```py
+PIPELINE = (
+  core.demo_frame_sequence_source(_id="source")
+  | core.notify(_id="notify")
+)
+```
+
+Endpoints:
+- `POST /api/pipelines/compile-python` (retorna `graph` + output compilado + alerts)
+- `PUT/POST /api/pipelines` em `editor_mode=python` recompila o `python_source` e persiste o `graph`
 
 ---
 
@@ -378,8 +396,8 @@ Conforme `current-plan.ignore.md`, ainda faltam/estão parciais:
 2) **`core.filter` genérico (predicado determinístico)** (Etapa 16) ✅  
    Operador `core.filter` com presets e expressão validada por AST seguro, referenciando `payload`/`metadata`/`lifecycle`/`artifacts`.
 
-3) **DSL Python com operador `|` → Graph** (Etapa 17)  
-   O modo Python existe como texto “one-way”, mas ainda não compila para graph nem valida a DSL.
+3) **DSL Python com operador `|` → Graph** (Etapa 17) ✅  
+   O modo Python compila para graph de forma determinística via backend e permanece “one-way”.
 
 4) **Templates/instanciação multi-câmera** (Etapa 18)  
    Aplicar um pipeline `reuse` como template em N câmeras sem redesenhar manualmente.

@@ -61,6 +61,10 @@ export type PipelineCompileOutput = {
   alerts: PipelineAlert[];
 };
 
+export type PipelineCompilePythonOutput = PipelineCompileOutput & {
+  graph: Record<string, unknown>;
+};
+
 export type ProcessingServer = {
   id: string;
   name: string;
@@ -309,6 +313,20 @@ export async function deletePipeline(name: string): Promise<Pipeline> {
 
 export async function compilePipeline(pipeline: Pipeline): Promise<PipelineCompileOutput> {
   const res = await fetch("/api/pipelines/compile", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pipeline }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const detail = (body as any)?.detail ? String((body as any).detail) : String(res.status);
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+export async function compilePipelinePython(pipeline: Pipeline): Promise<PipelineCompilePythonOutput> {
+  const res = await fetch("/api/pipelines/compile-python", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ pipeline }),

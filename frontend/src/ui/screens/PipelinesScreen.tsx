@@ -7,12 +7,14 @@ import type {
   Pipeline,
   PipelineAlert,
   PipelineCompileOutput,
+  PipelineCompilePythonOutput,
   PipelineOperatorDefinition,
   ProcessingServer,
   ProcessingServerStatus,
 } from "../../util/api";
 import {
   compilePipeline,
+  compilePipelinePython,
   createPipeline,
   deletePipeline,
   deleteProcessingServer,
@@ -62,7 +64,7 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
   const [graphText, setGraphText] = useState<string>("");
   const [pythonText, setPythonText] = useState<string>("");
   const [mode, setMode] = useState<EditorMode>("interactive");
-  const [compileOutput, setCompileOutput] = useState<PipelineCompileOutput | null>(null);
+  const [compileOutput, setCompileOutput] = useState<(PipelineCompileOutput | PipelineCompilePythonOutput) | null>(null);
 
   const [recommendations, setRecommendations] = useState<PipelineAlert[]>([]);
   const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
@@ -187,11 +189,9 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
       return { ok: true, graph: parsed.data };
     }
 
-    // Python mode is currently one-way for editing, but the runtime still uses the JSON graph.
-    // Preserve the latest graph from interactive/json when available to avoid losing unsaved edits.
+    // Python mode compiles to graph on save/compile. Keep the latest JSON around for reference.
     const parsed = safeJsonParse(graphText);
     if (parsed.ok && isRecord(parsed.data)) return { ok: true, graph: parsed.data };
-
     const graph = isRecord(draft.graph) ? draft.graph : emptyGraph();
     return { ok: true, graph };
   };
@@ -204,41 +204,54 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
       return;
     }
 
-    const resolved = resolveGraphFromActiveMode();
-    if (!resolved.ok) {
-      setRecommendations([]);
-      setRecommendationsError(resolved.message);
-      setRecommendationsLoading(false);
-      return;
-    }
-
     let cancelled = false;
     setRecommendationsLoading(true);
     setRecommendationsError(null);
 
     const handle = window.setTimeout(() => {
-      void compilePipeline({ ...draft, graph: resolved.graph })
-        .then((output) => {
+      const run = async () => {
+        try {
+          if (mode === "python") {
+            const output = await compilePipelinePython({
+              ...draft,
+              editor_mode: "python",
+              python_source: pythonText,
+            });
+            if (cancelled) return;
+            setRecommendations(Array.isArray(output.alerts) ? output.alerts : []);
+            setRecommendationsError(null);
+            return;
+          }
+
+          const resolved = resolveGraphFromActiveMode();
+          if (!resolved.ok) {
+            if (cancelled) return;
+            setRecommendations([]);
+            setRecommendationsError(resolved.message);
+            return;
+          }
+          const output = await compilePipeline({ ...draft, graph: resolved.graph });
           if (cancelled) return;
           setRecommendations(Array.isArray(output.alerts) ? output.alerts : []);
           setRecommendationsError(null);
-        })
-        .catch((err: any) => {
+        } catch (err: any) {
           if (cancelled) return;
           setRecommendations([]);
           setRecommendationsError(String(err?.message ?? err));
-        })
-        .finally(() => {
+        } finally {
           if (cancelled) return;
           setRecommendationsLoading(false);
-        });
+        }
+      };
+
+      void run();
     }, 450);
 
     return () => {
       cancelled = true;
       window.clearTimeout(handle);
     };
-  }, [draft, mode, interactiveGraph.graph, graphText]);
+  }, [draft, mode, interactiveGraph.graph, graphText, pythonText]);
 
   const handleCreate = async () => {
     const name = createName.trim();
@@ -259,18 +272,39 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
     setError(null);
     setCompileOutput(null);
 
-    const resolved = resolveGraphFromActiveMode();
-    if (!resolved.ok) {
-      setError(resolved.message);
-      return;
-    }
+    let updated: Pipeline;
 
-    const updated: Pipeline = {
-      ...draft,
-      graph: resolved.graph,
-      editor_mode: mode,
-      python_source: mode === "python" ? pythonText : draft.python_source ?? "",
-    };
+    if (mode === "python") {
+      try {
+        const compiled = await compilePipelinePython({
+          ...draft,
+          editor_mode: "python",
+          python_source: pythonText,
+        });
+        setGraphText(jsonPretty(compiled.graph ?? emptyGraph()));
+        updated = {
+          ...draft,
+          graph: compiled.graph,
+          editor_mode: "python",
+          python_source: pythonText,
+        };
+      } catch (err: any) {
+        setError(String(err?.message ?? err));
+        return;
+      }
+    } else {
+      const resolved = resolveGraphFromActiveMode();
+      if (!resolved.ok) {
+        setError(resolved.message);
+        return;
+      }
+      updated = {
+        ...draft,
+        graph: resolved.graph,
+        editor_mode: mode,
+        python_source: draft.python_source ?? "",
+      };
+    }
 
     try {
       const saved = await putPipeline(draft.name, updated);
@@ -289,13 +323,22 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
     setError(null);
     setCompileOutput(null);
 
-    const resolved = resolveGraphFromActiveMode();
-    if (!resolved.ok) {
-      setError(resolved.message);
-      return;
-    }
-
     try {
+      if (mode === "python") {
+        const output = await compilePipelinePython({
+          ...draft,
+          editor_mode: "python",
+          python_source: pythonText,
+        });
+        setCompileOutput(output);
+        setGraphText(jsonPretty(output.graph ?? emptyGraph()));
+        return;
+      }
+      const resolved = resolveGraphFromActiveMode();
+      if (!resolved.ok) {
+        setError(resolved.message);
+        return;
+      }
       const output = await compilePipeline({ ...draft, graph: resolved.graph });
       setCompileOutput(output);
     } catch (err: any) {

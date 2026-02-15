@@ -573,6 +573,7 @@ export function App(): React.ReactElement {
   useEffect(() => {
     if (!backendAvailable) return;
 
+    let closed = false;
     const es = new EventSource("/api/notifications/stream");
     es.onmessage = (ev) => {
       try {
@@ -593,16 +594,21 @@ export function App(): React.ReactElement {
       }
     };
     es.onerror = (err) => {
+      if (closed) return;
       console.warn("Notifications SSE error", err);
     };
 
-    return () => es.close();
+    return () => {
+      closed = true;
+      es.close();
+    };
   }, [backendAvailable, upsertNotification]);
 
   useEffect(() => {
     if (!backendAvailable) return;
     if (!activeNotificationId) return;
 
+    let closed = false;
     let cancelled = false;
     void getNotification(activeNotificationId)
       .then((notif) => {
@@ -626,11 +632,13 @@ export function App(): React.ReactElement {
       }
     };
     es.onerror = (err) => {
+      if (closed) return;
       console.warn("Notification detail SSE error", err);
     };
 
     return () => {
       cancelled = true;
+      closed = true;
       es.close();
     };
   }, [activeNotificationId, backendAvailable, upsertNotification]);

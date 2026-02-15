@@ -33,6 +33,7 @@ from toposync.runtime.config_store import (
 )
 from toposync.runtime.notifications import NotificationsRuntime
 from toposync.runtime.services import ServiceRegistry
+from toposync.runtime.processing_diagnostics import collect_processing_server_diagnostics
 from toposync.runtime.pipelines import (
     ArtifactMemoryCounter,
     GraphCompileError,
@@ -169,8 +170,7 @@ class PipelineStatsResponse(BaseModel):
     pipeline_name: str
     window_seconds: int = 0
     bucket_seconds: int = 0
-    inputs_24h: int = 0
-    outputs_24h: int = 0
+    node_outputs: dict[str, int] = Field(default_factory=dict)
     updated_at: float = 0.0
 
 
@@ -462,7 +462,12 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown processing server")
 
         if server.kind != "http":
-            return ProcessingServerStatusResponse(ok=True, status={"kind": server.kind, "id": server.id})
+            status: dict[str, Any] = {"kind": server.kind, "id": server.id}
+            try:
+                status.update(await collect_processing_server_diagnostics())
+            except Exception:
+                pass
+            return ProcessingServerStatusResponse(ok=True, status=status)
 
         try:
             transport = HttpProcessingTransport(
@@ -812,7 +817,41 @@ def create_app() -> FastAPI:
         stats_store: PipelineStatsStore | None = getattr(request.app.state, "pipeline_stats_store", None)
         if stats_store is None:
             return PipelineStatsResponse(pipeline_name=pipeline.name)
-        snapshot = stats_store.snapshot_24h(pipeline.name)
+        node_ids: set[str] = set()
+        raw_nodes = pipeline.graph.get("nodes")
+        if isinstance(raw_nodes, list):
+            for node in raw_nodes:
+                if not isinstance(node, dict):
+                    continue
+                node_id = str(node.get("id") or "").strip()
+                if node_id:
+                    node_ids.add(node_id)
+        snapshot = stats_store.snapshot(pipeline.name, node_ids=node_ids or None)
+        return PipelineStatsResponse.model_validate(snapshot)
+
+    @app.post("/api/pipelines/{pipeline_name}/stats/reset", response_model=PipelineStatsResponse)
+    async def reset_pipeline_stats(request: Request, pipeline_name: str) -> PipelineStatsResponse:
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            pipeline = await config_store.get_pipeline(pipeline_name)
+        except PipelineValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if pipeline is None:
+            raise HTTPException(status_code=404, detail="Unknown pipeline")
+        stats_store: PipelineStatsStore | None = getattr(request.app.state, "pipeline_stats_store", None)
+        if stats_store is None:
+            return PipelineStatsResponse(pipeline_name=pipeline.name)
+        stats_store.reset(pipeline.name)
+        node_ids: set[str] = set()
+        raw_nodes = pipeline.graph.get("nodes")
+        if isinstance(raw_nodes, list):
+            for node in raw_nodes:
+                if not isinstance(node, dict):
+                    continue
+                node_id = str(node.get("id") or "").strip()
+                if node_id:
+                    node_ids.add(node_id)
+        snapshot = stats_store.snapshot(pipeline.name, node_ids=node_ids or None)
         return PipelineStatsResponse.model_validate(snapshot)
 
     @app.put("/api/pipelines/{pipeline_name}", response_model=Pipeline)

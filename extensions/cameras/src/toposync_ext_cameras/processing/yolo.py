@@ -4,11 +4,13 @@ import logging
 import os
 import platform
 import time
+import weakref
 from dataclasses import dataclass
 from typing import Any
 
 
 logger = logging.getLogger(__name__)
+_YOLO_TRACKERS: weakref.WeakSet["YoloTracker"] = weakref.WeakSet()
 
 
 try:
@@ -134,6 +136,10 @@ class YoloTracker:
         self._fps_count: int = 0
         self._fps_window_start: float = time.time()
         self.fps: float = 0.0
+        try:
+            _YOLO_TRACKERS.add(self)
+        except Exception:
+            pass
 
     def _ensure_model(self) -> None:
         if self._yolo is not None:
@@ -427,3 +433,22 @@ class YoloTracker:
             device_effective=self._effective_device,
             device_reason=self._device_reason,
         )
+
+
+def registered_yolo_trackers_diagnostics(limit: int = 8) -> list[dict[str, Any]]:
+    try:
+        items = list(_YOLO_TRACKERS)
+    except Exception:
+        items = []
+
+    out: list[dict[str, Any]] = []
+    for tracker in items:
+        try:
+            out.append(tracker.diagnostics())
+        except Exception:
+            continue
+
+    out.sort(key=lambda item: (str(item.get("model") or ""), str(item.get("tracker") or "")))
+    if limit <= 0:
+        return out
+    return out[: int(limit)]

@@ -13,6 +13,7 @@ import { useCameraContexts } from "./editor/useCameraContexts";
 type Props = {
   operatorsById: Record<string, PipelineOperatorDefinition>;
   camerasIndex: CamerasIndexResponse;
+  stepOutputsByNodeId: Record<string, number> | null;
   interactiveSteps: InteractiveStep[];
   setInteractiveSteps: React.Dispatch<React.SetStateAction<InteractiveStep[]>>;
   interactiveWarning: string | null;
@@ -23,6 +24,7 @@ type Props = {
 export function InteractivePipelineEditor({
   operatorsById,
   camerasIndex,
+  stepOutputsByNodeId,
   interactiveSteps,
   setInteractiveSteps,
   interactiveWarning,
@@ -199,6 +201,7 @@ export function InteractivePipelineEditor({
         activeCameraContexts={activeCameraContexts}
         activeCameraContextsError={activeCameraContextsError}
         cameraAreaOptions={cameraAreaOptions}
+        stepOutputsByNodeId={stepOutputsByNodeId}
         draggingStepUid={draggingStepUid}
         dragOverStep={dragOverStep}
         onBeginDrag={beginStepDrag}

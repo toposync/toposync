@@ -20,7 +20,7 @@ from .runtime import (
     Packet,
     QueueOperationStatus,
 )
-from .stats import NodeStatsRoles, PipelineStatsStore
+from .stats import PipelineStatsStore
 
 
 class PipelineExecutionError(RuntimeError):
@@ -37,7 +37,7 @@ class PipelineRuntimeDependencies:
     origin_inbox: BoundedChannel[dict[str, Any]] | None = None
     processing_emit_projected_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None
     pipeline_stats_store: PipelineStatsStore | None = None
-    pipeline_stats_node_roles: dict[str, NodeStatsRoles] | None = None
+    pipeline_stats_node_occurrences: dict[str, tuple[tuple[str, str], ...]] | None = None
     execution_scheduler: ExecutionScheduler | None = None
     artifact_max_bytes_per_packet: int | None = 128 * 1024 * 1024
     artifact_max_total_bytes_per_pipeline: int | None = 512 * 1024 * 1024
@@ -95,8 +95,9 @@ class NodeExecutionContext:
     metrics: NodeRuntimeMetrics
     logger: logging.Logger
     stats_store: PipelineStatsStore | None = None
-    stats_input_pipelines: tuple[str, ...] = ()
-    stats_output_pipelines: tuple[str, ...] = ()
+    stats_node_occurrences: tuple[tuple[str, str], ...] = ()
+    stats_count_outputs_on_read: bool = False
+    stats_count_terminal_outputs_on_emit: bool = False
 
     async def run_blocking(
         self,
@@ -129,10 +130,10 @@ class NodeExecutionContext:
         result = await channel.get(timeout_s=timeout_s, cancel_event=self.cancel_event)
         if result.status == QueueOperationStatus.ACCEPTED:
             self.metrics.processed_packets += 1
-            if self.stats_store is not None and self.stats_output_pipelines:
+            if self.stats_count_outputs_on_read and self.stats_store is not None and self.stats_node_occurrences:
                 now_s = time.time()
-                for pipeline_name in self.stats_output_pipelines:
-                    self.stats_store.increment_outputs(pipeline_name, now_s=now_s, value=1)
+                for pipeline_name, node_id in self.stats_node_occurrences:
+                    self.stats_store.increment_node_output(pipeline_name, node_id, now_s=now_s, value=1)
             return result.item
         if result.status == QueueOperationStatus.TIMEOUT:
             self.metrics.timeout_count += 1
@@ -151,8 +152,6 @@ class NodeExecutionContext:
         timeout_s: float = 0.1,
     ) -> int:
         channels = self.outputs.get(port, [])
-        if not channels:
-            return 0
         accepted = 0
         for channel in channels:
             result = await channel.put(packet, timeout_s=timeout_s, cancel_event=self.cancel_event)
@@ -165,10 +164,11 @@ class NodeExecutionContext:
                 self.metrics.timeout_count += 1
             elif result.status == QueueOperationStatus.CANCELED:
                 self.metrics.canceled_count += 1
-        if accepted and self.stats_store is not None and self.stats_input_pipelines:
+        should_count_outputs = accepted > 0 or (not channels and self.stats_count_terminal_outputs_on_emit)
+        if should_count_outputs and self.stats_store is not None and self.stats_node_occurrences:
             now_s = time.time()
-            for pipeline_name in self.stats_input_pipelines:
-                self.stats_store.increment_inputs(pipeline_name, now_s=now_s, value=1)
+            for pipeline_name, node_id in self.stats_node_occurrences:
+                self.stats_store.increment_node_output(pipeline_name, node_id, now_s=now_s, value=1)
         return accepted
 
     async def sleep(self, seconds: float) -> None:
@@ -435,16 +435,15 @@ class PipelineRuntime:
                 logger=self.logger,
                 stats_store=self.dependencies.pipeline_stats_store,
             )
-            roles_map = self.dependencies.pipeline_stats_node_roles
-            roles = roles_map.get(node_id) if roles_map else None
-            if roles is None and self.dependencies.pipeline_stats_store is not None and roles_map is None:
-                if int(indegree.get(node_id, 0)) == 0:
-                    context.stats_input_pipelines = (self.compiled.name,)
-                if int(outdegree.get(node_id, 0)) == 0:
-                    context.stats_output_pipelines = (self.compiled.name,)
-            elif roles is not None:
-                context.stats_input_pipelines = tuple(roles.input_pipelines)
-                context.stats_output_pipelines = tuple(roles.output_pipelines)
+            if self.dependencies.pipeline_stats_store is not None:
+                occurrences_map = self.dependencies.pipeline_stats_node_occurrences
+                occurrences = occurrences_map.get(node_id) if occurrences_map else None
+                if occurrences is None:
+                    occurrences = ((self.compiled.name, node_id),)
+                context.stats_node_occurrences = tuple((str(pipeline), str(nid)) for pipeline, nid in occurrences)
+
+                context.stats_count_outputs_on_read = int(outdegree.get(node_id, 0)) == 0 and bool(node_inputs)
+                context.stats_count_terminal_outputs_on_emit = int(outdegree.get(node_id, 0)) == 0 and not bool(node_inputs)
             self._context_by_node[node_id] = context
 
 

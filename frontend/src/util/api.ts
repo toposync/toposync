@@ -69,8 +69,7 @@ export type PipelineStats = {
   pipeline_name: string;
   window_seconds: number;
   bucket_seconds: number;
-  inputs_24h: number;
-  outputs_24h: number;
+  node_outputs: Record<string, number>;
   updated_at: number;
 };
 
@@ -340,6 +339,12 @@ export async function deletePipeline(name: string): Promise<Pipeline> {
 export async function getPipelineStats(name: string): Promise<PipelineStats> {
   const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/stats`);
   if (!res.ok) throw new Error(`Failed to fetch pipeline stats ${name}: ${res.status}`);
+  return res.json();
+}
+
+export async function resetPipelineStats(name: string): Promise<PipelineStats> {
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/stats/reset`, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to reset pipeline stats ${name}: ${res.status}`);
   return res.json();
 }
 

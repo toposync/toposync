@@ -232,12 +232,12 @@ def test_orchestrator_runs_local_bundle_and_shares_yolo(tmp_path: Path) -> None:
         assert int(sink_counts.get("sink_a", 0)) > 0
         assert int(sink_counts.get("sink_b", 0)) > 0
 
-        stats_a = stats_store.snapshot_24h("final_a")
-        stats_b = stats_store.snapshot_24h("final_b")
-        assert int(stats_a["inputs_24h"]) == int(counters.get("source_frames", 0))
-        assert int(stats_b["inputs_24h"]) == int(counters.get("source_frames", 0))
-        assert int(stats_a["outputs_24h"]) == int(sink_counts.get("sink_a", 0))
-        assert int(stats_b["outputs_24h"]) == int(sink_counts.get("sink_b", 0))
+        stats_a = stats_store.snapshot("final_a")
+        stats_b = stats_store.snapshot("final_b")
+        assert int(stats_a["node_outputs"]["source_a"]) == int(counters.get("source_frames", 0))
+        assert int(stats_b["node_outputs"]["source_b"]) == int(counters.get("source_frames", 0))
+        assert int(stats_a["node_outputs"]["sink_a"]) == int(sink_counts.get("sink_a", 0))
+        assert int(stats_b["node_outputs"]["sink_b"]) == int(sink_counts.get("sink_b", 0))
 
         runtime_snapshot = status["local_bundle"]["runtime"]
         for channel in runtime_snapshot["channels"].values():

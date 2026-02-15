@@ -19,6 +19,7 @@ from toposync.runtime.config_store import ConfigStore, Pipeline, UserDataPaths
 from toposync.runtime.event_bus import EventBus
 from toposync.runtime.notifications.events import EventBroadcaster
 from toposync.runtime.services import ServiceRegistry
+from toposync.runtime.processing_diagnostics import collect_processing_server_diagnostics
 
 from ..builtins import register_builtin_operators
 from ..compiler import PipelineGraphCompiler
@@ -295,7 +296,12 @@ def create_processing_app() -> FastAPI:
 
     @app.get("/api/processing/status")
     async def get_processing_status() -> dict[str, Any]:
-        return runtime.status()
+        status = runtime.status()
+        try:
+            status.update(await collect_processing_server_diagnostics())
+        except Exception:
+            pass
+        return status
 
     @app.post("/api/processing/events/ack")
     async def ack_processing_events(body: ProcessingAck) -> dict[str, Any]:

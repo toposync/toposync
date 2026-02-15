@@ -24,16 +24,16 @@ def test_pipeline_stats_store_rolls_over_window() -> None:
     store = PipelineStatsStore(window_seconds=60, bucket_seconds=10)
 
     now = 1_000.0
-    store.increment_inputs("p", now_s=now, value=2)
-    store.increment_outputs("p", now_s=now, value=3)
-    snap = store.snapshot_24h("p", now_s=now)
-    assert snap["inputs_24h"] == 2
-    assert snap["outputs_24h"] == 3
+    store.increment_node_output("p", "node_a", now_s=now, value=2)
+    store.increment_node_output("p", "node_b", now_s=now, value=3)
+    snap = store.snapshot("p", now_s=now)
+    assert snap["node_outputs"]["node_a"] == 2
+    assert snap["node_outputs"]["node_b"] == 3
 
     later = now + 75.0
-    snap2 = store.snapshot_24h("p", now_s=later)
-    assert snap2["inputs_24h"] == 0
-    assert snap2["outputs_24h"] == 0
+    snap2 = store.snapshot("p", now_s=later)
+    assert snap2["node_outputs"]["node_a"] == 0
+    assert snap2["node_outputs"]["node_b"] == 0
 
 
 class _FiniteSourceConfig(BaseModel):
@@ -81,7 +81,7 @@ class _CollectSinkRuntime(SinkRuntime):
         return []
 
 
-def test_pipeline_runtime_records_input_and_output_counts() -> None:
+def test_pipeline_runtime_records_step_output_counts() -> None:
     async def scenario() -> None:
         registry = OperatorRegistry()
         register_builtin_operators(registry)
@@ -126,9 +126,8 @@ def test_pipeline_runtime_records_input_and_output_counts() -> None:
         await asyncio.wait_for(done_event.wait(), timeout=1.0)
         await runtime.stop()
 
-        snap = stats_store.snapshot_24h("stats_runtime_pipeline")
-        assert snap["inputs_24h"] == 10
-        assert snap["outputs_24h"] == 10
+        snap = stats_store.snapshot("stats_runtime_pipeline")
+        assert snap["node_outputs"]["source"] == 10
+        assert snap["node_outputs"]["sink"] == 10
 
     asyncio.run(scenario())
-

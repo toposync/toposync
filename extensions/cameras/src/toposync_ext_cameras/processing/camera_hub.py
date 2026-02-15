@@ -79,3 +79,38 @@ class CameraHub:
         async with self._lock:
             return sorted(self._entries.keys())
 
+    async def snapshot(self) -> list[dict[str, Any]]:
+        async with self._lock:
+            items = [
+                (
+                    str(key),
+                    entry.grabber,
+                    int(entry.refcount),
+                    str(entry.backend),
+                    float(entry.target_fps),
+                    float(entry.created_at),
+                )
+                for key, entry in self._entries.items()
+            ]
+
+        out: list[dict[str, Any]] = []
+        for key, grabber, refcount, backend, target_fps, created_at in items:
+            metrics: Any = None
+            try:
+                if hasattr(grabber, "metrics_snapshot"):
+                    metrics = grabber.metrics_snapshot()
+                    if hasattr(metrics, "__dict__"):
+                        metrics = dict(metrics.__dict__)
+            except Exception:
+                metrics = None
+            out.append(
+                {
+                    "key": key,
+                    "refcount": refcount,
+                    "backend": backend,
+                    "target_fps": target_fps,
+                    "created_at_ts": created_at,
+                    "metrics": metrics,
+                },
+            )
+        return out

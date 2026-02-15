@@ -113,7 +113,12 @@ def test_processing_servers_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
         res = client.get("/api/processing-servers/local/status")
         assert res.status_code == 200
-        assert res.json()["ok"] is True
+        status_body = res.json()
+        assert status_body["ok"] is True
+        assert isinstance(status_body.get("status"), dict)
+        assert "system" in status_body["status"]
+        assert "vision" in status_body["status"]
+        assert "cameras" in status_body["status"]
 
         res = client.delete("/api/processing-servers/remote_gpu")
         assert res.status_code == 200

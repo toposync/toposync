@@ -20,6 +20,7 @@ type Props = {
   activeCameraContexts: CameraContextsResponse | null;
   activeCameraContextsError: string | null;
   cameraAreaOptions: SelectOption[];
+  stepOutputsByNodeId: Record<string, number> | null;
 
   draggingStepUid: string | null;
   dragOverStep: { uid: string; position: DragInsertPosition } | null;
@@ -68,6 +69,7 @@ export function InteractiveStepCard({
   activeCameraContexts,
   activeCameraContextsError,
   cameraAreaOptions,
+  stepOutputsByNodeId,
   draggingStepUid,
   dragOverStep,
   onBeginDrag,
@@ -114,6 +116,7 @@ export function InteractiveStepCard({
 
   const operatorName = operator ? prettyOperatorName(operator.id) : prettyOperatorName(step.operatorId);
   const stepIndexLabel = `${index + 1}.`;
+  const stepOutputCount = stepOutputsByNodeId ? Number(stepOutputsByNodeId[step.nodeId] ?? 0) : null;
 
   return (
     <div
@@ -128,6 +131,12 @@ export function InteractiveStepCard({
         <div className="pipelinesStepHeaderMain">
           <div className="pipelinesStepIndex">{stepIndexLabel}</div>
           <div className="pipelinesStepTitle">{operatorName}</div>
+          {stepOutputCount !== null ? (
+            <div className="pipelinesStepStatBadge" title={t("core.ui.pipelines.stats.step.outputs_tooltip")}>
+              <i className="fa-solid fa-arrow-right" aria-hidden="true" />
+              {stepOutputCount.toLocaleString()}
+            </div>
+          ) : null}
         </div>
 
         <div className="pipelinesStepHeaderActions">

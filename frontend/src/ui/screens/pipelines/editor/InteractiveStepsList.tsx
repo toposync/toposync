@@ -17,6 +17,7 @@ type Props = {
   activeCameraContexts: CameraContextsResponse | null;
   activeCameraContextsError: string | null;
   cameraAreaOptions: SelectOption[];
+  stepOutputsByNodeId: Record<string, number> | null;
 
   draggingStepUid: string | null;
   dragOverStep: { uid: string; position: DragInsertPosition } | null;

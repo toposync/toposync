@@ -427,6 +427,14 @@ textarea {
   white-space: nowrap;
 }
 
+.pipelinesServerMetaDiag {
+  margin-top: 2px;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
 .processingServersBody {
   flex: 1;
   min-height: 0;
@@ -588,6 +596,44 @@ textarea {
   letter-spacing: 0.2px;
 }
 
+.pipelinesStepStatsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.pipelinesStepStatsGrid {
+  display: grid;
+  gap: 8px;
+}
+
+.pipelinesStepStatsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(15, 23, 48, 0.45);
+}
+
+.pipelinesStepStatsName {
+  font-weight: 650;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipelinesStepStatsValue {
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
+}
+
 .pipelinesAlerts {
   display: grid;
   gap: 10px;
@@ -716,6 +762,25 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+.pipelinesStepStatBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(15, 23, 48, 0.55);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+.pipelinesStepStatBadge i {
+  font-size: 11px;
 }
 
 .pipelinesStepHeaderActions {

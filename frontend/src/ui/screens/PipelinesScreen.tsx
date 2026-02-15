@@ -26,6 +26,7 @@ import {
   listPipelines,
   listProcessingServers,
   putPipeline,
+  resetPipelineStats,
 } from "../../util/api";
 import { InteractivePipelineEditor } from "./pipelines/InteractivePipelineEditor";
 import { PipelineTemplateApplyModal } from "./pipelines/PipelineTemplateApplyModal";
@@ -37,6 +38,7 @@ import {
   emptyGraph,
   isRecord,
   jsonPretty,
+  prettyOperatorName,
   safeJsonParse,
 } from "./pipelines/utils";
 
@@ -252,6 +254,11 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
       const run = async () => {
         try {
           if (mode === "python") {
+            if (!pythonText.trim()) {
+              setRecommendations([]);
+              setRecommendationsError(null);
+              return;
+            }
             const output = await compilePipelinePython({
               ...draft,
               editor_mode: "python",
@@ -325,6 +332,29 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
     };
   }, [draft?.name]);
 
+  const resetStats = useCallback(async () => {
+    if (!draft) return;
+    if (!confirm(t("core.ui.pipelines.stats.confirm_reset", { name: draft.name }))) return;
+    setPipelineStatsLoading(true);
+    setPipelineStatsError(null);
+    try {
+      const stats = await resetPipelineStats(draft.name);
+      setPipelineStats(stats);
+    } catch (err: any) {
+      setPipelineStats(null);
+      setPipelineStatsError(String(err?.message ?? err));
+    } finally {
+      setPipelineStatsLoading(false);
+    }
+  }, [draft, t]);
+
+  const stepOutputsByNodeId = useMemo(() => {
+    if (!pipelineStats || typeof pipelineStats !== "object") return null;
+    const raw = (pipelineStats as any).node_outputs;
+    if (!raw || typeof raw !== "object") return null;
+    return raw as Record<string, number>;
+  }, [pipelineStats]);
+
   const handleCreate = async () => {
     const name = createName.trim();
     if (!name) return;
@@ -348,6 +378,10 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
     let updated: Pipeline;
 
     if (mode === "python") {
+      if (!pythonText.trim()) {
+        setError("Python source is required in Python mode.");
+        return;
+      }
       try {
         const compiled = await compilePipelinePython({
           ...draft,
@@ -398,6 +432,10 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
 
     try {
       if (mode === "python") {
+        if (!pythonText.trim()) {
+          setError("Python source is required in Python mode.");
+          return;
+        }
         const output = await compilePipelinePython({
           ...draft,
           editor_mode: "python",
@@ -474,11 +512,12 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
           .filter(Boolean)
           .join(" ")}
       >
-        {compactLayout ? (
+        {compactLayout && sidebarOpen ? (
           <button
             className="pipelinesSidebarBackdrop"
             type="button"
             aria-label={t("core.ui.pipelines.aria.close_list")}
+            tabIndex={-1}
             onClick={() => setSidebarOpen(false)}
           />
         ) : null}
@@ -575,30 +614,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                     <i className="fa-solid fa-trash" aria-hidden="true" />
                     {t("core.actions.delete")}
                   </button>
-                </div>
-              </div>
-
-              <div className="card">
-                <div className="cardTitle">{t("core.ui.pipelines.stats.title")}</div>
-                <div className="cardBody">
-                  {pipelineStatsLoading ? (
-                    <div className="pipelinesHint">{t("core.ui.pipelines.stats.loading")}</div>
-                  ) : pipelineStatsError ? (
-                    <div className="pipelinesHint">{t("core.ui.pipelines.stats.unavailable", { error: pipelineStatsError })}</div>
-                  ) : pipelineStats ? (
-                    <div className="pipelinesStatsRow">
-                      <div className="pipelinesStatsItem">
-                        <div className="pipelinesHint">{t("core.ui.pipelines.stats.inputs")}</div>
-                        <div className="pipelinesStatsValue">{Number(pipelineStats.inputs_24h ?? 0).toLocaleString()}</div>
-                      </div>
-                      <div className="pipelinesStatsItem">
-                        <div className="pipelinesHint">{t("core.ui.pipelines.stats.outputs")}</div>
-                        <div className="pipelinesStatsValue">{Number(pipelineStats.outputs_24h ?? 0).toLocaleString()}</div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="pipelinesHint">{t("core.ui.pipelines.stats.no_data")}</div>
-                  )}
                 </div>
               </div>
 
@@ -738,6 +753,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                     <InteractivePipelineEditor
                       operatorsById={operatorsById}
                       camerasIndex={camerasIndex}
+                      stepOutputsByNodeId={stepOutputsByNodeId}
                       interactiveSteps={interactiveSteps}
                       setInteractiveSteps={setInteractiveSteps}
                       interactiveWarning={interactiveWarning}
@@ -772,6 +788,46 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                   </div>
                 </div>
               ) : null}
+
+              <div className="card">
+                <div className="cardTitle">{t("core.ui.pipelines.stats.title")}</div>
+                <div className="cardBody">
+                  <div className="pipelinesStepStatsHeader">
+                    <div className="pipelinesHint">
+                      {pipelineStats
+                        ? t("core.ui.pipelines.stats.window_hint", {
+                            days: Math.max(1, Math.round(Number(pipelineStats.window_seconds || 0) / 86400)),
+                          })
+                        : t("core.ui.pipelines.stats.no_data")}
+                    </div>
+                    <button className="pillButton" type="button" onClick={() => void resetStats()} disabled={pipelineStatsLoading}>
+                      <i className="fa-solid fa-rotate" aria-hidden="true" />
+                      {t("core.ui.pipelines.stats.reset")}
+                    </button>
+                  </div>
+
+                  {pipelineStatsLoading ? (
+                    <div className="pipelinesHint">{t("core.ui.pipelines.stats.loading")}</div>
+                  ) : pipelineStatsError ? (
+                    <div className="pipelinesHint">{t("core.ui.pipelines.stats.unavailable", { error: pipelineStatsError })}</div>
+                  ) : (
+                    <div className="pipelinesStepStatsGrid">
+                      {interactiveSteps.length === 0 ? (
+                        <div className="pipelinesHint">{t("core.ui.pipelines.stats.no_data")}</div>
+                      ) : (
+                        interactiveSteps.map((step) => (
+                          <div key={`step-stat:${step.nodeId}:${step.uid}`} className="pipelinesStepStatsRow">
+                            <div className="pipelinesStepStatsName">{prettyOperatorName(step.operatorId) || step.operatorId}</div>
+                            <div className="pipelinesStepStatsValue">
+                              {Number((stepOutputsByNodeId?.[step.nodeId] ?? 0) as number).toLocaleString()}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </div>

@@ -9,6 +9,83 @@ type Props = {
   onClose: () => void;
 };
 
+function isRecord(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function formatBytes(bytes: number): string {
+  const value = Number.isFinite(bytes) ? bytes : 0;
+  const abs = Math.max(0, value);
+  const gb = abs / (1024 * 1024 * 1024);
+  if (gb >= 10) return `${gb.toFixed(0)} GB`;
+  if (gb >= 1) return `${gb.toFixed(1)} GB`;
+  const mb = abs / (1024 * 1024);
+  if (mb >= 10) return `${mb.toFixed(0)} MB`;
+  if (mb >= 1) return `${mb.toFixed(1)} MB`;
+  return `${abs.toFixed(0)} B`;
+}
+
+function buildDiagnosticsSummary(status: Record<string, unknown> | undefined): string | null {
+  if (!status || !isRecord(status)) return null;
+  const system = isRecord(status.system) ? status.system : null;
+  const platform = system && isRecord(system.platform) ? system.platform : null;
+  const python = system && isRecord(system.python) ? system.python : null;
+  const memory = system && isRecord(system.memory) ? system.memory : null;
+
+  const vision = isRecord(status.vision) ? status.vision : null;
+  const torch = vision && isRecord(vision.torch) ? vision.torch : null;
+  const yoloRecommended = vision && isRecord(vision.yolo_device_recommended) ? vision.yolo_device_recommended : null;
+
+  const cameras = isRecord(status.cameras) ? status.cameras : null;
+  const opencv = cameras && isRecord(cameras.opencv) ? cameras.opencv : null;
+  const ffmpeg = cameras && isRecord(cameras.ffmpeg) ? cameras.ffmpeg : null;
+  const hub = cameras && isRecord(cameras.hub) ? cameras.hub : null;
+
+  const parts: string[] = [];
+
+  const os = [String(platform?.system || "").trim(), String(platform?.machine || "").trim()].filter(Boolean).join(" ");
+  if (os) parts.push(os);
+
+  const py = String(python?.version || "").trim();
+  if (py) parts.push(`Python ${py}`);
+
+  const torchVersion = String(torch?.torch_version || "").trim();
+  if (torchVersion) parts.push(`torch ${torchVersion}`);
+
+  const trackers = vision && Array.isArray(vision.yolo_trackers) ? vision.yolo_trackers : [];
+  const trackerDevices = new Set<string>();
+  for (const raw of trackers) {
+    if (!isRecord(raw)) continue;
+    const effective = String(raw.device_effective || "").trim();
+    const selected = String(raw.device_selected || "").trim();
+    const chosen = effective && effective !== "unknown" ? effective : selected;
+    if (chosen) trackerDevices.add(chosen);
+  }
+  const recommendedDevice = String(yoloRecommended?.device || "").trim();
+  const deviceLabel = trackerDevices.size ? Array.from(trackerDevices).join(", ") : recommendedDevice;
+  if (deviceLabel) parts.push(`YOLO ${deviceLabel}`);
+
+  const cudaDevices = torch && Array.isArray(torch.cuda_devices) ? (torch.cuda_devices as any[]) : [];
+  if (cudaDevices.length) {
+    const first = String(cudaDevices[0] || "").trim();
+    parts.push(first ? `GPU ${first}` : `GPU x${cudaDevices.length}`);
+  }
+
+  const memTotal = Number(memory?.total_bytes ?? 0);
+  if (Number.isFinite(memTotal) && memTotal > 0) parts.push(`RAM ${formatBytes(memTotal)}`);
+
+  const cv = opencv && opencv.available ? String(opencv.version || "").trim() : "";
+  if (cv) parts.push(`OpenCV ${cv}`);
+
+  const ff = ffmpeg && ffmpeg.available ? String(ffmpeg.version || "").trim() : "";
+  if (ff) parts.push(`ffmpeg ${ff}`);
+
+  const active = Number(hub?.active_count ?? 0);
+  if (Number.isFinite(active) && active > 0) parts.push(`cameras ${active}`);
+
+  return parts.length ? parts.join(" • ") : null;
+}
+
 function sortServers(list: ProcessingServer[]): ProcessingServer[] {
   const local = list.find((s) => s.id === "local") ?? null;
   const rest = list.filter((s) => s.id !== "local").sort((a, b) => a.id.localeCompare(b.id));
@@ -134,6 +211,7 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
                   : ` • ${t("core.ui.processing_servers.status.offline")}`
                 : "";
             const statusTitle = testing ? t("core.ui.processing_servers.status.testing") : probe && !probe.ok ? String(probe.error || "") : "";
+            const diagnosticsLine = probe && probe.ok ? buildDiagnosticsSummary(probe.status) : null;
             return (
               <div key={server.id} className="pipelinesServerRow">
                 <button
@@ -155,19 +233,22 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
                     {server.url ? ` • ${server.url}` : ""}
                     {statusLabel}
                   </div>
+                  {diagnosticsLine ? (
+                    <div className="pipelinesServerMeta pipelinesServerMetaDiag" title={diagnosticsLine}>
+                      {diagnosticsLine}
+                    </div>
+                  ) : null}
                 </button>
 
-                {server.kind === "http" ? (
-                  <button
-                    className="iconButton iconButtonPrimary"
-                    type="button"
-                    disabled={testing}
-                    onClick={() => void handleTestServer(server.id)}
-                    title={t("core.ui.processing_servers.actions.test_connection")}
-                  >
-                    <i className="fa-solid fa-plug" aria-hidden="true" />
-                  </button>
-                ) : null}
+                <button
+                  className="iconButton iconButtonPrimary"
+                  type="button"
+                  disabled={testing}
+                  onClick={() => void handleTestServer(server.id)}
+                  title={t("core.ui.processing_servers.actions.test_connection")}
+                >
+                  <i className="fa-solid fa-plug" aria-hidden="true" />
+                </button>
 
                 {server.id !== "local" ? (
                   <>

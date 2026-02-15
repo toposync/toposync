@@ -38,10 +38,12 @@ from toposync.runtime.pipelines import (
     OperatorDefinition,
     OperatorRegistry,
     PipelineGraphCompiler,
+    PipelineRuntimeDependencies,
     register_builtin_operators,
 )
 from toposync.runtime.pipelines.python_dsl import PythonDslCompileError, compile_python_source_to_graph
 from toposync.runtime.pipelines.recommendations import PipelineAlert, analyze_compiled_pipeline
+from toposync.runtime.pipelines.stats import PipelineStatsStore
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
 from toposync.runtime.pipelines.distributed.transport import HttpProcessingTransport, ProcessingTransportError
 from toposync.runtime.pipelines.migration_legacy_cameras import (
@@ -161,6 +163,15 @@ class PipelineRuntimeStatusResponse(BaseModel):
     status: dict[str, Any] = Field(default_factory=dict)
 
 
+class PipelineStatsResponse(BaseModel):
+    pipeline_name: str
+    window_seconds: int = 0
+    bucket_seconds: int = 0
+    inputs_24h: int = 0
+    outputs_24h: int = 0
+    updated_at: float = 0.0
+
+
 class PipelineTemplateApplyCamerasRequest(BaseModel):
     template_pipeline_name: str
     camera_ids: list[str] = Field(default_factory=list)
@@ -269,6 +280,8 @@ async def _lifespan(app: FastAPI):
     app.state.notifications = notifications
     app.state.pipeline_operator_registry = operator_registry
     app.state.pipeline_graph_compiler = pipeline_compiler
+    pipeline_stats_store = PipelineStatsStore()
+    app.state.pipeline_stats_store = pipeline_stats_store
 
     ext_manager = ExtensionManager(group="toposync.extensions")
     await ext_manager.load(app=app, bus=bus, services=services)
@@ -281,6 +294,7 @@ async def _lifespan(app: FastAPI):
         notifications=notifications,
         files_dir=config_store.paths.files_dir,
         poll_interval_s=1.0,
+        runtime_dependencies=PipelineRuntimeDependencies(pipeline_stats_store=pipeline_stats_store),
     )
     orchestrator.start()
     app.state.pipelines_orchestrator = orchestrator
@@ -755,6 +769,21 @@ def create_app() -> FastAPI:
         if pipeline is None:
             raise HTTPException(status_code=404, detail="Unknown pipeline")
         return pipeline
+
+    @app.get("/api/pipelines/{pipeline_name}/stats", response_model=PipelineStatsResponse)
+    async def get_pipeline_stats(request: Request, pipeline_name: str) -> PipelineStatsResponse:
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            pipeline = await config_store.get_pipeline(pipeline_name)
+        except PipelineValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if pipeline is None:
+            raise HTTPException(status_code=404, detail="Unknown pipeline")
+        stats_store: PipelineStatsStore | None = getattr(request.app.state, "pipeline_stats_store", None)
+        if stats_store is None:
+            return PipelineStatsResponse(pipeline_name=pipeline.name)
+        snapshot = stats_store.snapshot_24h(pipeline.name)
+        return PipelineStatsResponse.model_validate(snapshot)
 
     @app.put("/api/pipelines/{pipeline_name}", response_model=Pipeline)
     async def replace_pipeline(request: Request, pipeline_name: str, body: Pipeline) -> Pipeline:

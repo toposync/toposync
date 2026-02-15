@@ -11,6 +11,7 @@ import type {
   PipelineCompileOutput,
   PipelineCompilePythonOutput,
   PipelineOperatorDefinition,
+  PipelineStats,
   ProcessingServer,
 } from "../../util/api";
 import {
@@ -19,6 +20,7 @@ import {
   compilePipelinePython,
   createPipeline,
   deletePipeline,
+  getPipelineStats,
   listCamerasIndex,
   listPipelineOperators,
   listPipelines,
@@ -69,6 +71,10 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
 
   const [interactiveSteps, setInteractiveSteps] = useState<InteractiveStep[]>([]);
   const [interactiveWarning, setInteractiveWarning] = useState<string | null>(null);
+
+  const [pipelineStats, setPipelineStats] = useState<PipelineStats | null>(null);
+  const [pipelineStatsError, setPipelineStatsError] = useState<string | null>(null);
+  const [pipelineStatsLoading, setPipelineStatsLoading] = useState(false);
 
   const operatorsById = useMemo(() => {
     const entries = operators.map((operator) => [operator.id, operator] as const);
@@ -249,6 +255,38 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
       window.clearTimeout(handle);
     };
   }, [draft, mode, interactiveGraph.graph, graphText, pythonText]);
+
+  useEffect(() => {
+    if (!draft) {
+      setPipelineStats(null);
+      setPipelineStatsError(null);
+      setPipelineStatsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setPipelineStatsLoading(true);
+    setPipelineStatsError(null);
+
+    getPipelineStats(draft.name)
+      .then((stats) => {
+        if (cancelled) return;
+        setPipelineStats(stats);
+      })
+      .catch((err: any) => {
+        if (cancelled) return;
+        setPipelineStats(null);
+        setPipelineStatsError(String(err?.message ?? err));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setPipelineStatsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [draft?.name]);
 
   const handleCreate = async () => {
     const name = createName.trim();
@@ -464,6 +502,30 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                     <i className="fa-solid fa-trash" aria-hidden="true" />
                     Delete
                   </button>
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="cardTitle">Stats (last 24h)</div>
+                <div className="cardBody">
+                  {pipelineStatsLoading ? (
+                    <div className="pipelinesHint">Loading stats…</div>
+                  ) : pipelineStatsError ? (
+                    <div className="pipelinesHint">Stats unavailable: {pipelineStatsError}</div>
+                  ) : pipelineStats ? (
+                    <div className="pipelinesStatsRow">
+                      <div className="pipelinesStatsItem">
+                        <div className="pipelinesHint">Inputs</div>
+                        <div className="pipelinesStatsValue">{Number(pipelineStats.inputs_24h ?? 0).toLocaleString()}</div>
+                      </div>
+                      <div className="pipelinesStatsItem">
+                        <div className="pipelinesHint">Outputs</div>
+                        <div className="pipelinesStatsValue">{Number(pipelineStats.outputs_24h ?? 0).toLocaleString()}</div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="pipelinesHint">No data yet.</div>
+                  )}
                 </div>
               </div>
 

@@ -17,6 +17,7 @@ from .runtime import (
     Packet,
     QueueOperationStatus,
 )
+from .stats import NodeStatsRoles, PipelineStatsStore
 
 
 class PipelineExecutionError(RuntimeError):
@@ -32,6 +33,8 @@ class PipelineRuntimeDependencies:
     notifications_upsert: Callable[..., Any] | None = None
     origin_inbox: BoundedChannel[dict[str, Any]] | None = None
     processing_emit_projected_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+    pipeline_stats_store: PipelineStatsStore | None = None
+    pipeline_stats_node_roles: dict[str, NodeStatsRoles] | None = None
 
 
 @dataclass(slots=True)
@@ -80,6 +83,9 @@ class NodeExecutionContext:
     cancel_event: asyncio.Event
     metrics: NodeRuntimeMetrics
     logger: logging.Logger
+    stats_store: PipelineStatsStore | None = None
+    stats_input_pipelines: tuple[str, ...] = ()
+    stats_output_pipelines: tuple[str, ...] = ()
 
     async def read(self, *, port: str = "in", timeout_s: float = 0.2) -> Packet | None:
         channel = self.inputs.get(port)
@@ -89,6 +95,10 @@ class NodeExecutionContext:
         result = await channel.get(timeout_s=timeout_s, cancel_event=self.cancel_event)
         if result.status == QueueOperationStatus.ACCEPTED:
             self.metrics.processed_packets += 1
+            if self.stats_store is not None and self.stats_output_pipelines:
+                now_s = time.time()
+                for pipeline_name in self.stats_output_pipelines:
+                    self.stats_store.increment_outputs(pipeline_name, now_s=now_s, value=1)
             return result.item
         if result.status == QueueOperationStatus.TIMEOUT:
             self.metrics.timeout_count += 1
@@ -121,6 +131,10 @@ class NodeExecutionContext:
                 self.metrics.timeout_count += 1
             elif result.status == QueueOperationStatus.CANCELED:
                 self.metrics.canceled_count += 1
+        if accepted and self.stats_store is not None and self.stats_input_pipelines:
+            now_s = time.time()
+            for pipeline_name in self.stats_input_pipelines:
+                self.stats_store.increment_inputs(pipeline_name, now_s=now_s, value=1)
         return accepted
 
     async def sleep(self, seconds: float) -> None:
@@ -269,10 +283,15 @@ class PipelineRuntime:
         self._runtime_by_node = {}
         self._context_by_node = {}
 
+        indegree: dict[str, int] = {node.node_id: 0 for node in self.compiled.nodes}
+        outdegree: dict[str, int] = {node.node_id: 0 for node in self.compiled.nodes}
+
         outputs_by_node_port: dict[tuple[str, str], list[BoundedChannel[Packet]]] = {}
         inputs_by_node_port: dict[tuple[str, str], BoundedChannel[Packet]] = {}
 
         for edge in self.compiled.edges:
+            indegree[edge.target_node_id] = int(indegree.get(edge.target_node_id, 0)) + 1
+            outdegree[edge.source_node_id] = int(outdegree.get(edge.source_node_id, 0)) + 1
             channel_name = f"{edge.source_node_id}.{edge.source_port}->{edge.target_node_id}.{edge.target_port}"
             channel = BoundedChannel[Packet](
                 name=channel_name,
@@ -320,7 +339,18 @@ class PipelineRuntime:
                 cancel_event=self._cancel_event,
                 metrics=metrics,
                 logger=self.logger,
+                stats_store=self.dependencies.pipeline_stats_store,
             )
+            roles_map = self.dependencies.pipeline_stats_node_roles
+            roles = roles_map.get(node_id) if roles_map else None
+            if roles is None and self.dependencies.pipeline_stats_store is not None and roles_map is None:
+                if int(indegree.get(node_id, 0)) == 0:
+                    context.stats_input_pipelines = (self.compiled.name,)
+                if int(outdegree.get(node_id, 0)) == 0:
+                    context.stats_output_pipelines = (self.compiled.name,)
+            elif roles is not None:
+                context.stats_input_pipelines = tuple(roles.input_pipelines)
+                context.stats_output_pipelines = tuple(roles.output_pipelines)
             self._context_by_node[node_id] = context
 
 

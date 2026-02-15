@@ -65,6 +65,15 @@ export type PipelineCompilePythonOutput = PipelineCompileOutput & {
   graph: Record<string, unknown>;
 };
 
+export type PipelineStats = {
+  pipeline_name: string;
+  window_seconds: number;
+  bucket_seconds: number;
+  inputs_24h: number;
+  outputs_24h: number;
+  updated_at: number;
+};
+
 export type PipelineTemplateApplyCamerasRequest = {
   template_pipeline_name: string;
   camera_ids: string[];
@@ -325,6 +334,12 @@ export async function putPipeline(name: string, pipeline: Pipeline): Promise<Pip
 export async function deletePipeline(name: string): Promise<Pipeline> {
   const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`Failed to delete pipeline ${name}: ${res.status}`);
+  return res.json();
+}
+
+export async function getPipelineStats(name: string): Promise<PipelineStats> {
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/stats`);
+  if (!res.ok) throw new Error(`Failed to fetch pipeline stats ${name}: ${res.status}`);
   return res.json();
 }
 

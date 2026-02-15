@@ -552,6 +552,27 @@ textarea {
   color: var(--muted);
 }
 
+.pipelinesStatsRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.pipelinesStatsItem {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(15, 23, 48, 0.45);
+  display: grid;
+  gap: 6px;
+}
+
+.pipelinesStatsValue {
+  font-size: 18px;
+  font-weight: 750;
+  letter-spacing: 0.2px;
+}
+
 .pipelinesAlerts {
   display: grid;
   gap: 10px;

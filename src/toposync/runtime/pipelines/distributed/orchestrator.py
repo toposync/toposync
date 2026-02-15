@@ -262,6 +262,7 @@ class PipelinesOrchestrator:
             origin_inbox=origin_inbox,
             yolo_backend_factory=base.yolo_backend_factory,
             processing_emit_projected_event=base.processing_emit_projected_event,
+            pipeline_stats_store=base.pipeline_stats_store,
             logger=logger,
         )
 

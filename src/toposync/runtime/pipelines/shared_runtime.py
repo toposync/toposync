@@ -7,6 +7,7 @@ from typing import Any
 from .compiler import CompilationReport, CompiledEdge, CompiledNode, CompiledPipeline
 from .execution import PipelineRuntime, PipelineRuntimeDependencies
 from .operator_registry import OperatorRegistry
+from .stats import NodeStatsRoles
 
 
 class SharedRuntimeBuildError(ValueError):
@@ -120,6 +121,11 @@ class PipelineBundleRuntime:
 
     def __post_init__(self) -> None:
         self.plan = build_merged_pipeline_plan(self.report, bundle_name=self.bundle_name)
+        if self.dependencies.pipeline_stats_store is not None:
+            self.dependencies.pipeline_stats_node_roles = _build_bundle_stats_node_roles(
+                report=self.report,
+                plan=self.plan,
+            )
         self._runtime = PipelineRuntime(
             compiled=self.plan.merged_pipeline,
             registry=self.registry,
@@ -195,3 +201,42 @@ def _topological_order(*, merged_nodes: list[CompiledNode], merged_edges: list[C
             "Merged runtime graph must be acyclic (cycle detected in nodes: " + ", ".join(cyc_nodes) + ")",
         )
     return order
+
+
+def _build_bundle_stats_node_roles(*, report: CompilationReport, plan: MergedPipelinePlan) -> dict[str, NodeStatsRoles]:
+    inputs_by_node: dict[str, set[str]] = defaultdict(set)
+    outputs_by_node: dict[str, set[str]] = defaultdict(set)
+
+    for pipeline in report.pipelines:
+        roots, leaves = _roots_and_leaves(pipeline)
+        for node_id in roots:
+            merged = plan.occurrence_to_merged_node_id.get((pipeline.name, node_id))
+            if merged:
+                inputs_by_node[merged].add(pipeline.name)
+        for node_id in leaves:
+            merged = plan.occurrence_to_merged_node_id.get((pipeline.name, node_id))
+            if merged:
+                outputs_by_node[merged].add(pipeline.name)
+
+    roles: dict[str, NodeStatsRoles] = {}
+    all_nodes = set(inputs_by_node) | set(outputs_by_node)
+    for node_id in all_nodes:
+        roles[node_id] = NodeStatsRoles(
+            input_pipelines=tuple(sorted(inputs_by_node.get(node_id, set()))),
+            output_pipelines=tuple(sorted(outputs_by_node.get(node_id, set()))),
+        )
+    return roles
+
+
+def _roots_and_leaves(pipeline: CompiledPipeline) -> tuple[set[str], set[str]]:
+    node_ids = [node.node_id for node in pipeline.nodes]
+    indegree: dict[str, int] = {node_id: 0 for node_id in node_ids}
+    outdegree: dict[str, int] = {node_id: 0 for node_id in node_ids}
+
+    for edge in pipeline.edges:
+        indegree[edge.target_node_id] = int(indegree.get(edge.target_node_id, 0)) + 1
+        outdegree[edge.source_node_id] = int(outdegree.get(edge.source_node_id, 0)) + 1
+
+    roots = {node_id for node_id in node_ids if int(indegree.get(node_id, 0)) == 0}
+    leaves = {node_id for node_id in node_ids if int(outdegree.get(node_id, 0)) == 0}
+    return roots, leaves

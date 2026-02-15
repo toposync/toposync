@@ -20,6 +20,7 @@ from toposync.runtime.pipelines import (
     register_builtin_operators,
 )
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
+from toposync.runtime.pipelines.stats import PipelineStatsStore
 from toposync_ext_cameras.pipelines import YoloObject, register_camera_pipeline_operators
 
 
@@ -177,7 +178,11 @@ def test_orchestrator_runs_local_bundle_and_shares_yolo(tmp_path: Path) -> None:
             [],
             [],
         ]
-        deps = PipelineRuntimeDependencies(yolo_backend_factory=_build_backend_factory(yolo_sequence, counters))
+        stats_store = PipelineStatsStore(window_seconds=24 * 60 * 60, bucket_seconds=60)
+        deps = PipelineRuntimeDependencies(
+            yolo_backend_factory=_build_backend_factory(yolo_sequence, counters),
+            pipeline_stats_store=stats_store,
+        )
 
         paths = UserDataPaths(
             data_dir=tmp_path / "data",
@@ -220,6 +225,13 @@ def test_orchestrator_runs_local_bundle_and_shares_yolo(tmp_path: Path) -> None:
         sink_counts = counters.get("sink_counts", {})
         assert int(sink_counts.get("sink_a", 0)) > 0
         assert int(sink_counts.get("sink_b", 0)) > 0
+
+        stats_a = stats_store.snapshot_24h("final_a")
+        stats_b = stats_store.snapshot_24h("final_b")
+        assert int(stats_a["inputs_24h"]) == int(counters.get("source_frames", 0))
+        assert int(stats_b["inputs_24h"]) == int(counters.get("source_frames", 0))
+        assert int(stats_a["outputs_24h"]) == int(sink_counts.get("sink_a", 0))
+        assert int(stats_b["outputs_24h"]) == int(sink_counts.get("sink_b", 0))
 
         runtime_snapshot = status["local_bundle"]["runtime"]
         for channel in runtime_snapshot["channels"].values():

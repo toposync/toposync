@@ -160,6 +160,156 @@ export function CategoryGateConfigCard({ config, onUpdateConfig }: CategoryGateP
   );
 }
 
+type FilterProps = {
+  config: Record<string, unknown>;
+  onUpdateConfig: UpdateConfig;
+};
+
+export function FilterConfigCard({ config, onUpdateConfig }: FilterProps): React.ReactElement {
+  const presetId = String((config as any).preset_id ?? "").trim();
+  const expression = String((config as any).expression ?? "").trim();
+  const invert = Boolean((config as any).invert ?? false);
+
+  const categoriesRaw = (config as any).categories;
+  const categories = Array.isArray(categoriesRaw)
+    ? categoriesRaw.map((value: any) => String(value || "").trim().toLowerCase()).filter((value: string) => value.length > 0)
+    : [];
+  const selectedCategoryOptions = categories.map((value) => YOLO_CATEGORY_OPTIONS.find((opt) => opt.value === value) ?? { value, label: value });
+
+  const lifecyclesRaw = (config as any).lifecycles;
+  const lifecycles = Array.isArray(lifecyclesRaw)
+    ? lifecyclesRaw.map((value: any) => String(value || "").trim().toLowerCase()).filter((value: string) => value.length > 0)
+    : [];
+  const lifecycleOptions: SelectOption[] = [
+    { value: "open", label: "open" },
+    { value: "update", label: "update" },
+    { value: "close", label: "close" },
+  ];
+  const selectedLifecycleOptions = lifecycles.map((value) => lifecycleOptions.find((opt) => opt.value === value) ?? { value, label: value });
+
+  const artifactNamesRaw = (config as any).artifact_names;
+  const artifactNames = Array.isArray(artifactNamesRaw)
+    ? artifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
+    : [];
+  const selectedArtifactOptions = artifactNames.map((value) => ARTIFACT_SUGGESTIONS.find((opt) => opt.value === value) ?? { value, label: value });
+
+  const presetOptions: Array<{ value: string; label: string; hint: string }> = [
+    { value: "", label: "Custom expression", hint: "Write a safe expression referencing payload/metadata." },
+    { value: "object_category_in", label: "Object category in list", hint: "Matches payload.object_category_label (YOLO)." },
+    { value: "object_category_not_in", label: "Object category not in list", hint: "Excludes payload.object_category_label (YOLO)." },
+    { value: "lifecycle_is", label: "Lifecycle is", hint: "Filters by packet lifecycle (open/update/close)." },
+    { value: "has_artifact", label: "Has artifact", hint: "Requires at least one artifact name to be present." },
+  ];
+  const presetSelected = presetOptions.find((opt) => opt.value === presetId) ?? presetOptions[0];
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <label className="pipelinesLabel">
+        <span>Preset</span>
+        <select
+          className="pipelinesSelect"
+          value={presetSelected.value}
+          onChange={(event) => {
+            const nextPreset = String(event.target.value ?? "").trim();
+            onUpdateConfig((prev) => ({
+              ...prev,
+              preset_id: nextPreset,
+              // Avoid confusion: presets ignore expression.
+              expression: nextPreset ? "" : String((prev as any).expression ?? ""),
+            }));
+          }}
+        >
+          {presetOptions.map((item) => (
+            <option key={item.value || "expression"} value={item.value}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="pipelinesStepHint">{presetSelected.hint}</div>
+
+      {presetSelected.value === "" ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>Expression</span>
+            <textarea
+              className="pipelinesTextArea"
+              rows={4}
+              value={expression}
+              placeholder={'payload.object_category_label == "person" and metadata.motion_gate_open'}
+              onChange={(event) => {
+                const nextValue = String(event.target.value ?? "");
+                onUpdateConfig((prev) => ({ ...prev, expression: nextValue }));
+              }}
+            />
+          </label>
+          <div className="pipelinesStepHint">
+            Available names: <code>payload</code>, <code>metadata</code>, <code>stream_id</code>, <code>lifecycle</code>, <code>artifacts</code>.
+            No function calls; only boolean logic, comparisons, and literals.
+          </div>
+        </>
+      ) : presetSelected.value === "object_category_in" || presetSelected.value === "object_category_not_in" ? (
+        <label className="pipelinesLabel">
+          <span>Categories</span>
+          <CreatableSelect<SelectOption, true>
+            isMulti
+            styles={pipelinesReactSelectStyles}
+            options={YOLO_CATEGORY_OPTIONS}
+            value={selectedCategoryOptions}
+            placeholder="All categories"
+            onChange={(value: MultiValue<SelectOption>) => {
+              onUpdateConfig((prev) => ({
+                ...prev,
+                categories: value.map((item) => item.value),
+              }));
+            }}
+          />
+        </label>
+      ) : presetSelected.value === "lifecycle_is" ? (
+        <label className="pipelinesLabel">
+          <span>Lifecycles</span>
+          <Select<SelectOption, true>
+            isMulti
+            styles={pipelinesReactSelectStyles}
+            options={lifecycleOptions}
+            value={selectedLifecycleOptions}
+            placeholder="All lifecycles"
+            onChange={(value: MultiValue<SelectOption>) => {
+              onUpdateConfig((prev) => ({
+                ...prev,
+                lifecycles: value.map((item) => item.value),
+              }));
+            }}
+          />
+        </label>
+      ) : presetSelected.value === "has_artifact" ? (
+        <label className="pipelinesLabel">
+          <span>Artifacts</span>
+          <CreatableSelect<SelectOption, true>
+            isMulti
+            styles={pipelinesReactSelectStyles}
+            options={ARTIFACT_SUGGESTIONS}
+            value={selectedArtifactOptions}
+            placeholder="Select artifacts…"
+            onChange={(value: MultiValue<SelectOption>) => {
+              onUpdateConfig((prev) => ({
+                ...prev,
+                artifact_names: value.map((item) => item.value),
+              }));
+            }}
+          />
+        </label>
+      ) : null}
+
+      <label className="pipelinesLabel">
+        <span>Invert</span>
+        <input type="checkbox" checked={invert} onChange={(event) => onUpdateConfig((prev) => ({ ...prev, invert: event.target.checked }))} />
+      </label>
+      <div className="pipelinesStepHint">Tip: place Filter before camera.source only when you are filtering gate packets (schedule, HA, etc.).</div>
+    </div>
+  );
+}
+
 type ThrottleProps = {
   config: Record<string, unknown>;
   showAdvanced: boolean;
@@ -610,4 +760,3 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
     </div>
   );
 }
-

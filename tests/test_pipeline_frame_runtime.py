@@ -100,6 +100,7 @@ def test_builtin_core_operators_are_registered_with_runtime_factories() -> None:
     required_ids = {
         "core.schedule_gate",
         "core.category_gate",
+        "core.filter",
         "core.fps_reducer",
         "core.throttle",
         "core.debounce",

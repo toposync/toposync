@@ -8,6 +8,7 @@ import {
   CategoryGateConfigCard,
   DebounceConfigCard,
   DebugConfigCard,
+  FilterConfigCard,
   NotifyConfigCard,
   ScheduleGateConfigCard,
   StoreImagesConfigCard,
@@ -75,6 +76,9 @@ export function OperatorConfigPanel({
   }
   if (operatorId === "core.category_gate") {
     return <CategoryGateConfigCard config={config} onUpdateConfig={onUpdateConfig} />;
+  }
+  if (operatorId === "core.filter") {
+    return <FilterConfigCard config={config} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "camera.camera_mapping") {
     return (

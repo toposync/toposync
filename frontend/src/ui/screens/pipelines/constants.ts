@@ -11,6 +11,7 @@ export const PIPELINE_PRESET_OPERATOR_IDS = [
   "vision.object_tracking_yolo",
   "vision.object_detection_yolo",
   "core.category_gate",
+  "core.filter",
   "camera.object_segmentation",
   "camera.camera_mapping",
   "camera.area_restriction",
@@ -35,6 +36,7 @@ export const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "vision.object_tracking_yolo": "YOLO tracking",
   "vision.object_detection_yolo": "YOLO detection",
   "core.category_gate": "Category gate",
+  "core.filter": "Filter",
   "camera.object_segmentation": "Object segmentation",
   "camera.camera_mapping": "Camera mapping",
   "camera.area_restriction": "Area restriction",
@@ -210,4 +212,3 @@ export const HUMANIZE_ACRONYMS: Record<string, string> = {
   sse: "SSE",
   ts: "TS",
 };
-

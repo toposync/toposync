@@ -372,11 +372,11 @@ Implementação: `src/toposync/runtime/pipelines/operators_core.py` (`core.debug
 
 Conforme `current-plan.ignore.md`, ainda faltam/estão parciais:
 
-1) **Backends de captura plugáveis** (Etapa 15)  
-   Hoje `camera.source` usa OpenCV via `FrameGrabber`. Precisamos de interface única com `backend=opencv|ffmpeg|gstreamer`, mantendo “latest frame wins”.
+1) **Backends de captura plugáveis** (Etapa 15) ✅  
+   `camera.source` agora suporta `backend=auto|opencv|ffmpeg` com fallback automático, “latest frame wins” e métricas no payload.
 
-2) **`core.filter` genérico (predicado determinístico)** (Etapa 16)  
-   Existem gates prontos (`schedule_gate`, `category_gate`), mas não há filtro genérico seguro por expressão/AST com presets.
+2) **`core.filter` genérico (predicado determinístico)** (Etapa 16) ✅  
+   Operador `core.filter` com presets e expressão validada por AST seguro, referenciando `payload`/`metadata`/`lifecycle`/`artifacts`.
 
 3) **DSL Python com operador `|` → Graph** (Etapa 17)  
    O modo Python existe como texto “one-way”, mas ainda não compila para graph nem valida a DSL.
@@ -386,4 +386,3 @@ Conforme `current-plan.ignore.md`, ainda faltam/estão parciais:
 
 5) **Pipelines finitos / self-destruct + lixeira** (Etapa 19)  
    Para casos assistidos por LLM (pipelines temporários e auto-removíveis).
-

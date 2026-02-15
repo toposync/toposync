@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .execution import SourceOperatorRuntime, TransformOperatorRuntime
 from .operator_registry import OperatorRegistry
 from .runtime import Lifecycle, Packet
+from .safe_expression import SafeExpression
 
 try:
     from zoneinfo import ZoneInfo
@@ -253,6 +254,167 @@ class CategoryGateRuntime(TransformOperatorRuntime):
         return [packet] if allowed else []
 
 
+class CoreFilterConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    expression: str = Field(
+        default="",
+        description="Boolean expression evaluated against payload/metadata. Empty means pass-through.",
+    )
+    preset_id: Literal[
+        "",
+        "object_category_in",
+        "object_category_not_in",
+        "lifecycle_is",
+        "has_artifact",
+    ] = ""
+
+    categories: list[str] = Field(default_factory=list, description="Used by object_category_* presets.")
+    lifecycles: list[Literal["open", "update", "close"]] = Field(default_factory=list, description="Used by lifecycle_is preset.")
+    artifact_names: list[str] = Field(default_factory=list, description="Used by has_artifact preset.")
+
+    invert: bool = Field(default=False, description="Inverts the predicate result.")
+
+    @field_validator("expression")
+    @classmethod
+    def _trim_expression(cls, value: str) -> str:
+        return str(value or "").strip()
+
+    @field_validator("categories")
+    @classmethod
+    def _normalize_categories(cls, value: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            category = str(raw or "").strip().lower()
+            if not category or category in seen:
+                continue
+            out.append(category)
+            seen.add(category)
+        return out
+
+    @field_validator("artifact_names")
+    @classmethod
+    def _normalize_artifacts(cls, value: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            name = str(raw or "").strip()
+            if not name or name in seen:
+                continue
+            out.append(name)
+            seen.add(name)
+        return out
+
+    @field_validator("lifecycles")
+    @classmethod
+    def _normalize_lifecycles(cls, value: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            token = str(raw or "").strip().lower()
+            if token not in {"open", "update", "close"}:
+                raise ValueError("lifecycles must contain only: open, update, close")
+            if token in seen:
+                continue
+            out.append(token)
+            seen.add(token)
+        return out
+
+    @field_validator("expression")
+    @classmethod
+    def _validate_expression_is_safe(cls, value: str) -> str:
+        # Only validate when preset is not used, or when expression is explicitly provided.
+        if not value:
+            return value
+        SafeExpression.compile(value)
+        return value
+
+
+class CoreFilterRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        parsed = CoreFilterConfig.model_validate(config)
+        self._config = parsed
+        self._expr: SafeExpression | None = None
+        if parsed.preset_id == "":
+            if parsed.expression:
+                self._expr = SafeExpression.compile(parsed.expression)
+        self._allowed_by_stream: dict[str, bool] = {}
+
+        self._category_set = set(parsed.categories)
+        self._lifecycle_set = set(parsed.lifecycles)
+        self._artifact_set = set(parsed.artifact_names)
+
+    def _preset_match(self, packet: Packet) -> bool:
+        preset_id = self._config.preset_id
+        if preset_id == "":
+            return True
+
+        if preset_id in {"object_category_in", "object_category_not_in"}:
+            if not self._category_set:
+                return True
+            raw = packet.payload.get("object_category_label") or packet.payload.get("category") or ""
+            category = str(raw or "").strip().lower()
+            if not category:
+                return preset_id == "object_category_not_in"
+            if preset_id == "object_category_not_in":
+                return category not in self._category_set
+            return category in self._category_set
+
+        if preset_id == "lifecycle_is":
+            if not self._lifecycle_set:
+                return True
+            return packet.lifecycle.value in self._lifecycle_set
+
+        if preset_id == "has_artifact":
+            if not self._artifact_set:
+                return True
+            return any(name in packet.artifacts for name in self._artifact_set)
+
+        return True
+
+    def _matches(self, packet: Packet) -> bool:
+        if not self._config.enabled:
+            return True
+
+        ok = self._preset_match(packet)
+        if ok and self._expr is not None:
+            ok = self._expr.evaluate(
+                payload=packet.payload,
+                metadata=packet.metadata,
+                stream_id=packet.stream_id,
+                lifecycle=packet.lifecycle.value,
+                artifacts=set(packet.artifacts.keys()),
+            )
+        if self._config.invert:
+            return not ok
+        return bool(ok)
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        stream_key = packet.stream_id
+
+        if packet.lifecycle == Lifecycle.OPEN:
+            allowed = self._matches(packet)
+            self._allowed_by_stream[stream_key] = allowed
+            return [packet] if allowed else []
+
+        if packet.lifecycle == Lifecycle.CLOSE:
+            allowed = self._allowed_by_stream.pop(stream_key, False)
+            return [packet] if allowed else []
+
+        allowed = self._allowed_by_stream.get(stream_key)
+        if allowed is False:
+            return []
+
+        # For update-only streams (e.g. camera frames), evaluate per packet without caching.
+        if allowed is None:
+            return [packet] if self._matches(packet) else []
+
+        # Stream is opened downstream; filter UPDATE packets, but always allow CLOSE.
+        return [packet] if self._matches(packet) else []
+
+
 def register_gate_operators(registry: OperatorRegistry) -> None:
     registry.register_operator(
         operator_id="core.schedule_gate",
@@ -278,4 +440,15 @@ def register_gate_operators(registry: OperatorRegistry) -> None:
         owner="core",
         runtime_factory=lambda config, _deps: CategoryGateRuntime(config),
     )
-
+    registry.register_operator(
+        operator_id="core.filter",
+        description="Deterministic filter operator with a safe expression evaluator (payload/metadata) and presets.",
+        config_model=CoreFilterConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["filter", "expression"],
+        defaults=CoreFilterConfig().model_dump(),
+        share_strategy="by_signature",
+        owner="core",
+        runtime_factory=lambda config, _deps: CoreFilterRuntime(config),
+    )

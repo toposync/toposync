@@ -195,9 +195,11 @@ class ArtifactMemoryCounter:
 
 class DropPolicy(str, enum.Enum):
     BLOCK = "block"
+    DROP_UPDATES = "drop_updates"
     DROP_OLDEST = "drop_oldest"
     DROP_NEWEST = "drop_newest"
     LATEST_ONLY = "latest_only"
+    KEYED_LATEST_ONLY = "keyed_latest_only"
 
 
 class QueueOperationStatus(str, enum.Enum):
@@ -431,8 +433,14 @@ class BoundedChannel(Generic[T]):
                 return ChannelPutResult(status=QueueOperationStatus.CANCELED)
 
             if not structural and not self._budget_can_reserve(envelope.artifact_bytes):
-                if self.drop_policy in {DropPolicy.DROP_OLDEST, DropPolicy.LATEST_ONLY}:
-                    dropped, _dropped_bytes = self._drop_droppable(clear_all=self.drop_policy == DropPolicy.LATEST_ONLY)
+                if self.drop_policy in {
+                    DropPolicy.DROP_UPDATES,
+                    DropPolicy.DROP_OLDEST,
+                    DropPolicy.LATEST_ONLY,
+                    DropPolicy.KEYED_LATEST_ONLY,
+                }:
+                    clear_all = self.drop_policy in {DropPolicy.LATEST_ONLY, DropPolicy.KEYED_LATEST_ONLY}
+                    dropped, _dropped_bytes = self._drop_droppable(clear_all=clear_all)
                     if dropped > 0:
                         self._metrics.dropped_oldest += dropped
                         continue
@@ -451,8 +459,14 @@ class BoundedChannel(Generic[T]):
                 self._metrics.dropped_newest += 1
                 return ChannelPutResult(status=QueueOperationStatus.DROPPED)
 
-            if self.drop_policy in {DropPolicy.DROP_OLDEST, DropPolicy.LATEST_ONLY}:
-                dropped, _dropped_bytes = self._drop_droppable(clear_all=self.drop_policy == DropPolicy.LATEST_ONLY)
+            if self.drop_policy in {
+                DropPolicy.DROP_UPDATES,
+                DropPolicy.DROP_OLDEST,
+                DropPolicy.LATEST_ONLY,
+                DropPolicy.KEYED_LATEST_ONLY,
+            }:
+                clear_all = self.drop_policy in {DropPolicy.LATEST_ONLY, DropPolicy.KEYED_LATEST_ONLY}
+                dropped, _dropped_bytes = self._drop_droppable(clear_all=clear_all)
                 if dropped > 0:
                     self._metrics.dropped_oldest += dropped
                     continue
@@ -758,9 +772,20 @@ class KeyedBoundedChannel(Generic[T]):
                 return ChannelPutResult(status=QueueOperationStatus.CANCELED)
 
             async with self._condition:
+                if self.drop_policy == DropPolicy.KEYED_LATEST_ONLY and not structural:
+                    dropped, _dropped_bytes = self._drop_droppable_for_key_locked(key, clear_all=True)
+                    if dropped > 0:
+                        self._metrics.dropped_oldest += int(dropped)
+                        self._condition.notify_all()
+
                 if not structural and not self._budget_can_reserve(envelope.artifact_bytes):
-                    if self.drop_policy in {DropPolicy.DROP_OLDEST, DropPolicy.LATEST_ONLY}:
-                        clear_all = self.drop_policy == DropPolicy.LATEST_ONLY
+                    if self.drop_policy in {
+                        DropPolicy.DROP_UPDATES,
+                        DropPolicy.DROP_OLDEST,
+                        DropPolicy.LATEST_ONLY,
+                        DropPolicy.KEYED_LATEST_ONLY,
+                    }:
+                        clear_all = self.drop_policy in {DropPolicy.LATEST_ONLY, DropPolicy.KEYED_LATEST_ONLY}
                         dropped, _dropped_bytes = self._drop_droppable_for_key_locked(key, clear_all=clear_all)
                         if dropped <= 0:
                             dropped, _dropped_bytes = self._drop_oldest_droppable_locked(clear_all=clear_all)
@@ -781,8 +806,13 @@ class KeyedBoundedChannel(Generic[T]):
                     self._metrics.dropped_newest += 1
                     return ChannelPutResult(status=QueueOperationStatus.DROPPED)
 
-                if self.drop_policy in {DropPolicy.DROP_OLDEST, DropPolicy.LATEST_ONLY}:
-                    clear_all = self.drop_policy == DropPolicy.LATEST_ONLY
+                if self.drop_policy in {
+                    DropPolicy.DROP_UPDATES,
+                    DropPolicy.DROP_OLDEST,
+                    DropPolicy.LATEST_ONLY,
+                    DropPolicy.KEYED_LATEST_ONLY,
+                }:
+                    clear_all = self.drop_policy in {DropPolicy.LATEST_ONLY, DropPolicy.KEYED_LATEST_ONLY}
                     dropped, _dropped_bytes = self._drop_droppable_for_key_locked(key, clear_all=clear_all)
                     if dropped <= 0:
                         dropped, _dropped_bytes = self._drop_oldest_droppable_locked(clear_all=clear_all)

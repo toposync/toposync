@@ -165,7 +165,7 @@ class DslGraphBuilder:
         if "sink" in target_caps or "origin_only" in target_caps:
             return 128, DropPolicy.DROP_OLDEST.value
         if "split_stream" in source_caps:
-            return 64, DropPolicy.DROP_OLDEST.value
+            return 64, DropPolicy.KEYED_LATEST_ONLY.value
         return 32, DropPolicy.DROP_OLDEST.value
 
     def connect(

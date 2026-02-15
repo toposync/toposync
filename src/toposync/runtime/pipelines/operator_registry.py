@@ -154,6 +154,14 @@ class OperatorRegistry:
         if not parsed_outputs:
             parsed_outputs = [OperatorPort(name="out")]
 
+        capability_values = list(capabilities or [])
+        if share_strategy == "by_signature":
+            capability_values = [item for item in capability_values if str(item or "").strip().lower() != "side_effect"]
+            capability_values.append("pure")
+        else:
+            capability_values = [item for item in capability_values if str(item or "").strip().lower() != "pure"]
+            capability_values.append("side_effect")
+
         default_values = dict(defaults or {})
         normalized_defaults = _validate_with_model(cfg_model, default_values)
         config_schema = cfg_model.model_json_schema()
@@ -164,7 +172,7 @@ class OperatorRegistry:
             description=str(description or "").strip(),
             inputs=parsed_inputs,
             outputs=parsed_outputs,
-            capabilities=list(capabilities or []),
+            capabilities=capability_values,
             defaults=normalized_defaults,
             config_schema=config_schema,
             share_strategy=share_strategy,

@@ -463,7 +463,7 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
                         severity="warning",
                         code="split_stream_latest_only_channel",
                         message="A split-stream operator feeds into a maxsize=1 latest_only channel, which drops packets across different objects/streams.",
-                        suggestion="Increase maxsize and use drop_oldest for downstream processing (or use a keyed-latest strategy when available).",
+                        suggestion="Increase maxsize and prefer drop_policy='keyed_latest_only' (per-stream latest) or drop_oldest for downstream processing after split streams.",
                         edge={
                             "from": {"node": edge.source_node_id, "port": edge.source_port},
                             "to": {"node": edge.target_node_id, "port": edge.target_port},

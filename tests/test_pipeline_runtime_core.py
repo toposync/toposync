@@ -232,3 +232,59 @@ def test_keyed_channel_round_robin_fairness() -> None:
         assert (fifth.item.stream_id, fifth.item.payload.get("seq")) == ("obj:A", 3)
 
     asyncio.run(scenario())
+
+
+def test_channel_drop_updates_never_drops_open_close_packets() -> None:
+    async def scenario() -> None:
+        channel = BoundedChannel[Packet](name="drop_updates", maxsize=1, drop_policy=DropPolicy.DROP_UPDATES)
+
+        open_packet = Packet.create(stream_id="stream", lifecycle=Lifecycle.OPEN, payload={"kind": "event"})
+        assert (await channel.put(open_packet)).status == QueueOperationStatus.ACCEPTED
+
+        update_packet = Packet.create(stream_id="stream", lifecycle=Lifecycle.UPDATE, payload={"seq": 1})
+        dropped = await channel.put(update_packet, timeout_s=0.01)
+        assert dropped.status == QueueOperationStatus.DROPPED
+
+        first = await channel.get(timeout_s=0.05)
+        assert first.item is not None
+        assert first.item.lifecycle == Lifecycle.OPEN
+
+        close_packet = Packet.create(stream_id="stream", lifecycle=Lifecycle.CLOSE, payload={"seq": 2})
+        assert (await channel.put(close_packet)).status == QueueOperationStatus.ACCEPTED
+        second = await channel.get(timeout_s=0.05)
+        assert second.item is not None
+        assert second.item.lifecycle == Lifecycle.CLOSE
+
+    asyncio.run(scenario())
+
+
+def test_keyed_channel_keyed_latest_only_keeps_latest_update_per_stream() -> None:
+    async def scenario() -> None:
+        channel = KeyedBoundedChannel[Packet](
+            name="keyed_latest_only",
+            maxsize=10,
+            drop_policy=DropPolicy.KEYED_LATEST_ONLY,
+            key_fn=lambda packet: packet.stream_id,
+        )
+
+        await channel.put(Packet.create(stream_id="obj:A", lifecycle=Lifecycle.OPEN))
+        await channel.put(Packet.create(stream_id="obj:A", lifecycle=Lifecycle.UPDATE, payload={"seq": 1}))
+        await channel.put(Packet.create(stream_id="obj:A", lifecycle=Lifecycle.UPDATE, payload={"seq": 2}))
+        assert channel.depth == 2
+
+        await channel.put(Packet.create(stream_id="obj:B", lifecycle=Lifecycle.UPDATE, payload={"seq": 1}))
+        assert channel.depth == 3
+
+        first = await channel.get(timeout_s=0.05)
+        second = await channel.get(timeout_s=0.05)
+        third = await channel.get(timeout_s=0.05)
+        assert first.item is not None
+        assert second.item is not None
+        assert third.item is not None
+
+        seen = {(p.stream_id, p.lifecycle.value, p.payload.get("seq")) for p in [first.item, second.item, third.item]}
+        assert ("obj:A", "open", None) in seen
+        assert ("obj:A", "update", 2) in seen
+        assert ("obj:B", "update", 1) in seen
+
+    asyncio.run(scenario())

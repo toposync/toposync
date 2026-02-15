@@ -5,6 +5,8 @@ import json
 import re
 import tempfile
 import time
+from collections import OrderedDict
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -335,6 +337,155 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
             await asyncio.to_thread(self._root_dir.mkdir, parents=True, exist_ok=True)
             self._root_dir_ready = True
         return self._root_dir
+
+
+class StreamStateSnapshotConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    interval_seconds: float = Field(
+        default=1.0,
+        ge=0.05,
+        le=60.0,
+        description="Minimum seconds between UPDATE snapshots per stream.",
+    )
+    max_streams: int = Field(default=512, ge=1, le=100_000, description="Maximum streams tracked in-memory (LRU).")
+    artifact_names: list[str] = Field(
+        default_factory=list,
+        description="Optional allowlist of artifact names to include (as references only). Empty = include all.",
+    )
+    include_payload_keys: list[str] = Field(
+        default_factory=list,
+        description="Optional allowlist of payload keys to include in the snapshot. Empty = include all.",
+    )
+    include_metadata_keys: list[str] = Field(
+        default_factory=list,
+        description="Optional allowlist of metadata keys to include in the snapshot. Empty = include all.",
+    )
+
+    @field_validator("artifact_names", "include_payload_keys", "include_metadata_keys")
+    @classmethod
+    def _normalize_lists(cls, value: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in value or []:
+            name = str(item or "").strip()
+            if not name:
+                continue
+            if name in seen:
+                continue
+            out.append(name)
+            seen.add(name)
+        return out
+
+
+@dataclass(slots=True)
+class _StreamSnapshotState:
+    first_seen_at: float
+    last_seen_at: float
+    last_emitted_at: float
+    update_count: int
+    is_open: bool
+
+
+class StreamStateSnapshotRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = StreamStateSnapshotConfig.model_validate(config)
+        self._state_by_stream_id: "OrderedDict[str, _StreamSnapshotState]" = OrderedDict()
+        self._artifact_allowlist = set(self._config.artifact_names)
+        self._payload_allowlist = set(self._config.include_payload_keys)
+        self._metadata_allowlist = set(self._config.include_metadata_keys)
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        stream_id = str(packet.stream_id or "").strip() or "-"
+        now = float(packet.created_at)
+
+        state = self._state_by_stream_id.get(stream_id)
+        if state is None:
+            state = _StreamSnapshotState(
+                first_seen_at=now,
+                last_seen_at=now,
+                last_emitted_at=0.0,
+                update_count=0,
+                is_open=False,
+            )
+            self._state_by_stream_id[stream_id] = state
+        else:
+            self._state_by_stream_id.move_to_end(stream_id)
+
+        state.last_seen_at = now
+        if packet.lifecycle == Lifecycle.OPEN:
+            state.first_seen_at = now
+            state.update_count = 0
+            state.is_open = True
+        elif packet.lifecycle == Lifecycle.UPDATE:
+            state.update_count += 1
+            state.is_open = True
+        elif packet.lifecycle == Lifecycle.CLOSE:
+            state.is_open = False
+
+        while len(self._state_by_stream_id) > int(self._config.max_streams):
+            self._state_by_stream_id.popitem(last=False)
+
+        should_emit = False
+        if packet.lifecycle in {Lifecycle.OPEN, Lifecycle.CLOSE}:
+            should_emit = True
+        elif packet.lifecycle == Lifecycle.UPDATE:
+            interval = float(self._config.interval_seconds)
+            if interval <= 0:
+                should_emit = True
+            else:
+                should_emit = (now - float(state.last_emitted_at)) >= interval
+
+        if should_emit:
+            snapshot = self._build_snapshot_packet(packet, state=state, context=context)
+            await context.emit(snapshot, port="snapshot")
+            state.last_emitted_at = now
+
+        if packet.lifecycle == Lifecycle.CLOSE:
+            self._state_by_stream_id.pop(stream_id, None)
+
+        return [packet]
+
+    def _build_snapshot_packet(self, packet: Packet, *, state: _StreamSnapshotState, context) -> Packet:  # noqa: ANN001
+        payload = dict(packet.payload)
+        metadata = dict(packet.metadata)
+
+        if self._payload_allowlist:
+            payload = {key: payload[key] for key in self._payload_allowlist if key in payload}
+        if self._metadata_allowlist:
+            metadata = {key: metadata[key] for key in self._metadata_allowlist if key in metadata}
+
+        metadata["snapshot_state"] = {
+            "stream_id": packet.stream_id,
+            "is_open": bool(state.is_open),
+            "first_seen_at": float(state.first_seen_at),
+            "last_seen_at": float(state.last_seen_at),
+            "update_count": int(state.update_count),
+            "duration_seconds": max(0.0, float(packet.created_at) - float(state.first_seen_at)),
+            "source_node_id": str(getattr(context, "node_id", "") or ""),
+        }
+
+        artifacts: dict[str, Artifact] = {}
+        for name, artifact in packet.artifacts.items():
+            if self._artifact_allowlist and name not in self._artifact_allowlist:
+                continue
+            # Nunca inclui blobs em memória: snapshots são para UI/debug e devem ser leves.
+            artifacts[name] = Artifact(
+                name=str(artifact.name),
+                data=None,
+                reference=str(artifact.reference) if artifact.reference else None,
+                mime_type=str(artifact.mime_type) if artifact.mime_type else None,
+                metadata=dict(artifact.metadata),
+            )
+
+        snapshot = Packet.create(
+            stream_id=packet.stream_id,
+            lifecycle=packet.lifecycle,
+            payload=payload,
+            artifacts=artifacts,
+            metadata=metadata,
+            parent_packet_id=packet.packet_id,
+        )
+        return replace(snapshot, created_at=float(packet.created_at), created_monotonic_ns=int(packet.created_monotonic_ns))
 
 
 class SyntheticSourceRuntime(SourceOperatorRuntime):
@@ -685,6 +836,18 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         share_strategy="by_signature",
         owner="core",
         runtime_factory=lambda config, _deps: LifecycleFromBooleanRuntime(config),
+    )
+    registry.register_operator(
+        operator_id="core.stream_state_snapshot",
+        description="Emits periodic per-stream snapshot packets to a side output while passing through the original stream.",
+        config_model=StreamStateSnapshotConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}, {"name": "snapshot"}],
+        capabilities=["snapshot", "realtime", "lifecycle"],
+        defaults=StreamStateSnapshotConfig().model_dump(),
+        share_strategy="by_signature",
+        owner="core",
+        runtime_factory=lambda config, _deps: StreamStateSnapshotRuntime(config),
     )
     registry.register_operator(
         operator_id="core.debug",

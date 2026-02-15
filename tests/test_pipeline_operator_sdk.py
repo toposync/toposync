@@ -116,3 +116,31 @@ def test_pipeline_compiler_rejects_unknown_operator_and_cycle() -> None:
     }
     with pytest.raises(GraphCompileError):
         compiler.compile_pipeline(Pipeline(name="cyclic_graph", type="reuse", graph=cycle_graph))
+
+
+def test_operator_registry_adds_purity_capability() -> None:
+    registry = OperatorRegistry()
+    registry.register_operator(
+        operator_id="test.pure_node",
+        inputs=[],
+        outputs=[{"name": "out"}],
+        defaults={},
+        share_strategy="by_signature",
+    )
+    registry.register_operator(
+        operator_id="test.side_effect_node",
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        defaults={},
+        share_strategy="never",
+    )
+
+    pure = registry.get("test.pure_node")
+    assert pure is not None
+    assert "pure" in set(pure.definition.capabilities)
+    assert "side_effect" not in set(pure.definition.capabilities)
+
+    side_effect = registry.get("test.side_effect_node")
+    assert side_effect is not None
+    assert "side_effect" in set(side_effect.definition.capabilities)
+    assert "pure" not in set(side_effect.definition.capabilities)

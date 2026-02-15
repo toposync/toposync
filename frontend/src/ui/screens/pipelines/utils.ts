@@ -144,7 +144,7 @@ function edgePolicyFor(
     return { maxsize: 128, drop_policy: "drop_oldest" };
   }
   if (sourceCaps.has("split_stream")) {
-    return { maxsize: 64, drop_policy: "drop_oldest" };
+    return { maxsize: 64, drop_policy: "keyed_latest_only" };
   }
   return { maxsize: 32, drop_policy: "drop_oldest" };
 }

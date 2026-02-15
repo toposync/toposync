@@ -40,6 +40,7 @@ from toposync.runtime.pipelines import (
     PipelineGraphCompiler,
     register_builtin_operators,
 )
+from toposync.runtime.pipelines.recommendations import PipelineAlert, analyze_compiled_pipeline
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
 from toposync.runtime.pipelines.distributed.transport import HttpProcessingTransport, ProcessingTransportError
 from toposync.runtime.pipelines.migration_legacy_cameras import (
@@ -130,6 +131,7 @@ class PipelineCompileRequest(BaseModel):
 class PipelineCompileResponse(BaseModel):
     pipeline: dict[str, Any]
     shared_signatures: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    alerts: list[PipelineAlert] = Field(default_factory=list)
 
 
 class LegacyCamerasMigrationRequest(BaseModel):
@@ -423,6 +425,7 @@ def create_app() -> FastAPI:
     @app.post("/api/pipelines/compile", response_model=PipelineCompileResponse)
     async def compile_pipeline_graph(request: Request, body: PipelineCompileRequest) -> PipelineCompileResponse:
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
+        registry: OperatorRegistry = request.app.state.pipeline_operator_registry
         try:
             compiled = compiler.compile_many([body.pipeline])
         except GraphCompileError as exc:
@@ -468,7 +471,8 @@ def create_app() -> FastAPI:
             ]
             for signature, occurrences in compiled.shared_signatures.items()
         }
-        return PipelineCompileResponse(pipeline=compiled_dict, shared_signatures=shared_signatures)
+        alerts = analyze_compiled_pipeline(pipeline=pipeline, registry=registry)
+        return PipelineCompileResponse(pipeline=compiled_dict, shared_signatures=shared_signatures, alerts=alerts)
 
     @app.post("/api/pipelines", response_model=Pipeline, status_code=201)
     async def create_pipeline(request: Request, body: Pipeline) -> Pipeline:

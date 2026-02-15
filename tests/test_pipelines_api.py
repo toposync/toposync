@@ -118,3 +118,26 @@ def test_processing_servers_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyP
         res = client.delete("/api/processing-servers/remote_gpu")
         assert res.status_code == 200
         assert res.json()["id"] == "remote_gpu"
+
+
+def test_pipeline_compile_returns_recommendations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        pipeline = Pipeline(
+            name="demo_pipeline",
+            type="final",
+            graph={
+                "schema_version": 1,
+                "nodes": [
+                    {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
+                    {"id": "notify", "operator": "core.notify", "config": {}},
+                ],
+                "edges": [
+                    {"from": {"node": "source", "port": "out"}, "to": {"node": "notify", "port": "in"}},
+                ],
+            },
+        ).model_dump(mode="json")
+        res = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
+        assert res.status_code == 200
+        body = res.json()
+        assert isinstance(body.get("alerts"), list)
+        assert any(item.get("code") == "notify_missing_store_images" for item in body["alerts"])

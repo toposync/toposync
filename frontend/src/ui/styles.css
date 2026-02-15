@@ -440,6 +440,56 @@ textarea {
   color: var(--muted);
 }
 
+.pipelinesAlerts {
+  display: grid;
+  gap: 10px;
+}
+
+.pipelinesAlertRow {
+  display: flex;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(15, 23, 48, 0.55);
+}
+
+.pipelinesAlertRow.isWarning {
+  border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.06);
+}
+
+.pipelinesAlertRow.isInfo {
+  border-color: rgba(59, 130, 246, 0.30);
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.pipelinesAlertBadge {
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 2px;
+  min-width: 72px;
+}
+
+.pipelinesAlertText {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.pipelinesAlertMessage {
+  font-weight: 650;
+}
+
+.pipelinesAlertSuggestion {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .pipelinesInteractiveRoot {
   display: grid;
   gap: 12px;

@@ -45,6 +45,22 @@ export type Pipeline = {
   graph: unknown;
 };
 
+export type PipelineAlert = {
+  severity: "info" | "warning";
+  code: string;
+  message: string;
+  suggestion?: string;
+  node_id?: string | null;
+  operator_id?: string | null;
+  edge?: unknown;
+};
+
+export type PipelineCompileOutput = {
+  pipeline: Record<string, unknown>;
+  shared_signatures: Record<string, Array<Record<string, unknown>>>;
+  alerts: PipelineAlert[];
+};
+
 export type ProcessingServer = {
   id: string;
   name: string;
@@ -291,7 +307,7 @@ export async function deletePipeline(name: string): Promise<Pipeline> {
   return res.json();
 }
 
-export async function compilePipeline(pipeline: Pipeline): Promise<any> {
+export async function compilePipeline(pipeline: Pipeline): Promise<PipelineCompileOutput> {
   const res = await fetch("/api/pipelines/compile", {
     method: "POST",
     headers: { "content-type": "application/json" },

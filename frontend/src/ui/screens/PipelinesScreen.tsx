@@ -8,6 +8,8 @@ import type {
   CameraContextsResponse,
   CamerasIndexResponse,
   Pipeline,
+  PipelineAlert,
+  PipelineCompileOutput,
   PipelineOperatorDefinition,
   ProcessingServer,
   ProcessingServerStatus,
@@ -394,11 +396,13 @@ function edgePolicyFor(source: PipelineOperatorDefinition | null, target: Pipeli
   const sourceCaps = new Set((source?.capabilities ?? []).map((value) => String(value).trim().toLowerCase()));
   const targetCaps = new Set((target?.capabilities ?? []).map((value) => String(value).trim().toLowerCase()));
 
-  if (sourceCaps.has("source") || sourceCaps.has("camera") || sourceCaps.has("realtime")) {
-    return { maxsize: 1, drop_policy: "latest_only" };
-  }
+  if (targetCaps.has("heavy_compute")) return { maxsize: 1, drop_policy: "latest_only" };
+  if (sourceCaps.has("source")) return { maxsize: 1, drop_policy: "latest_only" };
   if (targetCaps.has("sink") || targetCaps.has("origin_only")) {
     return { maxsize: 128, drop_policy: "drop_oldest" };
+  }
+  if (sourceCaps.has("split_stream")) {
+    return { maxsize: 64, drop_policy: "drop_oldest" };
   }
   return { maxsize: 32, drop_policy: "drop_oldest" };
 }
@@ -671,7 +675,11 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
   const [graphText, setGraphText] = useState<string>("");
   const [pythonText, setPythonText] = useState<string>("");
   const [mode, setMode] = useState<EditorMode>("interactive");
-  const [compileOutput, setCompileOutput] = useState<any>(null);
+  const [compileOutput, setCompileOutput] = useState<PipelineCompileOutput | null>(null);
+
+  const [recommendations, setRecommendations] = useState<PipelineAlert[]>([]);
+  const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
+  const [recommendationsLoading, setRecommendationsLoading] = useState(false);
 
   const [interactiveSteps, setInteractiveSteps] = useState<InteractiveStep[]>([]);
   const [interactiveWarning, setInteractiveWarning] = useState<string | null>(null);
@@ -813,6 +821,50 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
     if (!interactiveGraph.graph) return;
     setGraphText(jsonPretty(interactiveGraph.graph));
   }, [mode, interactiveGraph.graph]);
+
+  useEffect(() => {
+    if (!draft) {
+      setRecommendations([]);
+      setRecommendationsError(null);
+      setRecommendationsLoading(false);
+      return;
+    }
+
+    const resolved = resolveGraphFromActiveMode();
+    if (!resolved.ok) {
+      setRecommendations([]);
+      setRecommendationsError(resolved.message);
+      setRecommendationsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setRecommendationsLoading(true);
+    setRecommendationsError(null);
+
+    const handle = window.setTimeout(() => {
+      void compilePipeline({ ...draft, graph: resolved.graph })
+        .then((output) => {
+          if (cancelled) return;
+          setRecommendations(Array.isArray(output.alerts) ? output.alerts : []);
+          setRecommendationsError(null);
+        })
+        .catch((err: any) => {
+          if (cancelled) return;
+          setRecommendations([]);
+          setRecommendationsError(String(err?.message ?? err));
+        })
+        .finally(() => {
+          if (cancelled) return;
+          setRecommendationsLoading(false);
+        });
+    }, 450);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [draft, mode, interactiveGraph.graph, graphText]);
 
   useEffect(() => {
     if (mode !== "interactive") return;
@@ -1249,6 +1301,40 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
                   </button>
                 </div>
               </div>
+
+              {recommendationsError ? (
+                <div className="card cardDanger">
+                  <div className="cardBody">Pipeline analysis failed: {recommendationsError}</div>
+                </div>
+              ) : null}
+
+              {recommendationsLoading ? <div className="pipelinesHint">Analyzing pipeline…</div> : null}
+
+              {recommendations.length > 0 ? (
+                <div className="card">
+                  <div className="cardTitle">Recommendations</div>
+                  <div className="cardBody">
+                    <div className="pipelinesAlerts">
+                      {recommendations.map((alert, index) => (
+                        <div
+                          key={`${alert.code}:${alert.node_id ?? ""}:${index}`}
+                          className={["pipelinesAlertRow", alert.severity === "warning" ? "isWarning" : "isInfo"]
+                            .filter(Boolean)
+                            .join(" ")}
+                        >
+                          <div className="pipelinesAlertBadge">{alert.severity}</div>
+                          <div className="pipelinesAlertText">
+                            <div className="pipelinesAlertMessage">{alert.message}</div>
+                            {alert.suggestion ? <div className="pipelinesAlertSuggestion">{alert.suggestion}</div> : null}
+                            {alert.node_id ? <div className="pipelinesHint">Node: {alert.node_id}</div> : null}
+                            {alert.edge ? <pre className="pipelinesPre">{JSON.stringify(alert.edge, null, 2)}</pre> : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
 
               <div className="pipelinesEditorGrid">
                 <div className="pipelinesForm">

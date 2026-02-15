@@ -375,25 +375,38 @@ class PipelinesOrchestrator:
 
         async def pump() -> None:
             last_event_id = 0
+            backoff_s = 0.5
             try:
-                async for event in transport.stream_events(last_event_id=0):
+                while True:
                     try:
-                        eid = int(event.get("event_id") or 0)
-                    except Exception:
-                        eid = 0
-                    if eid:
-                        last_event_id = max(last_event_id, eid)
-                    name = str(event.get("pipeline_name") or "").strip()
-                    inbox = self._inboxes.get(name)
-                    if inbox is None:
+                        async for event in transport.stream_events(last_event_id=last_event_id):
+                            backoff_s = 0.5
+                            try:
+                                eid = int(event.get("event_id") or 0)
+                            except Exception:
+                                eid = 0
+                            name = str(event.get("pipeline_name") or "").strip()
+                            inbox = self._inboxes.get(name)
+                            if inbox is None:
+                                if eid:
+                                    last_event_id = max(last_event_id, eid)
+                                    await transport.ack(last_event_id)
+                                continue
+                            put_result = await inbox.put(event, timeout_s=0.05, cancel_event=None)
+                            if eid and put_result.accepted:
+                                last_event_id = max(last_event_id, eid)
+                                await transport.ack(last_event_id)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("processing pump failed server=%s: %s", server.id, exc)
+                        await asyncio.sleep(backoff_s)
+                        backoff_s = min(10.0, backoff_s * 1.5)
                         continue
-                    await inbox.put(event, timeout_s=0.05, cancel_event=None)
-                    if eid:
-                        await transport.ack(eid)
+                    await asyncio.sleep(backoff_s)
+                    backoff_s = min(10.0, backoff_s * 1.5)
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("processing pump failed server=%s: %s", server.id, exc)
             finally:
                 handle = self._servers.get(server.id)
                 if handle is not None:

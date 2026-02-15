@@ -205,6 +205,27 @@ API:
 - `DELETE /api/processing-servers/{id}`
 - `GET /api/processing-servers/{id}/status`
 
+### Failure modes e idempotência (notificações “open”)
+
+O runtime foi desenhado para ser **previsível sob falhas** — especialmente para notificações com lifecycle `open/update/close`.
+
+**Garantia de entrega (processing → origin): at-least-once (best effort).**
+- O processing server publica eventos projetados com `event_id` e mantém um **buffer bounded** de replay.
+- O origin consome via stream HTTP (SSE) e envia **ACK** de `last_event_id`.
+- Em falhas de rede/reconnect, **o mesmo evento pode ser reenviado** (duplicado). Portanto, **idempotência é obrigatória** nos sinks.
+
+**Como deduplicar**
+- `core.notify` usa `dedupe_key` (único no SQLite) e faz **upsert**: replays/duplicatas **não geram notificações duplicadas**, apenas atualizam a existente.
+- Para casos avançados, use `dedupe_key_template` para controlar dedupe por regra (ex.: por `tracking_id`, `correlation_id`, etc).
+
+**Regras de recuperação**
+- **Shutdown/reload limpo:** operadores stateful (ex.: `core.notify`) sintetizam `close` no `shutdown()` para garantir o invariant “close must happen” (`reason="shutdown_synthesized"`).
+- **Restart/crash do origin:** ao subir, o origin fecha notificações de pipeline que ficaram `status="open"` no store com `reason="runtime_restart"`.
+  - Implementação: `src/toposync/runtime/notifications/runtime.py` (`close_open_pipeline_notifications`) chamado no startup em `src/toposync/app.py`.
+- **Processing server cai / rede processing→origin falha:**
+  - eventos podem ficar no buffer de replay do processing e serem reenviados após reconexão;
+  - se o origin ficar offline tempo suficiente para o buffer estourar, alguns `close` podem nunca chegar — nesse caso, o restart do origin fecha itens “open” remanescentes (regra acima).
+
 ---
 
 ## 7) Operadores: contrato, registro e lista (SDK)

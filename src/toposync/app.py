@@ -254,6 +254,12 @@ async def _lifespan(app: FastAPI):
 
     notifications = NotificationsRuntime(data_dir=config_store.paths.data_dir)
     services.register("notifications.upsert", notifications.upsert)
+    try:
+        closed = await notifications.close_open_pipeline_notifications(reason="runtime_restart")
+        if closed:
+            logger.info("Closed %s stale pipeline notifications (reason=runtime_restart)", closed)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to close stale pipeline notifications on startup: %s", exc)
 
     services.register("devices.get_state", store.get_state)
     services.register("devices.set_state", store.set_state)

@@ -6,17 +6,11 @@ import { prettyOperatorLabel } from "../utils";
 
 type Props = {
   presetOperators: PipelineOperatorDefinition[];
-  operators: PipelineOperatorDefinition[];
-  interactiveAddOperatorId: string;
-  onChangeInteractiveAddOperatorId: (operatorId: string) => void;
   onAddStep: (operatorId: string) => void;
 };
 
 export function InteractiveStepsToolbar({
   presetOperators,
-  operators,
-  interactiveAddOperatorId,
-  onChangeInteractiveAddOperatorId,
   onAddStep,
 }: Props): React.ReactElement {
   return (
@@ -31,27 +25,10 @@ export function InteractiveStepsToolbar({
             onClick={() => onAddStep(operator.id)}
             title={operator.description || operator.id}
           >
-            + {operator.id.split(".").pop()}
+            + {prettyOperatorLabel(operator)}
           </button>
         ))}
-      </div>
-      <div className="pipelinesInlineAddRow">
-        <select
-          className="pipelinesSelect"
-          value={interactiveAddOperatorId}
-          onChange={(event) => onChangeInteractiveAddOperatorId(event.target.value)}
-        >
-          {operators.map((operator) => (
-            <option key={operator.id} value={operator.id}>
-              {prettyOperatorLabel(operator)}
-            </option>
-          ))}
-        </select>
-        <button className="pillButton pillButtonPrimary" type="button" onClick={() => onAddStep(interactiveAddOperatorId)}>
-          Add
-        </button>
       </div>
     </div>
   );
 }
-

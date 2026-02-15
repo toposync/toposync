@@ -587,12 +587,6 @@ textarea {
   gap: 8px;
 }
 
-.pipelinesInlineAddRow {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px;
-}
-
 .pipelinesStepsList {
   display: grid;
   gap: 10px;

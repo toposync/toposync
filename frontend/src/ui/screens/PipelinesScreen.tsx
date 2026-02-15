@@ -711,7 +711,6 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
                     </div>
                   ) : mode === "interactive" ? (
                     <InteractivePipelineEditor
-                      operators={operators}
                       operatorsById={operatorsById}
                       camerasIndex={camerasIndex}
                       interactiveSteps={interactiveSteps}

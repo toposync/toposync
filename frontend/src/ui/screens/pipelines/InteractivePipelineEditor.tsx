@@ -1,17 +1,16 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 
 import type { CamerasIndexResponse, PipelineOperatorDefinition } from "../../../util/api";
 
 import { PIPELINE_PRESET_OPERATOR_IDS } from "./constants";
 import type { DragInsertPosition, InteractiveBuildResult, InteractiveStep, SelectOption } from "./types";
-import { createInteractiveStep, isRecord, jsonPretty, moveStep, pickDefaultOperatorId, safeJsonParse } from "./utils";
+import { createInteractiveStep, isRecord, jsonPretty, moveStep, safeJsonParse } from "./utils";
 
 import { InteractiveStepsList } from "./editor/InteractiveStepsList";
 import { InteractiveStepsToolbar } from "./editor/InteractiveStepsToolbar";
 import { useCameraContexts } from "./editor/useCameraContexts";
 
 type Props = {
-  operators: PipelineOperatorDefinition[];
   operatorsById: Record<string, PipelineOperatorDefinition>;
   camerasIndex: CamerasIndexResponse;
   interactiveSteps: InteractiveStep[];
@@ -22,7 +21,6 @@ type Props = {
 };
 
 export function InteractivePipelineEditor({
-  operators,
   operatorsById,
   camerasIndex,
   interactiveSteps,
@@ -31,7 +29,6 @@ export function InteractivePipelineEditor({
   setInteractiveWarning,
   interactiveGraph,
 }: Props): React.ReactElement {
-  const [interactiveAddOperatorId, setInteractiveAddOperatorId] = useState<string>("");
   const [draggingStepUid, setDraggingStepUid] = useState<string | null>(null);
   const [dragOverStep, setDragOverStep] = useState<{ uid: string; position: DragInsertPosition } | null>(null);
 
@@ -68,11 +65,6 @@ export function InteractivePipelineEditor({
   }, [cameraSelectOptions]);
 
   const { activeCameraContexts, activeCameraContextsError, cameraAreaOptions } = useCameraContexts(interactiveCameraId);
-
-  useEffect(() => {
-    if (interactiveAddOperatorId && operatorsById[interactiveAddOperatorId]) return;
-    setInteractiveAddOperatorId(pickDefaultOperatorId(operators));
-  }, [interactiveAddOperatorId, operatorsById, operators]);
 
   const addInteractiveStep = useCallback(
     (operatorId: string) => {
@@ -183,9 +175,6 @@ export function InteractivePipelineEditor({
     <div className="pipelinesInteractiveRoot">
       <InteractiveStepsToolbar
         presetOperators={presetOperators}
-        operators={operators}
-        interactiveAddOperatorId={interactiveAddOperatorId}
-        onChangeInteractiveAddOperatorId={setInteractiveAddOperatorId}
         onAddStep={addInteractiveStep}
       />
 
@@ -224,4 +213,3 @@ export function InteractivePipelineEditor({
     </div>
   );
 }
-

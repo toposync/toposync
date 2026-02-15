@@ -141,8 +141,10 @@ class PipelineBundleRuntime:
 
     def __post_init__(self) -> None:
         self.plan = build_merged_pipeline_plan(self.report, bundle_name=self.bundle_name)
-        if self.dependencies.pipeline_stats_store is not None:
-            self.dependencies.pipeline_stats_node_occurrences = _build_bundle_stats_node_occurrences(plan=self.plan)
+        # Mesmo se stats estiver desativado, esse mapa é útil para operadores "sinks"
+        # (ex.: store_images) conseguirem resolver o nome lógico do pipeline quando
+        # a execução estiver rodando dentro de um bundle (compiled.name=bundle_name).
+        self.dependencies.pipeline_stats_node_occurrences = _build_bundle_stats_node_occurrences(plan=self.plan)
         self._runtime = PipelineRuntime(
             compiled=self.plan.merged_pipeline,
             registry=self.registry,

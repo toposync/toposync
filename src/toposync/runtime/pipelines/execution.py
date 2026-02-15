@@ -435,13 +435,16 @@ class PipelineRuntime:
                 logger=self.logger,
                 stats_store=self.dependencies.pipeline_stats_store,
             )
-            if self.dependencies.pipeline_stats_store is not None:
-                occurrences_map = self.dependencies.pipeline_stats_node_occurrences
-                occurrences = occurrences_map.get(node_id) if occurrences_map else None
+            occurrences_map = self.dependencies.pipeline_stats_node_occurrences
+            if occurrences_map is not None:
+                occurrences = occurrences_map.get(node_id)
                 if occurrences is None:
                     occurrences = ((self.compiled.name, node_id),)
                 context.stats_node_occurrences = tuple((str(pipeline), str(nid)) for pipeline, nid in occurrences)
+            elif self.dependencies.pipeline_stats_store is not None:
+                context.stats_node_occurrences = ((self.compiled.name, node_id),)
 
+            if self.dependencies.pipeline_stats_store is not None:
                 context.stats_count_outputs_on_read = int(outdegree.get(node_id, 0)) == 0 and bool(node_inputs)
                 context.stats_count_terminal_outputs_on_emit = int(outdegree.get(node_id, 0)) == 0 and not bool(node_inputs)
             self._context_by_node[node_id] = context

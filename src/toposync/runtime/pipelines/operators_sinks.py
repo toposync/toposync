@@ -53,6 +53,21 @@ def _resolve_files_dir(dependencies: PipelineRuntimeDependencies) -> Path:
     raise RuntimeError("files_dir is required (set PipelineRuntimeDependencies.files_dir or config_store)")
 
 
+def _resolve_logical_pipeline_name(context: Any) -> str:
+    name = str(getattr(context, "pipeline_name", "") or "").strip()
+    if not name:
+        name = "pipeline"
+
+    occurrences = getattr(context, "stats_node_occurrences", None)
+    if isinstance(occurrences, tuple) and len(occurrences) == 1:
+        first = occurrences[0]
+        if isinstance(first, tuple) and len(first) >= 1:
+            occ_name = str(first[0] or "").strip()
+            if occ_name:
+                return occ_name
+    return name
+
+
 def _resolve_ts(packet: Packet, field: str) -> float:
     raw = packet.payload.get(field)
     try:
@@ -365,7 +380,7 @@ class StoreImagesRuntime(TransformOperatorRuntime):
         packet = _ensure_original_artifact(packet)
         files_dir = _resolve_files_dir(self._dependencies)
 
-        pipeline_name = getattr(context, "pipeline_name", "") or "pipeline"
+        pipeline_name = _resolve_logical_pipeline_name(context)
         camera_id = _resolve_string(packet, "camera_id") or "no_camera"
         token = (
             _resolve_string(packet, "event_id")
@@ -662,7 +677,7 @@ class NotifyRuntime(SinkRuntime):
         status = "closed" if lifecycle == Lifecycle.CLOSE else "open"
         payload = {
             "source": "pipelines",
-            "pipeline_name": getattr(context, "pipeline_name", None),
+            "pipeline_name": _resolve_logical_pipeline_name(context),
             "node_id": getattr(context, "node_id", None),
             "stream_id": packet.stream_id,
             "packet_id": packet.packet_id,

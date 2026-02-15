@@ -13,9 +13,11 @@ from toposync.runtime.config_store import Pipeline
 from toposync.runtime.notifications import NotificationsRuntime
 from toposync.runtime.pipelines import (
     Artifact,
+    CompilationReport,
     Lifecycle,
     OperatorRegistry,
     Packet,
+    PipelineBundleRuntime,
     PipelineGraphCompiler,
     PipelineRuntime,
     PipelineRuntimeDependencies,
@@ -247,6 +249,86 @@ def test_store_images_saves_with_correct_color_channels(tmp_path: Path) -> None:
 
         # cv2.imread returns BGR; it should match the original BGR frame.
         assert (img == frame).all()
+
+    asyncio.run(scenario())
+
+
+def test_store_images_in_bundle_uses_logical_pipeline_folder(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        files_dir = tmp_path / "files"
+        deps = PipelineRuntimeDependencies(files_dir=files_dir)
+
+        frame = np.zeros((8, 8, 3), dtype=np.uint8)
+        sequence = [
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {
+                    "frame_ts": 123.456,
+                    "camera_id": "camera-main",
+                    "tracking_id": "track-1",
+                },
+                "artifacts": {
+                    "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                    "frame": Artifact(
+                        name="frame",
+                        data=frame,
+                        mime_type="image/raw",
+                        metadata={"source": "test", "derived_from": "frame_original"},
+                    ),
+                },
+            },
+        ]
+        collector: dict[str, list[Packet]] = {}
+
+        registry = OperatorRegistry()
+        register_builtin_operators(registry)
+        _register_test_source_and_sink(registry, sequence=sequence, collector=collector)
+
+        def graph_for(sink_name: str) -> dict[str, Any]:
+            return {
+                "schema_version": 1,
+                "nodes": [
+                    {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                    {
+                        "id": "store",
+                        "operator": "core.store_images",
+                        "config": {
+                            "artifact_names": ["frame_original"],
+                            "subdir": "pipelines",
+                            "format": "png",
+                            "keep_data": False,
+                            "overwrite": False,
+                        },
+                    },
+                    {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
+                ],
+                "edges": [
+                    {"from": {"node": "source", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "store", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                ],
+            }
+
+        compiler = PipelineGraphCompiler(registry)
+        compiled_a = compiler.compile_pipeline(Pipeline(name="final_a", type="final", graph=graph_for("sink_a")))
+        compiled_b = compiler.compile_pipeline(Pipeline(name="final_b", type="final", graph=graph_for("sink_b")))
+
+        report = CompilationReport(pipelines=(compiled_a, compiled_b), shared_signatures={})
+        bundle = PipelineBundleRuntime(report=report, registry=registry, dependencies=deps, bundle_name="local_bundle")
+        await bundle.start()
+        await bundle.run_for(0.25)
+        await bundle.stop()
+
+        packets_a = collector.get("sink_a", [])
+        packets_b = collector.get("sink_b", [])
+        assert packets_a and packets_b
+
+        ref_a = next((art.reference for art in packets_a[-1].artifacts.values() if art.reference), None)
+        ref_b = next((art.reference for art in packets_b[-1].artifacts.values() if art.reference), None)
+        assert ref_a and ref_b
+
+        assert str(ref_a).startswith("pipelines/final_a/")
+        assert str(ref_b).startswith("pipelines/final_b/")
+        assert not (files_dir / "pipelines" / "local_bundle").exists()
 
     asyncio.run(scenario())
 

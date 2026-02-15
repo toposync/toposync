@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
 from .compiler import CompiledPipeline
+from .execution_scheduler import ExecutionMode, ExecutionScheduler
 from .operator_registry import OperatorRegistry
 from .runtime import (
     ArtifactMemoryCounter,
@@ -37,6 +38,7 @@ class PipelineRuntimeDependencies:
     processing_emit_projected_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None
     pipeline_stats_store: PipelineStatsStore | None = None
     pipeline_stats_node_roles: dict[str, NodeStatsRoles] | None = None
+    execution_scheduler: ExecutionScheduler | None = None
     artifact_max_bytes_per_packet: int | None = 128 * 1024 * 1024
     artifact_max_total_bytes_per_pipeline: int | None = 512 * 1024 * 1024
     artifact_global_counter: ArtifactMemoryCounter | None = None
@@ -82,6 +84,10 @@ class OperatorRuntime(Protocol):
 @dataclass(slots=True)
 class NodeExecutionContext:
     node_id: str
+    operator_id: str
+    execution_mode: ExecutionMode
+    max_concurrency: int | None
+    scheduler: ExecutionScheduler
     pipeline_name: str
     inputs: dict[str, BoundedChannel[Packet] | KeyedBoundedChannel[Packet]]
     outputs: dict[str, list[BoundedChannel[Packet] | KeyedBoundedChannel[Packet]]]
@@ -91,6 +97,29 @@ class NodeExecutionContext:
     stats_store: PipelineStatsStore | None = None
     stats_input_pipelines: tuple[str, ...] = ()
     stats_output_pipelines: tuple[str, ...] = ()
+
+    async def run_blocking(
+        self,
+        func: Callable[..., Any],
+        /,
+        *args: Any,
+        mode: ExecutionMode | None = None,
+        concurrency_key: str | None = None,
+        max_concurrency: int | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        execution_mode = mode or self.execution_mode
+        limit = max_concurrency if max_concurrency is not None else self.max_concurrency
+        key = str(concurrency_key or self.operator_id or "").strip() or None
+        return await self.scheduler.run_sync(
+            func,
+            *args,
+            mode=execution_mode,
+            concurrency_key=key,
+            max_concurrency=limit,
+            cancel_event=self.cancel_event,
+            **kwargs,
+        )
 
     async def read(self, *, port: str = "in", timeout_s: float = 0.2) -> Packet | None:
         channel = self.inputs.get(port)
@@ -234,6 +263,8 @@ class PipelineRuntime:
     _artifact_pipeline_counter: ArtifactMemoryCounter = field(init=False)
 
     def __post_init__(self) -> None:
+        if self.dependencies.execution_scheduler is None:
+            self.dependencies.execution_scheduler = ExecutionScheduler()
         self._artifact_pipeline_counter = ArtifactMemoryCounter(
             limit_bytes=self.dependencies.artifact_max_total_bytes_per_pipeline,
         )
@@ -392,6 +423,10 @@ class PipelineRuntime:
             self.node_metrics[node_id] = metrics
             context = NodeExecutionContext(
                 node_id=node_id,
+                operator_id=node.operator_id,
+                execution_mode=str(registered.definition.execution_mode),
+                max_concurrency=registered.definition.max_concurrency,
+                scheduler=self.dependencies.execution_scheduler,
                 pipeline_name=self.compiled.name,
                 inputs=node_inputs,
                 outputs=node_outputs,

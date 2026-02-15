@@ -23,6 +23,7 @@ from toposync.runtime.services import ServiceRegistry
 from ..builtins import register_builtin_operators
 from ..compiler import PipelineGraphCompiler
 from ..execution import PipelineRuntimeDependencies
+from ..execution_scheduler import ExecutionScheduler
 from ..operator_registry import OperatorRegistry
 from ..shared_runtime import PipelineBundleRuntime
 from ..runtime import ArtifactMemoryCounter
@@ -158,6 +159,7 @@ class ProcessingServerRuntime:
             config_store=self._config_store,
             logger=logger,
             processing_emit_projected_event=self._emit_projected_event,
+            execution_scheduler=ExecutionScheduler(),
             artifact_max_bytes_per_packet=artifact_max_bytes_per_packet,
             artifact_max_total_bytes_per_pipeline=artifact_max_total_bytes_per_pipeline,
             artifact_global_counter=artifact_global_counter,

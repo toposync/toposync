@@ -42,6 +42,7 @@ from toposync.runtime.pipelines import (
     PipelineRuntimeDependencies,
     register_builtin_operators,
 )
+from toposync.runtime.pipelines.execution_scheduler import ExecutionScheduler
 from toposync.runtime.pipelines.python_dsl import PythonDslCompileError, compile_python_source_to_graph
 from toposync.runtime.pipelines.recommendations import PipelineAlert, analyze_compiled_pipeline
 from toposync.runtime.pipelines.stats import PipelineStatsStore
@@ -319,6 +320,7 @@ async def _lifespan(app: FastAPI):
         poll_interval_s=1.0,
         runtime_dependencies=PipelineRuntimeDependencies(
             pipeline_stats_store=pipeline_stats_store,
+            execution_scheduler=ExecutionScheduler(),
             artifact_max_bytes_per_packet=artifact_max_bytes_per_packet,
             artifact_max_total_bytes_per_pipeline=artifact_max_total_bytes_per_pipeline,
             artifact_global_counter=artifact_global_counter,

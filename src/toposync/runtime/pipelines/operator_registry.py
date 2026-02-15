@@ -13,6 +13,7 @@ OPERATOR_ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 PORT_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 CAPABILITY_NAME_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 CONTRACT_ITEM_RE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
+EXECUTION_MODE = Literal["in_event_loop", "thread_pool", "process_pool", "external"]
 
 
 class OperatorRegistrationError(ValueError):
@@ -46,6 +47,8 @@ class OperatorDefinition(BaseModel):
     defaults: dict[str, Any] = Field(default_factory=dict)
     config_schema: dict[str, Any] = Field(default_factory=dict)
     share_strategy: Literal["by_signature", "never"] = "by_signature"
+    execution_mode: EXECUTION_MODE = "in_event_loop"
+    max_concurrency: int | None = Field(default=None, ge=1, le=1024)
     requires_payload_keys: list[str] = Field(default_factory=list)
     requires_artifacts: list[str] = Field(default_factory=list)
     produces_payload_keys: list[str] = Field(default_factory=list)
@@ -132,6 +135,8 @@ class OperatorRegistry:
         defaults: dict[str, Any] | None = None,
         description: str = "",
         share_strategy: Literal["by_signature", "never"] = "by_signature",
+        execution_mode: EXECUTION_MODE = "in_event_loop",
+        max_concurrency: int | None = None,
         requires_payload_keys: list[str] | None = None,
         requires_artifacts: list[str] | None = None,
         produces_payload_keys: list[str] | None = None,
@@ -163,6 +168,8 @@ class OperatorRegistry:
             defaults=normalized_defaults,
             config_schema=config_schema,
             share_strategy=share_strategy,
+            execution_mode=execution_mode,
+            max_concurrency=max_concurrency,
             requires_payload_keys=list(requires_payload_keys or []),
             requires_artifacts=list(requires_artifacts or []),
             produces_payload_keys=list(produces_payload_keys or []),

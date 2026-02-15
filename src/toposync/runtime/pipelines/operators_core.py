@@ -226,7 +226,7 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
         saved: list[dict[str, str]] = []
         if self._config.save_images and self._config.max_images_per_packet > 0:
             try:
-                saved = await self._save_images(packet, pipeline_name=pipeline_name, node_id=node_id)
+                saved = await self._save_images(packet, context=context, pipeline_name=pipeline_name, node_id=node_id)
             except Exception as exc:  # noqa: BLE001
                 print(f"[pipelines debug] failed to save images: {exc}", flush=True)
 
@@ -280,7 +280,7 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
         print(json.dumps(out, ensure_ascii=False, sort_keys=True, indent=2), flush=True)
         return [packet]
 
-    async def _save_images(self, packet: Packet, *, pipeline_name: str, node_id: str) -> list[dict[str, str]]:
+    async def _save_images(self, packet: Packet, *, context, pipeline_name: str, node_id: str) -> list[dict[str, str]]:  # noqa: ANN001
         root = await self._ensure_root_dir()
         camera_id = str(packet.payload.get("camera_id") or packet.metadata.get("camera_id") or "no_camera").strip() or "no_camera"
         token = str(packet.payload.get("tracking_id") or packet.payload.get("correlation_id") or packet.stream_id).strip() or packet.stream_id
@@ -310,7 +310,11 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
         limit = int(self._config.max_images_per_packet)
         for source, image in candidates[:limit]:
             try:
-                blob, ext, _mime = _encode_image_bytes(image, fmt="png", jpeg_quality=85)
+                run_blocking = getattr(context, "run_blocking", None)
+                if callable(run_blocking):
+                    blob, ext, _mime = await run_blocking(_encode_image_bytes, image, fmt="png", jpeg_quality=85)
+                else:
+                    blob, ext, _mime = await asyncio.to_thread(_encode_image_bytes, image, fmt="png", jpeg_quality=85)
             except Exception as exc:  # noqa: BLE001
                 written.append({"source": source, "error": str(exc)})
                 continue
@@ -690,6 +694,8 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["debug", "stdout"],
         defaults=DebugStdoutConfig().model_dump(),
+        execution_mode="thread_pool",
+        max_concurrency=2,
         share_strategy="never",
         owner="core",
         runtime_factory=lambda config, _deps: DebugStdoutRuntime(config),

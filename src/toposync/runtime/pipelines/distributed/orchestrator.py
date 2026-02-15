@@ -263,6 +263,7 @@ class PipelinesOrchestrator:
             yolo_backend_factory=base.yolo_backend_factory,
             processing_emit_projected_event=base.processing_emit_projected_event,
             pipeline_stats_store=base.pipeline_stats_store,
+            execution_scheduler=base.execution_scheduler,
             artifact_max_bytes_per_packet=base.artifact_max_bytes_per_packet,
             artifact_max_total_bytes_per_pipeline=base.artifact_max_total_bytes_per_pipeline,
             artifact_global_counter=base.artifact_global_counter,

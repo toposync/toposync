@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import time
 from collections import deque
@@ -530,57 +531,34 @@ class ImageAdjustRuntime(TransformOperatorRuntime):
         if isinstance(image, (bytes, bytearray, memoryview)):
             return [packet]
 
-        try:
-            import cv2  # type: ignore
-            import numpy as np  # type: ignore
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError("camera.image_adjust requires opencv-python-headless and numpy") from exc
-
-        arr = np.asarray(image)
-        if arr.size == 0:
-            return [packet]
-        if arr.dtype != np.uint8:
-            arr = arr.astype(np.uint8, copy=False)
-        if arr.ndim == 2:
-            arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
-        elif arr.ndim != 3:
-            return [packet]
-
-        alpha: Any | None = None
-        if int(arr.shape[2]) == 4 and bool(self._config.preserve_alpha):
-            alpha = arr[..., 3].copy()
-            arr = arr[..., :3]
-        elif int(arr.shape[2]) != 3:
-            return [packet]
-
         saturation = float(self._config.saturation)
         brightness = float(self._config.brightness)
         contrast = float(self._config.contrast)
         gamma = float(self._config.gamma)
-
-        bgr = np.ascontiguousarray(arr)
-
-        if saturation != 1.0:
-            hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
-            hsv[..., 1] = np.clip(hsv[..., 1] * saturation, 0.0, 255.0)
-            bgr = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
-
-        if contrast != 1.0 or brightness != 0.0 or gamma != 1.0:
-            f = bgr.astype(np.float32) / 255.0
-            if contrast != 1.0:
-                f = (f - 0.5) * contrast + 0.5
-            if brightness != 0.0:
-                f = f + brightness
-            f = np.clip(f, 0.0, 1.0)
-            if gamma != 1.0 and gamma > 0.0:
-                f = np.power(f, 1.0 / gamma)
-            bgr = np.clip(np.round(f * 255.0), 0.0, 255.0).astype(np.uint8)
-
-        if alpha is not None:
-            try:
-                bgr = np.dstack([bgr, alpha])
-            except Exception:
-                pass
+        preserve_alpha = bool(self._config.preserve_alpha)
+        run_blocking = getattr(context, "run_blocking", None)
+        if callable(run_blocking):
+            bgr = await run_blocking(
+                _adjust_image_opencv,
+                image,
+                saturation=saturation,
+                brightness=brightness,
+                contrast=contrast,
+                gamma=gamma,
+                preserve_alpha=preserve_alpha,
+            )
+        else:
+            bgr = await asyncio.to_thread(
+                _adjust_image_opencv,
+                image,
+                saturation=saturation,
+                brightness=brightness,
+                contrast=contrast,
+                gamma=gamma,
+                preserve_alpha=preserve_alpha,
+            )
+        if bgr is None:
+            return [packet]
 
         out = packet.with_artifact(
             Artifact(
@@ -625,83 +603,168 @@ class ImageAdjustRuntime(TransformOperatorRuntime):
         return [replace(out, payload=payload)]
 
 
+def _adjust_image_opencv(
+    image: Any,
+    *,
+    saturation: float,
+    brightness: float,
+    contrast: float,
+    gamma: float,
+    preserve_alpha: bool,
+) -> Any | None:
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("camera.image_adjust requires opencv-python-headless and numpy") from exc
+
+    arr = np.asarray(image)
+    if arr.size == 0:
+        return None
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8, copy=False)
+    if arr.ndim == 2:
+        arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+    elif arr.ndim != 3:
+        return None
+
+    alpha: Any | None = None
+    if int(arr.shape[2]) == 4 and preserve_alpha:
+        alpha = arr[..., 3].copy()
+        arr = arr[..., :3]
+    elif int(arr.shape[2]) != 3:
+        return None
+
+    bgr = np.ascontiguousarray(arr)
+
+    if float(saturation) != 1.0:
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hsv[..., 1] = np.clip(hsv[..., 1] * float(saturation), 0.0, 255.0)
+        bgr = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+    if float(contrast) != 1.0 or float(brightness) != 0.0 or float(gamma) != 1.0:
+        f = bgr.astype(np.float32) / 255.0
+        if float(contrast) != 1.0:
+            f = (f - 0.5) * float(contrast) + 0.5
+        if float(brightness) != 0.0:
+            f = f + float(brightness)
+        f = np.clip(f, 0.0, 1.0)
+        if float(gamma) != 1.0 and float(gamma) > 0.0:
+            f = np.power(f, 1.0 / float(gamma))
+        bgr = np.clip(np.round(f * 255.0), 0.0, 255.0).astype(np.uint8)
+
+    if alpha is not None:
+        try:
+            bgr = np.dstack([bgr, alpha])
+        except Exception:
+            pass
+    return bgr
+
+
 class ImageResizeRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = ImageResizeConfig.model_validate(config)
 
-    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         packet = _ensure_original_artifact(packet)
-        out = packet
-        try:
-            import cv2  # type: ignore
-            import numpy as np  # type: ignore
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError("camera.image_resize requires opencv-python-headless and numpy") from exc
-
-        for name in self._config.artifact_names:
-            artifact = out.artifacts.get(name)
-            if artifact is None:
-                continue
-            if artifact.reference:
-                # Evita inconsistência: artifact já persistido e referenciado (o resize é em memória).
-                continue
-            if artifact.data is None:
-                continue
-            if isinstance(artifact.data, (bytes, bytearray, memoryview)):
-                continue
-
-            shape = getattr(artifact.data, "shape", None)
-            if not shape or len(shape) < 2:
-                continue
-
-            try:
-                height = int(shape[0])
-                width = int(shape[1])
-            except Exception:
-                continue
-            if height <= 0 or width <= 0:
-                continue
-
-            max_edge = max(height, width)
-            if max_edge <= 0:
-                continue
-
-            target_edge = int(self._config.max_edge_px)
-            if target_edge <= 0:
-                continue
-
-            if not self._config.allow_upscale and max_edge <= target_edge:
-                continue
-
-            scale = float(target_edge) / float(max_edge)
-            if not self._config.allow_upscale and scale >= 1.0:
-                continue
-
-            new_width = max(1, int(round(float(width) * scale)))
-            new_height = max(1, int(round(float(height) * scale)))
-            if new_width == width and new_height == height:
-                continue
-
-            arr = np.asarray(artifact.data)
-            if arr.size == 0:
-                continue
-            arr = np.ascontiguousarray(arr)
-            interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
-            resized = cv2.resize(arr, (new_width, new_height), interpolation=interpolation)
-
-            metadata = dict(artifact.metadata)
-            metadata["resized_from"] = {"width": width, "height": height}
-            metadata["resized_to"] = {"width": new_width, "height": new_height}
-            out = out.with_artifact(
-                Artifact(
-                    name=artifact.name,
-                    data=resized,
-                    mime_type=artifact.mime_type,
-                    metadata=metadata,
-                ),
+        run_blocking = getattr(context, "run_blocking", None)
+        if callable(run_blocking):
+            out = await run_blocking(
+                _resize_packet_artifacts_opencv,
+                packet,
+                artifact_names=list(self._config.artifact_names),
+                max_edge_px=int(self._config.max_edge_px),
+                allow_upscale=bool(self._config.allow_upscale),
             )
-
+        else:
+            out = await asyncio.to_thread(
+                _resize_packet_artifacts_opencv,
+                packet,
+                artifact_names=list(self._config.artifact_names),
+                max_edge_px=int(self._config.max_edge_px),
+                allow_upscale=bool(self._config.allow_upscale),
+            )
         return [out]
+
+
+def _resize_packet_artifacts_opencv(
+    packet: Packet,
+    *,
+    artifact_names: list[str],
+    max_edge_px: int,
+    allow_upscale: bool,
+) -> Packet:
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("camera.image_resize requires opencv-python-headless and numpy") from exc
+
+    out = packet
+    target_edge = int(max_edge_px)
+    if target_edge <= 0:
+        return out
+
+    for name in artifact_names:
+        artifact = out.artifacts.get(name)
+        if artifact is None:
+            continue
+        if artifact.reference:
+            # Evita inconsistência: artifact já persistido e referenciado (o resize é em memória).
+            continue
+        if artifact.data is None:
+            continue
+        if isinstance(artifact.data, (bytes, bytearray, memoryview)):
+            continue
+
+        shape = getattr(artifact.data, "shape", None)
+        if not shape or len(shape) < 2:
+            continue
+
+        try:
+            height = int(shape[0])
+            width = int(shape[1])
+        except Exception:
+            continue
+        if height <= 0 or width <= 0:
+            continue
+
+        max_edge = max(height, width)
+        if max_edge <= 0:
+            continue
+
+        if not allow_upscale and max_edge <= target_edge:
+            continue
+
+        scale = float(target_edge) / float(max_edge)
+        if not allow_upscale and scale >= 1.0:
+            continue
+
+        new_width = max(1, int(round(float(width) * scale)))
+        new_height = max(1, int(round(float(height) * scale)))
+        if new_width == width and new_height == height:
+            continue
+
+        arr = np.asarray(artifact.data)
+        if arr.size == 0:
+            continue
+        arr = np.ascontiguousarray(arr)
+        interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        resized = cv2.resize(arr, (new_width, new_height), interpolation=interpolation)
+
+        metadata = dict(artifact.metadata)
+        metadata["resized_from"] = {"width": width, "height": height}
+        metadata["resized_to"] = {"width": new_width, "height": new_height}
+        out = out.with_artifact(
+            Artifact(
+                name=artifact.name,
+                data=resized,
+                mime_type=artifact.mime_type,
+                metadata=metadata,
+            ),
+        )
+
+    return out
 
 
 class CameraMappingRuntime(TransformOperatorRuntime):
@@ -1175,6 +1238,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["camera", "artifact", "image_adjust"],
         defaults=ImageAdjustConfig().model_dump(),
+        execution_mode="thread_pool",
         requires_artifacts=["frame_original"],
         produces_payload_keys=["artifact_contract", "artifact_names"],
         produces_artifacts=["frame_adjusted"],
@@ -1190,6 +1254,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["camera", "artifact"],
         defaults=ImageResizeConfig().model_dump(),
+        execution_mode="thread_pool",
         requires_artifacts=["frame_original"],
         share_strategy="by_signature",
         owner="com.toposync.cameras",

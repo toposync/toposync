@@ -327,7 +327,7 @@ class MotionGateRuntime(TransformOperatorRuntime):
         self._detector_by_key: dict[str, MotionDetector] = {}
         self._state_by_key: dict[str, dict[str, Any]] = {}
 
-    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         artifact = packet.artifacts.get("frame")
         if artifact is None or artifact.data is None:
             artifact = packet.artifacts.get("frame_original")
@@ -341,7 +341,11 @@ class MotionGateRuntime(TransformOperatorRuntime):
             detector = MotionDetector(threshold=self._threshold)
             self._detector_by_key[key] = detector
 
-        motion = detector.process(frame)
+        run_blocking = getattr(context, "run_blocking", None)
+        if callable(run_blocking):
+            motion = await run_blocking(detector.process, frame)
+        else:
+            motion = await asyncio.to_thread(detector.process, frame)
         now = time.monotonic()
         state = self._state_by_key.setdefault(key, {"active_frames": 0, "hold_until": 0.0})
 
@@ -459,7 +463,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         self._last_inference_by_stream[key] = now_monotonic
         return True
 
-    async def _track_objects(self, packet: Packet) -> list[YoloObject]:
+    async def _track_objects(self, packet: Packet, context) -> list[YoloObject]:  # noqa: ANN001
         artifact = packet.artifacts.get("frame")
         if artifact is None or artifact.data is None:
             artifact = packet.artifacts.get("frame_original")
@@ -470,10 +474,17 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         if not self._should_infer(packet, now_monotonic):
             return []
         backend = self._ensure_backend()
-        raw = await asyncio.to_thread(backend.track_objects, frame, categories=self._categories_set or None)
+        device_key = str(self._config.device or "").strip() or "auto"
+        concurrency_key = f"yolo:{device_key}"
+        raw = await context.run_blocking(
+            backend.track_objects,
+            frame,
+            categories=self._categories_set or None,
+            concurrency_key=concurrency_key,
+        )
         return self._normalize_objects(raw, packet=packet)
 
-    async def _detect_objects(self, packet: Packet) -> list[YoloObject]:
+    async def _detect_objects(self, packet: Packet, context) -> list[YoloObject]:  # noqa: ANN001
         artifact = packet.artifacts.get("frame")
         if artifact is None or artifact.data is None:
             artifact = packet.artifacts.get("frame_original")
@@ -484,7 +495,14 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         if not self._should_infer(packet, now_monotonic):
             return []
         backend = self._ensure_backend()
-        raw = await asyncio.to_thread(backend.detect_objects, frame, categories=self._categories_set or None)
+        device_key = str(self._config.device or "").strip() or "auto"
+        concurrency_key = f"yolo:{device_key}"
+        raw = await context.run_blocking(
+            backend.detect_objects,
+            frame,
+            categories=self._categories_set or None,
+            concurrency_key=concurrency_key,
+        )
         return self._normalize_objects(raw, packet=packet)
 
     def _copy_payload_with_object(self, packet: Packet, *, object_data: dict[str, Any]) -> dict[str, Any]:
@@ -594,8 +612,8 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
 
         return self._next_synthetic_tracking_key(source_stream_id)
 
-    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
-        detections = await self._track_objects(packet)
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        detections = await self._track_objects(packet, context)
         now_monotonic = time.monotonic()
         outputs: list[Packet] = []
         active_keys: set[str] = set()
@@ -694,8 +712,8 @@ class ObjectDetectionYOLORuntime(_BaseYoloRuntime):
         super().__init__(parsed, dependencies)
         self._parsed = parsed
 
-    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
-        detections = await self._detect_objects(packet)
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        detections = await self._detect_objects(packet, context)
         now_monotonic = time.monotonic()
         outputs: list[Packet] = []
 
@@ -769,6 +787,7 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["camera", "motion", "realtime"],
         defaults=MotionGateConfig().model_dump(),
+        execution_mode="thread_pool",
         requires_artifacts=["frame_original"],
         produces_payload_keys=["motion"],
         share_strategy="by_signature",
@@ -783,6 +802,8 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["vision", "yolo", "tracking", "heavy_compute", "split_stream"],
         defaults=ObjectTrackingYOLOConfig().model_dump(),
+        execution_mode="thread_pool",
+        max_concurrency=1,
         requires_artifacts=["frame_original"],
         produces_payload_keys=[
             "tracking_id",
@@ -806,6 +827,8 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["vision", "yolo", "detection", "heavy_compute", "split_stream"],
         defaults=ObjectDetectionYOLOConfig().model_dump(),
+        execution_mode="thread_pool",
+        max_concurrency=1,
         requires_artifacts=["frame_original"],
         produces_payload_keys=[
             "tracking_id",

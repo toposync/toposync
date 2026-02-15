@@ -368,7 +368,8 @@ class StoreImagesRuntime(TransformOperatorRuntime):
             if artifact.data is None:
                 continue
 
-            blob, ext, mime = _encode_image_bytes(
+            blob, ext, mime = await context.run_blocking(
+                _encode_image_bytes,
                 artifact.data,
                 fmt=self._config.format,
                 jpeg_quality=int(self._config.jpeg_quality),
@@ -632,6 +633,8 @@ def register_sink_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["storage", "artifacts", "origin_only"],
         defaults=StoreImagesConfig().model_dump(),
+        execution_mode="thread_pool",
+        max_concurrency=2,
         share_strategy="never",
         owner="core",
         runtime_factory=lambda config, deps: StoreImagesRuntime(config, deps),

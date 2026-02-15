@@ -13,7 +13,7 @@ def test_camera_image_crop_operator_crops_frame_and_keeps_original() -> None:
             raise RuntimeError("numpy is required for this test") from exc
 
         from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
-        from toposync.runtime.pipelines.runtime import Packet
+        from toposync.runtime.pipelines.runtime import Artifact, Packet
         from toposync_ext_cameras.pipelines.operators import ObjectDetectionYOLORuntime, YoloObject
         from toposync_ext_cameras.pipelines.postprocess import ImageCropRuntime
 
@@ -21,9 +21,12 @@ def test_camera_image_crop_operator_crops_frame_and_keeps_original() -> None:
         packet = Packet.create(
             stream_id="camera:test",
             payload={
-                "frame": frame,
                 "frame_width": 200,
                 "frame_height": 100,
+            },
+            artifacts={
+                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
             },
         )
 
@@ -35,7 +38,7 @@ def test_camera_image_crop_operator_crops_frame_and_keeps_original() -> None:
                 "right": 75.0,
                 "bottom": 60.0,
                 "output_artifact_name": "frame_cropped",
-                "set_payload_frame": True,
+                "set_stream_frame": True,
                 "min_crop_size_px": 8,
             },
         )
@@ -44,9 +47,10 @@ def test_camera_image_crop_operator_crops_frame_and_keeps_original() -> None:
         out = out_packets[0]
 
         assert "frame_original" in out.artifacts
+        assert "frame" in out.artifacts
         assert "frame_cropped" in out.artifacts
 
-        cropped = out.payload.get("frame")
+        cropped = out.artifacts["frame"].data
         assert cropped is not None
         assert tuple(getattr(cropped, "shape", ())) == (50, 100, 3)
         assert out.payload.get("frame_width") == 100
@@ -54,7 +58,7 @@ def test_camera_image_crop_operator_crops_frame_and_keeps_original() -> None:
 
         crop_payload = out.payload.get("frame_crop")
         assert isinstance(crop_payload, dict)
-        assert crop_payload.get("set_payload_frame") is True
+        assert crop_payload.get("set_stream_frame") is True
         assert crop_payload.get("bbox01") == pytest.approx([0.25, 0.10, 0.75, 0.60], abs=1e-6)
 
         meta = out.artifacts["frame_cropped"].metadata
@@ -70,4 +74,3 @@ def test_camera_image_crop_operator_crops_frame_and_keeps_original() -> None:
         assert normalized[0].bbox01 == pytest.approx((0.25, 0.10, 0.75, 0.60), abs=1e-6)
 
     asyncio.run(scenario())
-

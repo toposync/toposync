@@ -226,14 +226,17 @@ def build_sequence() -> list[Packet]:
                 stream_id="camera:stage6",
                 lifecycle=lifecycle,
                 payload={
-                    "frame": frame,
                     "camera_id": "camera-main",
                     "tracking_id": "track-1",
                     "frame_ts": 100.0 + float(index),
                     "object_confidence": confidence,
                     "object_bbox01": bbox_by_index[index - 1],
                 },
-                artifacts={"face": Artifact(name="face", data=face, mime_type="image/raw")},
+                artifacts={
+                    "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "demo"}),
+                    "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "demo", "derived_from": "frame_original"}),
+                    "face": Artifact(name="face", data=face, mime_type="image/raw"),
+                },
             ),
         )
     return sequence

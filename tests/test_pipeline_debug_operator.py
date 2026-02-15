@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from toposync.runtime.pipelines.operators_core import DebugStdoutRuntime
-from toposync.runtime.pipelines.runtime import Lifecycle, Packet
+from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 
 
 def test_core_debug_prints_to_stdout_and_dumps_images(tmp_path: Path, capsys) -> None:
@@ -29,10 +29,13 @@ def test_core_debug_prints_to_stdout_and_dumps_images(tmp_path: Path, capsys) ->
             stream_id="camera:test",
             lifecycle=Lifecycle.UPDATE,
             payload={
-                "frame": frame,
                 "frame_ts": 1.23,
                 "camera_id": "camera-main",
                 "tracking_id": "trk-1",
+            },
+            artifacts={
+                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
             },
         )
 

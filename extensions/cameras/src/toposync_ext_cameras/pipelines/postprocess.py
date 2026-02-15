@@ -19,11 +19,21 @@ from ..processing.mapping import ControlPointMapper, ControlPointPair
 class ObjectSegmentationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input_artifact_names: list[str] = Field(default_factory=lambda: ["frame_original"])
-    fallback_to_payload_frame: bool = True
+    fallback_to_stream_frame: bool = True
     output_artifact_name: str = "segmented"
     bbox_field: str = "object_bbox01"
     padding_ratio: float = Field(default=0.08, ge=0.0, le=1.0)
     min_crop_size_px: int = Field(default=8, ge=1, le=4096)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_fields(cls, values: Any) -> Any:
+        # Aceita graphs antigos (payload.frame) sem expor isso no schema atual.
+        if isinstance(values, dict):
+            values = dict(values)
+            if "fallback_to_payload_frame" in values and "fallback_to_stream_frame" not in values:
+                values["fallback_to_stream_frame"] = values.pop("fallback_to_payload_frame")
+        return values
 
     @field_validator("input_artifact_names", mode="after")
     @classmethod
@@ -61,7 +71,17 @@ class ImageCropConfig(BaseModel):
 
     output_artifact_name: str = "frame_cropped"
     min_crop_size_px: int = Field(default=8, ge=1, le=4096)
-    set_payload_frame: bool = True
+    set_stream_frame: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_fields(cls, values: Any) -> Any:
+        # Aceita graphs antigos (set_payload_frame) sem expor isso no schema atual.
+        if isinstance(values, dict):
+            values = dict(values)
+            if "set_payload_frame" in values and "set_stream_frame" not in values:
+                values["set_stream_frame"] = values.pop("set_payload_frame")
+        return values
 
     @field_validator("output_artifact_name")
     @classmethod
@@ -75,7 +95,7 @@ class ImageCropConfig(BaseModel):
 class ImageAdjustConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input_artifact_names: list[str] = Field(default_factory=lambda: ["frame_original"])
-    fallback_to_payload_frame: bool = True
+    fallback_to_stream_frame: bool = True
     output_artifact_name: str = "frame_adjusted"
 
     saturation: float = Field(default=1.0, ge=0.0, le=3.0)
@@ -83,8 +103,20 @@ class ImageAdjustConfig(BaseModel):
     contrast: float = Field(default=1.0, ge=0.0, le=3.0)
     gamma: float = Field(default=1.0, ge=0.1, le=5.0)
 
-    set_payload_frame: bool = True
+    set_stream_frame: bool = True
     preserve_alpha: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_fields(cls, values: Any) -> Any:
+        # Aceita graphs antigos (payload.frame) sem expor isso no schema atual.
+        if isinstance(values, dict):
+            values = dict(values)
+            if "fallback_to_payload_frame" in values and "fallback_to_stream_frame" not in values:
+                values["fallback_to_stream_frame"] = values.pop("fallback_to_payload_frame")
+            if "set_payload_frame" in values and "set_stream_frame" not in values:
+                values["set_stream_frame"] = values.pop("set_payload_frame")
+        return values
 
     @field_validator("input_artifact_names", mode="after")
     @classmethod
@@ -213,7 +245,7 @@ class VelocityEstimationConfig(BaseModel):
 class BestFrameSelectorConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "frame_original"])
-    fallback_to_payload_frame: bool = True
+    fallback_to_stream_frame: bool = True
     output_artifact_name: str = "best_frame"
     buffer_size: int = Field(default=8, ge=1, le=128)
     score_field: str = "object_confidence"
@@ -229,6 +261,8 @@ class BestFrameSelectorConfig(BaseModel):
         if isinstance(values, dict):
             values = dict(values)
             values.pop("key_field", None)
+            if "fallback_to_payload_frame" in values and "fallback_to_stream_frame" not in values:
+                values["fallback_to_stream_frame"] = values.pop("fallback_to_payload_frame")
         return values
 
     @field_validator("input_artifact_names", mode="after")
@@ -254,7 +288,7 @@ class ObjectSegmentationRuntime(TransformOperatorRuntime):
         selected_name, image = _resolve_input_image(
             packet,
             preferred_artifact_names=self._config.input_artifact_names,
-            fallback_to_payload_frame=self._config.fallback_to_payload_frame,
+            fallback_to_stream_frame=self._config.fallback_to_stream_frame,
         )
         if image is None:
             payload = _annotate_artifact_contract(
@@ -267,7 +301,7 @@ class ObjectSegmentationRuntime(TransformOperatorRuntime):
 
         bbox01: tuple[float, float, float, float] | None = None
         bbox_source = ""
-        if selected_name and selected_name != "payload.frame":
+        if selected_name:
             selected_artifact = packet.artifacts.get(selected_name)
             if selected_artifact is not None:
                 bbox01 = _read_bbox01_from_artifact(selected_artifact)
@@ -328,7 +362,10 @@ class ImageCropRuntime(TransformOperatorRuntime):
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         packet = _ensure_original_artifact(packet)
-        frame = packet.payload.get("frame")
+        frame_artifact = packet.artifacts.get("frame")
+        if frame_artifact is None or frame_artifact.data is None:
+            frame_artifact = packet.artifacts.get("frame_original")
+        frame = frame_artifact.data if frame_artifact is not None else None
         if frame is None:
             return [packet]
 
@@ -438,12 +475,20 @@ class ImageCropRuntime(TransformOperatorRuntime):
             "top": float(self._config.top),
             "right": float(self._config.right),
             "bottom": float(self._config.bottom),
-            "set_payload_frame": bool(self._config.set_payload_frame),
+            "set_stream_frame": bool(self._config.set_stream_frame),
+            "set_payload_frame": bool(self._config.set_stream_frame),  # legacy mirror for old readers
             "output_artifact_name": self._config.output_artifact_name,
         }
 
-        if self._config.set_payload_frame:
-            payload["frame"] = crop
+        if self._config.set_stream_frame:
+            out = out.with_artifact(
+                Artifact(
+                    name="frame",
+                    data=crop,
+                    mime_type="image/raw",
+                    metadata={"source": "camera.image_crop", "derived_from": self._config.output_artifact_name},
+                ),
+            )
             cshape = getattr(crop, "shape", None)
             if cshape and len(cshape) >= 2:
                 try:
@@ -456,7 +501,7 @@ class ImageCropRuntime(TransformOperatorRuntime):
             payload,
             packet=out,
             preferred_input_artifact_names=["frame_original"],
-            selected_input_artifact_name="payload.frame",
+            selected_input_artifact_name="frame",
             latest_artifact_name=self._config.output_artifact_name,
         )
         return [replace(out, payload=payload)]
@@ -471,7 +516,7 @@ class ImageAdjustRuntime(TransformOperatorRuntime):
         selected_name, image = _resolve_input_image(
             packet,
             preferred_artifact_names=self._config.input_artifact_names,
-            fallback_to_payload_frame=bool(self._config.fallback_to_payload_frame),
+            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
         )
         if image is None:
             payload = _annotate_artifact_contract(
@@ -553,8 +598,15 @@ class ImageAdjustRuntime(TransformOperatorRuntime):
         )
 
         payload = dict(out.payload)
-        if self._config.set_payload_frame:
-            payload["frame"] = bgr
+        if self._config.set_stream_frame:
+            out = out.with_artifact(
+                Artifact(
+                    name="frame",
+                    data=bgr,
+                    mime_type="image/raw",
+                    metadata={"source": "camera.image_adjust", "derived_from": self._config.output_artifact_name},
+                ),
+            )
             shape = getattr(bgr, "shape", None)
             if shape and len(shape) >= 2:
                 try:
@@ -1028,7 +1080,7 @@ class BestFrameSelectorRuntime(TransformOperatorRuntime):
         selected_name, selected_image = _resolve_input_image(
             packet,
             preferred_artifact_names=self._config.input_artifact_names,
-            fallback_to_payload_frame=self._config.fallback_to_payload_frame,
+            fallback_to_stream_frame=self._config.fallback_to_stream_frame,
         )
         candidates = self._candidates_by_key.setdefault(key, deque(maxlen=int(self._config.buffer_size)))
         if selected_image is not None:
@@ -1098,7 +1150,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
     )
     registry.register_operator(
         operator_id="camera.image_crop",
-        description="Crops payload frame by a configured rectangle and writes a cropped artifact.",
+        description="Crops stream frame artifact by a configured rectangle and writes a cropped artifact.",
         config_model=ImageCropConfig,
         inputs=[{"name": "in", "required": True}],
         outputs=[{"name": "out"}],
@@ -1187,6 +1239,8 @@ def _normalize_artifact_names(values: list[str]) -> list[str]:
     seen: set[str] = set()
     for raw in values:
         name = str(raw or "").strip()
+        if name == "payload.frame":
+            name = "frame"
         if not name or name in seen:
             continue
         out.append(name)
@@ -1195,26 +1249,68 @@ def _normalize_artifact_names(values: list[str]) -> list[str]:
 
 
 def _ensure_original_artifact(packet: Packet) -> Packet:
-    if "frame_original" in packet.artifacts:
+    artifacts = dict(packet.artifacts)
+    payload = packet.payload
+    changed = False
+
+    payload_frame = packet.payload.get("frame")
+    if payload_frame is not None:
+        payload2 = dict(packet.payload)
+        payload2.pop("frame", None)
+        payload = payload2
+        changed = True
+
+        if "frame_original" not in artifacts:
+            artifacts["frame_original"] = Artifact(
+                name="frame_original",
+                data=payload_frame,
+                mime_type="image/raw",
+                metadata={"source": "frame_contract.migrated_payload"},
+            )
+            changed = True
+        if "frame" not in artifacts:
+            artifacts["frame"] = Artifact(
+                name="frame",
+                data=payload_frame,
+                mime_type="image/raw",
+                metadata={"source": "frame_contract.migrated_payload", "derived_from": "frame_original"},
+            )
+            changed = True
+
+    if "frame_original" not in artifacts:
+        stream_frame = artifacts.get("frame")
+        if stream_frame is not None and (stream_frame.data is not None or stream_frame.reference):
+            artifacts["frame_original"] = Artifact(
+                name="frame_original",
+                data=stream_frame.data,
+                reference=stream_frame.reference,
+                mime_type=stream_frame.mime_type,
+                metadata={"source": "frame_contract.aliased_from_frame"},
+            )
+            changed = True
+
+    if "frame" not in artifacts:
+        original = artifacts.get("frame_original")
+        if original is not None and (original.data is not None or original.reference):
+            artifacts["frame"] = Artifact(
+                name="frame",
+                data=original.data,
+                reference=original.reference,
+                mime_type=original.mime_type,
+                metadata={"source": "frame_contract.aliased_from_frame_original", "derived_from": "frame_original"},
+            )
+            changed = True
+
+    if not changed:
         return packet
-    frame = packet.payload.get("frame")
-    if frame is None:
-        return packet
-    return packet.with_artifact(
-        Artifact(
-            name="frame_original",
-            data=frame,
-            mime_type="image/raw",
-            metadata={"source": "payload.frame"},
-        ),
-    )
+    return replace(packet, payload=dict(payload), artifacts=artifacts)
 
 
 def _resolve_input_image(
     packet: Packet,
     *,
     preferred_artifact_names: list[str],
-    fallback_to_payload_frame: bool,
+    fallback_to_stream_frame: bool,
 ) -> tuple[str | None, Any | None]:
     for name in preferred_artifact_names:
         artifact = packet.artifacts.get(name)
@@ -1223,10 +1319,12 @@ def _resolve_input_image(
         if artifact.data is None:
             continue
         return name, artifact.data
-    if fallback_to_payload_frame:
-        frame = packet.payload.get("frame")
-        if frame is not None:
-            return "payload.frame", frame
+    if fallback_to_stream_frame:
+        for name in ("frame", "frame_original"):
+            artifact = packet.artifacts.get(name)
+            if artifact is None or artifact.data is None:
+                continue
+            return name, artifact.data
     return None, None
 
 

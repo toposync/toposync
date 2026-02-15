@@ -17,7 +17,7 @@ from toposync.runtime.pipelines.execution import (
     TransformOperatorRuntime,
 )
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
-from toposync.runtime.pipelines.runtime import Lifecycle, Packet
+from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 
 from ..processing.frame_grabber import FrameGrabber
 from ..processing.motion import MotionDetector
@@ -237,11 +237,33 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             capture_metrics = dataclasses.asdict(self._grabber.metrics_snapshot())
         except Exception:
             capture_metrics = {}
+        frame_artifacts = {
+            "frame_original": Artifact(
+                name="frame_original",
+                data=frame,
+                mime_type="image/raw",
+                metadata={
+                    "source": "camera.source",
+                    "width": width,
+                    "height": height,
+                },
+            ),
+            "frame": Artifact(
+                name="frame",
+                data=frame,
+                mime_type="image/raw",
+                metadata={
+                    "source": "camera.source",
+                    "derived_from": "frame_original",
+                    "width": width,
+                    "height": height,
+                },
+            ),
+        }
         return Packet.create(
             stream_id=f"camera:{stream_suffix}",
             lifecycle=Lifecycle.UPDATE,
             payload={
-                "frame": frame,
                 "frame_ts": float(frame_ts),
                 "camera_id": self._camera_id or None,
                 "camera_name": self._camera_name or None,
@@ -249,6 +271,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 "frame_height": height,
                 "capture": capture_metrics,
             },
+            artifacts=frame_artifacts,
             metadata={
                 "source": "camera.source",
                 "camera_id": self._camera_id or None,
@@ -279,7 +302,10 @@ class MotionGateRuntime(TransformOperatorRuntime):
         self._state_by_key: dict[str, dict[str, Any]] = {}
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
-        frame = packet.payload.get("frame")
+        artifact = packet.artifacts.get("frame")
+        if artifact is None or artifact.data is None:
+            artifact = packet.artifacts.get("frame_original")
+        frame = artifact.data if artifact is not None else None
         if frame is None:
             return []
 
@@ -408,7 +434,10 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         return True
 
     async def _track_objects(self, packet: Packet) -> list[YoloObject]:
-        frame = packet.payload.get("frame")
+        artifact = packet.artifacts.get("frame")
+        if artifact is None or artifact.data is None:
+            artifact = packet.artifacts.get("frame_original")
+        frame = artifact.data if artifact is not None else None
         if frame is None:
             return []
         now_monotonic = time.monotonic()
@@ -419,7 +448,10 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         return self._normalize_objects(raw, packet=packet)
 
     async def _detect_objects(self, packet: Packet) -> list[YoloObject]:
-        frame = packet.payload.get("frame")
+        artifact = packet.artifacts.get("frame")
+        if artifact is None or artifact.data is None:
+            artifact = packet.artifacts.get("frame_original")
+        frame = artifact.data if artifact is not None else None
         if frame is None:
             return []
         now_monotonic = time.monotonic()
@@ -871,7 +903,10 @@ def _read_frame_crop_bbox01(packet: Packet) -> tuple[float, float, float, float]
     crop = packet.payload.get("frame_crop")
     if not isinstance(crop, dict):
         return None
-    if crop.get("set_payload_frame") is False:
+    apply_to_stream = crop.get("set_stream_frame")
+    if apply_to_stream is None:
+        apply_to_stream = crop.get("set_payload_frame")  # legacy
+    if apply_to_stream is False:
         return None
     raw = crop.get("bbox01")
     if isinstance(raw, (list, tuple)) and len(raw) >= 4:

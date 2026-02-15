@@ -41,6 +41,13 @@ O runtime trafega **Packets** (eventos) entre operadores. Um Packet carrega:
 
 Implementação: `src/toposync/runtime/pipelines/runtime.py` (`Packet`, `Artifact`, `Lifecycle`).
 
+### Regra de ouro: frame nunca vai em `payload`
+
+- **Frame de imagem sempre vai em `artifacts`**, nunca em `payload`.
+- Convenção atual:
+  - `artifacts["frame_original"]`: frame “imutável” de origem (full frame).
+  - `artifacts["frame"]`: frame “corrente” do stream (pode ser alterado por operadores como crop/adjust).
+
 ### Split (2 pessoas simultâneas)
 
 Operadores como `vision.object_tracking_yolo` **dividem o stream**: de um `stream_id` da câmera surgem múltiplos `stream_id` (um por objeto). Isso permite:
@@ -218,7 +225,7 @@ Extensão `com.toposync.cameras`:
 
 ### `camera.source` (latest frame wins)
 
-- Função: captura RTSP e emite `Packet` com `payload.frame` e metadados básicos.
+- Função: captura RTSP e emite `Packet` com `artifacts["frame_original"]` + `artifacts["frame"]` e metadados básicos.
 - Stream: `stream_id = "camera:<camera_id>"`
 - Portas:
   - input opcional: `gate` (permite pausar leitura RTSP)

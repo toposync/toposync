@@ -8,7 +8,7 @@ import time
 import struct
 import zlib
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -107,19 +107,61 @@ def _render_template(packet: Packet, template: str) -> str:
 
 
 def _ensure_original_artifact(packet: Packet) -> Packet:
-    if "frame_original" in packet.artifacts:
+    artifacts = dict(packet.artifacts)
+    payload = packet.payload
+    changed = False
+
+    payload_frame = packet.payload.get("frame")
+    if payload_frame is not None:
+        payload2 = dict(packet.payload)
+        payload2.pop("frame", None)
+        payload = payload2
+        changed = True
+
+        if "frame_original" not in artifacts:
+            artifacts["frame_original"] = Artifact(
+                name="frame_original",
+                data=payload_frame,
+                mime_type="image/raw",
+                metadata={"source": "frame_contract.migrated_payload"},
+            )
+            changed = True
+        if "frame" not in artifacts:
+            artifacts["frame"] = Artifact(
+                name="frame",
+                data=payload_frame,
+                mime_type="image/raw",
+                metadata={"source": "frame_contract.migrated_payload", "derived_from": "frame_original"},
+            )
+            changed = True
+
+    if "frame_original" not in artifacts:
+        stream_frame = artifacts.get("frame")
+        if stream_frame is not None and (stream_frame.data is not None or stream_frame.reference):
+            artifacts["frame_original"] = Artifact(
+                name="frame_original",
+                data=stream_frame.data,
+                reference=stream_frame.reference,
+                mime_type=stream_frame.mime_type,
+                metadata={"source": "frame_contract.aliased_from_frame"},
+            )
+            changed = True
+
+    if "frame" not in artifacts:
+        original = artifacts.get("frame_original")
+        if original is not None and (original.data is not None or original.reference):
+            artifacts["frame"] = Artifact(
+                name="frame",
+                data=original.data,
+                reference=original.reference,
+                mime_type=original.mime_type,
+                metadata={"source": "frame_contract.aliased_from_frame_original", "derived_from": "frame_original"},
+            )
+            changed = True
+
+    if not changed:
         return packet
-    frame = packet.payload.get("frame")
-    if frame is None:
-        return packet
-    return packet.with_artifact(
-        Artifact(
-            name="frame_original",
-            data=frame,
-            mime_type="image/raw",
-            metadata={"source": "payload.frame"},
-        ),
-    )
+    return replace(packet, payload=dict(payload), artifacts=artifacts)
 
 
 def _encode_image_bytes(image: Any, *, fmt: Literal["jpg", "png"], jpeg_quality: int) -> tuple[bytes, str, str]:

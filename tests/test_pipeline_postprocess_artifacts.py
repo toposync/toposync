@@ -105,6 +105,13 @@ def _pipeline_runtime(
     return PipelineRuntime(compiled=compiled, registry=registry)
 
 
+def _frame_artifacts(frame: Any) -> dict[str, Artifact]:
+    return {
+        "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw"),
+        "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"derived_from": "frame_original"}),
+    }
+
+
 def test_segmentation_and_best_frame_selection_are_deterministic() -> None:
     async def scenario() -> None:
         sequence: list[dict[str, Any]] = []
@@ -124,7 +131,6 @@ def test_segmentation_and_best_frame_selection_are_deterministic() -> None:
                 {
                     "lifecycle": lifecycle,
                     "payload": {
-                        "frame": frame,
                         "frame_ts": 100.0 + float(index),
                         "tracking_id": "trk-1",
                         "object_confidence": confidence,
@@ -132,6 +138,7 @@ def test_segmentation_and_best_frame_selection_are_deterministic() -> None:
                     },
                     "artifacts": {
                         "face": Artifact(name="face", data=face, mime_type="image/raw"),
+                        **_frame_artifacts(frame),
                     },
                 },
             )
@@ -192,6 +199,7 @@ def test_segmentation_and_best_frame_selection_are_deterministic() -> None:
         assert close_packet.payload.get("artifact_names") == [
             "best_frame",
             "face",
+            "frame",
             "frame_original",
             "segmented",
         ]
@@ -215,32 +223,32 @@ def test_segmentation_uses_bbox_from_best_frame_metadata() -> None:
             {
                 "lifecycle": Lifecycle.UPDATE,
                 "payload": {
-                    "frame": frame1,
                     "frame_ts": 1.0,
                     "tracking_id": "trk-1",
                     "object_confidence": 0.9,
                     "object_bbox01": bbox1,
                 },
+                "artifacts": _frame_artifacts(frame1),
             },
             {
                 "lifecycle": Lifecycle.UPDATE,
                 "payload": {
-                    "frame": frame2,
                     "frame_ts": 2.0,
                     "tracking_id": "trk-1",
                     "object_confidence": 0.1,
                     "object_bbox01": bbox2,
                 },
+                "artifacts": _frame_artifacts(frame2),
             },
             {
                 "lifecycle": Lifecycle.CLOSE,
                 "payload": {
-                    "frame": frame2,
                     "frame_ts": 3.0,
                     "tracking_id": "trk-1",
                     "object_confidence": 0.1,
                     "object_bbox01": bbox2,
                 },
+                "artifacts": _frame_artifacts(frame2),
             },
         ]
 
@@ -264,7 +272,7 @@ def test_segmentation_uses_bbox_from_best_frame_metadata() -> None:
                     "operator": "camera.object_segmentation",
                     "config": {
                         "input_artifact_names": ["best_frame"],
-                        "fallback_to_payload_frame": False,
+                        "fallback_to_stream_frame": False,
                         "output_artifact_name": "segmented",
                         "bbox_field": "object_bbox01",
                         "padding_ratio": 0.0,
@@ -310,10 +318,10 @@ def test_image_resize_downscales_selected_artifacts_in_place() -> None:
             {
                 "lifecycle": Lifecycle.UPDATE,
                 "payload": {
-                    "frame": frame,
                     "frame_ts": 1.0,
                     "tracking_id": "trk-resize",
                 },
+                "artifacts": _frame_artifacts(frame),
             },
         ]
 
@@ -362,32 +370,32 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
             {
                 "lifecycle": Lifecycle.UPDATE,
                 "payload": {
-                    "frame": frame,
                     "camera_id": "camera-main",
                     "tracking_id": "velocity-1",
                     "frame_ts": 1.0,
                     "object_bbox01": [0.48, 0.48, 0.52, 0.52],
                 },
+                "artifacts": _frame_artifacts(frame),
             },
             {
                 "lifecycle": Lifecycle.UPDATE,
                 "payload": {
-                    "frame": frame,
                     "camera_id": "camera-main",
                     "tracking_id": "velocity-1",
                     "frame_ts": 2.0,
                     "object_bbox01": [0.70, 0.48, 0.74, 0.52],
                 },
+                "artifacts": _frame_artifacts(frame),
             },
             {
                 "lifecycle": Lifecycle.UPDATE,
                 "payload": {
-                    "frame": frame,
                     "camera_id": "camera-main",
                     "tracking_id": "velocity-1",
                     "frame_ts": 3.0,
                     "object_bbox01": [0.70, 0.48, 0.74, 0.52],
                 },
+                "artifacts": _frame_artifacts(frame),
             },
         ]
         graph = {
@@ -469,7 +477,7 @@ def test_best_frame_selector_keeps_bounded_buffer_per_tracking_id() -> None:
         runtime = BestFrameSelectorRuntime(
             {
                 "input_artifact_names": ["segmented"],
-                "fallback_to_payload_frame": False,
+                "fallback_to_stream_frame": False,
                 "output_artifact_name": "best_frame",
                 "buffer_size": 2,
                 "emit_on_update": False,
@@ -598,7 +606,7 @@ def test_best_frame_selector_state_is_namespaced_when_tracking_id_repeats_across
         runtime = BestFrameSelectorRuntime(
             {
                 "input_artifact_names": ["segmented"],
-                "fallback_to_payload_frame": False,
+                "fallback_to_stream_frame": False,
                 "output_artifact_name": "best_frame",
                 "buffer_size": 8,
                 "emit_on_update": False,

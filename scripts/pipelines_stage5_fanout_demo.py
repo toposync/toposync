@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from toposync.runtime.config_store import Pipeline
 from toposync.runtime.pipelines import (
+    Artifact,
     Lifecycle,
     OperatorRegistry,
     Packet,
@@ -53,10 +54,15 @@ class FrameSourceRuntime(SourceOperatorRuntime):
             await context.sleep(self._next_tick - now)
         self._next_tick = max(self._next_tick + self._interval_s, time.monotonic())
         self._counters["source_frames"] = int(self._counters.get("source_frames", 0)) + 1
+        frame = {"sequence": self._sequence}
         packet = Packet.create(
             stream_id=self._stream_id,
             lifecycle=Lifecycle.UPDATE,
-            payload={"frame": {"sequence": self._sequence}, "frame_index": self._sequence},
+            payload={"frame_index": self._sequence},
+            artifacts={
+                "frame_original": Artifact(name="frame_original", data=frame, mime_type="application/json", metadata={"source": "demo"}),
+                "frame": Artifact(name="frame", data=frame, mime_type="application/json", metadata={"source": "demo", "derived_from": "frame_original"}),
+            },
         )
         self._sequence += 1
         return packet

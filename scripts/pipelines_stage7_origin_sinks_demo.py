@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict
 from toposync.runtime.config_store import ConfigStore, Pipeline, UserDataPaths
 from toposync.runtime.notifications import NotificationsRuntime
 from toposync.runtime.pipelines import (
+    Artifact,
     DropPolicy,
     Lifecycle,
     OperatorRegistry,
@@ -63,7 +64,6 @@ class SequenceSourceRuntime(SourceOperatorRuntime):
         frame_value = 180 if area_label == "front" else 210
         frame = np.full((64, 64, 3), frame_value, dtype=np.uint8)
         payload = {
-            "frame": frame,
             "frame_ts": time.time(),
             "camera_id": "camera-main",
             "camera_name": "Front Door",
@@ -72,7 +72,11 @@ class SequenceSourceRuntime(SourceOperatorRuntime):
             "object_confidence": float(confidence),
             "area_label": area_label,
         }
-        return Packet.create(stream_id=self._stream_id, lifecycle=lifecycle, payload=payload)
+        artifacts = {
+            "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "demo"}),
+            "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "demo", "derived_from": "frame_original"}),
+        }
+        return Packet.create(stream_id=self._stream_id, lifecycle=lifecycle, payload=payload, artifacts=artifacts)
 
 
 def _edge(from_node: str, to_node: str, *, maxsize: int, drop_policy: str) -> dict[str, Any]:

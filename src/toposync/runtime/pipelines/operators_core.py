@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .execution import PassThroughRuntime, SinkRuntime, SourceOperatorRuntime, TransformOperatorRuntime
 from .operator_registry import OperatorRegistry
-from .runtime import Lifecycle, Packet
+from .runtime import Artifact, Lifecycle, Packet
 from .operators_distributed import register_distributed_operators
 from .operators_gates import register_gate_operators
 from .operators_sinks import _encode_image_bytes, _write_bytes, register_sink_operators
@@ -412,17 +412,41 @@ class DemoFrameSequenceSourceRuntime(SourceOperatorRuntime):
         value = 180 + (self._index % 3) * 15
         frame = np.full((self._height, self._width, 3), value, dtype=np.uint8)
         payload = {
-            "frame": frame,
             "frame_ts": time.time(),
             "camera_id": self._camera_id,
             "camera_name": self._camera_name,
+            "frame_width": int(self._width),
+            "frame_height": int(self._height),
             "tracking_id": self._tracking_id,
             "object_category_label": self._category,
             "object_confidence": self._confidence,
             "area_label": "demo",
         }
+        artifacts = {
+            "frame_original": Artifact(
+                name="frame_original",
+                data=frame,
+                mime_type="image/raw",
+                metadata={
+                    "source": "core.demo_frame_sequence_source",
+                    "width": int(self._width),
+                    "height": int(self._height),
+                },
+            ),
+            "frame": Artifact(
+                name="frame",
+                data=frame,
+                mime_type="image/raw",
+                metadata={
+                    "source": "core.demo_frame_sequence_source",
+                    "derived_from": "frame_original",
+                    "width": int(self._width),
+                    "height": int(self._height),
+                },
+            ),
+        }
         self._index += 1
-        return Packet.create(stream_id=self._stream_id, lifecycle=lifecycle, payload=payload)
+        return Packet.create(stream_id=self._stream_id, lifecycle=lifecycle, payload=payload, artifacts=artifacts)
 
 
 class FPSReducerRuntime(TransformOperatorRuntime):

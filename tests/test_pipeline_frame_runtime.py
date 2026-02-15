@@ -11,6 +11,7 @@ import pytest
 
 from toposync.runtime.config_store import Pipeline
 from toposync.runtime.pipelines import (
+    Artifact,
     Lifecycle,
     OperatorRegistry,
     Packet,
@@ -289,7 +290,11 @@ def test_motion_gate_uses_hold_without_emitting_close(monkeypatch: pytest.Monkey
         packet = Packet.create(
             stream_id="camera:test",
             lifecycle=Lifecycle.UPDATE,
-            payload={"frame": object()},
+            payload={},
+            artifacts={
+                "frame_original": Artifact(name="frame_original", data=object(), mime_type="application/octet-stream"),
+                "frame": Artifact(name="frame", data=object(), mime_type="application/octet-stream", metadata={"derived_from": "frame_original"}),
+            },
         )
 
         first = await runtime.process_packet(packet, context=None)  # type: ignore[arg-type]

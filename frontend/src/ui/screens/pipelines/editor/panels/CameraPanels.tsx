@@ -285,7 +285,7 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
   const bottom = Number((config as any).bottom ?? 100);
   const outputArtifactName = String((config as any).output_artifact_name ?? "frame_cropped").trim() || "frame_cropped";
   const minCropSizePx = Number((config as any).min_crop_size_px ?? 8);
-  const setPayloadFrame = (config as any).set_payload_frame !== false;
+  const setStreamFrame = (config as any).set_stream_frame ?? (config as any).set_payload_frame ?? true;
 
   const percentMax = 100;
   const clampPercent = (value: number) => Math.max(0, Math.min(percentMax, value));
@@ -424,8 +424,8 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
             <span>Use cropped frame for downstream</span>
             <input
               type="checkbox"
-              checked={setPayloadFrame}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, set_payload_frame: event.target.checked }))}
+              checked={Boolean(setStreamFrame)}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, set_stream_frame: event.target.checked }))}
             />
           </label>
         </>
@@ -455,9 +455,9 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
   const gamma = Number((config as any).gamma ?? 1.0);
 
   const outputArtifactName = String((config as any).output_artifact_name ?? "frame_adjusted").trim() || "frame_adjusted";
-  const setPayloadFrame = (config as any).set_payload_frame !== false;
+  const setStreamFrame = (config as any).set_stream_frame ?? (config as any).set_payload_frame ?? true;
   const preserveAlpha = (config as any).preserve_alpha !== false;
-  const fallbackToPayloadFrame = (config as any).fallback_to_payload_frame !== false;
+  const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? (config as any).fallback_to_payload_frame ?? true;
 
   const clamp = (value: number, min: number, max: number, fallback: number) => {
     if (!Number.isFinite(value)) return fallback;
@@ -569,21 +569,21 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
           </label>
 
           <label className="pipelinesLabel">
-            <span>Apply to stream (payload.frame)</span>
+            <span>Apply to stream frame</span>
             <input
               type="checkbox"
-              checked={setPayloadFrame}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, set_payload_frame: event.target.checked }))}
+              checked={Boolean(setStreamFrame)}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, set_stream_frame: event.target.checked }))}
             />
           </label>
 
           <label className="pipelinesLabel">
-            <span>Fallback to payload frame</span>
+            <span>Fallback to stream frame</span>
             <input
               type="checkbox"
-              checked={fallbackToPayloadFrame}
+              checked={Boolean(fallbackToStreamFrame)}
               onChange={(event) =>
-                onUpdateConfig((prev) => ({ ...prev, fallback_to_payload_frame: event.target.checked }))
+                onUpdateConfig((prev) => ({ ...prev, fallback_to_stream_frame: event.target.checked }))
               }
             />
           </label>

@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from toposync.runtime.config_store import Pipeline
 from toposync.runtime.notifications import NotificationsRuntime
 from toposync.runtime.pipelines import (
+    Artifact,
     Lifecycle,
     OperatorRegistry,
     Packet,
@@ -100,10 +101,18 @@ def test_store_images_writes_files_and_sets_references(tmp_path: Path) -> None:
             {
                 "lifecycle": Lifecycle.UPDATE,
                 "payload": {
-                    "frame": frame,
                     "frame_ts": 123.456,
                     "camera_id": "camera-main",
                     "tracking_id": "track-1",
+                },
+                "artifacts": {
+                    "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                    "frame": Artifact(
+                        name="frame",
+                        data=frame,
+                        mime_type="image/raw",
+                        metadata={"source": "test", "derived_from": "frame_original"},
+                    ),
                 },
             },
         ]
@@ -172,10 +181,18 @@ def test_store_images_saves_with_correct_color_channels(tmp_path: Path) -> None:
             {
                 "lifecycle": Lifecycle.UPDATE,
                 "payload": {
-                    "frame": frame,
                     "frame_ts": 123.456,
                     "camera_id": "camera-main",
                     "tracking_id": "track-1",
+                },
+                "artifacts": {
+                    "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                    "frame": Artifact(
+                        name="frame",
+                        data=frame,
+                        mime_type="image/raw",
+                        metadata={"source": "test", "derived_from": "frame_original"},
+                    ),
                 },
             },
         ]
@@ -244,50 +261,54 @@ def test_notify_upserts_single_notification_with_templates_and_no_spam(tmp_path:
         )
 
         frame = np.full((32, 32, 3), 180, dtype=np.uint8)
+        artifacts = {
+            "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+            "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+        }
         sequence = [
             {
                 "lifecycle": Lifecycle.OPEN,
                 "payload": {
-                    "frame": frame,
                     "frame_ts": 100.0,
                     "camera_id": "camera-main",
                     "tracking_id": "trk-7",
                     "object_category_label": "person",
                     "area_label": "front",
                 },
+                "artifacts": artifacts,
             },
             {
                 "lifecycle": Lifecycle.UPDATE,
                 "payload": {
-                    "frame": frame,
                     "frame_ts": 100.1,
                     "camera_id": "camera-main",
                     "tracking_id": "trk-7",
                     "object_category_label": "person",
                     "area_label": "front",
                 },
+                "artifacts": artifacts,
             },
             {
                 "lifecycle": Lifecycle.UPDATE,
                 "payload": {
-                    "frame": frame,
                     "frame_ts": 100.2,
                     "camera_id": "camera-main",
                     "tracking_id": "trk-7",
                     "object_category_label": "person",
                     "area_label": "front",
                 },
+                "artifacts": artifacts,
             },
             {
                 "lifecycle": Lifecycle.CLOSE,
                 "payload": {
-                    "frame": frame,
                     "frame_ts": 100.3,
                     "camera_id": "camera-main",
                     "tracking_id": "trk-7",
                     "object_category_label": "person",
                     "area_label": "front",
                 },
+                "artifacts": artifacts,
             },
         ]
 

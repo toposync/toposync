@@ -31,7 +31,7 @@ class CameraSourceConfig(BaseModel):
     username: str = ""
     password: str = ""
     fps: float | None = Field(default=None, ge=1.0, le=60.0)
-    poll_interval_ms: int = Field(default=5, ge=1, le=250)
+    poll_interval_ms: int = Field(default=20, ge=1, le=250)
 
     @field_validator("camera_id", "rtsp_url", mode="after")
     @classmethod
@@ -86,14 +86,14 @@ class _YoloBaseConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model_name: str = "yolo11n"
     confidence_threshold: float = Field(default=0.4, ge=0.0, le=1.0)
-    iou_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    iou_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     image_size: int = Field(default=640, ge=64, le=2048)
     device: str = ""
     tracker: str = "bytetrack"
     categories: list[str] = Field(default_factory=list)
     max_objects_per_frame: int = Field(default=32, ge=1, le=512)
     inference_interval_seconds: float = Field(default=0.0, ge=0.0, le=60.0)
-    default_interval_seconds: float = Field(default=0.0, ge=0.0, le=120.0)
+    default_interval_seconds: float = Field(default=0.2, ge=0.0, le=120.0)
     category_intervals_seconds: dict[str, float] = Field(default_factory=dict)
 
     @field_validator("categories")
@@ -130,7 +130,7 @@ class _YoloBaseConfig(BaseModel):
 
 
 class ObjectTrackingYOLOConfig(_YoloBaseConfig):
-    close_after_seconds: float = Field(default=1.2, ge=0.05, le=300.0)
+    close_after_seconds: float = Field(default=4.0, ge=0.05, le=300.0)
     emit_open_on_first: bool = True
     emit_close_on_lost: bool = True
 

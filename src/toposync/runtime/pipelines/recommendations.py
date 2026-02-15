@@ -23,6 +23,7 @@ class PipelineAlert(BaseModel):
 def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorRegistry) -> list[PipelineAlert]:
     nodes_by_id = {node.node_id: node for node in pipeline.nodes}
     edges = list(pipeline.edges)
+    order_index = {node_id: idx for idx, node_id in enumerate(pipeline.topological_order)}
 
     incoming: dict[str, list[Any]] = {}
     outgoing: dict[str, list[Any]] = {}
@@ -100,6 +101,52 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
         return cfg if isinstance(cfg, dict) else {}
 
     alerts: list[PipelineAlert] = []
+
+    # Tracking defaults: too-aggressive closing and unthrottled update emission cause flicker under drops.
+    for tracking_node_id in _node_ids_by_operator("vision.object_tracking_yolo"):
+        cfg = _resolve_config(tracking_node_id)
+        try:
+            close_after = float(cfg.get("close_after_seconds") or 0.0)
+        except Exception:
+            close_after = 0.0
+        if close_after and close_after < 2.5:
+            alerts.append(
+                PipelineAlert(
+                    severity="info",
+                    code="tracking_close_after_aggressive",
+                    node_id=tracking_node_id,
+                    operator_id="vision.object_tracking_yolo",
+                    message=(
+                        "Object tracking closes streams quickly when a detection is briefly lost "
+                        f"(close_after_seconds={close_after:g}). This can look 'flickery' under frame drops/occlusions."
+                    ),
+                    suggestion="Increase close_after_seconds (e.g. 4.0) to keep tracks stable through short gaps.",
+                )
+            )
+
+        try:
+            default_interval = float(cfg.get("default_interval_seconds") or 0.0)
+        except Exception:
+            default_interval = 0.0
+        if default_interval <= 0.0:
+            downstream_ops = {nodes_by_id[nid].operator_id for nid in _downstream_nodes(tracking_node_id) if nid in nodes_by_id}
+            if downstream_ops & {"core.debug", "core.store_images", "core.notify"}:
+                alerts.append(
+                    PipelineAlert(
+                        severity="info",
+                        code="tracking_unbounded_update_rate",
+                        node_id=tracking_node_id,
+                        operator_id="vision.object_tracking_yolo",
+                        message=(
+                            "Object tracking is configured to emit updates at input frame-rate "
+                            "(default_interval_seconds=0), which can overload debug/storage/notify and reduce effective FPS."
+                        ),
+                        suggestion=(
+                            "Set default_interval_seconds to ~0.1–0.3, or add FPS Reducer/Throttle before heavy sinks "
+                            "(Store Images / Notify / Debug)."
+                        ),
+                    )
+                )
 
     # Notify requires stored artifact references (it never stores images itself).
     for notify_node_id in _node_ids_by_operator("core.notify"):
@@ -208,6 +255,33 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
         keep_data = bool(cfg.get("keep_data", False))
         if keep_data:
             continue
+        # If Store Images is fed directly by split/track streams without downstream rate control, it can be very heavy.
+        upstream_ops = [nodes_by_id[nid].operator_id for nid in _upstream_nodes(store_node_id) if nid in nodes_by_id]
+        tracking_ids = [nid for nid in _upstream_nodes(store_node_id) if nid in nodes_by_id and nodes_by_id[nid].operator_id == "vision.object_tracking_yolo"]
+        if tracking_ids:
+            tracking_idx = min(order_index.get(nid, 0) for nid in tracking_ids)
+            store_idx = order_index.get(store_node_id, tracking_idx + 1)
+            has_rate_control_after_tracking = False
+            for nid in _upstream_nodes(store_node_id):
+                if nid not in nodes_by_id:
+                    continue
+                idx = order_index.get(nid, -1)
+                if idx <= tracking_idx or idx >= store_idx:
+                    continue
+                if nodes_by_id[nid].operator_id in {"core.fps_reducer", "core.throttle", "core.debounce"}:
+                    has_rate_control_after_tracking = True
+                    break
+            if not has_rate_control_after_tracking:
+                alerts.append(
+                    PipelineAlert(
+                        severity="info",
+                        code="store_images_without_rate_control",
+                        node_id=store_node_id,
+                        operator_id="core.store_images",
+                        message="Store Images is fed by object tracking without any downstream rate control, which can be heavy on CPU/disk.",
+                        suggestion="Add FPS Reducer/Throttle before Store Images to limit how many frames are stored per second.",
+                    )
+                )
         downstream = _downstream_nodes(store_node_id)
         for node_id in downstream:
             node = nodes_by_id.get(node_id)

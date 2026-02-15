@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import math
 import time
 import uuid
@@ -30,6 +31,7 @@ class CameraSourceConfig(BaseModel):
     rtsp_url: str = ""
     username: str = ""
     password: str = ""
+    backend: str = "auto"
     fps: float | None = Field(default=None, ge=1.0, le=60.0)
     poll_interval_ms: int = Field(default=20, ge=1, le=250)
 
@@ -37,6 +39,16 @@ class CameraSourceConfig(BaseModel):
     @classmethod
     def _trim(cls, value: str) -> str:
         return str(value or "").strip()
+
+    @field_validator("backend", mode="after")
+    @classmethod
+    def _normalize_backend(cls, value: str) -> str:
+        key = str(value or "").strip().lower()
+        if key in {"opencv", "ffmpeg", "auto"}:
+            return key
+        if not key:
+            return "auto"
+        raise ValueError("backend must be one of: auto, opencv, ffmpeg")
 
 
 class MotionGateConfig(BaseModel):
@@ -156,7 +168,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         rtsp_url, fps, camera_id, camera_name = await _resolve_camera_source(self._config, self._dependencies)
         self._camera_id = camera_id
         self._camera_name = camera_name
-        self._grabber = FrameGrabber(rtsp_url, target_fps=fps).start()
+        self._grabber = FrameGrabber(rtsp_url, target_fps=fps, backend=self._config.backend).start()
 
     async def _consume_gate_packets(self, context) -> None:  # noqa: ANN001
         gate_channel = context.inputs.get("gate")
@@ -220,6 +232,11 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         height = int(getattr(frame, "shape", [0, 0])[0]) if getattr(frame, "shape", None) is not None else 0
         width = int(getattr(frame, "shape", [0, 0])[1]) if getattr(frame, "shape", None) is not None else 0
         stream_suffix = self._camera_id or "adhoc"
+        capture_metrics = {}
+        try:
+            capture_metrics = dataclasses.asdict(self._grabber.metrics_snapshot())
+        except Exception:
+            capture_metrics = {}
         return Packet.create(
             stream_id=f"camera:{stream_suffix}",
             lifecycle=Lifecycle.UPDATE,
@@ -230,11 +247,13 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 "camera_name": self._camera_name or None,
                 "frame_width": width,
                 "frame_height": height,
+                "capture": capture_metrics,
             },
             metadata={
                 "source": "camera.source",
                 "camera_id": self._camera_id or None,
                 "camera_name": self._camera_name or None,
+                "capture_backend": str(capture_metrics.get("backend") or ""),
             },
         )
 

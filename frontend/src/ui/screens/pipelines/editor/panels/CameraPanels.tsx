@@ -23,6 +23,8 @@ export function CameraSourceConfigCard({
   onUpdateConfig,
 }: CameraSourceProps): React.ReactElement {
   const cameraIdInConfig = String((config as any).camera_id ?? "").trim();
+  const backendRaw = String((config as any).backend ?? "auto").trim().toLowerCase() || "auto";
+  const backend = backendRaw === "opencv" || backendRaw === "ffmpeg" ? backendRaw : "auto";
   const selectedCameraOption = cameraIdInConfig
     ? (cameraSelectOptionById.get(cameraIdInConfig) ?? { value: cameraIdInConfig, label: cameraIdInConfig })
     : null;
@@ -55,6 +57,23 @@ export function CameraSourceConfigCard({
       {cameraSelectOptions.length === 0 ? (
         <div className="pipelinesStepHint">No cameras found. Configure cameras in the Cameras extension settings.</div>
       ) : null}
+
+      <label className="pipelinesLabel">
+        <span>Backend</span>
+        <select
+          className="pipelinesSelect"
+          value={backend}
+          onChange={(event) => {
+            const next = String(event.target.value || "auto").trim().toLowerCase();
+            onUpdateConfig((prev) => ({ ...prev, backend: next || "auto" }));
+          }}
+        >
+          <option value="auto">Auto (recommended)</option>
+          <option value="opencv">OpenCV</option>
+          <option value="ffmpeg">FFmpeg</option>
+        </select>
+      </label>
+      <div className="pipelinesStepHint">Auto selects the best available backend and falls back automatically if one fails to initialize.</div>
     </div>
   );
 }
@@ -311,4 +330,3 @@ export function ImageResizeConfigCard({ config, onUpdateConfig }: ImageResizePro
     </div>
   );
 }
-

@@ -469,11 +469,23 @@ class AreaRestrictionRuntime(TransformOperatorRuntime):
 
 
 @dataclass(slots=True)
+class _VelocitySample:
+    x: float
+    z: float
+    ts: float
+
+
+@dataclass(slots=True)
 class _VelocityState:
-    last_x: float
-    last_z: float
-    last_ts: float
+    samples: deque[_VelocitySample]
+    last_speed_mps: float = 0.0
+    moving: bool = False
     ever_stopped: bool = False
+
+
+_VELOCITY_WINDOW_SECONDS = 0.8
+_VELOCITY_HISTORY_SECONDS = 3.0
+_VELOCITY_MAX_SAMPLES = 128
 
 
 class VelocityEstimationRuntime(TransformOperatorRuntime):
@@ -490,14 +502,22 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
 
         world = packet.payload.get("world")
         if not isinstance(world, dict):
+            last_moving = state.moving if state is not None else False
+            last_speed = float(state.last_speed_mps) if state is not None else 0.0
             out_packet = self._annotate_packet(
                 packet,
-                speed=0.0,
+                speed=last_speed,
                 distance=0.0,
                 elapsed=0.0,
-                moving=False,
+                moving=last_moving,
                 valid=False,
                 ever_stopped=ever_stopped,
+                raw_speed=0.0,
+                raw_distance=0.0,
+                raw_elapsed=0.0,
+                raw_valid=False,
+                window_seconds=_VELOCITY_WINDOW_SECONDS,
+                reason="missing_world",
             )
             if packet.lifecycle == Lifecycle.CLOSE:
                 self._state_by_key.pop(key, None)
@@ -508,51 +528,124 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
             x = float(world.get("x"))
             z = float(world.get("z"))
         except Exception:
+            last_moving = state.moving if state is not None else False
+            last_speed = float(state.last_speed_mps) if state is not None else 0.0
             out_packet = self._annotate_packet(
                 packet,
-                speed=0.0,
+                speed=last_speed,
                 distance=0.0,
                 elapsed=0.0,
-                moving=False,
+                moving=last_moving,
                 valid=False,
                 ever_stopped=ever_stopped,
+                raw_speed=0.0,
+                raw_distance=0.0,
+                raw_elapsed=0.0,
+                raw_valid=False,
+                window_seconds=_VELOCITY_WINDOW_SECONDS,
+                reason="invalid_world",
             )
             if packet.lifecycle == Lifecycle.CLOSE:
                 self._state_by_key.pop(key, None)
                 return [out_packet]
             return self._apply_filter_mode(out_packet, valid=False, moving=False, ever_stopped=ever_stopped)
 
-        distance = 0.0
-        elapsed = 0.0
-        speed = 0.0
-        moving = False
-        valid = False
+        if state is None:
+            state = _VelocityState(samples=deque(maxlen=_VELOCITY_MAX_SAMPLES))
+            self._state_by_key[key] = state
 
-        if state is not None:
-            elapsed = max(0.0, now_ts - state.last_ts)
-            if elapsed >= self._config.min_elapsed_seconds:
-                valid = True
-                dx = x - state.last_x
-                dz = z - state.last_z
-                distance = math.sqrt((dx * dx) + (dz * dz))
-                speed = distance / elapsed
-                moving = speed >= self._config.stopped_speed_threshold
-                if not moving:
-                    ever_stopped = True
+        samples = state.samples
+        if samples and now_ts <= float(samples[-1].ts):
+            # Timestamp fora de ordem: não atualiza estado para evitar velocidade negativa/instável.
+            out_packet = self._annotate_packet(
+                packet,
+                speed=float(state.last_speed_mps),
+                distance=0.0,
+                elapsed=0.0,
+                moving=bool(state.moving),
+                valid=False,
+                ever_stopped=ever_stopped,
+                raw_speed=0.0,
+                raw_distance=0.0,
+                raw_elapsed=0.0,
+                raw_valid=False,
+                window_seconds=_VELOCITY_WINDOW_SECONDS,
+                reason="out_of_order_timestamp",
+            )
+            if packet.lifecycle == Lifecycle.CLOSE:
+                self._state_by_key.pop(key, None)
+                return [out_packet]
+            return self._apply_filter_mode(out_packet, valid=False, moving=False, ever_stopped=ever_stopped)
+
+        samples.append(_VelocitySample(x=float(x), z=float(z), ts=float(now_ts)))
+        # Mantém memória estável mesmo se algum stream ficar aberto por muito tempo.
+        while len(samples) > 1 and (now_ts - float(samples[0].ts)) > _VELOCITY_HISTORY_SECONDS:
+            samples.popleft()
+
+        raw_speed = 0.0
+        raw_distance = 0.0
+        raw_elapsed = 0.0
+        raw_valid = False
+        if len(samples) >= 2:
+            prev = samples[-2]
+            raw_elapsed = max(0.0, now_ts - float(prev.ts))
+            raw_valid = raw_elapsed >= self._config.min_elapsed_seconds
+            if raw_valid:
+                raw_dx = x - float(prev.x)
+                raw_dz = z - float(prev.z)
+                raw_distance = math.sqrt((raw_dx * raw_dx) + (raw_dz * raw_dz))
+                raw_speed = raw_distance / raw_elapsed if raw_elapsed > 0.0 else 0.0
+
+        # Janela: calcula velocidade usando um ponto ~N segundos atrás para reduzir jitter.
+        ref = samples[0]
+        cutoff = now_ts - float(_VELOCITY_WINDOW_SECONDS)
+        for sample in samples:
+            if float(sample.ts) <= cutoff:
+                ref = sample
             else:
-                moving = False
-        else:
-            moving = False
+                break
 
-        self._state_by_key[key] = _VelocityState(last_x=x, last_z=z, last_ts=now_ts, ever_stopped=ever_stopped)
+        window_elapsed = max(0.0, now_ts - float(ref.ts))
+        valid = window_elapsed >= self._config.min_elapsed_seconds and len(samples) >= 2
+        window_distance = 0.0
+        window_speed = 0.0
+        if valid:
+            window_dx = x - float(ref.x)
+            window_dz = z - float(ref.z)
+            window_distance = math.sqrt((window_dx * window_dx) + (window_dz * window_dz))
+            window_speed = window_distance / window_elapsed if window_elapsed > 0.0 else 0.0
+
+        moving = bool(state.moving)
+        if valid:
+            threshold = float(self._config.stopped_speed_threshold)
+            stop_threshold = threshold * 0.8
+            if moving:
+                if window_speed <= stop_threshold:
+                    moving = False
+            else:
+                if window_speed >= threshold:
+                    moving = True
+            if not moving:
+                ever_stopped = True
+
+        state.last_speed_mps = float(window_speed)
+        state.moving = bool(moving)
+        state.ever_stopped = bool(ever_stopped)
+
         out_packet = self._annotate_packet(
             packet,
-            speed=speed,
-            distance=distance,
-            elapsed=elapsed,
+            speed=window_speed,
+            distance=window_distance,
+            elapsed=window_elapsed,
             moving=moving,
             valid=valid,
             ever_stopped=ever_stopped,
+            raw_speed=raw_speed,
+            raw_distance=raw_distance,
+            raw_elapsed=raw_elapsed,
+            raw_valid=raw_valid,
+            window_seconds=_VELOCITY_WINDOW_SECONDS,
+            reason="",
         )
 
         if packet.lifecycle == Lifecycle.CLOSE:
@@ -571,6 +664,12 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
         moving: bool,
         valid: bool,
         ever_stopped: bool,
+        raw_speed: float,
+        raw_distance: float,
+        raw_elapsed: float,
+        raw_valid: bool,
+        window_seconds: float,
+        reason: str,
     ) -> Packet:
         payload = dict(packet.payload)
         payload["velocity"] = {
@@ -584,6 +683,13 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
             "stopped": bool(valid and not moving),
             "valid": bool(valid),
             "ever_stopped": bool(ever_stopped),
+            "speed_raw_mps": float(raw_speed),
+            "speed_raw_kmh": float(raw_speed * 3.6),
+            "distance_raw_m": float(raw_distance),
+            "elapsed_raw_seconds": float(raw_elapsed),
+            "valid_raw": bool(raw_valid),
+            "window_seconds": float(window_seconds),
+            "reason": str(reason or "").strip() or None,
         }
         return replace(packet, payload=payload)
 
@@ -893,7 +999,8 @@ def _resolve_image_point(packet: Packet, *, bbox_field: str, image_uv_field: str
     if bbox is None:
         return None
     x1, y1, x2, y2 = bbox
-    return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+    # Para mapear no "chão" (plano world x/z), o ponto mais estável tende a ser a base do bbox (bottom-center).
+    return ((x1 + x2) / 2.0, float(y2))
 
 
 def _resolve_camera_id(packet: Packet, *, camera_id_field: str) -> str:
@@ -990,12 +1097,20 @@ def _normalize_bbox01(bbox: tuple[float, float, float, float]) -> tuple[float, f
 
 
 def _resolve_tracking_key(packet: Packet) -> str:
-    key = str(packet.payload.get("tracking_id") or "").strip()
-    if not key:
-        key = str(packet.payload.get("correlation_id") or "").strip()
-    if not key:
-        key = packet.stream_id
-    return key
+    # Evita colisões quando operadores são "shared" entre múltiplas câmeras/streams:
+    # - `tracking_id` (ex: ByteTrack) pode se repetir entre fontes.
+    # - `correlation_id` (uuid por evento/track) é o identificador mais seguro para estado por objeto.
+    correlation_id = str(packet.payload.get("correlation_id") or "").strip()
+    if correlation_id:
+        return correlation_id
+
+    tracking_id = str(packet.payload.get("tracking_id") or "").strip()
+    if tracking_id:
+        source_stream_id = str(packet.payload.get("source_stream_id") or packet.metadata.get("source_stream_id") or "").strip()
+        prefix = source_stream_id or packet.stream_id
+        return f"{prefix}|{tracking_id}"
+
+    return packet.stream_id
 
 
 def _annotate_artifact_contract(

@@ -459,7 +459,7 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
         world = packet.payload.get("world")
         assert isinstance(world, dict)
         assert round(float(world.get("x")), 1) == 7.2
-        assert round(float(world.get("z")), 1) == 5.0
+        assert round(float(world.get("z")), 1) == 5.2
 
     asyncio.run(scenario())
 
@@ -552,5 +552,97 @@ def test_velocity_filter_mode_stopped_once_emits_only_after_object_stops() -> No
         assert isinstance(velocity, dict)
         assert velocity.get("ever_stopped") is True
         assert velocity.get("moving") is False
+
+    asyncio.run(scenario())
+
+
+def test_velocity_state_is_namespaced_when_tracking_id_repeats_across_streams() -> None:
+    async def scenario() -> None:
+        runtime = VelocityEstimationRuntime(
+            {
+                "stopped_speed_threshold": 0.2,
+                "filter_mode": "annotate",
+            },
+        )
+
+        def make_packet(*, stream_id: str, frame_ts: float, world_x: float) -> Packet:
+            return Packet.create(
+                stream_id=stream_id,
+                lifecycle=Lifecycle.UPDATE,
+                payload={
+                    "tracking_id": "1",
+                    "frame_ts": frame_ts,
+                    "world": {"x": world_x, "z": 0.0},
+                },
+            )
+
+        # If state was keyed only by tracking_id ("1"), packet2 would see a large speed from packet1.
+        packet1 = make_packet(stream_id="cam:one", frame_ts=1.0, world_x=0.0)
+        packet2 = make_packet(stream_id="cam:two", frame_ts=2.0, world_x=10.0)
+
+        out1 = (await runtime.process_packet(packet1, context=None))[0]
+        out2 = (await runtime.process_packet(packet2, context=None))[0]
+
+        v1 = out1.payload.get("velocity")
+        v2 = out2.payload.get("velocity")
+        assert isinstance(v1, dict)
+        assert isinstance(v2, dict)
+        assert v1.get("valid") is False
+        assert v2.get("valid") is False
+
+    asyncio.run(scenario())
+
+
+def test_best_frame_selector_state_is_namespaced_when_tracking_id_repeats_across_streams() -> None:
+    async def scenario() -> None:
+        runtime = BestFrameSelectorRuntime(
+            {
+                "input_artifact_names": ["segmented"],
+                "fallback_to_payload_frame": False,
+                "output_artifact_name": "best_frame",
+                "buffer_size": 8,
+                "emit_on_update": False,
+                "emit_on_close": True,
+            },
+        )
+
+        def make_packet(
+            *,
+            stream_id: str,
+            tracking_id: str,
+            lifecycle: Lifecycle,
+            frame_value: int,
+            confidence: float,
+        ) -> Packet:
+            frame = np.full((12, 12, 3), frame_value, dtype=np.uint8)
+            return Packet.create(
+                stream_id=stream_id,
+                lifecycle=lifecycle,
+                payload={
+                    "tracking_id": tracking_id,
+                    "object_confidence": confidence,
+                    "object_bbox01": [0.2, 0.2, 0.8, 0.8],
+                },
+                artifacts={"segmented": Artifact(name="segmented", data=frame, mime_type="image/raw")},
+            )
+
+        # Two independent streams that happen to share the same tracking_id.
+        sequence = [
+            make_packet(stream_id="obj:cam1", tracking_id="1", lifecycle=Lifecycle.OPEN, frame_value=1, confidence=0.9),
+            make_packet(stream_id="obj:cam2", tracking_id="1", lifecycle=Lifecycle.OPEN, frame_value=9, confidence=1.0),
+            make_packet(stream_id="obj:cam2", tracking_id="1", lifecycle=Lifecycle.UPDATE, frame_value=10, confidence=0.8),
+            make_packet(stream_id="obj:cam1", tracking_id="1", lifecycle=Lifecycle.UPDATE, frame_value=2, confidence=0.1),
+            make_packet(stream_id="obj:cam1", tracking_id="1", lifecycle=Lifecycle.CLOSE, frame_value=3, confidence=0.1),
+            make_packet(stream_id="obj:cam2", tracking_id="1", lifecycle=Lifecycle.CLOSE, frame_value=11, confidence=0.2),
+        ]
+
+        outputs: list[Packet] = []
+        for packet in sequence:
+            outputs.extend(await runtime.process_packet(packet, context=None))
+
+        close_outputs = [packet for packet in outputs if packet.lifecycle == Lifecycle.CLOSE]
+        assert len(close_outputs) == 2
+        close_by_stream = {packet.stream_id: packet for packet in close_outputs}
+        assert int(close_by_stream["obj:cam1"].artifacts["best_frame"].data[0, 0, 0]) == 1
 
     asyncio.run(scenario())

@@ -5,19 +5,17 @@ function escapeRegExp(value) {
 }
 
 async function openSettings(page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Settings" });
-  await expect(dialog).toBeVisible();
-  return dialog;
+  await page.goto("/settings");
+  await expect(page.getByText("Settings", { exact: true })).toBeVisible();
+  return page;
 }
 
 async function openViewSettings(page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "View settings", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "View" });
-  await expect(dialog).toBeVisible();
-  return dialog;
+  await page.goto("/settings");
+  await expect(page.getByText("Settings", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /^View options\b/ }).click();
+  await expect(page.getByText("Wall height")).toBeVisible();
+  return page;
 }
 
 async function openCompositions(page) {
@@ -52,9 +50,8 @@ test("wall height preset persists across reload", async ({ page }) => {
 
   await page.reload();
 
-  await page.getByRole("button", { name: "View settings", exact: true }).click();
-  const dialog2 = page.getByRole("dialog", { name: "View" });
-  const low = dialog2.getByRole("button", { name: /^Low\b/ });
+  await page.getByRole("button", { name: /^View options\b/ }).click();
+  const low = page.getByRole("button", { name: /^Low\b/ });
   await expect(low).toHaveClass(/isSelected/);
 });
 
@@ -75,15 +72,14 @@ test("ghost walls persists across reload", async ({ page }) => {
 
   await page.reload();
 
-  await page.getByRole("button", { name: "View settings", exact: true }).click();
-  const dialog2 = page.getByRole("dialog", { name: "View" });
-  const ghost = dialog2.getByRole("button", { name: /^Ghost walls\b/ });
+  await page.getByRole("button", { name: /^View options\b/ }).click();
+  const ghost = page.getByRole("button", { name: /^Ghost walls\b/ });
   await expect(ghost).toHaveClass(/isSelected/);
 });
 
 test("theme can be selected from settings", async ({ page }) => {
   const dialog = await openSettings(page);
-  await dialog.getByRole("button", { name: "Core" }).click();
+  await dialog.getByRole("button", { name: /^Core\b/ }).click();
 
   const accentBefore = await page.evaluate(() =>
     getComputedStyle(document.documentElement).getPropertyValue("--accent").trim(),

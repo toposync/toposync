@@ -83,6 +83,17 @@ Implementação: `src/toposync/runtime/pipelines/runtime.py` (`BoundedChannel`, 
 - `drop_newest`: descarta o item novo quando a fila está cheia.
 - `latest_only`: “latest wins”: ao encher, limpa a fila e mantém só o item mais recente (**ideal para frames brutos**).
 
+### Semântica de canal (global vs keyed)
+
+O runtime usa dois modos de fila, dependendo do ponto do grafo:
+
+- **Global por edge** (default): um `BoundedChannel` único por edge.
+  - Bom para fluxos com **um único stream** (ex.: antes do split).
+- **Keyed por `stream_id`** (após `split_stream`): edges downstream de operadores com capability `split_stream` usam `KeyedBoundedChannel`, particionado por `Packet.stream_id`.
+  - **Scheduler round-robin** entre streams para evitar starvation.
+  - **Drop “por chave”** para `update`: quando precisa descartar, tenta descartar updates **do mesmo `stream_id`** antes de afetar outros streams.
+  - Isso evita que um objeto “falante” monopolize a fila e cause drop/starvation de outros objetos.
+
 ### Regras práticas (realtime)
 
 - **Frames brutos / entrada do YOLO**: `maxsize=1` + `latest_only`

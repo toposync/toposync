@@ -7,7 +7,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field, replace
-from typing import Any, Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar
 
 
 T = TypeVar("T")
@@ -412,6 +412,270 @@ class BoundedChannel(Generic[T]):
         for task in pending:
             task.cancel()
         return None
+
+
+class KeyedBoundedChannel(Generic[T]):
+    def __init__(
+        self,
+        *,
+        name: str,
+        maxsize: int,
+        drop_policy: DropPolicy = DropPolicy.DROP_OLDEST,
+        key_fn: Callable[[T], str],
+    ) -> None:
+        bounded_maxsize = int(maxsize)
+        if bounded_maxsize < 1:
+            raise ValueError("maxsize must be >= 1")
+        self.name = str(name or "").strip() or "channel"
+        self.maxsize = bounded_maxsize
+        self.drop_policy = drop_policy
+        self._key_fn = key_fn
+        self._metrics = _ChannelMetrics()
+        self._queues_by_key: dict[str, deque[_Envelope[T]]] = {}
+        self._ready_keys: deque[str] = deque()
+        self._ready_set: set[str] = set()
+        self._depth = 0
+        self._condition = asyncio.Condition()
+
+    @property
+    def depth(self) -> int:
+        return int(self._depth)
+
+    def metrics_snapshot(self) -> ChannelMetricsSnapshot:
+        return self._metrics.snapshot(name=self.name, maxsize=self.maxsize, depth=self.depth)
+
+    async def put(
+        self,
+        item: T,
+        *,
+        timeout_s: float | None = None,
+        cancel_event: asyncio.Event | None = None,
+    ) -> ChannelPutResult:
+        timeout = _normalize_timeout(timeout_s)
+        structural = _is_structural_item(item)
+        if structural:
+            timeout = None
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        envelope = _Envelope(item=item, enqueued_monotonic_ns=time.monotonic_ns())
+        key = str(self._key_fn(item) or "").strip() or "-"
+        self._metrics.put_attempts += 1
+
+        while True:
+            if _is_canceled(cancel_event):
+                self._metrics.canceled += 1
+                return ChannelPutResult(status=QueueOperationStatus.CANCELED)
+
+            async with self._condition:
+                if self._depth < self.maxsize:
+                    self._enqueue_locked(key, envelope)
+                    self._on_put_accepted_locked()
+                    self._condition.notify_all()
+                    return ChannelPutResult(status=QueueOperationStatus.ACCEPTED)
+
+                if not structural and self.drop_policy == DropPolicy.DROP_NEWEST:
+                    self._metrics.dropped_newest += 1
+                    return ChannelPutResult(status=QueueOperationStatus.DROPPED)
+
+                if self.drop_policy in {DropPolicy.DROP_OLDEST, DropPolicy.LATEST_ONLY}:
+                    clear_all = self.drop_policy == DropPolicy.LATEST_ONLY
+                    dropped = self._drop_droppable_for_key_locked(key, clear_all=clear_all)
+                    if dropped <= 0:
+                        dropped = self._drop_oldest_droppable_locked(clear_all=clear_all)
+                    if dropped > 0:
+                        self._metrics.dropped_oldest += int(dropped)
+                        self._condition.notify_all()
+                        continue
+                    if not structural:
+                        self._metrics.dropped_newest += 1
+                        return ChannelPutResult(status=QueueOperationStatus.DROPPED)
+
+                if not structural and self.drop_policy != DropPolicy.BLOCK:
+                    self._metrics.dropped_newest += 1
+                    return ChannelPutResult(status=QueueOperationStatus.DROPPED)
+
+                remaining = _remaining_timeout(deadline)
+                if remaining is not None and remaining <= 0:
+                    self._metrics.timed_out += 1
+                    return ChannelPutResult(status=QueueOperationStatus.TIMEOUT)
+
+            status = await self._wait_for_slot(timeout_s=remaining, cancel_event=cancel_event)
+            if status == QueueOperationStatus.CANCELED:
+                self._metrics.canceled += 1
+                return ChannelPutResult(status=QueueOperationStatus.CANCELED)
+            if status == QueueOperationStatus.TIMEOUT:
+                self._metrics.timed_out += 1
+                return ChannelPutResult(status=QueueOperationStatus.TIMEOUT)
+
+    async def get(
+        self,
+        *,
+        timeout_s: float | None = None,
+        cancel_event: asyncio.Event | None = None,
+    ) -> ChannelGetResult[T]:
+        timeout = _normalize_timeout(timeout_s)
+        deadline = time.monotonic() + timeout if timeout is not None else None
+
+        while True:
+            if _is_canceled(cancel_event):
+                self._metrics.canceled += 1
+                return ChannelGetResult(status=QueueOperationStatus.CANCELED)
+
+            async with self._condition:
+                if self._depth > 0:
+                    envelope = self._dequeue_locked()
+                    self._condition.notify_all()
+                    return self._build_get_result(envelope)
+
+                remaining = _remaining_timeout(deadline)
+                if remaining is not None and remaining <= 0:
+                    self._metrics.timed_out += 1
+                    return ChannelGetResult(status=QueueOperationStatus.TIMEOUT)
+
+            status = await self._wait_for_item(timeout_s=remaining, cancel_event=cancel_event)
+            if status == QueueOperationStatus.CANCELED:
+                self._metrics.canceled += 1
+                return ChannelGetResult(status=QueueOperationStatus.CANCELED)
+            if status == QueueOperationStatus.TIMEOUT:
+                self._metrics.timed_out += 1
+                return ChannelGetResult(status=QueueOperationStatus.TIMEOUT)
+
+    def _enqueue_locked(self, key: str, envelope: _Envelope[T]) -> None:
+        queue = self._queues_by_key.get(key)
+        if queue is None:
+            queue = deque()
+            self._queues_by_key[key] = queue
+        queue.append(envelope)
+        self._depth += 1
+        if key not in self._ready_set:
+            self._ready_set.add(key)
+            self._ready_keys.append(key)
+
+    def _dequeue_locked(self) -> _Envelope[T]:
+        key = self._ready_keys.popleft()
+        self._ready_set.discard(key)
+        queue = self._queues_by_key.get(key)
+        if queue is None or not queue:
+            return self._dequeue_locked()
+        envelope = queue.popleft()
+        self._depth -= 1
+        if queue:
+            if key not in self._ready_set:
+                self._ready_set.add(key)
+                self._ready_keys.append(key)
+        else:
+            self._queues_by_key.pop(key, None)
+        return envelope
+
+    def _drop_droppable_for_key_locked(self, key: str, *, clear_all: bool) -> int:
+        queue = self._queues_by_key.get(key)
+        if not queue:
+            return 0
+        kept: deque[_Envelope[T]] = deque()
+        dropped = 0
+        for env in queue:
+            if _is_structural_item(env.item):
+                kept.append(env)
+                continue
+            if clear_all:
+                dropped += 1
+                continue
+            if dropped == 0:
+                dropped += 1
+                continue
+            kept.append(env)
+        if dropped <= 0:
+            return 0
+        self._queues_by_key[key] = kept
+        self._depth -= dropped
+        if not kept:
+            self._queues_by_key.pop(key, None)
+            if key in self._ready_set:
+                self._ready_set.discard(key)
+                self._ready_keys = deque([k for k in self._ready_keys if k != key])
+        return dropped
+
+    def _drop_oldest_droppable_locked(self, *, clear_all: bool) -> int:
+        oldest_key: str | None = None
+        oldest_ts: int | None = None
+        for key, queue in self._queues_by_key.items():
+            if not queue:
+                continue
+            for env in queue:
+                if _is_structural_item(env.item):
+                    continue
+                ts = int(env.enqueued_monotonic_ns)
+                if oldest_ts is None or ts < oldest_ts:
+                    oldest_ts = ts
+                    oldest_key = key
+                break
+        if oldest_key is None:
+            return 0
+        return self._drop_droppable_for_key_locked(oldest_key, clear_all=clear_all)
+
+    def _on_put_accepted_locked(self) -> None:
+        self._metrics.put_accepted += 1
+        depth = self.depth
+        if depth > self._metrics.max_depth_seen:
+            self._metrics.max_depth_seen = depth
+
+    def _build_get_result(self, envelope: _Envelope[T]) -> ChannelGetResult[T]:
+        now_ns = time.monotonic_ns()
+        queue_wait_ms = max(0.0, (float(now_ns) - float(envelope.enqueued_monotonic_ns)) / 1_000_000.0)
+        self._metrics.get_accepted += 1
+        self._metrics.queue_wait_samples_ms.append(queue_wait_ms)
+        return ChannelGetResult(
+            status=QueueOperationStatus.ACCEPTED,
+            item=envelope.item,
+            queue_wait_ms=queue_wait_ms,
+        )
+
+    async def _wait_for_slot(
+        self,
+        *,
+        timeout_s: float | None,
+        cancel_event: asyncio.Event | None,
+    ) -> QueueOperationStatus:
+        deadline = time.monotonic() + timeout_s if timeout_s is not None else None
+        async with self._condition:
+            while True:
+                if _is_canceled(cancel_event):
+                    return QueueOperationStatus.CANCELED
+                if self._depth < self.maxsize:
+                    return QueueOperationStatus.ACCEPTED
+                remaining = _remaining_timeout(deadline)
+                if remaining is not None and remaining <= 0:
+                    return QueueOperationStatus.TIMEOUT
+                wait_s = 0.05
+                if remaining is not None:
+                    wait_s = min(wait_s, remaining)
+                try:
+                    await asyncio.wait_for(self._condition.wait(), timeout=wait_s)
+                except TimeoutError:
+                    continue
+
+    async def _wait_for_item(
+        self,
+        *,
+        timeout_s: float | None,
+        cancel_event: asyncio.Event | None,
+    ) -> QueueOperationStatus:
+        deadline = time.monotonic() + timeout_s if timeout_s is not None else None
+        async with self._condition:
+            while True:
+                if _is_canceled(cancel_event):
+                    return QueueOperationStatus.CANCELED
+                if self._depth > 0:
+                    return QueueOperationStatus.ACCEPTED
+                remaining = _remaining_timeout(deadline)
+                if remaining is not None and remaining <= 0:
+                    return QueueOperationStatus.TIMEOUT
+                wait_s = 0.05
+                if remaining is not None:
+                    wait_s = min(wait_s, remaining)
+                try:
+                    await asyncio.wait_for(self._condition.wait(), timeout=wait_s)
+                except TimeoutError:
+                    continue
 
 
 def _normalize_timeout(timeout_s: float | None) -> float | None:

@@ -14,6 +14,7 @@ from .operator_registry import OperatorRegistry
 from .runtime import (
     BoundedChannel,
     ChannelMetricsSnapshot,
+    KeyedBoundedChannel,
     Packet,
     QueueOperationStatus,
 )
@@ -78,8 +79,8 @@ class OperatorRuntime(Protocol):
 class NodeExecutionContext:
     node_id: str
     pipeline_name: str
-    inputs: dict[str, BoundedChannel[Packet]]
-    outputs: dict[str, list[BoundedChannel[Packet]]]
+    inputs: dict[str, BoundedChannel[Packet] | KeyedBoundedChannel[Packet]]
+    outputs: dict[str, list[BoundedChannel[Packet] | KeyedBoundedChannel[Packet]]]
     cancel_event: asyncio.Event
     metrics: NodeRuntimeMetrics
     logger: logging.Logger
@@ -219,7 +220,7 @@ class PipelineRuntime:
     registry: OperatorRegistry
     dependencies: PipelineRuntimeDependencies = field(default_factory=PipelineRuntimeDependencies)
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("toposync.pipelines.runtime"))
-    channel_map: dict[str, BoundedChannel[Packet]] = field(init=False, default_factory=dict)
+    channel_map: dict[str, BoundedChannel[Packet] | KeyedBoundedChannel[Packet]] = field(init=False, default_factory=dict)
     node_metrics: dict[str, NodeRuntimeMetrics] = field(init=False, default_factory=dict)
     _runtime_by_node: dict[str, BaseOperatorRuntime] = field(init=False, default_factory=dict)
     _context_by_node: dict[str, NodeExecutionContext] = field(init=False, default_factory=dict)
@@ -286,23 +287,54 @@ class PipelineRuntime:
         indegree: dict[str, int] = {node.node_id: 0 for node in self.compiled.nodes}
         outdegree: dict[str, int] = {node.node_id: 0 for node in self.compiled.nodes}
 
-        outputs_by_node_port: dict[tuple[str, str], list[BoundedChannel[Packet]]] = {}
-        inputs_by_node_port: dict[tuple[str, str], BoundedChannel[Packet]] = {}
+        outputs_by_node_port: dict[tuple[str, str], list[BoundedChannel[Packet] | KeyedBoundedChannel[Packet]]] = {}
+        inputs_by_node_port: dict[tuple[str, str], BoundedChannel[Packet] | KeyedBoundedChannel[Packet]] = {}
+
+        node_by_id = {node.node_id: node for node in self.compiled.nodes}
+        caps_by_node_id: dict[str, set[str]] = {}
+        for node in self.compiled.nodes:
+            registered = self.registry.get(node.operator_id)
+            if registered is None:
+                continue
+            caps_by_node_id[node.node_id] = {str(cap) for cap in (registered.definition.capabilities or [])}
+
+        split_nodes = [node_id for node_id, caps in caps_by_node_id.items() if "split_stream" in caps]
+        reachable_after_split: set[str] = set()
+        if split_nodes:
+            adjacency: dict[str, set[str]] = {}
+            for edge in self.compiled.edges:
+                adjacency.setdefault(edge.source_node_id, set()).add(edge.target_node_id)
+            queue = deque(split_nodes)
+            while queue:
+                cur = queue.popleft()
+                if cur in reachable_after_split:
+                    continue
+                reachable_after_split.add(cur)
+                for nxt in sorted(adjacency.get(cur, set())):
+                    if nxt not in reachable_after_split:
+                        queue.append(nxt)
 
         for edge in self.compiled.edges:
             indegree[edge.target_node_id] = int(indegree.get(edge.target_node_id, 0)) + 1
             outdegree[edge.source_node_id] = int(outdegree.get(edge.source_node_id, 0)) + 1
             channel_name = f"{edge.source_node_id}.{edge.source_port}->{edge.target_node_id}.{edge.target_port}"
-            channel = BoundedChannel[Packet](
-                name=channel_name,
-                maxsize=edge.channel_maxsize,
-                drop_policy=edge.channel_drop_policy,
-            )
+            if edge.source_node_id in reachable_after_split:
+                channel = KeyedBoundedChannel[Packet](
+                    name=channel_name,
+                    maxsize=edge.channel_maxsize,
+                    drop_policy=edge.channel_drop_policy,
+                    key_fn=lambda packet: packet.stream_id,
+                )
+            else:
+                channel = BoundedChannel[Packet](
+                    name=channel_name,
+                    maxsize=edge.channel_maxsize,
+                    drop_policy=edge.channel_drop_policy,
+                )
             self.channel_map[channel_name] = channel
             outputs_by_node_port.setdefault((edge.source_node_id, edge.source_port), []).append(channel)
             inputs_by_node_port[(edge.target_node_id, edge.target_port)] = channel
 
-        node_by_id = {node.node_id: node for node in self.compiled.nodes}
         for node_id in self.compiled.topological_order:
             node = node_by_id[node_id]
             registered = self.registry.get(node.operator_id)
@@ -320,8 +352,8 @@ class PipelineRuntime:
             self._runtimes.append(runtime)
             self._runtime_by_node[node_id] = runtime
 
-            node_inputs: dict[str, BoundedChannel[Packet]] = {}
-            node_outputs: dict[str, list[BoundedChannel[Packet]]] = {}
+            node_inputs: dict[str, BoundedChannel[Packet] | KeyedBoundedChannel[Packet]] = {}
+            node_outputs: dict[str, list[BoundedChannel[Packet] | KeyedBoundedChannel[Packet]]] = {}
             for (target_node_id, target_port), channel in inputs_by_node_port.items():
                 if target_node_id == node_id:
                     node_inputs[target_port] = channel

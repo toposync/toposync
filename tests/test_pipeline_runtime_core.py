@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from toposync.runtime.pipelines import Artifact, BoundedChannel, DropPolicy, Lifecycle, Packet, QueueOperationStatus
+from toposync.runtime.pipelines import Artifact, BoundedChannel, DropPolicy, KeyedBoundedChannel, Lifecycle, Packet, QueueOperationStatus
 
 
 def test_packet_creation_and_artifact_attachment() -> None:
@@ -165,5 +165,70 @@ def test_channel_blocks_close_until_open_is_consumed() -> None:
         second = await channel.get(timeout_s=0.05)
         assert second.item is not None
         assert second.item.lifecycle == Lifecycle.CLOSE
+
+    asyncio.run(scenario())
+
+
+def test_keyed_channel_drop_oldest_is_per_stream() -> None:
+    async def scenario() -> None:
+        channel = KeyedBoundedChannel[Packet](
+            name="keyed_drop_oldest",
+            maxsize=3,
+            drop_policy=DropPolicy.DROP_OLDEST,
+            key_fn=lambda packet: packet.stream_id,
+        )
+
+        await channel.put(Packet.create(stream_id="obj:A", lifecycle=Lifecycle.UPDATE, payload={"seq": 1}))
+        await channel.put(Packet.create(stream_id="obj:B", lifecycle=Lifecycle.UPDATE, payload={"seq": 1}))
+        await channel.put(Packet.create(stream_id="obj:A", lifecycle=Lifecycle.UPDATE, payload={"seq": 2}))
+
+        await channel.put(Packet.create(stream_id="obj:A", lifecycle=Lifecycle.UPDATE, payload={"seq": 3}))
+
+        packets: list[Packet] = []
+        while channel.depth:
+            item = await channel.get(timeout_s=0.05)
+            assert item.item is not None
+            packets.append(item.item)
+
+        seen = {(p.stream_id, p.payload.get("seq")) for p in packets}
+        assert ("obj:B", 1) in seen
+        assert ("obj:A", 1) not in seen
+        assert ("obj:A", 2) in seen
+        assert ("obj:A", 3) in seen
+
+    asyncio.run(scenario())
+
+
+def test_keyed_channel_round_robin_fairness() -> None:
+    async def scenario() -> None:
+        channel = KeyedBoundedChannel[Packet](
+            name="keyed_fair",
+            maxsize=10,
+            drop_policy=DropPolicy.DROP_OLDEST,
+            key_fn=lambda packet: packet.stream_id,
+        )
+
+        await channel.put(Packet.create(stream_id="obj:A", lifecycle=Lifecycle.UPDATE, payload={"seq": 1}))
+        await channel.put(Packet.create(stream_id="obj:A", lifecycle=Lifecycle.UPDATE, payload={"seq": 2}))
+        await channel.put(Packet.create(stream_id="obj:A", lifecycle=Lifecycle.UPDATE, payload={"seq": 3}))
+        await channel.put(Packet.create(stream_id="obj:B", lifecycle=Lifecycle.UPDATE, payload={"seq": 1}))
+        await channel.put(Packet.create(stream_id="obj:B", lifecycle=Lifecycle.UPDATE, payload={"seq": 2}))
+
+        first = await channel.get(timeout_s=0.05)
+        second = await channel.get(timeout_s=0.05)
+        third = await channel.get(timeout_s=0.05)
+        fourth = await channel.get(timeout_s=0.05)
+        fifth = await channel.get(timeout_s=0.05)
+        assert first.item is not None
+        assert second.item is not None
+        assert third.item is not None
+        assert fourth.item is not None
+        assert fifth.item is not None
+
+        assert (first.item.stream_id, first.item.payload.get("seq")) == ("obj:A", 1)
+        assert (second.item.stream_id, second.item.payload.get("seq")) == ("obj:B", 1)
+        assert (third.item.stream_id, third.item.payload.get("seq")) == ("obj:A", 2)
+        assert (fourth.item.stream_id, fourth.item.payload.get("seq")) == ("obj:B", 2)
+        assert (fifth.item.stream_id, fifth.item.payload.get("seq")) == ("obj:A", 3)
 
     asyncio.run(scenario())

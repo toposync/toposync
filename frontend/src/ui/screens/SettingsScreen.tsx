@@ -2,14 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import type { GraphicsQuality, HostApi, SettingsPanel, ThemeDefinition, WallHeightPreset } from "@toposync/plugin-api";
 
-import type { AppSettings } from "../util/api";
-import { i18n, resolveLocalizedString } from "../util/i18n";
+import type { AppSettings } from "../../util/api";
+import { i18n, resolveLocalizedString } from "../../util/i18n";
 
-import { Icon } from "./Icon";
-import { Modal } from "./Modal";
+import { Icon } from "../Icon";
 
 type Props = {
-  open: boolean;
   backendAvailable: boolean;
   api: HostApi;
   wallHeightPreset: WallHeightPreset;
@@ -24,6 +22,8 @@ type Props = {
   onSetThemeId: (themeId: string) => void;
   settings: AppSettings;
   onPatchExtensionSettings: (extensionId: string, patch: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  onOpenPipelines: () => void;
+  onOpenProcessingServers: () => void;
   onClose: () => void;
 };
 
@@ -59,8 +59,7 @@ function loadActivePanelId(defaultId: string): string {
   return defaultId;
 }
 
-export function SettingsModal({
-  open,
+export function SettingsScreen({
   backendAvailable,
   api,
   wallHeightPreset,
@@ -75,32 +74,20 @@ export function SettingsModal({
   onSetThemeId,
   settings,
   onPatchExtensionSettings,
+  onOpenPipelines,
+  onOpenProcessingServers,
   onClose,
-}: Props): React.ReactElement | null {
+}: Props): React.ReactElement {
   const { t, locale, setLocale } = i18n.useI18n();
   const [activePanelId, setActivePanelId] = useState<string>(() => loadActivePanelId(VIEW_PANEL_ID));
   const [draftExtensions, setDraftExtensions] = useState<Record<string, Record<string, unknown>>>(() => settings.extensions ?? {});
   const [dirtyExtensions, setDirtyExtensions] = useState<Record<string, boolean>>({});
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
+  const [confirmExitOpen, setConfirmExitOpen] = useState(false);
+  const [pendingExitAction, setPendingExitAction] = useState<null | "close" | "pipelines" | "processing_servers">(null);
   const lastSettingsRef = useRef<AppSettings>(settings);
-
-  useEffect(() => {
-    if (!open) return;
-    setSaveError(null);
-    setSaving(false);
-    setConfirmCloseOpen(false);
-    setConfirmDiscardOpen(false);
-
-    lastSettingsRef.current = settings;
-    setDraftExtensions(settings.extensions ?? {});
-    setDirtyExtensions({});
-
-    // Open "View options" by default, since it's the most common entry point.
-    setActivePanelId(VIEW_PANEL_ID);
-  }, [open]);
 
   const orderedPanels = useMemo(() => {
     const list = [...panels];
@@ -320,18 +307,15 @@ export function SettingsModal({
   }, [dirtyExtensionIds, entries]);
 
   useEffect(() => {
-    if (!open) return;
     try {
       localStorage.setItem(ACTIVE_PANEL_STORAGE_KEY, activePanelId);
     } catch {
       // ignore
     }
-  }, [activePanelId, open]);
+  }, [activePanelId]);
 
   useEffect(() => {
-    if (!open) return;
     if (lastSettingsRef.current === settings) return;
-
     lastSettingsRef.current = settings;
 
     setDraftExtensions((prev) => {
@@ -345,7 +329,7 @@ export function SettingsModal({
 
       return next;
     });
-  }, [dirtyExtensions, open, settings]);
+  }, [dirtyExtensions, settings]);
 
   function updateDraftExtensionSettings(extensionId: string, patch: Record<string, unknown>): void {
     setDraftExtensions((prev) => {
@@ -357,11 +341,11 @@ export function SettingsModal({
 
   function renderExtensionPanel(panel: SettingsPanel): React.ReactNode {
     const extSettings = draftExtensions?.[panel.id] ?? settings.extensions?.[panel.id] ?? {};
-      return panel.render({
-        i18n,
-        api,
-        settings: extSettings,
-        updateSettings: (patch) => updateDraftExtensionSettings(panel.id, patch ?? {}),
+    return panel.render({
+      i18n,
+      api,
+      settings: extSettings,
+      updateSettings: (patch) => updateDraftExtensionSettings(panel.id, patch ?? {}),
     });
   }
 
@@ -391,27 +375,75 @@ export function SettingsModal({
     setSaveError(null);
   }
 
-  function requestClose(): void {
+  function requestExit(action: "close" | "pipelines" | "processing_servers"): void {
     if (saving) return;
     if (hasUnsavedChanges) {
-      setConfirmCloseOpen(true);
+      setPendingExitAction(action);
+      setConfirmExitOpen(true);
       return;
     }
-    onClose();
+    if (action === "pipelines") onOpenPipelines();
+    else if (action === "processing_servers") onOpenProcessingServers();
+    else onClose();
   }
 
+  const exitTitle = useMemo(() => {
+    if (pendingExitAction === "pipelines") return "Discard changes and open Pipelines?";
+    if (pendingExitAction === "processing_servers") return "Discard changes and open Processing servers?";
+    return t("core.ui.settings.confirm_close_title");
+  }, [pendingExitAction, t]);
+
+  const exitDesc = useMemo(() => {
+    if (pendingExitAction === "pipelines" || pendingExitAction === "processing_servers") {
+      const suffix = unsavedSectionsLabel ? ` (${unsavedSectionsLabel})` : "";
+      return `You have unsaved settings${suffix}. Discard them and continue?`;
+    }
+    return t("core.ui.settings.confirm_close_desc");
+  }, [pendingExitAction, t, unsavedSectionsLabel]);
+
+  const exitConfirmLabel = useMemo(() => {
+    if (pendingExitAction === "pipelines" || pendingExitAction === "processing_servers") return "Discard and continue";
+    return t("core.ui.settings.discard_and_close");
+  }, [pendingExitAction, t]);
+
   return (
-    <Modal
-      open={open}
-      title={t("core.ui.settings.title")}
-      onClose={requestClose}
-      panelClassName="settingsModalPanel"
-      bodyClassName="settingsModalBody"
-      bodyStyle={{ padding: 0, overflow: "hidden" }}
-    >
+    <div className="settingsRoot screenRoot">
+      <div className="settingsTopbar">
+        <button className="iconButton" type="button" onClick={() => requestExit("close")} aria-label={t("core.actions.back", {}, "Back")}>
+          <i className="fa-solid fa-arrow-left" aria-hidden="true" />
+        </button>
+        <div className="settingsTopbarTitle">{t("core.ui.settings.title")}</div>
+      </div>
+
       <div className="settingsLayout">
         <div className="settingsSidebar">
           <div className="settingsSidebarList">
+            <button type="button" className="settingsNavItem" onClick={() => requestExit("pipelines")}>
+              <span className="settingsNavIcon">
+                <Icon name="diagram-project" />
+              </span>
+              <span className="settingsNavText">
+                <span className="settingsNavTitleRow">
+                  <span className="settingsNavTitle">Pipelines</span>
+                </span>
+                <span className="settingsNavDesc">Create and edit pipelines.</span>
+              </span>
+            </button>
+
+            <button type="button" className="settingsNavItem" onClick={() => requestExit("processing_servers")}>
+              <span className="settingsNavIcon">
+                <Icon name="server" />
+              </span>
+              <span className="settingsNavText">
+                <span className="settingsNavTitleRow">
+                  <span className="settingsNavTitle">Processing servers</span>
+                </span>
+                <span className="settingsNavDesc">Manage remote processing servers.</span>
+              </span>
+            </button>
+
+            <div className="sectionDivider" style={{ margin: "12px 6px" }} />
+
             {entries.map((entry) => {
               const selected = entry.id === activePanelId;
               const isDirty = entry.kind === "extension" ? Boolean(dirtyExtensions[entry.id]) : false;
@@ -476,17 +508,12 @@ export function SettingsModal({
                   <button className="chipButton" type="button" disabled={saving} onClick={() => setConfirmDiscardOpen(true)}>
                     {t("core.ui.settings.discard_changes")}
                   </button>
-                  <button
-                    className="primaryButton"
-                    type="button"
-                    disabled={saving || !backendAvailable}
-                    onClick={() => void saveAll()}
-                  >
+                  <button className="primaryButton" type="button" disabled={saving || !backendAvailable} onClick={() => void saveAll()}>
                     {saving ? t("core.ui.settings.saving") : t("core.ui.settings.save_all_changes")}
                   </button>
                 </>
               ) : (
-                <button className="chipButton" type="button" onClick={requestClose}>
+                <button className="chipButton" type="button" onClick={() => requestExit("close")}>
                   {t("core.actions.close")}
                 </button>
               )}
@@ -518,31 +545,43 @@ export function SettingsModal({
           </div>
         ) : null}
 
-        {confirmCloseOpen ? (
+        {confirmExitOpen ? (
           <div className="settingsConfirmBackdrop" role="presentation">
-            <div className="settingsConfirmPanel" role="dialog" aria-modal="true" aria-label={t("core.ui.settings.confirm_close_title")}>
-              <div className="settingsConfirmTitle">{t("core.ui.settings.confirm_close_title")}</div>
-              <div className="settingsConfirmDesc">{t("core.ui.settings.confirm_close_desc")}</div>
+            <div className="settingsConfirmPanel" role="dialog" aria-modal="true" aria-label={exitTitle}>
+              <div className="settingsConfirmTitle">{exitTitle}</div>
+              <div className="settingsConfirmDesc">{exitDesc}</div>
               <div className="rowWrap" style={{ justifyContent: "flex-end", marginTop: 14 }}>
-                <button className="chipButton" type="button" onClick={() => setConfirmCloseOpen(false)}>
+                <button
+                  className="chipButton"
+                  type="button"
+                  onClick={() => {
+                    setConfirmExitOpen(false);
+                    setPendingExitAction(null);
+                  }}
+                >
                   {t("core.actions.cancel")}
                 </button>
                 <button
                   className="dangerButton"
                   type="button"
                   onClick={() => {
+                    const action = pendingExitAction;
                     discardAll();
-                    setConfirmCloseOpen(false);
-                    onClose();
+                    setConfirmExitOpen(false);
+                    setPendingExitAction(null);
+                    if (action === "pipelines") onOpenPipelines();
+                    else if (action === "processing_servers") onOpenProcessingServers();
+                    else onClose();
                   }}
                 >
-                  {t("core.ui.settings.discard_and_close")}
+                  {exitConfirmLabel}
                 </button>
               </div>
             </div>
           </div>
         ) : null}
       </div>
-    </Modal>
+    </div>
   );
 }
+

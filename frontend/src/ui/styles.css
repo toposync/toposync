@@ -150,6 +150,31 @@ textarea {
     var(--bg);
 }
 
+.settingsRoot {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background:
+    radial-gradient(1200px 900px at 30% 10%, rgba(99, 102, 241, 0.08), transparent 55%),
+    radial-gradient(1200px 900px at 70% 40%, rgba(56, 189, 248, 0.05), transparent 55%),
+    var(--bg);
+}
+
+.settingsTopbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(12, 18, 37, 0.55);
+  backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+}
+
+.settingsTopbarTitle {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
 .pipelinesTopbar {
   display: flex;
   align-items: center;
@@ -388,6 +413,21 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.processingServersBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.processingServersList {
+  display: grid;
+  gap: 10px;
 }
 
 .processingServerForm {

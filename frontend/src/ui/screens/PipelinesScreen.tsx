@@ -12,7 +12,6 @@ import type {
   PipelineCompilePythonOutput,
   PipelineOperatorDefinition,
   ProcessingServer,
-  ProcessingServerStatus,
 } from "../../util/api";
 import {
   applyPipelineTemplateToCameras,
@@ -20,16 +19,12 @@ import {
   compilePipelinePython,
   createPipeline,
   deletePipeline,
-  deleteProcessingServer,
-  getProcessingServerStatus,
   listCamerasIndex,
   listPipelineOperators,
   listPipelines,
   listProcessingServers,
   putPipeline,
-  putProcessingServer,
 } from "../../util/api";
-import { ProcessingServerModal } from "../ProcessingServerModal";
 import { InteractivePipelineEditor } from "./pipelines/InteractivePipelineEditor";
 import { PipelineTemplateApplyModal } from "./pipelines/PipelineTemplateApplyModal";
 import type { EditorMode, InteractiveStep } from "./pipelines/types";
@@ -45,19 +40,16 @@ import {
 
 type Props = {
   onClose: () => void;
+  onOpenProcessingServers?: () => void;
 };
 
-export function PipelinesScreen({ onClose }: Props): React.ReactElement {
+export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): React.ReactElement {
   const { t } = i18n.useI18n();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [servers, setServers] = useState<ProcessingServer[]>([]);
-  const [serverModalOpen, setServerModalOpen] = useState(false);
-  const [serverModalTarget, setServerModalTarget] = useState<ProcessingServer | null>(null);
   const [templateApplyOpen, setTemplateApplyOpen] = useState(false);
-  const [serverStatusById, setServerStatusById] = useState<Record<string, ProcessingServerStatus>>({});
-  const [serverTestingById, setServerTestingById] = useState<Record<string, boolean>>({});
   const [operators, setOperators] = useState<PipelineOperatorDefinition[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [camerasIndex, setCamerasIndex] = useState<CamerasIndexResponse>({ cameras: [] });
@@ -364,44 +356,6 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
     }
   };
 
-  const handleSaveServer = async (server: ProcessingServer) => {
-    setError(null);
-    try {
-      await putProcessingServer(server);
-      await reload();
-    } catch (err: any) {
-      setError(String(err?.message ?? err));
-    }
-  };
-
-  const handleDeleteServer = async (serverId: string, confirmDelete = true) => {
-    if (confirmDelete && !confirm(`Delete processing server '${serverId}'?`)) return;
-    setError(null);
-    try {
-      await deleteProcessingServer(serverId);
-      await reload();
-    } catch (err: any) {
-      setError(String(err?.message ?? err));
-    }
-  };
-
-  const handleTestServer = async (serverId: string): Promise<ProcessingServerStatus> => {
-    const sid = String(serverId || "").trim().toLowerCase();
-    if (!sid) return { ok: false, error: "Missing server id" };
-    setServerTestingById((prev) => ({ ...prev, [sid]: true }));
-    try {
-      const status = await getProcessingServerStatus(sid);
-      setServerStatusById((prev) => ({ ...prev, [sid]: status }));
-      return status;
-    } catch (err: any) {
-      const failed = { ok: false, error: String(err?.message ?? err) };
-      setServerStatusById((prev) => ({ ...prev, [sid]: failed }));
-      return failed;
-    } finally {
-      setServerTestingById((prev) => ({ ...prev, [sid]: false }));
-    }
-  };
-
   const handleApplyTemplate = async (
     payload: PipelineTemplateApplyCamerasRequest,
   ): Promise<PipelineTemplateApplyCamerasResponse> => {
@@ -460,84 +414,13 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 
           <div className="pipelinesSidebarFooter">
             <div className="pipelinesSidebarTitle">Processing servers</div>
-            <div className="pipelinesServers">
-              {servers.map((server) => {
-                const probe = serverStatusById[server.id] ?? null;
-                const testing = !!serverTestingById[server.id];
-                const statusLabel = testing ? " • testing…" : probe ? (probe.ok ? " • online" : " • offline") : "";
-                const statusTitle = testing ? "Testing…" : probe && !probe.ok ? String(probe.error || "Offline") : "";
-                return (
-                  <div key={server.id} className="pipelinesServerRow">
-                    <button
-                      className="pipelinesServerMain"
-                      type="button"
-                      disabled={server.id === "local"}
-                      onClick={() => {
-                        if (server.id === "local") return;
-                        setServerModalTarget(server);
-                        setServerModalOpen(true);
-                      }}
-                    >
-                      <div className="pipelinesServerId">{server.id}</div>
-                      <div className="pipelinesServerMeta" title={statusTitle}>
-                        {server.kind}
-                        {server.url ? ` • ${server.url}` : ""}
-                        {statusLabel}
-                      </div>
-                    </button>
-
-                    {server.kind === "http" ? (
-                      <button
-                        className="iconButton iconButtonPrimary"
-                        type="button"
-                        disabled={testing}
-                        onClick={() => void handleTestServer(server.id)}
-                        title="Test connection"
-                      >
-                        <i className="fa-solid fa-plug" aria-hidden="true" />
-                      </button>
-                    ) : null}
-
-                    {server.id !== "local" ? (
-                      <>
-                        <button
-                          className="iconButton"
-                          type="button"
-                          onClick={() => {
-                            setServerModalTarget(server);
-                            setServerModalOpen(true);
-                          }}
-                          title="Edit server"
-                        >
-                          <i className="fa-solid fa-pen-to-square" aria-hidden="true" />
-                        </button>
-
-                        <button
-                          className="iconButton iconButtonDanger"
-                          type="button"
-                          onClick={() => void handleDeleteServer(server.id)}
-                          title="Delete server"
-                        >
-                          <i className="fa-solid fa-trash" aria-hidden="true" />
-                        </button>
-                      </>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-
-            <button
-              className="pillButton"
-              type="button"
-              onClick={() => {
-                setServerModalTarget(null);
-                setServerModalOpen(true);
-              }}
-            >
-              <i className="fa-solid fa-plus" aria-hidden="true" />
-              Add processing server
-            </button>
+            <div className="pipelinesHint">Configure remote servers in Settings.</div>
+            {onOpenProcessingServers ? (
+              <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
+                <i className="fa-solid fa-server" aria-hidden="true" />
+                Manage servers
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -646,19 +529,26 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
 
                       <label className="pipelinesLabel">
                         <span>Processing server</span>
-                        <select
-                          className="pipelinesSelect"
-                          value={draft.processing_server_id ?? "local"}
-                          onChange={(event) =>
-                            setDraft((prev) => (prev ? { ...prev, processing_server_id: event.target.value } : prev))
-                          }
-                        >
-                          {servers.map((server) => (
-                            <option key={server.id} value={server.id}>
-                              {server.id}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="row">
+                          <select
+                            className="pipelinesSelect"
+                            value={draft.processing_server_id ?? "local"}
+                            onChange={(event) =>
+                              setDraft((prev) => (prev ? { ...prev, processing_server_id: event.target.value } : prev))
+                            }
+                          >
+                            {servers.map((server) => (
+                              <option key={server.id} value={server.id}>
+                                {server.id}
+                              </option>
+                            ))}
+                          </select>
+                          {onOpenProcessingServers ? (
+                            <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
+                              Manage…
+                            </button>
+                          ) : null}
+                        </div>
                       </label>
                     </>
                   ) : null}
@@ -751,18 +641,6 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
           )}
         </div>
       </div>
-
-      <ProcessingServerModal
-        open={serverModalOpen}
-        server={serverModalTarget}
-        onClose={() => {
-          setServerModalOpen(false);
-          setServerModalTarget(null);
-        }}
-        onSave={handleSaveServer}
-        onDelete={(serverId) => handleDeleteServer(serverId, false)}
-        onTest={handleTestServer}
-      />
 
       <PipelineTemplateApplyModal
         open={templateApplyOpen}

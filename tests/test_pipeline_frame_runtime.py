@@ -132,6 +132,7 @@ def test_camera_extension_operators_are_registered_with_runtime_factories() -> N
         "camera.motion_gate",
         "camera.object_segmentation",
         "camera.image_crop",
+        "camera.image_adjust",
         "camera.image_resize",
         "camera.camera_mapping",
         "camera.area_restriction",

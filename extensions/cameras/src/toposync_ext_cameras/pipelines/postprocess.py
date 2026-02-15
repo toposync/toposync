@@ -72,6 +72,34 @@ class ImageCropConfig(BaseModel):
         return name
 
 
+class ImageAdjustConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input_artifact_names: list[str] = Field(default_factory=lambda: ["frame_original"])
+    fallback_to_payload_frame: bool = True
+    output_artifact_name: str = "frame_adjusted"
+
+    saturation: float = Field(default=1.0, ge=0.0, le=3.0)
+    brightness: float = Field(default=0.0, ge=-1.0, le=1.0)
+    contrast: float = Field(default=1.0, ge=0.0, le=3.0)
+    gamma: float = Field(default=1.0, ge=0.1, le=5.0)
+
+    set_payload_frame: bool = True
+    preserve_alpha: bool = True
+
+    @field_validator("input_artifact_names", mode="after")
+    @classmethod
+    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
+        return _normalize_artifact_names(value)
+
+    @field_validator("output_artifact_name")
+    @classmethod
+    def _validate_output_artifact_name(cls, value: str) -> str:
+        name = str(value or "").strip()
+        if not name:
+            raise ValueError("output_artifact_name is required")
+        return name
+
+
 class CameraMappingControlPointImage(BaseModel):
     x: float = Field(ge=0.0, le=1.0)
     y: float = Field(ge=0.0, le=1.0)
@@ -429,6 +457,117 @@ class ImageCropRuntime(TransformOperatorRuntime):
             packet=out,
             preferred_input_artifact_names=["frame_original"],
             selected_input_artifact_name="payload.frame",
+            latest_artifact_name=self._config.output_artifact_name,
+        )
+        return [replace(out, payload=payload)]
+
+
+class ImageAdjustRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = ImageAdjustConfig.model_validate(config)
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        packet = _ensure_original_artifact(packet)
+        selected_name, image = _resolve_input_image(
+            packet,
+            preferred_artifact_names=self._config.input_artifact_names,
+            fallback_to_payload_frame=bool(self._config.fallback_to_payload_frame),
+        )
+        if image is None:
+            payload = _annotate_artifact_contract(
+                packet.payload,
+                packet=packet,
+                preferred_input_artifact_names=self._config.input_artifact_names,
+                selected_input_artifact_name=selected_name,
+            )
+            return [replace(packet, payload=payload)]
+
+        if isinstance(image, (bytes, bytearray, memoryview)):
+            return [packet]
+
+        try:
+            import cv2  # type: ignore
+            import numpy as np  # type: ignore
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("camera.image_adjust requires opencv-python-headless and numpy") from exc
+
+        arr = np.asarray(image)
+        if arr.size == 0:
+            return [packet]
+        if arr.dtype != np.uint8:
+            arr = arr.astype(np.uint8, copy=False)
+        if arr.ndim == 2:
+            arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+        elif arr.ndim != 3:
+            return [packet]
+
+        alpha: Any | None = None
+        if int(arr.shape[2]) == 4 and bool(self._config.preserve_alpha):
+            alpha = arr[..., 3].copy()
+            arr = arr[..., :3]
+        elif int(arr.shape[2]) != 3:
+            return [packet]
+
+        saturation = float(self._config.saturation)
+        brightness = float(self._config.brightness)
+        contrast = float(self._config.contrast)
+        gamma = float(self._config.gamma)
+
+        bgr = np.ascontiguousarray(arr)
+
+        if saturation != 1.0:
+            hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
+            hsv[..., 1] = np.clip(hsv[..., 1] * saturation, 0.0, 255.0)
+            bgr = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+        if contrast != 1.0 or brightness != 0.0 or gamma != 1.0:
+            f = bgr.astype(np.float32) / 255.0
+            if contrast != 1.0:
+                f = (f - 0.5) * contrast + 0.5
+            if brightness != 0.0:
+                f = f + brightness
+            f = np.clip(f, 0.0, 1.0)
+            if gamma != 1.0 and gamma > 0.0:
+                f = np.power(f, 1.0 / gamma)
+            bgr = np.clip(np.round(f * 255.0), 0.0, 255.0).astype(np.uint8)
+
+        if alpha is not None:
+            try:
+                bgr = np.dstack([bgr, alpha])
+            except Exception:
+                pass
+
+        out = packet.with_artifact(
+            Artifact(
+                name=self._config.output_artifact_name,
+                data=bgr,
+                mime_type="image/raw",
+                metadata={
+                    "source_artifact_name": selected_name,
+                    "saturation": float(saturation),
+                    "brightness": float(brightness),
+                    "contrast": float(contrast),
+                    "gamma": float(gamma),
+                },
+            ),
+        )
+
+        payload = dict(out.payload)
+        if self._config.set_payload_frame:
+            payload["frame"] = bgr
+            shape = getattr(bgr, "shape", None)
+            if shape and len(shape) >= 2:
+                try:
+                    payload["frame_height"] = int(shape[0])
+                    payload["frame_width"] = int(shape[1])
+                except Exception:
+                    pass
+
+        payload = _annotate_artifact_contract(
+            payload,
+            packet=out,
+            preferred_input_artifact_names=self._config.input_artifact_names,
+            selected_input_artifact_name=selected_name,
             latest_artifact_name=self._config.output_artifact_name,
         )
         return [replace(out, payload=payload)]
@@ -968,6 +1107,18 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: ImageCropRuntime(config),
+    )
+    registry.register_operator(
+        operator_id="camera.image_adjust",
+        description="Adjusts image color/levels (saturation/brightness/contrast/gamma) and writes artifact.",
+        config_model=ImageAdjustConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["camera", "artifact", "image_adjust"],
+        defaults=ImageAdjustConfig().model_dump(),
+        share_strategy="by_signature",
+        owner="com.toposync.cameras",
+        runtime_factory=lambda config, _deps: ImageAdjustRuntime(config),
     )
     registry.register_operator(
         operator_id="camera.image_resize",

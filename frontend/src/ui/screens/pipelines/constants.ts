@@ -18,6 +18,7 @@ export const PIPELINE_PRESET_OPERATOR_IDS = [
   "camera.area_restriction",
   "camera.velocity_estimation",
   "camera.best_frame_selector",
+  "camera.image_adjust",
   "camera.image_resize",
   "core.throttle",
   "core.debounce",
@@ -35,6 +36,7 @@ export const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "core.lifecycle_from_boolean": "Lifecycle from boolean",
   "core.fps_reducer": "FPS reducer",
   "camera.image_crop": "Crop frame",
+  "camera.image_adjust": "Image adjust",
   "vision.object_tracking_yolo": "YOLO tracking",
   "vision.object_detection_yolo": "YOLO detection",
   "core.category_gate": "Category gate",
@@ -186,6 +188,7 @@ export const YOLO_CATEGORY_OPTIONS: SelectOption[] = YOLO_CATEGORY_VALUES.map((v
 export const ARTIFACT_SUGGESTIONS: SelectOption[] = [
   { value: "frame_original", label: "Full frame" },
   { value: "frame_cropped", label: "Cropped frame" },
+  { value: "frame_adjusted", label: "Adjusted frame" },
   { value: "best_frame", label: "Best frame" },
   { value: "segmented", label: "Segmented" },
   { value: "face", label: "Face" },

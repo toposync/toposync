@@ -434,6 +434,174 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
   );
 }
 
+type ImageAdjustProps = {
+  config: Record<string, unknown>;
+  showAdvanced: boolean;
+  onUpdateConfig: UpdateConfig;
+};
+
+export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: ImageAdjustProps): React.ReactElement {
+  const inputArtifactNamesRaw = (config as any).input_artifact_names;
+  const inputArtifactNames = Array.isArray(inputArtifactNamesRaw)
+    ? inputArtifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
+    : ["frame_original"];
+  const selectedInputOptions = inputArtifactNames.map(
+    (value) => ARTIFACT_SUGGESTIONS.find((opt) => opt.value === value) ?? { value, label: value },
+  );
+
+  const saturation = Number((config as any).saturation ?? 1.0);
+  const brightness = Number((config as any).brightness ?? 0.0);
+  const contrast = Number((config as any).contrast ?? 1.0);
+  const gamma = Number((config as any).gamma ?? 1.0);
+
+  const outputArtifactName = String((config as any).output_artifact_name ?? "frame_adjusted").trim() || "frame_adjusted";
+  const setPayloadFrame = (config as any).set_payload_frame !== false;
+  const preserveAlpha = (config as any).preserve_alpha !== false;
+  const fallbackToPayloadFrame = (config as any).fallback_to_payload_frame !== false;
+
+  const clamp = (value: number, min: number, max: number, fallback: number) => {
+    if (!Number.isFinite(value)) return fallback;
+    return Math.max(min, Math.min(max, value));
+  };
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <label className="pipelinesLabel">
+        <span>Input artifacts (fallback order)</span>
+        <CreatableSelect<SelectOption, true>
+          isMulti
+          styles={pipelinesReactSelectStyles}
+          options={ARTIFACT_SUGGESTIONS}
+          value={selectedInputOptions}
+          placeholder="Full frame"
+          onChange={(value: MultiValue<SelectOption>) => {
+            onUpdateConfig((prev) => ({
+              ...prev,
+              input_artifact_names: value.map((item) => item.value),
+            }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">Uses the first available artifact. Keep <code>frame_original</code> as fallback.</div>
+
+      <div className="pipelinesScalarGrid" style={{ marginTop: 8 }}>
+        <label className="pipelinesLabel pipelinesScalarLabel">
+          <span>Saturation</span>
+          <input
+            className="pipelinesInput"
+            type="number"
+            min={0}
+            max={3}
+            step={0.05}
+            value={String(clamp(saturation, 0, 3, 1))}
+            onChange={(event) => {
+              const nextValue = Number(event.target.value);
+              onUpdateConfig((prev) => ({ ...prev, saturation: clamp(nextValue, 0, 3, 1) }));
+            }}
+          />
+        </label>
+
+        <label className="pipelinesLabel pipelinesScalarLabel">
+          <span>Brightness</span>
+          <input
+            className="pipelinesInput"
+            type="number"
+            min={-1}
+            max={1}
+            step={0.02}
+            value={String(clamp(brightness, -1, 1, 0))}
+            onChange={(event) => {
+              const nextValue = Number(event.target.value);
+              onUpdateConfig((prev) => ({ ...prev, brightness: clamp(nextValue, -1, 1, 0) }));
+            }}
+          />
+        </label>
+
+        <label className="pipelinesLabel pipelinesScalarLabel">
+          <span>Contrast</span>
+          <input
+            className="pipelinesInput"
+            type="number"
+            min={0}
+            max={3}
+            step={0.05}
+            value={String(clamp(contrast, 0, 3, 1))}
+            onChange={(event) => {
+              const nextValue = Number(event.target.value);
+              onUpdateConfig((prev) => ({ ...prev, contrast: clamp(nextValue, 0, 3, 1) }));
+            }}
+          />
+        </label>
+
+        <label className="pipelinesLabel pipelinesScalarLabel">
+          <span>Gamma</span>
+          <input
+            className="pipelinesInput"
+            type="number"
+            min={0.1}
+            max={5}
+            step={0.05}
+            value={String(clamp(gamma, 0.1, 5, 1))}
+            onChange={(event) => {
+              const nextValue = Number(event.target.value);
+              onUpdateConfig((prev) => ({ ...prev, gamma: clamp(nextValue, 0.1, 5, 1) }));
+            }}
+          />
+        </label>
+      </div>
+
+      <div className="pipelinesStepHint" style={{ marginTop: 8 }}>
+        Brightness is an additive offset in normalized space (e.g. <code>0.10</code> = +10%).
+      </div>
+
+      {showAdvanced ? (
+        <>
+          <div className="sectionDivider" />
+
+          <label className="pipelinesLabel">
+            <span>Output artifact name</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={outputArtifactName}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, output_artifact_name: event.target.value }))}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>Apply to stream (payload.frame)</span>
+            <input
+              type="checkbox"
+              checked={setPayloadFrame}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, set_payload_frame: event.target.checked }))}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>Fallback to payload frame</span>
+            <input
+              type="checkbox"
+              checked={fallbackToPayloadFrame}
+              onChange={(event) =>
+                onUpdateConfig((prev) => ({ ...prev, fallback_to_payload_frame: event.target.checked }))
+              }
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>Preserve alpha channel</span>
+            <input
+              type="checkbox"
+              checked={preserveAlpha}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, preserve_alpha: event.target.checked }))}
+            />
+          </label>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 type ImageResizeProps = {
   config: Record<string, unknown>;
   onUpdateConfig: UpdateConfig;

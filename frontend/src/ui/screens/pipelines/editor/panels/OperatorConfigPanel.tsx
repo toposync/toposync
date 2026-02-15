@@ -18,6 +18,7 @@ import {
   AreaRestrictionConfigCard,
   CameraMappingConfigCard,
   CameraSourceConfigCard,
+  ImageAdjustConfigCard,
   ImageCropConfigCard,
   ImageResizeConfigCard,
   VelocityEstimationConfigCard,
@@ -115,6 +116,9 @@ export function OperatorConfigPanel({
   }
   if (operatorId === "camera.image_crop") {
     return <ImageCropConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
+  }
+  if (operatorId === "camera.image_adjust") {
+    return <ImageAdjustConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "core.throttle") {
     return <ThrottleConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;

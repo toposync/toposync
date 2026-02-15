@@ -65,6 +65,23 @@ export type PipelineCompilePythonOutput = PipelineCompileOutput & {
   graph: Record<string, unknown>;
 };
 
+export type PipelineTemplateApplyCamerasRequest = {
+  template_pipeline_name: string;
+  camera_ids: string[];
+  instance_type?: "reuse" | "final";
+  enabled?: boolean;
+  processing_server_id?: string;
+  conflict?: "skip" | "replace" | "error";
+  dry_run?: boolean;
+};
+
+export type PipelineTemplateApplyCamerasResponse = {
+  dry_run: boolean;
+  created: string[];
+  updated: string[];
+  skipped: Array<Record<string, unknown>>;
+};
+
 export type ProcessingServer = {
   id: string;
   name: string;
@@ -330,6 +347,22 @@ export async function compilePipelinePython(pipeline: Pipeline): Promise<Pipelin
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ pipeline }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const detail = (body as any)?.detail ? String((body as any).detail) : String(res.status);
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+export async function applyPipelineTemplateToCameras(
+  payload: PipelineTemplateApplyCamerasRequest,
+): Promise<PipelineTemplateApplyCamerasResponse> {
+  const res = await fetch("/api/pipelines/templates/apply-cameras", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

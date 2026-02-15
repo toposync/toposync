@@ -370,6 +370,18 @@ Endpoints:
 - `POST /api/pipelines/compile-python` (retorna `graph` + output compilado + alerts)
 - `PUT/POST /api/pipelines` em `editor_mode=python` recompila o `python_source` e persiste o `graph`
 
+### Templates (instanciação multi-câmera)
+
+Pipelines `type=reuse` podem ser usados como **templates** para criar N pipelines finais (um por câmera) sem redesenhar.
+
+- Endpoint: `POST /api/pipelines/templates/apply-cameras`
+- Regras:
+  - o template precisa ter **exatamente 1** nó `camera.source`
+  - para cada `camera_id`, o sistema clona o graph e injeta `camera.source.config.camera_id=<camera_id>` (limpando `rtsp_url/username/password`)
+  - nomes são determinísticos: `<template_name>__<camera_id>` (sanitizado para identificador Python)
+
+UI: ao abrir um pipeline `reuse`, existe a ação **Apply template** para selecionar múltiplas câmeras e gerar pipelines finais.
+
 ---
 
 ## 12) Observabilidade e debug
@@ -399,8 +411,8 @@ Conforme `current-plan.ignore.md`, ainda faltam/estão parciais:
 3) **DSL Python com operador `|` → Graph** (Etapa 17) ✅  
    O modo Python compila para graph de forma determinística via backend e permanece “one-way”.
 
-4) **Templates/instanciação multi-câmera** (Etapa 18)  
-   Aplicar um pipeline `reuse` como template em N câmeras sem redesenhar manualmente.
+4) **Templates/instanciação multi-câmera** (Etapa 18) ✅  
+   Aplicar um pipeline `reuse` como template em N câmeras via endpoint e UI (“Apply template”).
 
 5) **Pipelines finitos / self-destruct + lixeira** (Etapa 19)  
    Para casos assistidos por LLM (pipelines temporários e auto-removíveis).

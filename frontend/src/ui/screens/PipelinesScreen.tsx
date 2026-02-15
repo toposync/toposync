@@ -4,6 +4,8 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { i18n } from "../../util/i18n";
 import type {
   CamerasIndexResponse,
+  PipelineTemplateApplyCamerasRequest,
+  PipelineTemplateApplyCamerasResponse,
   Pipeline,
   PipelineAlert,
   PipelineCompileOutput,
@@ -13,6 +15,7 @@ import type {
   ProcessingServerStatus,
 } from "../../util/api";
 import {
+  applyPipelineTemplateToCameras,
   compilePipeline,
   compilePipelinePython,
   createPipeline,
@@ -28,6 +31,7 @@ import {
 } from "../../util/api";
 import { ProcessingServerModal } from "../ProcessingServerModal";
 import { InteractivePipelineEditor } from "./pipelines/InteractivePipelineEditor";
+import { PipelineTemplateApplyModal } from "./pipelines/PipelineTemplateApplyModal";
 import type { EditorMode, InteractiveStep } from "./pipelines/types";
 import {
   buildGraphFromInteractiveSteps,
@@ -51,6 +55,7 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
   const [servers, setServers] = useState<ProcessingServer[]>([]);
   const [serverModalOpen, setServerModalOpen] = useState(false);
   const [serverModalTarget, setServerModalTarget] = useState<ProcessingServer | null>(null);
+  const [templateApplyOpen, setTemplateApplyOpen] = useState(false);
   const [serverStatusById, setServerStatusById] = useState<Record<string, ProcessingServerStatus>>({});
   const [serverTestingById, setServerTestingById] = useState<Record<string, boolean>>({});
   const [operators, setOperators] = useState<PipelineOperatorDefinition[]>([]);
@@ -397,6 +402,16 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
     }
   };
 
+  const handleApplyTemplate = async (
+    payload: PipelineTemplateApplyCamerasRequest,
+  ): Promise<PipelineTemplateApplyCamerasResponse> => {
+    const res = await applyPipelineTemplateToCameras(payload);
+    await reload();
+    const next = (res.created ?? [])[0] ?? (res.updated ?? [])[0] ?? null;
+    if (next) setSelectedName(next);
+    return res;
+  };
+
   return (
     <div className="pipelinesRoot screenRoot">
       <div className="pipelinesTopbar">
@@ -548,6 +563,12 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
               <div className="pipelinesEditorHeader">
                 <div className="pipelinesEditorTitle">{draft.name}</div>
                 <div className="pipelinesEditorActions">
+                  {draft.type === "reuse" ? (
+                    <button className="pillButton" type="button" onClick={() => setTemplateApplyOpen(true)}>
+                      <i className="fa-solid fa-wand-magic-sparkles" aria-hidden="true" />
+                      Apply template
+                    </button>
+                  ) : null}
                   <button className="pillButton" type="button" onClick={() => void handleCompile()}>
                     <i className="fa-solid fa-gears" aria-hidden="true" />
                     Compile
@@ -742,6 +763,15 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
         onSave={handleSaveServer}
         onDelete={(serverId) => handleDeleteServer(serverId, false)}
         onTest={handleTestServer}
+      />
+
+      <PipelineTemplateApplyModal
+        open={templateApplyOpen}
+        template={draft?.type === "reuse" ? draft : null}
+        cameras={camerasIndex.cameras}
+        servers={servers}
+        onClose={() => setTemplateApplyOpen(false)}
+        onApply={handleApplyTemplate}
       />
     </div>
   );

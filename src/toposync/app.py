@@ -48,6 +48,11 @@ from toposync.runtime.pipelines.migration_legacy_cameras import (
     build_pipeline_from_legacy_camera_rule,
     extract_legacy_camera_rules,
 )
+from toposync.runtime.pipelines.templates import (
+    PipelineTemplateError,
+    default_instance_name,
+    instantiate_camera_template_graph,
+)
 
 logger = logging.getLogger("toposync")
 
@@ -154,6 +159,23 @@ class LegacyCamerasMigrationResponse(BaseModel):
 
 class PipelineRuntimeStatusResponse(BaseModel):
     status: dict[str, Any] = Field(default_factory=dict)
+
+
+class PipelineTemplateApplyCamerasRequest(BaseModel):
+    template_pipeline_name: str
+    camera_ids: list[str] = Field(default_factory=list)
+    instance_type: str = "final"
+    enabled: bool = False
+    processing_server_id: str = "local"
+    conflict: str = "skip"  # skip|replace|error
+    dry_run: bool = False
+
+
+class PipelineTemplateApplyCamerasResponse(BaseModel):
+    dry_run: bool
+    created: list[str] = Field(default_factory=list)
+    updated: list[str] = Field(default_factory=list)
+    skipped: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def _guess_media_type(path: str) -> str:
@@ -570,6 +592,123 @@ def create_app() -> FastAPI:
             pipeline=compiled_dict,
             shared_signatures=shared_signatures,
             alerts=alerts,
+        )
+
+    @app.post("/api/pipelines/templates/apply-cameras", response_model=PipelineTemplateApplyCamerasResponse)
+    async def apply_pipeline_template_to_cameras(
+        request: Request,
+        body: PipelineTemplateApplyCamerasRequest,
+    ) -> PipelineTemplateApplyCamerasResponse:
+        config_store: ConfigStore = request.app.state.config_store
+        compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
+        registry: OperatorRegistry = request.app.state.pipeline_operator_registry
+
+        template_name = str(body.template_pipeline_name or "").strip()
+        if not template_name:
+            raise HTTPException(status_code=400, detail="template_pipeline_name is required")
+
+        template = await config_store.get_pipeline(template_name)
+        if template is None:
+            raise HTTPException(status_code=404, detail="Unknown template pipeline")
+
+        camera_ids = [str(item or "").strip() for item in (body.camera_ids or [])]
+        camera_ids = [cid for cid in camera_ids if cid]
+        if not camera_ids:
+            raise HTTPException(status_code=400, detail="camera_ids is required")
+
+        instance_type = str(body.instance_type or "final").strip().lower()
+        if instance_type not in {"final", "reuse"}:
+            raise HTTPException(status_code=400, detail="instance_type must be 'final' or 'reuse'")
+
+        conflict = str(body.conflict or "skip").strip().lower()
+        if conflict not in {"skip", "replace", "error"}:
+            raise HTTPException(status_code=400, detail="conflict must be one of: skip, replace, error")
+
+        template_graph = template.graph
+        if str(getattr(template, "editor_mode", "json")) == "python":
+            source = str(getattr(template, "python_source", "") or "")
+            if not source.strip():
+                raise HTTPException(status_code=400, detail="Template python pipeline is missing python_source")
+            try:
+                template_graph = compile_python_source_to_graph(
+                    python_source=source,
+                    pipeline_name=template.name,
+                    registry=registry,
+                    filename=f"<pipeline:{template.name}>",
+                )
+            except PythonDslCompileError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        created: list[str] = []
+        updated: list[str] = []
+        skipped: list[dict[str, Any]] = []
+
+        existing_names = {p.name for p in await config_store.list_pipelines()}
+
+        seen_camera_ids: set[str] = set()
+        for camera_id in camera_ids:
+            if camera_id in seen_camera_ids:
+                continue
+            seen_camera_ids.add(camera_id)
+            instance_name = default_instance_name(template_name=template.name, camera_id=camera_id)
+
+            exists = instance_name in existing_names
+            if exists and conflict == "skip":
+                skipped.append({"camera_id": camera_id, "pipeline_name": instance_name, "reason": "already_exists"})
+                continue
+            if exists and conflict == "error":
+                raise HTTPException(status_code=409, detail=f"Pipeline already exists: {instance_name}")
+
+            try:
+                graph = instantiate_camera_template_graph(template_graph=template_graph, camera_id=camera_id)
+            except PipelineTemplateError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            instance = Pipeline(
+                name=instance_name,
+                type=instance_type,  # type: ignore[arg-type]
+                enabled=bool(body.enabled) if instance_type == "final" else True,
+                processing_server_id=str(body.processing_server_id or template.processing_server_id or "local").strip()
+                or "local",
+                editor_mode="interactive",
+                python_source="",
+                graph=graph,
+            )
+
+            try:
+                compiler.compile_pipeline(instance)
+            except GraphCompileError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            if body.dry_run:
+                created.append(instance_name) if not exists else updated.append(instance_name)
+                continue
+
+            try:
+                if exists:
+                    await config_store.replace_pipeline(instance_name, instance)
+                    updated.append(instance_name)
+                else:
+                    await config_store.create_pipeline(instance)
+                    existing_names.add(instance_name)
+                    created.append(instance_name)
+            except PipelineValidationError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except PipelineAlreadyExistsError:
+                skipped.append({"camera_id": camera_id, "pipeline_name": instance_name, "reason": "already_exists"})
+
+        orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+        if orchestrator is not None and not body.dry_run:
+            try:
+                orchestrator.trigger_reload()
+            except Exception:
+                pass
+
+        return PipelineTemplateApplyCamerasResponse(
+            dry_run=bool(body.dry_run),
+            created=created,
+            updated=updated,
+            skipped=skipped,
         )
 
     @app.post("/api/pipelines", response_model=Pipeline, status_code=201)

@@ -300,7 +300,7 @@ class StoreImagesConfig(BaseModel):
     subdir: str = "pipelines"
     format: Literal["jpg", "png"] = "png"
     jpeg_quality: int = Field(default=85, ge=1, le=100)
-    keep_data: bool = False
+    drop_data_after_store: bool = True
     overwrite: bool = False
 
     @model_validator(mode="before")
@@ -312,6 +312,11 @@ class StoreImagesConfig(BaseModel):
             values.pop("timestamp_field", None)
             values.pop("camera_id_field", None)
             values.pop("tracking_id_field", None)
+            # Legacy field. `keep_data=True` means `drop_data_after_store=False`.
+            if "keep_data" in values and "drop_data_after_store" not in values:
+                values["drop_data_after_store"] = not bool(values.pop("keep_data"))
+            else:
+                values.pop("keep_data", None)
         return values
 
     @field_validator("artifact_names", mode="after")
@@ -388,7 +393,7 @@ class StoreImagesRuntime(TransformOperatorRuntime):
             packet = packet.with_artifact(
                 Artifact(
                     name=artifact.name,
-                    data=artifact.data if self._config.keep_data else None,
+                    data=None if bool(self._config.drop_data_after_store) else artifact.data,
                     reference=rel,
                     mime_type=mime,
                     metadata=meta,

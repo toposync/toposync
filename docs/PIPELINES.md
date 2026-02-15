@@ -48,6 +48,21 @@ Implementação: `src/toposync/runtime/pipelines/runtime.py` (`Packet`, `Artifac
   - `artifacts["frame_original"]`: frame “imutável” de origem (full frame).
   - `artifacts["frame"]`: frame “corrente” do stream (pode ser alterado por operadores como crop/adjust).
 
+### Orçamento de memória para `Artifact.data` (realtime safe)
+
+Para manter a máquina saudável quando o pipeline começa a gerar **crops/máscaras/frames derivados em cascata**, o runtime aplica limites de memória (com métricas).
+
+**Políticas**
+- `core.store_images` por padrão **remove `Artifact.data` após persistir** (`drop_data_after_store=true`), mantendo apenas `Artifact.reference`.
+- O runtime mantém métricas de **bytes de artifacts em memória** nas filas (por edge) e limita o crescimento com drop explícito.
+
+**Limites (defaults; configuráveis via env)**
+- `TOPOSYNC_ARTIFACT_MAX_BYTES_PER_PACKET` (default `134217728`): limite por Packet; quando estoura, o runtime “evicta” `Artifact.data` de artifacts derivados (mantém `frame_original`/`frame`).
+- `TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_PER_PIPELINE` (default `536870912`): limite por runtime (por pipeline/bundle).
+- `TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_GLOBAL` (default `1073741824`): limite global do processo (soma de todos os runtimes locais).
+
+Observação: `open/close` são estruturais e não são descartados; sob pressão de memória, o runtime tende a descartar **updates** primeiro.
+
 ### Lifecycle invariants (sob drop/backpressure)
 
 Para manter previsibilidade sob carga (e evitar “update sem open” ou “stream aberto para sempre”), o runtime segue invariantes:
@@ -363,6 +378,7 @@ Implementação: `extensions/cameras/src/toposync_ext_cameras/pipelines/postproc
 
 Persistência local (por enquanto):
 - escreve arquivos em `files/` e coloca o caminho relativo em `Artifact.reference`
+- por padrão, **remove `Artifact.data` após persistir** (`drop_data_after_store=true`) para reduzir uso de memória
 - **não** depende de câmera/tracking id “field configurável”: resolve por payload/metadata quando possível
 - converte BGR→RGB ao codificar PNG/JPEG (OpenCV friendly)
 

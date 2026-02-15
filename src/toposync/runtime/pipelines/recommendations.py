@@ -252,8 +252,10 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
     }
     for store_node_id in _node_ids_by_operator("core.store_images"):
         cfg = _resolve_config(store_node_id)
-        keep_data = bool(cfg.get("keep_data", False))
-        if keep_data:
+        drop_data_after_store = cfg.get("drop_data_after_store")
+        if drop_data_after_store is None:
+            drop_data_after_store = not bool(cfg.get("keep_data", False))
+        if not bool(drop_data_after_store):
             continue
         # If Store Images is fed directly by split/track streams without downstream rate control, it can be very heavy.
         upstream_ops = [nodes_by_id[nid].operator_id for nid in _upstream_nodes(store_node_id) if nid in nodes_by_id]

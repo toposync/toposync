@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable, Protocol
 from .compiler import CompiledPipeline
 from .operator_registry import OperatorRegistry
 from .runtime import (
+    ArtifactMemoryCounter,
     BoundedChannel,
     ChannelMetricsSnapshot,
     KeyedBoundedChannel,
@@ -36,6 +37,9 @@ class PipelineRuntimeDependencies:
     processing_emit_projected_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None
     pipeline_stats_store: PipelineStatsStore | None = None
     pipeline_stats_node_roles: dict[str, NodeStatsRoles] | None = None
+    artifact_max_bytes_per_packet: int | None = 128 * 1024 * 1024
+    artifact_max_total_bytes_per_pipeline: int | None = 512 * 1024 * 1024
+    artifact_global_counter: ArtifactMemoryCounter | None = None
 
 
 @dataclass(slots=True)
@@ -227,8 +231,12 @@ class PipelineRuntime:
     _tasks: list[asyncio.Task[None]] = field(init=False, default_factory=list)
     _runtimes: list[BaseOperatorRuntime] = field(init=False, default_factory=list)
     _cancel_event: asyncio.Event = field(init=False, default_factory=asyncio.Event)
+    _artifact_pipeline_counter: ArtifactMemoryCounter = field(init=False)
 
     def __post_init__(self) -> None:
+        self._artifact_pipeline_counter = ArtifactMemoryCounter(
+            limit_bytes=self.dependencies.artifact_max_total_bytes_per_pipeline,
+        )
         self._build_runtime()
 
     async def start(self) -> None:
@@ -255,6 +263,11 @@ class PipelineRuntime:
             await asyncio.gather(*pending, return_exceptions=True)
             await asyncio.gather(*done, return_exceptions=True)
         self._tasks.clear()
+        for channel in self.channel_map.values():
+            try:
+                channel.clear()
+            except Exception:
+                continue
 
     async def run_for(self, duration_s: float) -> dict[str, Any]:
         await self.start()
@@ -269,6 +282,14 @@ class PipelineRuntime:
             "pipeline_name": self.compiled.name,
             "channels": channels,
             "nodes": nodes,
+            "artifact_memory": {
+                "pipeline": self._artifact_pipeline_counter.snapshot(),
+                "global": (
+                    self.dependencies.artifact_global_counter.snapshot()
+                    if self.dependencies.artifact_global_counter is not None
+                    else None
+                ),
+            },
         }
 
     async def _run_node(self, runtime: BaseOperatorRuntime, context: NodeExecutionContext) -> None:
@@ -324,12 +345,18 @@ class PipelineRuntime:
                     maxsize=edge.channel_maxsize,
                     drop_policy=edge.channel_drop_policy,
                     key_fn=lambda packet: packet.stream_id,
+                    artifact_max_bytes_per_packet=self.dependencies.artifact_max_bytes_per_packet,
+                    pipeline_artifact_counter=self._artifact_pipeline_counter,
+                    global_artifact_counter=self.dependencies.artifact_global_counter,
                 )
             else:
                 channel = BoundedChannel[Packet](
                     name=channel_name,
                     maxsize=edge.channel_maxsize,
                     drop_policy=edge.channel_drop_policy,
+                    artifact_max_bytes_per_packet=self.dependencies.artifact_max_bytes_per_packet,
+                    pipeline_artifact_counter=self._artifact_pipeline_counter,
+                    global_artifact_counter=self.dependencies.artifact_global_counter,
                 )
             self.channel_map[channel_name] = channel
             outputs_by_node_port.setdefault((edge.source_node_id, edge.source_port), []).append(channel)
@@ -403,6 +430,11 @@ def _snapshot_to_dict(snapshot: ChannelMetricsSnapshot) -> dict[str, Any]:
         "avg_queue_wait_ms": snapshot.avg_queue_wait_ms,
         "p95_queue_wait_ms": snapshot.p95_queue_wait_ms,
         "utilization": snapshot.utilization,
+        "in_memory_artifact_bytes": snapshot.in_memory_artifact_bytes,
+        "max_in_memory_artifact_bytes_seen": snapshot.max_in_memory_artifact_bytes_seen,
+        "active_keys": snapshot.active_keys,
+        "max_depth_per_key_seen": snapshot.max_depth_per_key_seen,
+        "max_in_memory_artifact_bytes_per_key_seen": snapshot.max_in_memory_artifact_bytes_per_key_seen,
     }
 
 

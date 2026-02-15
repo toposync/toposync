@@ -34,6 +34,7 @@ from toposync.runtime.config_store import (
 from toposync.runtime.notifications import NotificationsRuntime
 from toposync.runtime.services import ServiceRegistry
 from toposync.runtime.pipelines import (
+    ArtifactMemoryCounter,
     GraphCompileError,
     OperatorDefinition,
     OperatorRegistry,
@@ -289,6 +290,22 @@ async def _lifespan(app: FastAPI):
     pipeline_stats_store = PipelineStatsStore()
     app.state.pipeline_stats_store = pipeline_stats_store
 
+    def _env_int(name: str, default: int) -> int:
+        raw = str(os.getenv(name) or "").strip()
+        if not raw:
+            return int(default)
+        try:
+            return int(raw)
+        except Exception:
+            return int(default)
+
+    artifact_max_bytes_per_packet = _env_int("TOPOSYNC_ARTIFACT_MAX_BYTES_PER_PACKET", 128 * 1024 * 1024)
+    artifact_max_total_bytes_per_pipeline = _env_int("TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_PER_PIPELINE", 512 * 1024 * 1024)
+    artifact_max_total_bytes_global = _env_int("TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_GLOBAL", 1024 * 1024 * 1024)
+    artifact_global_counter = (
+        ArtifactMemoryCounter(limit_bytes=artifact_max_total_bytes_global) if artifact_max_total_bytes_global > 0 else None
+    )
+
     ext_manager = ExtensionManager(group="toposync.extensions")
     await ext_manager.load(app=app, bus=bus, services=services)
     app.state.extensions = ext_manager
@@ -300,7 +317,12 @@ async def _lifespan(app: FastAPI):
         notifications=notifications,
         files_dir=config_store.paths.files_dir,
         poll_interval_s=1.0,
-        runtime_dependencies=PipelineRuntimeDependencies(pipeline_stats_store=pipeline_stats_store),
+        runtime_dependencies=PipelineRuntimeDependencies(
+            pipeline_stats_store=pipeline_stats_store,
+            artifact_max_bytes_per_packet=artifact_max_bytes_per_packet,
+            artifact_max_total_bytes_per_pipeline=artifact_max_total_bytes_per_pipeline,
+            artifact_global_counter=artifact_global_counter,
+        ),
     )
     orchestrator.start()
     app.state.pipelines_orchestrator = orchestrator

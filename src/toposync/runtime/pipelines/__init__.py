@@ -1,5 +1,6 @@
 from .runtime import (
     Artifact,
+    ArtifactMemoryCounter,
     BoundedChannel,
     ChannelGetResult,
     ChannelMetricsSnapshot,
@@ -48,6 +49,7 @@ from .shared_runtime import (
 
 __all__ = [
     "Artifact",
+    "ArtifactMemoryCounter",
     "BoundedChannel",
     "ChannelGetResult",
     "ChannelMetricsSnapshot",

@@ -127,7 +127,7 @@ def build_pipeline_from_legacy_camera_rule(rule: LegacyCameraRule, *, existing_n
                         "artifact_names": ["best_frame", "frame_original"],
                         "subdir": "pipelines",
                         "format": "png",
-                        "keep_data": False,
+                        "drop_data_after_store": True,
                     },
                 },
                 {
@@ -217,14 +217,14 @@ def build_pipeline_from_legacy_camera_rule(rule: LegacyCameraRule, *, existing_n
             },
             {
                 "id": "store",
-                "operator": "core.store_images",
-                "config": {
-                    "artifact_names": ["best_frame", "frame_original"],
-                    "subdir": "pipelines",
-                    "format": "png",
-                    "keep_data": False,
+                    "operator": "core.store_images",
+                    "config": {
+                        "artifact_names": ["best_frame", "frame_original"],
+                        "subdir": "pipelines",
+                        "format": "png",
+                        "drop_data_after_store": True,
+                    },
                 },
-            },
             {
                 "id": "notify",
                 "operator": "core.notify",

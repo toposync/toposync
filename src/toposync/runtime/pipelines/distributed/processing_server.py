@@ -25,6 +25,7 @@ from ..compiler import PipelineGraphCompiler
 from ..execution import PipelineRuntimeDependencies
 from ..operator_registry import OperatorRegistry
 from ..shared_runtime import PipelineBundleRuntime
+from ..runtime import ArtifactMemoryCounter
 from .plan import build_distributed_graphs
 
 
@@ -138,10 +139,28 @@ class ProcessingServerRuntime:
             return
 
         report = self._compiler.compile_many(processing_pipelines)
+        def _env_int(name: str, default: int) -> int:
+            raw = str(os.getenv(name) or "").strip()
+            if not raw:
+                return int(default)
+            try:
+                return int(raw)
+            except Exception:
+                return int(default)
+
+        artifact_max_bytes_per_packet = _env_int("TOPOSYNC_ARTIFACT_MAX_BYTES_PER_PACKET", 128 * 1024 * 1024)
+        artifact_max_total_bytes_per_pipeline = _env_int("TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_PER_PIPELINE", 512 * 1024 * 1024)
+        artifact_max_total_bytes_global = _env_int("TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_GLOBAL", 1024 * 1024 * 1024)
+        artifact_global_counter = (
+            ArtifactMemoryCounter(limit_bytes=artifact_max_total_bytes_global) if artifact_max_total_bytes_global > 0 else None
+        )
         deps = PipelineRuntimeDependencies(
             config_store=self._config_store,
             logger=logger,
             processing_emit_projected_event=self._emit_projected_event,
+            artifact_max_bytes_per_packet=artifact_max_bytes_per_packet,
+            artifact_max_total_bytes_per_pipeline=artifact_max_total_bytes_per_pipeline,
+            artifact_global_counter=artifact_global_counter,
         )
         bundle = PipelineBundleRuntime(report=report, registry=self._registry, dependencies=deps, bundle_name="processing_bundle")
         await bundle.start()

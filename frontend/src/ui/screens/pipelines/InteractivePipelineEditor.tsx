@@ -1236,7 +1236,10 @@ export function InteractivePipelineEditor({
                                 }}
                               />
                             </label>
-                            <div className="pipelinesStepHint">Use templates like {{object_category_label}}, {{area_label}}, {{pose_label}}.</div>
+                            <div className="pipelinesStepHint">
+                              Use templates like <code>{"{{object_category_label}}"}</code>, <code>{"{{area_label}}"}</code>,{" "}
+                              <code>{"{{pose_label}}"}</code>.
+                            </div>
 
                             <label className="pipelinesLabel">
                               <span>Description template</span>
@@ -1425,4 +1428,3 @@ export function InteractivePipelineEditor({
     </div>
   );
 }
-

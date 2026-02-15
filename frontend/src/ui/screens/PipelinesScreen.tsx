@@ -187,6 +187,11 @@ export function PipelinesScreen({ onClose }: Props): React.ReactElement {
       return { ok: true, graph: parsed.data };
     }
 
+    // Python mode is currently one-way for editing, but the runtime still uses the JSON graph.
+    // Preserve the latest graph from interactive/json when available to avoid losing unsaved edits.
+    const parsed = safeJsonParse(graphText);
+    if (parsed.ok && isRecord(parsed.data)) return { ok: true, graph: parsed.data };
+
     const graph = isRecord(draft.graph) ? draft.graph : emptyGraph();
     return { ok: true, graph };
   };

@@ -222,6 +222,94 @@ def test_object_tracking_yolo_splits_two_objects_and_closes_lifecycle() -> None:
     asyncio.run(scenario())
 
 
+def test_object_tracking_yolo_assigns_stable_synthetic_id_when_tracker_id_missing() -> None:
+    async def scenario() -> None:
+        counters: dict[str, Any] = {}
+        registry = OperatorRegistry()
+        register_builtin_operators(registry)
+        register_camera_pipeline_operators(registry)
+        _register_test_source_and_sink(registry, counters, source_shareable=False)
+
+        sequence = [
+            [YoloObject(tracking_id=None, category="person", confidence=0.98, bbox01=(0.10, 0.10, 0.20, 0.40))],
+            [YoloObject(tracking_id=None, category="person", confidence=0.96, bbox01=(0.11, 0.10, 0.21, 0.41))],
+            [YoloObject(tracking_id=None, category="person", confidence=0.95, bbox01=(0.12, 0.11, 0.22, 0.42))],
+            [],
+            [],
+        ]
+        dependencies = PipelineRuntimeDependencies(
+            yolo_backend_factory=_build_backend_factory(sequence, counters),
+        )
+
+        graph = _tracking_pipeline_graph(source_id="source", yolo_id="yolo", sink_id="sink", sink_name="tracking_sink")
+        pipeline = Pipeline(name="stage5_tracking_synthetic_ids", type="final", graph=graph)
+        compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+        runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
+        await runtime.run_for(0.35)
+
+        packets = [record["packet"] for record in counters.get("packets", [])]
+        assert packets
+
+        tracking_ids = {str(packet.payload.get("tracking_id") or "") for packet in packets}
+        tracking_ids.discard("")
+        assert len(tracking_ids) == 1
+        tracking_id = next(iter(tracking_ids))
+        assert tracking_id.startswith("syn:camera:test:")
+
+        tracking_packets = [packet for packet in packets if str(packet.payload.get("tracking_id") or "") == tracking_id]
+        assert tracking_packets[0].lifecycle == Lifecycle.OPEN
+        assert any(packet.lifecycle == Lifecycle.CLOSE for packet in tracking_packets)
+        assert all(packet.payload.get("tracker_track_id") is None for packet in tracking_packets)
+
+        correlation_ids = {str(packet.payload.get("correlation_id") or "") for packet in tracking_packets}
+        assert len(correlation_ids) == 1
+
+    asyncio.run(scenario())
+
+
+def test_object_tracking_yolo_continues_when_tracker_id_missing_for_one_frame() -> None:
+    async def scenario() -> None:
+        counters: dict[str, Any] = {}
+        registry = OperatorRegistry()
+        register_builtin_operators(registry)
+        register_camera_pipeline_operators(registry)
+        _register_test_source_and_sink(registry, counters, source_shareable=False)
+
+        sequence = [
+            [YoloObject(tracking_id="17", category="person", confidence=0.98, bbox01=(0.10, 0.10, 0.20, 0.40))],
+            [YoloObject(tracking_id=None, category="person", confidence=0.96, bbox01=(0.11, 0.10, 0.21, 0.41))],
+            [YoloObject(tracking_id="17", category="person", confidence=0.95, bbox01=(0.12, 0.11, 0.22, 0.42))],
+            [],
+            [],
+        ]
+        dependencies = PipelineRuntimeDependencies(
+            yolo_backend_factory=_build_backend_factory(sequence, counters),
+        )
+
+        graph = _tracking_pipeline_graph(source_id="source", yolo_id="yolo", sink_id="sink", sink_name="tracking_sink")
+        pipeline = Pipeline(name="stage5_tracking_missing_id_frame", type="final", graph=graph)
+        compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+        runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
+        await runtime.run_for(0.35)
+
+        packets = [record["packet"] for record in counters.get("packets", [])]
+        assert packets
+
+        tracking_ids = {str(packet.payload.get("tracking_id") or "") for packet in packets}
+        assert tracking_ids == {"17"}
+
+        tracking_packets = [packet for packet in packets if str(packet.payload.get("tracking_id") or "") == "17"]
+        assert tracking_packets[0].lifecycle == Lifecycle.OPEN
+        assert any(packet.lifecycle == Lifecycle.CLOSE for packet in tracking_packets)
+
+        stream_ids = {packet.stream_id for packet in tracking_packets}
+        assert len(stream_ids) == 1
+        correlation_ids = {str(packet.payload.get("correlation_id") or "") for packet in tracking_packets}
+        assert len(correlation_ids) == 1
+
+    asyncio.run(scenario())
+
+
 def test_object_detection_yolo_emits_open_close_pairs_with_category_throttle() -> None:
     async def scenario() -> None:
         counters: dict[str, Any] = {}

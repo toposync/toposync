@@ -54,6 +54,23 @@ def _clean_device(v: str | None) -> str | None:
     return raw
 
 
+def _normalize_track_id(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+        if isinstance(value, (list, tuple)):
+            if not value:
+                return None
+            value = value[0]
+        if value is None:
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
 BBox01 = tuple[float, float, float, float]
 
 
@@ -372,10 +389,8 @@ class YoloTracker:
 
             track_id = None
             if hasattr(box, "id"):
-                try:
-                    track_id = int(box.id[0])
-                except Exception:
-                    track_id = None
+                raw_id = getattr(box, "id", None)
+                track_id = _normalize_track_id(raw_id)
 
             name = None
             if class_id is not None:

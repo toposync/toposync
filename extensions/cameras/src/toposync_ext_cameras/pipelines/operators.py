@@ -303,6 +303,7 @@ class MotionGateRuntime(TransformOperatorRuntime):
 @dataclass(slots=True)
 class _TrackingState:
     tracking_id: str
+    tracker_track_id: str | None
     correlation_id: str
     stream_id: str
     category: str
@@ -410,6 +411,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         payload.update(
             {
                 "tracking_id": object_data.get("tracking_id"),
+                "tracker_track_id": object_data.get("tracker_track_id"),
                 "correlation_id": object_data.get("correlation_id"),
                 "object_category_label": object_data.get("category"),
                 "object_confidence": object_data.get("confidence"),
@@ -427,6 +429,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
                 "operator_id": operator_id,
                 "source_stream_id": object_data.get("source_stream_id"),
                 "tracking_id": object_data.get("tracking_id"),
+                "tracker_track_id": object_data.get("tracker_track_id"),
                 "correlation_id": object_data.get("correlation_id"),
                 "object_category": object_data.get("category"),
                 "object_confidence": object_data.get("confidence"),
@@ -441,22 +444,99 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
         super().__init__(parsed, dependencies)
         self._parsed = parsed
         self._state_by_tracking_key: dict[str, _TrackingState] = {}
+        self._synthetic_tracking_counter: int = 0
+
+    def _next_synthetic_tracking_key(self, source_stream_id: str) -> str:
+        self._synthetic_tracking_counter += 1
+        return f"syn:{source_stream_id}:{self._synthetic_tracking_counter}"
+
+    def _match_tracking_key_by_iou(
+        self,
+        *,
+        detection: YoloObject,
+        now_monotonic: float,
+        used_keys: set[str],
+        min_iou: float,
+    ) -> str | None:
+        max_age = max(0.15, float(self._parsed.close_after_seconds) * 2.0)
+        best_key: str | None = None
+        best_iou = 0.0
+        for key, state in self._state_by_tracking_key.items():
+            if key in used_keys:
+                continue
+            if state.category != detection.category:
+                continue
+            if (now_monotonic - float(state.last_seen_monotonic)) > max_age:
+                continue
+            iou = _bbox_iou01(state.bbox01, detection.bbox01)
+            if iou > best_iou:
+                best_iou = iou
+                best_key = key
+        if best_key is None or best_iou < float(min_iou):
+            return None
+        return best_key
+
+    def _resolve_tracking_key(
+        self,
+        source_stream_id: str,
+        detection: YoloObject,
+        *,
+        now_monotonic: float,
+        used_keys: set[str],
+    ) -> str:
+        requested = str(detection.tracking_id or "").strip()
+
+        # Prefer tracker-provided ids when available and not already used in this frame.
+        if requested and requested not in used_keys and requested in self._state_by_tracking_key:
+            return requested
+
+        # When ids start appearing late (or flip), keep continuity by matching.
+        if requested:
+            matched = self._match_tracking_key_by_iou(
+                detection=detection,
+                now_monotonic=now_monotonic,
+                used_keys=used_keys,
+                min_iou=0.70,
+            )
+            if matched is not None:
+                return matched
+            return requested
+
+        matched = self._match_tracking_key_by_iou(
+            detection=detection,
+            now_monotonic=now_monotonic,
+            used_keys=used_keys,
+            min_iou=0.35,
+        )
+        if matched is not None:
+            return matched
+
+        return self._next_synthetic_tracking_key(source_stream_id)
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         detections = await self._track_objects(packet)
         now_monotonic = time.monotonic()
         outputs: list[Packet] = []
         active_keys: set[str] = set()
+        used_keys: set[str] = set()
 
         for index, detection in enumerate(detections):
-            tracking_key = _tracking_key(packet.stream_id, detection, index)
+            _ = index
+            tracking_key = self._resolve_tracking_key(
+                packet.stream_id,
+                detection,
+                now_monotonic=now_monotonic,
+                used_keys=used_keys,
+            )
             active_keys.add(tracking_key)
+            used_keys.add(tracking_key)
             state = self._state_by_tracking_key.get(tracking_key)
             if state is None:
                 source_stream = packet.stream_id
                 stream_id = f"obj:{source_stream}:{tracking_key}"
                 state = _TrackingState(
                     tracking_id=tracking_key,
+                    tracker_track_id=str(detection.tracking_id).strip() if detection.tracking_id else None,
                     correlation_id=uuid.uuid4().hex,
                     stream_id=stream_id,
                     category=detection.category,
@@ -468,6 +548,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
                 )
                 self._state_by_tracking_key[tracking_key] = state
 
+            state.tracker_track_id = str(detection.tracking_id).strip() if detection.tracking_id else None
             state.category = detection.category
             state.confidence = detection.confidence
             state.bbox01 = detection.bbox01
@@ -503,6 +584,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
     def _build_tracking_packet(self, source_packet: Packet, *, state: _TrackingState, lifecycle: Lifecycle) -> Packet:
         object_data = {
             "tracking_id": state.tracking_id,
+            "tracker_track_id": state.tracker_track_id,
             "correlation_id": state.correlation_id,
             "source_stream_id": source_packet.stream_id,
             "category": state.category,
@@ -760,6 +842,35 @@ def _normalize_bbox01(bbox: tuple[float, float, float, float]) -> tuple[float, f
     if y2 < y1:
         y1, y2 = y2, y1
     return (x1, y1, x2, y2)
+
+
+def _bbox_iou01(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+) -> float:
+    ax1, ay1, ax2, ay2 = [float(v) for v in a]
+    bx1, by1, bx2, by2 = [float(v) for v in b]
+
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+
+    iw = max(0.0, ix2 - ix1)
+    ih = max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0.0:
+        return 0.0
+
+    aw = max(0.0, ax2 - ax1)
+    ah = max(0.0, ay2 - ay1)
+    bw = max(0.0, bx2 - bx1)
+    bh = max(0.0, by2 - by1)
+    union = (aw * ah) + (bw * bh) - inter
+    if union <= 0.0:
+        return 0.0
+
+    return max(0.0, min(1.0, inter / union))
 
 
 def _tracking_key(source_stream_id: str, detection: YoloObject, index: int) -> str:

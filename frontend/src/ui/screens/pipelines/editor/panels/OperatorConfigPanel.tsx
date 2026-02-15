@@ -72,7 +72,7 @@ export function OperatorConfigPanel({
     );
   }
   if (operatorId === "vision.object_tracking_yolo" || operatorId === "vision.object_detection_yolo") {
-    return <YoloVisionConfigCard config={config} onUpdateConfig={onUpdateConfig} />;
+    return <YoloVisionConfigCard operatorId={operatorId} config={config} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "core.category_gate") {
     return <CategoryGateConfigCard config={config} onUpdateConfig={onUpdateConfig} />;

@@ -258,13 +258,71 @@ def _normalize_config(config: AppConfig) -> AppConfig:
     if active_id not in ids:
         active_id = compositions[0].id
 
+    def _migrate_pipeline_graph(graph: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(graph, dict):
+            return graph
+        nodes_raw = graph.get("nodes")
+        if not isinstance(nodes_raw, list):
+            return graph
+        changed = False
+        migrated_nodes: list[Any] = []
+
+        def _as_float(v: Any) -> float | None:
+            try:
+                value = float(v)
+            except Exception:
+                return None
+            if not (value == value):  # NaN
+                return None
+            return value
+
+        for item in nodes_raw:
+            if not isinstance(item, dict):
+                migrated_nodes.append(item)
+                continue
+            operator_id = str(item.get("operator") or "").strip()
+            if operator_id != "vision.object_tracking_yolo":
+                migrated_nodes.append(item)
+                continue
+            cfg_raw = item.get("config")
+            if not isinstance(cfg_raw, dict):
+                migrated_nodes.append(item)
+                continue
+            cfg = dict(cfg_raw)
+            node_changed = False
+
+            # Migração: defaults antigos eram agressivos demais e causavam tracking "flickery" e updates excessivos.
+            close_after = _as_float(cfg.get("close_after_seconds"))
+            if close_after is not None and abs(close_after - 1.2) < 1e-9:
+                cfg["close_after_seconds"] = 4.0
+                node_changed = True
+
+            default_interval = _as_float(cfg.get("default_interval_seconds"))
+            if default_interval is not None and abs(default_interval - 0.0) < 1e-9:
+                cfg["default_interval_seconds"] = 0.2
+                node_changed = True
+
+            if node_changed:
+                changed = True
+                migrated_nodes.append({**item, "config": cfg})
+            else:
+                migrated_nodes.append(item)
+
+        if not changed:
+            return graph
+        return {**graph, "nodes": migrated_nodes}
+
     seen_pipeline_names: set[str] = set()
     normalized_pipelines: list[Pipeline] = []
     for pipeline in config.pipelines:
         if pipeline.name in seen_pipeline_names:
             continue
         seen_pipeline_names.add(pipeline.name)
-        normalized_pipelines.append(pipeline)
+        migrated_graph = _migrate_pipeline_graph(pipeline.graph)
+        if migrated_graph is pipeline.graph:
+            normalized_pipelines.append(pipeline)
+        else:
+            normalized_pipelines.append(pipeline.model_copy(update={"graph": migrated_graph}))
 
     return AppConfig(
         schema_version=config.schema_version,

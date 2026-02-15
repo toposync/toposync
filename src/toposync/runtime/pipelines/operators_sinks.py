@@ -366,13 +366,16 @@ class StoreImagesRuntime(TransformOperatorRuntime):
         files_dir = _resolve_files_dir(self._dependencies)
 
         pipeline_name = getattr(context, "pipeline_name", "") or "pipeline"
-        node_id = getattr(context, "node_id", "") or "node"
         camera_id = _resolve_string(packet, "camera_id") or "no_camera"
         token = (
             _resolve_string(packet, "event_id")
             or _resolve_string(packet, "tracking_id")
             or _resolve_string(packet, "correlation_id")
             or packet.stream_id
+        )
+        category = (
+            str(packet.payload.get("object_category_label") or "").strip()
+            or str(packet.metadata.get("object_category") or "").strip()
         )
 
         ts = _resolve_ts(packet, "frame_ts")
@@ -402,10 +405,26 @@ class StoreImagesRuntime(TransformOperatorRuntime):
                 targets.append((key or artifact_name, artifact_name))
                 break
 
+        images = packet.payload.get("images") if isinstance(packet.payload.get("images"), dict) else {}
+
+        def _semantic_image_key(raw_key: str, artifact_name: str) -> str:
+            key_norm = str(raw_key or "").strip()
+            artifact_norm = str(artifact_name or "").strip()
+            if key_norm and key_norm != artifact_norm:
+                return key_norm
+            matches = [str(k) for k, v in images.items() if str(v or "").strip() == artifact_norm]
+            if matches:
+                priority = {"best_frame": 0, "segmented": 1, "treated": 2, "original": 3}
+                matches.sort(key=lambda item: priority.get(item, 100))
+                return str(matches[0] or "").strip() or artifact_norm or key_norm
+            return artifact_norm or key_norm
+
         for key, artifact_name in targets:
             artifact = packet.artifacts.get(artifact_name)
             if artifact is None:
                 continue
+
+            image_key = _semantic_image_key(str(key), artifact_name)
 
             rel: str | None = str(artifact.reference) if artifact.reference else None
             mime: str | None = str(artifact.mime_type) if artifact.mime_type else None
@@ -418,15 +437,21 @@ class StoreImagesRuntime(TransformOperatorRuntime):
                     fmt=self._config.format,
                     jpeg_quality=int(self._config.jpeg_quality),
                 )
-                filename = f"{ts_ms}_{packet.packet_id[:8]}_{_safe_component(artifact_name)}{ext}"
+                parts: list[str] = [str(ts_ms)]
+                if camera_id:
+                    parts.append(_safe_component(camera_id, max_len=40))
+                if category:
+                    parts.append(_safe_component(category, max_len=32))
+                parts.append(_safe_component(image_key or artifact_name, max_len=32))
+                if token:
+                    parts.append(_safe_component(token, max_len=80))
+                parts.append(_safe_component(packet.packet_id[:8], max_len=16))
+                filename = "__".join(parts) + ext
                 abs_path, rel_path = _build_rel_path(
                     files_dir=files_dir,
                     components=[
                         self._config.subdir,
                         pipeline_name,
-                        node_id,
-                        camera_id,
-                        token,
                     ],
                     filename=filename,
                 )
@@ -449,7 +474,7 @@ class StoreImagesRuntime(TransformOperatorRuntime):
             if rel:
                 packet = add_stored_image_entry(
                     packet,
-                    key=str(key or "").strip() or artifact_name,
+                    key=image_key or artifact_name,
                     artifact=packet.artifacts.get(artifact_name) or artifact,
                     rel_path=rel,
                     stored_ts_ms=ts_ms,

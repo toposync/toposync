@@ -157,9 +157,11 @@ def test_store_images_writes_files_and_sets_references(tmp_path: Path) -> None:
         art = out_packet.artifacts["frame_original"]
         assert art.reference
         assert art.data is None
-        assert str(art.reference).startswith("pipelines/")
-        assert "camera-main" in str(art.reference)
-        assert "track-1" in str(art.reference)
+        rel = str(art.reference)
+        assert rel.startswith("pipelines/stage7_store_images/")
+        assert "camera-main" in rel
+        assert "track-1" in rel
+        assert "original" in rel
         assert (files_dir / str(art.reference)).is_file()
 
     asyncio.run(scenario())

@@ -26,6 +26,13 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+button,
+[role="button"],
+[draggable="true"] {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;

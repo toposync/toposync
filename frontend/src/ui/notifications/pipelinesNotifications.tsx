@@ -9,6 +9,16 @@ import type {
 } from "@toposync/plugin-api";
 
 type Priority = "low" | "medium" | "high";
+type NotificationImageSource = "thumbnail" | "artifact" | "stored";
+
+export type NotificationImageItem = {
+  id: string;
+  url: string;
+  label: string;
+  source: NotificationImageSource;
+  storedTsMs?: number;
+  confidence?: number;
+};
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
@@ -54,15 +64,65 @@ function resolveArtifacts(payload: Record<string, unknown>): Record<string, stri
   return out;
 }
 
+function toFileUrl(relPath: string): string {
+  return `/files/${encodeURI(relPath)}`;
+}
+
 function resolveThumbnailFromArtifacts(artifacts: Record<string, string>): { artifactName: string; url: string } | null {
   for (const candidate of preferredArtifactNames()) {
     const rel = artifacts[candidate];
     if (!rel) continue;
-    return { artifactName: candidate, url: `/files/${encodeURI(rel)}` };
+    return { artifactName: candidate, url: toFileUrl(rel) };
   }
   const first = Object.entries(artifacts)[0];
   if (!first) return null;
-  return { artifactName: first[0], url: `/files/${encodeURI(first[1])}` };
+  return { artifactName: first[0], url: toFileUrl(first[1]) };
+}
+
+function parseStoredTsMs(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const parsed = Math.floor(value);
+  return parsed > 0 ? parsed : undefined;
+}
+
+function parseConfidence(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  return value;
+}
+
+function resolveStoredImages(payload: Record<string, unknown>): NotificationImageItem[] {
+  const rawStored = asRecord(payload.stored_images);
+  const out: NotificationImageItem[] = [];
+
+  for (const [key, entriesRaw] of Object.entries(rawStored)) {
+    if (!Array.isArray(entriesRaw)) continue;
+    let idx = 0;
+    for (const entryRaw of entriesRaw) {
+      const entry = asRecord(entryRaw);
+      const relPath = asString(entry.rel_path, "").trim();
+      if (!relPath) continue;
+      idx += 1;
+      const artifactName = asString(entry.artifact_name, "").trim();
+      const label = artifactName || key || "stored";
+      out.push({
+        id: `stored:${key}:${idx}:${relPath}`,
+        url: toFileUrl(relPath),
+        label,
+        source: "stored",
+        storedTsMs: parseStoredTsMs(entry.stored_ts_ms),
+        confidence: parseConfidence(entry.confidence),
+      });
+    }
+  }
+
+  out.sort((a, b) => {
+    const at = a.storedTsMs ?? 0;
+    const bt = b.storedTsMs ?? 0;
+    if (at !== bt) return at - bt;
+    return a.label.localeCompare(b.label);
+  });
+
+  return out;
 }
 
 function asFiniteNumber(value: unknown): number | null {
@@ -276,6 +336,50 @@ export function notificationThumbnailUrl(notification: Notification): string | n
   return resolveThumbnailFromArtifacts(artifacts)?.url ?? null;
 }
 
+export function notificationImageItems(notification: Notification): NotificationImageItem[] {
+  const out: NotificationImageItem[] = [];
+  const seenUrls = new Set<string>();
+
+  function push(item: NotificationImageItem): void {
+    const key = item.url.trim();
+    if (!key || seenUrls.has(key)) return;
+    seenUrls.add(key);
+    out.push(item);
+  }
+
+  if (typeof notification.imageUrl === "string" && notification.imageUrl.trim()) {
+    push({
+      id: `thumbnail:${notification.id}`,
+      url: notification.imageUrl.trim(),
+      label: "thumbnail",
+      source: "thumbnail",
+    });
+  }
+
+  const payload = asRecord(notification.payload);
+  const artifacts = resolveArtifacts(payload);
+  const orderedArtifactNames = [
+    ...preferredArtifactNames().filter((name) => Boolean(artifacts[name])),
+    ...Object.keys(artifacts).filter((name) => !preferredArtifactNames().includes(name)),
+  ];
+  for (const name of orderedArtifactNames) {
+    const relPath = artifacts[name];
+    if (!relPath) continue;
+    push({
+      id: `artifact:${name}:${relPath}`,
+      url: toFileUrl(relPath),
+      label: name,
+      source: "artifact",
+    });
+  }
+
+  for (const item of resolveStoredImages(payload)) {
+    push(item);
+  }
+
+  return out;
+}
+
 function renderPipelinesNotification(notification: Notification): React.ReactNode {
   const payload = asRecord(notification.payload);
   const data = asRecord(payload.data);
@@ -291,12 +395,7 @@ function renderPipelinesNotification(notification: Notification): React.ReactNod
   const cameraId = asString(data.camera_id, "").trim();
   const locationLabel = asString(data.area_label, "").trim();
 
-  const artifacts = resolveArtifacts(payload);
-  const artifactNames = [
-    ...preferredArtifactNames().filter((name) => Boolean(artifacts[name])),
-    ...Object.keys(artifacts).filter((name) => !preferredArtifactNames().includes(name)),
-  ];
-  const thumb = resolveThumbnailFromArtifacts(artifacts);
+  const normalizedStatus = status || lifecycle;
 
   const subtitleParts = [cameraName || cameraId || pipelineName, locationLabel].filter(Boolean);
   const subtitle = subtitleParts.join(" • ");
@@ -318,22 +417,9 @@ function renderPipelinesNotification(notification: Notification): React.ReactNod
 
       <div className="notificationChips">
         <span className="notificationChip">{priority.toUpperCase()}</span>
-        {lifecycle ? <span className="notificationChip">{lifecycle.toUpperCase()}</span> : null}
+        {normalizedStatus ? <span className="notificationChip">{normalizedStatus.toUpperCase()}</span> : null}
         {duration ? <span className="notificationChip">{duration}</span> : null}
-        {thumb?.artifactName ? <span className="notificationChip">thumb: {thumb.artifactName}</span> : null}
-        {artifactNames.length ? <span className="notificationChip">artifacts: {artifactNames.length}</span> : null}
       </div>
-
-      {artifactNames.length ? (
-        <div className="notificationChips">
-          {artifactNames.slice(0, 4).map((name) => (
-            <span className="notificationChip" key={name}>
-              {name}
-            </span>
-          ))}
-          {artifactNames.length > 4 ? <span className="notificationChip">+{artifactNames.length - 4}</span> : null}
-        </div>
-      ) : null}
 
       {notification.description ? <div className="notificationText">{notification.description}</div> : null}
     </div>

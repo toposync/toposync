@@ -1,4 +1,4 @@
-import type { CamerasIndex } from "../types";
+import type { CameraContextsResponse, CameraPipelineWizardRequest, CameraPipelineWizardResponse, CamerasIndex } from "../types";
 import { readRecord } from "../parsing";
 
 type ControlPointMapPair = { image: { x: number; y: number }; world: { x: number; z: number } };
@@ -59,6 +59,33 @@ export async function mapControlPoint(
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Mapping failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function fetchCameraContexts(cameraId: string, signal?: AbortSignal): Promise<CameraContextsResponse> {
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/contexts`, { signal });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Failed to load camera contexts: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function createCameraPipelineFromWizard(
+  cameraId: string,
+  body: CameraPipelineWizardRequest,
+  signal?: AbortSignal,
+): Promise<CameraPipelineWizardResponse> {
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/pipeline-wizard`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Failed to create pipeline: ${response.status}`);
   }
   return response.json();
 }

@@ -363,7 +363,7 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
         if wanted_names:
             store_candidates = wanted_names
         else:
-            fallback = str(cfg.get("image_with_fallback") or "").strip() or "segmented,treated,original"
+            fallback = str(cfg.get("image_with_fallback") or "").strip() or "best_frame,original,treated,segmented"
             store_candidates = [p.strip() for p in fallback.split(",") if p.strip()]
         stored_artifacts = {_map_name(name) for name in store_candidates if str(name or "").strip()}
 

@@ -50,8 +50,8 @@ export const camerasTranslations = {
     "ext.cameras.wizard.enabled": "Enabled",
     "ext.cameras.wizard.enabled_hint": "Start this pipeline automatically after creation.",
     "ext.cameras.wizard.summary": "Summary",
-    "ext.cameras.wizard.summary.people": "Detect people and notify (5s throttle, segmented image).",
-    "ext.cameras.wizard.summary.pets": "Detect pets (cat/dog) and notify (throttle, segmented image).",
+    "ext.cameras.wizard.summary.people": "Detect people and notify (5s throttle, best/full-frame first).",
+    "ext.cameras.wizard.summary.pets": "Detect pets (cat/dog) and notify (throttle, best/full-frame first).",
     "ext.cameras.wizard.summary.vehicles":
       "Detect vehicles that stop (mapping required), optionally restrict by area, and notify (high priority).",
     "ext.cameras.wizard.creating": "Creating…",
@@ -133,8 +133,8 @@ export const camerasTranslations = {
     "ext.cameras.wizard.enabled": "Ativo",
     "ext.cameras.wizard.enabled_hint": "Inicia este pipeline automaticamente após criar.",
     "ext.cameras.wizard.summary": "Resumo",
-    "ext.cameras.wizard.summary.people": "Detecta pessoas e notifica (throttle 5s, imagem segmentada).",
-    "ext.cameras.wizard.summary.pets": "Detecta pets (gato/cachorro) e notifica (throttle, imagem segmentada).",
+    "ext.cameras.wizard.summary.people": "Detecta pessoas e notifica (throttle 5s, prioriza melhor/frame completo).",
+    "ext.cameras.wizard.summary.pets": "Detecta pets (gato/cachorro) e notifica (throttle, prioriza melhor/frame completo).",
     "ext.cameras.wizard.summary.vehicles":
       "Detecta veículos que pararam (mapping obrigatório), permite restringir por área e notifica (prioridade alta).",
     "ext.cameras.wizard.creating": "Criando…",

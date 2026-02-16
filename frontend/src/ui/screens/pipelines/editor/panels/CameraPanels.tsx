@@ -651,3 +651,156 @@ export function ImageResizeConfigCard({ config, onUpdateConfig }: ImageResizePro
     </div>
   );
 }
+
+type ObjectSegmentationProps = {
+  config: Record<string, unknown>;
+  showAdvanced: boolean;
+  onUpdateConfig: UpdateConfig;
+};
+
+function normalizeStringArray(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return fallback;
+  const items = value.map((item) => String(item || "").trim()).filter((item) => item.length > 0);
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const key = item.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(item);
+  }
+  return unique.length > 0 ? unique : fallback;
+}
+
+export function ObjectSegmentationConfigCard({
+  config,
+  showAdvanced,
+  onUpdateConfig,
+}: ObjectSegmentationProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? (config as any).fallback_to_payload_frame ?? true;
+  const paddingRatio = Number((config as any).padding_ratio ?? 0.08);
+  const minCropSizePx = Number((config as any).min_crop_size_px ?? 8);
+  const outputArtifactName = String((config as any).output_artifact_name ?? "segmented").trim() || "segmented";
+  const bboxField = String((config as any).bbox_field ?? "object_bbox01").trim() || "object_bbox01";
+
+  const inputNames = normalizeStringArray((config as any).input_artifact_names, ["original", "treated"]);
+  const preferOriginal = String(inputNames[0] || "").trim().toLowerCase() !== "treated";
+
+  const artifactSuggestions = buildArtifactSuggestions(t);
+  const selectedInputOptions = inputNames.map((value) => artifactSuggestions.find((opt) => opt.value === value) ?? { value, label: value });
+
+  const clamp = (value: number, min: number, max: number, fallback: number) => {
+    if (!Number.isFinite(value)) return fallback;
+    return Math.max(min, Math.min(max, value));
+  };
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.object_segmentation.quality")}</span>
+        <select
+          className="pipelinesSelect"
+          value={preferOriginal ? "best" : "fast"}
+          onChange={(event) => {
+            const next = String(event.target.value || "best").trim().toLowerCase();
+            onUpdateConfig((prev) => ({
+              ...prev,
+              input_artifact_names: next === "fast" ? ["treated", "original"] : ["original", "treated"],
+            }));
+          }}
+        >
+          <option value="best">{t("core.ui.pipelines.panels.object_segmentation.quality.best")}</option>
+          <option value="fast">{t("core.ui.pipelines.panels.object_segmentation.quality.fast")}</option>
+        </select>
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.object_segmentation.quality_hint")}</div>
+
+      {showAdvanced ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.object_segmentation.input_images")}</span>
+            <CreatableSelect<SelectOption, true>
+              isMulti
+              styles={pipelinesReactSelectStyles}
+              options={artifactSuggestions}
+              value={selectedInputOptions}
+              placeholder={t("core.ui.pipelines.panels.object_segmentation.input_images_placeholder")}
+              onChange={(value: MultiValue<SelectOption>) => {
+                onUpdateConfig((prev) => ({
+                  ...prev,
+                  input_artifact_names: value.map((item) => item.value),
+                }));
+              }}
+            />
+          </label>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.object_segmentation.input_images_hint")}</div>
+        </>
+      ) : null}
+
+      <div className="pipelinesScalarGrid" style={{ marginTop: 8 }}>
+        <label className="pipelinesLabel pipelinesScalarLabel">
+          <span>{t("core.ui.pipelines.panels.object_segmentation.padding")}</span>
+          <PipelinesNumberInput
+            className="pipelinesInput"
+            min={0}
+            max={0.5}
+            step={0.01}
+            value={clamp(paddingRatio, 0, 0.5, 0.08)}
+            onChange={(nextValue) => onUpdateConfig((prev) => ({ ...prev, padding_ratio: clamp(nextValue, 0, 0.5, 0.08) }))}
+          />
+        </label>
+
+        <label className="pipelinesLabel pipelinesScalarLabel">
+          <span>{t("core.ui.pipelines.panels.object_segmentation.min_crop_size_px")}</span>
+          <PipelinesNumberInput
+            className="pipelinesInput"
+            min={1}
+            max={4096}
+            step={1}
+            value={clamp(minCropSizePx, 1, 4096, 8)}
+            onChange={(nextValue) => onUpdateConfig((prev) => ({ ...prev, min_crop_size_px: clamp(nextValue, 1, 4096, 8) }))}
+          />
+        </label>
+      </div>
+      <div className="pipelinesStepHint" style={{ marginTop: 8 }}>
+        {t("core.ui.pipelines.panels.object_segmentation.hint")}
+      </div>
+
+      {showAdvanced ? (
+        <>
+          <div className="sectionDivider" />
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.object_segmentation.output_artifact_name")}</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={outputArtifactName}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, output_artifact_name: event.target.value }))}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.object_segmentation.bbox_field")}</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={bboxField}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, bbox_field: event.target.value }))}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.object_segmentation.fallback_stream_frame")}</span>
+            <input
+              type="checkbox"
+              checked={Boolean(fallbackToStreamFrame)}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, fallback_to_stream_frame: event.target.checked }))}
+            />
+          </label>
+        </>
+      ) : null}
+    </div>
+  );
+}

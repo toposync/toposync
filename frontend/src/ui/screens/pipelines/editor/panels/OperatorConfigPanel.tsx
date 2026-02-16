@@ -21,6 +21,7 @@ import {
   ImageAdjustConfigCard,
   ImageCropConfigCard,
   ImageResizeConfigCard,
+  ObjectSegmentationConfigCard,
   VelocityEstimationConfigCard,
 } from "./CameraPanels";
 import { YoloVisionConfigCard } from "./VisionPanels";
@@ -128,6 +129,9 @@ export function OperatorConfigPanel({
   }
   if (operatorId === "camera.image_resize") {
     return <ImageResizeConfigCard config={config} onUpdateConfig={onUpdateConfig} />;
+  }
+  if (operatorId === "camera.object_segmentation") {
+    return <ObjectSegmentationConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "core.debug") {
     return <DebugConfigCard config={config} onUpdateConfig={onUpdateConfig} />;

@@ -319,6 +319,23 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.filter.hint":
       "Tip: place Filter before camera.source only when you are filtering gate packets (schedule, HA, etc.).",
 
+    "core.ui.pipelines.panels.object_segmentation.quality": "Quality",
+    "core.ui.pipelines.panels.object_segmentation.quality.best": "Best (crop from original)",
+    "core.ui.pipelines.panels.object_segmentation.quality.fast": "Fast (crop from treated)",
+    "core.ui.pipelines.panels.object_segmentation.quality_hint":
+      "Uses the detection bbox (normalized) and crops on the selected image. Best quality uses the full original frame even if YOLO runs on a resized treated frame.",
+    "core.ui.pipelines.panels.object_segmentation.input_images": "Input images (fallback order)",
+    "core.ui.pipelines.panels.object_segmentation.input_images_placeholder": "Original → Treated",
+    "core.ui.pipelines.panels.object_segmentation.input_images_hint":
+      "Advanced: controls which image is used for cropping when available. Recommended: original,treated.",
+    "core.ui.pipelines.panels.object_segmentation.padding": "Padding ratio",
+    "core.ui.pipelines.panels.object_segmentation.min_crop_size_px": "Min crop size (px)",
+    "core.ui.pipelines.panels.object_segmentation.hint":
+      "Produces a 'segmented' image artifact by cropping the object bbox. If the object is far away, the crop may still be small (because it occupies few pixels).",
+    "core.ui.pipelines.panels.object_segmentation.output_artifact_name": "Output artifact name",
+    "core.ui.pipelines.panels.object_segmentation.bbox_field": "BBox field",
+    "core.ui.pipelines.panels.object_segmentation.fallback_stream_frame": "Fallback to stream frame",
+
     "core.ui.pipelines.panels.throttle.interval_seconds": "Interval (seconds)",
     "core.ui.pipelines.panels.throttle.mode": "Mode",
     "core.ui.pipelines.panels.throttle.mode.first": "First (recommended)",
@@ -823,6 +840,23 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.filter.invert": "Inverter",
     "core.ui.pipelines.panels.filter.hint":
       "Dica: coloque Filter antes de camera.source apenas quando estiver filtrando pacotes de gate (schedule, HA, etc.).",
+
+    "core.ui.pipelines.panels.object_segmentation.quality": "Qualidade",
+    "core.ui.pipelines.panels.object_segmentation.quality.best": "Melhor (recortar no original)",
+    "core.ui.pipelines.panels.object_segmentation.quality.fast": "Rápido (recortar no tratado)",
+    "core.ui.pipelines.panels.object_segmentation.quality_hint":
+      "Usa a bbox da detecção (normalizada) e recorta na imagem selecionada. Melhor qualidade usa o frame original mesmo se o YOLO rodar em um tratado redimensionado.",
+    "core.ui.pipelines.panels.object_segmentation.input_images": "Imagens de entrada (ordem de fallback)",
+    "core.ui.pipelines.panels.object_segmentation.input_images_placeholder": "Original → Tratado",
+    "core.ui.pipelines.panels.object_segmentation.input_images_hint":
+      "Avançado: controla qual imagem é usada para o recorte quando disponível. Recomendado: original,treated.",
+    "core.ui.pipelines.panels.object_segmentation.padding": "Padding",
+    "core.ui.pipelines.panels.object_segmentation.min_crop_size_px": "Tamanho mínimo do recorte (px)",
+    "core.ui.pipelines.panels.object_segmentation.hint":
+      "Produz um artefato de imagem 'segmented' recortando a bbox do objeto. Se o objeto estiver longe, o recorte pode ser pequeno (porque ele ocupa poucos pixels).",
+    "core.ui.pipelines.panels.object_segmentation.output_artifact_name": "Nome do artefato de saída",
+    "core.ui.pipelines.panels.object_segmentation.bbox_field": "Campo de bbox",
+    "core.ui.pipelines.panels.object_segmentation.fallback_stream_frame": "Fallback para frame do fluxo",
 
     "core.ui.pipelines.panels.throttle.interval_seconds": "Intervalo (segundos)",
     "core.ui.pipelines.panels.throttle.mode": "Modo",

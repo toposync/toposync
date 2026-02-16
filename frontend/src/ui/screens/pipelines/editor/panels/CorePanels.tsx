@@ -344,7 +344,7 @@ export function ThrottleConfigCard({ config, showAdvanced, onUpdateConfig }: Thr
   const { t } = i18n.useI18n();
   const intervalSeconds = Number((config as any).interval_seconds ?? 1.0);
   const modeRaw = String((config as any).mode ?? "first").trim().toLowerCase() || "first";
-  const keyFieldRaw = String((config as any).key_field ?? "stream_id").trim() || "stream_id";
+  const keyFieldRaw = String((config as any).key_field ?? "payload.event_id").trim() || "payload.event_id";
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -390,6 +390,7 @@ export function ThrottleConfigCard({ config, showAdvanced, onUpdateConfig }: Thr
               onUpdateConfig((prev) => ({ ...prev, key_field: nextKey }));
             }}
           >
+            <option value="payload.event_id">{t("core.ui.pipelines.panels.throttle.key.event_id")}</option>
             <option value="stream_id">{t("core.ui.pipelines.panels.throttle.key.stream_id")}</option>
             <option value="payload.tracking_id">{t("core.ui.pipelines.panels.throttle.key.tracking_id")}</option>
             <option value="payload.correlation_id">{t("core.ui.pipelines.panels.throttle.key.correlation_id")}</option>
@@ -415,7 +416,7 @@ export function DebounceConfigCard({ config, showAdvanced, onUpdateConfig }: Deb
   const { t } = i18n.useI18n();
   const quietSeconds = Number((config as any).quiet_period_seconds ?? 1.0);
   const modeRaw = String((config as any).mode ?? "first").trim().toLowerCase() || "first";
-  const keyFieldRaw = String((config as any).key_field ?? "stream_id").trim() || "stream_id";
+  const keyFieldRaw = String((config as any).key_field ?? "payload.event_id").trim() || "payload.event_id";
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -461,6 +462,7 @@ export function DebounceConfigCard({ config, showAdvanced, onUpdateConfig }: Deb
               onUpdateConfig((prev) => ({ ...prev, key_field: nextKey }));
             }}
           >
+            <option value="payload.event_id">{t("core.ui.pipelines.panels.debounce.key.event_id")}</option>
             <option value="stream_id">{t("core.ui.pipelines.panels.debounce.key.stream_id")}</option>
             <option value="payload.tracking_id">{t("core.ui.pipelines.panels.debounce.key.tracking_id")}</option>
             <option value="payload.correlation_id">{t("core.ui.pipelines.panels.debounce.key.correlation_id")}</option>

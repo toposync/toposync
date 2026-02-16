@@ -28,6 +28,10 @@ Implementação: `src/toposync/runtime/config_store.py` (`Pipeline`, validaçõe
 O runtime trafega **Packets** (eventos) entre operadores. Um Packet carrega:
 
 - **`stream_id`**: identifica um fluxo lógico (ex.: uma câmera, ou um objeto trackeado).
+- **`payload["event_id"]`**: identifica um **evento lógico** dentro do fluxo (opcional).
+  - Em tracking (`vision.object_tracking_yolo`), é preenchido e fica estável durante `open→update→close` (um por objeto).
+  - Em detecção pontual (`vision.object_detection_yolo`), fica **nulo** por design (cada detecção vira um evento “fechado” e não deve “virar tracking”).
+  - Operadores stateful que fazem sentido “por objeto” (ex.: `camera.velocity_estimation`, `camera.best_frame_selector`, `core.throttle`, `core.debounce`, `core.fps_reducer`) usam `event_id` quando existe e fazem fallback para `stream_id` quando não existe.
 - **`lifecycle`**: `open | update | close`
   - `open`: início de um stream/evento (ex.: “pessoa detectada”)
   - `update`: atualização do stream (ex.: bbox mudou / posição no mundo mudou)

@@ -38,7 +38,7 @@ class FPSReducerConfig(BaseModel):
 class ThrottleConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     interval_seconds: float = Field(default=1.0, ge=0.01, le=120.0)
-    key_field: str = Field(default="stream_id")
+    key_field: str = Field(default="payload.event_id")
     mode: str = Field(default="first")
 
     @field_validator("mode")
@@ -53,7 +53,7 @@ class ThrottleConfig(BaseModel):
 class DebounceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     quiet_period_seconds: float = Field(default=1.0, ge=0.01, le=120.0)
-    key_field: str = Field(default="stream_id")
+    key_field: str = Field(default="payload.event_id")
     mode: str = Field(default="first")
 
     @field_validator("mode")
@@ -611,7 +611,7 @@ class FPSReducerRuntime(TransformOperatorRuntime):
         self._last_emit_by_key: dict[str, float] = {}
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
-        key = packet.stream_id
+        key = _resolve_key(packet, "payload.event_id")
         now = time.monotonic()
         last_emit = float(self._last_emit_by_key.get(key, 0.0))
         if packet.lifecycle in {Lifecycle.OPEN, Lifecycle.CLOSE}:
@@ -900,10 +900,18 @@ def _resolve_key(packet: Packet, key_field: str) -> str:
         key = packet.packet_id
     elif key_field.startswith("payload."):
         field_name = key_field[len("payload.") :]
-        key = str(packet.payload.get(field_name, ""))
+        value = packet.payload.get(field_name)
+        if value is None:
+            key = ""
+        else:
+            key = str(value)
     elif key_field.startswith("metadata."):
         field_name = key_field[len("metadata.") :]
-        key = str(packet.metadata.get(field_name, ""))
+        value = packet.metadata.get(field_name)
+        if value is None:
+            key = ""
+        else:
+            key = str(value)
     if not key:
         key = packet.stream_id
     return key

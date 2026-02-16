@@ -579,7 +579,7 @@ export function StoreImagesConfigCard({ config, showAdvanced, onUpdateConfig }: 
     ? artifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
     : [];
 
-  const fallbackRaw = String((config as any).image_with_fallback ?? "segmented,treated,original");
+  const fallbackRaw = String((config as any).image_with_fallback ?? "best_frame,original,treated,segmented");
   const fallbackKeys = fallbackRaw
     .split(",")
     .map((value) => String(value || "").trim())
@@ -602,7 +602,7 @@ export function StoreImagesConfigCard({ config, showAdvanced, onUpdateConfig }: 
                 onUpdateConfig((prev) => ({
                   ...prev,
                   artifact_names: [],
-                  image_with_fallback: String((prev as any).image_with_fallback ?? "segmented,treated,original"),
+                  image_with_fallback: String((prev as any).image_with_fallback ?? "best_frame,original,treated,segmented"),
                 }))
               }
             >
@@ -731,7 +731,7 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
   const notifyFallbackRaw = (config as any).thumbnail_with_fallback;
   const notifyFallback = Array.isArray(notifyFallbackRaw)
     ? notifyFallbackRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
-    : ["best_frame", "segmented", "treated", "original"];
+    : ["best_frame", "original", "treated", "segmented"];
   const notifySelectedFallbackOptions = notifyFallback.map((value: string) => ({ value, label: value }));
   const artifactSuggestions = buildArtifactSuggestions(t);
 

@@ -572,7 +572,11 @@ class CamerasExtension(BaseExtension):
                     {"id": "map", "operator": "camera.camera_mapping", "config": {}},
                     {"id": "throttle", "operator": "core.throttle", "config": {"interval_seconds": 5.0}},
                     {"id": "segment", "operator": "camera.object_segmentation", "config": {}},
-                    {"id": "store", "operator": "core.store_images", "config": {"image_with_fallback": "segmented,treated,original", "subdir": "pipelines", "format": "png"}},
+                    {
+                        "id": "store",
+                        "operator": "core.store_images",
+                        "config": {"image_with_fallback": "best_frame,original,treated,segmented", "subdir": "pipelines", "format": "png"},
+                    },
                     {
                         "id": "notify",
                         "operator": "core.notify",
@@ -581,7 +585,7 @@ class CamerasExtension(BaseExtension):
                             "title": notification_title or "{{camera_name}}: Person detected",
                             "description": notification_description or "{{camera_name}}",
                             "priority": "medium",
-                            "thumbnail_with_fallback": ["segmented", "treated", "original"],
+                            "thumbnail_with_fallback": ["best_frame", "original", "treated", "segmented"],
                         },
                     },
                 ]
@@ -603,7 +607,11 @@ class CamerasExtension(BaseExtension):
                     {"id": "map", "operator": "camera.camera_mapping", "config": {}},
                     {"id": "throttle", "operator": "core.throttle", "config": {"interval_seconds": 8.0}},
                     {"id": "segment", "operator": "camera.object_segmentation", "config": {"padding_ratio": 0.12}},
-                    {"id": "store", "operator": "core.store_images", "config": {"image_with_fallback": "segmented,treated,original", "subdir": "pipelines", "format": "png"}},
+                    {
+                        "id": "store",
+                        "operator": "core.store_images",
+                        "config": {"image_with_fallback": "best_frame,original,treated,segmented", "subdir": "pipelines", "format": "png"},
+                    },
                     {
                         "id": "notify",
                         "operator": "core.notify",
@@ -612,7 +620,7 @@ class CamerasExtension(BaseExtension):
                             "title": notification_title or "{{camera_name}}: Pet detected",
                             "description": notification_description or "{{camera_name}}",
                             "priority": "medium",
-                            "thumbnail_with_fallback": ["segmented", "treated", "original"],
+                            "thumbnail_with_fallback": ["best_frame", "original", "treated", "segmented"],
                         },
                     },
                 ]
@@ -651,7 +659,11 @@ class CamerasExtension(BaseExtension):
                     {"id": "velocity", "operator": "camera.velocity_estimation", "config": {"filter_mode": "stopped_now"}},
                     {"id": "throttle", "operator": "core.throttle", "config": {"interval_seconds": 60.0}},
                     {"id": "segment", "operator": "camera.object_segmentation", "config": {"padding_ratio": 0.16}},
-                    {"id": "store", "operator": "core.store_images", "config": {"image_with_fallback": "segmented,treated,original", "subdir": "pipelines", "format": "png"}},
+                    {
+                        "id": "store",
+                        "operator": "core.store_images",
+                        "config": {"image_with_fallback": "best_frame,original,treated,segmented", "subdir": "pipelines", "format": "png"},
+                    },
                     {
                         "id": "notify",
                         "operator": "core.notify",
@@ -660,7 +672,7 @@ class CamerasExtension(BaseExtension):
                             "title": notification_title or "{{camera_name}}: Vehicle stopped",
                             "description": notification_description or "{{camera_name}}",
                             "priority": "high",
-                            "thumbnail_with_fallback": ["segmented", "treated", "original"],
+                            "thumbnail_with_fallback": ["best_frame", "original", "treated", "segmented"],
                         },
                     },
                 ]

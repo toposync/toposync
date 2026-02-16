@@ -107,7 +107,7 @@ function resolveStoredImages(payload: Record<string, unknown>): NotificationImag
       if (!relPath) continue;
       idx += 1;
       const artifactName = asString(entry.artifact_name, "").trim();
-      const label = artifactName || key || "stored";
+      const label = key || artifactName || "stored";
       out.push({
         id: `stored:${key}:${idx}:${relPath}`,
         url: toFileUrl(relPath),
@@ -351,6 +351,13 @@ export function notificationImageItems(notification: Notification): Notification
     out.push(item);
   }
 
+  const payload = asRecord(notification.payload);
+
+  // Prefer stored images when URLs overlap with artifacts/thumbnail.
+  for (const item of resolveStoredImages(payload)) {
+    push(item);
+  }
+
   if (typeof notification.imageUrl === "string" && notification.imageUrl.trim()) {
     push({
       id: `thumbnail:${notification.id}`,
@@ -360,7 +367,6 @@ export function notificationImageItems(notification: Notification): Notification
     });
   }
 
-  const payload = asRecord(notification.payload);
   const artifacts = resolveArtifacts(payload);
   const orderedArtifactNames = [
     ...preferredArtifactNames().filter((name) => Boolean(artifacts[name])),
@@ -375,10 +381,6 @@ export function notificationImageItems(notification: Notification): Notification
       label: name,
       source: "artifact",
     });
-  }
-
-  for (const item of resolveStoredImages(payload)) {
-    push(item);
   }
 
   return out;

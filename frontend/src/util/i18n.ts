@@ -398,7 +398,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.store_images.artifacts": "Artifacts",
     "core.ui.pipelines.panels.store_images.artifacts_placeholder": "Full frame",
     "core.ui.pipelines.panels.store_images.image_with_fallback": "Image (fallback order)",
-    "core.ui.pipelines.panels.store_images.image_with_fallback_placeholder": "Segmented → Treated → Original",
+    "core.ui.pipelines.panels.store_images.image_with_fallback_placeholder": "Best frame → Full frame → Treated → Segmented",
     "core.ui.pipelines.panels.store_images.hint":
       "Stores one image locally on the origin and attaches a reference. Add this step more than once to store multiple images.",
     "core.ui.pipelines.panels.store_images.using_explicit_artifact_names":
@@ -427,7 +427,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.notify.update_interval_hint":
       "Avoids spamming UI updates while an event is open. Set to 0 to emit every change.",
     "core.ui.pipelines.panels.notify.thumbnail_fallback": "Thumbnail fallback",
-    "core.ui.pipelines.panels.notify.thumbnail_placeholder": "Best frame → Face → Segmented → Full frame",
+    "core.ui.pipelines.panels.notify.thumbnail_placeholder": "Best frame → Full frame → Treated → Segmented",
     "core.ui.pipelines.panels.notify.thumbnail_hint":
       "Registers notifications only (never stores images). To include images, add Store Images before this step.",
     "core.ui.pipelines.panels.notify.notification_type": "Notification type",
@@ -947,7 +947,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.store_images.artifacts": "Artefatos",
     "core.ui.pipelines.panels.store_images.artifacts_placeholder": "Frame completo",
     "core.ui.pipelines.panels.store_images.image_with_fallback": "Imagem (ordem de fallback)",
-    "core.ui.pipelines.panels.store_images.image_with_fallback_placeholder": "Segmentado → Tratado → Original",
+    "core.ui.pipelines.panels.store_images.image_with_fallback_placeholder": "Melhor frame → Frame completo → Tratado → Segmentado",
     "core.ui.pipelines.panels.store_images.hint":
       "Salva uma imagem localmente na origem e anexa a referência. Adicione esta etapa mais de uma vez para salvar várias imagens.",
     "core.ui.pipelines.panels.store_images.using_explicit_artifact_names":
@@ -976,7 +976,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.notify.update_interval_hint":
       "Evita spam de atualizações na UI enquanto o evento está aberto. Use 0 para emitir toda mudança.",
     "core.ui.pipelines.panels.notify.thumbnail_fallback": "Fallback de miniatura",
-    "core.ui.pipelines.panels.notify.thumbnail_placeholder": "Best frame → Face → Segmented → Full frame",
+    "core.ui.pipelines.panels.notify.thumbnail_placeholder": "Melhor frame → Frame completo → Tratado → Segmentado",
     "core.ui.pipelines.panels.notify.thumbnail_hint":
       "Apenas registra notificações (nunca armazena imagens). Para incluir imagens, adicione Store Images antes desta etapa.",
     "core.ui.pipelines.panels.notify.notification_type": "Tipo de notificação",

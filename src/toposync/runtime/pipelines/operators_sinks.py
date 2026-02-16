@@ -21,6 +21,7 @@ from .execution import PipelineRuntimeDependencies, SinkRuntime, TransformOperat
 from .images import (
     add_stored_image_entry,
     ensure_packet_image_keys,
+    parse_fallback_keys,
     resolve_image_artifact_for_data,
     resolve_image_artifact_for_reference,
     resolve_image_artifact_name,
@@ -342,7 +343,7 @@ async def _write_bytes(path: Path, blob: bytes, *, overwrite: bool) -> None:
 class StoreImagesConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     # New UX: store a single image selected by fallback order (recommended).
-    image_with_fallback: str = "segmented,treated,original"
+    image_with_fallback: str = "best_frame,original,treated,segmented"
     # Legacy/advanced: store multiple artifacts explicitly.
     artifact_names: list[str] = Field(default_factory=list)
     min_frame_width: int = Field(
@@ -561,7 +562,7 @@ class NotifyConfig(BaseModel):
     realtime: bool = True
     update_interval_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
     thumbnail_with_fallback: list[str] = Field(
-        default_factory=lambda: ["best_frame", "segmented", "treated", "original"],
+        default_factory=lambda: ["best_frame", "original", "treated", "segmented"],
     )
     dedupe_key_template: str = ""
 
@@ -710,9 +711,15 @@ class NotifyRuntime(SinkRuntime):
         image_path: str | None = None
         if state.stored_images:
             if lifecycle == Lifecycle.CLOSE:
-                image_path = _select_best_confidence_stored_image(state.stored_images)
+                image_path = _select_best_confidence_stored_image(
+                    state.stored_images,
+                    preferred_keys=list(self._config.thumbnail_with_fallback),
+                )
             elif bool(self._config.realtime):
-                image_path = _select_latest_stored_image(state.stored_images)
+                image_path = _select_latest_stored_image(
+                    state.stored_images,
+                    preferred_keys=list(self._config.thumbnail_with_fallback),
+                )
         if not image_path:
             image_path = await self._select_thumbnail_path(packet, context)
         signature = _signature_payload(
@@ -796,7 +803,13 @@ class NotifyRuntime(SinkRuntime):
                     type=self._config.notification_type,
                     title=state.last_title or "Pipeline event",
                     description=state.last_description or "",
-                    image_path=_select_best_confidence_stored_image(state.stored_images) or state.last_image_path,
+                    image_path=(
+                        _select_best_confidence_stored_image(
+                            state.stored_images,
+                            preferred_keys=list(self._config.thumbnail_with_fallback),
+                        )
+                        or state.last_image_path
+                    ),
                     payload={
                         "source": "pipelines",
                         "lifecycle": Lifecycle.CLOSE.value,
@@ -852,22 +865,50 @@ def _signature_payload(payload: dict[str, Any]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _iter_stored_image_entries(stored_images: dict[str, Any]) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for entries_raw in stored_images.values():
-        entries = entries_raw if isinstance(entries_raw, list) else []
-        for entry in entries:
-            if isinstance(entry, dict):
-                out.append(entry)
+def _build_key_rank_map(preferred_keys: list[str] | None) -> dict[str, int]:
+    keys = parse_fallback_keys(preferred_keys or [])
+    if not keys:
+        return {}
+    alias = {
+        "frame_original": "original",
+        "frame": "treated",
+    }
+    out: dict[str, int] = {}
+    for idx, key in enumerate(keys):
+        if key not in out:
+            out[key] = idx
+        mapped = alias.get(key)
+        if mapped and mapped not in out:
+            out[mapped] = idx
     return out
 
 
-def _select_latest_stored_image(stored_images: dict[str, Any]) -> str | None:
+def _stored_entry_key_rank(key_rank_map: dict[str, int], image_key: str) -> int:
+    if not key_rank_map:
+        return 1_000_000
+    normalized = str(image_key or "").strip()
+    return int(key_rank_map.get(normalized, 1_000_000))
+
+
+def _iter_stored_image_entries(stored_images: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    out: list[tuple[str, dict[str, Any]]] = []
+    for key_raw, entries_raw in stored_images.items():
+        image_key = str(key_raw or "").strip()
+        entries = entries_raw if isinstance(entries_raw, list) else []
+        for entry in entries:
+            if isinstance(entry, dict):
+                out.append((image_key, entry))
+    return out
+
+
+def _select_latest_stored_image(stored_images: dict[str, Any], *, preferred_keys: list[str] | None = None) -> str | None:
     best_rel: str | None = None
     best_ts = -1
+    best_key_rank = 1_000_000
     best_idx = -1
     idx = 0
-    for entry in _iter_stored_image_entries(stored_images):
+    key_rank_map = _build_key_rank_map(preferred_keys)
+    for image_key, entry in _iter_stored_image_entries(stored_images):
         rel = str(entry.get("rel_path") or "").strip()
         if not rel:
             continue
@@ -876,20 +917,28 @@ def _select_latest_stored_image(stored_images: dict[str, Any]) -> str | None:
         except Exception:
             ts = 0
         idx += 1
-        if ts > best_ts or (ts == best_ts and idx > best_idx):
+        key_rank = _stored_entry_key_rank(key_rank_map, image_key)
+        if (
+            ts > best_ts
+            or (ts == best_ts and key_rank < best_key_rank)
+            or (ts == best_ts and key_rank == best_key_rank and idx > best_idx)
+        ):
             best_ts = ts
+            best_key_rank = key_rank
             best_idx = idx
             best_rel = rel
     return best_rel
 
 
-def _select_best_confidence_stored_image(stored_images: dict[str, Any]) -> str | None:
+def _select_best_confidence_stored_image(stored_images: dict[str, Any], *, preferred_keys: list[str] | None = None) -> str | None:
     best_rel: str | None = None
     best_conf: float | None = None
+    best_key_rank = 1_000_000
     best_ts = -1
     best_idx = -1
     idx = 0
-    for entry in _iter_stored_image_entries(stored_images):
+    key_rank_map = _build_key_rank_map(preferred_keys)
+    for image_key, entry in _iter_stored_image_entries(stored_images):
         rel = str(entry.get("rel_path") or "").strip()
         if not rel:
             continue
@@ -901,19 +950,26 @@ def _select_best_confidence_stored_image(stored_images: dict[str, Any]) -> str |
         except Exception:
             ts = 0
         idx += 1
+        key_rank = _stored_entry_key_rank(key_rank_map, image_key)
 
         should_take = best_conf is None or conf > best_conf
         if not should_take and conf == best_conf:
-            # Em empate de confiança, preferimos o frame mais cedo para evitar
+            if key_rank != best_key_rank:
+                should_take = key_rank < best_key_rank
+            # Em empate de confiança e prioridade, preferimos o frame mais cedo para evitar
             # que o CLOSE substitua a miniatura por um frame tardio sem objeto.
-            should_take = ts < best_ts or (ts == best_ts and idx < best_idx)
+            elif ts != best_ts:
+                should_take = ts < best_ts
+            else:
+                should_take = idx < best_idx
         if should_take:
             best_conf = conf
+            best_key_rank = key_rank
             best_ts = ts
             best_idx = idx
             best_rel = rel
 
-    return best_rel or _select_latest_stored_image(stored_images)
+    return best_rel or _select_latest_stored_image(stored_images, preferred_keys=preferred_keys)
 
 
 def _select_notification_data(packet: Packet) -> dict[str, Any]:

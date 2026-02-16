@@ -1410,8 +1410,9 @@ textarea {
   height: 62px;
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.10);
-  background: rgba(0, 0, 0, 0.16);
-  object-fit: cover;
+  background: #000;
+  object-fit: contain;
+  object-position: center;
   display: block;
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.30);
 }

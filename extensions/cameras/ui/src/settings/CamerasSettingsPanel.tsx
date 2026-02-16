@@ -7,6 +7,7 @@ import { CAMERAS_EXTENSION_ID } from "../constants";
 import { createUniqueId, parseCameras } from "../parsing";
 import type { CameraConfig } from "../types";
 import { SubModal } from "../ui/SubModal";
+import { CameraPipelineWizardModal } from "../wizard/CameraPipelineWizardModal";
 
 export function createCamerasSettingsPanel(): SettingsPanel {
   return {
@@ -59,6 +60,8 @@ function CamerasSettingsPanelContent({
   const [snapshotErrorMessage, setSnapshotErrorMessage] = useState<string | null>(null);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const snapshotAbortRef = React.useRef<AbortController | null>(null);
+
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -255,6 +258,10 @@ function CamerasSettingsPanelContent({
                 </div>
 
                 <div className="rowWrap" style={{ gap: 10, justifyContent: "flex-end" }}>
+                  <button className="chipButton" type="button" onClick={() => setWizardOpen(true)}>
+                    {t("ext.cameras.wizard.open", {}, "Create pipeline")}
+                  </button>
+
                   <button
                     className="chipButton"
                     type="button"
@@ -391,6 +398,10 @@ function CamerasSettingsPanelContent({
           </div>
         )}
       </SubModal>
+
+      {activeCamera ? (
+        <CameraPipelineWizardModal open={wizardOpen} camera={activeCamera} i18n={i18n} onClose={() => setWizardOpen(false)} />
+      ) : null}
     </div>
   );
 }

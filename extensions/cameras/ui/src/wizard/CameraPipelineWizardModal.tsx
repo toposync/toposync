@@ -169,6 +169,11 @@ export function CameraPipelineWizardModal({
     setStep("configure");
   }
 
+  const defaultPipelineName = useMemo(() => {
+    if (!preset) return "";
+    return safePipelineName(`camera_${camera.id}__${presetSuffix(preset)}`);
+  }, [camera.id, preset]);
+
   const cameraPlaceholder = "{{camera_name}}";
   const areaPlaceholder = "{{area_label}}";
   const categoryPlaceholder = "{{object_category_label}}";
@@ -196,7 +201,7 @@ export function CameraPipelineWizardModal({
     try {
       const response = await createCameraPipelineFromWizard(camera.id, {
         preset,
-        pipeline_name: pipelineName.trim(),
+        pipeline_name: pipelineName.trim() && pipelineName.trim() !== defaultPipelineName ? pipelineName.trim() : "",
         enabled,
         composition_id: preset === "vehicles_stopped" ? compositionId : "",
         area_id: preset === "vehicles_stopped" ? areaId : "",
@@ -436,4 +441,3 @@ export function CameraPipelineWizardModal({
     </SubModal>
   );
 }
-

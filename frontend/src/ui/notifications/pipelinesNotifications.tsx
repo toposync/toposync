@@ -33,10 +33,6 @@ function asString(value: unknown, fallback: string): string {
   return typeof value === "string" ? value : fallback;
 }
 
-function isSameNormalized(a: string, b: string): boolean {
-  return a.trim().toLowerCase() === b.trim().toLowerCase();
-}
-
 function normalizePriority(value: unknown): Priority {
   const raw = asString(value, "").toLowerCase();
   if (raw === "low" || raw === "medium" || raw === "high") return raw;
@@ -394,17 +390,10 @@ function renderPipelinesNotification(notification: Notification): React.ReactNod
   const realtime = payload.realtime === true;
   const duration = formatDurationCompact(asRecord(payload.event).duration_seconds);
 
-  const cameraName = asString(data.camera_name, "").trim();
-  const cameraId = asString(data.camera_id, "").trim();
   const locationLabel = asString(data.area_label, "").trim();
 
-  const title = asString(notification.title, "").trim();
   const description = asString(notification.description, "").trim();
-  const cameraLabel = cameraName || cameraId;
-  const titleIncludesCamera = cameraLabel ? title.toLowerCase().includes(cameraLabel.toLowerCase()) : false;
-  const shouldHideDescription =
-    !description || (cameraLabel && isSameNormalized(description, cameraLabel)) || (title && isSameNormalized(description, title));
-  const metaParts = [titleIncludesCamera ? "" : cameraLabel, locationLabel, duration].filter(Boolean);
+  const metaParts = [locationLabel, duration].filter(Boolean);
   const meta = metaParts.join(" • ");
   const isLive = status === "open" && realtime;
 
@@ -422,7 +411,7 @@ function renderPipelinesNotification(notification: Notification): React.ReactNod
         </div>
       ) : null}
 
-      {!shouldHideDescription ? <div className="notificationText">{description}</div> : null}
+      {description ? <div className="notificationText">{description}</div> : null}
     </div>
   );
 }

@@ -74,23 +74,6 @@ function asFiniteNumber(value: unknown): number | null {
   return value;
 }
 
-function stripCameraPrefixFromTitle(titleRaw: string, cameraRaw: string): string {
-  const title = titleRaw.trim();
-  const camera = cameraRaw.trim();
-  if (!title || !camera) return title;
-
-  const lowerTitle = title.toLowerCase();
-  const lowerCamera = camera.toLowerCase();
-  if (!lowerTitle.startsWith(lowerCamera)) return title;
-
-  const tail = title.slice(camera.length).trimStart();
-  if (!tail) return title;
-  const separator = tail[0] ?? "";
-  if (!["-", ":", "|", ">", "—", "–"].includes(separator)) return title;
-  const cleaned = tail.slice(1).trimStart();
-  return cleaned || title;
-}
-
 function formatDateTimeLong(locale: string, iso: string | undefined): string | null {
   if (!iso) return null;
   const d = new Date(iso);
@@ -570,10 +553,7 @@ export function MainScreen({
               {visibleNotifications.map((n) => {
                 const renderer = notificationRenderers.find((r) => r.type === n.type);
                 const time = formatDateTimeShort(locale, n.updatedAt ?? n.createdAt);
-                const payload = asRecord(n.payload);
-                const data = asRecord(payload.data);
-                const cameraLabel = asTrimmedString(data.camera_name) || asTrimmedString(data.camera_id);
-                const title = stripCameraPrefixFromTitle(n.title, cameraLabel) || n.title;
+                const title = n.title;
                 const priority = notificationPriority(n);
                 const priorityClass =
                   priority === "high" ? "isHigh" : priority === "low" ? "isLow" : "isMedium";

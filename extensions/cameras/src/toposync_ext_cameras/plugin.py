@@ -560,7 +560,15 @@ class CamerasExtension(BaseExtension):
             if preset == "people":
                 nodes = [
                     *base_nodes,
-                    {"id": "track", "operator": "vision.object_tracking_yolo", "config": {"categories": ["person"], "close_after_seconds": 5.0}},
+                    {
+                        "id": "track",
+                        "operator": "vision.object_tracking_yolo",
+                        "config": {
+                            "categories": ["person"],
+                            "close_after_seconds": 5.0,
+                            "confidence_threshold": 0.55,
+                        },
+                    },
                     {"id": "map", "operator": "camera.camera_mapping", "config": {}},
                     {"id": "throttle", "operator": "core.throttle", "config": {"interval_seconds": 5.0}},
                     {"id": "segment", "operator": "camera.object_segmentation", "config": {}},

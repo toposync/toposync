@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   CompositionElement,
@@ -18,7 +18,7 @@ import { CompositionSelectorModal } from "../CompositionSelectorModal";
 import { Icon } from "../Icon";
 import { Viewport3D } from "../Viewport3D";
 import { MainViewport2D } from "../main2d/MainViewport2D";
-import { notificationPriority, notificationThumbnailUrl } from "../notifications/pipelinesNotifications";
+import { notificationImageItems, notificationPriority, notificationThumbnailUrl } from "../notifications/pipelinesNotifications";
 
 type Props = {
   compositionName: string;
@@ -53,6 +53,73 @@ function formatDateTimeShort(locale: string, iso: string | undefined): string | 
   } catch {
     return d.toLocaleString();
   }
+}
+
+type NotificationDetailField = {
+  label: string;
+  value: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function asTrimmedString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return value;
+}
+
+function formatDateTimeLong(locale: string, iso: string | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(d);
+  } catch {
+    return d.toLocaleString();
+  }
+}
+
+function formatTimestampMillis(locale: string, tsMillis: number | undefined): string | null {
+  if (!tsMillis || !Number.isFinite(tsMillis)) return null;
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(new Date(tsMillis));
+  } catch {
+    return new Date(tsMillis).toLocaleString();
+  }
+}
+
+function formatDurationVerbose(secondsRaw: unknown): string | null {
+  const totalSeconds = asFiniteNumber(secondsRaw);
+  if (totalSeconds == null || totalSeconds < 0) return null;
+  const seconds = Math.floor(totalSeconds);
+  if (seconds < 60) return `${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  if (mins < 60) return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  if (remMins > 0 && secs > 0) return `${hours}h ${remMins}m ${secs}s`;
+  if (remMins > 0) return `${hours}h ${remMins}m`;
+  return secs > 0 ? `${hours}h ${secs}s` : `${hours}h`;
 }
 
 const NOTIFICATIONS_OPEN_STORAGE_KEY = "toposync.notifications_open.v1";
@@ -123,6 +190,8 @@ export function MainScreen({
   const [isCompositionModalOpen, setIsCompositionModalOpen] = useState(false);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
   const [imageModal, setImageModal] = useState<{ url: string; title: string; subtitle?: string } | null>(null);
+  const [isNotificationDetailsOpen, setIsNotificationDetailsOpen] = useState(false);
+  const [notificationImageIndex, setNotificationImageIndex] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(() => loadNotificationsOpen());
   const [showLowPriority, setShowLowPriority] = useState(() => loadNotificationsShowLow());
   const [renderMode, setRenderMode] = useState<"3d" | "2d">(() => {
@@ -140,6 +209,96 @@ export function MainScreen({
     if (!activeNotificationId) return null;
     return notifications.find((n) => n.id === activeNotificationId) ?? null;
   }, [activeNotificationId, notifications]);
+
+  const activeNotificationImages = useMemo(() => {
+    if (!activeNotification) return [];
+    return notificationImageItems(activeNotification);
+  }, [activeNotification]);
+
+  const activeNotificationImage = activeNotificationImages[notificationImageIndex] ?? null;
+
+  const activeNotificationDetails = useMemo(() => {
+    if (!activeNotification) return [] as NotificationDetailField[];
+    const payload = asRecord(activeNotification.payload);
+    const data = asRecord(payload.data);
+    const event = asRecord(payload.event);
+
+    const out: NotificationDetailField[] = [];
+    const push = (label: string, valueRaw: unknown) => {
+      const value = asTrimmedString(valueRaw);
+      if (!value) return;
+      out.push({ label, value });
+    };
+
+    const cameraName = asTrimmedString(data.camera_name);
+    const cameraId = asTrimmedString(data.camera_id);
+    const cameraLabel = [cameraName, cameraId].filter(Boolean).join(" • ");
+    const trackingId = asTrimmedString(payload.tracking_id) || asTrimmedString(data.tracking_id);
+    const eventId = asTrimmedString(payload.event_id) || asTrimmedString(data.event_id);
+    const duration = formatDurationVerbose(event.duration_seconds);
+    const createdAt = formatDateTimeLong(locale, activeNotification.createdAt);
+    const updatedAt = formatDateTimeLong(locale, activeNotification.updatedAt);
+
+    push(t("core.ui.notifications.details.meta.type", {}, "Type"), activeNotification.type);
+    push(t("core.ui.notifications.details.meta.priority", {}, "Priority"), payload.priority);
+    push(t("core.ui.notifications.details.meta.status", {}, "Status"), payload.status);
+    push(t("core.ui.notifications.details.meta.lifecycle", {}, "Lifecycle"), payload.lifecycle);
+    push(t("core.ui.notifications.details.meta.pipeline", {}, "Pipeline"), payload.pipeline_name);
+    push(t("core.ui.notifications.details.meta.camera", {}, "Camera"), cameraLabel);
+    push(t("core.ui.notifications.details.meta.area", {}, "Area"), data.area_label);
+    push(t("core.ui.notifications.details.meta.tracking_id", {}, "Tracking ID"), trackingId);
+    push(t("core.ui.notifications.details.meta.event_id", {}, "Event ID"), eventId);
+    push(t("core.ui.notifications.details.meta.duration", {}, "Duration"), duration);
+    push(t("core.ui.notifications.details.meta.created_at", {}, "Created"), createdAt);
+    push(t("core.ui.notifications.details.meta.updated_at", {}, "Updated"), updatedAt);
+
+    out.push({
+      label: t("core.ui.notifications.details.meta.images", {}, "Images"),
+      value: String(activeNotificationImages.length),
+    });
+    return out;
+  }, [activeNotification, activeNotificationImages.length, locale, t]);
+
+  const activeNotificationSubtitle = useMemo(() => {
+    if (!activeNotification) return null;
+    const payload = asRecord(activeNotification.payload);
+    const data = asRecord(payload.data);
+    const camera = asTrimmedString(data.camera_name) || asTrimmedString(data.camera_id);
+    const area = asTrimmedString(data.area_label);
+    const pipeline = asTrimmedString(payload.pipeline_name);
+    const parts = [camera || pipeline, area].filter(Boolean);
+    if (!parts.length) return null;
+    return parts.join(" • ");
+  }, [activeNotification]);
+
+  const activeNotificationImageMeta = useMemo(() => {
+    if (!activeNotificationImage) return null;
+    const parts: string[] = [
+      t(`core.ui.notifications.details.image_source.${activeNotificationImage.source}`, {}, activeNotificationImage.source),
+    ];
+    if (typeof activeNotificationImage.confidence === "number") {
+      parts.push(`${Math.round(activeNotificationImage.confidence * 100)}%`);
+    }
+    const tsLabel = formatTimestampMillis(locale, activeNotificationImage.storedTsMs);
+    if (tsLabel) parts.push(tsLabel);
+    return parts.join(" • ");
+  }, [activeNotificationImage, locale, t]);
+
+  const showPrevNotificationImage = useCallback(() => {
+    setNotificationImageIndex((prev) => {
+      const total = activeNotificationImages.length;
+      if (total <= 1) return 0;
+      return (prev - 1 + total) % total;
+    });
+  }, [activeNotificationImages.length]);
+
+  const showNextNotificationImage = useCallback(() => {
+    setNotificationImageIndex((prev) => {
+      const total = activeNotificationImages.length;
+      if (total <= 1) return 0;
+      return (prev + 1) % total;
+    });
+  }, [activeNotificationImages.length]);
 
   const activeNotificationRenderer = useMemo(() => {
     if (!activeNotification) return null;
@@ -178,6 +337,36 @@ export function MainScreen({
       // ignore
     }
   }, [showLowPriority]);
+
+  useEffect(() => {
+    if (activeNotification) return;
+    setIsNotificationDetailsOpen(false);
+    setNotificationImageIndex(0);
+  }, [activeNotification]);
+
+  useEffect(() => {
+    setNotificationImageIndex(0);
+  }, [activeNotificationId]);
+
+  useEffect(() => {
+    if (notificationImageIndex < activeNotificationImages.length) return;
+    setNotificationImageIndex(0);
+  }, [activeNotificationImages.length, notificationImageIndex]);
+
+  useEffect(() => {
+    if (!isNotificationDetailsOpen) return;
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        showPrevNotificationImage();
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        showNextNotificationImage();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isNotificationDetailsOpen, showNextNotificationImage, showPrevNotificationImage]);
 
   useEffect(() => {
     const root = notificationScrollRef.current;
@@ -306,6 +495,21 @@ export function MainScreen({
             <div className="railHeader">
               <div className="railTitle">{t("core.ui.notifications")}</div>
               <div className="row">
+                <button
+                  className={["iconButton", isNotificationDetailsOpen ? "iconButtonPrimary" : ""].filter(Boolean).join(" ")}
+                  type="button"
+                  aria-label={t("core.ui.notifications.details.aria_open", {}, "Open selected notification details")}
+                  title={t("core.ui.notifications.details.open", {}, "Open details")}
+                  onClick={() => {
+                    if (!activeNotification) return;
+                    setNotificationImageIndex(0);
+                    setIsNotificationDetailsOpen(true);
+                  }}
+                  disabled={!activeNotification}
+                >
+                  <Icon name="circle-info" />
+                </button>
+
                 <button
                   className={["iconButton", showLowPriority ? "iconButtonPrimary" : ""].filter(Boolean).join(" ")}
                   type="button"
@@ -477,6 +681,103 @@ export function MainScreen({
         onRename={onRenameComposition}
         onDelete={onDeleteComposition}
       />
+
+      <Modal
+        open={isNotificationDetailsOpen}
+        title={t("core.ui.notifications.details.title", {}, "Notification details")}
+        onClose={() => setIsNotificationDetailsOpen(false)}
+        panelClassName="notificationDetailsModalPanel"
+        bodyClassName="notificationDetailsModalBody"
+      >
+        {activeNotification ? (
+          <div className="notificationDetailsRoot">
+            <div className="notificationDetailsHeader">
+              <div className="notificationDetailsTitle">{activeNotification.title}</div>
+              {activeNotificationSubtitle ? <div className="notificationDetailsSubtitle">{activeNotificationSubtitle}</div> : null}
+              {activeNotification.description ? <div className="notificationDetailsDescription">{activeNotification.description}</div> : null}
+            </div>
+
+            {activeNotificationImage ? (
+              <div className="notificationGallery">
+                <div className="notificationGalleryStage">
+                  <button
+                    className="iconButton notificationGalleryNav"
+                    type="button"
+                    aria-label={t("core.ui.notifications.details.image_prev", {}, "Previous image")}
+                    title={t("core.ui.notifications.details.image_prev", {}, "Previous image")}
+                    onClick={showPrevNotificationImage}
+                    disabled={activeNotificationImages.length <= 1}
+                  >
+                    <Icon name="chevron-left" />
+                  </button>
+
+                  <img className="notificationGalleryImage" src={activeNotificationImage.url} alt="" />
+
+                  <button
+                    className="iconButton notificationGalleryNav"
+                    type="button"
+                    aria-label={t("core.ui.notifications.details.image_next", {}, "Next image")}
+                    title={t("core.ui.notifications.details.image_next", {}, "Next image")}
+                    onClick={showNextNotificationImage}
+                    disabled={activeNotificationImages.length <= 1}
+                  >
+                    <Icon name="chevron-right" />
+                  </button>
+                </div>
+
+                <div className="notificationGalleryCaption">
+                  <div className="notificationGalleryLabel">{activeNotificationImage.label}</div>
+                  <div className="notificationGalleryCounter">
+                    {t(
+                      "core.ui.notifications.details.image_counter",
+                      { current: notificationImageIndex + 1, total: activeNotificationImages.length },
+                      `${notificationImageIndex + 1} / ${activeNotificationImages.length}`,
+                    )}
+                  </div>
+                </div>
+                {activeNotificationImageMeta ? <div className="notificationGalleryMeta">{activeNotificationImageMeta}</div> : null}
+
+                {activeNotificationImages.length > 1 ? (
+                  <div className="notificationGalleryThumbs">
+                    {activeNotificationImages.map((item, idx) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={["notificationGalleryThumbButton", idx === notificationImageIndex ? "isActive" : ""].filter(Boolean).join(" ")}
+                        onClick={() => setNotificationImageIndex(idx)}
+                        title={item.label}
+                        aria-label={item.label}
+                      >
+                        <img src={item.url} alt="" className="notificationGalleryThumbImage" loading="lazy" />
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="cardBody">{t("core.ui.notifications.details.no_images", {}, "No images found for this detection.")}</div>
+            )}
+
+            <div className="notificationDetailsGrid">
+              {activeNotificationDetails.map((field) => (
+                <div className="notificationDetailField" key={`${field.label}:${field.value}`}>
+                  <div className="notificationDetailLabel">{field.label}</div>
+                  <div className="notificationDetailValue">{field.value}</div>
+                </div>
+              ))}
+            </div>
+
+            {activeNotification.payload ? (
+              <details className="notificationPayloadDetails">
+                <summary>{t("core.ui.notifications.details.payload", {}, "Payload")}</summary>
+                <pre>{JSON.stringify(activeNotification.payload, null, 2)}</pre>
+              </details>
+            ) : null}
+          </div>
+        ) : (
+          <div className="cardBody">{t("core.ui.notifications.details.no_selection", {}, "Select a notification to inspect it.")}</div>
+        )}
+      </Modal>
 
       <Modal
         open={isActionModalOpen}

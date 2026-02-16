@@ -616,3 +616,99 @@ def test_notify_thumbnail_shows_latest_when_live_and_best_confidence_on_close(tm
         assert "/103000__" not in close_url
 
     asyncio.run(scenario())
+
+
+def test_notify_close_prefers_earliest_frame_on_confidence_tie(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        files_dir = tmp_path / "files"
+        notifications = NotificationsRuntime(data_dir=tmp_path / "data")
+        q = notifications.broadcaster.subscribe()
+
+        deps = PipelineRuntimeDependencies(
+            files_dir=files_dir,
+            notifications_upsert=notifications.upsert,
+        )
+
+        frame = np.full((24, 24, 3), 128, dtype=np.uint8)
+        artifacts = {
+            "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+        }
+        sequence = [
+            {
+                "lifecycle": Lifecycle.OPEN,
+                "payload": {"frame_ts": 200.0, "camera_id": "camera-main", "tracking_id": "trk-1", "object_confidence": 0.5},
+                "artifacts": artifacts,
+            },
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {"frame_ts": 201.0, "camera_id": "camera-main", "tracking_id": "trk-1", "object_confidence": 0.5},
+                "artifacts": artifacts,
+            },
+            {
+                "lifecycle": Lifecycle.CLOSE,
+                "payload": {"frame_ts": 202.0, "camera_id": "camera-main", "tracking_id": "trk-1", "object_confidence": 0.5},
+                "artifacts": artifacts,
+            },
+        ]
+
+        registry = OperatorRegistry()
+        register_builtin_operators(registry)
+        _register_test_source_and_sink(registry, sequence=sequence, collector={})
+
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "store",
+                    "operator": "core.store_images",
+                    "config": {"artifact_names": ["frame_original"], "subdir": "pipelines", "format": "png", "keep_data": False},
+                },
+                {
+                    "id": "notify",
+                    "operator": "core.notify",
+                    "config": {
+                        "notification_type": "pipelines.tracking",
+                        "title": "Detected!",
+                        "priority": "high",
+                        "update_interval_seconds": 0.0,
+                        "thumbnail_with_fallback": ["frame_original"],
+                    },
+                },
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
+                {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
+            ],
+        }
+
+        pipeline = Pipeline(name="stage7_notify_conf_tie", type="final", graph=graph)
+        compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+        runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
+        await runtime.run_for(0.30)
+
+        events: list[dict[str, Any]] = []
+        while True:
+            try:
+                events.append(q.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        notifications.broadcaster.unsubscribe(q)
+
+        close_url = ""
+        for e in events:
+            notif = e.get("notification")
+            if not isinstance(notif, dict):
+                continue
+            payload = notif.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            if str(payload.get("lifecycle") or "") != "close":
+                continue
+            close_url = str(notif.get("imageUrl") or "")
+        assert close_url
+        assert "/200000__" in close_url
+        assert "/201000__" not in close_url
+        assert "/202000__" not in close_url
+
+    asyncio.run(scenario())

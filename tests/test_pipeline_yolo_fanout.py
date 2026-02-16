@@ -343,6 +343,43 @@ def test_object_tracking_yolo_assigns_stable_synthetic_id_when_tracker_id_missin
     asyncio.run(scenario())
 
 
+def test_object_tracking_yolo_matches_non_overlapping_boxes_when_tracker_id_missing() -> None:
+    async def scenario() -> None:
+        counters: dict[str, Any] = {}
+        registry = OperatorRegistry()
+        register_builtin_operators(registry)
+        register_camera_pipeline_operators(registry)
+        _register_test_source_and_sink(registry, counters, source_shareable=False)
+
+        # Same object moving fast enough that consecutive boxes do not overlap (IoU=0).
+        sequence = [
+            [YoloObject(tracking_id=None, category="person", confidence=0.52, bbox01=(0.70, 0.47, 0.73, 0.61))],
+            [YoloObject(tracking_id=None, category="person", confidence=0.55, bbox01=(0.74, 0.49, 0.77, 0.62))],
+            [YoloObject(tracking_id=None, category="person", confidence=0.51, bbox01=(0.78, 0.51, 0.81, 0.64))],
+            [YoloObject(tracking_id=None, category="person", confidence=0.50, bbox01=(0.82, 0.53, 0.85, 0.66))],
+            [],
+            [],
+        ]
+        dependencies = PipelineRuntimeDependencies(
+            yolo_backend_factory=_build_backend_factory(sequence, counters),
+        )
+
+        graph = _tracking_pipeline_graph(source_id="source", yolo_id="yolo", sink_id="sink", sink_name="tracking_sink")
+        pipeline = Pipeline(name="stage5_tracking_synthetic_non_overlap", type="final", graph=graph)
+        compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+        runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
+        await runtime.run_for(0.35)
+
+        packets = [record["packet"] for record in counters.get("packets", [])]
+        assert packets
+
+        tracking_ids = {str(packet.payload.get("tracking_id") or "") for packet in packets}
+        tracking_ids.discard("")
+        assert len(tracking_ids) == 1
+
+    asyncio.run(scenario())
+
+
 def test_object_tracking_yolo_continues_when_tracker_id_missing_for_one_frame() -> None:
     async def scenario() -> None:
         counters: dict[str, Any] = {}

@@ -904,7 +904,9 @@ def _select_best_confidence_stored_image(stored_images: dict[str, Any]) -> str |
 
         should_take = best_conf is None or conf > best_conf
         if not should_take and conf == best_conf:
-            should_take = ts > best_ts or (ts == best_ts and idx > best_idx)
+            # Em empate de confiança, preferimos o frame mais cedo para evitar
+            # que o CLOSE substitua a miniatura por um frame tardio sem objeto.
+            should_take = ts < best_ts or (ts == best_ts and idx < best_idx)
         if should_take:
             best_conf = conf
             best_ts = ts

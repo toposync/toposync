@@ -62,12 +62,17 @@ def _normalize_track_id(value: Any) -> int | None:
     try:
         if hasattr(value, "tolist"):
             value = value.tolist()
-        if isinstance(value, (list, tuple)):
+        while isinstance(value, (list, tuple)):
             if not value:
                 return None
             value = value[0]
         if value is None:
             return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            return int(float(stripped))
         return int(value)
     except Exception:
         return None
@@ -373,7 +378,21 @@ class YoloTracker:
         except Exception:
             boxes = []
 
-        for box in boxes:
+        raw_box_ids: list[Any] = []
+        if boxes is not None and hasattr(boxes, "id"):
+            try:
+                ids = getattr(boxes, "id", None)
+                if ids is not None:
+                    if hasattr(ids, "tolist"):
+                        ids = ids.tolist()
+                    if isinstance(ids, (list, tuple)):
+                        raw_box_ids = list(ids)
+                    else:
+                        raw_box_ids = [ids]
+            except Exception:
+                raw_box_ids = []
+
+        for idx, box in enumerate(boxes):
             try:
                 xyxy = box.xyxy.tolist()[0]
             except Exception:
@@ -396,6 +415,8 @@ class YoloTracker:
             track_id = None
             if hasattr(box, "id"):
                 raw_id = getattr(box, "id", None)
+                if raw_id is None and idx < len(raw_box_ids):
+                    raw_id = raw_box_ids[idx]
                 track_id = _normalize_track_id(raw_id)
 
             name = None

@@ -589,6 +589,48 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
             return None
         return best_key
 
+    def _match_tracking_key_by_center_distance(
+        self,
+        *,
+        detection: YoloObject,
+        now_monotonic: float,
+        used_keys: set[str],
+        max_distance: float,
+    ) -> str | None:
+        max_age = max(0.15, float(self._parsed.close_after_seconds) * 2.0)
+        det_center_x, det_center_y = _bbox_center01(detection.bbox01)
+        det_area = max(1e-6, _bbox_area01(detection.bbox01))
+        det_width = max(1e-6, float(detection.bbox01[2]) - float(detection.bbox01[0]))
+        best_key: str | None = None
+        best_distance = float("inf")
+
+        for key, state in self._state_by_tracking_key.items():
+            if key in used_keys:
+                continue
+            if state.category != detection.category:
+                continue
+            age = now_monotonic - float(state.last_seen_monotonic)
+            if age > max_age:
+                continue
+
+            state_area = max(1e-6, _bbox_area01(state.bbox01))
+            area_ratio = det_area / state_area
+            if area_ratio < 0.35 or area_ratio > 2.85:
+                continue
+
+            state_center_x, state_center_y = _bbox_center01(state.bbox01)
+            distance = math.hypot(det_center_x - state_center_x, det_center_y - state_center_y)
+            state_width = max(1e-6, float(state.bbox01[2]) - float(state.bbox01[0]))
+            width_scale = max(det_width, state_width)
+            adaptive_max = max(float(max_distance), min(0.22, (width_scale * 2.8) + (0.22 * max(0.0, age))))
+            if distance > adaptive_max:
+                continue
+            if distance < best_distance:
+                best_distance = distance
+                best_key = key
+
+        return best_key
+
     def _resolve_tracking_key(
         self,
         source_stream_id: str,
@@ -614,11 +656,29 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
             if matched is not None:
                 return matched
 
+            matched = self._match_tracking_key_by_center_distance(
+                detection=detection,
+                now_monotonic=now_monotonic,
+                used_keys=used_keys,
+                max_distance=0.08,
+            )
+            if matched is not None:
+                return matched
+
         matched = self._match_tracking_key_by_iou(
             detection=detection,
             now_monotonic=now_monotonic,
             used_keys=used_keys,
             min_iou=0.35,
+        )
+        if matched is not None:
+            return matched
+
+        matched = self._match_tracking_key_by_center_distance(
+            detection=detection,
+            now_monotonic=now_monotonic,
+            used_keys=used_keys,
+            max_distance=0.10,
         )
         if matched is not None:
             return matched
@@ -1054,6 +1114,16 @@ def _bbox_iou01(
         return 0.0
 
     return max(0.0, min(1.0, inter / union))
+
+
+def _bbox_center01(bbox: tuple[float, float, float, float]) -> tuple[float, float]:
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    return ((x1 + x2) * 0.5, (y1 + y2) * 0.5)
+
+
+def _bbox_area01(bbox: tuple[float, float, float, float]) -> float:
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    return max(0.0, x2 - x1) * max(0.0, y2 - y1)
 
 
 def _tracking_key(source_stream_id: str, detection: YoloObject, index: int) -> str:

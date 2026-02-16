@@ -39,7 +39,7 @@ function formatDurationCompact(secondsRaw: unknown): string | null {
 }
 
 function preferredArtifactNames(): string[] {
-  return ["best_frame", "face", "segmented", "frame_original"];
+  return ["best_frame", "face", "segmented", "frame", "frame_original"];
 }
 
 function resolveArtifacts(payload: Record<string, unknown>): Record<string, string> {

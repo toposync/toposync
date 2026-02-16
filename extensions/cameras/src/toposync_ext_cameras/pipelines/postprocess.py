@@ -25,7 +25,7 @@ from ..processing.mapping import ControlPointMapper, ControlPointPair
 
 class ObjectSegmentationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["treated", "original"])
+    input_artifact_names: list[str] = Field(default_factory=lambda: ["original", "treated"])
     fallback_to_stream_frame: bool = True
     output_artifact_name: str = "segmented"
     bbox_field: str = "object_bbox01"
@@ -58,7 +58,7 @@ class ObjectSegmentationConfig(BaseModel):
 
 class ImageResizeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "frame"])
+    artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated"])
     max_edge_px: int = Field(default=1280, ge=16, le=16384)
     allow_upscale: bool = False
 

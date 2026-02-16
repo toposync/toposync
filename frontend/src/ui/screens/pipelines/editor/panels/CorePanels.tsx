@@ -555,56 +555,96 @@ export function DebugConfigCard({ config, onUpdateConfig }: DebugProps): React.R
 
 type StoreImagesProps = {
   config: Record<string, unknown>;
+  showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
 };
 
-export function StoreImagesConfigCard({ config, onUpdateConfig }: StoreImagesProps): React.ReactElement {
+export function StoreImagesConfigCard({ config, showAdvanced, onUpdateConfig }: StoreImagesProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const formatRaw = String((config as any).format ?? "png").trim().toLowerCase() || "png";
-  const format = formatRaw === "jpeg" ? "jpeg" : "png";
+  const format = formatRaw === "jpg" || formatRaw === "jpeg" ? "jpg" : "png";
   const subdir = String((config as any).subdir ?? "pipelines").trim() || "pipelines";
-  const keepData = Boolean((config as any).keep_data ?? false);
+  const jpegQualityRaw = Number((config as any).jpeg_quality ?? 85);
+  const jpegQuality = Number.isFinite(jpegQualityRaw) ? Math.max(1, Math.min(100, jpegQualityRaw)) : 85;
+  const overwrite = Boolean((config as any).overwrite ?? false);
+
+  const dropDataRaw = (config as any).drop_data_after_store;
+  const legacyKeepData = Boolean((config as any).keep_data ?? false);
+  const dropDataAfterStore = dropDataRaw === undefined || dropDataRaw === null ? !legacyKeepData : Boolean(dropDataRaw);
 
   const artifactNamesRaw = (config as any).artifact_names;
   const artifactNames = Array.isArray(artifactNamesRaw)
     ? artifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
     : [];
+
+  const fallbackRaw = String((config as any).image_with_fallback ?? "segmented,treated,original");
+  const fallbackKeys = fallbackRaw
+    .split(",")
+    .map((value) => String(value || "").trim())
+    .filter((value) => value.length > 0);
   const artifactSuggestions = buildArtifactSuggestions(t);
-  const selectedArtifactOptions = artifactNames.map((value) => artifactSuggestions.find((option) => option.value === value) ?? { value, label: value });
+  const selectedFallbackOptions = fallbackKeys.map(
+    (value) => artifactSuggestions.find((option) => option.value === value) ?? { value, label: value },
+  );
 
   return (
     <div className="pipelinesOperatorConfigCard">
+      {artifactNames.length > 0 ? (
+        <div className="pipelinesInlineError">
+          {t("core.ui.pipelines.panels.store_images.using_explicit_artifact_names")}
+          <div style={{ marginTop: 8 }}>
+            <button
+              className="chipButton"
+              type="button"
+              onClick={() =>
+                onUpdateConfig((prev) => ({
+                  ...prev,
+                  artifact_names: [],
+                  image_with_fallback: String((prev as any).image_with_fallback ?? "segmented,treated,original"),
+                }))
+              }
+            >
+              {t("core.ui.pipelines.panels.store_images.use_fallback_button")}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <label className="pipelinesLabel">
-        <span>{t("core.ui.pipelines.panels.store_images.artifacts")}</span>
+        <span>{t("core.ui.pipelines.panels.store_images.image_with_fallback")}</span>
         <CreatableSelect<SelectOption, true>
           isMulti
           styles={pipelinesReactSelectStyles}
           options={artifactSuggestions}
-          value={selectedArtifactOptions}
-          placeholder={t("core.ui.pipelines.panels.store_images.artifacts_placeholder")}
+          value={selectedFallbackOptions}
+          placeholder={t("core.ui.pipelines.panels.store_images.image_with_fallback_placeholder")}
           onChange={(value: MultiValue<SelectOption>) => {
             onUpdateConfig((prev) => ({
               ...prev,
-              artifact_names: value.map((item) => item.value),
+              image_with_fallback: value.map((item) => item.value).join(","),
+              // Avoid subtle bugs: explicit artifact_names overrides fallback selection.
+              artifact_names: [],
             }));
           }}
         />
       </label>
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.store_images.hint")}</div>
 
-      <label className="pipelinesLabel">
-        <span>{t("core.ui.pipelines.panels.store_images.subdir")}</span>
-        <input
-          className="pipelinesInput"
-          type="text"
-          value={subdir}
-          placeholder="pipelines"
-          onChange={(event) => {
-            const nextValue = String(event.target.value ?? "");
-            onUpdateConfig((prev) => ({ ...prev, subdir: nextValue }));
-          }}
-        />
-      </label>
+      {showAdvanced ? (
+        <label className="pipelinesLabel">
+          <span>{t("core.ui.pipelines.panels.store_images.subdir")}</span>
+          <input
+            className="pipelinesInput"
+            type="text"
+            value={subdir}
+            placeholder="pipelines"
+            onChange={(event) => {
+              const nextValue = String(event.target.value ?? "");
+              onUpdateConfig((prev) => ({ ...prev, subdir: nextValue }));
+            }}
+          />
+        </label>
+      ) : null}
 
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.store_images.format")}</span>
@@ -613,19 +653,58 @@ export function StoreImagesConfigCard({ config, onUpdateConfig }: StoreImagesPro
           value={format}
           onChange={(event) => {
             const nextValue = String(event.target.value || "png").trim().toLowerCase();
-            onUpdateConfig((prev) => ({ ...prev, format: nextValue === "jpeg" ? "jpeg" : "png" }));
+            onUpdateConfig((prev) => ({ ...prev, format: nextValue === "jpg" ? "jpg" : "png" }));
           }}
         >
           <option value="png">PNG</option>
-          <option value="jpeg">JPEG</option>
+          <option value="jpg">JPG</option>
         </select>
       </label>
 
+      {format === "jpg" ? (
+        <label className="pipelinesLabel">
+          <span>{t("core.ui.pipelines.panels.store_images.jpeg_quality")}</span>
+          <PipelinesNumberInput
+            className="pipelinesInput"
+            min={1}
+            max={100}
+            step={1}
+            value={jpegQuality}
+            onChange={(nextValue) => {
+              const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(100, nextValue)) : 85;
+              onUpdateConfig((prev) => ({ ...prev, jpeg_quality: normalized }));
+            }}
+          />
+        </label>
+      ) : null}
+
       <label className="pipelinesLabel">
-        <span>{t("core.ui.pipelines.panels.store_images.keep_data")}</span>
-        <input type="checkbox" checked={keepData} onChange={(event) => onUpdateConfig((prev) => ({ ...prev, keep_data: event.target.checked }))} />
+        <span>{t("core.ui.pipelines.panels.store_images.drop_data_after_store")}</span>
+        <input
+          type="checkbox"
+          checked={dropDataAfterStore}
+          onChange={(event) =>
+            onUpdateConfig((prev) => {
+              const next = { ...prev };
+              (next as any).drop_data_after_store = event.target.checked;
+              delete (next as any).keep_data;
+              return next;
+            })
+          }
+        />
       </label>
-      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.store_images.keep_data_hint")}</div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.store_images.drop_data_after_store_hint")}</div>
+
+      {showAdvanced ? (
+        <label className="pipelinesLabel">
+          <span>{t("core.ui.pipelines.panels.store_images.overwrite")}</span>
+          <input
+            type="checkbox"
+            checked={overwrite}
+            onChange={(event) => onUpdateConfig((prev) => ({ ...prev, overwrite: event.target.checked }))}
+          />
+        </label>
+      ) : null}
     </div>
   );
 }
@@ -650,7 +729,7 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
   const notifyFallbackRaw = (config as any).thumbnail_with_fallback;
   const notifyFallback = Array.isArray(notifyFallbackRaw)
     ? notifyFallbackRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
-    : ["best_frame", "frame_original"];
+    : ["best_frame", "segmented", "treated", "original"];
   const notifySelectedFallbackOptions = notifyFallback.map((value: string) => ({ value, label: value }));
   const artifactSuggestions = buildArtifactSuggestions(t);
 

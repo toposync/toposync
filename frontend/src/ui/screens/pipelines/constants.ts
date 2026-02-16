@@ -188,11 +188,10 @@ export const YOLO_CATEGORY_OPTIONS: SelectOption[] = YOLO_CATEGORY_VALUES.map((v
 type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: string) => string;
 
 const ARTIFACT_SUGGESTION_DEFS: Array<{ value: string; labelKey: string; fallback: string }> = [
-  { value: "frame_original", labelKey: "core.ui.pipelines.artifacts.frame_original", fallback: "Full frame" },
-  { value: "frame_cropped", labelKey: "core.ui.pipelines.artifacts.frame_cropped", fallback: "Cropped frame" },
-  { value: "frame_adjusted", labelKey: "core.ui.pipelines.artifacts.frame_adjusted", fallback: "Adjusted frame" },
   { value: "best_frame", labelKey: "core.ui.pipelines.artifacts.best_frame", fallback: "Best frame" },
   { value: "segmented", labelKey: "core.ui.pipelines.artifacts.segmented", fallback: "Segmented" },
+  { value: "treated", labelKey: "core.ui.pipelines.artifacts.treated", fallback: "Treated" },
+  { value: "original", labelKey: "core.ui.pipelines.artifacts.original", fallback: "Original" },
   { value: "face", labelKey: "core.ui.pipelines.artifacts.face", fallback: "Face" },
   { value: "pose", labelKey: "core.ui.pipelines.artifacts.pose", fallback: "Pose" },
 ];

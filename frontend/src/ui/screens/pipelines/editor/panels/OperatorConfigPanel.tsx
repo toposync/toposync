@@ -133,7 +133,7 @@ export function OperatorConfigPanel({
     return <DebugConfigCard config={config} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "core.store_images") {
-    return <StoreImagesConfigCard config={config} onUpdateConfig={onUpdateConfig} />;
+    return <StoreImagesConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "core.notify") {
     return <NotifyConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;

@@ -338,11 +338,54 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
                     )
                 )
         downstream = _downstream_nodes(store_node_id)
+        store_mapping: dict[str, str] = {"original": "frame_original", "treated": "frame"}
+        for upstream_id in _upstream_nodes(store_node_id):
+            upstream_node = nodes_by_id.get(upstream_id)
+            if upstream_node is None:
+                continue
+            if upstream_node.operator_id == "camera.object_segmentation":
+                seg_cfg = _resolve_config(upstream_id)
+                out_name = str(seg_cfg.get("output_artifact_name") or "segmented").strip() or "segmented"
+                store_mapping["segmented"] = out_name
+            if upstream_node.operator_id == "camera.best_frame_selector":
+                bf_cfg = _resolve_config(upstream_id)
+                out_name = str(bf_cfg.get("output_artifact_name") or "best_frame").strip() or "best_frame"
+                store_mapping["best_frame"] = out_name
+
+        def _map_name(raw: str) -> str:
+            key = str(raw or "").strip()
+            return store_mapping.get(key, key)
+
+        # Which artifacts might Store Images drop pixel data for?
+        store_candidates: list[str] = []
+        wanted = cfg.get("artifact_names")
+        wanted_names = [str(item).strip() for item in wanted] if isinstance(wanted, list) else []
+        if wanted_names:
+            store_candidates = wanted_names
+        else:
+            fallback = str(cfg.get("image_with_fallback") or "").strip() or "segmented,treated,original"
+            store_candidates = [p.strip() for p in fallback.split(",") if p.strip()]
+        stored_artifacts = {_map_name(name) for name in store_candidates if str(name or "").strip()}
+
+        # Warn only when a downstream post-process step might consume the same artifacts that Store Images could drop.
         for node_id in downstream:
             node = nodes_by_id.get(node_id)
-            if node is None:
+            if node is None or node.operator_id not in data_consumers:
                 continue
-            if node.operator_id in data_consumers:
+            consumer_cfg = _resolve_config(node_id)
+            consumer_inputs: list[str] = []
+            if node.operator_id == "camera.object_segmentation":
+                raw = consumer_cfg.get("input_artifact_names")
+                consumer_inputs = [str(item).strip() for item in raw] if isinstance(raw, list) else []
+            elif node.operator_id == "camera.image_resize":
+                raw = consumer_cfg.get("artifact_names")
+                consumer_inputs = [str(item).strip() for item in raw] if isinstance(raw, list) else []
+            elif node.operator_id == "camera.best_frame_selector":
+                raw = consumer_cfg.get("input_artifact_names")
+                consumer_inputs = [str(item).strip() for item in raw] if isinstance(raw, list) else []
+
+            consumer_artifacts = {_map_name(name) for name in consumer_inputs if str(name or "").strip()}
+            if stored_artifacts & consumer_artifacts:
                 alerts.append(
                     PipelineAlert(
                         severity="warning",
@@ -356,8 +399,6 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
                 break
 
         # Storing artifacts that are never produced upstream usually indicates a broken config.
-        wanted = cfg.get("artifact_names")
-        wanted_names = [str(item).strip() for item in wanted] if isinstance(wanted, list) else []
         if wanted_names:
             produced: set[str] = {"frame_original"}
             for nid in _upstream_nodes(store_node_id):

@@ -228,6 +228,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.artifacts.frame_adjusted": "Adjusted frame",
     "core.ui.pipelines.artifacts.best_frame": "Best frame",
     "core.ui.pipelines.artifacts.segmented": "Segmented",
+    "core.ui.pipelines.artifacts.treated": "Treated",
+    "core.ui.pipelines.artifacts.original": "Original",
     "core.ui.pipelines.artifacts.face": "Face",
     "core.ui.pipelines.artifacts.pose": "Pose",
 
@@ -351,11 +353,21 @@ const translationsByLocale: Record<Locale, Translations> = {
 
     "core.ui.pipelines.panels.store_images.artifacts": "Artifacts",
     "core.ui.pipelines.panels.store_images.artifacts_placeholder": "Full frame",
-    "core.ui.pipelines.panels.store_images.hint": "Stores artifacts locally on the origin. Notify uses stored references only.",
+    "core.ui.pipelines.panels.store_images.image_with_fallback": "Image (fallback order)",
+    "core.ui.pipelines.panels.store_images.image_with_fallback_placeholder": "Segmented → Treated → Original",
+    "core.ui.pipelines.panels.store_images.hint":
+      "Stores one image locally on the origin and attaches a reference. Add this step more than once to store multiple images.",
+    "core.ui.pipelines.panels.store_images.using_explicit_artifact_names":
+      "This step is using explicit artifact_names (advanced). Fallback selection is ignored until you clear them.",
+    "core.ui.pipelines.panels.store_images.use_fallback_button": "Use fallback (recommended)",
     "core.ui.pipelines.panels.store_images.subdir": "Subdir",
     "core.ui.pipelines.panels.store_images.format": "Format",
+    "core.ui.pipelines.panels.store_images.jpeg_quality": "JPG quality",
+    "core.ui.pipelines.panels.store_images.drop_data_after_store": "Drop pixel data after store",
+    "core.ui.pipelines.panels.store_images.drop_data_after_store_hint": "Recommended. Keeps memory stable under load.",
     "core.ui.pipelines.panels.store_images.keep_data": "Keep data in memory",
     "core.ui.pipelines.panels.store_images.keep_data_hint": "If disabled, pixel data is dropped after storing to keep memory stable.",
+    "core.ui.pipelines.panels.store_images.overwrite": "Overwrite existing files",
 
     "core.ui.pipelines.panels.notify.title_template": "Title template",
     "core.ui.pipelines.panels.notify.title_placeholder": "{{object_category_label}} detected",
@@ -431,7 +443,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.velocity.mapping_required": "Add Camera Mapping before this step to get world speed.",
 
     "core.ui.pipelines.panels.image_crop.hint":
-      "Crops the frame for downstream analysis (YOLO). The original full frame is preserved as frame_original.",
+      "Crops the frame for downstream analysis (YOLO). The original full frame is preserved as original.",
     "core.ui.pipelines.panels.image_crop.units": "Units",
     "core.ui.pipelines.panels.image_crop.units.percent": "Percent (0–100)",
     "core.ui.pipelines.panels.image_crop.units.pixels": "Pixels",
@@ -448,7 +460,7 @@ const translationsByLocale: Record<Locale, Translations> = {
 
     "core.ui.pipelines.panels.image_adjust.input_artifacts": "Input artifacts (fallback order)",
     "core.ui.pipelines.panels.image_adjust.input_artifacts_placeholder": "Full frame",
-    "core.ui.pipelines.panels.image_adjust.input_artifacts_hint": "Uses the first available artifact. Keep frame_original as fallback.",
+    "core.ui.pipelines.panels.image_adjust.input_artifacts_hint": "Uses the first available image. Keep original as fallback.",
     "core.ui.pipelines.panels.image_adjust.saturation": "Saturation",
     "core.ui.pipelines.panels.image_adjust.brightness": "Brightness",
     "core.ui.pipelines.panels.image_adjust.contrast": "Contrast",
@@ -720,6 +732,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.artifacts.frame_adjusted": "Frame ajustado",
     "core.ui.pipelines.artifacts.best_frame": "Melhor frame",
     "core.ui.pipelines.artifacts.segmented": "Segmentado",
+    "core.ui.pipelines.artifacts.treated": "Tratado",
+    "core.ui.pipelines.artifacts.original": "Original",
     "core.ui.pipelines.artifacts.face": "Rosto",
     "core.ui.pipelines.artifacts.pose": "Pose",
 
@@ -843,12 +857,22 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.debug.print_artifacts": "Imprimir artefatos",
 
     "core.ui.pipelines.panels.store_images.artifacts": "Artefatos",
-    "core.ui.pipelines.panels.store_images.artifacts_placeholder": "Full frame",
-    "core.ui.pipelines.panels.store_images.hint": "Salva artefatos localmente na origem. Notify usa apenas referências salvas.",
+    "core.ui.pipelines.panels.store_images.artifacts_placeholder": "Frame completo",
+    "core.ui.pipelines.panels.store_images.image_with_fallback": "Imagem (ordem de fallback)",
+    "core.ui.pipelines.panels.store_images.image_with_fallback_placeholder": "Segmentado → Tratado → Original",
+    "core.ui.pipelines.panels.store_images.hint":
+      "Salva uma imagem localmente na origem e anexa a referência. Adicione esta etapa mais de uma vez para salvar várias imagens.",
+    "core.ui.pipelines.panels.store_images.using_explicit_artifact_names":
+      "Esta etapa está usando artifact_names explícitos (avançado). A seleção de fallback é ignorada até você limpá-los.",
+    "core.ui.pipelines.panels.store_images.use_fallback_button": "Usar fallback (recomendado)",
     "core.ui.pipelines.panels.store_images.subdir": "Subdiretório",
     "core.ui.pipelines.panels.store_images.format": "Formato",
+    "core.ui.pipelines.panels.store_images.jpeg_quality": "Qualidade do JPG",
+    "core.ui.pipelines.panels.store_images.drop_data_after_store": "Descartar pixels após salvar",
+    "core.ui.pipelines.panels.store_images.drop_data_after_store_hint": "Recomendado. Mantém a memória estável sob carga.",
     "core.ui.pipelines.panels.store_images.keep_data": "Manter dados na memória",
     "core.ui.pipelines.panels.store_images.keep_data_hint": "Se desativado, os pixels são descartados após salvar para manter a memória estável.",
+    "core.ui.pipelines.panels.store_images.overwrite": "Sobrescrever arquivos existentes",
 
     "core.ui.pipelines.panels.notify.title_template": "Template do título",
     "core.ui.pipelines.panels.notify.title_placeholder": "{{object_category_label}} detectado",
@@ -922,7 +946,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.velocity.mapping_required": "Adicione Camera Mapping antes desta etapa para obter velocidade no mundo.",
 
     "core.ui.pipelines.panels.image_crop.hint":
-      "Recorta o frame para análise downstream (YOLO). O frame cheio original é preservado como frame_original.",
+      "Recorta o frame para análise downstream (YOLO). O frame cheio original é preservado como original.",
     "core.ui.pipelines.panels.image_crop.units": "Unidades",
     "core.ui.pipelines.panels.image_crop.units.percent": "Porcentagem (0–100)",
     "core.ui.pipelines.panels.image_crop.units.pixels": "Pixels",
@@ -939,7 +963,7 @@ const translationsByLocale: Record<Locale, Translations> = {
 
     "core.ui.pipelines.panels.image_adjust.input_artifacts": "Artefatos de entrada (ordem de fallback)",
     "core.ui.pipelines.panels.image_adjust.input_artifacts_placeholder": "Full frame",
-    "core.ui.pipelines.panels.image_adjust.input_artifacts_hint": "Usa o primeiro artefato disponível. Mantenha frame_original como fallback.",
+    "core.ui.pipelines.panels.image_adjust.input_artifacts_hint": "Usa a primeira imagem disponível. Mantenha original como fallback.",
     "core.ui.pipelines.panels.image_adjust.saturation": "Saturação",
     "core.ui.pipelines.panels.image_adjust.brightness": "Brilho",
     "core.ui.pipelines.panels.image_adjust.contrast": "Contraste",

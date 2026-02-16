@@ -334,6 +334,9 @@ class StoreImagesConfig(BaseModel):
         # Keep backwards compatibility with older graphs, but don't expose these knobs in the UX.
         if isinstance(values, dict):
             values = dict(values)
+            fmt = str(values.get("format", "") or "").strip().lower()
+            if fmt == "jpeg":
+                values["format"] = "jpg"
             values.pop("timestamp_field", None)
             values.pop("camera_id_field", None)
             values.pop("tracking_id_field", None)

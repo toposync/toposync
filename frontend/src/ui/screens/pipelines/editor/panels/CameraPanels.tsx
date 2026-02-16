@@ -290,7 +290,7 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
   const top = Number((config as any).top ?? 0);
   const right = Number((config as any).right ?? 100);
   const bottom = Number((config as any).bottom ?? 100);
-  const outputArtifactName = String((config as any).output_artifact_name ?? "frame_cropped").trim() || "frame_cropped";
+  const outputArtifactName = String((config as any).output_artifact_name ?? "frame").trim() || "frame";
   const minCropSizePx = Number((config as any).min_crop_size_px ?? 8);
   const setStreamFrame = (config as any).set_stream_frame ?? (config as any).set_payload_frame ?? true;
 
@@ -440,7 +440,7 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
   const inputArtifactNamesRaw = (config as any).input_artifact_names;
   const inputArtifactNames = Array.isArray(inputArtifactNamesRaw)
     ? inputArtifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
-    : ["frame_original"];
+    : ["segmented", "treated", "original"];
   const artifactSuggestions = buildArtifactSuggestions(t);
   const selectedInputOptions = inputArtifactNames.map(
     (value) => artifactSuggestions.find((opt) => opt.value === value) ?? { value, label: value },
@@ -451,7 +451,7 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
   const contrast = Number((config as any).contrast ?? 1.0);
   const gamma = Number((config as any).gamma ?? 1.0);
 
-  const outputArtifactName = String((config as any).output_artifact_name ?? "frame_adjusted").trim() || "frame_adjusted";
+  const outputArtifactName = String((config as any).output_artifact_name ?? "frame").trim() || "frame";
   const setStreamFrame = (config as any).set_stream_frame ?? (config as any).set_payload_frame ?? true;
   const preserveAlpha = (config as any).preserve_alpha !== false;
   const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? (config as any).fallback_to_payload_frame ?? true;
@@ -603,7 +603,7 @@ export function ImageResizeConfigCard({ config, onUpdateConfig }: ImageResizePro
   const artifactNamesRaw = (config as any).artifact_names;
   const artifactNames = Array.isArray(artifactNamesRaw)
     ? artifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
-    : ["frame_original"];
+    : ["segmented", "treated"];
   const artifactSuggestions = buildArtifactSuggestions(t);
   const selectedOptions = artifactNames.map((value) => artifactSuggestions.find((opt) => opt.value === value) ?? { value, label: value });
 

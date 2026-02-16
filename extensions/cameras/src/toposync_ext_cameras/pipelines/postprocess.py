@@ -335,7 +335,19 @@ class ObjectSegmentationRuntime(TransformOperatorRuntime):
             )
             return [replace(packet, payload=payload)]
 
-        bbox01_used = _expand_bbox01(bbox01, padding_ratio=float(self._config.padding_ratio))
+        bbox01_input = bbox01
+        bbox01_selected = bbox01_input
+        treated_resolved = resolve_image_artifact_name(packet, "treated")
+        treated_name = treated_resolved[1] if treated_resolved is not None else "frame"
+        if selected_name == treated_name:
+            crop_bbox01 = _read_frame_crop_bbox01(packet)
+            if crop_bbox01 is not None:
+                reproj = _reproject_bbox01_to_crop(bbox01_input, crop_bbox01)
+                if reproj is not None:
+                    bbox01_selected = reproj
+                    bbox_source = f"{bbox_source}|reproject:frame_crop" if bbox_source else "reproject:frame_crop"
+
+        bbox01_used = _expand_bbox01(bbox01_selected, padding_ratio=float(self._config.padding_ratio))
         crop = _crop_bbox01(image=image, bbox01=bbox01_used, min_crop_size_px=self._config.min_crop_size_px)
         if crop is None:
             payload = _annotate_artifact_contract(
@@ -354,7 +366,8 @@ class ObjectSegmentationRuntime(TransformOperatorRuntime):
                 metadata={
                     "source_artifact_name": selected_name,
                     "bbox01": list(bbox01_used),
-                    "bbox01_original": list(bbox01),
+                    "bbox01_original": list(bbox01_input),
+                    "bbox01_selected": list(bbox01_selected),
                     "bbox_source": bbox_source,
                     "padding_ratio": float(self._config.padding_ratio),
                 },
@@ -1491,6 +1504,47 @@ def _read_bbox01_from_artifact(artifact: Artifact) -> tuple[float, float, float,
         if values:
             return _normalize_bbox01((values[0], values[1], values[2], values[3]))
     return None
+
+
+def _read_frame_crop_bbox01(packet: Packet) -> tuple[float, float, float, float] | None:
+    crop = packet.payload.get("frame_crop")
+    if not isinstance(crop, dict):
+        return None
+    apply_to_stream = crop.get("set_stream_frame")
+    if apply_to_stream is None:
+        apply_to_stream = crop.get("set_payload_frame")  # legacy
+    if apply_to_stream is False:
+        return None
+    raw = crop.get("bbox01")
+    if isinstance(raw, (list, tuple)) and len(raw) >= 4:
+        try:
+            values = [float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3])]
+        except Exception:
+            values = []
+        if values:
+            return _normalize_bbox01((values[0], values[1], values[2], values[3]))
+    return None
+
+
+def _reproject_bbox01_to_crop(
+    bbox01: tuple[float, float, float, float],
+    crop_bbox01: tuple[float, float, float, float],
+) -> tuple[float, float, float, float] | None:
+    # Converte bbox no espaço do frame original para o espaço do frame "cropped" (stream frame).
+    x1, y1, x2, y2 = [float(v) for v in bbox01]
+    cx1, cy1, cx2, cy2 = [float(v) for v in crop_bbox01]
+    cw = float(cx2) - float(cx1)
+    ch = float(cy2) - float(cy1)
+    if cw <= 1e-12 or ch <= 1e-12:
+        return None
+    return _normalize_bbox01(
+        (
+            (x1 - cx1) / cw,
+            (y1 - cy1) / ch,
+            (x2 - cx1) / cw,
+            (y2 - cy1) / ch,
+        ),
+    )
 
 
 def _expand_bbox01(bbox01: tuple[float, float, float, float], *, padding_ratio: float) -> tuple[float, float, float, float]:

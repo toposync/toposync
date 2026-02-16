@@ -112,6 +112,18 @@ def _frame_artifacts(frame: Any) -> dict[str, Artifact]:
     }
 
 
+def _frame_artifacts_with_stream(original: Any, stream_frame: Any) -> dict[str, Artifact]:
+    return {
+        "frame_original": Artifact(name="frame_original", data=original, mime_type="image/raw"),
+        "frame": Artifact(
+            name="frame",
+            data=stream_frame,
+            mime_type="image/raw",
+            metadata={"derived_from": "frame_original"},
+        ),
+    }
+
+
 def test_segmentation_and_best_frame_selection_are_deterministic() -> None:
     async def scenario() -> None:
         sequence: list[dict[str, Any]] = []
@@ -203,6 +215,76 @@ def test_segmentation_and_best_frame_selection_are_deterministic() -> None:
             "frame_original",
             "segmented",
         ]
+
+    asyncio.run(scenario())
+
+
+def test_segmentation_reprojects_bbox_for_cropped_stream_frame() -> None:
+    async def scenario() -> None:
+        frame_original = np.zeros((100, 100, 3), dtype=np.uint8)
+        frame_original[30:50, 30:50] = 123
+
+        # Simulates a stream crop of the center area [0.25..0.75] applied as the stream frame.
+        stream_frame = frame_original[25:75, 25:75].copy()
+
+        sequence: list[dict[str, Any]] = [
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {
+                    "frame_ts": 1.0,
+                    "tracking_id": "trk-1",
+                    # Use exact binary fractions to avoid borderline rounding in int/ceil conversions.
+                    "object_bbox01": [0.3125, 0.3125, 0.50, 0.50],
+                    "frame_crop": {
+                        "bbox01": [0.25, 0.25, 0.75, 0.75],
+                        "set_stream_frame": True,
+                    },
+                    "images": {
+                        "original": "frame_original",
+                        "treated": "frame",
+                    },
+                },
+                "artifacts": _frame_artifacts_with_stream(frame_original, stream_frame),
+            },
+        ]
+
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "segment",
+                    "operator": "camera.object_segmentation",
+                    "config": {
+                        "input_artifact_names": ["treated"],
+                        "fallback_to_stream_frame": False,
+                        "output_artifact_name": "segmented",
+                        "bbox_field": "object_bbox01",
+                        "padding_ratio": 0.0,
+                        "min_crop_size_px": 1,
+                    },
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "segment", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+                {"from": {"node": "segment", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+            ],
+        }
+
+        collector: dict[str, list[Packet]] = {}
+        runtime = _pipeline_runtime(graph=graph, sequence=sequence, collector=collector)
+        await runtime.run_for(0.2)
+
+        packets = collector.get("sink", [])
+        assert len(packets) == 1
+        packet = packets[0]
+        segmented = packet.artifacts["segmented"].data
+        assert segmented is not None
+
+        # When bbox is given in original coordinates, and stream frame is cropped, segmentation must reproject.
+        assert tuple(segmented.shape[:2]) == (19, 19)
+        assert int(segmented[0, 0, 0]) == 123
 
     asyncio.run(scenario())
 

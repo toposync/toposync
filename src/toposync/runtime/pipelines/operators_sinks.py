@@ -79,6 +79,29 @@ def _resolve_ts(packet: Packet, field: str) -> float:
     return float(packet.created_at)
 
 
+def _as_finite_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return float(parsed)
+
+
+def _resolve_image_confidence(packet: Packet, artifact: Artifact) -> float | None:
+    meta = artifact.metadata if isinstance(artifact.metadata, dict) else {}
+    for key in ("confidence", "best_score", "score"):
+        parsed = _as_finite_float(meta.get(key))
+        if parsed is not None and parsed >= 0.0:
+            return float(parsed)
+
+    parsed = _as_finite_float(packet.payload.get("object_confidence"))
+    if parsed is not None and parsed >= 0.0:
+        return float(parsed)
+    return None
+
+
 def _resolve_string(packet: Packet, field: str) -> str:
     value = str(packet.payload.get(field) or "").strip()
     if value:
@@ -490,12 +513,14 @@ class StoreImagesRuntime(TransformOperatorRuntime):
                 )
 
             if rel:
+                stored_artifact = packet.artifacts.get(artifact_name) or artifact
                 packet = add_stored_image_entry(
                     packet,
                     key=image_key or artifact_name,
-                    artifact=packet.artifacts.get(artifact_name) or artifact,
+                    artifact=stored_artifact,
                     rel_path=rel,
                     stored_ts_ms=ts_ms,
+                    confidence=_resolve_image_confidence(packet, stored_artifact),
                 )
 
         return [packet]
@@ -656,7 +681,14 @@ class NotifyRuntime(SinkRuntime):
         title = _render_template(packet, self._config.title)
         description = _render_template(packet, self._config.description)
 
-        image_path = await self._select_thumbnail_path(packet, context)
+        image_path: str | None = None
+        if state.stored_images:
+            if lifecycle == Lifecycle.CLOSE:
+                image_path = _select_best_confidence_stored_image(state.stored_images)
+            elif bool(self._config.realtime):
+                image_path = _select_latest_stored_image(state.stored_images)
+        if not image_path:
+            image_path = await self._select_thumbnail_path(packet, context)
         signature = _signature_payload(
             {
                 "title": title,
@@ -738,7 +770,7 @@ class NotifyRuntime(SinkRuntime):
                     type=self._config.notification_type,
                     title=state.last_title or "Pipeline event",
                     description=state.last_description or "",
-                    image_path=state.last_image_path,
+                    image_path=_select_best_confidence_stored_image(state.stored_images) or state.last_image_path,
                     payload={
                         "source": "pipelines",
                         "lifecycle": Lifecycle.CLOSE.value,
@@ -792,6 +824,68 @@ class NotifyRuntime(SinkRuntime):
 def _signature_payload(payload: dict[str, Any]) -> str:
     raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _iter_stored_image_entries(stored_images: dict[str, Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for entries_raw in stored_images.values():
+        entries = entries_raw if isinstance(entries_raw, list) else []
+        for entry in entries:
+            if isinstance(entry, dict):
+                out.append(entry)
+    return out
+
+
+def _select_latest_stored_image(stored_images: dict[str, Any]) -> str | None:
+    best_rel: str | None = None
+    best_ts = -1
+    best_idx = -1
+    idx = 0
+    for entry in _iter_stored_image_entries(stored_images):
+        rel = str(entry.get("rel_path") or "").strip()
+        if not rel:
+            continue
+        try:
+            ts = int(entry.get("stored_ts_ms") or 0)
+        except Exception:
+            ts = 0
+        idx += 1
+        if ts > best_ts or (ts == best_ts and idx > best_idx):
+            best_ts = ts
+            best_idx = idx
+            best_rel = rel
+    return best_rel
+
+
+def _select_best_confidence_stored_image(stored_images: dict[str, Any]) -> str | None:
+    best_rel: str | None = None
+    best_conf: float | None = None
+    best_ts = -1
+    best_idx = -1
+    idx = 0
+    for entry in _iter_stored_image_entries(stored_images):
+        rel = str(entry.get("rel_path") or "").strip()
+        if not rel:
+            continue
+        conf = _as_finite_float(entry.get("confidence"))
+        if conf is None or conf < 0.0:
+            continue
+        try:
+            ts = int(entry.get("stored_ts_ms") or 0)
+        except Exception:
+            ts = 0
+        idx += 1
+
+        should_take = best_conf is None or conf > best_conf
+        if not should_take and conf == best_conf:
+            should_take = ts > best_ts or (ts == best_ts and idx > best_idx)
+        if should_take:
+            best_conf = conf
+            best_ts = ts
+            best_idx = idx
+            best_rel = rel
+
+    return best_rel or _select_latest_stored_image(stored_images)
 
 
 def _select_notification_data(packet: Packet) -> dict[str, Any]:

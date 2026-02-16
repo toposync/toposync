@@ -74,6 +74,23 @@ function asFiniteNumber(value: unknown): number | null {
   return value;
 }
 
+function stripCameraPrefixFromTitle(titleRaw: string, cameraRaw: string): string {
+  const title = titleRaw.trim();
+  const camera = cameraRaw.trim();
+  if (!title || !camera) return title;
+
+  const lowerTitle = title.toLowerCase();
+  const lowerCamera = camera.toLowerCase();
+  if (!lowerTitle.startsWith(lowerCamera)) return title;
+
+  const tail = title.slice(camera.length).trimStart();
+  if (!tail) return title;
+  const separator = tail[0] ?? "";
+  if (!["-", ":", "|", ">", "—", "–"].includes(separator)) return title;
+  const cleaned = tail.slice(1).trimStart();
+  return cleaned || title;
+}
+
 function formatDateTimeLong(locale: string, iso: string | undefined): string | null {
   if (!iso) return null;
   const d = new Date(iso);
@@ -553,7 +570,13 @@ export function MainScreen({
               {visibleNotifications.map((n) => {
                 const renderer = notificationRenderers.find((r) => r.type === n.type);
                 const time = formatDateTimeShort(locale, n.updatedAt ?? n.createdAt);
-                const title = n.title;
+                const payload = asRecord(n.payload);
+                const data = asRecord(payload.data);
+                const cameraLabel = asTrimmedString(data.camera_name) || asTrimmedString(data.camera_id);
+                const title = stripCameraPrefixFromTitle(n.title, cameraLabel) || n.title;
+                const priority = notificationPriority(n);
+                const priorityClass =
+                  priority === "high" ? "isHigh" : priority === "low" ? "isLow" : "isMedium";
                 const isActive = Boolean(activeNotificationId && n.id === activeNotificationId);
                 const thumbUrl = notificationThumbnailUrl(n);
                 return (
@@ -565,11 +588,19 @@ export function MainScreen({
                       onSelectNotification(n.id);
                       if (shouldAutoCloseNotificationsAfterSelect()) setNotificationsOpen(false);
                     }}
+                    onDoubleClick={() => {
+                      onSelectNotification(n.id);
+                      setNotificationImageIndex(0);
+                      setIsNotificationDetailsOpen(true);
+                    }}
                   >
                     <div className="notificationCardGrid">
                       <div className="notificationCardMain">
                         <div className="notificationCardHeader">
-                          <div className="notificationCardTitle">{title}</div>
+                          <div className="notificationCardTitleRow">
+                            <span className={["notificationPriorityDot", priorityClass].join(" ")} aria-hidden="true" />
+                            <div className="notificationCardTitle">{title}</div>
+                          </div>
                           {time ? <div className="notificationCardTime">{time}</div> : null}
                         </div>
 

@@ -94,14 +94,35 @@ function resolveWorldPoint(notification: Notification): { x: number; z: number; 
   return { x, z, compositionId: comp || null };
 }
 
+function resolveTrailPoints(notification: Notification): Array<{ x: number; z: number; compositionId: string | null }> | null {
+  const payload = asRecord(notification.payload);
+  const rawTrail = payload.trail;
+  if (Array.isArray(rawTrail)) {
+    const out: Array<{ x: number; z: number; compositionId: string | null }> = [];
+    for (const entry of rawTrail) {
+      const rec = asRecord(entry);
+      const x = asFiniteNumber(rec.x);
+      const z = asFiniteNumber(rec.z);
+      if (x == null || z == null) continue;
+      const comp = asString(rec.composition_id, "").trim();
+      out.push({ x, z, compositionId: comp || null });
+    }
+    if (out.length) return out;
+  }
+
+  const point = resolveWorldPoint(notification);
+  return point ? [point] : null;
+}
+
 function createPipelines3DOverlay(
   ctx: Scene3DContext,
   notification: Notification,
   actions: NotificationOverlayActions,
 ): Notification3DOverlay | null {
-  const point = resolveWorldPoint(notification);
-  if (!point) return null;
-  if (ctx.compositionId && point.compositionId && point.compositionId !== ctx.compositionId) return null;
+  const trail = resolveTrailPoints(notification);
+  if (!trail?.length) return null;
+  const lastPoint = trail[trail.length - 1] ?? null;
+  if (ctx.compositionId && lastPoint?.compositionId && lastPoint.compositionId !== ctx.compositionId) return null;
 
   const { THREE } = ctx;
   const group = new THREE.Group();
@@ -132,6 +153,39 @@ function createPipelines3DOverlay(
   marker.frustumCulled = false;
   marker.renderOrder = 10_001;
   group.add(marker);
+
+  function writeTrail(points: Array<{ x: number; z: number }>): void {
+    pointCount = 0;
+    lastX = null;
+    lastZ = null;
+
+    const eps2 = 0.000_001;
+    const start = points.length > maxPoints ? points.length - maxPoints : 0;
+    for (let i = start; i < points.length; i += 1) {
+      const { x, z } = points[i]!;
+      if (lastX != null && lastZ != null) {
+        const dx = x - lastX;
+        const dz = z - lastZ;
+        if (dx * dx + dz * dz <= eps2) continue;
+      }
+
+      lastX = x;
+      lastZ = z;
+
+      const base = pointCount * 3;
+      positions[base] = x;
+      positions[base + 1] = 0.05;
+      positions[base + 2] = z;
+      pointCount += 1;
+      if (pointCount >= maxPoints) break;
+    }
+
+    positionAttr.needsUpdate = true;
+    geometry.setDrawRange(0, pointCount);
+    geometry.computeBoundingSphere();
+
+    if (lastX != null && lastZ != null) marker.position.set(lastX, 0.06, lastZ);
+  }
 
   function append(x: number, z: number): void {
     const eps2 = 0.000_001;
@@ -174,16 +228,22 @@ function createPipelines3DOverlay(
     markerMat.transparent = closed;
   }
 
-  append(point.x, point.z);
+  writeTrail(trail);
   applyStyleFromNotification(notification);
 
   return {
     object: group,
     update: (next) => {
-      const nextPoint = resolveWorldPoint(next);
-      if (nextPoint) {
-        if (!ctx.compositionId || !nextPoint.compositionId || nextPoint.compositionId === ctx.compositionId) {
-          append(nextPoint.x, nextPoint.z);
+      const nextTrail = resolveTrailPoints(next);
+      const nextLast = nextTrail?.length ? nextTrail[nextTrail.length - 1] ?? null : null;
+      if (nextLast && (!ctx.compositionId || !nextLast.compositionId || nextLast.compositionId === ctx.compositionId)) {
+        writeTrail(nextTrail ?? []);
+      } else {
+        const nextPoint = resolveWorldPoint(next);
+        if (nextPoint) {
+          if (!ctx.compositionId || !nextPoint.compositionId || nextPoint.compositionId === ctx.compositionId) {
+            append(nextPoint.x, nextPoint.z);
+          }
         }
       }
       applyStyleFromNotification(next);

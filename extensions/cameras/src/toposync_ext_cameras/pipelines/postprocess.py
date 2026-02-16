@@ -732,6 +732,140 @@ class ImageResizeRuntime(TransformOperatorRuntime):
         return [out]
 
 
+class FrameAttachConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    artifact_names: list[str] = Field(default_factory=lambda: ["frame_original", "frame"])
+    overwrite: bool = True
+    wait_timeout_s: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=5.0,
+        description="Optional time to wait for a frame on the 'frames' input when none is available yet.",
+    )
+    max_delta_seconds: float = Field(
+        default=2.0,
+        ge=0.0,
+        le=60.0,
+        description="Maximum allowed |frame_ts(in) - frame_ts(frames)| to attach. 0 disables the check.",
+    )
+    update_frame_dimensions: bool = True
+    annotate_metadata: bool = True
+
+    @field_validator("artifact_names", mode="after")
+    @classmethod
+    def _normalize_artifact_names(cls, value: list[str]) -> list[str]:
+        return _normalize_artifact_names(value)
+
+
+class FrameAttachRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = FrameAttachConfig.model_validate(config)
+        self._last_frame_packet: Packet | None = None
+
+    async def _consume_frames(self, context) -> None:  # noqa: ANN001
+        frames_channel = context.inputs.get("frames")
+        if frames_channel is None:
+            return
+        while True:
+            result = await frames_channel.get(timeout_s=0.0, cancel_event=context.cancel_event)
+            if not result.accepted:
+                break
+            packet = result.item
+            if packet is None:
+                continue
+            self._last_frame_packet = packet
+
+    def _resolve_frame_ts(self, packet: Packet) -> float | None:
+        raw = packet.payload.get("frame_ts")
+        try:
+            value = float(raw)
+        except Exception:
+            return None
+        if not math.isfinite(value) or value <= 0:
+            return None
+        return float(value)
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        await self._consume_frames(context)
+        if self._last_frame_packet is None:
+            frames_channel = context.inputs.get("frames")
+            if frames_channel is not None and float(self._config.wait_timeout_s) > 0:
+                result = await frames_channel.get(timeout_s=float(self._config.wait_timeout_s), cancel_event=context.cancel_event)
+                if result.accepted and result.item is not None:
+                    self._last_frame_packet = result.item
+        frame_packet = self._last_frame_packet
+        if frame_packet is None:
+            return [packet]
+
+        in_ts = self._resolve_frame_ts(packet)
+        frame_ts = self._resolve_frame_ts(frame_packet)
+        delta_s: float | None = None
+        if in_ts is not None and frame_ts is not None:
+            delta_s = abs(float(in_ts) - float(frame_ts))
+            max_delta = float(self._config.max_delta_seconds)
+            if max_delta > 0 and delta_s > max_delta:
+                if self._config.annotate_metadata:
+                    meta = dict(packet.metadata)
+                    meta["frame_attach"] = {
+                        "status": "skipped_delta_too_large",
+                        "delta_s": float(delta_s),
+                        "max_delta_s": float(max_delta),
+                        "frames_stream_id": str(frame_packet.stream_id),
+                    }
+                    return [replace(packet, metadata=meta)]
+                return [packet]
+
+        artifacts = dict(packet.artifacts)
+        imported: list[str] = []
+        for name_raw in self._config.artifact_names:
+            name = str(name_raw or "").strip()
+            if not name:
+                continue
+            src_artifact = frame_packet.artifacts.get(name)
+            if src_artifact is None:
+                continue
+            if not self._config.overwrite and name in artifacts:
+                continue
+            if src_artifact.data is None and not src_artifact.reference:
+                continue
+            meta = dict(src_artifact.metadata) if isinstance(src_artifact.metadata, dict) else {}
+            meta["attached_from_stream_id"] = str(frame_packet.stream_id)
+            meta["attached_from_camera_id"] = str(frame_packet.payload.get("camera_id") or "").strip() or None
+            if frame_ts is not None:
+                meta["attached_frame_ts"] = float(frame_ts)
+            artifacts[name] = replace(src_artifact, metadata=meta)
+            imported.append(name)
+
+        if not imported:
+            return [packet]
+
+        payload = dict(packet.payload)
+        if self._config.update_frame_dimensions:
+            ref = artifacts.get("frame_original") or artifacts.get("frame")
+            if ref is not None:
+                width = ref.metadata.get("width") if isinstance(ref.metadata, dict) else None
+                height = ref.metadata.get("height") if isinstance(ref.metadata, dict) else None
+                try:
+                    if width is not None:
+                        payload["frame_width"] = int(width)
+                    if height is not None:
+                        payload["frame_height"] = int(height)
+                except Exception:
+                    pass
+
+        if self._config.annotate_metadata:
+            meta = dict(packet.metadata)
+            meta["frame_attach"] = {
+                "status": "attached",
+                "delta_s": float(delta_s) if delta_s is not None else None,
+                "frames_stream_id": str(frame_packet.stream_id),
+                "imported_artifacts": list(imported),
+            }
+            return [replace(packet, payload=payload, artifacts=artifacts, metadata=meta)]
+
+        return [replace(packet, payload=payload, artifacts=artifacts)]
+
+
 def _resize_packet_artifacts_opencv(
     packet: Packet,
     *,
@@ -1266,6 +1400,18 @@ class BestFrameSelectorRuntime(TransformOperatorRuntime):
 
 
 def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
+    registry.register_operator(
+        operator_id="camera.frame_attach",
+        description="Attaches frame artifacts from a secondary frame stream (e.g. HQ) to the current packet.",
+        config_model=FrameAttachConfig,
+        inputs=[{"name": "in", "required": True}, {"name": "frames", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["camera", "artifact"],
+        defaults=FrameAttachConfig().model_dump(),
+        share_strategy="by_signature",
+        owner="com.toposync.cameras",
+        runtime_factory=lambda config, _deps: FrameAttachRuntime(config),
+    )
     registry.register_operator(
         operator_id="camera.object_segmentation",
         description="Crops object image by bbox and writes artifact.",

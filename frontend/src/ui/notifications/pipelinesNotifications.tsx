@@ -190,11 +190,9 @@ function createPipelines3DOverlay(
     },
     onPointerEvent: (event) => {
       if (event.kind !== "click") return false;
-      const payload = asRecord(event.notification.payload);
-      const artifacts = resolveArtifacts(payload);
-      const thumb = resolveThumbnailFromArtifacts(artifacts);
-      if (!thumb) return false;
-      actions.openImage({ url: thumb.url, title: event.notification.title, subtitle: `thumb: ${thumb.artifactName}` });
+      const url = notificationThumbnailUrl(event.notification);
+      if (!url) return false;
+      actions.openImage({ url, title: event.notification.title });
       return true;
     },
     dispose: () => {

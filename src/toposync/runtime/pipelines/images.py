@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from typing import Any
 
@@ -147,6 +148,7 @@ def add_stored_image_entry(
     artifact: Artifact,
     rel_path: str,
     stored_ts_ms: int,
+    confidence: float | None = None,
     max_entries_per_key: int = 64,
 ) -> Packet:
     normalized_key = normalize_image_key(key)
@@ -159,16 +161,22 @@ def add_stored_image_entry(
     entries = entries_raw if isinstance(entries_raw, list) else []
 
     next_entries = list(entries)[-max(0, int(max_entries_per_key) - 1) :]
-    next_entries.append(
-        {
-            "rel_path": str(rel_path),
-            "artifact_name": str(artifact.name),
-            "mime_type": str(artifact.mime_type or "") or None,
-            "stored_ts_ms": int(stored_ts_ms),
-        },
-    )
+    entry: dict[str, Any] = {
+        "rel_path": str(rel_path),
+        "artifact_name": str(artifact.name),
+        "mime_type": str(artifact.mime_type or "") or None,
+        "stored_ts_ms": int(stored_ts_ms),
+    }
+    if confidence is not None:
+        try:
+            parsed = float(confidence)
+        except Exception:
+            parsed = None
+        if parsed is not None and math.isfinite(parsed) and parsed >= 0.0:
+            entry["confidence"] = float(parsed)
+
+    next_entries.append(entry)
     stored = dict(stored)
     stored[normalized_key] = next_entries
     payload[STORED_IMAGES_PAYLOAD_FIELD] = stored
     return replace(packet, payload=payload)
-

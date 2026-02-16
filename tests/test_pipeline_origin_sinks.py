@@ -467,3 +467,152 @@ def test_notify_upserts_single_notification_with_templates_and_no_spam(tmp_path:
         assert ops.count("update") == 1
 
     asyncio.run(scenario())
+
+
+def test_notify_thumbnail_shows_latest_when_live_and_best_confidence_on_close(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        files_dir = tmp_path / "files"
+        notifications = NotificationsRuntime(data_dir=tmp_path / "data")
+        q = notifications.broadcaster.subscribe()
+
+        deps = PipelineRuntimeDependencies(
+            files_dir=files_dir,
+            notifications_upsert=notifications.upsert,
+        )
+
+        frame = np.full((32, 32, 3), 128, dtype=np.uint8)
+        artifacts = {
+            "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+        }
+        sequence = [
+            {
+                "lifecycle": Lifecycle.OPEN,
+                "payload": {
+                    "frame_ts": 100.0,
+                    "camera_id": "camera-main",
+                    "tracking_id": "trk-1",
+                    "object_category_label": "person",
+                    "object_confidence": 0.1,
+                },
+                "artifacts": artifacts,
+            },
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {
+                    "frame_ts": 101.0,
+                    "camera_id": "camera-main",
+                    "tracking_id": "trk-1",
+                    "object_category_label": "person",
+                    "object_confidence": 0.9,
+                },
+                "artifacts": artifacts,
+            },
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {
+                    "frame_ts": 102.0,
+                    "camera_id": "camera-main",
+                    "tracking_id": "trk-1",
+                    "object_category_label": "person",
+                    "object_confidence": 0.2,
+                },
+                "artifacts": artifacts,
+            },
+            {
+                "lifecycle": Lifecycle.CLOSE,
+                "payload": {
+                    "frame_ts": 103.0,
+                    "camera_id": "camera-main",
+                    "tracking_id": "trk-1",
+                    "object_category_label": "person",
+                    "object_confidence": 0.3,
+                },
+                "artifacts": artifacts,
+            },
+        ]
+
+        registry = OperatorRegistry()
+        register_builtin_operators(registry)
+        _register_test_source_and_sink(registry, sequence=sequence, collector={})
+
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "store",
+                    "operator": "core.store_images",
+                    "config": {"artifact_names": ["frame_original"], "subdir": "pipelines", "format": "png", "keep_data": False},
+                },
+                {
+                    "id": "notify",
+                    "operator": "core.notify",
+                    "config": {
+                        "notification_type": "pipelines.tracking",
+                        "title": "Detected!",
+                        "priority": "high",
+                        "update_interval_seconds": 0.0,
+                        "thumbnail_with_fallback": ["frame_original"],
+                    },
+                },
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
+                {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
+            ],
+        }
+
+        pipeline = Pipeline(name="stage7_notify_thumb_selection", type="final", graph=graph)
+        compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+        runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
+        await runtime.run_for(0.35)
+
+        events: list[dict[str, Any]] = []
+        while True:
+            try:
+                events.append(q.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        notifications.broadcaster.unsubscribe(q)
+
+        ops = [str(e.get("op") or "") for e in events]
+        assert ops.count("insert") == 1
+        assert ops.count("update") == 3
+
+        snapshots: list[tuple[str, str]] = []
+        for e in events:
+            notif = e.get("notification")
+            if not isinstance(notif, dict):
+                continue
+            payload = notif.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            lifecycle = str(payload.get("lifecycle") or "")
+            image_url = str(notif.get("imageUrl") or "")
+            if lifecycle and image_url:
+                snapshots.append((lifecycle, image_url))
+
+        open_url = next(url for lifecycle, url in snapshots if lifecycle == "open")
+        update_urls = [url for lifecycle, url in snapshots if lifecycle == "update"]
+        close_url = next(url for lifecycle, url in snapshots if lifecycle == "close")
+        assert len(update_urls) == 2
+
+        def _assert_file(url: str) -> None:
+            assert url.startswith("/files/")
+            rel = url[len("/files/") :]
+            assert (files_dir / rel).is_file()
+
+        _assert_file(open_url)
+        _assert_file(update_urls[0])
+        _assert_file(update_urls[1])
+        _assert_file(close_url)
+
+        assert "/100000__" in open_url
+        assert "/101000__" in update_urls[0]
+        assert "/102000__" in update_urls[1]
+
+        assert "/101000__" in close_url
+        assert "/102000__" not in close_url
+        assert "/103000__" not in close_url
+
+    asyncio.run(scenario())

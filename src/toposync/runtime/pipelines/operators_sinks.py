@@ -345,6 +345,18 @@ class StoreImagesConfig(BaseModel):
     image_with_fallback: str = "segmented,treated,original"
     # Legacy/advanced: store multiple artifacts explicitly.
     artifact_names: list[str] = Field(default_factory=list)
+    min_frame_width: int = Field(
+        default=0,
+        ge=0,
+        le=16384,
+        description="Optional minimum payload.frame_width required to store images. 0 disables the check.",
+    )
+    min_frame_height: int = Field(
+        default=0,
+        ge=0,
+        le=16384,
+        description="Optional minimum payload.frame_height required to store images. 0 disables the check.",
+    )
     subdir: str = "pipelines"
     format: Literal["jpg", "png"] = "png"
     jpeg_quality: int = Field(default=85, ge=1, le=100)
@@ -403,6 +415,20 @@ class StoreImagesRuntime(TransformOperatorRuntime):
         self._dependencies = dependencies
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        min_width = int(self._config.min_frame_width)
+        min_height = int(self._config.min_frame_height)
+        if min_width > 0 or min_height > 0:
+            try:
+                width = int(float(packet.payload.get("frame_width") or 0))
+            except Exception:
+                width = 0
+            try:
+                height = int(float(packet.payload.get("frame_height") or 0))
+            except Exception:
+                height = 0
+            if (min_width > 0 and width < min_width) or (min_height > 0 and height < min_height):
+                return [packet]
+
         packet = _ensure_original_artifact(packet)
         files_dir = _resolve_files_dir(self._dependencies)
 

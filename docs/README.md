@@ -10,4 +10,4 @@
 - `docs/DATA.md` — persistência e onde os dados ficam
 - `docs/TROUBLESHOOTING.md` — problemas comuns
 - `docs/EXTENSIONS_FIRST_PARTY.md` — extensões inclusas no repo
-
+- `docs/PIPELINES.md` — pipelines globais (DAG) para automações/visão

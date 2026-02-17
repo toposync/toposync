@@ -222,3 +222,32 @@ class NotificationStore:
             if rec is None:
                 raise RuntimeError("Failed to read notification after insert")
             return rec, True
+
+    def list_open_pipeline_notifications(self, *, limit: int = 5000) -> list[NotificationRecord]:
+        limit_n = max(1, min(50_000, int(limit)))
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                SELECT seq, id, type, title, description, image_path, payload_json, created_at, updated_at, dedupe_key
+                FROM notification
+                WHERE
+                  type LIKE 'pipelines.%'
+                  AND dedupe_key IS NOT NULL
+                  AND payload_json LIKE '%"status":"open"%'
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (limit_n,),
+            )
+            rows = cur.fetchall()
+
+        records = [self._row_to_record(r) for r in rows]
+        out: list[NotificationRecord] = []
+        for rec in records:
+            payload = rec.payload
+            if payload.get("source") != "pipelines":
+                continue
+            if payload.get("status") != "open":
+                continue
+            out.append(rec)
+        return out

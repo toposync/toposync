@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
+import math
 import os
 import re
 import shutil
@@ -11,19 +11,21 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
-from starlette.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from toposync.extensions import BaseExtension
-from toposync.runtime.config_store import ConfigStore
+from toposync.runtime.config_store import ConfigStore, Pipeline, PipelineAlreadyExistsError, PipelineValidationError
 from toposync.runtime.event_bus import EventBus
+from toposync.runtime.pipelines.compiler import GraphCompileError, PipelineGraphCompiler
+from toposync.runtime.pipelines.operator_registry import OperatorRegistry
+from toposync.runtime.pipelines.templates import safe_pipeline_name
 from toposync.runtime.services import ServiceRegistry
 
+from .pipelines import register_camera_pipeline_operators
 from .processing.mapping import ControlPointMapper, ControlPointPair
-from .processing.runtime import CamerasProcessingRuntime
+from .pipelines.postprocess import _parse_control_point_pairs  # noqa: PLC2701
 
 
 EXTENSION_ID = "com.toposync.cameras"
@@ -61,6 +63,21 @@ class ControlPointMapQuery(BaseModel):
 class ControlPointMapRequest(BaseModel):
     pairs: list[ControlPointMapPair]
     query: ControlPointMapQuery
+
+
+class CameraPipelineWizardRequest(BaseModel):
+    preset: Literal["people", "vehicles_stopped", "pets"]
+    pipeline_name: str = ""
+    enabled: bool = True
+    processing_server_id: str = "local"
+    composition_id: str = ""
+    area_id: str = ""
+    notification_title: str = ""
+    notification_description: str = ""
+
+
+class CameraPipelineWizardResponse(BaseModel):
+    pipeline_name: str
 
 
 def _rtsp_url_with_auth(url: str, username: str, password: str) -> str:
@@ -207,6 +224,10 @@ class CamerasExtension(BaseExtension):
         super().__init__(package="toposync_ext_cameras")
 
     async def setup(self, app: FastAPI, *, bus: EventBus, services: ServiceRegistry) -> None:  # noqa: ARG002
+        registry = getattr(app.state, "pipeline_operator_registry", None)
+        if isinstance(registry, OperatorRegistry):
+            register_camera_pipeline_operators(registry)
+
         def _config_store(request: Request) -> ConfigStore:
             store = getattr(request.app.state, "config_store", None)
             if store is None:
@@ -218,34 +239,11 @@ class CamerasExtension(BaseExtension):
             ext = settings.extensions.get(EXTENSION_ID, {})
             return ext if isinstance(ext, dict) else {}
 
-        config_store = getattr(app.state, "config_store", None)
-        if isinstance(config_store, ConfigStore):
-            runtime = CamerasProcessingRuntime(
-                config_store=config_store,
-                extension_id=EXTENSION_ID,
-                data_dir=config_store.paths.data_dir,
-                files_dir=config_store.paths.files_dir,
-                services=services,
-            )
-            runtime.start()
-
-            async def _stop_runtime() -> None:
-                await runtime.stop()
-
-            app.add_event_handler("shutdown", _stop_runtime)
-            app.state.cameras_processing = runtime
-        else:
-            runtime = None
-
         snapshot_cache: dict[str, SnapshotCacheEntry] = {}
         snapshot_locks: dict[str, asyncio.Lock] = {}
         snapshot_cache_ttl_s = float(os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_TTL_S", "0.8") or "0.8")
-        snapshot_max_frame_age_s = float(os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_MAX_FRAME_AGE_S", "5.0") or "5.0")
         snapshot_ffmpeg_concurrency = int(os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_FFMPEG_CONCURRENCY", "2") or "2")
         snapshot_ffmpeg_sema = asyncio.Semaphore(max(1, snapshot_ffmpeg_concurrency))
-        remote_snapshot_timeout_s = float(os.getenv("TOPOSYNC_CAMERA_REMOTE_SNAPSHOT_TIMEOUT_S", "5.0") or "5.0")
-        remote_http = httpx.AsyncClient(timeout=remote_snapshot_timeout_s)
-        app.add_event_handler("shutdown", remote_http.aclose)
 
         def _get_lock(key: str) -> asyncio.Lock:
             lock = snapshot_locks.get(key)
@@ -254,64 +252,10 @@ class CamerasExtension(BaseExtension):
                 snapshot_locks[key] = lock
             return lock
 
-        async def _encode_jpeg(frame: Any) -> bytes | None:
-            def _work() -> bytes | None:
-                try:
-                    import cv2  # type: ignore
-                except Exception:
-                    return None
-                try:
-                    ok, buf = cv2.imencode(".jpg", frame)
-                except Exception:
-                    return None
-                if not ok or buf is None:
-                    return None
-                try:
-                    return buf.tobytes()
-                except Exception:
-                    return None
-
-            return await asyncio.to_thread(_work)
-
-        async def _fetch_remote_snapshot(server_url: str, camera_id: str) -> bytes | None:
-            base = str(server_url or "").strip().rstrip("/")
-            if not base:
-                return None
-            cid = str(camera_id or "").strip()
-            if not cid:
-                return None
-            url = f"{base}/api/processor/cameras/{urllib.parse.quote(cid)}/snapshot"
-            try:
-                res = await remote_http.get(url)
-            except Exception:
-                return None
-            if res.status_code != 200:
-                return None
-            content = res.content
-            return content if content else None
-
         @app.get("/api/cameras/index")
         async def cameras_index(request: Request) -> dict[str, Any]:
             ext = await _read_ext_settings(request)
-
-            raw_servers = ext.get("processing_servers", [])
             raw_cameras = ext.get("cameras", [])
-
-            servers: list[dict[str, Any]] = []
-            if isinstance(raw_servers, list):
-                for s in raw_servers:
-                    if not isinstance(s, dict):
-                        continue
-                    sid = str(s.get("id", "")).strip()
-                    if not sid:
-                        continue
-                    servers.append(
-                        {
-                            "id": sid,
-                            "name": str(s.get("name", "")).strip(),
-                            "url": str(s.get("url", "")).strip(),
-                        }
-                    )
 
             cameras: list[dict[str, Any]] = []
             if isinstance(raw_cameras, list):
@@ -326,54 +270,10 @@ class CamerasExtension(BaseExtension):
                             "id": cid,
                             "name": str(c.get("name", "")).strip(),
                             "connection_type": str(c.get("connection_type", "rtsp")).strip() or "rtsp",
-                            "processing_server_id": str(c.get("processing_server_id", "")).strip(),
                         }
                     )
 
-            return {"processing_servers": servers, "cameras": cameras}
-
-        @app.get("/api/cameras/detections/recent")
-        async def recent_detections(
-            request: Request,
-            camera_id: str | None = None,
-            composition_id: str | None = None,
-            tracking_id: str | None = None,
-            limit: int = 200,
-        ) -> dict[str, Any]:
-            if runtime is None:
-                return {"events": []}
-            cam = (camera_id or "").strip() or None
-            comp = (composition_id or "").strip() or None
-            track = (tracking_id or "").strip() or None
-            return {"events": runtime.db.list_events(camera_id=cam, composition_id=comp, tracking_id=track, limit=limit)}
-
-        @app.get("/api/cameras/processing/status")
-        async def processing_status() -> dict[str, Any]:
-            if runtime is None:
-                return {"local_workers": [], "remote_servers": []}
-            return runtime.status()
-
-        @app.get("/api/cameras/detections/stream")
-        async def detections_stream(request: Request) -> StreamingResponse:
-            if runtime is None:
-                async def empty_stream():
-                    yield "event: ready\ndata: {}\n\n"
-                return StreamingResponse(empty_stream(), media_type="text/event-stream")
-
-            q = runtime.broadcaster.subscribe()
-
-            async def gen():
-                try:
-                    yield "retry: 1000\n\n"
-                    while True:
-                        event = await q.get()
-                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                except asyncio.CancelledError:
-                    raise
-                finally:
-                    runtime.broadcaster.unsubscribe(q)
-
-            return StreamingResponse(gen(), media_type="text/event-stream")
+            return {"cameras": cameras}
 
         @app.post("/api/cameras/control_points/map")
         async def map_control_points(body: ControlPointMapRequest) -> dict[str, Any]:
@@ -485,52 +385,6 @@ class CamerasExtension(BaseExtension):
                 if cached and (now - cached.created_ts) <= snapshot_cache_ttl_s:
                     return Response(content=cached.blob, media_type="image/jpeg", headers=cached.headers)
 
-                if runtime is not None:
-                    frame, frame_ts = runtime.get_latest_frame(cid)
-                    if frame is not None and frame_ts:
-                        age_s = max(0.0, now - float(frame_ts))
-                        if age_s <= snapshot_max_frame_age_s:
-                            blob = await _encode_jpeg(frame)
-                            if blob:
-                                headers = {
-                                    "Cache-Control": "no-store",
-                                    "X-Toposync-Snapshot-Source": "local_grabber",
-                                    "X-Toposync-Snapshot-Frame-Age-Ms": str(int(age_s * 1000)),
-                                }
-                                snapshot_cache[cache_key] = SnapshotCacheEntry(
-                                    blob=blob,
-                                    created_ts=time.time(),
-                                    frame_ts=float(frame_ts),
-                                    headers=headers,
-                                )
-                                return Response(content=blob, media_type="image/jpeg", headers=headers)
-
-                processing_server_id = str(camera.get("processing_server_id", "")).strip()
-                if processing_server_id:
-                    servers_raw = ext.get("processing_servers", [])
-                    server_url = ""
-                    if isinstance(servers_raw, list):
-                        for s in servers_raw:
-                            if not isinstance(s, dict):
-                                continue
-                            if str(s.get("id", "")).strip() == processing_server_id:
-                                server_url = str(s.get("url", "")).strip()
-                                break
-
-                    remote_blob = await _fetch_remote_snapshot(server_url, cid)
-                    if remote_blob:
-                        headers = {
-                            "Cache-Control": "no-store",
-                            "X-Toposync-Snapshot-Source": f"remote[{processing_server_id}]",
-                        }
-                        snapshot_cache[cache_key] = SnapshotCacheEntry(
-                            blob=remote_blob,
-                            created_ts=time.time(),
-                            frame_ts=time.time(),
-                            headers=headers,
-                        )
-                        return Response(content=remote_blob, media_type="image/jpeg", headers=headers)
-
                 url_raw = str(camera.get("rtsp_url", "")).strip()
                 username = str(camera.get("username", "")).strip()
                 password = str(camera.get("password", "")).strip()
@@ -556,3 +410,383 @@ class CamerasExtension(BaseExtension):
                     headers=headers,
                 )
                 return Response(content=result.blob, media_type="image/jpeg", headers=headers)
+
+        @app.get("/api/cameras/cameras/{camera_id}/contexts")
+        async def camera_contexts(request: Request, camera_id: str) -> dict[str, Any]:
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            store = _config_store(request)
+            cfg = await store.get_config()
+
+            compositions_out: list[dict[str, Any]] = []
+            for composition in cfg.compositions:
+                camera_elements: list[dict[str, Any]] = []
+                for element in composition.elements:
+                    props = element.props if isinstance(element.props, dict) else {}
+                    if str(props.get("camera_id", "")).strip() != cid:
+                        continue
+                    pairs = _parse_control_point_pairs(props.get("control_points"))
+                    camera_elements.append(
+                        {
+                            "id": element.id,
+                            "name": str(element.name or "").strip() or element.id,
+                            "control_points_pairs": len(pairs),
+                            "has_mapping": len(pairs) >= 4,
+                        }
+                    )
+
+                if not camera_elements:
+                    continue
+
+                areas: list[dict[str, Any]] = []
+                for element in composition.elements:
+                    if str(element.type or "").strip() != "com.toposync.structural.area":
+                        continue
+                    props = element.props if isinstance(element.props, dict) else {}
+                    vertices = props.get("vertices")
+                    if not isinstance(vertices, list) or len(vertices) < 3:
+                        continue
+                    name = str(element.name or "").strip()
+                    areas.append(
+                        {
+                            "id": element.id,
+                            "name": name or element.id,
+                            "vertices_count": len(vertices),
+                        }
+                    )
+
+                compositions_out.append(
+                    {
+                        "id": composition.id,
+                        "name": composition.name,
+                        "camera_elements": camera_elements,
+                        "areas": areas,
+                    }
+                )
+
+            return {"camera_id": cid, "compositions": compositions_out}
+
+        def _unique_pipeline_name(base: str, *, existing_names: set[str]) -> str:
+            base_safe = safe_pipeline_name(base)
+            if base_safe not in existing_names:
+                return base_safe
+            suffix = 2
+            while True:
+                candidate = safe_pipeline_name(f"{base_safe}_{suffix}")
+                if candidate not in existing_names:
+                    return candidate
+                suffix += 1
+
+        def _default_mapping_composition_id(cfg: Any, *, camera_id: str) -> str | None:
+            cid = str(camera_id or "").strip()
+            if not cid:
+                return None
+            for composition in getattr(cfg, "compositions", []):
+                for element in getattr(composition, "elements", []):
+                    props = element.props if isinstance(getattr(element, "props", None), dict) else {}
+                    if str(props.get("camera_id", "")).strip() != cid:
+                        continue
+                    pairs = _parse_control_point_pairs(props.get("control_points"))
+                    if len(pairs) >= 4:
+                        return str(getattr(composition, "id", "") or "").strip() or None
+            return None
+
+        def _resolve_area_polygon(cfg: Any, *, composition_id: str, area_id: str) -> tuple[str, list[dict[str, float]]]:
+            comp_id = str(composition_id or "").strip()
+            aid = str(area_id or "").strip()
+            if not comp_id or not aid:
+                raise ValueError("composition_id and area_id are required")
+
+            for composition in getattr(cfg, "compositions", []):
+                if str(getattr(composition, "id", "") or "").strip() != comp_id:
+                    continue
+                for element in getattr(composition, "elements", []):
+                    if str(getattr(element, "id", "") or "").strip() != aid:
+                        continue
+                    if str(getattr(element, "type", "") or "").strip() != "com.toposync.structural.area":
+                        raise ValueError("Selected element is not an area")
+                    props = element.props if isinstance(getattr(element, "props", None), dict) else {}
+                    vertices = props.get("vertices")
+                    if not isinstance(vertices, list) or len(vertices) < 3:
+                        raise ValueError("Area is missing vertices")
+                    points: list[dict[str, float]] = []
+                    for vertex in vertices:
+                        if not isinstance(vertex, dict):
+                            continue
+                        try:
+                            x = float(vertex.get("x"))
+                            z = float(vertex.get("z"))
+                        except Exception:
+                            continue
+                        if not math.isfinite(x) or not math.isfinite(z):
+                            continue
+                        points.append({"x": x, "z": z})
+                    if len(points) < 3:
+                        raise ValueError("Area vertices are invalid")
+                    name = str(getattr(element, "name", "") or "").strip() or aid
+                    return name, points
+                raise ValueError("Unknown area_id in composition")
+            raise ValueError("Unknown composition_id")
+
+        def _build_wizard_graph(
+            *,
+            preset: str,
+            camera_id: str,
+            composition_id: str,
+            area_name: str,
+            area_points: list[dict[str, float]],
+            notification_title: str,
+            notification_description: str,
+        ) -> dict[str, Any]:
+            motion_hold_seconds = 6.0
+            if preset == "vehicles_stopped":
+                motion_hold_seconds = 12.0
+
+            base_nodes: list[dict[str, Any]] = [
+                {"id": "source", "operator": "camera.source", "config": {"camera_id": camera_id}},
+                {
+                    "id": "motion",
+                    "operator": "camera.motion_gate",
+                    "config": {
+                        "threshold": 0.010,
+                        "activation_frames": 2,
+                        "hold_seconds": motion_hold_seconds,
+                    },
+                },
+            ]
+
+            if preset == "people":
+                nodes = [
+                    *base_nodes,
+                    {
+                        "id": "track",
+                        "operator": "vision.object_tracking_yolo",
+                        "config": {
+                            "categories": ["person"],
+                            "close_after_seconds": 5.0,
+                            "confidence_threshold": 0.55,
+                        },
+                    },
+                    {"id": "map", "operator": "camera.camera_mapping", "config": {}},
+                    {"id": "throttle", "operator": "core.throttle", "config": {"interval_seconds": 5.0}},
+                    {"id": "segment", "operator": "camera.object_segmentation", "config": {}},
+                    {
+                        "id": "store",
+                        "operator": "core.store_images",
+                        "config": {"image_with_fallback": "best_frame,original,treated,segmented", "subdir": "pipelines", "format": "png"},
+                    },
+                    {
+                        "id": "notify",
+                        "operator": "core.notify",
+                        "config": {
+                            "notification_type": "pipelines.tracking",
+                            "title": notification_title or "{{camera_name}}: Person detected",
+                            "description": notification_description or "{{camera_name}}",
+                            "priority": "medium",
+                            "thumbnail_with_fallback": ["best_frame", "original", "treated", "segmented"],
+                        },
+                    },
+                ]
+                edges = [
+                    {"from": {"node": "source", "port": "out"}, "to": {"node": "motion", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "motion", "port": "out"}, "to": {"node": "track", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "track", "port": "out"}, "to": {"node": "map", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "map", "port": "out"}, "to": {"node": "throttle", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "throttle", "port": "out"}, "to": {"node": "segment", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "segment", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 16, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}, "maxsize": 16, "drop_policy": "drop_oldest"},
+                ]
+                return {"schema_version": 1, "nodes": nodes, "edges": edges}
+
+            if preset == "pets":
+                nodes = [
+                    *base_nodes,
+                    {"id": "track", "operator": "vision.object_tracking_yolo", "config": {"categories": ["cat", "dog"], "close_after_seconds": 5.0}},
+                    {"id": "map", "operator": "camera.camera_mapping", "config": {}},
+                    {"id": "throttle", "operator": "core.throttle", "config": {"interval_seconds": 8.0}},
+                    {"id": "segment", "operator": "camera.object_segmentation", "config": {"padding_ratio": 0.12}},
+                    {
+                        "id": "store",
+                        "operator": "core.store_images",
+                        "config": {"image_with_fallback": "best_frame,original,treated,segmented", "subdir": "pipelines", "format": "png"},
+                    },
+                    {
+                        "id": "notify",
+                        "operator": "core.notify",
+                        "config": {
+                            "notification_type": "pipelines.tracking",
+                            "title": notification_title or "{{camera_name}}: Pet detected",
+                            "description": notification_description or "{{camera_name}}",
+                            "priority": "medium",
+                            "thumbnail_with_fallback": ["best_frame", "original", "treated", "segmented"],
+                        },
+                    },
+                ]
+                edges = [
+                    {"from": {"node": "source", "port": "out"}, "to": {"node": "motion", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "motion", "port": "out"}, "to": {"node": "track", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "track", "port": "out"}, "to": {"node": "map", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "map", "port": "out"}, "to": {"node": "throttle", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "throttle", "port": "out"}, "to": {"node": "segment", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "segment", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 16, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}, "maxsize": 16, "drop_policy": "drop_oldest"},
+                ]
+                return {"schema_version": 1, "nodes": nodes, "edges": edges}
+
+            if preset == "vehicles_stopped":
+                if not composition_id:
+                    raise ValueError("composition_id is required for vehicles_stopped")
+
+                nodes = [
+                    *base_nodes,
+                    {"id": "track", "operator": "vision.object_tracking_yolo", "config": {"categories": ["car", "motorcycle", "bicycle"], "close_after_seconds": 10.0}},
+                    {"id": "map", "operator": "camera.camera_mapping", "config": {"composition_id": composition_id}},
+                    {
+                        "id": "area",
+                        "operator": "camera.area_restriction",
+                        "config": (
+                            {
+                                "areas": [{"name": area_name, "points": area_points}],
+                                "include_area_names": [area_name],
+                                "drop_when_unmapped": True,
+                            }
+                            if area_name and area_points
+                            else {"areas": [], "include_area_names": [], "drop_when_unmapped": False}
+                        ),
+                    },
+                    {"id": "velocity", "operator": "camera.velocity_estimation", "config": {"filter_mode": "stopped_now"}},
+                    {"id": "throttle", "operator": "core.throttle", "config": {"interval_seconds": 60.0}},
+                    {"id": "segment", "operator": "camera.object_segmentation", "config": {"padding_ratio": 0.16}},
+                    {
+                        "id": "store",
+                        "operator": "core.store_images",
+                        "config": {"image_with_fallback": "best_frame,original,treated,segmented", "subdir": "pipelines", "format": "png"},
+                    },
+                    {
+                        "id": "notify",
+                        "operator": "core.notify",
+                        "config": {
+                            "notification_type": "pipelines.event",
+                            "title": notification_title or "{{camera_name}}: Vehicle stopped",
+                            "description": notification_description or "{{camera_name}}",
+                            "priority": "high",
+                            "thumbnail_with_fallback": ["best_frame", "original", "treated", "segmented"],
+                        },
+                    },
+                ]
+                edges = [
+                    {"from": {"node": "source", "port": "out"}, "to": {"node": "motion", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "motion", "port": "out"}, "to": {"node": "track", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "track", "port": "out"}, "to": {"node": "map", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "map", "port": "out"}, "to": {"node": "area", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "area", "port": "out"}, "to": {"node": "velocity", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "velocity", "port": "out"}, "to": {"node": "throttle", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "throttle", "port": "out"}, "to": {"node": "segment", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "segment", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 16, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}, "maxsize": 16, "drop_policy": "drop_oldest"},
+                ]
+                return {"schema_version": 1, "nodes": nodes, "edges": edges}
+
+            raise ValueError("Unknown preset")
+
+        @app.post("/api/cameras/cameras/{camera_id}/pipeline-wizard", response_model=CameraPipelineWizardResponse)
+        async def create_camera_pipeline_from_wizard(
+            request: Request,
+            camera_id: str,
+            body: CameraPipelineWizardRequest,
+        ) -> CameraPipelineWizardResponse:
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            preset = str(body.preset or "").strip()
+            if preset not in {"people", "vehicles_stopped", "pets"}:
+                raise HTTPException(status_code=400, detail="preset must be one of: people, vehicles_stopped, pets")
+
+            store = _config_store(request)
+            compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
+
+            ext = await _read_ext_settings(request)
+            raw_cameras = ext.get("cameras", [])
+            if not isinstance(raw_cameras, list):
+                raise HTTPException(status_code=404, detail="Unknown camera")
+            if not any(isinstance(item, dict) and str(item.get("id", "")).strip() == cid for item in raw_cameras):
+                raise HTTPException(status_code=404, detail="Unknown camera")
+
+            cfg = await store.get_config()
+
+            composition_id = str(body.composition_id or "").strip()
+            area_id = str(body.area_id or "").strip()
+            area_name = ""
+            area_points: list[dict[str, float]] = []
+
+            if preset == "vehicles_stopped":
+                if not composition_id:
+                    composition_id = _default_mapping_composition_id(cfg, camera_id=cid) or ""
+                if not composition_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Vehicle preset requires camera mapping. Add control points (>=4) in a composition first.",
+                    )
+                if area_id:
+                    try:
+                        area_name, area_points = _resolve_area_polygon(cfg, composition_id=composition_id, area_id=area_id)
+                    except ValueError as exc:
+                        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            requested_name = str(body.pipeline_name or "").strip()
+            existing_names = {p.name for p in await store.list_pipelines()}
+
+            if requested_name:
+                pipeline_name = safe_pipeline_name(requested_name)
+                if pipeline_name in existing_names:
+                    raise HTTPException(status_code=409, detail=f"Pipeline already exists: {pipeline_name}")
+            else:
+                pipeline_name = _unique_pipeline_name(f"camera_{cid}__{preset}", existing_names=existing_names)
+
+            try:
+                graph = _build_wizard_graph(
+                    preset=preset,
+                    camera_id=cid,
+                    composition_id=composition_id,
+                    area_name=area_name,
+                    area_points=area_points,
+                    notification_title=str(body.notification_title or "").strip(),
+                    notification_description=str(body.notification_description or "").strip(),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            processing_server_id = str(body.processing_server_id or "").strip() or "local"
+            pipeline = Pipeline(
+                name=pipeline_name,
+                type="final",
+                enabled=bool(body.enabled),
+                processing_server_id=processing_server_id,
+                editor_mode="interactive",
+                python_source="",
+                graph=graph,
+            )
+
+            try:
+                compiler.compile_pipeline(pipeline)
+            except GraphCompileError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            try:
+                await store.create_pipeline(pipeline)
+            except PipelineAlreadyExistsError:
+                raise HTTPException(status_code=409, detail=f"Pipeline already exists: {pipeline_name}") from None
+            except PipelineValidationError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+            if orchestrator is not None:
+                try:
+                    orchestrator.trigger_reload()
+                except Exception:
+                    pass
+
+            return CameraPipelineWizardResponse(pipeline_name=pipeline_name)

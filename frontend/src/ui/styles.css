@@ -26,6 +26,13 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+button,
+[role="button"],
+[draggable="true"] {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -139,6 +146,850 @@ textarea {
 .main2dHaButton.isOff {
   border-color: rgba(239, 68, 68, 0.55);
   background: rgba(239, 68, 68, 0.12);
+}
+
+/* Pipelines editor */
+.pipelinesRoot {
+  display: flex;
+  flex-direction: column;
+  background: radial-gradient(1200px 900px at 30% 10%, rgba(251, 191, 36, 0.06), transparent 55%),
+    radial-gradient(1200px 900px at 70% 40%, rgba(56, 189, 248, 0.06), transparent 55%),
+    var(--bg);
+}
+
+.settingsRoot {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background:
+    radial-gradient(1200px 900px at 30% 10%, rgba(99, 102, 241, 0.08), transparent 55%),
+    radial-gradient(1200px 900px at 70% 40%, rgba(56, 189, 248, 0.05), transparent 55%),
+    var(--bg);
+}
+
+.settingsTopbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(12, 18, 37, 0.55);
+  backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+}
+
+.settingsTopbarTitle {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.pipelinesTopbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(12, 18, 37, 0.55);
+  backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+}
+
+.pipelinesTitle {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.pipelinesTopbarRight {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pipelinesFlag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+  min-width: 0;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipelinesBody {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.pipelinesSidebarBackdrop {
+  display: none;
+}
+
+.pipelinesSidebar {
+  border-right: 1px solid var(--border);
+  background: rgba(12, 18, 37, 0.45);
+  backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pipelinesSidebarHeader {
+  padding: 12px 12px 8px;
+}
+
+.pipelinesSidebarTitle {
+  font-weight: 700;
+}
+
+.pipelinesCreate {
+  padding: 8px 12px 10px;
+  display: grid;
+  grid-template-columns: 1fr 92px auto;
+  gap: 8px;
+}
+
+.pipelinesInput,
+.pipelinesSelect {
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(15, 23, 48, 0.85);
+  color: var(--text);
+}
+
+.pillButton {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.03));
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+  backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+  -webkit-backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+.pillButton:hover {
+  border-color: var(--borderStrong);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.04));
+}
+
+.pillButton:focus-visible {
+  outline: 2px solid rgba(251, 191, 36, 0.55);
+  outline-offset: 2px;
+}
+
+.pillButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.pillButtonPrimary {
+  border-color: rgba(251, 191, 36, 0.35);
+  color: rgba(255, 244, 210, 0.92);
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.24), rgba(251, 191, 36, 0.10));
+}
+
+.pillButtonPrimary:hover {
+  border-color: rgba(251, 191, 36, 0.55);
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.28), rgba(251, 191, 36, 0.12));
+}
+
+.pillButtonDanger {
+  border-color: rgba(248, 113, 113, 0.35);
+  color: rgba(254, 202, 202, 0.92);
+  background: linear-gradient(180deg, rgba(248, 113, 113, 0.16), rgba(248, 113, 113, 0.06));
+}
+
+.pillButtonDanger:hover {
+  border-color: rgba(248, 113, 113, 0.6);
+  background: linear-gradient(180deg, rgba(248, 113, 113, 0.20), rgba(248, 113, 113, 0.07));
+}
+
+.pillButton.isActive {
+  border-color: rgba(251, 191, 36, 0.55);
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.28), rgba(251, 191, 36, 0.12));
+}
+
+.pipelinesInputTextarea {
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(15, 23, 48, 0.85);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.4;
+}
+
+.pipelinesList {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px;
+}
+
+.pipelinesListItem {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 10px 10px;
+  background: transparent;
+  color: var(--text);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.pipelinesListItem:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.pipelinesListItem.isActive {
+  background: rgba(251, 191, 36, 0.10);
+  border-color: rgba(251, 191, 36, 0.28);
+}
+
+.pipelinesListItemName {
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pipelinesListItemMeta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pipelinesSidebarFooter {
+  border-top: 1px solid var(--border);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.pipelinesServers {
+  display: grid;
+  gap: 8px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.pipelinesServerRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(15, 23, 48, 0.70);
+}
+
+.pipelinesServerMain {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.pipelinesServerMain:disabled {
+  cursor: default;
+}
+
+.pipelinesServerId {
+  font-weight: 650;
+}
+
+.pipelinesServerMeta {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipelinesServerMetaDiag {
+  margin-top: 2px;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.processingServersBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.processingServersList {
+  display: grid;
+  gap: 10px;
+}
+
+.processingServerForm {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.processingServerEndpointRow {
+  display: grid;
+  grid-template-columns: 110px 1fr 110px;
+  gap: 10px;
+  align-items: end;
+}
+
+.processingServerAuthRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: end;
+}
+
+.modalFooter {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.pipelinesEditor {
+  padding: 14px;
+  overflow: auto;
+}
+
+.pipelinesEditorInner {
+  display: grid;
+  gap: 12px;
+}
+
+.pipelinesEditorHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pipelinesEditorTitle {
+  font-weight: 800;
+  font-size: 18px;
+}
+
+.pipelinesEditorActions {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.pipelinesEditorGrid {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 12px;
+  min-height: 0;
+}
+
+.pipelinesForm {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 12px;
+  background: rgba(12, 18, 37, 0.55);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.pipelinesLabel {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.pipelinesModes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pipelinesEditorPanel {
+  min-height: 360px;
+}
+
+.pipelinesMonacoWrap {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.pipelinesTextarea {
+  width: 100%;
+  height: 520px;
+  resize: vertical;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: rgba(12, 18, 37, 0.55);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  box-shadow: var(--shadow);
+}
+
+.pipelinesPre {
+  margin: 0;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.pipelinesHint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pipelinesStatsRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.pipelinesStatsItem {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(15, 23, 48, 0.45);
+  display: grid;
+  gap: 6px;
+}
+
+.pipelinesStatsValue {
+  font-size: 18px;
+  font-weight: 750;
+  letter-spacing: 0.2px;
+}
+
+.pipelinesStepStatsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.pipelinesStepStatsGrid {
+  display: grid;
+  gap: 8px;
+}
+
+.pipelinesStepStatsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(15, 23, 48, 0.45);
+}
+
+.pipelinesStepStatsName {
+  font-weight: 650;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipelinesStepStatsValue {
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
+}
+
+.pipelinesAlerts {
+  display: grid;
+  gap: 10px;
+}
+
+.pipelinesAlertRow {
+  display: flex;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(15, 23, 48, 0.55);
+}
+
+.pipelinesAlertRow.isWarning {
+  border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.06);
+}
+
+.pipelinesAlertRow.isInfo {
+  border-color: rgba(59, 130, 246, 0.30);
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.pipelinesAlertBadge {
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 2px;
+  min-width: 72px;
+}
+
+.pipelinesAlertText {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.pipelinesAlertMessage {
+  font-weight: 650;
+}
+
+.pipelinesAlertSuggestion {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.pipelinesInteractiveRoot {
+  display: grid;
+  gap: 12px;
+}
+
+.pipelinesInteractiveToolbar {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 12px;
+  background: rgba(12, 18, 37, 0.55);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 10px;
+}
+
+.pipelinesInteractiveLabel {
+  font-weight: 650;
+}
+
+.pipelinesPresetButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pipelinesStepsList {
+  display: grid;
+  gap: 10px;
+}
+
+.pipelinesStepCard {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(12, 18, 37, 0.55);
+  box-shadow: var(--shadow);
+}
+
+.pipelinesStepCard.isDragSource {
+  opacity: 0.6;
+}
+
+.pipelinesStepCard.isDropBefore {
+  border-top: 2px solid rgba(251, 191, 36, 0.85);
+}
+
+.pipelinesStepCard.isDropAfter {
+  border-bottom: 2px solid rgba(251, 191, 36, 0.85);
+}
+
+.pipelinesStepHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+}
+
+.pipelinesStepIndex {
+  min-width: 22px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pipelinesStepHeaderMain {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pipelinesStepTitle {
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.pipelinesStepStatBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(15, 23, 48, 0.55);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+.pipelinesStepStatBadge i {
+  font-size: 11px;
+}
+
+.pipelinesStepHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.pipelinesStepNodeId {
+  min-width: 0;
+}
+
+.pipelinesStepOperator {
+  min-width: 0;
+}
+
+.pipelinesStepBody {
+  border-top: 1px solid var(--border);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.pipelinesStepDescription {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.pipelinesStepCapabilities {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pipelinesOperatorConfigCard {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(15, 23, 48, 0.55);
+  display: grid;
+  gap: 8px;
+}
+
+.pipelinesStepHint {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.pipelinesContextList {
+  display: grid;
+  gap: 8px;
+}
+
+.pipelinesContextRow {
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(12, 18, 37, 0.35);
+}
+
+.pipelinesContextMain {
+  display: grid;
+  gap: 2px;
+}
+
+.pipelinesContextName {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.pipelinesContextMeta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pipelinesScalarGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.pipelinesScalarLabel {
+  gap: 4px;
+}
+
+.pipelinesTextArea,
+.pipelinesStepConfigTextarea {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(15, 23, 48, 0.80);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.pipelinesInlineError {
+  color: #ef4444;
+  font-size: 12px;
+}
+
+@media (max-width: 960px) {
+  .pipelinesBody {
+    grid-template-columns: 1fr;
+  }
+
+  .pipelinesSidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(380px, calc(100vw - 44px));
+    border-right: 1px solid rgba(255, 255, 255, 0.18);
+    transform: translateX(-102%);
+    transition: transform 160ms ease;
+    z-index: 4;
+    box-shadow: 0 22px 70px rgba(0, 0, 0, 0.72);
+  }
+
+  .pipelinesBody.isSidebarOpen .pipelinesSidebar {
+    transform: translateX(0);
+  }
+
+  .pipelinesSidebarBackdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    border: none;
+    padding: 0;
+    margin: 0;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    z-index: 3;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .pipelinesBody.isSidebarOpen .pipelinesSidebarBackdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .pipelinesCreate {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .pipelinesCreate > input {
+    grid-column: 1 / -1;
+  }
+
+  .pipelinesCreate > button {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 1100px) {
+  .pipelinesEditorGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .pipelinesEditorActions {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 520px) {
+  .pipelinesCreate {
+    grid-template-columns: 1fr;
+  }
+
+  .pipelinesStepHeader {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pipelinesStepHeaderActions {
+    justify-content: flex-end;
+  }
+
+  .pipelinesStepTitle {
+    white-space: normal;
+  }
+
+  .pipelinesFlag {
+    max-width: 220px;
+  }
+
+  .pipelinesEditorActions {
+    gap: 8px;
+  }
+
+  .pipelinesEditorActions .pillButton {
+    flex: 1 1 auto;
+  }
 }
 
 .main2dHaButton i {
@@ -515,12 +1366,21 @@ textarea {
 
 .notificationCardHeader {
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
+  min-width: 0;
+}
+
+.notificationCardTitleRow {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .notificationCardTitle {
+  min-width: 0;
   font-weight: 800;
   font-size: 14px;
   overflow: hidden;
@@ -529,9 +1389,31 @@ textarea {
 }
 
 .notificationCardTime {
+  margin-left: auto;
+  flex: 0 0 auto;
   font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
+}
+
+.notificationPriorityDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08);
+}
+
+.notificationPriorityDot.isHigh {
+  background: rgba(248, 113, 113, 0.98);
+}
+
+.notificationPriorityDot.isMedium {
+  background: rgba(251, 191, 36, 0.98);
+}
+
+.notificationPriorityDot.isLow {
+  background: rgba(148, 163, 184, 0.98);
 }
 
 .notificationCardBody {
@@ -559,8 +1441,9 @@ textarea {
   height: 62px;
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.10);
-  background: rgba(0, 0, 0, 0.16);
-  object-fit: cover;
+  background: #000;
+  object-fit: contain;
+  object-position: center;
   display: block;
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.30);
 }
@@ -652,9 +1535,9 @@ textarea {
 }
 
 .notificationCameraName {
-  font-weight: 800;
-  font-size: 13px;
-  color: rgba(230, 232, 242, 0.92);
+  font-weight: 700;
+  font-size: 12px;
+  color: rgba(230, 232, 242, 0.80);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -683,27 +1566,13 @@ textarea {
   box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.12);
 }
 
-.notificationChips {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.notificationChip {
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding: 0 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.05);
-  color: rgba(230, 232, 242, 0.86);
-  font-size: 12px;
-  font-weight: 700;
-}
-
 .notificationText {
-  white-space: pre-wrap;
+  white-space: normal;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  color: rgba(230, 232, 242, 0.72);
 }
 
 .notificationThumb {
@@ -713,6 +1582,203 @@ textarea {
   border: 1px solid rgba(255, 255, 255, 0.10);
   background: rgba(0, 0, 0, 0.16);
   display: block;
+}
+
+.notificationDetailsModalPanel {
+  width: min(980px, calc(100vw - 28px));
+}
+
+.notificationDetailsModalBody {
+  padding: 12px;
+}
+
+.notificationDetailsRoot {
+  display: grid;
+  gap: 12px;
+}
+
+.notificationDetailsHeader {
+  display: grid;
+  gap: 4px;
+}
+
+.notificationDetailsTitle {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.notificationDetailsSubtitle {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.notificationDetailsDescription {
+  font-size: 13px;
+  line-height: 1.4;
+  color: rgba(230, 232, 242, 0.82);
+}
+
+.notificationGallery {
+  display: grid;
+  gap: 8px;
+}
+
+.notificationGalleryStage {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.notificationGalleryNav {
+  flex: 0 0 auto;
+}
+
+.notificationGalleryImage {
+  width: 100%;
+  max-height: min(56vh, 560px);
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.28);
+  object-fit: contain;
+  display: block;
+}
+
+.notificationGalleryCaption {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.notificationGalleryLabel {
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(230, 232, 242, 0.9);
+}
+
+.notificationGalleryCounter {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.notificationGalleryMeta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.notificationGalleryThumbs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.notificationGalleryThumbButton {
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  padding: 0;
+  cursor: pointer;
+  background: rgba(15, 23, 48, 0.56);
+  overflow: hidden;
+}
+
+.notificationGalleryThumbButton:hover {
+  border-color: var(--borderStrong);
+}
+
+.notificationGalleryThumbButton.isActive {
+  border-color: rgba(99, 102, 241, 0.7);
+}
+
+.notificationGalleryThumbImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.notificationDetailsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.notificationDetailField {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(15, 23, 48, 0.48);
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+.notificationDetailLabel {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.notificationDetailValue {
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.notificationPayloadDetails {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(15, 23, 48, 0.42);
+  padding: 8px 10px;
+}
+
+.notificationPayloadDetails > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(230, 232, 242, 0.86);
+  user-select: none;
+}
+
+.notificationPayloadDetails > pre {
+  margin: 8px 0 0 0;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(7, 10, 20, 0.62);
+}
+
+@media (max-width: 720px) {
+  .notificationDetailsModalPanel {
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+  }
+
+  .notificationGalleryStage {
+    grid-template-columns: 34px 1fr 34px;
+    gap: 6px;
+  }
+
+  .notificationGalleryImage {
+    max-height: min(48vh, 420px);
+  }
+
+  .notificationGalleryThumbButton {
+    width: 54px;
+    height: 54px;
+  }
 }
 
 .row {

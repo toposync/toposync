@@ -173,6 +173,10 @@ class ObjectDetectionYOLOConfig(_YoloBaseConfig):
     emit_open_and_close: bool = True
 
 
+class _CameraSourcePendingError(RuntimeError):
+    """Transient source-resolution error while camera settings/config are converging."""
+
+
 class CameraSourceRuntime(SourceOperatorRuntime):
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = CameraSourceConfig.model_validate(config)
@@ -184,11 +188,14 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._camera_id = ""
         self._gate_open = True
         self._gate_known = False
+        self._waiting_for_source_config = False
+        self._last_wait_log_monotonic = 0.0
 
     async def _ensure_grabber(self) -> None:
         if self._grabber is not None:
             return
         rtsp_url, fps, camera_id, camera_name = await _resolve_camera_source(self._config, self._dependencies)
+        self._waiting_for_source_config = False
         self._camera_id = camera_id
         self._camera_name = camera_name
         self._hub_key = _camera_hub_key(camera_id=camera_id, rtsp_url=rtsp_url, backend=self._config.backend)
@@ -248,7 +255,20 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             await self._stop_grabber_if_needed()
             return None
 
-        await self._ensure_grabber()
+        try:
+            await self._ensure_grabber()
+        except _CameraSourcePendingError as exc:
+            self._waiting_for_source_config = True
+            now = time.monotonic()
+            if (now - self._last_wait_log_monotonic) >= 5.0:
+                context.logger.warning(
+                    "Node '%s' waiting for camera settings (camera_id=%s): %s",
+                    context.node_id,
+                    str(self._config.camera_id or "").strip() or "-",
+                    str(exc),
+                )
+                self._last_wait_log_monotonic = now
+            return None
         if self._grabber is None:
             return None
         frame, frame_ts = self._grabber.get_latest()
@@ -318,7 +338,10 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             # Evita ficar em loop apertado quando o gate está fechado.
             await context.sleep(max(0.05, float(self._config.poll_interval_ms) / 1000.0))
             return
-        await context.sleep(max(0.001, float(self._config.poll_interval_ms) / 1000.0))
+        sleep_s = max(0.001, float(self._config.poll_interval_ms) / 1000.0)
+        if self._waiting_for_source_config:
+            sleep_s = max(0.25, sleep_s)
+        await context.sleep(sleep_s)
 
     async def shutdown(self) -> None:
         await self._stop_grabber_if_needed()
@@ -989,7 +1012,7 @@ async def _resolve_camera_source(
     ext_rec = ext if isinstance(ext, dict) else {}
     cameras = ext_rec.get("cameras", [])
     if not isinstance(cameras, list):
-        raise RuntimeError(f"Camera '{camera_id}' not found in settings")
+        raise _CameraSourcePendingError(f"Camera '{camera_id}' not found in settings yet")
 
     camera: dict[str, Any] | None = None
     for item in cameras:
@@ -1000,11 +1023,11 @@ async def _resolve_camera_source(
             break
 
     if camera is None:
-        raise RuntimeError(f"Camera '{camera_id}' not found in settings")
+        raise _CameraSourcePendingError(f"Camera '{camera_id}' not found in settings yet")
 
     rtsp_url = str(camera.get("rtsp_url", "")).strip()
     if not rtsp_url:
-        raise RuntimeError(f"Camera '{camera_id}' has empty rtsp_url")
+        raise _CameraSourcePendingError(f"Camera '{camera_id}' has empty rtsp_url")
 
     username = str(camera.get("username", "")).strip()
     password = str(camera.get("password", "")).strip()

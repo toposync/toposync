@@ -16,6 +16,7 @@ build/
 .parcel-cache/
 
 .toposync-data/
+.toposync-processor-data
 toposync-data/
 
 *.log

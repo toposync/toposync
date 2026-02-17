@@ -35,6 +35,128 @@ export type AppSettings = {
   extensions: Record<string, Record<string, unknown>>;
 };
 
+export type Pipeline = {
+  name: string;
+  type: "reuse" | "final";
+  enabled?: boolean;
+  processing_server_id?: string;
+  editor_mode?: "interactive" | "json" | "python";
+  python_source?: string;
+  graph: unknown;
+};
+
+export type PipelineAlert = {
+  severity: "info" | "warning";
+  code: string;
+  message: string;
+  suggestion?: string;
+  node_id?: string | null;
+  operator_id?: string | null;
+  edge?: unknown;
+};
+
+export type PipelineCompileOutput = {
+  pipeline: Record<string, unknown>;
+  shared_signatures: Record<string, Array<Record<string, unknown>>>;
+  alerts: PipelineAlert[];
+};
+
+export type PipelineCompilePythonOutput = PipelineCompileOutput & {
+  graph: Record<string, unknown>;
+};
+
+export type PipelineStats = {
+  pipeline_name: string;
+  window_seconds: number;
+  bucket_seconds: number;
+  node_outputs: Record<string, number>;
+  updated_at: number;
+};
+
+export type PipelineTemplateApplyCamerasRequest = {
+  template_pipeline_name: string;
+  camera_ids: string[];
+  instance_type?: "reuse" | "final";
+  enabled?: boolean;
+  processing_server_id?: string;
+  conflict?: "skip" | "replace" | "error";
+  dry_run?: boolean;
+};
+
+export type PipelineTemplateApplyCamerasResponse = {
+  dry_run: boolean;
+  created: string[];
+  updated: string[];
+  skipped: Array<Record<string, unknown>>;
+};
+
+export type ProcessingServer = {
+  id: string;
+  name: string;
+  kind: "inprocess" | "http";
+  url: string;
+  username?: string;
+  password?: string;
+};
+
+export type ProcessingServerStatus = {
+  ok: boolean;
+  status?: Record<string, unknown>;
+  error?: string | null;
+};
+
+export type CameraSummary = {
+  id: string;
+  name: string;
+  connection_type: string;
+};
+
+export type CamerasIndexResponse = {
+  cameras: CameraSummary[];
+};
+
+export type CameraContextArea = {
+  id: string;
+  name: string;
+  vertices_count: number;
+};
+
+export type CameraContextCameraElement = {
+  id: string;
+  name: string;
+  control_points_pairs: number;
+  has_mapping: boolean;
+};
+
+export type CameraContextComposition = {
+  id: string;
+  name: string;
+  camera_elements: CameraContextCameraElement[];
+  areas: CameraContextArea[];
+};
+
+export type CameraContextsResponse = {
+  camera_id: string;
+  compositions: CameraContextComposition[];
+};
+
+export type PipelineOperatorPort = {
+  name: string;
+  required: boolean;
+  description: string;
+};
+
+export type PipelineOperatorDefinition = {
+  id: string;
+  description: string;
+  inputs: PipelineOperatorPort[];
+  outputs: PipelineOperatorPort[];
+  capabilities: string[];
+  defaults: Record<string, unknown>;
+  config_schema: Record<string, unknown>;
+  share_strategy: "by_signature" | "never";
+};
+
 export type NotificationsPage = {
   notifications: Notification[];
   next_cursor: number | null;
@@ -150,4 +272,142 @@ export async function getNotification(notificationId: string): Promise<Notificat
   const res = await fetch(`/api/notifications/${encodeURIComponent(notificationId)}`);
   if (!res.ok) throw new Error(`Failed to fetch notification ${notificationId}: ${res.status}`);
   return res.json();
+}
+
+export async function listProcessingServers(): Promise<ProcessingServer[]> {
+  const res = await fetch("/api/processing-servers");
+  if (!res.ok) throw new Error(`Failed to list processing servers: ${res.status}`);
+  const body = (await res.json()) as { servers?: ProcessingServer[] };
+  return body.servers ?? [];
+}
+
+export async function putProcessingServer(server: ProcessingServer): Promise<ProcessingServer> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(server.id)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(server),
+  });
+  if (!res.ok) throw new Error(`Failed to save processing server ${server.id}: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteProcessingServer(serverId: string): Promise<ProcessingServer> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Failed to delete processing server ${serverId}: ${res.status}`);
+  return res.json();
+}
+
+export async function getProcessingServerStatus(serverId: string): Promise<ProcessingServerStatus> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/status`);
+  if (!res.ok) throw new Error(`Failed to fetch processing server status ${serverId}: ${res.status}`);
+  return res.json();
+}
+
+export async function listPipelines(): Promise<Pipeline[]> {
+  const res = await fetch("/api/pipelines");
+  if (!res.ok) throw new Error(`Failed to list pipelines: ${res.status}`);
+  const body = (await res.json()) as { pipelines?: Pipeline[] };
+  return body.pipelines ?? [];
+}
+
+export async function createPipeline(pipeline: Pipeline): Promise<Pipeline> {
+  const res = await fetch("/api/pipelines", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(pipeline),
+  });
+  if (!res.ok) throw new Error(`Failed to create pipeline: ${res.status}`);
+  return res.json();
+}
+
+export async function putPipeline(name: string, pipeline: Pipeline): Promise<Pipeline> {
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(pipeline),
+  });
+  if (!res.ok) throw new Error(`Failed to save pipeline ${name}: ${res.status}`);
+  return res.json();
+}
+
+export async function deletePipeline(name: string): Promise<Pipeline> {
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Failed to delete pipeline ${name}: ${res.status}`);
+  return res.json();
+}
+
+export async function getPipelineStats(name: string): Promise<PipelineStats> {
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/stats`);
+  if (!res.ok) throw new Error(`Failed to fetch pipeline stats ${name}: ${res.status}`);
+  return res.json();
+}
+
+export async function resetPipelineStats(name: string): Promise<PipelineStats> {
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/stats/reset`, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to reset pipeline stats ${name}: ${res.status}`);
+  return res.json();
+}
+
+export async function compilePipeline(pipeline: Pipeline): Promise<PipelineCompileOutput> {
+  const res = await fetch("/api/pipelines/compile", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pipeline }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const detail = (body as any)?.detail ? String((body as any).detail) : String(res.status);
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+export async function compilePipelinePython(pipeline: Pipeline): Promise<PipelineCompilePythonOutput> {
+  const res = await fetch("/api/pipelines/compile-python", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pipeline }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const detail = (body as any)?.detail ? String((body as any).detail) : String(res.status);
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+export async function applyPipelineTemplateToCameras(
+  payload: PipelineTemplateApplyCamerasRequest,
+): Promise<PipelineTemplateApplyCamerasResponse> {
+  const res = await fetch("/api/pipelines/templates/apply-cameras", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const detail = (body as any)?.detail ? String((body as any).detail) : String(res.status);
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+export async function listCamerasIndex(): Promise<CamerasIndexResponse> {
+  const res = await fetch("/api/cameras/index");
+  if (!res.ok) throw new Error(`Failed to list cameras index: ${res.status}`);
+  const body = (await res.json()) as { cameras?: CameraSummary[] };
+  return { cameras: Array.isArray(body.cameras) ? body.cameras : [] };
+}
+
+export async function getCameraContexts(cameraId: string): Promise<CameraContextsResponse> {
+  const res = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/contexts`);
+  if (!res.ok) throw new Error(`Failed to fetch camera contexts: ${res.status}`);
+  return res.json();
+}
+
+export async function listPipelineOperators(): Promise<PipelineOperatorDefinition[]> {
+  const res = await fetch("/api/pipelines/operators");
+  if (!res.ok) throw new Error(`Failed to list pipeline operators: ${res.status}`);
+  const body = (await res.json()) as { operators?: PipelineOperatorDefinition[] };
+  return body.operators ?? [];
 }

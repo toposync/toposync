@@ -4,11 +4,13 @@ import logging
 import os
 import platform
 import time
+import weakref
 from dataclasses import dataclass
 from typing import Any
 
 
 logger = logging.getLogger(__name__)
+_YOLO_TRACKERS: weakref.WeakSet["YoloTracker"] = weakref.WeakSet()
 
 
 try:
@@ -52,6 +54,28 @@ def _clean_device(v: str | None) -> str | None:
     if low in {"", "none", "null", "auto", "default"}:
         return None
     return raw
+
+
+def _normalize_track_id(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+        while isinstance(value, (list, tuple)):
+            if not value:
+                return None
+            value = value[0]
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            return int(float(stripped))
+        return int(value)
+    except Exception:
+        return None
 
 
 BBox01 = tuple[float, float, float, float]
@@ -117,6 +141,10 @@ class YoloTracker:
         self._fps_count: int = 0
         self._fps_window_start: float = time.time()
         self.fps: float = 0.0
+        try:
+            _YOLO_TRACKERS.add(self)
+        except Exception:
+            pass
 
     def _ensure_model(self) -> None:
         if self._yolo is not None:
@@ -350,7 +378,21 @@ class YoloTracker:
         except Exception:
             boxes = []
 
-        for box in boxes:
+        raw_box_ids: list[Any] = []
+        if boxes is not None and hasattr(boxes, "id"):
+            try:
+                ids = getattr(boxes, "id", None)
+                if ids is not None:
+                    if hasattr(ids, "tolist"):
+                        ids = ids.tolist()
+                    if isinstance(ids, (list, tuple)):
+                        raw_box_ids = list(ids)
+                    else:
+                        raw_box_ids = [ids]
+            except Exception:
+                raw_box_ids = []
+
+        for idx, box in enumerate(boxes):
             try:
                 xyxy = box.xyxy.tolist()[0]
             except Exception:
@@ -372,10 +414,10 @@ class YoloTracker:
 
             track_id = None
             if hasattr(box, "id"):
-                try:
-                    track_id = int(box.id[0])
-                except Exception:
-                    track_id = None
+                raw_id = getattr(box, "id", None)
+                if raw_id is None and idx < len(raw_box_ids):
+                    raw_id = raw_box_ids[idx]
+                track_id = _normalize_track_id(raw_id)
 
             name = None
             if class_id is not None:
@@ -412,3 +454,22 @@ class YoloTracker:
             device_effective=self._effective_device,
             device_reason=self._device_reason,
         )
+
+
+def registered_yolo_trackers_diagnostics(limit: int = 8) -> list[dict[str, Any]]:
+    try:
+        items = list(_YOLO_TRACKERS)
+    except Exception:
+        items = []
+
+    out: list[dict[str, Any]] = []
+    for tracker in items:
+        try:
+            out.append(tracker.diagnostics())
+        except Exception:
+            continue
+
+    out.sort(key=lambda item: (str(item.get("model") or ""), str(item.get("tracker") or "")))
+    if limit <= 0:
+        return out
+    return out[: int(limit)]

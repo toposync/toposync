@@ -1,25 +1,3 @@
-import type { YoloV12Category } from "./yolo";
-
-export type ProcessingServer = {
-  id: string;
-  name: string;
-  url: string;
-  username?: string;
-  password?: string;
-};
-
-export type DetectionCondition =
-  | { kind: "motion" }
-  | { kind: "ha_sensor"; entity_id: string }
-  | { kind: "ha_state"; entity_id: string; state: string }
-  | { kind: "object"; category: YoloV12Category };
-
-export type CameraDetection = {
-  id: string;
-  trigger: DetectionCondition;
-  filters: DetectionCondition[];
-};
-
 export type CameraConfig = {
   id: string;
   name: string;
@@ -28,13 +6,10 @@ export type CameraConfig = {
   username?: string;
   password?: string;
   fps: number;
-  processing_server_id?: string;
-  detections?: CameraDetection[];
 };
 
 export type CamerasIndex = {
-  processing_servers: Array<{ id: string; name: string; url: string }>;
-  cameras: Array<{ id: string; name: string; connection_type: string; processing_server_id?: string }>;
+  cameras: Array<{ id: string; name: string; connection_type: string }>;
 };
 
 export type ControlPoint = {
@@ -44,3 +19,44 @@ export type ControlPoint = {
   world?: { x: number; z: number } | null;
 };
 
+export type CameraContextArea = {
+  id: string;
+  name: string;
+  vertices_count: number;
+};
+
+export type CameraContextCameraElement = {
+  id: string;
+  name: string;
+  control_points_pairs: number;
+  has_mapping: boolean;
+};
+
+export type CameraContextComposition = {
+  id: string;
+  name: string;
+  camera_elements: CameraContextCameraElement[];
+  areas: CameraContextArea[];
+};
+
+export type CameraContextsResponse = {
+  camera_id: string;
+  compositions: CameraContextComposition[];
+};
+
+export type CameraPipelineWizardPreset = "people" | "vehicles_stopped" | "pets";
+
+export type CameraPipelineWizardRequest = {
+  preset: CameraPipelineWizardPreset;
+  pipeline_name?: string;
+  enabled?: boolean;
+  processing_server_id?: string;
+  composition_id?: string;
+  area_id?: string;
+  notification_title?: string;
+  notification_description?: string;
+};
+
+export type CameraPipelineWizardResponse = {
+  pipeline_name: string;
+};

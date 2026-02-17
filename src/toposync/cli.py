@@ -30,6 +30,16 @@ def main(argv: list[str] | None = None) -> None:
         help="Disable serving the built frontend (even if TOPOSYNC_FRONTEND_DIR/frontend/dist is present).",
     )
 
+    processing = sub.add_parser("processing-serve", help="Run the Toposync processing server (distributed pipelines).")
+    processing.add_argument("--host", default="127.0.0.1")
+    processing.add_argument("--port", type=int, default=9001)
+    processing.add_argument("--log-level", default="info")
+    processing.add_argument(
+        "--data-dir",
+        default=None,
+        help="Override TOPOSYNC_DATA_DIR (where config.json is read from).",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "serve":
@@ -41,6 +51,17 @@ def main(argv: list[str] | None = None) -> None:
             os.environ["TOPOSYNC_NO_FRONTEND"] = "1"
         uvicorn.run(
             "toposync.app:create_app",
+            factory=True,
+            host=args.host,
+            port=args.port,
+            log_level=args.log_level,
+        )
+    if args.command == "processing-serve":
+        if args.data_dir:
+            os.environ["TOPOSYNC_DATA_DIR"] = args.data_dir
+        os.environ.setdefault("TOPOSYNC_ROLE", "processing")
+        uvicorn.run(
+            "toposync.processing_server:create_app",
             factory=True,
             host=args.host,
             port=args.port,

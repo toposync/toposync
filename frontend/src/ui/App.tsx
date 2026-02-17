@@ -37,10 +37,14 @@ import type { AppSettings } from "../util/api";
 import { i18n, resolveLocalizedString } from "../util/i18n";
 import { loadRemoteActivate } from "../util/moduleFederation";
 import { applyTheme, loadThemeId, saveThemeId } from "../util/theme";
-import { SettingsModal } from "./SettingsModal";
+import { getPreviousPathname, navigate, replace, usePathname } from "./router";
 import { Viewport2D } from "./Viewport2D";
+import { builtinNotificationRenderers } from "./notifications/pipelinesNotifications";
 import { CompositionEditorScreen } from "./screens/CompositionEditorScreen";
 import { MainScreen } from "./screens/MainScreen";
+import { PipelinesScreen } from "./screens/PipelinesScreen";
+import { ProcessingServersScreen } from "./screens/ProcessingServersScreen";
+import { SettingsScreen } from "./screens/SettingsScreen";
 
 type ExtensionRecord = {
   id: string;
@@ -207,6 +211,7 @@ function mergeElement(el: CompositionElement, patch: CompositionElementPatch): C
 }
 
 export function App(): React.ReactElement {
+  const pathname = usePathname();
   const [screen, setScreen] = useState<Screen>("main");
   const [elementTypesById, setElementTypesById] = useState<Record<string, ElementType>>({});
   const [notificationRenderersById, setNotificationRenderersById] = useState<Record<string, NotificationRenderer>>({});
@@ -232,7 +237,6 @@ export function App(): React.ReactElement {
   const [graphicsQuality, setGraphicsQuality] = useState<GraphicsQuality>(() => loadGraphicsQuality());
   const [themeId, setThemeId] = useState<string>(() => loadThemeId());
   const [settings, setSettings] = useState<AppSettings>({ core: {}, extensions: {} });
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const [compositionRevision, setCompositionRevision] = useState(0);
 
@@ -276,7 +280,7 @@ export function App(): React.ReactElement {
   }, [resetHistory, screen, composition.id]);
 
   const notificationRenderers = useMemo(
-    () => Object.values(notificationRenderersById),
+    () => [...Object.values(notificationRenderersById), ...builtinNotificationRenderers],
     [notificationRenderersById],
   );
 
@@ -569,6 +573,7 @@ export function App(): React.ReactElement {
   useEffect(() => {
     if (!backendAvailable) return;
 
+    let closed = false;
     const es = new EventSource("/api/notifications/stream");
     es.onmessage = (ev) => {
       try {
@@ -589,16 +594,21 @@ export function App(): React.ReactElement {
       }
     };
     es.onerror = (err) => {
+      if (closed) return;
       console.warn("Notifications SSE error", err);
     };
 
-    return () => es.close();
+    return () => {
+      closed = true;
+      es.close();
+    };
   }, [backendAvailable, upsertNotification]);
 
   useEffect(() => {
     if (!backendAvailable) return;
     if (!activeNotificationId) return;
 
+    let closed = false;
     let cancelled = false;
     void getNotification(activeNotificationId)
       .then((notif) => {
@@ -622,11 +632,13 @@ export function App(): React.ReactElement {
       }
     };
     es.onerror = (err) => {
+      if (closed) return;
       console.warn("Notification detail SSE error", err);
     };
 
     return () => {
       cancelled = true;
+      closed = true;
       es.close();
     };
   }, [activeNotificationId, backendAvailable, upsertNotification]);
@@ -948,76 +960,108 @@ export function App(): React.ReactElement {
     lastUserInteractionTsRef.current = Date.now();
   }, []);
 
+  const normalizedPathname = useMemo(() => {
+    const raw = pathname || "/";
+    if (raw.length > 1 && raw.endsWith("/")) return raw.slice(0, -1);
+    return raw;
+  }, [pathname]);
+
+  const lastNonSettingsPathRef = useRef<string>("/");
+  useEffect(() => {
+    if (!normalizedPathname.startsWith("/settings")) lastNonSettingsPathRef.current = normalizedPathname;
+  }, [normalizedPathname]);
+
+  const openSettings = useCallback(() => navigate("/settings"), []);
+  const openPipelinesSettings = useCallback(() => navigate("/settings/pipelines"), []);
+  const openProcessingServersSettings = useCallback(() => navigate("/settings/processing-servers"), []);
+
+  const closeSettings = useCallback(() => replace(lastNonSettingsPathRef.current || "/"), []);
+
+  const closeSettingsChild = useCallback(() => {
+    const prev = getPreviousPathname();
+    if (prev && prev.startsWith("/settings")) {
+      window.history.back();
+      return;
+    }
+    replace("/settings");
+  }, []);
+
   return (
     <div className="appShell">
-	      {screen === "main" ? (
-	        <MainScreen
-	          compositionName={composition.name}
-	          compositions={compositions}
-	          activeCompositionId={activeCompositionId}
-	          elements={composition.elements}
-	          elementTypesById={elementTypesById}
-	          viewSettings={viewSettings}
-	          notificationRenderers={notificationRenderers}
-	          notifications={notifications}
-	          activeNotificationId={activeNotificationId}
-	          notificationsLoading={notificationsLoading}
-	          onSelectNotification={selectNotification}
+      {normalizedPathname.startsWith("/settings/pipelines") ? (
+        <PipelinesScreen onClose={closeSettingsChild} onOpenProcessingServers={openProcessingServersSettings} />
+      ) : normalizedPathname.startsWith("/settings/processing-servers") ? (
+        <ProcessingServersScreen onClose={closeSettingsChild} />
+      ) : normalizedPathname.startsWith("/settings") ? (
+        <SettingsScreen
+          backendAvailable={backendAvailable}
+          api={host.api}
+          wallHeightPreset={wallHeightPreset}
+          ghostWalls={ghostWalls}
+          graphicsQuality={graphicsQuality}
+          onSetWallHeightPreset={setWallHeightPreset}
+          onSetGhostWalls={setGhostWalls}
+          onSetGraphicsQuality={setGraphicsQuality}
+          panels={Object.values(settingsPanelsById)}
+          themes={themeOptions}
+          themeId={themeId}
+          onSetThemeId={setThemeId}
+          settings={settings}
+          onPatchExtensionSettings={updateExtensionSettings}
+          onOpenPipelines={openPipelinesSettings}
+          onOpenProcessingServers={openProcessingServersSettings}
+          onClose={closeSettings}
+        />
+      ) : screen === "main" ? (
+        <MainScreen
+          compositionName={composition.name}
+          compositions={compositions}
+          activeCompositionId={activeCompositionId}
+          elements={composition.elements}
+          elementTypesById={elementTypesById}
+          viewSettings={viewSettings}
+          notificationRenderers={notificationRenderers}
+          notifications={notifications}
+          activeNotificationId={activeNotificationId}
+          notificationsLoading={notificationsLoading}
+          onSelectNotification={selectNotification}
           onLoadMoreNotifications={loadMoreNotifications}
           api={host.api}
           updateElement={updateElement}
           onEditComposition={() => setScreen("editor")}
-          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenPipelines={openPipelinesSettings}
+          onOpenSettings={openSettings}
           onActivateComposition={activateCompositionById}
           onCreateComposition={createNewComposition}
           onRenameComposition={renameExistingComposition}
           onDeleteComposition={deleteExistingComposition}
         />
-      ) : (
-	        <CompositionEditorScreen
-	          compositionName={composition.name}
-	          compositions={compositions}
-	          activeCompositionId={activeCompositionId}
-	          elements={composition.elements}
-	          elementTypesById={elementTypesById}
-	          api={host.api}
-	          fileDropHandlers={fileDropHandlers}
-	          createElement={createElement}
-	          editorTools={Object.values(editorToolsById)}
-	          updateElement={updateElement}
-	          reorderElements={reorderElements}
-	          removeElement={removeElement}
-	          onBeginUndoGroup={beginUndoGroup}
-	          onEndUndoGroup={endUndoGroup}
-	          onUndo={undo}
+      ) : screen === "editor" ? (
+        <CompositionEditorScreen
+          compositionName={composition.name}
+          compositions={compositions}
+          activeCompositionId={activeCompositionId}
+          elements={composition.elements}
+          elementTypesById={elementTypesById}
+          api={host.api}
+          fileDropHandlers={fileDropHandlers}
+          createElement={createElement}
+          editorTools={Object.values(editorToolsById)}
+          updateElement={updateElement}
+          reorderElements={reorderElements}
+          removeElement={removeElement}
+          onBeginUndoGroup={beginUndoGroup}
+          onEndUndoGroup={endUndoGroup}
+          onUndo={undo}
           onRedo={redo}
           onExit={() => setScreen("main")}
-          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenSettings={openSettings}
           onActivateComposition={activateCompositionById}
           onCreateComposition={createNewComposition}
           onRenameComposition={renameExistingComposition}
           onDeleteComposition={deleteExistingComposition}
         />
-      )}
-
-      <SettingsModal
-        open={isSettingsOpen}
-        backendAvailable={backendAvailable}
-        api={host.api}
-        wallHeightPreset={wallHeightPreset}
-        ghostWalls={ghostWalls}
-        graphicsQuality={graphicsQuality}
-        onSetWallHeightPreset={setWallHeightPreset}
-        onSetGhostWalls={setGhostWalls}
-        onSetGraphicsQuality={setGraphicsQuality}
-        panels={Object.values(settingsPanelsById)}
-        themes={themeOptions}
-        themeId={themeId}
-        onSetThemeId={setThemeId}
-        settings={settings}
-        onPatchExtensionSettings={updateExtensionSettings}
-        onClose={() => setIsSettingsOpen(false)}
-      />
+      ) : null}
     </div>
   );
 }

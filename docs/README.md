@@ -2,6 +2,7 @@
 
 - `docs/ARCHITECTURE.md` — visão geral da arquitetura e estrutura do repo
 - `docs/DEVELOPMENT.md` — setup e fluxo de dev (backend + frontend + UIs das extensões)
+- `docs/PROCESSING_SERVER_DEVELOPMENT.md` — dev setup do processing server distribuído (deps + run)
 - `docs/SELF_HOSTING.md` — self‑hosting em produção (Docker e Python/uv)
 - `docs/BUILD.md` — build e distribuição (wheels e bundles)
 - `docs/EXTENSIONS_RUNTIME.md` — como o runtime descobre e serve extensões

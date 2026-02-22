@@ -72,6 +72,15 @@ Você pode sobrescrever por ambiente:
 - `TOPOSYNC_PROCESSING_PORT`
 - `TOPOSYNC_DATA_DIR` (recomendado quando rodar duas instâncias)
 
+`npm run dev` lê automaticamente variáveis de `.env` (ou de `TOPOSYNC_ENV_FILE`, se definido).
+
+Exemplo usando o template:
+
+```bash
+cp .env.example .env
+npm run dev
+```
+
 Exemplo de segunda instância local:
 
 ```bash

@@ -1,10 +1,41 @@
 #!/usr/bin/env node
 
 const { execFile, spawn } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const isWindows = process.platform === "win32";
 const npmCmd = isWindows ? "npm.cmd" : "npm";
 const runnerCmd = npmCmd;
+
+function loadDotenv() {
+  const envFile = String(process.env.TOPOSYNC_ENV_FILE ?? ".env").trim() || ".env";
+  const envPath = path.resolve(process.cwd(), envFile);
+  if (!fs.existsSync(envPath)) return;
+
+  const content = fs.readFileSync(envPath, "utf8");
+  for (const rawLine of content.split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const line = trimmed.startsWith("export ") ? trimmed.slice(7).trim() : trimmed;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+
+    const key = line.slice(0, eq).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    if (Object.prototype.hasOwnProperty.call(process.env, key)) continue;
+
+    let value = line.slice(eq + 1).trim();
+    const quoted =
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"));
+    if (quoted && value.length >= 2) value = value.slice(1, -1);
+    process.env[key] = value;
+  }
+}
+
+loadDotenv();
 
 function spawnScript(label, scriptName, extraArgs = []) {
   const child = spawn(runnerCmd, ["run", scriptName, ...extraArgs], {

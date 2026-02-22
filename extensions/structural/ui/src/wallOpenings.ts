@@ -155,8 +155,17 @@ export function resolveWallOpenings(openings: WallOpening[], wallLength: number,
     if (end - start < MIN_OPENING_WIDTH_M) continue;
 
     const defaults = defaultVerticalBand(opening.kind, height);
-    let yMin = Number.isFinite(opening.y_min_m ?? NaN) ? (opening.y_min_m as number) : defaults.yMin;
-    let yMax = Number.isFinite(opening.y_max_m ?? NaN) ? (opening.y_max_m as number) : defaults.yMax;
+    // RoomPlan-style "openings" are effectively floor-to-ceiling cutouts; doors/windows carry the
+    // typical vertical band semantics (and may become user-customizable in the future).
+    let yMin: number;
+    let yMax: number;
+    if (opening.kind === "opening") {
+      yMin = 0;
+      yMax = height;
+    } else {
+      yMin = Number.isFinite(opening.y_min_m ?? NaN) ? (opening.y_min_m as number) : defaults.yMin;
+      yMax = Number.isFinite(opening.y_max_m ?? NaN) ? (opening.y_max_m as number) : defaults.yMax;
+    }
     yMin = clamp(yMin, 0, height);
     yMax = clamp(yMax, 0, height);
     if (yMax < yMin) {

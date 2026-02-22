@@ -9,7 +9,7 @@ export const structuralTranslations = {
 
     "ext.structural.tools.wall": "Wall",
     "ext.structural.tools.wall_opening": "Opening",
-    "ext.structural.tools.wall_opening_desc": "Hover a wall, click and drag to size. Click to place default width. Hold Shift for symmetric sizing.",
+    "ext.structural.tools.wall_opening_desc": "Floor-to-ceiling wall cutout. Hover a wall, click and drag to size. Click to place default width. Hold Shift for symmetric sizing.",
     "ext.structural.tools.wall_door": "Door",
     "ext.structural.tools.wall_door_desc": "Place a door cutout on a wall.",
     "ext.structural.tools.wall_window": "Window",
@@ -57,7 +57,7 @@ export const structuralTranslations = {
 
     "ext.structural.tools.wall": "Parede",
     "ext.structural.tools.wall_opening": "Abertura",
-    "ext.structural.tools.wall_opening_desc": "Passe sobre a parede, clique e arraste para dimensionar. Clique para largura padrão. Segure Shift para simetria.",
+    "ext.structural.tools.wall_opening_desc": "Recorte do piso ao teto. Passe sobre a parede, clique e arraste para dimensionar. Clique para largura padrão. Segure Shift para simetria.",
     "ext.structural.tools.wall_door": "Porta",
     "ext.structural.tools.wall_door_desc": "Adiciona um recorte de porta na parede.",
     "ext.structural.tools.wall_window": "Janela",

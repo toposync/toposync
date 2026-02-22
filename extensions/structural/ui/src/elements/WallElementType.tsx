@@ -305,9 +305,11 @@ export function createWallElementType(i18n: HostI18n): ElementType {
       const wallAxisGroup = new THREE.Group();
       const solidsGroup = new THREE.Group();
       const insertsGroup = new THREE.Group();
+      const picksGroup = new THREE.Group();
 
       wallAxisGroup.add(solidsGroup);
       wallAxisGroup.add(insertsGroup);
+      wallAxisGroup.add(picksGroup);
       root.add(wallAxisGroup);
 
       const wallMaterial = new THREE.MeshStandardMaterial({
@@ -316,6 +318,16 @@ export function createWallElementType(i18n: HostI18n): ElementType {
         metalness: 0.05,
         flatShading: true,
       });
+
+      // Invisible mesh used only for raycasting/picking in 3D.
+      // Without this, clicking through a cutout can "fall through" to the floor/area behind it.
+      const pickMaterial = new THREE.MeshBasicMaterial({
+        color: "#000000",
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      });
+      pickMaterial.colorWrite = false;
 
       let lastKey = "";
 
@@ -359,6 +371,7 @@ export function createWallElementType(i18n: HostI18n): ElementType {
           lastKey = key;
           clearMeshGroup(solidsGroup, false);
           clearMeshGroup(insertsGroup, true);
+          clearMeshGroup(picksGroup, false);
 
           const solidRects = buildSolidRects(length, height, resolvedOpenings);
           for (const rect of solidRects) {
@@ -380,6 +393,17 @@ export function createWallElementType(i18n: HostI18n): ElementType {
               addWindowInsert(THREE, insertsGroup, opening, thicknessWorld);
             }
           }
+
+          for (const opening of resolvedOpenings) {
+            const openingHeight = opening.y_max_m - opening.y_min_m;
+            if (opening.width_m <= 0.08 || openingHeight <= 0.08) continue;
+            const geometry = new THREE.BoxGeometry(opening.width_m, openingHeight, thicknessWorld * 1.06);
+            const mesh = new THREE.Mesh(geometry, pickMaterial);
+            mesh.position.set(opening.center_m, GROUND_Y + opening.y_min_m + openingHeight / 2, 0);
+            mesh.castShadow = false;
+            mesh.receiveShadow = false;
+            picksGroup.add(mesh);
+          }
         }
 
         wallMaterial.color.set(color);
@@ -398,7 +422,9 @@ export function createWallElementType(i18n: HostI18n): ElementType {
         dispose: () => {
           clearMeshGroup(solidsGroup, false);
           clearMeshGroup(insertsGroup, true);
+          clearMeshGroup(picksGroup, false);
           wallMaterial.dispose();
+          pickMaterial.dispose();
         },
       };
     },

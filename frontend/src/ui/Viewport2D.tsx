@@ -1152,14 +1152,10 @@ export function Viewport2D({
 
       const a = readPlanePoint(el.props.a);
       const b = readPlanePoint(el.props.b);
-      const aPrev = readPlanePoint((el.props as any).a_prev);
-      const bNext = readPlanePoint((el.props as any).b_next);
       const vertices = readVertices(el.props.vertices);
 
       if (a) propsPatch.a = add(a, delta);
       if (b) propsPatch.b = add(b, delta);
-      if (aPrev) propsPatch.a_prev = add(aPrev, delta);
-      if (bNext) propsPatch.b_next = add(bNext, delta);
       if (vertices.length >= 3) propsPatch.vertices = vertices.map((p) => add(p, delta));
 
       const patch: CompositionElementPatch = {
@@ -1268,12 +1264,8 @@ export function Viewport2D({
         const propsPatch: Record<string, unknown> = {};
         const a = readPlanePoint(startElement.props.a);
         const b = readPlanePoint(startElement.props.b);
-        const aPrev = readPlanePoint((startElement.props as any).a_prev);
-        const bNext = readPlanePoint((startElement.props as any).b_next);
         if (a) propsPatch.a = rotateAround(a, pivot, deltaRad);
         if (b) propsPatch.b = rotateAround(b, pivot, deltaRad);
-        if (aPrev) propsPatch.a_prev = rotateAround(aPrev, pivot, deltaRad);
-        if (bNext) propsPatch.b_next = rotateAround(bNext, pivot, deltaRad);
         return Object.keys(propsPatch).length ? { props: propsPatch } : {};
       }
 
@@ -2063,12 +2055,8 @@ export function Viewport2D({
               const propsPatch: Record<string, unknown> = {};
               const a = readPlanePoint(el.props.a);
               const b = readPlanePoint(el.props.b);
-              const aPrev = readPlanePoint((el.props as any).a_prev);
-              const bNext = readPlanePoint((el.props as any).b_next);
               if (a) propsPatch.a = rotateAround(a, pivot, deltaRad);
               if (b) propsPatch.b = rotateAround(b, pivot, deltaRad);
-              if (aPrev) propsPatch.a_prev = rotateAround(aPrev, pivot, deltaRad);
-              if (bNext) propsPatch.b_next = rotateAround(bNext, pivot, deltaRad);
               if (Object.keys(propsPatch).length > 0) updateElementRef.current(selectedId, { props: propsPatch });
               requestDraw();
               return;

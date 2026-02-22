@@ -3,6 +3,9 @@ export const AREA_ELEMENT_TYPE_ID = "com.toposync.structural.area";
 export const POOL_ELEMENT_TYPE_ID = "com.toposync.structural.pool";
 
 export const WALL_TOOL_ID = "com.toposync.structural.tool.wall";
+export const WALL_OPENING_TOOL_ID = "com.toposync.structural.tool.opening";
+export const WALL_DOOR_TOOL_ID = "com.toposync.structural.tool.door";
+export const WALL_WINDOW_TOOL_ID = "com.toposync.structural.tool.window";
 export const AREA_SQUARE_TOOL_ID = "com.toposync.structural.tool.area_square";
 export const AREA_POLYGON_TOOL_ID = "com.toposync.structural.tool.area_polygon";
 export const AREA_SQUARE_WITH_WALLS_TOOL_ID = "com.toposync.structural.tool.area_square_walls";

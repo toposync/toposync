@@ -398,6 +398,7 @@ export function CompositionEditorScreen({
 
     const session = tool.createSession({
       i18n,
+      getElements: () => elements,
       createElement,
       updateElement,
       removeElement,

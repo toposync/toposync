@@ -23,7 +23,7 @@ O modelo base de instância em uma composição é `CompositionElement`:
 ## Editor tools (rápido)
 
 - O editor 2D envia eventos de ponteiro em coordenadas do “mundo” (plano X/Z).
-- A ferramenta cria uma sessão (`createSession`) e recebe callbacks (`createElement`, `openEditor`, etc).
+- A ferramenta cria uma sessão (`createSession`) e recebe callbacks (`getElements`, `createElement`, `openEditor`, etc).
 - Exemplos reais: `extensions/structural` (paredes/áreas) e `extensions/models` (importar GLB/GLTF).
 
 Exemplo mínimo de ferramenta “clique para adicionar”:

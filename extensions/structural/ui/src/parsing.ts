@@ -45,14 +45,3 @@ export function readPlanePointArray(value: unknown): PlanePoint[] {
     .map((item) => readPlanePoint(item, { x: 0, z: 0 }))
     .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.z));
 }
-
-export function readOptionalPlanePoint(value: unknown): PlanePoint | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  const x = record.x;
-  const z = record.z;
-  if (typeof x !== "number" || typeof z !== "number") return null;
-  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
-  return { x, z };
-}
-

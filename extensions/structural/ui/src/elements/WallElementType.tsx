@@ -183,6 +183,7 @@ function addDoorInsert(
   const left = new THREE.Mesh(leftGeometry, frameMaterial);
   const right = new THREE.Mesh(rightGeometry, frameMaterial);
   const top = new THREE.Mesh(topGeometry, frameMaterial);
+  for (const mesh of [left, right, top]) (mesh.userData as any).__toposyncAllowPickWhenGhostWalls = true;
 
   const centerY = GROUND_Y + opening.y_min_m + openingHeight / 2;
   left.position.set(opening.start_m + frameThickness / 2, centerY, 0);
@@ -196,6 +197,7 @@ function addDoorInsert(
   if (panelWidth > 0.08 && panelHeight > 0.2) {
     const panelGeometry = new THREE.BoxGeometry(panelWidth, panelHeight, panelDepth);
     const panel = new THREE.Mesh(panelGeometry, panelMaterial);
+    (panel.userData as any).__toposyncAllowPickWhenGhostWalls = true;
     panel.position.set(opening.center_m, GROUND_Y + opening.y_min_m + panelHeight / 2, 0);
     panel.castShadow = true;
     panel.receiveShadow = true;
@@ -243,6 +245,7 @@ function addWindowInsert(
   const bottom = new THREE.Mesh(bottomGeometry, frameMaterial);
   const left = new THREE.Mesh(leftGeometry, frameMaterial);
   const right = new THREE.Mesh(rightGeometry, frameMaterial);
+  for (const mesh of [top, bottom, left, right]) (mesh.userData as any).__toposyncAllowPickWhenGhostWalls = true;
 
   const centerY = GROUND_Y + opening.y_min_m + openingHeight / 2;
   top.position.set(opening.center_m, GROUND_Y + opening.y_max_m - frameThickness / 2, 0);
@@ -282,6 +285,7 @@ function addWindowInsert(
   }
 
   const pane = new THREE.Mesh(paneGeometry, paneMaterial);
+  (pane.userData as any).__toposyncAllowPickWhenGhostWalls = true;
   pane.position.set(opening.center_m, centerY, 0);
   pane.castShadow = false;
   pane.receiveShadow = true;
@@ -401,6 +405,7 @@ export function createWallElementType(i18n: HostI18n): ElementType {
             if (opening.width_m <= 0.08 || openingHeight <= 0.08) continue;
             const geometry = new THREE.BoxGeometry(opening.width_m, openingHeight, thicknessWorld * 1.06);
             const mesh = new THREE.Mesh(geometry, pickMaterial);
+            (mesh.userData as any).__toposyncAllowPickWhenGhostWalls = true;
             mesh.position.set(opening.center_m, GROUND_Y + opening.y_min_m + openingHeight / 2, 0);
             mesh.castShadow = false;
             mesh.receiveShadow = false;
@@ -544,6 +549,13 @@ function WallEditor({ element, update, remove, close, i18n }: WallEditorProps): 
     [openings],
   );
 
+  const resolvedOpeningsById = useMemo(() => {
+    const resolved = resolveWallOpenings(openings, wallLengthMeters, 3.2);
+    const out = new Map<string, ResolvedWallOpening>();
+    for (const item of resolved) out.set(item.id, item);
+    return out;
+  }, [openings, wallLengthMeters]);
+
   function saveOpenings(nextOpenings: WallOpening[]): void {
     update({ props: { openings: openingsToProps(nextOpenings) } });
   }
@@ -558,10 +570,13 @@ function WallEditor({ element, update, remove, close, i18n }: WallEditorProps): 
 
   function addOpening(kind: WallOpeningKind): void {
     const defaultWidth = kind === "door" ? 0.9 : kind === "window" ? 1.2 : 1.0;
+    const safeLength = Math.max(0, wallLengthMeters);
+    const minWidth = Math.min(MIN_OPENING_WIDTH_M, safeLength);
+    const width = clamp(defaultWidth, minWidth, safeLength);
     const opening = createDefaultOpening({
       kind,
       center_m: wallLengthMeters / 2,
-      width_m: Math.max(MIN_OPENING_WIDTH_M, Math.min(wallLengthMeters, defaultWidth)),
+      width_m: width,
     });
     saveOpenings([...openings, opening]);
   }
@@ -621,12 +636,30 @@ function WallEditor({ element, update, remove, close, i18n }: WallEditorProps): 
         const kind = opening.kind;
         const openingTexture = readOpeningTextureId(opening.texture, defaultTextureForKind(kind));
         const openingColor = opening.color ?? defaultColorForKind(kind) ?? "#8f806a";
+        const resolved = resolvedOpeningsById.get(opening.id) ?? null;
+        const heightLabel =
+          kind === "opening"
+            ? t("ext.structural.editor.opening_height_full")
+            : resolved
+              ? t("ext.structural.editor.opening_height_range", {
+                  yMin: numberFormatter.format(resolved.y_min_m),
+                  yMax: numberFormatter.format(resolved.y_max_m),
+                })
+              : null;
+
+        const maxWidth = Math.max(0, wallLengthMeters);
+        const minWidth = Math.min(MIN_OPENING_WIDTH_M, maxWidth);
+        const widthValue = clamp(opening.width_m, minWidth, Math.max(minWidth, maxWidth));
+        const centerMin = widthValue / 2;
+        const centerMax = Math.max(centerMin, maxWidth - widthValue / 2);
+        const centerValue = clamp(opening.center_m, centerMin, centerMax);
         return (
           <div className="card" key={opening.id} style={{ marginTop: 10 }}>
             <div className="cardHeaderRow">
               <div className="cardTitle">{t(`ext.structural.editor.kind.${kind}`)}</div>
-              <div className="cardMeta">{numberFormatter.format(opening.width_m)} m</div>
+              <div className="cardMeta">{numberFormatter.format(widthValue)} m</div>
             </div>
+            {heightLabel ? <div className="cardMeta" style={{ marginTop: 6 }}>{heightLabel}</div> : null}
 
             <div className="rowWrap">
               <div className="field" style={{ flex: 1, minWidth: 120 }}>
@@ -655,13 +688,19 @@ function WallEditor({ element, update, remove, close, i18n }: WallEditorProps): 
                   className="input"
                   type="number"
                   step={0.05}
-                  value={Math.max(0, Math.min(wallLengthMeters, opening.center_m))}
+                  value={centerValue}
                   onChange={(e) => {
                     const next = Number(e.target.value);
                     if (!Number.isFinite(next)) return;
-                    patchOpening(opening.id, { center_m: clamp(next, 0, wallLengthMeters) });
+                    patchOpening(opening.id, { center_m: clamp(next, centerMin, centerMax) });
                   }}
                 />
+                <div className="cardMeta">
+                  {t("ext.structural.editor.opening_center_hint", {
+                    start: numberFormatter.format(0),
+                    end: numberFormatter.format(wallLengthMeters),
+                  })}
+                </div>
               </div>
               <div className="field" style={{ flex: 1, minWidth: 120 }}>
                 <div className="label">{t("ext.structural.editor.opening_width")}</div>
@@ -669,14 +708,18 @@ function WallEditor({ element, update, remove, close, i18n }: WallEditorProps): 
                   className="input"
                   type="number"
                   step={0.05}
-                  min={MIN_OPENING_WIDTH_M}
-                  max={Math.max(MIN_OPENING_WIDTH_M, wallLengthMeters)}
-                  value={Math.max(MIN_OPENING_WIDTH_M, Math.min(wallLengthMeters, opening.width_m))}
+                  min={minWidth}
+                  max={Math.max(minWidth, maxWidth)}
+                  value={widthValue}
                   onChange={(e) => {
                     const next = Number(e.target.value);
                     if (!Number.isFinite(next)) return;
+                    const nextWidth = clamp(next, minWidth, Math.max(minWidth, maxWidth));
+                    const nextCenterMin = nextWidth / 2;
+                    const nextCenterMax = Math.max(nextCenterMin, maxWidth - nextWidth / 2);
                     patchOpening(opening.id, {
-                      width_m: clamp(next, MIN_OPENING_WIDTH_M, Math.max(MIN_OPENING_WIDTH_M, wallLengthMeters)),
+                      width_m: nextWidth,
+                      center_m: clamp(opening.center_m, nextCenterMin, nextCenterMax),
                     });
                   }}
                 />

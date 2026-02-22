@@ -140,9 +140,10 @@ export function resolveWallOpenings(openings: WallOpening[], wallLength: number,
   const height = Math.max(0.15, wallHeight);
   const out: ResolvedWallOpening[] = [];
   for (const opening of openings) {
+    const minWidth = Math.min(MIN_OPENING_WIDTH_M, length);
     const width = clamp(
       Number.isFinite(opening.width_m) ? opening.width_m : defaultWidthForKind(opening.kind),
-      MIN_OPENING_WIDTH_M,
+      minWidth,
       length,
     );
     const center = clamp(
@@ -152,7 +153,7 @@ export function resolveWallOpenings(openings: WallOpening[], wallLength: number,
     );
     const start = center - width / 2;
     const end = center + width / 2;
-    if (end - start < MIN_OPENING_WIDTH_M) continue;
+    if (end - start < minWidth - 1e-6) continue;
 
     const defaults = defaultVerticalBand(opening.kind, height);
     // RoomPlan-style "openings" are effectively floor-to-ceiling cutouts; doors/windows carry the

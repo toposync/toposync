@@ -32,6 +32,7 @@ type Tracked = {
 };
 
 const ELEMENT_ID = "__toposyncElementId";
+const ALLOW_PICK_WHEN_GHOST_WALLS = "__toposyncAllowPickWhenGhostWalls";
 const FULL_WALL_HEIGHT = 2.7;
 const FOCUS_HIGHLIGHT_COLOR = 0xfbbf24;
 const GHOST_WALLS_OPACITY = 0.22;
@@ -614,7 +615,10 @@ export function Viewport3D({
         if (viewRef.current.ghostWalls) {
           const tracked = trackedRef.current.get(id);
           const def = tracked ? elementTypesByIdRef.current[tracked.type] : null;
-          if (def?.layerGroup === "walls") continue;
+          if (def?.layerGroup === "walls") {
+            const allowPick = (hit.object.userData as any)?.[ALLOW_PICK_WHEN_GHOST_WALLS] === true;
+            if (!allowPick) continue;
+          }
         }
         return id;
       }

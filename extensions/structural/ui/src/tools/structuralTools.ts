@@ -92,6 +92,10 @@ type WallTarget = {
   props: Record<string, unknown>;
 };
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
 function dot(a: PlanePoint, b: PlanePoint): number {
   return a.x * b.x + a.z * b.z;
 }

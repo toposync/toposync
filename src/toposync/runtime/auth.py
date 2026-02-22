@@ -748,7 +748,6 @@ class AuthRuntime:
 
     public_routes: set[str] = {
         "/api/health",
-        "/api/auth/status",
         "/api/auth/login",
         "/api/auth/logout",
     }

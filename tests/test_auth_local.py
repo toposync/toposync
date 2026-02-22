@@ -62,12 +62,21 @@ def test_auth_login_logout_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     with _create_client(tmp_path, monkeypatch) as client:
         _setup_owner(client)
 
+        res = client.get("/api/auth/status")
+        assert res.status_code == 200
+        assert res.json()["authenticated"] is True
+        assert res.json()["user"]["username"] == "owner"
+
         res = client.get("/api/pipelines")
         assert res.status_code == 200
 
         res = client.post("/api/auth/logout")
         assert res.status_code == 200
         assert res.json()["ok"] is True
+
+        res = client.get("/api/auth/status")
+        assert res.status_code == 200
+        assert res.json()["authenticated"] is False
 
         res = client.get("/api/pipelines")
         assert res.status_code == 401
@@ -77,6 +86,11 @@ def test_auth_login_logout_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
             json={"username": "owner", "password": "password123", "device_label": "pytest-2"},
         )
         assert res.status_code == 200
+        assert res.json()["user"]["username"] == "owner"
+
+        res = client.get("/api/auth/status")
+        assert res.status_code == 200
+        assert res.json()["authenticated"] is True
         assert res.json()["user"]["username"] == "owner"
 
         res = client.get("/api/pipelines")

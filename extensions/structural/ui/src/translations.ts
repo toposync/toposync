@@ -9,8 +9,11 @@ export const structuralTranslations = {
 
     "ext.structural.tools.wall": "Wall",
     "ext.structural.tools.wall_opening": "Opening",
+    "ext.structural.tools.wall_opening_desc": "Hover a wall, click and drag to size. Click to place default width. Hold Shift for symmetric sizing.",
     "ext.structural.tools.wall_door": "Door",
+    "ext.structural.tools.wall_door_desc": "Place a door cutout on a wall.",
     "ext.structural.tools.wall_window": "Window",
+    "ext.structural.tools.wall_window_desc": "Place a window cutout on a wall.",
     "ext.structural.tools.area_square": "Area (rectangle)",
     "ext.structural.tools.area_polygon": "Area (polygon)",
     "ext.structural.tools.area_square_walls": "Area + walls (rectangle)",
@@ -56,8 +59,11 @@ export const structuralTranslations = {
 
     "ext.structural.tools.wall": "Parede",
     "ext.structural.tools.wall_opening": "Abertura",
+    "ext.structural.tools.wall_opening_desc": "Passe sobre a parede, clique e arraste para dimensionar. Clique para largura padrão. Segure Shift para simetria.",
     "ext.structural.tools.wall_door": "Porta",
+    "ext.structural.tools.wall_door_desc": "Adiciona um recorte de porta na parede.",
     "ext.structural.tools.wall_window": "Janela",
+    "ext.structural.tools.wall_window_desc": "Adiciona um recorte de janela na parede.",
     "ext.structural.tools.area_square": "Área (retângulo)",
     "ext.structural.tools.area_polygon": "Área (polígono)",
     "ext.structural.tools.area_square_walls": "Área + paredes (retângulo)",

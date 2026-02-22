@@ -333,7 +333,8 @@ export function createWallElementType(i18n: HostI18n): ElementType {
         const wallTexture = getWallTexture(THREE, textureId);
 
         wallAxisGroup.position.set(startPoint.x - el.position.x, GROUND_Y, startPoint.z - el.position.z);
-        wallAxisGroup.rotation.set(0, Math.atan2(direction.z, direction.x), 0);
+        // Align local +X with the wall direction in XZ (three.js Y-rotation maps +X -> (cos, -sin)).
+        wallAxisGroup.rotation.set(0, Math.atan2(-direction.z, direction.x), 0);
 
         const openings = readWallOpenings(el.props.openings);
         const resolvedOpenings = resolveWallOpenings(openings, length, height);

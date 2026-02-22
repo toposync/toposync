@@ -365,6 +365,15 @@ export function createWallElementType(i18n: HostI18n): ElementType {
         flatShading: true,
       });
 
+      // Untextured material for thickness faces (sides/top/bottom). Mapping the wall texture on thin
+      // faces (especially around openings) looks stretched and inconsistent.
+      const wallCapMaterial = new THREE.MeshStandardMaterial({
+        color: DEFAULT_WALL_COLOR,
+        roughness: 0.86,
+        metalness: 0.04,
+        flatShading: true,
+      });
+
       // Invisible mesh used only for raycasting/picking in 3D.
       // Without this, clicking through a cutout can "fall through" to the floor/area behind it.
       const pickMaterial = new THREE.MeshBasicMaterial({
@@ -429,7 +438,11 @@ export function createWallElementType(i18n: HostI18n): ElementType {
               originZ: 0,
               thicknessWorld,
             });
-            const mesh = new THREE.Mesh(geometry, wallMaterial);
+            const material = wallTexture
+              ? // BoxGeometry groups: 0 right, 1 left, 2 top, 3 bottom, 4 front, 5 back.
+                [wallCapMaterial, wallCapMaterial, wallCapMaterial, wallCapMaterial, wallMaterial, wallMaterial]
+              : wallMaterial;
+            const mesh = new THREE.Mesh(geometry, material);
             mesh.castShadow = true;
             mesh.receiveShadow = true;
             mesh.position.set((rect.x0 + rect.x1) / 2, GROUND_Y + (rect.y0 + rect.y1) / 2, 0);
@@ -460,6 +473,7 @@ export function createWallElementType(i18n: HostI18n): ElementType {
         }
 
         wallMaterial.color.set(color);
+        wallCapMaterial.color.set(color);
         if (wallMaterial.map !== wallTexture) {
           wallMaterial.map = wallTexture;
           wallMaterial.needsUpdate = true;
@@ -477,6 +491,7 @@ export function createWallElementType(i18n: HostI18n): ElementType {
           clearMeshGroup(insertsGroup, true);
           clearMeshGroup(picksGroup, false);
           wallMaterial.dispose();
+          wallCapMaterial.dispose();
           pickMaterial.dispose();
         },
       };

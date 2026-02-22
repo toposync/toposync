@@ -473,6 +473,9 @@ export function createWallElementType(i18n: HostI18n): ElementType {
       const endPoint = readPlanePoint(element.props.b, { x: element.position.x + 1, z: element.position.z });
       const widthWorld = Math.max(0.04, readNumber(element.props.width, DEFAULT_WALL_WIDTH));
       const threshold = Math.max(widthWorld / 2, 10 / Math.max(1, viewport.scale));
+      // Openings are rendered as a thicker preview rectangle (min ~18cm wide) to be easy to see/click.
+      // Make the opening region hittable too so clicks select the wall instead of "falling through" to areas.
+      const openingThreshold = Math.max(widthWorld / 2, 0.09, 10 / Math.max(1, viewport.scale));
 
       const length = Math.max(0.001, distanceBetweenPoints(startPoint, endPoint));
       const direction = normalizePoint(subtractPoints(endPoint, startPoint));
@@ -486,6 +489,12 @@ export function createWallElementType(i18n: HostI18n): ElementType {
         const a = pointAtDistance(startPoint, direction, interval.start);
         const b = pointAtDistance(startPoint, direction, interval.end);
         if (distPointToSegment(world, a, b) <= threshold) return true;
+      }
+
+      for (const opening of openings) {
+        const a = pointAtDistance(startPoint, direction, opening.start_m);
+        const b = pointAtDistance(startPoint, direction, opening.end_m);
+        if (distPointToSegment(world, a, b) <= openingThreshold) return true;
       }
       return false;
     },

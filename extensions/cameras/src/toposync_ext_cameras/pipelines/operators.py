@@ -167,6 +167,13 @@ class ObjectTrackingYOLOConfig(_YoloBaseConfig):
     close_after_seconds: float = Field(default=4.0, ge=0.05, le=300.0)
     emit_open_on_first: bool = True
     emit_close_on_lost: bool = True
+    pause_when_gate_closed: bool = True
+    max_paused_seconds: float = Field(
+        default=900.0,
+        ge=0.0,
+        le=86_400.0,
+        description="Failsafe: if gate stays closed for too long, force-close tracked objects. Set 0 to disable.",
+    )
 
 
 class ObjectDetectionYOLOConfig(_YoloBaseConfig):
@@ -414,11 +421,13 @@ class _TrackingState:
     tracker_track_id: str | None
     correlation_id: str
     stream_id: str
+    source_stream_id: str
     category: str
     confidence: float
     bbox01: tuple[float, float, float, float]
     opened: bool = False
     last_seen_monotonic: float = 0.0
+    last_seen_pause_total: float = 0.0
     last_emit_monotonic: float = 0.0
 
 
@@ -581,6 +590,53 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
         self._parsed = parsed
         self._state_by_tracking_key: dict[str, _TrackingState] = {}
         self._synthetic_tracking_counter: int = 0
+        self._pause_started_by_source_stream: dict[str, float] = {}
+        self._pause_accumulated_by_source_stream: dict[str, float] = {}
+
+    def _motion_gate_open(self, packet: Packet) -> bool:
+        value = packet.metadata.get("motion_gate_open")
+        if isinstance(value, bool):
+            return value
+        return True
+
+    def _pause_total_for_stream(self, source_stream_id: str, *, now_monotonic: float) -> float:
+        total = float(self._pause_accumulated_by_source_stream.get(source_stream_id, 0.0))
+        started = self._pause_started_by_source_stream.get(source_stream_id)
+        if started is not None:
+            total += max(0.0, now_monotonic - float(started))
+        return total
+
+    def _mark_paused(self, source_stream_id: str, *, now_monotonic: float) -> float:
+        started = self._pause_started_by_source_stream.get(source_stream_id)
+        if started is None:
+            self._pause_started_by_source_stream[source_stream_id] = now_monotonic
+            return 0.0
+        return max(0.0, now_monotonic - float(started))
+
+    def _mark_resumed(self, source_stream_id: str, *, now_monotonic: float) -> None:
+        started = self._pause_started_by_source_stream.pop(source_stream_id, None)
+        if started is None:
+            return
+        delta = max(0.0, now_monotonic - float(started))
+        self._pause_accumulated_by_source_stream[source_stream_id] = (
+            float(self._pause_accumulated_by_source_stream.get(source_stream_id, 0.0)) + delta
+        )
+
+    def _effective_age_seconds(self, state: _TrackingState, *, now_monotonic: float) -> float:
+        pause_total = self._pause_total_for_stream(state.source_stream_id, now_monotonic=now_monotonic)
+        paused_since_seen = max(0.0, pause_total - float(state.last_seen_pause_total))
+        return max(0.0, (now_monotonic - float(state.last_seen_monotonic)) - paused_since_seen)
+
+    def _force_close_for_stream(self, packet: Packet, *, source_stream_id: str) -> list[Packet]:
+        if not self._parsed.emit_close_on_lost:
+            return []
+        outputs: list[Packet] = []
+        for tracking_key, state in list(self._state_by_tracking_key.items()):
+            if state.source_stream_id != source_stream_id:
+                continue
+            outputs.append(self._build_tracking_packet(packet, state=state, lifecycle=Lifecycle.CLOSE))
+            self._state_by_tracking_key.pop(tracking_key, None)
+        return outputs
 
     def _next_synthetic_tracking_key(self, source_stream_id: str) -> str:
         self._synthetic_tracking_counter += 1
@@ -589,6 +645,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
     def _match_tracking_key_by_iou(
         self,
         *,
+        source_stream_id: str,
         detection: YoloObject,
         now_monotonic: float,
         used_keys: set[str],
@@ -600,9 +657,11 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
         for key, state in self._state_by_tracking_key.items():
             if key in used_keys:
                 continue
+            if state.source_stream_id != source_stream_id:
+                continue
             if state.category != detection.category:
                 continue
-            if (now_monotonic - float(state.last_seen_monotonic)) > max_age:
+            if self._effective_age_seconds(state, now_monotonic=now_monotonic) > max_age:
                 continue
             iou = _bbox_iou01(state.bbox01, detection.bbox01)
             if iou > best_iou:
@@ -615,6 +674,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
     def _match_tracking_key_by_center_distance(
         self,
         *,
+        source_stream_id: str,
         detection: YoloObject,
         now_monotonic: float,
         used_keys: set[str],
@@ -630,9 +690,11 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
         for key, state in self._state_by_tracking_key.items():
             if key in used_keys:
                 continue
+            if state.source_stream_id != source_stream_id:
+                continue
             if state.category != detection.category:
                 continue
-            age = now_monotonic - float(state.last_seen_monotonic)
+            age = self._effective_age_seconds(state, now_monotonic=now_monotonic)
             if age > max_age:
                 continue
 
@@ -671,6 +733,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
                     return key
 
             matched = self._match_tracking_key_by_iou(
+                source_stream_id=source_stream_id,
                 detection=detection,
                 now_monotonic=now_monotonic,
                 used_keys=used_keys,
@@ -680,6 +743,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
                 return matched
 
             matched = self._match_tracking_key_by_center_distance(
+                source_stream_id=source_stream_id,
                 detection=detection,
                 now_monotonic=now_monotonic,
                 used_keys=used_keys,
@@ -689,6 +753,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
                 return matched
 
         matched = self._match_tracking_key_by_iou(
+            source_stream_id=source_stream_id,
             detection=detection,
             now_monotonic=now_monotonic,
             used_keys=used_keys,
@@ -698,6 +763,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
             return matched
 
         matched = self._match_tracking_key_by_center_distance(
+            source_stream_id=source_stream_id,
             detection=detection,
             now_monotonic=now_monotonic,
             used_keys=used_keys,
@@ -709,16 +775,27 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
         return self._next_synthetic_tracking_key(source_stream_id)
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
-        detections = await self._track_objects(packet, context)
         now_monotonic = time.monotonic()
+        source_stream_id = packet.stream_id
+
+        if bool(self._parsed.pause_when_gate_closed) and not self._motion_gate_open(packet):
+            paused_for = self._mark_paused(source_stream_id, now_monotonic=now_monotonic)
+            max_paused = float(self._parsed.max_paused_seconds)
+            if max_paused > 0.0 and paused_for >= max_paused:
+                return self._force_close_for_stream(packet, source_stream_id=source_stream_id)
+            return []
+
+        self._mark_resumed(source_stream_id, now_monotonic=now_monotonic)
+        detections = await self._track_objects(packet, context)
         outputs: list[Packet] = []
         active_keys: set[str] = set()
         used_keys: set[str] = set()
+        pause_total_now = self._pause_total_for_stream(source_stream_id, now_monotonic=now_monotonic)
 
         for index, detection in enumerate(detections):
             _ = index
             tracking_key = self._resolve_tracking_key(
-                packet.stream_id,
+                source_stream_id,
                 detection,
                 now_monotonic=now_monotonic,
                 used_keys=used_keys,
@@ -734,11 +811,13 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
                     tracker_track_id=str(detection.tracking_id).strip() if detection.tracking_id else None,
                     correlation_id=uuid.uuid4().hex,
                     stream_id=stream_id,
+                    source_stream_id=source_stream_id,
                     category=detection.category,
                     confidence=detection.confidence,
                     bbox01=detection.bbox01,
                     opened=False,
                     last_seen_monotonic=now_monotonic,
+                    last_seen_pause_total=pause_total_now,
                     last_emit_monotonic=0.0,
                 )
                 self._state_by_tracking_key[tracking_key] = state
@@ -749,6 +828,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
             state.confidence = detection.confidence
             state.bbox01 = detection.bbox01
             state.last_seen_monotonic = now_monotonic
+            state.last_seen_pause_total = pause_total_now
 
             if not state.opened and self._parsed.emit_open_on_first:
                 outputs.append(self._build_tracking_packet(packet, state=state, lifecycle=Lifecycle.OPEN))
@@ -768,9 +848,11 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
         if self._parsed.emit_close_on_lost:
             close_after_seconds = float(self._parsed.close_after_seconds)
             for tracking_key, state in list(self._state_by_tracking_key.items()):
+                if state.source_stream_id != source_stream_id:
+                    continue
                 if tracking_key in active_keys:
                     continue
-                if (now_monotonic - state.last_seen_monotonic) < close_after_seconds:
+                if self._effective_age_seconds(state, now_monotonic=now_monotonic) < close_after_seconds:
                     continue
                 outputs.append(self._build_tracking_packet(packet, state=state, lifecycle=Lifecycle.CLOSE))
                 self._state_by_tracking_key.pop(tracking_key, None)

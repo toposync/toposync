@@ -552,7 +552,7 @@ export function MainScreen({
               ) : null}
               {visibleNotifications.map((n) => {
                 const renderer = notificationRenderers.find((r) => r.type === n.type);
-                const time = formatDateTimeShort(locale, n.updatedAt ?? n.createdAt);
+                const time = formatDateTimeShort(locale, n.createdAt ?? n.updatedAt);
                 const title = n.title;
                 const priority = notificationPriority(n);
                 const priorityClass =

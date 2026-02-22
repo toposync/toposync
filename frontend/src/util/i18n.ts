@@ -243,6 +243,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.camera.image_adjust": "Image adjust",
     "core.ui.pipelines.operator_name.camera.image_resize": "Resize images",
     "core.ui.pipelines.operator_name.core.throttle": "Throttle",
+    "core.ui.pipelines.operator_name.core.velocity_throttle": "Velocity-aware throttle",
     "core.ui.pipelines.operator_name.core.debounce": "Debounce",
     "core.ui.pipelines.operator_name.core.debug": "Debug",
     "core.ui.pipelines.operator_name.core.store_images": "Store images",
@@ -372,6 +373,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.throttle.key.camera_id": "Camera ID",
     "core.ui.pipelines.panels.throttle.hint":
       "Emits OPEN/CLOSE packets always. Mode “first” emits the first UPDATE in each interval window (keyed).",
+    "core.ui.pipelines.panels.velocity_throttle.moving_interval_seconds": "Moving interval (seconds)",
+    "core.ui.pipelines.panels.velocity_throttle.stopped_interval_seconds": "Stopped interval (seconds)",
+    "core.ui.pipelines.panels.velocity_throttle.moving_field": "Moving field",
+    "core.ui.pipelines.panels.velocity_throttle.default_moving": "Default moving when field missing",
+    "core.ui.pipelines.panels.velocity_throttle.hint":
+      "Emits OPEN/CLOSE always. Uses moving interval when moving is true, otherwise stopped interval.",
 
     "core.ui.pipelines.panels.debounce.quiet_period_seconds": "Quiet period (seconds)",
     "core.ui.pipelines.panels.debounce.mode": "Mode",
@@ -791,6 +798,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.camera.image_adjust": "Ajuste de imagem",
     "core.ui.pipelines.operator_name.camera.image_resize": "Redimensionar imagens",
     "core.ui.pipelines.operator_name.core.throttle": "Throttle",
+    "core.ui.pipelines.operator_name.core.velocity_throttle": "Throttle por velocidade",
     "core.ui.pipelines.operator_name.core.debounce": "Debounce",
     "core.ui.pipelines.operator_name.core.debug": "Debug",
     "core.ui.pipelines.operator_name.core.store_images": "Armazenar imagens",
@@ -921,6 +929,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.throttle.key.camera_id": "Camera ID",
     "core.ui.pipelines.panels.throttle.hint":
       "Emite pacotes OPEN/CLOSE sempre. No modo “first”, emite o primeiro UPDATE de cada janela (por chave).",
+    "core.ui.pipelines.panels.velocity_throttle.moving_interval_seconds": "Intervalo enquanto em movimento (segundos)",
+    "core.ui.pipelines.panels.velocity_throttle.stopped_interval_seconds": "Intervalo enquanto parado (segundos)",
+    "core.ui.pipelines.panels.velocity_throttle.moving_field": "Campo de movimento",
+    "core.ui.pipelines.panels.velocity_throttle.default_moving": "Considerar em movimento se faltar campo",
+    "core.ui.pipelines.panels.velocity_throttle.hint":
+      "Emite sempre OPEN/CLOSE. Usa intervalo de movimento quando moving = true; caso contrário usa intervalo de parado.",
 
     "core.ui.pipelines.panels.debounce.quiet_period_seconds": "Período de silêncio (segundos)",
     "core.ui.pipelines.panels.debounce.mode": "Modo",

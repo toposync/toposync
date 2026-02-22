@@ -542,7 +542,7 @@ class CamerasExtension(BaseExtension):
         ) -> dict[str, Any]:
             motion_hold_seconds = 6.0
             if preset == "vehicles_stopped":
-                motion_hold_seconds = 12.0
+                motion_hold_seconds = 10.0
 
             base_nodes: list[dict[str, Any]] = [
                 {"id": "source", "operator": "camera.source", "config": {"camera_id": camera_id}},
@@ -553,6 +553,7 @@ class CamerasExtension(BaseExtension):
                         "threshold": 0.010,
                         "activation_frames": 2,
                         "hold_seconds": motion_hold_seconds,
+                        "emit_when_idle": preset == "vehicles_stopped",
                     },
                 },
             ]
@@ -641,7 +642,19 @@ class CamerasExtension(BaseExtension):
 
                 nodes = [
                     *base_nodes,
-                    {"id": "track", "operator": "vision.object_tracking_yolo", "config": {"categories": ["car", "motorcycle", "bicycle"], "close_after_seconds": 10.0}},
+                    {
+                        "id": "track",
+                        "operator": "vision.object_tracking_yolo",
+                        "config": {
+                            "categories": ["car", "motorcycle", "bicycle"],
+                            "close_after_seconds": 8.0,
+                            "confidence_threshold": 0.55,
+                            "default_interval_seconds": 0.25,
+                            "inference_interval_seconds": 0.7,
+                            "pause_when_gate_closed": True,
+                            "max_paused_seconds": 900.0,
+                        },
+                    },
                     {"id": "map", "operator": "camera.camera_mapping", "config": {"composition_id": composition_id}},
                     {
                         "id": "area",
@@ -653,11 +666,19 @@ class CamerasExtension(BaseExtension):
                                 "drop_when_unmapped": True,
                             }
                             if area_name and area_points
-                            else {"areas": [], "include_area_names": [], "drop_when_unmapped": False}
+                            else {"areas": [], "include_area_names": [], "drop_when_unmapped": True}
                         ),
                     },
-                    {"id": "velocity", "operator": "camera.velocity_estimation", "config": {"filter_mode": "stopped_now"}},
-                    {"id": "throttle", "operator": "core.throttle", "config": {"interval_seconds": 60.0}},
+                    {
+                        "id": "velocity",
+                        "operator": "camera.velocity_estimation",
+                        "config": {
+                            "filter_mode": "stopped_now",
+                            "min_elapsed_seconds": 0.05,
+                            "stopped_speed_threshold": 0.07,
+                        },
+                    },
+                    {"id": "throttle", "operator": "core.velocity_throttle", "config": {"moving_interval_seconds": 2.5, "stopped_interval_seconds": 120.0}},
                     {"id": "segment", "operator": "camera.object_segmentation", "config": {"padding_ratio": 0.16}},
                     {
                         "id": "store",

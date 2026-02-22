@@ -256,7 +256,7 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
             src_node = nodes_by_id.get(src_id)
             if src_node is None:
                 continue
-            if src_node.operator_id in {"core.throttle", "core.debounce", "core.fps_reducer"}:
+            if src_node.operator_id in {"core.throttle", "core.velocity_throttle", "core.debounce", "core.fps_reducer"}:
                 alerts.append(
                     PipelineAlert(
                         severity="info",
@@ -323,7 +323,7 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
                 idx = order_index.get(nid, -1)
                 if idx <= tracking_idx or idx >= store_idx:
                     continue
-                if nodes_by_id[nid].operator_id in {"core.fps_reducer", "core.throttle", "core.debounce"}:
+                if nodes_by_id[nid].operator_id in {"core.fps_reducer", "core.throttle", "core.velocity_throttle", "core.debounce"}:
                     has_rate_control_after_tracking = True
                     break
             if not has_rate_control_after_tracking:

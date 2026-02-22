@@ -10,6 +10,7 @@ import {
   DebugConfigCard,
   FilterConfigCard,
   NotifyConfigCard,
+  VelocityThrottleConfigCard,
   ScheduleGateConfigCard,
   StoreImagesConfigCard,
   ThrottleConfigCard,
@@ -123,6 +124,11 @@ export function OperatorConfigPanel({
   }
   if (operatorId === "core.throttle") {
     return <ThrottleConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
+  }
+  if (operatorId === "core.velocity_throttle") {
+    return (
+      <VelocityThrottleConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />
+    );
   }
   if (operatorId === "core.debounce") {
     return <DebounceConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;

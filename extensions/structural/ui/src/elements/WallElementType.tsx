@@ -438,10 +438,10 @@ export function createWallElementType(i18n: HostI18n): ElementType {
               originZ: 0,
               thicknessWorld,
             });
-            const material = wallTexture
-              ? // BoxGeometry groups: 0 right, 1 left, 2 top, 3 bottom, 4 front, 5 back.
-                [wallCapMaterial, wallCapMaterial, wallCapMaterial, wallCapMaterial, wallMaterial, wallMaterial]
-              : wallMaterial;
+            // Always apply the cap material on thickness faces. Otherwise, walls created with "no texture"
+            // would keep a single-material mesh and later end up stretching textures on thin faces.
+            // BoxGeometry groups: 0 right, 1 left, 2 top, 3 bottom, 4 front, 5 back.
+            const material = [wallCapMaterial, wallCapMaterial, wallCapMaterial, wallCapMaterial, wallMaterial, wallMaterial];
             const mesh = new THREE.Mesh(geometry, material);
             mesh.castShadow = true;
             mesh.receiveShadow = true;

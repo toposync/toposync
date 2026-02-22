@@ -16,6 +16,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from toposync.extensions import BaseExtension
+from toposync.runtime.auth import AuthContext, AuthRuntime
 from toposync.runtime.config_store import ConfigStore, Pipeline, PipelineAlreadyExistsError, PipelineValidationError
 from toposync.runtime.event_bus import EventBus
 from toposync.runtime.pipelines.compiler import GraphCompileError, PipelineGraphCompiler
@@ -243,6 +244,51 @@ class CamerasExtension(BaseExtension):
                 raise RuntimeError("Toposync config_store not available")
             return store
 
+        def _maybe_auth(request: Request) -> tuple[AuthRuntime, AuthContext] | None:
+            auth = getattr(request.app.state, "auth", None)
+            context = getattr(request.state, "auth_context", None)
+            if not isinstance(auth, AuthRuntime):
+                return None
+            if not isinstance(context, AuthContext):
+                return None
+            return auth, context
+
+        def _require_auth(
+            request: Request,
+            *,
+            action: str,
+            resource_type: str | None = None,
+            resource_selector: str = "*",
+        ) -> None:
+            maybe = _maybe_auth(request)
+            if maybe is None:
+                return
+            auth, context = maybe
+            auth.authorize(
+                context=context,
+                action=action,
+                resource_type=resource_type,
+                resource_selector=resource_selector,
+            )
+
+        def _is_allowed(
+            request: Request,
+            *,
+            action: str,
+            resource_type: str | None = None,
+            resource_selector: str = "*",
+        ) -> bool:
+            try:
+                _require_auth(
+                    request,
+                    action=action,
+                    resource_type=resource_type,
+                    resource_selector=resource_selector,
+                )
+                return True
+            except HTTPException:
+                return False
+
         async def _read_ext_settings(request: Request) -> dict[str, Any]:
             settings = await _config_store(request).get_settings()
             ext = settings.extensions.get(EXTENSION_ID, {})
@@ -456,6 +502,13 @@ class CamerasExtension(BaseExtension):
                     props = element.props if isinstance(element.props, dict) else {}
                     vertices = props.get("vertices")
                     if not isinstance(vertices, list) or len(vertices) < 3:
+                        continue
+                    if not _is_allowed(
+                        request,
+                        action="core:area:read",
+                        resource_type="core:area",
+                        resource_selector=f"{composition.id}.{element.id}",
+                    ):
                         continue
                     name = str(element.name or "").strip()
                     areas.append(
@@ -727,6 +780,7 @@ class CamerasExtension(BaseExtension):
             camera_id: str,
             body: CameraPipelineWizardRequest,
         ) -> CameraPipelineWizardResponse:
+            _require_auth(request, action="core:pipelines:write")
             cid = str(camera_id or "").strip()
             if not cid:
                 raise HTTPException(status_code=400, detail="camera_id is required")
@@ -760,6 +814,12 @@ class CamerasExtension(BaseExtension):
                         status_code=409,
                         detail="Vehicle preset requires camera mapping. Add control points (>=4) in a composition first.",
                     )
+                _require_auth(
+                    request,
+                    action="core:area:edit",
+                    resource_type="core:area",
+                    resource_selector=f"{composition_id}.{area_id}" if area_id else f"{composition_id}.*",
+                )
                 if area_id:
                     try:
                         area_name, area_points = _resolve_area_polygon(cfg, composition_id=composition_id, area_id=area_id)

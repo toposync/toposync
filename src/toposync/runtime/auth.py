@@ -731,6 +731,8 @@ class AuthRuntime:
             "core:files:read",
             "core:events:emit",
             "core:devices:read",
+            "core:area:read",
+            "core:area:control",
             "core:notifications:read",
             "core:notifications:stream",
         },

@@ -6,8 +6,8 @@ const isWindows = process.platform === "win32";
 const npmCmd = isWindows ? "npm.cmd" : "npm";
 const runnerCmd = npmCmd;
 
-function spawnScript(label, scriptName) {
-  const child = spawn(runnerCmd, ["run", scriptName], {
+function spawnScript(label, scriptName, extraArgs = []) {
+  const child = spawn(runnerCmd, ["run", scriptName, ...extraArgs], {
     stdio: "inherit",
     env: process.env,
     detached: !isWindows,
@@ -59,7 +59,10 @@ function killProcessTree(child, signal) {
   return Promise.resolve();
 }
 
-const backend = spawnScript("backend", "dev:backend");
+const backendDataDir = String(process.env.TOPOSYNC_DATA_DIR ?? "").trim();
+const backendArgs = backendDataDir ? ["--", "--data-dir", backendDataDir] : [];
+
+const backend = spawnScript("backend", "dev:backend", backendArgs);
 const frontend = spawnScript("frontend", "dev:frontend");
 
 let shuttingDown = false;

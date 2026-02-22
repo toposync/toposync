@@ -57,6 +57,32 @@ npm run dev
 
 Abra `http://localhost:5173`.
 
+## Rodar 2 instâncias em paralelo (sem conflito)
+
+As portas padrão continuam:
+
+- backend: `8000`
+- frontend: `5173`
+- processing server (quando usado): `9001`
+
+Você pode sobrescrever por ambiente:
+
+- `TOPOSYNC_BACKEND_PORT`
+- `TOPOSYNC_FRONTEND_PORT`
+- `TOPOSYNC_PROCESSING_PORT`
+- `TOPOSYNC_DATA_DIR` (recomendado quando rodar duas instâncias)
+
+Exemplo de segunda instância local:
+
+```bash
+TOPOSYNC_BACKEND_PORT=8100 \
+TOPOSYNC_FRONTEND_PORT=5174 \
+TOPOSYNC_DATA_DIR=.toposync-data-2 \
+npm run dev
+```
+
+Nesse caso, abra `http://localhost:5174`.
+
 ## Quando rodar o quê (atalho mental)
 
 - Alterou código Python do core ou da extensão → reinicie `uv run toposync serve` (use o mesmo `--data-dir`, se estiver usando)
@@ -82,4 +108,3 @@ npx playwright install chromium
 ```bash
 npm run test:e2e
 ```
-

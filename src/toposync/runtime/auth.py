@@ -19,6 +19,7 @@ from fastapi import HTTPException, Request, Response
 
 
 RoleName = Literal["owner", "admin", "member", "service"]
+CookieSecureMode = Literal["auto", "true", "false"]
 
 
 def _now() -> float:
@@ -47,9 +48,40 @@ def _hash_password(password: str) -> str:
     if len(pwd) < 8:
         raise ValueError("Password must have at least 8 characters")
     salt = secrets.token_bytes(16)
-    rounds = 2**14
-    block_size = 8
-    parallel = 1
+    rounds_default = 2**14
+    block_default = 8
+    parallel_default = 1
+
+    rounds = rounds_default
+    rounds_raw = str(os.getenv("TOPOSYNC_AUTH_SCRYPT_N") or "").strip()
+    if rounds_raw:
+        try:
+            parsed = int(rounds_raw)
+            if parsed >= 2**14 and parsed <= 2**18 and (parsed & (parsed - 1)) == 0:
+                rounds = parsed
+        except Exception:
+            rounds = rounds_default
+
+    block_size = block_default
+    block_raw = str(os.getenv("TOPOSYNC_AUTH_SCRYPT_R") or "").strip()
+    if block_raw:
+        try:
+            parsed = int(block_raw)
+            if 1 <= parsed <= 16:
+                block_size = parsed
+        except Exception:
+            block_size = block_default
+
+    parallel = parallel_default
+    parallel_raw = str(os.getenv("TOPOSYNC_AUTH_SCRYPT_P") or "").strip()
+    if parallel_raw:
+        try:
+            parsed = int(parallel_raw)
+            if 1 <= parsed <= 8:
+                parallel = parsed
+        except Exception:
+            parallel = parallel_default
+
     key = hashlib.scrypt(
         pwd.encode("utf-8"),
         salt=salt,
@@ -75,8 +107,20 @@ def _verify_password(password: str, stored_hash: str) -> bool:
         rounds = int(rounds_raw)
         block_size = int(block_raw)
         parallel = int(parallel_raw)
+        if rounds < 2**14 or rounds > 2**18:
+            return False
+        if (rounds & (rounds - 1)) != 0:
+            return False
+        if block_size < 1 or block_size > 16:
+            return False
+        if parallel < 1 or parallel > 8:
+            return False
         salt = _b64url_decode(salt_b64)
         expected = _b64url_decode(key_b64)
+        if len(salt) < 8 or len(salt) > 32:
+            return False
+        if len(expected) < 32 or len(expected) > 128:
+            return False
         derived = hashlib.scrypt(
             str(password or "").encode("utf-8"),
             salt=salt,
@@ -95,6 +139,29 @@ def _parse_mode(raw: str | None) -> str:
     if mode in {"bypass", "off", "disabled"}:
         return "bypass"
     return "enforced"
+
+
+def _parse_cookie_secure_mode(raw: str | None) -> CookieSecureMode:
+    value = str(raw or "").strip().lower()
+    if not value or value == "auto":
+        return "auto"
+    if value in {"1", "true", "yes", "on"}:
+        return "true"
+    if value in {"0", "false", "no", "off"}:
+        return "false"
+    return "auto"
+
+
+def _request_is_https(request: Request | None) -> bool:
+    if request is None:
+        return False
+    forwarded = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+    if forwarded in {"https", "http"}:
+        return forwarded == "https"
+    try:
+        return str(request.url.scheme or "").lower() == "https"
+    except Exception:
+        return False
 
 
 def _parse_bool_env(raw: str | None, default: bool) -> bool:
@@ -194,6 +261,7 @@ class AuthStore:
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 PRAGMA temp_store=MEMORY;
+PRAGMA foreign_keys=ON;
 
 CREATE TABLE IF NOT EXISTS auth_meta (
   key          TEXT PRIMARY KEY,
@@ -252,6 +320,11 @@ CREATE INDEX IF NOT EXISTS idx_auth_grant_user ON auth_grant(user_id);
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(self._INIT_SQL)
+        try:
+            if os.name != "nt" and self._db_path.is_file():
+                self._db_path.chmod(0o600)
+        except Exception:
+            pass
 
     def _row_to_user(self, row: sqlite3.Row | None) -> AuthUser | None:
         if row is None:
@@ -754,7 +827,7 @@ class AuthRuntime:
 
     def __init__(self, *, data_dir: Path) -> None:
         self.mode = _parse_mode(os.getenv("TOPOSYNC_AUTH_MODE"))
-        self.cookie_secure = _parse_bool_env(os.getenv("TOPOSYNC_AUTH_COOKIE_SECURE"), default=False)
+        self.cookie_secure_mode = _parse_cookie_secure_mode(os.getenv("TOPOSYNC_AUTH_COOKIE_SECURE"))
         self.access_ttl_s = int(os.getenv("TOPOSYNC_AUTH_ACCESS_TTL_S") or 900)
         self.refresh_ttl_s = int(os.getenv("TOPOSYNC_AUTH_REFRESH_TTL_S") or (90 * 24 * 3600))
         self.store = AuthStore(data_dir / "auth" / "auth.sqlite3")
@@ -889,18 +962,30 @@ class AuthRuntime:
 
         return AuthContext(principal=None, mode=self.mode, requires_setup=requires_setup)
 
-    def apply_context_cookies(self, response: Response, context: AuthContext) -> None:
+    def apply_context_cookies(self, response: Response, context: AuthContext, *, request: Request | None = None) -> None:
         if context.cookies_to_set is None:
             return
         access_token, refresh_token = context.cookies_to_set
-        self.apply_session_cookies(response, access_token=access_token, refresh_token=refresh_token)
+        self.apply_session_cookies(response, access_token=access_token, refresh_token=refresh_token, request=request)
 
-    def apply_session_cookies(self, response: Response, *, access_token: str, refresh_token: str) -> None:
+    def apply_session_cookies(
+        self,
+        response: Response,
+        *,
+        access_token: str,
+        refresh_token: str,
+        request: Request | None = None,
+    ) -> None:
+        secure = False
+        if self.cookie_secure_mode == "true":
+            secure = True
+        elif self.cookie_secure_mode == "auto":
+            secure = _request_is_https(request)
         response.set_cookie(
             key=self.access_cookie_name,
             value=access_token,
             httponly=True,
-            secure=self.cookie_secure,
+            secure=secure,
             samesite="lax",
             path="/",
             max_age=max(60, int(self.access_ttl_s)),
@@ -909,7 +994,7 @@ class AuthRuntime:
             key=self.refresh_cookie_name,
             value=refresh_token,
             httponly=True,
-            secure=self.cookie_secure,
+            secure=secure,
             samesite="lax",
             path="/",
             max_age=max(60, int(self.refresh_ttl_s)),
@@ -921,7 +1006,7 @@ class AuthRuntime:
 
     def login(self, *, username: str, password: str, device_label: str) -> tuple[AuthPrincipal, str, str]:
         if self.mode == "bypass":
-            raise ValueError("Login is disabled in bypass mode")
+            raise HTTPException(status_code=400, detail="Login is disabled in bypass mode")
         user = self.store.verify_credentials(username, password)
         if user is None:
             raise HTTPException(status_code=401, detail="Invalid credentials")

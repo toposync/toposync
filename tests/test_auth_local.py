@@ -194,3 +194,32 @@ def test_cameras_pipeline_wizard_requires_pipelines_write(tmp_path: Path, monkey
         )
         assert res.status_code == 403
         assert res.json()["detail"] == "Permission denied"
+
+
+def test_auth_store_deletes_tokens_and_grants_on_user_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        _setup_owner(client)
+
+        auth = client.app.state.auth
+        member = auth.store.create_user(
+            username="member1",
+            display_name="Member",
+            role="member",
+            password="password123",
+        )
+
+        auth.store.upsert_grant(
+            user_id=member.id,
+            action="core:events:emit",
+            resource_type="core:event",
+            include=[],
+            exclude=["device.action_requested"],
+        )
+        token, _ = auth.store.issue_refresh_token(user_id=member.id, device_label="pytest", ttl_s=3600)
+        assert token
+        assert auth.store.active_sessions_count(member.id) == 1
+        assert len(auth.store.list_grants(member.id)) == 1
+
+        auth.store.delete_user(member.id)
+        assert auth.store.active_sessions_count(member.id) == 0
+        assert len(auth.store.list_grants(member.id)) == 0

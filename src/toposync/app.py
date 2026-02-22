@@ -494,7 +494,7 @@ def create_app() -> FastAPI:
                             break
 
         response = await call_next(request)
-        auth.apply_context_cookies(response, context)
+        auth.apply_context_cookies(response, context, request=request)
         return response
 
     event_allowlist_raw = str(
@@ -560,7 +560,7 @@ def create_app() -> FastAPI:
         )
         payload = AuthLoginResponse(user=AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True)))
         response = JSONResponse(payload.model_dump(mode="json"))
-        auth.apply_session_cookies(response, access_token=access_token, refresh_token=refresh_token)
+        auth.apply_session_cookies(response, access_token=access_token, refresh_token=refresh_token, request=request)
         return response
 
     @app.post("/api/auth/login", response_model=AuthLoginResponse)
@@ -576,7 +576,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=401, detail="Invalid credentials")
         payload = AuthLoginResponse(user=AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True)))
         response = JSONResponse(payload.model_dump(mode="json"))
-        auth.apply_session_cookies(response, access_token=access_token, refresh_token=refresh_token)
+        auth.apply_session_cookies(response, access_token=access_token, refresh_token=refresh_token, request=request)
         return response
 
     @app.post("/api/auth/logout")

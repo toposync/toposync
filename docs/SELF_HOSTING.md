@@ -5,6 +5,14 @@ Toposync agora tem autenticação/autorização local embutida.
 - Primeiro acesso exige criar o usuário `owner` local.
 - Depois disso, o navegador mantém sessão e não pede senha a cada requisição.
 - Para dev/testes, você pode desabilitar auth com `TOPOSYNC_AUTH_MODE=bypass`.
+- Cookies de sessão usam `SameSite=Lax` e `HttpOnly`. Para HTTPS, o flag `Secure` é aplicado automaticamente quando o backend detecta HTTPS (incluindo `X-Forwarded-Proto: https`).
+
+### HTTPS e cookies (`Secure`)
+
+Se você estiver servindo o Toposync atrás de um reverse proxy com TLS (Nginx/Caddy/Traefik):
+
+- Garanta que o proxy envie `X-Forwarded-Proto: https`, **ou**
+- Force o cookie como HTTPS‑only com `TOPOSYNC_AUTH_COOKIE_SECURE=true`.
 
 ## Opção A) Docker (recomendado)
 

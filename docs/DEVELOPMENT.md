@@ -72,6 +72,7 @@ Você pode sobrescrever por ambiente:
 - `TOPOSYNC_PROCESSING_PORT`
 - `TOPOSYNC_DATA_DIR` (recomendado quando rodar duas instâncias)
 - `TOPOSYNC_AUTH_MODE` (`enforced` padrão, `bypass` para dev/curl/e2e)
+- `TOPOSYNC_AUTH_COOKIE_SECURE` (`auto` padrão; force `true` quando rodar atrás de HTTPS/reverse proxy)
 
 `npm run dev` lê automaticamente variáveis de `.env` (ou de `TOPOSYNC_ENV_FILE`, se definido).
 

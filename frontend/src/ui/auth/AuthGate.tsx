@@ -8,6 +8,7 @@ import {
   setupOwner,
   type AuthStatus,
 } from "../../util/api";
+import { i18n } from "../../util/i18n";
 
 type AuthStage = "loading" | "ready" | "error";
 
@@ -17,6 +18,7 @@ function defaultDeviceLabel(): string {
 }
 
 export function AuthGate(): React.ReactElement {
+  const { t } = i18n.useI18n();
   const [stage, setStage] = useState<AuthStage>("loading");
   const [status, setStatus] = useState<AuthStatus | null>(null);
   const [error, setError] = useState<string>("");
@@ -76,7 +78,7 @@ export function AuthGate(): React.ReactElement {
       ev.preventDefault();
       if (setupBusy) return;
       if (setupPassword !== setupConfirm) {
-        setError("Passwords do not match");
+        setError(t("core.ui.auth.error.password_mismatch"));
         return;
       }
       setSetupBusy(true);
@@ -106,8 +108,8 @@ export function AuthGate(): React.ReactElement {
   }, [loadStatus]);
 
   const title = useMemo(() => {
-    if (status?.requires_setup) return "Create local owner account";
-    return "Sign in to Toposync";
+    if (status?.requires_setup) return t("core.ui.auth.setup.title");
+    return t("core.ui.auth.login.title");
   }, [status]);
 
   if (stage === "loading") {
@@ -115,7 +117,7 @@ export function AuthGate(): React.ReactElement {
       <div className="authRoot">
         <div className="authCard">
           <div className="authTitle">Toposync</div>
-          <div className="authSubtitle">Loading authentication state...</div>
+          <div className="authSubtitle">{t("core.ui.auth.loading_state")}</div>
         </div>
       </div>
     );
@@ -126,10 +128,10 @@ export function AuthGate(): React.ReactElement {
       <div className="authRoot">
         <div className="authCard">
           <div className="authTitle">Toposync</div>
-          <div className="authSubtitle">Failed to reach backend authentication.</div>
+          <div className="authSubtitle">{t("core.ui.auth.backend_unreachable")}</div>
           {error ? <div className="errorText">{error}</div> : null}
           <button className="primaryButton" type="button" onClick={() => void loadStatus()}>
-            Retry
+            {t("core.actions.retry")}
           </button>
         </div>
       </div>
@@ -141,7 +143,7 @@ export function AuthGate(): React.ReactElement {
       <div className="authRoot">
         <div className="authCard">
           <div className="authTitle">Toposync</div>
-          <div className="authSubtitle">Missing auth status.</div>
+          <div className="authSubtitle">{t("core.ui.auth.missing_status")}</div>
         </div>
       </div>
     );
@@ -160,7 +162,7 @@ export function AuthGate(): React.ReactElement {
         {status.requires_setup ? (
           <>
             <label className="authLabel" htmlFor="setupUsername">
-              Username
+              {t("core.ui.auth.field.username")}
             </label>
             <input
               id="setupUsername"
@@ -172,7 +174,7 @@ export function AuthGate(): React.ReactElement {
             />
 
             <label className="authLabel" htmlFor="setupDisplayName">
-              Display name
+              {t("core.ui.auth.field.display_name")}
             </label>
             <input
               id="setupDisplayName"
@@ -183,7 +185,7 @@ export function AuthGate(): React.ReactElement {
             />
 
             <label className="authLabel" htmlFor="setupPassword">
-              Password
+              {t("core.ui.auth.field.password")}
             </label>
             <input
               id="setupPassword"
@@ -197,7 +199,7 @@ export function AuthGate(): React.ReactElement {
             />
 
             <label className="authLabel" htmlFor="setupConfirm">
-              Confirm password
+              {t("core.ui.auth.field.confirm_password")}
             </label>
             <input
               id="setupConfirm"
@@ -211,13 +213,13 @@ export function AuthGate(): React.ReactElement {
             />
 
             <button className="primaryButton" type="submit" disabled={setupBusy}>
-              {setupBusy ? "Creating..." : "Create owner"}
+              {setupBusy ? t("core.ui.auth.action.creating") : t("core.ui.auth.action.create_owner")}
             </button>
           </>
         ) : (
           <>
             <label className="authLabel" htmlFor="loginUsername">
-              Username
+              {t("core.ui.auth.field.username")}
             </label>
             <input
               id="loginUsername"
@@ -229,7 +231,7 @@ export function AuthGate(): React.ReactElement {
             />
 
             <label className="authLabel" htmlFor="loginPassword">
-              Password
+              {t("core.ui.auth.field.password")}
             </label>
             <input
               id="loginPassword"
@@ -242,7 +244,7 @@ export function AuthGate(): React.ReactElement {
             />
 
             <button className="primaryButton" type="submit" disabled={loginBusy}>
-              {loginBusy ? "Signing in..." : "Sign in"}
+              {loginBusy ? t("core.ui.auth.action.signing_in") : t("core.ui.auth.action.sign_in")}
             </button>
           </>
         )}

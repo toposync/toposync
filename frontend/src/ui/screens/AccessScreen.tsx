@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { AccessUsersPayload, AuthRole, AuthUser } from "../../util/api";
+import { i18n } from "../../util/i18n";
 
 const ROLE_OPTIONS: AuthRole[] = ["owner", "admin", "member", "service"];
 
@@ -70,6 +71,7 @@ export function AccessScreen({
   upsertAccessGrant,
   deleteAccessGrant,
 }: Props): React.ReactElement {
+  const { t } = i18n.useI18n();
   const [data, setData] = useState<AccessUsersPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>("");
@@ -294,16 +296,16 @@ export function AccessScreen({
   return (
     <div className="accessRoot screenRoot">
       <div className="settingsTopbar">
-        <button className="iconButton" type="button" onClick={onClose} aria-label="Back">
+        <button className="iconButton" type="button" onClick={onClose} aria-label={t("core.actions.back")}>
           <i className="fa-solid fa-arrow-left" aria-hidden="true" />
         </button>
         <div className="settingsTopbarTitle">Access</div>
         <div className="row" style={{ marginLeft: "auto", gap: 8 }}>
           <button className="chipButton" type="button" onClick={() => void loadData()} disabled={loading || busy}>
-            Refresh
+            {t("core.actions.refresh")}
           </button>
           <button className="chipButton" type="button" onClick={() => void onLogout()}>
-            Sign out
+            {t("core.actions.sign_out")}
           </button>
         </div>
       </div>

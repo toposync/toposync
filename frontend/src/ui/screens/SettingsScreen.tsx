@@ -94,7 +94,9 @@ export function SettingsScreen({
   const [saving, setSaving] = useState(false);
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
   const [confirmExitOpen, setConfirmExitOpen] = useState(false);
-  const [pendingExitAction, setPendingExitAction] = useState<null | "close" | "pipelines" | "processing_servers" | "access">(null);
+  const [pendingExitAction, setPendingExitAction] = useState<
+    null | "close" | "pipelines" | "processing_servers" | "access" | "logout"
+  >(null);
   const lastSettingsRef = useRef<AppSettings>(settings);
 
   const orderedPanels = useMemo(() => {
@@ -267,13 +269,15 @@ export function SettingsScreen({
 
           <div className="sectionDivider" />
 
-          <div className="modalSectionTitle">Session</div>
+          <div className="modalSectionTitle">{t("core.ui.auth.session.title")}</div>
           <div className="card">
-            <div className="cardTitle">{authUser?.display_name || authUser?.username || "Current user"}</div>
+            <div className="cardTitle">
+              {authUser?.display_name || authUser?.username || t("core.ui.auth.session.current_user_fallback")}
+            </div>
             {authUser ? <div className="cardBody">{authUser.username} · {authUser.role}</div> : null}
             <div style={{ marginTop: 8 }}>
-              <button className="chipButton" type="button" onClick={() => void onLogout()}>
-                Sign out
+              <button className="chipButton" type="button" onClick={() => requestExit("logout")}>
+                {t("core.actions.sign_out")}
               </button>
             </div>
           </div>
@@ -398,7 +402,7 @@ export function SettingsScreen({
     setSaveError(null);
   }
 
-  function requestExit(action: "close" | "pipelines" | "processing_servers" | "access"): void {
+  function requestExit(action: "close" | "pipelines" | "processing_servers" | "access" | "logout"): void {
     if (saving) return;
     if (hasUnsavedChanges) {
       setPendingExitAction(action);
@@ -408,6 +412,7 @@ export function SettingsScreen({
     if (action === "pipelines") onOpenPipelines();
     else if (action === "processing_servers") onOpenProcessingServers();
     else if (action === "access") onOpenAccess();
+    else if (action === "logout") void onLogout();
     else onClose();
   }
 
@@ -415,11 +420,17 @@ export function SettingsScreen({
     if (pendingExitAction === "pipelines") return t("core.ui.settings.confirm_open_pipelines_title");
     if (pendingExitAction === "processing_servers") return t("core.ui.settings.confirm_open_processing_servers_title");
     if (pendingExitAction === "access") return "Open access control?";
+    if (pendingExitAction === "logout") return t("core.ui.auth.confirm_sign_out_title");
     return t("core.ui.settings.confirm_close_title");
   }, [pendingExitAction, t]);
 
   const exitDesc = useMemo(() => {
-    if (pendingExitAction === "pipelines" || pendingExitAction === "processing_servers" || pendingExitAction === "access") {
+    if (
+      pendingExitAction === "pipelines" ||
+      pendingExitAction === "processing_servers" ||
+      pendingExitAction === "access" ||
+      pendingExitAction === "logout"
+    ) {
       const suffix = unsavedSectionsLabel ? ` (${unsavedSectionsLabel})` : "";
       return t("core.ui.settings.confirm_discard_continue_desc", { suffix });
     }
@@ -427,7 +438,14 @@ export function SettingsScreen({
   }, [pendingExitAction, t, unsavedSectionsLabel]);
 
   const exitConfirmLabel = useMemo(() => {
-    if (pendingExitAction === "pipelines" || pendingExitAction === "processing_servers" || pendingExitAction === "access") return t("core.ui.settings.confirm_discard_continue");
+    if (
+      pendingExitAction === "pipelines" ||
+      pendingExitAction === "processing_servers" ||
+      pendingExitAction === "access" ||
+      pendingExitAction === "logout"
+    ) {
+      return t("core.ui.settings.confirm_discard_continue");
+    }
     return t("core.ui.settings.discard_and_close");
   }, [pendingExitAction, t]);
 
@@ -438,6 +456,14 @@ export function SettingsScreen({
           <i className="fa-solid fa-arrow-left" aria-hidden="true" />
         </button>
         <div className="settingsTopbarTitle">{t("core.ui.settings.title")}</div>
+        {authUser ? (
+          <div className="row" style={{ marginLeft: "auto", gap: 8 }}>
+            <span className="settingsStatusMuted">{authUser.display_name || authUser.username}</span>
+            <button className="chipButton" type="button" onClick={() => requestExit("logout")}>
+              {t("core.actions.sign_out")}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className="settingsLayout">
@@ -611,6 +637,7 @@ export function SettingsScreen({
                     if (action === "pipelines") onOpenPipelines();
                     else if (action === "processing_servers") onOpenProcessingServers();
                     else if (action === "access") onOpenAccess();
+                    else if (action === "logout") void onLogout();
                     else onClose();
                   }}
                 >

@@ -189,8 +189,10 @@ function addDoorInsert(
   right.position.set(opening.end_m - frameThickness / 2, centerY, 0);
   top.position.set(opening.center_m, GROUND_Y + opening.y_max_m - frameThickness / 2, 0);
 
-  const panelWidth = opening.width_m - frameThickness * 2.2;
-  const panelHeight = openingHeight - frameThickness * 1.3;
+  // Keep the door panel nearly flush with the frame while avoiding coplanar faces (z-fighting).
+  const seam = clamp(frameThickness * 0.02, 0.001, 0.004);
+  const panelWidth = opening.width_m - frameThickness * 2 - seam * 2;
+  const panelHeight = openingHeight - frameThickness - seam;
   if (panelWidth > 0.08 && panelHeight > 0.2) {
     const panelGeometry = new THREE.BoxGeometry(panelWidth, panelHeight, panelDepth);
     const panel = new THREE.Mesh(panelGeometry, panelMaterial);

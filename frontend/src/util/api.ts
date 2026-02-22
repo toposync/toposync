@@ -35,6 +35,40 @@ export type AppSettings = {
   extensions: Record<string, Record<string, unknown>>;
 };
 
+export type AuthRole = "owner" | "admin" | "member" | "service";
+
+export type AuthUser = {
+  id: string;
+  username: string;
+  display_name: string;
+  role: AuthRole;
+  is_disabled: boolean;
+  sessions: number;
+  grants: Array<{
+    id: string;
+    action: string;
+    resource_type: string;
+    include: string[];
+    exclude: string[];
+    created_at: number;
+    updated_at: number;
+  }>;
+  created_at: number;
+  updated_at: number;
+};
+
+export type AuthStatus = {
+  mode: "enforced" | "bypass" | string;
+  requires_setup: boolean;
+  authenticated: boolean;
+  user: AuthUser | null;
+};
+
+export type AccessUsersPayload = {
+  users: AuthUser[];
+  grants_catalog: Record<string, string[]>;
+};
+
 export type Pipeline = {
   name: string;
   type: "reuse" | "final";
@@ -161,6 +195,128 @@ export type NotificationsPage = {
   notifications: Notification[];
   next_cursor: number | null;
 };
+
+export async function getAuthStatus(): Promise<AuthStatus> {
+  const res = await fetch("/api/auth/status");
+  if (!res.ok) throw new Error(`Failed to load auth status: ${res.status}`);
+  return res.json();
+}
+
+export async function setupOwner(params: {
+  username: string;
+  password: string;
+  display_name?: string;
+  device_label?: string;
+}): Promise<AuthUser> {
+  const res = await fetch("/api/auth/setup", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      username: params.username,
+      password: params.password,
+      display_name: params.display_name ?? "",
+      device_label: params.device_label ?? "browser",
+    }),
+  });
+  if (!res.ok) throw new Error(`Failed to setup owner: ${res.status}`);
+  const body = await res.json();
+  return body.user;
+}
+
+export async function login(params: {
+  username: string;
+  password: string;
+  device_label?: string;
+}): Promise<AuthUser> {
+  const res = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      username: params.username,
+      password: params.password,
+      device_label: params.device_label ?? "browser",
+    }),
+  });
+  if (!res.ok) throw new Error(`Failed to login: ${res.status}`);
+  const body = await res.json();
+  return body.user;
+}
+
+export async function logout(): Promise<void> {
+  const res = await fetch("/api/auth/logout", { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to logout: ${res.status}`);
+}
+
+export async function listAccessUsers(): Promise<AccessUsersPayload> {
+  const res = await fetch("/api/access/users");
+  if (!res.ok) throw new Error(`Failed to list access users: ${res.status}`);
+  return res.json();
+}
+
+export async function createAccessUser(payload: {
+  username: string;
+  password: string;
+  role: AuthRole;
+  display_name?: string;
+}): Promise<AuthUser> {
+  const res = await fetch("/api/access/users", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Failed to create access user: ${res.status}`);
+  return res.json();
+}
+
+export async function patchAccessUser(
+  userId: string,
+  payload: {
+    display_name?: string;
+    role?: AuthRole;
+    password?: string;
+    is_disabled?: boolean;
+  },
+): Promise<AuthUser> {
+  const res = await fetch(`/api/access/users/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Failed to patch access user ${userId}: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteAccessUser(userId: string): Promise<void> {
+  const res = await fetch(`/api/access/users/${encodeURIComponent(userId)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Failed to delete access user ${userId}: ${res.status}`);
+}
+
+export async function upsertAccessGrant(
+  userId: string,
+  payload: {
+    action: string;
+    resource_type: string;
+    include: string[];
+    exclude: string[];
+  },
+): Promise<AuthUser> {
+  const res = await fetch(`/api/access/users/${encodeURIComponent(userId)}/grants`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Failed to upsert grant for ${userId}: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteAccessGrant(userId: string, action: string, resourceType: string): Promise<AuthUser> {
+  const query = new URLSearchParams({ action, resource_type: resourceType });
+  const res = await fetch(`/api/access/users/${encodeURIComponent(userId)}/grants?${query.toString()}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`Failed to delete grant for ${userId}: ${res.status}`);
+  return res.json();
+}
 
 export async function fetchExtensions(): Promise<any[]> {
   const res = await fetch("/api/extensions");

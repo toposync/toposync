@@ -1,6 +1,10 @@
 # Self‑hosting (produção)
 
-Toposync hoje não tem autenticação/controle de acesso. Para uso “na rede”, publique apenas em uma rede confiável (LAN/VPN) ou coloque atrás de um proxy com autenticação.
+Toposync agora tem autenticação/autorização local embutida.
+
+- Primeiro acesso exige criar o usuário `owner` local.
+- Depois disso, o navegador mantém sessão e não pede senha a cada requisição.
+- Para dev/testes, você pode desabilitar auth com `TOPOSYNC_AUTH_MODE=bypass`.
 
 ## Opção A) Docker (recomendado)
 

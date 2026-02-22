@@ -14,7 +14,7 @@ module.exports = defineConfig({
   },
   webServer: [
     {
-      command: "uv run toposync serve --data-dir ./.toposync-data/e2e --port 8000 --log-level warning",
+      command: "TOPOSYNC_AUTH_MODE=bypass uv run toposync serve --data-dir ./.toposync-data/e2e --port 8000 --log-level warning",
       url: "http://127.0.0.1:8000/api/health",
       timeout: 120_000,
       reuseExistingServer: !process.env.CI,
@@ -27,4 +27,3 @@ module.exports = defineConfig({
     },
   ],
 });
-

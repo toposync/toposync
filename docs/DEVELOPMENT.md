@@ -71,6 +71,7 @@ Você pode sobrescrever por ambiente:
 - `TOPOSYNC_FRONTEND_PORT`
 - `TOPOSYNC_PROCESSING_PORT`
 - `TOPOSYNC_DATA_DIR` (recomendado quando rodar duas instâncias)
+- `TOPOSYNC_AUTH_MODE` (`enforced` padrão, `bypass` para dev/curl/e2e)
 
 `npm run dev` lê automaticamente variáveis de `.env` (ou de `TOPOSYNC_ENV_FILE`, se definido).
 
@@ -79,6 +80,12 @@ Exemplo usando o template:
 ```bash
 cp .env.example .env
 npm run dev
+```
+
+Para rodar sem autenticação local em dev:
+
+```bash
+TOPOSYNC_AUTH_MODE=bypass npm run dev
 ```
 
 Exemplo de segunda instância local:

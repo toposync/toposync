@@ -63,6 +63,14 @@ class LoadedExtension:
         return data
 
 
+@dataclass(frozen=True, slots=True)
+class ExtensionAuthRoute:
+    extension_id: str
+    prefix: str
+    action: str
+    resource_type: str = "core:extension"
+
+
 PluginFactory = Callable[[], Any]
 
 
@@ -70,12 +78,16 @@ class ExtensionManager:
     def __init__(self, *, group: str):
         self._group = group
         self._extensions: dict[str, LoadedExtension] = {}
+        self._auth_routes: list[ExtensionAuthRoute] = []
 
     def get(self, extension_id: str) -> LoadedExtension | None:
         return self._extensions.get(extension_id)
 
     def public_extensions(self) -> list[dict[str, Any]]:
         return [ext.public_dict() for ext in sorted(self._extensions.values(), key=lambda e: e.manifest.id)]
+
+    def auth_routes(self) -> list[ExtensionAuthRoute]:
+        return list(self._auth_routes)
 
     async def load(self, *, app: FastAPI, bus: EventBus, services: ServiceRegistry) -> None:
         for ep in _iter_entry_points(self._group):
@@ -123,6 +135,34 @@ class ExtensionManager:
                 continue
 
             self._extensions[manifest.id] = LoadedExtension(manifest=manifest, plugin=plugin_obj, static_root=static_root)
+
+            caps = {}
+            if hasattr(plugin_obj, "capabilities"):
+                try:
+                    maybe_caps = plugin_obj.capabilities()
+                    caps = maybe_caps if isinstance(maybe_caps, dict) else {}
+                except Exception:
+                    logger.warning("Extension '%s' capabilities() failed.", manifest.id, exc_info=True)
+                    caps = {}
+
+            auth_caps = caps.get("auth") if isinstance(caps, dict) else None
+            if isinstance(auth_caps, dict):
+                route_action = str(auth_caps.get("action") or "core:extension:use").strip() or "core:extension:use"
+                route_resource_type = str(auth_caps.get("resource_type") or "core:extension").strip() or "core:extension"
+                prefixes = auth_caps.get("api_prefixes")
+                if isinstance(prefixes, list):
+                    for raw_prefix in prefixes:
+                        prefix = str(raw_prefix or "").strip()
+                        if not prefix or not prefix.startswith("/api/"):
+                            continue
+                        self._auth_routes.append(
+                            ExtensionAuthRoute(
+                                extension_id=manifest.id,
+                                prefix=prefix,
+                                action=route_action,
+                                resource_type=route_resource_type,
+                            )
+                        )
 
         async def _setup(ext: LoadedExtension) -> None:
             if hasattr(ext.plugin, "setup"):

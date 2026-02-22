@@ -20,7 +20,10 @@ import type {
 import {
   activateComposition,
   createComposition,
+  deleteAccessGrant,
+  deleteAccessUser,
   deleteComposition,
+  listAccessUsers,
   fetchExtensions,
   getComposition,
   getDevice,
@@ -30,10 +33,13 @@ import {
   listNotifications,
   emitEvent,
   patchExtensionSettings,
+  patchAccessUser,
   putComposition,
   renameComposition,
+  createAccessUser,
+  upsertAccessGrant,
 } from "../util/api";
-import type { AppSettings } from "../util/api";
+import type { AppSettings, AuthUser } from "../util/api";
 import { i18n, resolveLocalizedString } from "../util/i18n";
 import { loadRemoteActivate } from "../util/moduleFederation";
 import { applyTheme, loadThemeId, saveThemeId } from "../util/theme";
@@ -45,6 +51,7 @@ import { MainScreen } from "./screens/MainScreen";
 import { PipelinesScreen } from "./screens/PipelinesScreen";
 import { ProcessingServersScreen } from "./screens/ProcessingServersScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
+import { AccessScreen } from "./screens/AccessScreen";
 
 type ExtensionRecord = {
   id: string;
@@ -228,7 +235,13 @@ function mergeElement(el: CompositionElement, patch: CompositionElementPatch): C
   };
 }
 
-export function App(): React.ReactElement {
+type AppProps = {
+  authUser: AuthUser | null;
+  authMode: string;
+  onLogout: () => Promise<void>;
+};
+
+export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElement {
   const pathname = usePathname();
   const [screen, setScreen] = useState<Screen>("main");
   const [elementTypesById, setElementTypesById] = useState<Record<string, ElementType>>({});
@@ -982,6 +995,7 @@ export function App(): React.ReactElement {
   const openSettings = useCallback(() => navigate("/settings"), []);
   const openPipelinesSettings = useCallback(() => navigate("/settings/pipelines"), []);
   const openProcessingServersSettings = useCallback(() => navigate("/settings/processing-servers"), []);
+  const openAccessSettings = useCallback(() => navigate("/settings/access"), []);
 
   const closeSettings = useCallback(() => replace(lastNonSettingsPathRef.current || "/"), []);
 
@@ -1000,6 +1014,19 @@ export function App(): React.ReactElement {
         <PipelinesScreen onClose={closeSettingsChild} onOpenProcessingServers={openProcessingServersSettings} />
       ) : normalizedPathname.startsWith("/settings/processing-servers") ? (
         <ProcessingServersScreen onClose={closeSettingsChild} />
+      ) : normalizedPathname.startsWith("/settings/access") ? (
+        <AccessScreen
+          authUser={authUser}
+          authMode={authMode}
+          onClose={closeSettingsChild}
+          onLogout={onLogout}
+          listAccessUsers={listAccessUsers}
+          createAccessUser={createAccessUser}
+          patchAccessUser={patchAccessUser}
+          deleteAccessUser={deleteAccessUser}
+          upsertAccessGrant={upsertAccessGrant}
+          deleteAccessGrant={deleteAccessGrant}
+        />
       ) : normalizedPathname.startsWith("/settings") ? (
         <SettingsScreen
           backendAvailable={backendAvailable}
@@ -1018,6 +1045,10 @@ export function App(): React.ReactElement {
           onPatchExtensionSettings={updateExtensionSettings}
           onOpenPipelines={openPipelinesSettings}
           onOpenProcessingServers={openProcessingServersSettings}
+          onOpenAccess={openAccessSettings}
+          canManageAccess={Boolean(authMode === "bypass" || (authUser && (authUser.role === "owner" || authUser.role === "admin")))}
+          authUser={authUser}
+          onLogout={onLogout}
           onClose={closeSettings}
         />
       ) : screen === "main" ? (

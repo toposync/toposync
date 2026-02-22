@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import logging
 import mimetypes
@@ -9,7 +10,7 @@ import re
 import uuid
 from pathlib import Path
 from contextlib import asynccontextmanager
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -18,6 +19,7 @@ from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from toposync.extensions.manager import ExtensionManager
+from toposync.runtime.auth import AuthContext, AuthRuntime
 from toposync.runtime.device_store import DeviceStore
 from toposync.runtime.event_bus import EventBus, EventOutcome
 from toposync.runtime.config_store import (
@@ -191,6 +193,68 @@ class PipelineTemplateApplyCamerasResponse(BaseModel):
     skipped: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class AuthUserPublic(BaseModel):
+    id: str
+    username: str
+    display_name: str
+    role: Literal["owner", "admin", "member", "service"]
+    is_disabled: bool = False
+    sessions: int = 0
+    grants: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: float = 0.0
+    updated_at: float = 0.0
+
+
+class AuthStatusResponse(BaseModel):
+    mode: str
+    requires_setup: bool
+    authenticated: bool
+    user: AuthUserPublic | None = None
+
+
+class AuthSetupRequest(BaseModel):
+    username: str
+    password: str
+    display_name: str = ""
+    device_label: str = "browser"
+
+
+class AuthLoginRequest(BaseModel):
+    username: str
+    password: str
+    device_label: str = "browser"
+
+
+class AuthLoginResponse(BaseModel):
+    user: AuthUserPublic
+
+
+class AccessUsersResponse(BaseModel):
+    users: list[AuthUserPublic] = Field(default_factory=list)
+    grants_catalog: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class AccessUserCreateRequest(BaseModel):
+    username: str
+    password: str
+    role: Literal["owner", "admin", "member", "service"] = "member"
+    display_name: str = ""
+
+
+class AccessUserPatchRequest(BaseModel):
+    display_name: str | None = None
+    role: Literal["owner", "admin", "member", "service"] | None = None
+    password: str | None = None
+    is_disabled: bool | None = None
+
+
+class AccessGrantUpsertRequest(BaseModel):
+    action: str
+    resource_type: str
+    include: list[str] = Field(default_factory=list)
+    exclude: list[str] = Field(default_factory=list)
+
+
 def _guess_media_type(path: str) -> str:
     lower = path.lower()
     if lower.endswith(".glb"):
@@ -247,6 +311,7 @@ async def _lifespan(app: FastAPI):
     pipeline_compiler = PipelineGraphCompiler(operator_registry)
     config_store = ConfigStore(paths=UserDataPaths.resolve())
     await config_store.load()
+    auth = AuthRuntime(data_dir=config_store.paths.data_dir)
     logger.info(
         "Using data dir=%s config=%s files=%s",
         config_store.paths.data_dir,
@@ -285,6 +350,7 @@ async def _lifespan(app: FastAPI):
     app.state.bus = bus
     app.state.services = services
     app.state.config_store = config_store
+    app.state.auth = auth
     app.state.notifications = notifications
     app.state.pipeline_operator_registry = operator_registry
     app.state.pipeline_graph_compiler = pipeline_compiler
@@ -351,12 +417,296 @@ async def _lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="Toposync", version="0.1.0", lifespan=_lifespan)
 
+    def _auth_context(request: Request) -> AuthContext:
+        context = getattr(request.state, "auth_context", None)
+        if isinstance(context, AuthContext):
+            return context
+        auth: AuthRuntime = request.app.state.auth
+        return AuthContext(
+            principal=None,
+            mode=auth.mode,
+            requires_setup=auth.requires_setup(),
+        )
+
+    def _require(
+        request: Request,
+        *,
+        action: str,
+        resource_type: str | None = None,
+        resource_selector: str = "*",
+    ) -> None:
+        auth: AuthRuntime = request.app.state.auth
+        auth.authorize(
+            context=_auth_context(request),
+            action=action,
+            resource_type=resource_type,
+            resource_selector=resource_selector,
+        )
+
+    @app.middleware("http")
+    async def auth_and_extension_guard(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        auth: AuthRuntime | None = getattr(request.app.state, "auth", None)
+        if auth is None:
+            return await call_next(request)
+
+        context = auth.resolve_request(request)
+        request.state.auth_context = context
+
+        path = request.url.path
+        is_api = path.startswith("/api/")
+        is_auth_api = path.startswith("/api/auth/")
+        is_public_api = path in auth.public_routes
+        is_setup_api = path == "/api/auth/setup"
+        is_protected_file_route = path.startswith("/files/")
+        is_protected_extension_asset = path.startswith("/extensions/")
+
+        if auth.mode != "bypass":
+            if context.requires_setup and (is_api or is_protected_file_route or is_protected_extension_asset):
+                setup_allowed = is_setup_api and request.method == "POST"
+                status_allowed = path == "/api/auth/status"
+                health_allowed = path == "/api/health"
+                if not (setup_allowed or status_allowed or health_allowed):
+                    return JSONResponse(status_code=503, content={"detail": "Auth setup is required"})
+            if (is_api or is_protected_file_route or is_protected_extension_asset) and not (
+                is_public_api or is_auth_api or is_setup_api
+            ):
+                if context.principal is None:
+                    return JSONResponse(status_code=401, content={"detail": "Authentication required"})
+
+            if is_api:
+                ext_manager: ExtensionManager | None = getattr(request.app.state, "extensions", None)
+                if ext_manager is not None:
+                    for auth_route in ext_manager.auth_routes():
+                        prefix = auth_route.prefix.rstrip("/")
+                        if path == prefix or path.startswith(prefix + "/"):
+                            try:
+                                auth.authorize(
+                                    context=context,
+                                    action=auth_route.action,
+                                    resource_type=auth_route.resource_type,
+                                    resource_selector=auth_route.extension_id,
+                                )
+                            except HTTPException as exc:
+                                return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+                            break
+
+        response = await call_next(request)
+        auth.apply_context_cookies(response, context)
+        return response
+
+    event_allowlist_raw = str(
+        os.getenv(
+            "TOPOSYNC_AUTH_EVENT_ALLOWLIST",
+            "device.action_requested,home_assistant.primary_action_requested,home_assistant.service_call",
+        )
+        or ""
+    )
+    event_allowlist = [item.strip() for item in event_allowlist_raw.split(",") if item.strip()]
+
+    def _event_is_allowed(event_name: str) -> bool:
+        if not event_allowlist:
+            return False
+        name = str(event_name or "").strip()
+        return any(fnmatch.fnmatchcase(name, pattern) for pattern in event_allowlist)
+
     @app.get("/api/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/api/auth/status", response_model=AuthStatusResponse)
+    async def auth_status(request: Request) -> AuthStatusResponse:
+        auth: AuthRuntime = request.app.state.auth
+        context = _auth_context(request)
+        principal = context.principal
+        user: AuthUserPublic | None = None
+        if principal is not None and not principal.bypass:
+            db_user = auth.store.get_user_by_id(principal.user_id)
+            if db_user is not None:
+                user = AuthUserPublic.model_validate(auth.serialize_user(db_user, include_grants=True))
+        if principal is not None and principal.bypass:
+            user = AuthUserPublic(
+                id="bypass",
+                username="bypass",
+                display_name="Bypass",
+                role="owner",
+                sessions=0,
+                grants=[],
+                created_at=0.0,
+                updated_at=0.0,
+                is_disabled=False,
+            )
+        return AuthStatusResponse(
+            mode=auth.mode,
+            requires_setup=context.requires_setup,
+            authenticated=principal is not None,
+            user=user,
+        )
+
+    @app.post("/api/auth/setup", response_model=AuthLoginResponse)
+    async def auth_setup(request: Request, body: AuthSetupRequest) -> Response:  # noqa: ARG001
+        auth: AuthRuntime = request.app.state.auth
+        user = auth.setup_owner(
+            username=body.username,
+            display_name=body.display_name,
+            password=body.password,
+        )
+        _, access_token, refresh_token = auth.login(
+            username=user.username,
+            password=body.password,
+            device_label=body.device_label,
+        )
+        payload = AuthLoginResponse(user=AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True)))
+        response = JSONResponse(payload.model_dump(mode="json"))
+        auth.apply_session_cookies(response, access_token=access_token, refresh_token=refresh_token)
+        return response
+
+    @app.post("/api/auth/login", response_model=AuthLoginResponse)
+    async def auth_login(request: Request, body: AuthLoginRequest) -> Response:  # noqa: ARG001
+        auth: AuthRuntime = request.app.state.auth
+        principal, access_token, refresh_token = auth.login(
+            username=body.username,
+            password=body.password,
+            device_label=body.device_label,
+        )
+        user = auth.store.get_user_by_id(principal.user_id)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        payload = AuthLoginResponse(user=AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True)))
+        response = JSONResponse(payload.model_dump(mode="json"))
+        auth.apply_session_cookies(response, access_token=access_token, refresh_token=refresh_token)
+        return response
+
+    @app.post("/api/auth/logout")
+    async def auth_logout(request: Request) -> Response:
+        auth: AuthRuntime = request.app.state.auth
+        auth.logout(request.cookies.get(auth.refresh_cookie_name))
+        response = JSONResponse({"ok": True})
+        auth.clear_session_cookies(response)
+        return response
+
+    @app.get("/api/access/users", response_model=AccessUsersResponse)
+    async def list_access_users(request: Request) -> AccessUsersResponse:
+        _require(request, action="core:access:manage")
+        auth: AuthRuntime = request.app.state.auth
+        users = [AuthUserPublic.model_validate(auth.serialize_user(item, include_grants=True)) for item in auth.store.list_users()]
+        return AccessUsersResponse(users=users, grants_catalog=auth.configurable_actions)
+
+    @app.post("/api/access/users", response_model=AuthUserPublic)
+    async def create_access_user(request: Request, body: AccessUserCreateRequest) -> AuthUserPublic:
+        _require(request, action="core:access:manage")
+        auth: AuthRuntime = request.app.state.auth
+        context = _auth_context(request)
+        if context.principal is not None and context.principal.role != "owner" and body.role == "owner":
+            raise HTTPException(status_code=403, detail="Only owners can create another owner")
+        try:
+            user = auth.store.create_user(
+                username=body.username,
+                display_name=body.display_name,
+                role=body.role,
+                password=body.password,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True))
+
+    @app.patch("/api/access/users/{user_id}", response_model=AuthUserPublic)
+    async def patch_access_user(request: Request, user_id: str, body: AccessUserPatchRequest) -> AuthUserPublic:
+        _require(request, action="core:access:manage")
+        auth: AuthRuntime = request.app.state.auth
+        context = _auth_context(request)
+        current = auth.store.get_user_by_id(user_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="Unknown user")
+        if context.principal is not None and user_id == context.principal.user_id and body.is_disabled is True:
+            raise HTTPException(status_code=400, detail="Cannot disable current user")
+        if context.principal is not None and user_id == context.principal.user_id and body.role and body.role != "owner":
+            raise HTTPException(status_code=400, detail="Cannot downgrade current owner session")
+        if context.principal is not None and context.principal.role != "owner":
+            if current.role == "owner" or body.role == "owner":
+                raise HTTPException(status_code=403, detail="Only owners can manage owner role")
+        try:
+            user = auth.store.update_user(
+                user_id,
+                display_name=body.display_name,
+                role=body.role,
+                password=body.password,
+                is_disabled=body.is_disabled,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True))
+
+    @app.delete("/api/access/users/{user_id}")
+    async def delete_access_user(request: Request, user_id: str) -> dict[str, bool]:
+        _require(request, action="core:access:manage")
+        auth: AuthRuntime = request.app.state.auth
+        context = _auth_context(request)
+        target = auth.store.get_user_by_id(user_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Unknown user")
+        if context.principal is not None and user_id == context.principal.user_id:
+            raise HTTPException(status_code=400, detail="Cannot delete current user")
+        if context.principal is not None and context.principal.role != "owner" and target.role == "owner":
+            raise HTTPException(status_code=403, detail="Only owners can delete owner accounts")
+        owners = [item for item in auth.store.list_users() if item.role == "owner"]
+        if any(owner.id == user_id for owner in owners) and len(owners) <= 1:
+            raise HTTPException(status_code=400, detail="Cannot delete last owner")
+        try:
+            auth.store.delete_user(user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"ok": True}
+
+    @app.post("/api/access/users/{user_id}/grants", response_model=AuthUserPublic)
+    async def upsert_access_grant(
+        request: Request,
+        user_id: str,
+        body: AccessGrantUpsertRequest,
+    ) -> AuthUserPublic:
+        _require(request, action="core:access:manage")
+        auth: AuthRuntime = request.app.state.auth
+        action = str(body.action or "").strip()
+        resource_type = str(body.resource_type or "").strip()
+        if not action or not resource_type:
+            raise HTTPException(status_code=400, detail="action and resource_type are required")
+        try:
+            auth.store.upsert_grant(
+                user_id=user_id,
+                action=action,
+                resource_type=resource_type,
+                include=body.include,
+                exclude=body.exclude,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        user = auth.store.get_user_by_id(user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="Unknown user")
+        return AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True))
+
+    @app.delete("/api/access/users/{user_id}/grants", response_model=AuthUserPublic)
+    async def delete_access_grant(
+        request: Request,
+        user_id: str,
+        action: str,
+        resource_type: str,
+    ) -> AuthUserPublic:
+        _require(request, action="core:access:manage")
+        auth: AuthRuntime = request.app.state.auth
+        auth.store.delete_grant(user_id=user_id, action=action, resource_type=resource_type)
+        user = auth.store.get_user_by_id(user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="Unknown user")
+        return AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True))
+
     @app.get("/api/system/paths")
     async def system_paths(request: Request) -> dict[str, str]:
+        _require(request, action="core:system:paths:read")
         config_store: ConfigStore = request.app.state.config_store
         paths = config_store.paths
         return {
@@ -367,16 +717,19 @@ def create_app() -> FastAPI:
 
     @app.get("/api/extensions")
     async def list_extensions(request: Request) -> JSONResponse:
+        _require(request, action="core:extensions:list")
         ext_manager: ExtensionManager = request.app.state.extensions
         return JSONResponse(ext_manager.public_extensions())
 
     @app.get("/api/settings", response_model=AppSettings)
     async def get_settings(request: Request) -> AppSettings:
+        _require(request, action="core:settings:read")
         config_store: ConfigStore = request.app.state.config_store
         return await config_store.get_settings()
 
     @app.put("/api/settings", response_model=AppSettings)
     async def put_settings(request: Request, settings: AppSettings) -> AppSettings:
+        _require(request, action="core:settings:write")
         config_store: ConfigStore = request.app.state.config_store
         return await config_store.replace_settings(settings)
 
@@ -386,12 +739,19 @@ def create_app() -> FastAPI:
         extension_id: str,
         patch: dict[str, Any],
     ) -> ExtensionSettingsResponse:
+        _require(
+            request,
+            action="core:extension:settings:write",
+            resource_type="core:extension",
+            resource_selector=extension_id,
+        )
         config_store: ConfigStore = request.app.state.config_store
         settings = await config_store.patch_extension_settings(extension_id, patch)
         return ExtensionSettingsResponse(extension_id=extension_id, settings=settings)
 
     @app.get("/api/pipelines/runtime/status", response_model=PipelineRuntimeStatusResponse)
     async def pipelines_runtime_status(request: Request) -> PipelineRuntimeStatusResponse:
+        _require(request, action="core:pipelines:runtime:read")
         orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
         if orchestrator is None:
             return PipelineRuntimeStatusResponse(status={"running": False})
@@ -403,6 +763,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/pipelines/runtime/reload", response_model=PipelineRuntimeStatusResponse)
     async def pipelines_runtime_reload(request: Request) -> PipelineRuntimeStatusResponse:
+        _require(request, action="core:pipelines:runtime:write")
         orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
         if orchestrator is None:
             return PipelineRuntimeStatusResponse(status={"running": False})
@@ -414,12 +775,14 @@ def create_app() -> FastAPI:
 
     @app.get("/api/processing-servers", response_model=ProcessingServersListResponse)
     async def list_processing_servers(request: Request) -> ProcessingServersListResponse:
+        _require(request, action="core:processing_servers:read")
         config_store: ConfigStore = request.app.state.config_store
         servers = await config_store.list_processing_servers()
         return ProcessingServersListResponse(servers=servers)
 
     @app.put("/api/processing-servers/{server_id}", response_model=ProcessingServer)
     async def put_processing_server(request: Request, server_id: str, body: ProcessingServer) -> ProcessingServer:
+        _require(request, action="core:processing_servers:write")
         if body.id != server_id:
             raise HTTPException(status_code=400, detail="server_id mismatch")
         config_store: ConfigStore = request.app.state.config_store
@@ -437,6 +800,7 @@ def create_app() -> FastAPI:
 
     @app.delete("/api/processing-servers/{server_id}", response_model=ProcessingServer)
     async def delete_processing_server(request: Request, server_id: str) -> ProcessingServer:
+        _require(request, action="core:processing_servers:write")
         config_store: ConfigStore = request.app.state.config_store
         try:
             removed = await config_store.delete_processing_server(server_id)
@@ -454,6 +818,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/processing-servers/{server_id}/status", response_model=ProcessingServerStatusResponse)
     async def get_processing_server_status(request: Request, server_id: str) -> ProcessingServerStatusResponse:
+        _require(request, action="core:processing_servers:read")
         config_store: ConfigStore = request.app.state.config_store
         sid = str(server_id or "").strip().lower()
         servers = await config_store.list_processing_servers()
@@ -492,17 +857,20 @@ def create_app() -> FastAPI:
 
     @app.get("/api/pipelines", response_model=PipelinesListResponse)
     async def list_pipelines(request: Request) -> PipelinesListResponse:
+        _require(request, action="core:pipelines:read")
         config_store: ConfigStore = request.app.state.config_store
         pipelines = await config_store.list_pipelines()
         return PipelinesListResponse(pipelines=pipelines)
 
     @app.get("/api/pipelines/operators", response_model=OperatorsListResponse)
     async def list_pipeline_operators(request: Request) -> OperatorsListResponse:
+        _require(request, action="core:pipelines:read")
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
         return OperatorsListResponse(operators=registry.list_operators())
 
     @app.post("/api/pipelines/compile", response_model=PipelineCompileResponse)
     async def compile_pipeline_graph(request: Request, body: PipelineCompileRequest) -> PipelineCompileResponse:
+        _require(request, action="core:pipelines:compile")
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
         pipeline = body.pipeline
@@ -570,6 +938,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/pipelines/compile-python", response_model=PipelineCompilePythonResponse)
     async def compile_pipeline_python(request: Request, body: PipelineCompileRequest) -> PipelineCompilePythonResponse:
+        _require(request, action="core:pipelines:compile")
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
 
@@ -648,6 +1017,7 @@ def create_app() -> FastAPI:
         request: Request,
         body: PipelineTemplateApplyCamerasRequest,
     ) -> PipelineTemplateApplyCamerasResponse:
+        _require(request, action="core:pipelines:write")
         config_store: ConfigStore = request.app.state.config_store
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
@@ -762,6 +1132,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/pipelines", response_model=Pipeline, status_code=201)
     async def create_pipeline(request: Request, body: Pipeline) -> Pipeline:
+        _require(request, action="core:pipelines:write")
         config_store: ConfigStore = request.app.state.config_store
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
@@ -796,6 +1167,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/pipelines/{pipeline_name}", response_model=Pipeline)
     async def get_pipeline(request: Request, pipeline_name: str) -> Pipeline:
+        _require(request, action="core:pipelines:read")
         config_store: ConfigStore = request.app.state.config_store
         try:
             pipeline = await config_store.get_pipeline(pipeline_name)
@@ -807,6 +1179,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/pipelines/{pipeline_name}/stats", response_model=PipelineStatsResponse)
     async def get_pipeline_stats(request: Request, pipeline_name: str) -> PipelineStatsResponse:
+        _require(request, action="core:pipelines:read")
         config_store: ConfigStore = request.app.state.config_store
         try:
             pipeline = await config_store.get_pipeline(pipeline_name)
@@ -831,6 +1204,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/pipelines/{pipeline_name}/stats/reset", response_model=PipelineStatsResponse)
     async def reset_pipeline_stats(request: Request, pipeline_name: str) -> PipelineStatsResponse:
+        _require(request, action="core:pipelines:write")
         config_store: ConfigStore = request.app.state.config_store
         try:
             pipeline = await config_store.get_pipeline(pipeline_name)
@@ -856,6 +1230,7 @@ def create_app() -> FastAPI:
 
     @app.put("/api/pipelines/{pipeline_name}", response_model=Pipeline)
     async def replace_pipeline(request: Request, pipeline_name: str, body: Pipeline) -> Pipeline:
+        _require(request, action="core:pipelines:write")
         config_store: ConfigStore = request.app.state.config_store
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
@@ -894,6 +1269,7 @@ def create_app() -> FastAPI:
 
     @app.delete("/api/pipelines/{pipeline_name}", response_model=Pipeline)
     async def delete_pipeline(request: Request, pipeline_name: str) -> Pipeline:
+        _require(request, action="core:pipelines:write")
         config_store: ConfigStore = request.app.state.config_store
         try:
             removed = await config_store.delete_pipeline(pipeline_name)
@@ -911,6 +1287,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/pipelines/migrate-legacy/cameras", response_model=LegacyCamerasMigrationResponse)
     async def migrate_legacy_cameras(request: Request, body: LegacyCamerasMigrationRequest) -> LegacyCamerasMigrationResponse:
+        _require(request, action="core:pipelines:write")
         config_store: ConfigStore = request.app.state.config_store
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
 
@@ -959,16 +1336,19 @@ def create_app() -> FastAPI:
 
     @app.get("/api/composition", response_model=Composition)
     async def get_composition(request: Request) -> Composition:
+        _require(request, action="core:compositions:read")
         config_store: ConfigStore = request.app.state.config_store
         return await config_store.get_active_composition()
 
     @app.put("/api/composition", response_model=Composition)
     async def put_composition(request: Request, composition: Composition) -> Composition:
+        _require(request, action="core:compositions:write")
         config_store: ConfigStore = request.app.state.config_store
         return await config_store.set_active_composition(composition)
 
     @app.get("/api/compositions", response_model=CompositionsIndexResponse)
     async def list_compositions(request: Request) -> CompositionsIndexResponse:
+        _require(request, action="core:compositions:read")
         config_store: ConfigStore = request.app.state.config_store
         active_id, compositions = await config_store.list_compositions()
         return CompositionsIndexResponse(
@@ -978,6 +1358,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/compositions", response_model=Composition)
     async def create_composition(request: Request, body: CreateCompositionRequest) -> Composition:
+        _require(request, action="core:compositions:manage")
         name = body.name.strip()
         if not name:
             raise HTTPException(status_code=400, detail="name is required")
@@ -990,6 +1371,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/compositions/{composition_id}/activate", response_model=Composition)
     async def activate_composition(request: Request, composition_id: str) -> Composition:
+        _require(request, action="core:compositions:manage")
         config_store: ConfigStore = request.app.state.config_store
         try:
             return await config_store.activate_composition(composition_id)
@@ -998,6 +1380,7 @@ def create_app() -> FastAPI:
 
     @app.patch("/api/compositions/{composition_id}", response_model=Composition)
     async def rename_composition(request: Request, composition_id: str, body: RenameCompositionRequest) -> Composition:
+        _require(request, action="core:compositions:manage")
         name = body.name.strip()
         if not name:
             raise HTTPException(status_code=400, detail="name is required")
@@ -1010,6 +1393,7 @@ def create_app() -> FastAPI:
 
     @app.delete("/api/compositions/{composition_id}", response_model=DeleteCompositionResponse)
     async def delete_composition(request: Request, composition_id: str) -> DeleteCompositionResponse:
+        _require(request, action="core:compositions:manage")
         config_store: ConfigStore = request.app.state.config_store
         try:
             cfg: AppConfig = await config_store.delete_composition(composition_id)
@@ -1027,6 +1411,12 @@ def create_app() -> FastAPI:
 
     @app.get("/extensions/{extension_id}/{path:path}")
     async def get_extension_asset(request: Request, extension_id: str, path: str) -> Response:
+        _require(
+            request,
+            action="core:extension:use",
+            resource_type="core:extension",
+            resource_selector=extension_id,
+        )
         ext_manager: ExtensionManager = request.app.state.extensions
         extension = ext_manager.get(extension_id)
         if extension is None:
@@ -1044,6 +1434,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/files/exists", response_model=FileExistsResponse)
     async def file_exists(request: Request, path: str) -> FileExistsResponse:
+        _require(request, action="core:files:read")
         config_store: ConfigStore = request.app.state.config_store
         base_dir = config_store.paths.files_dir.resolve()
         candidate = (base_dir / path).resolve()
@@ -1060,6 +1451,7 @@ def create_app() -> FastAPI:
         dir: str | None = Form(default=None),
         filename: str | None = Form(default=None),
     ) -> UploadFileResponse:
+        _require(request, action="core:files:write")
         config_store: ConfigStore = request.app.state.config_store
         dir_id = _safe_dir_id(dir)
         target_dir = config_store.paths.files_dir / dir_id
@@ -1090,6 +1482,7 @@ def create_app() -> FastAPI:
 
     @app.get("/files/{path:path}")
     async def get_user_file(request: Request, path: str) -> Response:
+        _require(request, action="core:files:read")
         config_store: ConfigStore = request.app.state.config_store
         base_dir = config_store.paths.files_dir.resolve()
         candidate = (base_dir / path).resolve()
@@ -1107,6 +1500,14 @@ def create_app() -> FastAPI:
 
     @app.post("/api/events/{event_name}", response_model=EmitEventResponse)
     async def emit_event(request: Request, event_name: str, body: EmitEventRequest) -> EmitEventResponse:
+        if not _event_is_allowed(event_name):
+            raise HTTPException(status_code=403, detail="Event is not allowed for external emit")
+        _require(
+            request,
+            action="core:events:emit",
+            resource_type="core:event",
+            resource_selector=event_name,
+        )
         bus: EventBus = request.app.state.bus
 
         if event_name == "device.action_requested" and not isinstance(body.payload, dict):
@@ -1125,17 +1526,20 @@ def create_app() -> FastAPI:
 
     @app.get("/api/devices/{device_id}")
     async def get_device(request: Request, device_id: str) -> dict[str, Any]:
+        _require(request, action="core:devices:read")
         store: DeviceStore = request.app.state.store
         return {"device_id": device_id, "state": store.peek(device_id)}
 
     @app.get("/api/notifications")
     async def list_notifications(request: Request, before: int | None = None, limit: int = 50) -> dict[str, Any]:
+        _require(request, action="core:notifications:read")
         runtime: NotificationsRuntime = request.app.state.notifications
         items, next_cursor = await runtime.list(before=before, limit=limit)
         return {"notifications": items, "next_cursor": next_cursor}
 
     @app.get("/api/notifications/stream")
     async def notifications_stream(request: Request) -> StreamingResponse:  # noqa: ARG001
+        _require(request, action="core:notifications:stream")
         runtime: NotificationsRuntime = request.app.state.notifications
         q = runtime.broadcaster.subscribe()
 
@@ -1155,6 +1559,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/notifications/{notification_id}/stream")
     async def notification_stream(request: Request, notification_id: str) -> StreamingResponse:  # noqa: ARG001
+        _require(request, action="core:notifications:stream")
         runtime: NotificationsRuntime = request.app.state.notifications
         wanted = notification_id.strip()
         if not wanted:
@@ -1183,6 +1588,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/notifications/{notification_id}")
     async def get_notification(request: Request, notification_id: str) -> dict[str, Any]:
+        _require(request, action="core:notifications:read")
         runtime: NotificationsRuntime = request.app.state.notifications
         notif = await runtime.get(notification_id)
         if notif is None:

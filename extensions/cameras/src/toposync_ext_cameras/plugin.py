@@ -223,6 +223,15 @@ class CamerasExtension(BaseExtension):
     def __init__(self) -> None:
         super().__init__(package="toposync_ext_cameras")
 
+    def capabilities(self) -> dict[str, Any]:
+        return {
+            "auth": {
+                "action": "core:extension:use",
+                "resource_type": "core:extension",
+                "api_prefixes": ["/api/cameras"],
+            }
+        }
+
     async def setup(self, app: FastAPI, *, bus: EventBus, services: ServiceRegistry) -> None:  # noqa: ARG002
         registry = getattr(app.state, "pipeline_operator_registry", None)
         if isinstance(registry, OperatorRegistry):

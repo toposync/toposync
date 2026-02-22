@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import type { GraphicsQuality, HostApi, SettingsPanel, ThemeDefinition, WallHeightPreset } from "@toposync/plugin-api";
 
-import type { AppSettings } from "../../util/api";
+import type { AppSettings, AuthUser } from "../../util/api";
 import { i18n, resolveLocalizedString } from "../../util/i18n";
 
 import { Icon } from "../Icon";
@@ -24,6 +24,10 @@ type Props = {
   onPatchExtensionSettings: (extensionId: string, patch: Record<string, unknown>) => Promise<Record<string, unknown>>;
   onOpenPipelines: () => void;
   onOpenProcessingServers: () => void;
+  onOpenAccess: () => void;
+  canManageAccess: boolean;
+  authUser: AuthUser | null;
+  onLogout: () => Promise<void>;
   onClose: () => void;
 };
 
@@ -76,6 +80,10 @@ export function SettingsScreen({
   onPatchExtensionSettings,
   onOpenPipelines,
   onOpenProcessingServers,
+  onOpenAccess,
+  canManageAccess,
+  authUser,
+  onLogout,
   onClose,
 }: Props): React.ReactElement {
   const { t, locale, setLocale } = i18n.useI18n();
@@ -86,7 +94,7 @@ export function SettingsScreen({
   const [saving, setSaving] = useState(false);
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
   const [confirmExitOpen, setConfirmExitOpen] = useState(false);
-  const [pendingExitAction, setPendingExitAction] = useState<null | "close" | "pipelines" | "processing_servers">(null);
+  const [pendingExitAction, setPendingExitAction] = useState<null | "close" | "pipelines" | "processing_servers" | "access">(null);
   const lastSettingsRef = useRef<AppSettings>(settings);
 
   const orderedPanels = useMemo(() => {
@@ -256,6 +264,19 @@ export function SettingsScreen({
               );
             })}
           </div>
+
+          <div className="sectionDivider" />
+
+          <div className="modalSectionTitle">Session</div>
+          <div className="card">
+            <div className="cardTitle">{authUser?.display_name || authUser?.username || "Current user"}</div>
+            {authUser ? <div className="cardBody">{authUser.username} · {authUser.role}</div> : null}
+            <div style={{ marginTop: 8 }}>
+              <button className="chipButton" type="button" onClick={() => void onLogout()}>
+                Sign out
+              </button>
+            </div>
+          </div>
         </div>
       ),
     };
@@ -278,6 +299,8 @@ export function SettingsScreen({
     onSetGraphicsQuality,
     onSetThemeId,
     onSetWallHeightPreset,
+    onLogout,
+    authUser,
     orderedPanels,
     t,
     themeId,
@@ -375,7 +398,7 @@ export function SettingsScreen({
     setSaveError(null);
   }
 
-  function requestExit(action: "close" | "pipelines" | "processing_servers"): void {
+  function requestExit(action: "close" | "pipelines" | "processing_servers" | "access"): void {
     if (saving) return;
     if (hasUnsavedChanges) {
       setPendingExitAction(action);
@@ -384,17 +407,19 @@ export function SettingsScreen({
     }
     if (action === "pipelines") onOpenPipelines();
     else if (action === "processing_servers") onOpenProcessingServers();
+    else if (action === "access") onOpenAccess();
     else onClose();
   }
 
   const exitTitle = useMemo(() => {
     if (pendingExitAction === "pipelines") return t("core.ui.settings.confirm_open_pipelines_title");
     if (pendingExitAction === "processing_servers") return t("core.ui.settings.confirm_open_processing_servers_title");
+    if (pendingExitAction === "access") return "Open access control?";
     return t("core.ui.settings.confirm_close_title");
   }, [pendingExitAction, t]);
 
   const exitDesc = useMemo(() => {
-    if (pendingExitAction === "pipelines" || pendingExitAction === "processing_servers") {
+    if (pendingExitAction === "pipelines" || pendingExitAction === "processing_servers" || pendingExitAction === "access") {
       const suffix = unsavedSectionsLabel ? ` (${unsavedSectionsLabel})` : "";
       return t("core.ui.settings.confirm_discard_continue_desc", { suffix });
     }
@@ -402,7 +427,7 @@ export function SettingsScreen({
   }, [pendingExitAction, t, unsavedSectionsLabel]);
 
   const exitConfirmLabel = useMemo(() => {
-    if (pendingExitAction === "pipelines" || pendingExitAction === "processing_servers") return t("core.ui.settings.confirm_discard_continue");
+    if (pendingExitAction === "pipelines" || pendingExitAction === "processing_servers" || pendingExitAction === "access") return t("core.ui.settings.confirm_discard_continue");
     return t("core.ui.settings.discard_and_close");
   }, [pendingExitAction, t]);
 
@@ -441,6 +466,20 @@ export function SettingsScreen({
                 <span className="settingsNavDesc">{t("core.ui.settings.nav.processing_servers.desc")}</span>
               </span>
             </button>
+
+            {canManageAccess ? (
+              <button type="button" className="settingsNavItem" onClick={() => requestExit("access")}>
+                <span className="settingsNavIcon">
+                  <Icon name="users" />
+                </span>
+                <span className="settingsNavText">
+                  <span className="settingsNavTitleRow">
+                    <span className="settingsNavTitle">Access</span>
+                  </span>
+                  <span className="settingsNavDesc">Manage users and include/exclude grants.</span>
+                </span>
+              </button>
+            ) : null}
 
             <div className="sectionDivider" style={{ margin: "12px 6px" }} />
 
@@ -571,6 +610,7 @@ export function SettingsScreen({
                     setPendingExitAction(null);
                     if (action === "pipelines") onOpenPipelines();
                     else if (action === "processing_servers") onOpenProcessingServers();
+                    else if (action === "access") onOpenAccess();
                     else onClose();
                   }}
                 >

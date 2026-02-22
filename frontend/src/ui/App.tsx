@@ -157,8 +157,26 @@ function parseIsoMillis(iso: string | undefined): number {
   return Number.isFinite(ts) ? ts : 0;
 }
 
-function notificationActivityMillis(notification: Notification): number {
-  return Math.max(parseIsoMillis(notification.updatedAt), parseIsoMillis(notification.createdAt));
+function notificationCreatedMillis(notification: Notification): number {
+  return parseIsoMillis(notification.createdAt);
+}
+
+function sortNotificationsByCreatedDesc(notifications: readonly Notification[]): Notification[] {
+  const out = [...notifications];
+  out.sort((left, right) => {
+    const rightTs = notificationCreatedMillis(right);
+    const leftTs = notificationCreatedMillis(left);
+    if (leftTs !== rightTs) {
+      return rightTs - leftTs;
+    }
+    const rightUpdated = parseIsoMillis(right.updatedAt);
+    const leftUpdated = parseIsoMillis(left.updatedAt);
+    if (leftUpdated !== rightUpdated) {
+      return rightUpdated - leftUpdated;
+    }
+    return asString(right.id, "").localeCompare(asString(left.id, ""));
+  });
+  return out;
 }
 
 function defaultComposition(): Composition {
@@ -514,28 +532,17 @@ export function App(): React.ReactElement {
     };
   }, []);
 
-  const upsertNotification = useCallback((next: Notification, op: "insert" | "update") => {
+  const upsertNotification = useCallback((next: Notification, _op: "insert" | "update") => {
     setNotifications((prev) => {
       const idx = prev.findIndex((n) => n.id === next.id);
-      if (idx === -1) return [next, ...prev];
+      if (idx === -1) {
+        return sortNotificationsByCreatedDesc([next, ...prev]);
+      }
 
       const prevEntry = prev[idx];
       const merged = { ...prevEntry, ...next };
-      const out = prev.slice();
-      out[idx] = merged;
-
-      const shouldBump =
-        idx > 0 &&
-        (op === "insert" ||
-          notificationActivityMillis(merged) > notificationActivityMillis(prevEntry) ||
-          (prevEntry.imageUrl ?? "") !== (merged.imageUrl ?? ""));
-
-      if (shouldBump) {
-        out.splice(idx, 1);
-        return [merged, ...out];
-      }
-
-      return out;
+      const out = prev.map((n, i) => (i === idx ? merged : n));
+      return sortNotificationsByCreatedDesc(out);
     });
   }, []);
 
@@ -547,7 +554,7 @@ export function App(): React.ReactElement {
       try {
         const page = await listNotifications(null, 40);
         if (cancelled) return;
-        setNotifications(page.notifications ?? []);
+        setNotifications(sortNotificationsByCreatedDesc(page.notifications ?? []));
         setNotificationsCursor(page.next_cursor ?? null);
         setNotificationsHasMore(page.next_cursor != null);
       } catch (err) {
@@ -945,7 +952,8 @@ export function App(): React.ReactElement {
       setNotifications((prev) => {
         const existing = new Set(prev.map((n) => n.id));
         const toAdd = page.notifications.filter((n) => !existing.has(n.id));
-        return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+        if (toAdd.length === 0) return prev;
+        return sortNotificationsByCreatedDesc([...prev, ...toAdd]);
       });
     } catch (err) {
       console.error("Failed to load more notifications", err);

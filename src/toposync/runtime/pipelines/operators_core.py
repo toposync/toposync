@@ -50,6 +50,31 @@ class ThrottleConfig(BaseModel):
         return mode
 
 
+class VelocityThrottleConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    moving_interval_seconds: float = Field(
+        default=2.0,
+        ge=0.01,
+        le=3600.0,
+        description="Interval for packets when entity is moving.",
+    )
+    stopped_interval_seconds: float = Field(
+        default=300.0,
+        ge=0.01,
+        le=3600.0,
+        description="Interval for packets when entity is currently stopped.",
+    )
+    key_field: str = Field(default="payload.event_id")
+    moving_field: str = Field(
+        default="payload.velocity.moving",
+        description="Boolean field that indicates movement state (payload.* or metadata.* with dotted path).",
+    )
+    default_moving: bool = Field(
+        default=True,
+        description="If moving flag is missing/invalid, use this state.",
+    )
+
+
 class DebounceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     quiet_period_seconds: float = Field(default=1.0, ge=0.01, le=120.0)
@@ -613,13 +638,11 @@ class FPSReducerRuntime(TransformOperatorRuntime):
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         key = _resolve_key(packet, "payload.event_id")
         now = time.monotonic()
-        last_emit = float(self._last_emit_by_key.get(key, 0.0))
         if packet.lifecycle in {Lifecycle.OPEN, Lifecycle.CLOSE}:
             self._last_emit_by_key[key] = now
             return [packet]
-        if last_emit and (now - last_emit) < self._min_interval:
+        if not _emit_if_interval_elapsed(now, state=self._last_emit_by_key, key=key, interval_seconds=self._min_interval):
             return []
-        self._last_emit_by_key[key] = now
         return [packet]
 
 
@@ -636,10 +659,38 @@ class ThrottleRuntime(TransformOperatorRuntime):
         if packet.lifecycle in {Lifecycle.OPEN, Lifecycle.CLOSE}:
             self._last_emit[key] = now
             return [packet]
-        last_emit = float(self._last_emit.get(key, 0.0))
-        if last_emit and (now - last_emit) < self._interval_seconds:
+        if not _emit_if_interval_elapsed(now, state=self._last_emit, key=key, interval_seconds=self._interval_seconds):
             return []
-        self._last_emit[key] = now
+        return [packet]
+
+
+class VelocityThrottleRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        parsed = VelocityThrottleConfig.model_validate(config)
+        self._moving_interval_seconds = float(parsed.moving_interval_seconds)
+        self._stopped_interval_seconds = float(parsed.stopped_interval_seconds)
+        self._key_field = str(parsed.key_field or "").strip() or "payload.event_id"
+        self._moving_field = str(parsed.moving_field or "").strip() or "payload.velocity.moving"
+        self._default_moving = bool(parsed.default_moving)
+        self._last_emit_by_key: dict[str, float] = {}
+        self._last_moving_by_key: dict[str, bool] = {}
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        key = _resolve_key(packet, self._key_field)
+        now = time.monotonic()
+        if packet.lifecycle in {Lifecycle.OPEN, Lifecycle.CLOSE}:
+            self._last_emit_by_key[key] = now
+            return [packet]
+
+        moving = _resolve_bool_field(packet, self._moving_field)
+        if moving is None:
+            moving = bool(self._last_moving_by_key.get(key, self._default_moving))
+        else:
+            self._last_moving_by_key[key] = bool(moving)
+
+        interval_seconds = self._moving_interval_seconds if bool(moving) else self._stopped_interval_seconds
+        if not _emit_if_interval_elapsed(now, state=self._last_emit_by_key, key=key, interval_seconds=interval_seconds):
+            return []
         return [packet]
 
 
@@ -814,6 +865,18 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         runtime_factory=lambda config, _deps: ThrottleRuntime(config),
     )
     registry.register_operator(
+        operator_id="core.velocity_throttle",
+        description="Velocity-aware throttle: emits more frequently while moving and less frequently while stopped.",
+        config_model=VelocityThrottleConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["rate_control", "realtime", "camera", "velocity"],
+        defaults=VelocityThrottleConfig().model_dump(),
+        share_strategy="by_signature",
+        owner="core",
+        runtime_factory=lambda config, _deps: VelocityThrottleRuntime(config),
+    )
+    registry.register_operator(
         operator_id="core.debounce",
         description="Debounce-first keyed operator that emits first packet and waits for quiet period.",
         config_model=DebounceConfig,
@@ -915,3 +978,14 @@ def _resolve_key(packet: Packet, key_field: str) -> str:
     if not key:
         key = packet.stream_id
     return key
+
+
+def _emit_if_interval_elapsed(now: float, *, state: dict[str, float], key: str, interval_seconds: float) -> bool:
+    if interval_seconds <= 0.0:
+        state[key] = now
+        return True
+    last_emit = float(state.get(key, 0.0))
+    if last_emit and (now - last_emit) < interval_seconds:
+        return False
+    state[key] = now
+    return True

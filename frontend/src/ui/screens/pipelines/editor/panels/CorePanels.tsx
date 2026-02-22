@@ -406,6 +406,108 @@ export function ThrottleConfigCard({ config, showAdvanced, onUpdateConfig }: Thr
   );
 }
 
+type VelocityThrottleProps = {
+  config: Record<string, unknown>;
+  showAdvanced: boolean;
+  onUpdateConfig: UpdateConfig;
+};
+
+export function VelocityThrottleConfigCard({
+  config,
+  showAdvanced,
+  onUpdateConfig,
+}: VelocityThrottleProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const movingIntervalSeconds = Number((config as any).moving_interval_seconds ?? 2.0);
+  const stoppedIntervalSeconds = Number((config as any).stopped_interval_seconds ?? 300.0);
+  const keyFieldRaw = String((config as any).key_field ?? "payload.event_id").trim() || "payload.event_id";
+  const movingFieldRaw = String((config as any).moving_field ?? "payload.velocity.moving").trim() || "payload.velocity.moving";
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.velocity_throttle.moving_interval_seconds")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0.01}
+          max={3600}
+          step={0.1}
+          value={Number.isFinite(movingIntervalSeconds) ? movingIntervalSeconds : 2.0}
+          onChange={(nextValue) => {
+            onUpdateConfig((prev) => ({
+              ...prev,
+              moving_interval_seconds: Math.max(0.01, Math.min(3600, nextValue)),
+            }));
+          }}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.velocity_throttle.stopped_interval_seconds")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0.01}
+          max={3600}
+          step={1.0}
+          value={Number.isFinite(stoppedIntervalSeconds) ? stoppedIntervalSeconds : 300.0}
+          onChange={(nextValue) => {
+            onUpdateConfig((prev) => ({
+              ...prev,
+              stopped_interval_seconds: Math.max(0.01, Math.min(3600, nextValue)),
+            }));
+          }}
+        />
+      </label>
+
+      {showAdvanced ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.throttle.key")}</span>
+            <select
+              className="pipelinesSelect"
+              value={keyFieldRaw}
+              onChange={(event) => {
+                const nextKey = String(event.target.value || "stream_id").trim() || "stream_id";
+                onUpdateConfig((prev) => ({ ...prev, key_field: nextKey }));
+              }}
+            >
+              <option value="payload.event_id">{t("core.ui.pipelines.panels.throttle.key.event_id")}</option>
+              <option value="stream_id">{t("core.ui.pipelines.panels.throttle.key.stream_id")}</option>
+              <option value="payload.tracking_id">{t("core.ui.pipelines.panels.throttle.key.tracking_id")}</option>
+              <option value="payload.correlation_id">{t("core.ui.pipelines.panels.throttle.key.correlation_id")}</option>
+              <option value="payload.camera_id">{t("core.ui.pipelines.panels.throttle.key.camera_id")}</option>
+            </select>
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.velocity_throttle.moving_field")}</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={movingFieldRaw}
+              onChange={(event) => {
+                const nextField = String(event.target.value || "payload.velocity.moving").trim() || "payload.velocity.moving";
+                onUpdateConfig((prev) => ({ ...prev, moving_field: nextField }));
+              }}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.velocity_throttle.default_moving")}</span>
+            <input
+              type="checkbox"
+              checked={Boolean((config as any).default_moving ?? true)}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, default_moving: event.target.checked }))}
+            />
+          </label>
+        </>
+      ) : null}
+
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.velocity_throttle.hint")}</div>
+    </div>
+  );
+}
+
 type DebounceProps = {
   config: Record<string, unknown>;
   showAdvanced: boolean;

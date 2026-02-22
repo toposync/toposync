@@ -49,6 +49,7 @@ function shouldHideScalarGrid(operatorId: string): boolean {
     operatorId === "camera.area_restriction" ||
     operatorId === "camera.velocity_estimation" ||
     operatorId === "core.throttle" ||
+    operatorId === "core.velocity_throttle" ||
     operatorId === "core.debounce" ||
     operatorId === "core.debug" ||
     operatorId === "core.notify" ||

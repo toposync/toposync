@@ -127,6 +127,46 @@ function disposeMaterial(material: ThreeTypes.Material | ThreeTypes.Material[], 
   material.dispose();
 }
 
+function applyWorldUvToBoxGeometry(
+  geometry: ThreeTypes.BufferGeometry,
+  args: { originX: number; originY: number; originZ: number; thicknessWorld: number },
+): void {
+  const pos = geometry.getAttribute("position") as ThreeTypes.BufferAttribute | null;
+  const norm = geometry.getAttribute("normal") as ThreeTypes.BufferAttribute | null;
+  const uv = geometry.getAttribute("uv") as ThreeTypes.BufferAttribute | null;
+  if (!pos || !norm || !uv) return;
+
+  const zOffset = args.thicknessWorld / 2;
+
+  for (let i = 0; i < uv.count; i += 1) {
+    const nx = norm.getX(i);
+    const ny = norm.getY(i);
+    const nz = norm.getZ(i);
+    const px = pos.getX(i);
+    const py = pos.getY(i);
+    const pz = pos.getZ(i);
+
+    let u = 0;
+    let v = 0;
+    if (Math.abs(nz) >= 0.5) {
+      // Front/back wall faces: map X (length) and Y (height) in world meters.
+      u = px + args.originX;
+      v = py + args.originY;
+    } else if (Math.abs(nx) >= 0.5) {
+      // Side faces: map Z (thickness) and Y (height).
+      u = pz + args.originZ + zOffset;
+      v = py + args.originY;
+    } else {
+      // Top/bottom faces: map X (length) and Z (thickness).
+      u = px + args.originX;
+      v = pz + args.originZ + zOffset;
+    }
+
+    uv.setXY(i, u, v);
+  }
+  uv.needsUpdate = true;
+}
+
 function clearMeshGroup(group: ThreeTypes.Group, disposeMaterials: boolean): void {
   const materialSeen = new Set<ThreeTypes.Material>();
   for (const child of [...group.children]) {
@@ -383,6 +423,12 @@ export function createWallElementType(i18n: HostI18n): ElementType {
           for (const rect of solidRects) {
             if (rect.x1 - rect.x0 <= 1e-6 || rect.y1 - rect.y0 <= 1e-6) continue;
             const geometry = new THREE.BoxGeometry(rect.x1 - rect.x0, rect.y1 - rect.y0, thicknessWorld);
+            applyWorldUvToBoxGeometry(geometry, {
+              originX: (rect.x0 + rect.x1) / 2,
+              originY: GROUND_Y + (rect.y0 + rect.y1) / 2,
+              originZ: 0,
+              thicknessWorld,
+            });
             const mesh = new THREE.Mesh(geometry, wallMaterial);
             mesh.castShadow = true;
             mesh.receiveShadow = true;

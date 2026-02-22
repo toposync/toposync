@@ -255,8 +255,18 @@ export function readOpeningTextureId(value: unknown, fallback: OpeningTextureId)
 
 export function getWallTexture(THREE: Three, id: WallTextureId): Texture | null {
   if (id === "none") return null;
-  if (id === "brick") return getCachedTexture(THREE, "wall:brick", createBrickTextureCanvas, { size: 256, anisotropy: 4 });
-  if (id === "concrete") return getCachedTexture(THREE, "wall:concrete", createConcreteTextureCanvas, { size: 256, anisotropy: 4 });
+  if (id === "brick") {
+    const tex = getCachedTexture(THREE, "wall:brick", createBrickTextureCanvas, { size: 256, anisotropy: 4 });
+    // World UVs are in meters; repeat controls cycles-per-meter.
+    tex.repeat.set(1, 1);
+    return tex;
+  }
+  if (id === "concrete") {
+    const tex = getCachedTexture(THREE, "wall:concrete", createConcreteTextureCanvas, { size: 256, anisotropy: 4 });
+    // Keep concrete less "tiled" than brick.
+    tex.repeat.set(0.5, 0.5);
+    return tex;
+  }
   return null;
 }
 

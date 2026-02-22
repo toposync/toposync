@@ -607,7 +607,7 @@ function WallEditor({ element, update, remove, close, i18n }: WallEditorProps): 
           <div className="card" key={opening.id} style={{ marginTop: 10 }}>
             <div className="cardHeaderRow">
               <div className="cardTitle">{t(`ext.structural.editor.kind.${kind}`)}</div>
-              <div className="cardMeta">{opening.id.slice(0, 8)}</div>
+              <div className="cardMeta">{numberFormatter.format(opening.width_m)} m</div>
             </div>
 
             <div className="rowWrap">
@@ -691,16 +691,6 @@ function WallEditor({ element, update, remove, close, i18n }: WallEditorProps): 
                 </div>
               </div>
             ) : null}
-
-            <div className="field">
-              <div className="label">{t("ext.structural.editor.opening_external_ref")}</div>
-              <input
-                className="input"
-                value={opening.external_ref ?? ""}
-                onChange={(e) => patchOpening(opening.id, { external_ref: e.target.value })}
-                placeholder={t("ext.structural.editor.opening_external_ref_placeholder")}
-              />
-            </div>
 
             <div className="rowWrap">
               <button className="dangerButton" type="button" onClick={() => removeOpening(opening.id)}>

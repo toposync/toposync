@@ -9,7 +9,6 @@ export type WallOpening = {
   y_max_m?: number;
   color?: string;
   texture?: string;
-  external_ref?: string;
 };
 
 export type ResolvedWallOpening = {
@@ -23,7 +22,6 @@ export type ResolvedWallOpening = {
   y_max_m: number;
   color?: string;
   texture?: string;
-  external_ref?: string;
 };
 
 export const MIN_OPENING_WIDTH_M = 0.25;
@@ -94,7 +92,6 @@ function normalizeOpening(value: unknown): WallOpening | null {
     y_max_m: asOptionalFiniteNumber(record.y_max_m),
     color: colorRaw && HEX_COLOR_RE.test(colorRaw) ? colorRaw : undefined,
     texture: textureRaw,
-    external_ref: asNonEmptyString(record.external_ref),
   };
 }
 
@@ -180,7 +177,6 @@ export function resolveWallOpenings(openings: WallOpening[], wallLength: number,
       y_max_m: yMax,
       color: opening.color,
       texture: opening.texture,
-      external_ref: opening.external_ref,
     });
   }
   out.sort((a, b) => a.start_m - b.start_m || a.id.localeCompare(b.id));
@@ -199,7 +195,6 @@ export function openingsToProps(openings: WallOpening[]): Array<Record<string, u
     if (typeof opening.y_max_m === "number" && Number.isFinite(opening.y_max_m)) out.y_max_m = opening.y_max_m;
     if (opening.color) out.color = opening.color;
     if (opening.texture) out.texture = opening.texture;
-    if (opening.external_ref) out.external_ref = opening.external_ref;
     return out;
   });
 }

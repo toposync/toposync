@@ -5,6 +5,8 @@ import { i18n } from "../../util/i18n";
 
 const ROLE_OPTIONS: AuthRole[] = ["owner", "admin", "member", "service"];
 
+type Translate = (key: string, params?: Record<string, unknown>, fallback?: string) => string;
+
 type Props = {
   authUser: AuthUser | null;
   authMode: string;
@@ -46,17 +48,20 @@ function parseSelectors(raw: string): string[] {
     .filter(Boolean);
 }
 
-function grantSummary(include: string[], exclude: string[]): string {
+function grantSummary(t: Translate, include: string[], exclude: string[]): string {
   if ((!include || include.length === 0) && (!exclude || exclude.length === 0)) {
-    return "Includes all and excludes none";
+    return t("core.ui.access.grants.summary.all");
   }
   if ((!include || include.length === 0) && exclude.length > 0) {
-    return `Includes all except: ${exclude.join(", ")}`;
+    return t("core.ui.access.grants.summary.all_except", { selectors: exclude.join(", ") });
   }
   if (include.length > 0 && (!exclude || exclude.length === 0)) {
-    return `Includes only: ${include.join(", ")}`;
+    return t("core.ui.access.grants.summary.only", { selectors: include.join(", ") });
   }
-  return `Includes: ${include.join(", ")} | Excludes: ${exclude.join(", ")}`;
+  return t("core.ui.access.grants.summary.mixed", {
+    include: include.join(", "),
+    exclude: exclude.join(", "),
+  });
 }
 
 export function AccessScreen({
@@ -94,6 +99,7 @@ export function AccessScreen({
   const [grantExcludeRaw, setGrantExcludeRaw] = useState("");
 
   const canManage = authMode === "bypass" || (authUser && (authUser.role === "owner" || authUser.role === "admin"));
+  const formatRole = useCallback((value: AuthRole) => t(`core.ui.auth.role.${value}`, {}, value), [t]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -190,7 +196,7 @@ export function AccessScreen({
     const username = createUsername.trim();
     const password = createPassword;
     if (!username || !password) {
-      setError("Username and password are required");
+      setError(t("core.ui.access.error.username_password_required"));
       return;
     }
     setBusy(true);
@@ -220,7 +226,7 @@ export function AccessScreen({
 
   const onDeleteUser = useCallback(async () => {
     if (!selectedUser || !canManage || busy) return;
-    if (!window.confirm(`Delete user ${selectedUser.username}?`)) return;
+    if (!window.confirm(t("core.ui.access.confirm_delete_user", { username: selectedUser.username }))) return;
     setBusy(true);
     setError("");
     try {
@@ -241,7 +247,7 @@ export function AccessScreen({
   const onUpsertGrant = useCallback(async () => {
     if (!selectedUser || !canManage || busy) return;
     if (!grantAction.trim() || !grantResourceType.trim()) {
-      setError("Select action and resource type");
+      setError(t("core.ui.access.error.select_action_resource"));
       return;
     }
     setBusy(true);
@@ -299,7 +305,7 @@ export function AccessScreen({
         <button className="iconButton" type="button" onClick={onClose} aria-label={t("core.actions.back")}>
           <i className="fa-solid fa-arrow-left" aria-hidden="true" />
         </button>
-        <div className="settingsTopbarTitle">Access</div>
+        <div className="settingsTopbarTitle">{t("core.ui.access.title")}</div>
         <div className="row accessTopbarActions">
           <button className="chipButton" type="button" onClick={() => void loadData()} disabled={loading || busy}>
             {t("core.actions.refresh")}
@@ -312,9 +318,9 @@ export function AccessScreen({
 
       <div className="accessLayout">
         <div className="accessSidebar">
-          <div className="modalSectionTitle">Users</div>
-          {loading ? <div className="settingsStatusMuted">Loading...</div> : null}
-          {!loading && (!data || data.users.length === 0) ? <div className="settingsStatusMuted">No users found.</div> : null}
+          <div className="modalSectionTitle">{t("core.ui.access.users.title")}</div>
+          {loading ? <div className="settingsStatusMuted">{t("core.ui.loading")}</div> : null}
+          {!loading && (!data || data.users.length === 0) ? <div className="settingsStatusMuted">{t("core.ui.access.users.none")}</div> : null}
           <div className="settingsSidebarList">
             {(data?.users || []).map((user) => {
               const selected = user.id === selectedUserId;
@@ -333,7 +339,7 @@ export function AccessScreen({
                       <span className="settingsNavTitle">{user.display_name || user.username}</span>
                     </span>
                     <span className="settingsNavDesc">
-                      {user.username} · {user.role} · {user.sessions} sessions
+                      {user.username} · {formatRole(user.role)} · {t("core.ui.access.users.sessions_count", { count: user.sessions })}
                     </span>
                   </span>
                 </button>
@@ -343,25 +349,35 @@ export function AccessScreen({
 
           {canManage ? (
             <div className="card">
-              <div className="cardTitle">Create user</div>
-              <input className="input" placeholder="Username" value={createUsername} onChange={(e) => setCreateUsername(e.target.value)} />
-              <input className="input" placeholder="Display name" value={createDisplayName} onChange={(e) => setCreateDisplayName(e.target.value)} />
+              <div className="cardTitle">{t("core.ui.access.create_user.title")}</div>
+              <input
+                className="input"
+                placeholder={t("core.ui.auth.field.username")}
+                value={createUsername}
+                onChange={(e) => setCreateUsername(e.target.value)}
+              />
+              <input
+                className="input"
+                placeholder={t("core.ui.auth.field.display_name")}
+                value={createDisplayName}
+                onChange={(e) => setCreateDisplayName(e.target.value)}
+              />
               <select className="input" value={createRole} onChange={(e) => setCreateRole(e.target.value as AuthRole)}>
                 {ROLE_OPTIONS.map((item) => (
                   <option key={item} value={item}>
-                    {item}
+                    {formatRole(item)}
                   </option>
                 ))}
               </select>
               <input
                 className="input"
                 type="password"
-                placeholder="Password"
+                placeholder={t("core.ui.auth.field.password")}
                 value={createPassword}
                 onChange={(e) => setCreatePassword(e.target.value)}
               />
               <button className="primaryButton" type="button" onClick={() => void onCreateUser()} disabled={busy}>
-                Create
+                {t("core.ui.access.create_user.action")}
               </button>
             </div>
           ) : null}
@@ -369,7 +385,7 @@ export function AccessScreen({
 
         <div className="accessMain">
           {!selectedUser ? (
-            <div className="settingsStatusMuted">Select a user to inspect permissions.</div>
+            <div className="settingsStatusMuted">{t("core.ui.access.empty_state.select_user")}</div>
           ) : (
             <>
               <div className="settingsHeader">
@@ -379,20 +395,20 @@ export function AccessScreen({
 
               <div className="settingsContent">
                 <div className="card">
-                  <div className="cardTitle">Identity</div>
-                  <label className="authLabel">Display name</label>
+                  <div className="cardTitle">{t("core.ui.access.section.identity")}</div>
+                  <label className="authLabel">{t("core.ui.auth.field.display_name")}</label>
                   <input className="input" value={displayName} onChange={(e) => setDisplayName(e.target.value)} disabled={!canManage} />
 
-                  <label className="authLabel">Role</label>
+                  <label className="authLabel">{t("core.ui.access.field.role")}</label>
                   <select className="input" value={role} onChange={(e) => setRole(e.target.value as AuthRole)} disabled={!canManage}>
                     {ROLE_OPTIONS.map((item) => (
                       <option key={item} value={item}>
-                        {item}
+                        {formatRole(item)}
                       </option>
                     ))}
                   </select>
 
-                  <label className="authLabel">New password (optional)</label>
+                  <label className="authLabel">{t("core.ui.access.field.new_password_optional")}</label>
                   <input
                     className="input"
                     type="password"
@@ -403,30 +419,30 @@ export function AccessScreen({
 
                   <label className="row">
                     <input type="checkbox" checked={isDisabled} onChange={(e) => setIsDisabled(e.target.checked)} disabled={!canManage} />
-                    Disabled
+                    {t("core.ui.access.field.disabled")}
                   </label>
 
                   {canManage ? (
                     <div className="cardFooter">
                       <button className="primaryButton" type="button" onClick={() => void onSaveUser()} disabled={busy}>
-                        Save user
+                        {t("core.ui.access.action.save_user")}
                       </button>
                       <button className="dangerButton" type="button" onClick={() => void onDeleteUser()} disabled={busy}>
-                        Delete user
+                        {t("core.ui.access.action.delete_user")}
                       </button>
                     </div>
                   ) : null}
                 </div>
 
                 <div className="card">
-                  <div className="cardTitle">Scope grants (include/exclude)</div>
+                  <div className="cardTitle">{t("core.ui.access.grants.title")}</div>
                   <div className="settingsStatusMuted">
-                    Empty include means "include all". Empty exclude means "exclude none". Exclude always wins.
+                    {t("core.ui.access.grants.hint")}
                   </div>
 
                   <div className="sectionDivider" />
 
-                  {selectedUser.grants.length === 0 ? <div className="settingsStatusMuted">No custom grants.</div> : null}
+                  {selectedUser.grants.length === 0 ? <div className="settingsStatusMuted">{t("core.ui.access.grants.none")}</div> : null}
                   {selectedUser.grants.length > 0 ? (
                     <div className="accessGrantsList">
                       {selectedUser.grants.map((grant) => (
@@ -443,11 +459,11 @@ export function AccessScreen({
                                 onClick={() => void onDeleteGrant(grant.action, grant.resource_type)}
                                 disabled={busy}
                               >
-                                Remove
+                                {t("core.ui.access.grants.action.remove")}
                               </button>
                             ) : null}
                           </div>
-                          <div className="settingsStatusMuted">{grantSummary(grant.include, grant.exclude)}</div>
+                          <div className="settingsStatusMuted">{grantSummary(t, grant.include, grant.exclude)}</div>
                         </div>
                       ))}
                     </div>
@@ -456,9 +472,9 @@ export function AccessScreen({
                   {canManage ? (
                     <>
                       <div className="sectionDivider" />
-                      <div className="cardTitle">Add or update grant</div>
+                      <div className="cardTitle">{t("core.ui.access.grants.form.title")}</div>
 
-                      <label className="authLabel">Resource type</label>
+                      <label className="authLabel">{t("core.ui.access.grants.form.resource_type")}</label>
                       <select className="input" value={grantResourceType} onChange={(e) => setGrantResourceType(e.target.value)}>
                         {resourceTypeOptions.map((item) => (
                           <option key={item} value={item}>
@@ -467,7 +483,7 @@ export function AccessScreen({
                         ))}
                       </select>
 
-                      <label className="authLabel">Action</label>
+                      <label className="authLabel">{t("core.ui.access.grants.form.action")}</label>
                       <select className="input" value={grantAction} onChange={(e) => setGrantAction(e.target.value)}>
                         {actionOptions.map((item) => (
                           <option key={item} value={item}>
@@ -476,26 +492,26 @@ export function AccessScreen({
                         ))}
                       </select>
 
-                      <label className="authLabel">Include selectors (comma/newline)</label>
+                      <label className="authLabel">{t("core.ui.access.grants.form.include_selectors")}</label>
                       <textarea
                         className="input"
                         rows={3}
                         value={grantIncludeRaw}
                         onChange={(e) => setGrantIncludeRaw(e.target.value)}
-                        placeholder="Empty means include all"
+                        placeholder={t("core.ui.access.grants.form.include_placeholder")}
                       />
 
-                      <label className="authLabel">Exclude selectors (comma/newline)</label>
+                      <label className="authLabel">{t("core.ui.access.grants.form.exclude_selectors")}</label>
                       <textarea
                         className="input"
                         rows={3}
                         value={grantExcludeRaw}
                         onChange={(e) => setGrantExcludeRaw(e.target.value)}
-                        placeholder="Empty means exclude none"
+                        placeholder={t("core.ui.access.grants.form.exclude_placeholder")}
                       />
 
                       <button className="primaryButton" type="button" onClick={() => void onUpsertGrant()} disabled={busy}>
-                        Save grant
+                        {t("core.ui.access.grants.form.save")}
                       </button>
                     </>
                   ) : null}

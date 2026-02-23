@@ -4,6 +4,7 @@ import type { GraphicsQuality, HostApi, SettingsPanel, ThemeDefinition, WallHeig
 
 import type { AppSettings, AuthUser } from "../../util/api";
 import { i18n, resolveLocalizedString } from "../../util/i18n";
+import type { AccentIntensity, TransparencyLevel, Viewport3DBackground } from "../../util/theme";
 
 import { Icon } from "../Icon";
 
@@ -20,6 +21,12 @@ type Props = {
   themes: ThemeDefinition[];
   themeId: string;
   onSetThemeId: (themeId: string) => void;
+  transparencyLevel: TransparencyLevel;
+  onSetTransparencyLevel: (value: TransparencyLevel) => void;
+  accentIntensity: AccentIntensity;
+  onSetAccentIntensity: (value: AccentIntensity) => void;
+  viewport3dBackground: Viewport3DBackground;
+  onSetViewport3dBackground: (value: Viewport3DBackground) => void;
   settings: AppSettings;
   onPatchExtensionSettings: (extensionId: string, patch: Record<string, unknown>) => Promise<Record<string, unknown>>;
   onOpenPipelines: () => void;
@@ -76,6 +83,12 @@ export function SettingsScreen({
   themes,
   themeId,
   onSetThemeId,
+  transparencyLevel,
+  onSetTransparencyLevel,
+  accentIntensity,
+  onSetAccentIntensity,
+  viewport3dBackground,
+  onSetViewport3dBackground,
   settings,
   onPatchExtensionSettings,
   onOpenPipelines,
@@ -193,6 +206,108 @@ export function SettingsScreen({
               );
             })}
           </div>
+
+          <div className="sectionDivider" />
+
+          <div className="modalSectionTitle">{t("core.ui.settings.transparency")}</div>
+          <div className="choiceList">
+            {(
+              [
+                { id: "normal", title: t("core.ui.settings.transparency.normal"), desc: t("core.ui.settings.transparency.normal_desc") },
+                { id: "high", title: t("core.ui.settings.transparency.high"), desc: t("core.ui.settings.transparency.high_desc") },
+                { id: "reduced", title: t("core.ui.settings.transparency.reduced"), desc: t("core.ui.settings.transparency.reduced_desc") },
+              ] as const
+            ).map((opt) => {
+              const selected = transparencyLevel === opt.id;
+              return (
+                <div
+                  key={opt.id}
+                  className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSetTransparencyLevel(opt.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") onSetTransparencyLevel(opt.id);
+                  }}
+                >
+                  <div className="choiceTitle">{opt.title}</div>
+                  <div className="choiceDesc">{opt.desc}</div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="sectionDivider" />
+
+          <div className="modalSectionTitle">{t("core.ui.settings.accent")}</div>
+          <div className="choiceList">
+            {(
+              [
+                { id: "subtle", title: t("core.ui.settings.accent.subtle"), desc: t("core.ui.settings.accent.subtle_desc") },
+                { id: "normal", title: t("core.ui.settings.accent.normal"), desc: t("core.ui.settings.accent.normal_desc") },
+                { id: "vivid", title: t("core.ui.settings.accent.vivid"), desc: t("core.ui.settings.accent.vivid_desc") },
+              ] as const
+            ).map((opt) => {
+              const selected = accentIntensity === opt.id;
+              return (
+                <div
+                  key={opt.id}
+                  className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSetAccentIntensity(opt.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") onSetAccentIntensity(opt.id);
+                  }}
+                >
+                  <div className="choiceTitle">{opt.title}</div>
+                  <div className="choiceDesc">{opt.desc}</div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="sectionDivider" />
+
+          <div className="modalSectionTitle">{t("core.ui.settings.viewport3d_background")}</div>
+          <div className="choiceList">
+            {(
+              [
+                {
+                  id: "paper",
+                  title: t("core.ui.settings.viewport3d_background.paper"),
+                  desc: t("core.ui.settings.viewport3d_background.paper_desc"),
+                },
+                {
+                  id: "pure",
+                  title: t("core.ui.settings.viewport3d_background.pure"),
+                  desc: t("core.ui.settings.viewport3d_background.pure_desc"),
+                },
+                {
+                  id: "night",
+                  title: t("core.ui.settings.viewport3d_background.night"),
+                  desc: t("core.ui.settings.viewport3d_background.night_desc"),
+                },
+              ] as const
+            ).map((opt) => {
+              const selected = viewport3dBackground === opt.id;
+              return (
+                <div
+                  key={opt.id}
+                  className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSetViewport3dBackground(opt.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") onSetViewport3dBackground(opt.id);
+                  }}
+                >
+                  <div className="choiceTitle">{opt.title}</div>
+                  <div className="choiceDesc">{opt.desc}</div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       ),
     };
@@ -296,19 +411,25 @@ export function SettingsScreen({
     return [viewEntry, coreEntry, ...extEntries];
   }, [
     backendAvailable,
+    accentIntensity,
     ghostWalls,
     graphicsQuality,
     locale,
+    onSetAccentIntensity,
     onSetGhostWalls,
     onSetGraphicsQuality,
     onSetThemeId,
+    onSetTransparencyLevel,
+    onSetViewport3dBackground,
     onSetWallHeightPreset,
     onLogout,
     authUser,
     orderedPanels,
     t,
     themeId,
+    transparencyLevel,
     themes,
+    viewport3dBackground,
     wallHeightPreset,
     setLocale,
   ]);

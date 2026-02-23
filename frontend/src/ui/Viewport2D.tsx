@@ -196,7 +196,78 @@ function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: n
   ctx.quadraticCurveTo(x, y, x + radius, y);
 }
 
+type RGB = { r: number; g: number; b: number };
+
+function cssVar(styles: CSSStyleDeclaration, name: string, fallback: string): string {
+  const value = styles.getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+function parseRgb(value: string): RGB | null {
+  const hex = value.trim();
+  const shortMatch = /^#([0-9a-fA-F]{3})$/.exec(hex);
+  if (shortMatch) {
+    const [r, g, b] = shortMatch[1].split("");
+    return {
+      r: Number.parseInt(r + r, 16),
+      g: Number.parseInt(g + g, 16),
+      b: Number.parseInt(b + b, 16),
+    };
+  }
+  const longMatch = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (longMatch) {
+    const n = longMatch[1];
+    return {
+      r: Number.parseInt(n.slice(0, 2), 16),
+      g: Number.parseInt(n.slice(2, 4), 16),
+      b: Number.parseInt(n.slice(4, 6), 16),
+    };
+  }
+  const rgbMatch = /^rgba?\(([^)]+)\)$/.exec(hex);
+  if (rgbMatch) {
+    const parts = rgbMatch[1]
+      .split(",")
+      .map((part) => Number.parseFloat(part.trim()))
+      .filter((part) => Number.isFinite(part));
+    if (parts.length >= 3) {
+      return {
+        r: Math.max(0, Math.min(255, parts[0])),
+        g: Math.max(0, Math.min(255, parts[1])),
+        b: Math.max(0, Math.min(255, parts[2])),
+      };
+    }
+  }
+  return null;
+}
+
+function rgba(rgb: RGB | null, alpha: number, fallback: string): string {
+  if (!rgb) return fallback;
+  return `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+}
+
 type Camera2D = { cx: number; cz: number; scale: number };
+
+type ResolvedViewport2DStyles = {
+  themeId: string;
+  fontFamilySans: string;
+  textPrimary: string;
+  textMuted: string;
+  borderStrong: string;
+  surfaceSolid: string;
+  canvasBg: string;
+  gridMinor: string;
+  gridMajor: string;
+  accentAxis: string;
+  accentLabelBg: string;
+  accentLabelText: string;
+  markerFill: string;
+  selectionPrimary: string;
+  selectionSecondary: string;
+  selectionShadow: string;
+  selectionSoftFill: string;
+  handleBase: string;
+  handleGhost: string;
+};
 
 type VertexHandleHit =
   | { kind: "wall-endpoint"; endpoint: "a" | "b" }
@@ -452,6 +523,77 @@ export function Viewport2D({
     let vertexRaf = 0;
     let pendingVertexPatch: { id: string; patch: CompositionElementPatch } | null = null;
 
+    function themeIdForStyles(): string {
+      const el = document.documentElement;
+      return el.dataset.toposyncBaseTheme || el.dataset.toposyncTheme || "topo-day";
+    }
+
+    function stylesSignature(): string {
+      const d = document.documentElement.dataset;
+      return [
+        d.toposyncBaseTheme ?? "",
+        d.toposyncTheme ?? "",
+        d.toposyncTransparency ?? "",
+        d.toposyncAccent ?? "",
+        d.toposyncViewport3d ?? "",
+      ].join("|");
+    }
+
+    function resolveViewportStyles(): ResolvedViewport2DStyles {
+      const styles = getComputedStyle(document.documentElement);
+      const themeId = themeIdForStyles();
+      const isDay = themeId !== "topo-night";
+
+      const accentBlue = parseRgb(cssVar(styles, "--color-accent-blue", "#3b82f6"));
+      const accentTeal = parseRgb(cssVar(styles, "--color-accent-teal", "#0ea5a4"));
+
+      const fontFamilySans = cssVar(styles, "--font-family-sans", "ui-sans-serif, system-ui");
+      const textPrimary = cssVar(styles, "--color-text-primary", isDay ? "#101418" : "rgba(230,232,242,0.96)");
+      const textMuted = cssVar(styles, "--color-text-muted", isDay ? "rgba(16,20,24,0.72)" : "rgba(230,232,242,0.72)");
+      const borderStrong = cssVar(styles, "--color-border-strong", isDay ? "rgba(16,20,24,0.2)" : "rgba(255,255,255,0.18)");
+      const surfaceSolid = cssVar(styles, "--color-surface-solid", isDay ? "#ffffff" : "rgba(16,20,28,1)");
+      const canvasBg = cssVar(styles, "--color-canvas2d-background", isDay ? "#f4f1ea" : "#070a16");
+      const gridMinor = cssVar(styles, "--color-canvas2d-grid-minor", isDay ? "rgba(16,20,24,0.06)" : "rgba(255,255,255,0.06)");
+      const gridMajor = cssVar(styles, "--color-canvas2d-grid-major", isDay ? "rgba(16,20,24,0.1)" : "rgba(255,255,255,0.1)");
+
+      const accentAxis = rgba(accentBlue, 0.2, "rgba(59,130,246,0.2)");
+      const accentLabelBg = rgba(
+        parseRgb(surfaceSolid),
+        isDay ? 0.9 : 0.82,
+        isDay ? "rgba(255,255,255,0.9)" : "rgba(8,12,26,0.82)",
+      );
+      const markerFill = rgba(accentTeal, 0.95, "rgba(14,165,164,0.95)");
+      const selectionPrimary = rgba(accentBlue, 0.92, "rgba(59,130,246,0.92)");
+      const selectionSecondary = rgba(accentBlue, 0.55, "rgba(59,130,246,0.55)");
+      const selectionShadow = rgba(accentBlue, 0.35, "rgba(59,130,246,0.35)");
+      const selectionSoftFill = rgba(accentBlue, 0.08, "rgba(59,130,246,0.08)");
+
+      return {
+        themeId,
+        fontFamilySans,
+        textPrimary,
+        textMuted,
+        borderStrong,
+        surfaceSolid,
+        canvasBg,
+        gridMinor,
+        gridMajor,
+        accentAxis,
+        accentLabelBg,
+        accentLabelText: textPrimary,
+        markerFill,
+        selectionPrimary,
+        selectionSecondary,
+        selectionShadow,
+        selectionSoftFill,
+        handleBase: isDay ? "rgba(255,255,255,0.96)" : "rgba(8,12,26,0.92)",
+        handleGhost: isDay ? "rgba(255,255,255,0.85)" : "rgba(8,12,26,0.72)",
+      };
+    }
+
+    let resolvedViewportStylesSignature = stylesSignature();
+    let resolvedViewportStyles = resolveViewportStyles();
+
     function requestDraw() {
       if (raf) return;
       raf = requestAnimationFrame(() => {
@@ -513,11 +655,32 @@ export function Viewport2D({
       const h = canvasEl.clientHeight;
 
       ctx2d.clearRect(0, 0, w, h);
+      const signature = stylesSignature();
+      if (signature !== resolvedViewportStylesSignature) {
+        resolvedViewportStylesSignature = signature;
+        resolvedViewportStyles = resolveViewportStyles();
+      }
 
-      const g = ctx2d.createLinearGradient(0, 0, 0, h);
-      g.addColorStop(0, "#070a14");
-      g.addColorStop(1, "#050713");
-      ctx2d.fillStyle = g;
+      const {
+        fontFamilySans,
+        textMuted,
+        borderStrong,
+        canvasBg,
+        gridMinor,
+        gridMajor,
+        accentAxis,
+        accentLabelBg,
+        accentLabelText,
+        markerFill,
+        selectionPrimary,
+        selectionSecondary,
+        selectionShadow,
+        selectionSoftFill,
+        handleBase,
+        handleGhost,
+      } = resolvedViewportStyles;
+
+      ctx2d.fillStyle = canvasBg;
       ctx2d.fillRect(0, 0, w, h);
 
       const originX = w / 2;
@@ -591,11 +754,11 @@ export function Viewport2D({
 
       const minorPx = SNAP_STEP * scale;
       if (minorPx >= 8) {
-        drawGrid(SNAP_STEP, { stroke: "rgba(255,255,255,0.028)", width: 1 });
+        drawGrid(SNAP_STEP, { stroke: gridMinor, width: 1 });
       }
-      drawGrid(majorStep, { stroke: "rgba(255,255,255,0.055)", width: 1 });
+      drawGrid(majorStep, { stroke: gridMajor, width: 1 });
 
-      ctx2d.strokeStyle = "rgba(251,191,36,0.20)";
+      ctx2d.strokeStyle = accentAxis;
       ctx2d.lineWidth = 1.25;
       const axisX = Math.round(worldToScreen(toPlanePoint(0, 0)).x) + 0.5;
       const axisY = Math.round(worldToScreen(toPlanePoint(0, 0)).y) + 0.5;
@@ -608,9 +771,9 @@ export function Viewport2D({
       ctx2d.lineTo(w, axisY);
       ctx2d.stroke();
 
-      ctx2d.fillStyle = "rgba(251,191,36,0.95)";
-      ctx2d.strokeStyle = "rgba(0,0,0,0.35)";
-      ctx2d.font = "12px ui-sans-serif, system-ui";
+      ctx2d.fillStyle = markerFill;
+      ctx2d.strokeStyle = borderStrong;
+      ctx2d.font = `12px ${fontFamilySans}`;
 
       const elementRank = (el: CompositionElement): number => {
         const group = elementTypesRef.current[el.type]?.layerGroup ?? "";
@@ -649,9 +812,9 @@ export function Viewport2D({
         ctx2d.fill();
         ctx2d.stroke();
 
-        ctx2d.fillStyle = "rgba(230,232,242,0.85)";
+        ctx2d.fillStyle = textMuted;
         ctx2d.fillText(el.name || el.type, p.x + 10, p.y + 4);
-        ctx2d.fillStyle = "rgba(251,191,36,0.95)";
+        ctx2d.fillStyle = markerFill;
       }
 
       const selectedIds = selectedRef.current;
@@ -672,9 +835,9 @@ export function Viewport2D({
           const b = readPlanePoint(el.props.b);
 
           ctx2d.save();
-          ctx2d.strokeStyle = isPrimary ? "rgba(251,191,36,0.92)" : "rgba(251,191,36,0.55)";
+          ctx2d.strokeStyle = isPrimary ? selectionPrimary : selectionSecondary;
           ctx2d.lineWidth = isPrimary ? 3 : 2;
-          ctx2d.shadowColor = isPrimary ? "rgba(251,191,36,0.35)" : "rgba(0,0,0,0)";
+          ctx2d.shadowColor = isPrimary ? selectionShadow : "rgba(0,0,0,0)";
           ctx2d.shadowBlur = isPrimary ? 10 : 0;
 
           if (verts.length >= 3) {
@@ -724,7 +887,7 @@ export function Viewport2D({
               const anchorY = anchor.y - 18;
 
               ctx2d.save();
-              ctx2d.font = "12px ui-sans-serif, system-ui";
+              ctx2d.font = `12px ${fontFamilySans}`;
               ctx2d.textAlign = "center";
               ctx2d.textBaseline = "middle";
 
@@ -735,10 +898,10 @@ export function Viewport2D({
               const x0 = anchorX - boxW / 2;
               const y0 = anchorY - boxH / 2;
 
-              ctx2d.shadowColor = "rgba(0,0,0,0.38)";
+              ctx2d.shadowColor = "rgba(0,0,0,0.30)";
               ctx2d.shadowBlur = 14;
-              ctx2d.fillStyle = "rgba(8,12,26,0.78)";
-              ctx2d.strokeStyle = "rgba(255,255,255,0.14)";
+              ctx2d.fillStyle = accentLabelBg;
+              ctx2d.strokeStyle = borderStrong;
               ctx2d.lineWidth = 1;
               ctx2d.beginPath();
               roundRectPath(ctx2d, x0, y0, boxW, boxH, 999);
@@ -746,7 +909,7 @@ export function Viewport2D({
               ctx2d.shadowBlur = 0;
               ctx2d.stroke();
 
-              ctx2d.fillStyle = "rgba(230,232,242,0.92)";
+              ctx2d.fillStyle = accentLabelText;
               ctx2d.fillText(label, anchorX, anchorY);
               ctx2d.restore();
             }
@@ -787,16 +950,16 @@ export function Viewport2D({
                 const p = worldToScreen(pt);
                 const hot = isHandleHot(handle);
                 ctx2d.save();
-                ctx2d.shadowColor = hot && !opts.ghost ? "rgba(251,191,36,0.35)" : "rgba(0,0,0,0)";
+                ctx2d.shadowColor = hot && !opts.ghost ? selectionShadow : "rgba(0,0,0,0)";
                 ctx2d.shadowBlur = hot && !opts.ghost ? 12 : 0;
-                ctx2d.fillStyle = opts.ghost ? "rgba(8,12,26,0.72)" : "rgba(8,12,26,0.92)";
+                ctx2d.fillStyle = opts.ghost ? handleGhost : handleBase;
                 ctx2d.strokeStyle = opts.ghost
                   ? hot
-                    ? "rgba(251,191,36,0.85)"
-                    : "rgba(251,191,36,0.55)"
+                    ? selectionPrimary
+                    : selectionSecondary
                   : hot
-                    ? "rgba(251,191,36,0.98)"
-                    : "rgba(251,191,36,0.92)";
+                    ? selectionPrimary
+                    : selectionSecondary;
                 ctx2d.lineWidth = hot ? 2.5 : 2;
                 if (opts.ghost) ctx2d.setLineDash([3, 3]);
                 ctx2d.beginPath();
@@ -851,16 +1014,16 @@ export function Viewport2D({
 
               ctx2d.save();
               ctx2d.lineWidth = 2;
-              ctx2d.strokeStyle = isHot ? "rgba(251,191,36,0.78)" : "rgba(255,255,255,0.10)";
+              ctx2d.strokeStyle = isHot ? selectionSecondary : borderStrong;
               ctx2d.beginPath();
               ctx2d.moveTo(pivot.x, pivot.y);
               ctx2d.lineTo(handle.x, handle.y);
               ctx2d.stroke();
 
-              ctx2d.shadowColor = isHot ? "rgba(251,191,36,0.35)" : "rgba(0,0,0,0)";
+              ctx2d.shadowColor = isHot ? selectionShadow : "rgba(0,0,0,0)";
               ctx2d.shadowBlur = isHot ? 12 : 0;
-              ctx2d.fillStyle = "rgba(8,12,26,0.92)";
-              ctx2d.strokeStyle = isHot ? "rgba(251,191,36,0.92)" : "rgba(255,255,255,0.18)";
+              ctx2d.fillStyle = handleBase;
+              ctx2d.strokeStyle = isHot ? selectionPrimary : borderStrong;
               ctx2d.lineWidth = 2;
               ctx2d.beginPath();
               ctx2d.arc(handle.x, handle.y, 8, 0, Math.PI * 2);
@@ -872,7 +1035,7 @@ export function Viewport2D({
                 const label = `${deltaDeg}°`;
                 const hint = absoluteDeg !== null ? ` (${absoluteDeg}°)` : "";
                 const text = `${label}${hint}`;
-                ctx2d.font = "12px ui-sans-serif, system-ui";
+                ctx2d.font = `12px ${fontFamilySans}`;
                 ctx2d.textAlign = "center";
                 ctx2d.textBaseline = "middle";
                 const metrics = ctx2d.measureText(text);
@@ -880,14 +1043,14 @@ export function Viewport2D({
                 const boxH = 24;
                 const x0 = handle.x - boxW / 2;
                 const y0 = handle.y - 24;
-                ctx2d.fillStyle = "rgba(8,12,26,0.82)";
-                ctx2d.strokeStyle = "rgba(255,255,255,0.14)";
+                ctx2d.fillStyle = accentLabelBg;
+                ctx2d.strokeStyle = borderStrong;
                 ctx2d.lineWidth = 1;
                 ctx2d.beginPath();
                 roundRectPath(ctx2d, x0, y0, boxW, boxH, 999);
                 ctx2d.fill();
                 ctx2d.stroke();
-                ctx2d.fillStyle = "rgba(230,232,242,0.92)";
+                ctx2d.fillStyle = accentLabelText;
                 ctx2d.fillText(text, handle.x, y0 + boxH / 2);
               }
 
@@ -922,8 +1085,8 @@ export function Viewport2D({
         const rectH = bottom - top;
         if (rectW >= 3 || rectH >= 3) {
           ctx2d.save();
-          ctx2d.fillStyle = "rgba(251,191,36,0.08)";
-          ctx2d.strokeStyle = "rgba(251,191,36,0.55)";
+          ctx2d.fillStyle = selectionSoftFill;
+          ctx2d.strokeStyle = selectionSecondary;
           ctx2d.lineWidth = 1;
           ctx2d.setLineDash([6, 5]);
           ctx2d.fillRect(left, top, rectW, rectH);
@@ -1057,29 +1220,29 @@ export function Viewport2D({
       return Math.hypot(world.x - p.x, world.z - p.z) <= radius;
     }
 
-	    function findHitElement(world: PlanePoint): string | null {
-	      const viewport = makeViewportContext();
-	      const hidden = hiddenElementIdsRef.current;
+    function findHitElement(world: PlanePoint): string | null {
+      const viewport = makeViewportContext();
+      const hidden = hiddenElementIdsRef.current;
 
-	      const elementRank = (el: CompositionElement): number => {
-	        const group = elementTypesRef.current[el.type]?.layerGroup ?? "";
-	        if (group === "background") {
-	          const mode = el.props?.mode;
-	          if (mode === "tracing") return 0.5;
-	          return -1;
-	        }
-	        if (group === "areas") return 0;
-	        if (group === "walls") return 1;
-	        return 2;
-	      };
+      const elementRank = (el: CompositionElement): number => {
+        const group = elementTypesRef.current[el.type]?.layerGroup ?? "";
+        if (group === "background") {
+          const mode = el.props?.mode;
+          if (mode === "tracing") return 0.5;
+          return -1;
+        }
+        if (group === "areas") return 0;
+        if (group === "walls") return 1;
+        return 2;
+      };
 
-	      const ordered = elementsRef.current
-	        .map((el, idx) => ({ el, idx }))
-	        .sort((a, b) => elementRank(a.el) - elementRank(b.el) || a.idx - b.idx)
-	        .map((v) => v.el);
+      const ordered = elementsRef.current
+        .map((el, idx) => ({ el, idx }))
+        .sort((a, b) => elementRank(a.el) - elementRank(b.el) || a.idx - b.idx)
+        .map((v) => v.el);
 
-	      for (let i = ordered.length - 1; i >= 0; i--) {
-	        const el = ordered[i];
+      for (let i = ordered.length - 1; i >= 0; i--) {
+        const el = ordered[i];
         if (hidden.has(el.id)) continue;
         if (hitTestElement(el, world, viewport)) return el.id;
       }

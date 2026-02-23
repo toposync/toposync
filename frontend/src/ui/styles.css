@@ -1,16 +1,17 @@
 :root {
-  --bg: #000;
-  --panel: rgba(12, 18, 37, 0.72);
-  --panelSolid: #0c1225;
-  --panel2: rgba(15, 23, 48, 0.88);
-  --text: #e6e8f2;
-  --muted: #a0a7bd;
-  --accent: #fbbf24;
-  --border: rgba(255, 255, 255, 0.12);
-  --borderStrong: rgba(255, 255, 255, 0.22);
-  --shadow: 0 22px 70px rgba(0, 0, 0, 0.60);
-  --glassBlur: 14px;
-  --glassSaturate: 1.15;
+  --bg: var(--color-application-background);
+  --panel: var(--color-surface-frost);
+  --panelSolid: var(--color-surface-solid);
+  --panel2: var(--color-surface-frost-strong);
+  --text: var(--color-text-primary);
+  --muted: var(--color-text-muted);
+  --accent: var(--color-accent-teal);
+  --border: var(--color-border-subtle);
+  --borderStrong: var(--color-border-strong);
+  --shadow: var(--shadow-elevation-2);
+  --shadowStrong: var(--shadow-elevation-3);
+  --glassBlur: var(--frost-blur-medium);
+  --glassSaturate: 1.4;
 }
 
 *,
@@ -23,11 +24,16 @@ html,
 body {
   height: 100%;
   margin: 0;
-  background: var(--bg);
+  background: linear-gradient(165deg, var(--color-application-background), var(--color-application-background-secondary));
   color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-14);
+  line-height: var(--line-height-normal);
+  letter-spacing: var(--letter-spacing-normal);
   user-select: text;
   -webkit-user-select: text;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 button,
@@ -52,12 +58,26 @@ textarea {
   position: fixed;
   inset: 0;
   overflow: hidden;
-  background: var(--bg);
+  background: linear-gradient(165deg, var(--color-application-background), var(--color-application-background-secondary));
+}
+
+.appShell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: var(--noise-opacity);
+  background-image:
+    radial-gradient(circle at 25% 25%, rgba(255, 255, 255, 0.55) 0.5px, transparent 0.5px),
+    radial-gradient(circle at 75% 75%, rgba(16, 20, 24, 0.35) 0.5px, transparent 0.5px);
+  background-size: 3px 3px, 5px 5px;
+  mix-blend-mode: soft-light;
 }
 
 .screenRoot {
   position: absolute;
   inset: 0;
+  z-index: var(--z-base);
 }
 
 .viewportRoot,
@@ -104,6 +124,11 @@ textarea {
 }
 
 .main2dOverlay {
+  mix-blend-mode: normal;
+}
+
+:root[data-toposync-base-theme="topo-night"] .main2dOverlay,
+:root[data-toposync-theme="topo-night"] .main2dOverlay {
   mix-blend-mode: screen;
 }
 
@@ -2850,4 +2875,562 @@ textarea {
   .accessLayout {
     grid-template-columns: 1fr;
   }
+}
+
+/* Topo Frost 2026 foundation */
+.topoSurfaceFrost {
+  background: var(--color-surface-frost);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-elevation-2);
+  backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+  -webkit-backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+}
+
+.topoSurfaceFrostStrong {
+  background: var(--color-surface-frost-strong);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-modal);
+  box-shadow: var(--shadow-elevation-3);
+  backdrop-filter: blur(var(--frost-blur-large)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+  -webkit-backdrop-filter: blur(var(--frost-blur-large)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+}
+
+.topoSurfaceSolid {
+  background: var(--color-surface-solid);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-elevation-2);
+}
+
+.topoFocusRing:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--color-focus-ring-inner),
+    0 0 0 4px var(--color-focus-ring-outer);
+}
+
+:where(button, input, textarea, select, [role="button"]):focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--color-focus-ring-inner),
+    0 0 0 4px var(--color-focus-ring-outer);
+}
+
+:where(button, input, textarea, select) {
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-13);
+}
+
+:where(input, textarea)::placeholder {
+  color: var(--color-text-subtle);
+}
+
+.viewportRoot {
+  background:
+    radial-gradient(circle at center, transparent 48%, var(--color-viewport3d-vignette)),
+    linear-gradient(160deg, var(--color-viewport3d-background-start), var(--color-viewport3d-background-end));
+}
+
+.viewportRoot canvas {
+  background: transparent !important;
+}
+
+.main2dRoot {
+  background: var(--color-canvas2d-background);
+}
+
+.appShell,
+.settingsRoot,
+.pipelinesRoot,
+.authRoot,
+.accessRoot {
+  color: var(--color-text-primary);
+}
+
+.settingsRoot,
+.pipelinesRoot,
+.authRoot,
+.accessRoot {
+  background:
+    radial-gradient(900px 600px at 10% 0%, color-mix(in srgb, var(--color-accent-teal) 9%, transparent), transparent 58%),
+    radial-gradient(900px 600px at 90% 100%, color-mix(in srgb, var(--color-accent-blue) 8%, transparent), transparent 58%),
+    linear-gradient(165deg, var(--color-application-background), var(--color-application-background-secondary));
+}
+
+.viewportRoot,
+.viewportCanvas,
+.overlayTopRight,
+.overlayLeft,
+.emptyHint {
+  z-index: var(--z-viewport-overlay);
+}
+
+.overlayTopRight,
+.overlayLeft,
+.pipelinesTopbar,
+.settingsTopbar {
+  color: var(--color-text-primary);
+}
+
+.card,
+.railNotifications,
+.pipelinesForm,
+.pipelinesInteractiveToolbar,
+.pipelinesStepCard,
+.pipelinesOperatorConfigCard,
+.pipelinesStatsItem,
+.pipelinesStepStatsRow,
+.pipelinesAlertRow,
+.notificationDetailField,
+.notificationPayloadDetails,
+.settingsConfirmPanel,
+.authCard,
+.accessSidebar,
+.accessMain,
+.pipelinesServerRow {
+  background: var(--color-surface-frost);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-elevation-2);
+  backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+  -webkit-backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+}
+
+.pipelinesSidebar,
+.settingsSidebar,
+.settingsMain,
+.modalPanel,
+.settingsConfirmPanel,
+.railNotifications {
+  background: var(--color-surface-frost-strong);
+  border-color: var(--color-border-subtle);
+  backdrop-filter: blur(var(--frost-blur-large)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+  -webkit-backdrop-filter: blur(var(--frost-blur-large)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+}
+
+.modalBackdrop,
+.settingsConfirmBackdrop,
+.pipelinesSidebarBackdrop {
+  background: var(--color-scrim);
+}
+
+.modalBackdrop,
+.settingsConfirmBackdrop {
+  z-index: var(--z-modal);
+}
+
+.modalPanel {
+  border-radius: var(--radius-modal);
+  box-shadow: var(--shadow-elevation-3);
+}
+
+.modalHeader {
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.modalBody {
+  padding: var(--space-4);
+}
+
+.modalFooter,
+.settingsFooter {
+  padding: var(--space-4);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.settingsFooter {
+  background: var(--color-surface-frost-ultra);
+}
+
+.settingsTopbar,
+.pipelinesTopbar {
+  background: var(--color-surface-frost);
+  border-bottom: 1px solid var(--color-border-subtle);
+  backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+  -webkit-backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+}
+
+.settingsTopbarTitle,
+.pipelinesTitle,
+.settingsHeaderTitle,
+.pipelinesEditorTitle {
+  color: var(--color-text-primary);
+}
+
+.settingsHeaderDesc,
+.pipelinesHint,
+.pipelinesStepHint,
+.settingsStatusMuted,
+.label,
+.authLabel,
+.notificationText,
+.cardMeta,
+.pipelinesServerMeta,
+.pipelinesAlertSuggestion,
+.pipelinesContextMeta,
+.notificationDetailsSubtitle,
+.notificationGalleryCounter,
+.notificationGalleryMeta {
+  color: var(--color-text-muted);
+}
+
+.cardBody,
+.choiceDesc,
+.notificationCardBody,
+.notificationDetailsDescription {
+  color: var(--color-text-muted);
+}
+
+.chipButton,
+.pillButton,
+.primaryButton,
+.dangerButton,
+.iconButton,
+.sceneIconButton,
+.layerDragHandle,
+.layerToggleButton,
+.elementTypeButton,
+.layerDeleteButton,
+.layerMainButton,
+.compositionSelectButton {
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-primary);
+  background: var(--color-surface-frost);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
+  backdrop-filter: blur(var(--frost-blur-small)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+  -webkit-backdrop-filter: blur(var(--frost-blur-small)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+  transition:
+    transform var(--motion-medium) var(--ease-standard),
+    border-color var(--motion-medium) var(--ease-standard),
+    background-color var(--motion-medium) var(--ease-standard),
+    box-shadow var(--motion-medium) var(--ease-standard);
+}
+
+.chipButton,
+.pillButton,
+.primaryButton,
+.dangerButton {
+  height: var(--control-height-m);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-13);
+  font-weight: var(--font-weight-semibold);
+}
+
+.iconButton,
+.sceneIconButton {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-control);
+}
+
+.chipButton:hover,
+.pillButton:hover,
+.iconButton:hover,
+.sceneIconButton:hover,
+.layerDragHandle:hover,
+.layerToggleButton:hover,
+.elementTypeButton:hover,
+.layerMainButton:hover,
+.compositionSelectButton:hover {
+  border-color: var(--color-border-strong);
+  transform: translateY(var(--hover-translate-y));
+}
+
+.chipButton:active,
+.pillButton:active,
+.primaryButton:active,
+.dangerButton:active,
+.iconButton:active,
+.elementTypeButton:active {
+  transform: translateY(var(--press-translate-y));
+}
+
+.primaryButton,
+.pillButtonPrimary,
+.iconButtonPrimary {
+  color: var(--color-text-inverted);
+  border-color: color-mix(in srgb, var(--color-accent-teal) 45%, var(--color-accent-blue) 24%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-accent-teal) 84%, white), var(--color-accent-teal)),
+    linear-gradient(135deg, color-mix(in srgb, var(--color-accent-teal) 86%, transparent), color-mix(in srgb, var(--color-accent-blue) 40%, transparent));
+  box-shadow: var(--shadow-elevation-2), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.primaryButton:hover,
+.pillButtonPrimary:hover,
+.iconButtonPrimary:hover {
+  border-color: color-mix(in srgb, var(--color-accent-teal) 65%, var(--color-accent-blue) 42%);
+}
+
+.dangerButton,
+.pillButtonDanger,
+.iconButtonDanger,
+.layerDeleteButton {
+  color: var(--color-text-inverted);
+  border-color: color-mix(in srgb, var(--color-danger) 46%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-danger) 84%, white),
+    color-mix(in srgb, var(--color-danger) 68%, black)
+  );
+}
+
+.dangerButton:hover,
+.pillButtonDanger:hover,
+.iconButtonDanger:hover,
+.layerDeleteButton:hover {
+  border-color: color-mix(in srgb, var(--color-danger) 68%, transparent);
+}
+
+.pipelinesInput,
+.pipelinesSelect,
+.input {
+  height: var(--control-height-m);
+  padding: 0 var(--space-3);
+}
+
+.pipelinesInput,
+.pipelinesSelect,
+.input,
+.pipelinesInputTextarea,
+.pipelinesTextArea,
+.pipelinesStepConfigTextarea,
+.pipelinesTextarea,
+textarea,
+select {
+  border-radius: var(--radius-control);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-frost);
+  color: var(--color-text-primary);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--color-surface-solid) 28%, transparent);
+  transition:
+    border-color var(--motion-medium) var(--ease-standard),
+    box-shadow var(--motion-medium) var(--ease-standard),
+    background-color var(--motion-medium) var(--ease-standard);
+}
+
+.pipelinesInput:hover,
+.pipelinesSelect:hover,
+.input:hover,
+.pipelinesInputTextarea:hover,
+.pipelinesTextArea:hover,
+.pipelinesStepConfigTextarea:hover,
+.pipelinesTextarea:hover {
+  border-color: var(--color-border-strong);
+}
+
+.pipelinesInput:focus,
+.pipelinesSelect:focus,
+.input:focus,
+.pipelinesInputTextarea:focus,
+.pipelinesTextArea:focus,
+.pipelinesStepConfigTextarea:focus,
+.pipelinesTextarea:focus {
+  border-color: var(--color-accent-border);
+  box-shadow:
+    0 0 0 2px var(--color-focus-ring-inner),
+    0 0 0 4px var(--color-focus-ring-outer);
+}
+
+.pipelinesTextarea,
+.pipelinesStepConfigTextarea,
+.pipelinesTextArea {
+  font-family: var(--font-family-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.pipelinesTextarea {
+  background: color-mix(in srgb, var(--color-surface-solid) 84%, var(--color-application-background));
+}
+
+:root[data-toposync-base-theme="topo-night"] .pipelinesTextarea,
+:root[data-toposync-theme="topo-night"] .pipelinesTextarea {
+  background: #0b1020;
+}
+
+.pipelinesListItem,
+.settingsNavItem,
+.settingsTab,
+.choiceItem,
+.compositionSelectButton,
+.layerMainButton,
+.elementTypeButton {
+  transition:
+    border-color var(--motion-medium) var(--ease-standard),
+    background-color var(--motion-medium) var(--ease-standard),
+    transform var(--motion-medium) var(--ease-standard);
+}
+
+.pipelinesListItem:hover,
+.settingsNavItem:hover,
+.settingsTab:hover,
+.choiceItem:hover {
+  background: linear-gradient(135deg, var(--color-accent-background-soft), var(--color-accent-background-soft-2));
+  border-color: color-mix(in srgb, var(--color-accent-border) 58%, var(--color-border-subtle));
+}
+
+.pipelinesListItem.isActive,
+.settingsNavItem.isSelected,
+.settingsTab.isSelected,
+.choiceItem.isSelected,
+.layerMainButton.isSelected,
+.layerToggleButton.isActive,
+.elementTypeButton.isSelected,
+.compositionSelectButton.isActive,
+.card.isActive {
+  background: linear-gradient(135deg, var(--color-accent-background-strong), var(--color-accent-background-strong-2));
+  border-color: var(--color-accent-border);
+}
+
+.pipelinesStepCard.isDropBefore {
+  border-top-color: var(--color-accent-border-2);
+}
+
+.pipelinesStepCard.isDropAfter {
+  border-bottom-color: var(--color-accent-border-2);
+}
+
+.layerRow.isDropBefore::before,
+.layerRow.isDropAfter::after {
+  background: linear-gradient(135deg, var(--color-accent-teal), var(--color-accent-blue));
+}
+
+.errorText,
+.pipelinesInlineError {
+  color: color-mix(in srgb, var(--color-danger) 80%, var(--color-text-inverted));
+  background: color-mix(in srgb, var(--color-danger) 16%, transparent);
+  border-color: color-mix(in srgb, var(--color-danger) 38%, transparent);
+}
+
+.notificationLivePip {
+  background: linear-gradient(135deg, var(--color-accent-background-strong), var(--color-accent-background-strong-2));
+  border-color: var(--color-accent-border);
+  color: var(--color-text-primary);
+}
+
+.notificationLiveDot {
+  background: var(--color-accent-teal);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent-teal) 20%, transparent);
+}
+
+.notificationsToggleBadge,
+.main2dHaClusterCount,
+.pillBadge {
+  border: 1px solid color-mix(in srgb, var(--color-accent-border) 55%, transparent);
+  background: linear-gradient(135deg, var(--color-accent-teal), var(--color-accent-blue));
+  color: var(--color-text-inverted);
+}
+
+.main2dHaButton {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-panel);
+  border-color: var(--color-border-subtle);
+  background: var(--color-surface-frost);
+  box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
+}
+
+.main2dHaButton:hover {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-frost-strong);
+}
+
+.main2dHaButton.isOn {
+  border-color: color-mix(in srgb, var(--color-success) 65%, transparent);
+  background: color-mix(in srgb, var(--color-success) 14%, var(--color-surface-frost));
+}
+
+.main2dHaButton.isOff {
+  border-color: color-mix(in srgb, var(--color-danger) 65%, transparent);
+  background: color-mix(in srgb, var(--color-danger) 14%, var(--color-surface-frost));
+}
+
+.main2dHaCluster,
+.main2dHaCluster:hover {
+  border-color: var(--color-accent-border);
+  background: linear-gradient(135deg, var(--color-accent-background-strong), var(--color-accent-background-strong-2));
+}
+
+.settingsNavDirtyDot {
+  background: var(--color-accent-teal);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent-teal) 20%, transparent);
+}
+
+.settingsNavIcon,
+.main2dClusterIcon {
+  border-color: var(--color-border-subtle);
+  background: var(--color-surface-frost-ultra);
+}
+
+.notificationPriorityDot.isHigh {
+  background: var(--color-danger);
+}
+
+.notificationPriorityDot.isMedium {
+  background: var(--color-warning);
+}
+
+.notificationPriorityDot.isLow {
+  background: color-mix(in srgb, var(--color-text-muted) 80%, transparent);
+}
+
+.railScroll,
+.modalBody,
+.settingsContent,
+.settingsSidebar,
+.processingServersBody,
+.pipelinesList,
+.pipelinesServers,
+.notificationGalleryThumbs {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.railScroll::-webkit-scrollbar,
+.modalBody::-webkit-scrollbar,
+.settingsContent::-webkit-scrollbar,
+.settingsSidebar::-webkit-scrollbar,
+.processingServersBody::-webkit-scrollbar,
+.pipelinesList::-webkit-scrollbar,
+.notificationGalleryThumbs::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.railScroll::-webkit-scrollbar-thumb,
+.modalBody::-webkit-scrollbar-thumb,
+.settingsContent::-webkit-scrollbar-thumb,
+.settingsSidebar::-webkit-scrollbar-thumb,
+.processingServersBody::-webkit-scrollbar-thumb,
+.pipelinesList::-webkit-scrollbar-thumb,
+.notificationGalleryThumbs::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: var(--radius-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.railScroll::-webkit-scrollbar-thumb:hover,
+.modalBody::-webkit-scrollbar-thumb:hover,
+.settingsContent::-webkit-scrollbar-thumb:hover,
+.settingsSidebar::-webkit-scrollbar-thumb:hover,
+.processingServersBody::-webkit-scrollbar-thumb:hover,
+.pipelinesList::-webkit-scrollbar-thumb:hover,
+.notificationGalleryThumbs::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+:root[data-toposync-base-theme="topo-day"] .notificationGalleryImage,
+:root[data-toposync-theme="topo-day"] .notificationGalleryImage,
+:root[data-toposync-base-theme="topo-day"] .notificationThumb,
+:root[data-toposync-theme="topo-day"] .notificationThumb,
+:root[data-toposync-base-theme="topo-day"] .notificationCardThumb,
+:root[data-toposync-theme="topo-day"] .notificationCardThumb {
+  background: color-mix(in srgb, var(--color-surface-solid) 75%, var(--color-application-background));
+  border-color: var(--color-border-subtle);
 }

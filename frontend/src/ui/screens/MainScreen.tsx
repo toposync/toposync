@@ -825,9 +825,9 @@ export function MainScreen({
               width: "100%",
               maxHeight: "72vh",
               objectFit: "contain",
-              borderRadius: 14,
-              border: "1px solid rgba(255,255,255,0.12)",
-              background: "rgba(0,0,0,0.18)",
+              borderRadius: "var(--radius-panel)",
+              border: "1px solid var(--color-border-subtle)",
+              background: "var(--color-surface-frost)",
               marginTop: imageModal.subtitle ? 12 : 0,
               display: "block",
             }}

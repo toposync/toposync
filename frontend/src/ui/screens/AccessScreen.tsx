@@ -300,7 +300,7 @@ export function AccessScreen({
           <i className="fa-solid fa-arrow-left" aria-hidden="true" />
         </button>
         <div className="settingsTopbarTitle">Access</div>
-        <div className="row" style={{ marginLeft: "auto", gap: 8 }}>
+        <div className="row accessTopbarActions">
           <button className="chipButton" type="button" onClick={() => void loadData()} disabled={loading || busy}>
             {t("core.actions.refresh")}
           </button>
@@ -342,7 +342,7 @@ export function AccessScreen({
           </div>
 
           {canManage ? (
-            <div className="card" style={{ marginTop: 12 }}>
+            <div className="card">
               <div className="cardTitle">Create user</div>
               <input className="input" placeholder="Username" value={createUsername} onChange={(e) => setCreateUsername(e.target.value)} />
               <input className="input" placeholder="Display name" value={createDisplayName} onChange={(e) => setCreateDisplayName(e.target.value)} />
@@ -401,13 +401,13 @@ export function AccessScreen({
                     disabled={!canManage}
                   />
 
-                  <label className="row" style={{ gap: 8 }}>
+                  <label className="row">
                     <input type="checkbox" checked={isDisabled} onChange={(e) => setIsDisabled(e.target.checked)} disabled={!canManage} />
                     Disabled
                   </label>
 
                   {canManage ? (
-                    <div className="row" style={{ gap: 8, marginTop: 8 }}>
+                    <div className="cardFooter">
                       <button className="primaryButton" type="button" onClick={() => void onSaveUser()} disabled={busy}>
                         Save user
                       </button>
@@ -418,40 +418,44 @@ export function AccessScreen({
                   ) : null}
                 </div>
 
-                <div className="card" style={{ marginTop: 12 }}>
+                <div className="card">
                   <div className="cardTitle">Scope grants (include/exclude)</div>
                   <div className="settingsStatusMuted">
                     Empty include means "include all". Empty exclude means "exclude none". Exclude always wins.
                   </div>
 
-                  <div className="sectionDivider" style={{ margin: "10px 0" }} />
+                  <div className="sectionDivider" />
 
                   {selectedUser.grants.length === 0 ? <div className="settingsStatusMuted">No custom grants.</div> : null}
-                  {selectedUser.grants.map((grant) => (
-                    <div key={`${grant.action}:${grant.resource_type}`} className="card" style={{ marginBottom: 8 }}>
-                      <div className="row" style={{ justifyContent: "space-between", gap: 8 }}>
-                        <div>
-                          <strong>{grant.action}</strong>
-                          <div className="settingsNavDesc">{grant.resource_type}</div>
+                  {selectedUser.grants.length > 0 ? (
+                    <div className="accessGrantsList">
+                      {selectedUser.grants.map((grant) => (
+                        <div key={`${grant.action}:${grant.resource_type}`} className="card">
+                          <div className="row accessGrantHeaderRow">
+                            <div>
+                              <strong>{grant.action}</strong>
+                              <div className="settingsNavDesc">{grant.resource_type}</div>
+                            </div>
+                            {canManage ? (
+                              <button
+                                className="chipButton"
+                                type="button"
+                                onClick={() => void onDeleteGrant(grant.action, grant.resource_type)}
+                                disabled={busy}
+                              >
+                                Remove
+                              </button>
+                            ) : null}
+                          </div>
+                          <div className="settingsStatusMuted">{grantSummary(grant.include, grant.exclude)}</div>
                         </div>
-                        {canManage ? (
-                          <button
-                            className="chipButton"
-                            type="button"
-                            onClick={() => void onDeleteGrant(grant.action, grant.resource_type)}
-                            disabled={busy}
-                          >
-                            Remove
-                          </button>
-                        ) : null}
-                      </div>
-                      <div className="settingsStatusMuted">{grantSummary(grant.include, grant.exclude)}</div>
+                      ))}
                     </div>
-                  ))}
+                  ) : null}
 
                   {canManage ? (
                     <>
-                      <div className="sectionDivider" style={{ margin: "10px 0" }} />
+                      <div className="sectionDivider" />
                       <div className="cardTitle">Add or update grant</div>
 
                       <label className="authLabel">Resource type</label>
@@ -500,7 +504,7 @@ export function AccessScreen({
             </>
           )}
 
-          {error ? <div className="errorText" style={{ marginTop: 8 }}>{error}</div> : null}
+          {error ? <div className="errorText">{error}</div> : null}
         </div>
       </div>
     </div>

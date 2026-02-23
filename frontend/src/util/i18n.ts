@@ -141,6 +141,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.settings.confirm_close_desc": "You have unsaved changes. Discard them and close Settings?",
     "core.ui.settings.confirm_open_pipelines_title": "Discard changes and open Pipelines?",
     "core.ui.settings.confirm_open_processing_servers_title": "Discard changes and open Processing servers?",
+    "core.ui.settings.confirm_open_access_title": "Discard changes and open Access control?",
     "core.ui.settings.confirm_discard_continue": "Discard and continue",
     "core.ui.settings.confirm_discard_continue_desc": "You have unsaved settings{{suffix}}. Discard them and continue?",
 
@@ -622,6 +623,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.settings.nav.pipelines.desc": "Create and edit pipelines.",
     "core.ui.settings.nav.processing_servers.title": "Processing servers",
     "core.ui.settings.nav.processing_servers.desc": "Manage remote processing servers.",
+    "core.ui.settings.nav.access.title": "Access",
+    "core.ui.settings.nav.access.desc": "Manage users and include/exclude grants.",
   },
   "pt-BR": {
     "core.actions.add": "Adicionar",
@@ -739,6 +742,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.settings.confirm_close_desc": "Você tem alterações não salvas. Descartar e fechar as configurações?",
     "core.ui.settings.confirm_open_pipelines_title": "Descartar alterações e abrir Pipelines?",
     "core.ui.settings.confirm_open_processing_servers_title": "Descartar alterações e abrir Servidores de processamento?",
+    "core.ui.settings.confirm_open_access_title": "Descartar alterações e abrir Controle de acesso?",
     "core.ui.settings.confirm_discard_continue": "Descartar e continuar",
     "core.ui.settings.confirm_discard_continue_desc": "Você tem configurações não salvas{{suffix}}. Descartar e continuar?",
 
@@ -1218,6 +1222,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.settings.nav.pipelines.desc": "Crie e edite pipelines.",
     "core.ui.settings.nav.processing_servers.title": "Servidores de processamento",
     "core.ui.settings.nav.processing_servers.desc": "Gerencie servidores de processamento remotos.",
+    "core.ui.settings.nav.access.title": "Acesso",
+    "core.ui.settings.nav.access.desc": "Gerencie usuários e permissões (include/exclude).",
   },
 };
 

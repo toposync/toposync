@@ -79,8 +79,6 @@ export const camerasTranslations = {
     "ext.cameras.action.no_camera": "No camera selected.",
     "ext.cameras.action.refresh": "Refresh snapshot",
     "ext.cameras.action.loading": "Loading...",
-    "ext.cameras.theme.neon_name": "Neon (blue)",
-    "ext.cameras.theme.neon_desc": "A neon blue variation for the whole UI.",
   },
   "pt-BR": {
     "ext.cameras.settings.name": "Câmeras",
@@ -162,7 +160,5 @@ export const camerasTranslations = {
     "ext.cameras.action.no_camera": "Nenhuma câmera selecionada.",
     "ext.cameras.action.refresh": "Atualizar snapshot",
     "ext.cameras.action.loading": "Carregando...",
-    "ext.cameras.theme.neon_name": "Neon (azul)",
-    "ext.cameras.theme.neon_desc": "Uma variação neon azul para toda a interface.",
   },
 };

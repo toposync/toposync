@@ -385,17 +385,17 @@ export function SettingsScreen({
           <div className="sectionDivider" />
 
           <div className="modalSectionTitle">{t("core.ui.auth.session.title")}</div>
-          <div className="card">
-            <div className="cardTitle">
-              {authUser?.display_name || authUser?.username || t("core.ui.auth.session.current_user_fallback")}
+            <div className="card">
+              <div className="cardTitle">
+                {authUser?.display_name || authUser?.username || t("core.ui.auth.session.current_user_fallback")}
+              </div>
+              {authUser ? <div className="cardBody">{authUser.username} · {authUser.role}</div> : null}
+              <div className="cardFooter">
+                <button className="chipButton" type="button" onClick={() => requestExit("logout")}>
+                  {t("core.actions.sign_out")}
+                </button>
+              </div>
             </div>
-            {authUser ? <div className="cardBody">{authUser.username} · {authUser.role}</div> : null}
-            <div style={{ marginTop: 8 }}>
-              <button className="chipButton" type="button" onClick={() => requestExit("logout")}>
-                {t("core.actions.sign_out")}
-              </button>
-            </div>
-          </div>
         </div>
       ),
     };
@@ -540,7 +540,7 @@ export function SettingsScreen({
   const exitTitle = useMemo(() => {
     if (pendingExitAction === "pipelines") return t("core.ui.settings.confirm_open_pipelines_title");
     if (pendingExitAction === "processing_servers") return t("core.ui.settings.confirm_open_processing_servers_title");
-    if (pendingExitAction === "access") return "Open access control?";
+    if (pendingExitAction === "access") return t("core.ui.settings.confirm_open_access_title");
     if (pendingExitAction === "logout") return t("core.ui.auth.confirm_sign_out_title");
     return t("core.ui.settings.confirm_close_title");
   }, [pendingExitAction, t]);
@@ -621,9 +621,9 @@ export function SettingsScreen({
                 </span>
                 <span className="settingsNavText">
                   <span className="settingsNavTitleRow">
-                    <span className="settingsNavTitle">Access</span>
+                    <span className="settingsNavTitle">{t("core.ui.settings.nav.access.title")}</span>
                   </span>
-                  <span className="settingsNavDesc">Manage users and include/exclude grants.</span>
+                  <span className="settingsNavDesc">{t("core.ui.settings.nav.access.desc")}</span>
                 </span>
               </button>
             ) : null}

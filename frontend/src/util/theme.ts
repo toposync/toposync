@@ -52,6 +52,7 @@ export function isBuiltinThemeId(value: string): value is BuiltinThemeId {
 export function loadThemeId(): string {
   const stored = safeGetStorage(THEME_STORAGE_KEY);
   if (!stored || stored === "default") return "topo-day";
+  if (stored === "com.toposync.theme.neon_blue") return "topo-day";
   return stored;
 }
 

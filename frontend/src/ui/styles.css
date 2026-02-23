@@ -276,8 +276,12 @@ textarea {
 .pipelinesCreate {
   padding: 8px 12px 10px;
   display: grid;
-  grid-template-columns: 1fr 92px auto;
+  grid-template-columns: minmax(0, 1fr) 92px auto;
   gap: 8px;
+}
+
+.pipelinesCreate > * {
+  min-width: 0;
 }
 
 .pipelinesInput,
@@ -512,6 +516,9 @@ textarea {
 .pipelinesEditor {
   padding: 14px;
   overflow: auto;
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
 }
 
 .pipelinesEditorInner {
@@ -802,11 +809,13 @@ textarea {
   gap: 6px;
   padding: 2px 8px;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: rgba(15, 23, 48, 0.55);
-  color: var(--muted);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-frost-ultra);
+  box-shadow: var(--shadow-inner-highlight);
+  color: var(--color-text-primary);
   font-size: 12px;
   font-weight: 650;
+  font-variant-numeric: tabular-nums;
   flex: 0 0 auto;
   user-select: none;
 }
@@ -1240,9 +1249,17 @@ textarea {
   pointer-events: none;
 }
 
-.railNotifications .railTitle,
-.railNotifications .railScroll {
+.rail.railNotifications {
+  gap: 0;
+  padding: 0;
+}
+
+.railNotifications .railTitle {
   pointer-events: none;
+}
+
+.railNotifications .railScroll {
+  pointer-events: auto;
 }
 
 .railNotifications .railHeader {
@@ -1257,7 +1274,14 @@ textarea {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+  flex: 0 0 auto;
+}
+
+.railHeader .row {
+  gap: var(--space-2);
 }
 
 .notificationsCollapsedRail {
@@ -1294,7 +1318,7 @@ textarea {
 .railScroll {
   flex: 1;
   overflow: auto;
-  padding-right: 6px;
+  padding: var(--space-2);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1310,10 +1334,10 @@ textarea {
 }
 
 .railTitle {
-  font-size: 12px;
+  font-size: var(--font-size-12);
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(230, 232, 242, 0.72);
+  color: var(--color-text-muted);
 }
 
 .card {
@@ -1347,10 +1371,18 @@ textarea {
 }
 
 .cardBody {
-  margin-top: 8px;
+  margin-top: var(--space-2);
   font-size: 13px;
   color: rgba(230, 232, 242, 0.78);
   line-height: 1.4;
+}
+
+.cardFooter {
+  margin-top: var(--space-2);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-2);
 }
 
 .cardButton {
@@ -1816,7 +1848,7 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  align-items: center;
+  align-items: flex-start;
 }
 
 .modalBackdrop {
@@ -1957,7 +1989,7 @@ textarea {
 .settingsSidebar {
   width: 270px;
   min-width: 270px;
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  border-right: 1px solid var(--color-border-subtle);
   background:
     radial-gradient(1200px 800px at 20% 0%, rgba(99, 102, 241, 0.12), transparent 60%),
     rgba(0, 0, 0, 0.22);
@@ -1976,36 +2008,42 @@ textarea {
   width: 100%;
   text-align: left;
   cursor: pointer;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  border-radius: 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
   padding: 10px 10px;
-  background: rgba(12, 18, 37, 0.30);
-  color: var(--text);
+  background: transparent;
+  color: var(--color-text-primary);
   display: flex;
   gap: 10px;
   align-items: flex-start;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  box-shadow: none;
 }
 
 .settingsNavItem:hover {
-  border-color: rgba(255, 255, 255, 0.18);
-  background: rgba(12, 18, 37, 0.44);
+  background: linear-gradient(135deg, var(--color-accent-background-soft), var(--color-accent-background-soft-2));
+  border-color: color-mix(in srgb, var(--color-accent-border) 58%, var(--color-border-subtle));
 }
 
 .settingsNavItem.isSelected {
-  border-color: rgba(251, 191, 36, 0.55);
-  background: rgba(251, 191, 36, 0.10);
+  background: linear-gradient(135deg, var(--color-accent-background-strong), var(--color-accent-background-strong-2));
+  border-color: var(--color-accent-border);
 }
 
 .settingsNavIcon {
   width: 34px;
   height: 34px;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-frost);
+  color: var(--color-text-muted);
   display: grid;
   place-items: center;
   flex: 0 0 auto;
+}
+
+.settingsNavItem.isSelected .settingsNavIcon {
+  color: var(--color-text-primary);
+  border-color: color-mix(in srgb, var(--color-accent-border) 35%, var(--color-border-subtle));
 }
 
 .settingsNavIcon i {
@@ -2036,7 +2074,7 @@ textarea {
 
 .settingsNavDesc {
   font-size: 12px;
-  color: rgba(230, 232, 242, 0.72);
+  color: var(--color-text-muted);
   line-height: 1.25;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -2272,7 +2310,7 @@ textarea {
   font-size: 12px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(230, 232, 242, 0.72);
+  color: var(--color-text-muted);
   margin-bottom: 8px;
 }
 
@@ -2374,15 +2412,16 @@ textarea {
 }
 
 .choiceItem {
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
   padding: 12px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.02));
+  background: var(--color-surface-frost);
+  color: var(--color-text-primary);
   cursor: pointer;
   position: relative;
-  backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
-  -webkit-backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
-  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
+  backdrop-filter: blur(var(--frost-blur-small)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+  -webkit-backdrop-filter: blur(var(--frost-blur-small)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
 }
 
 .choiceItem:hover {
@@ -2533,19 +2572,24 @@ textarea {
 }
 
 .toolIcon {
-  color: rgba(230, 232, 242, 0.78);
+  color: var(--color-text-muted);
   width: 16px;
   text-align: center;
 }
 
+.elementTypeButton:hover .toolIcon,
+.elementTypeButton.isSelected .toolIcon {
+  color: var(--color-text-primary);
+}
+
 .elementTypeButtonHint {
-  color: rgba(230, 232, 242, 0.60);
+  color: var(--color-text-muted);
   font-weight: 600;
   font-size: 12px;
 }
 
 .elementTypeButtonHint i {
-  color: rgba(251, 191, 36, 0.92);
+  color: var(--color-accent-teal);
 }
 
 .layerRow {
@@ -2556,7 +2600,7 @@ textarea {
 }
 
 .layerRow.isHidden .layerMainButton {
-  opacity: 0.58;
+  opacity: 0.66;
 }
 
 .layerRow.isDragSource {
@@ -2669,20 +2713,19 @@ textarea {
   justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
-  border-radius: 14px;
-  border: 1px solid var(--border);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
-    rgba(12, 18, 37, 0.40);
-  color: var(--text);
+  border-radius: var(--radius-control);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-frost);
+  color: var(--color-text-primary);
   cursor: pointer;
-  backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
-  -webkit-backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
-  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
+  backdrop-filter: blur(var(--frost-blur-small)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+  -webkit-backdrop-filter: blur(var(--frost-blur-small)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
 }
 
 .layerGroupHeader:hover {
-  border-color: var(--borderStrong);
+  border-color: var(--color-border-strong);
+  background: linear-gradient(135deg, var(--color-accent-background-soft), var(--color-accent-background-soft-2));
 }
 
 .layerGroupTitle {
@@ -2695,14 +2738,14 @@ textarea {
 
 .layerGroupChevron {
   font-size: 12px;
-  color: rgba(230, 232, 242, 0.72);
+  color: var(--color-text-muted);
   width: 14px;
   text-align: center;
 }
 
 .layerGroupCount {
   font-size: 12px;
-  color: rgba(230, 232, 242, 0.64);
+  color: var(--color-text-muted);
 }
 
 .layerGroupItems {
@@ -2711,13 +2754,11 @@ textarea {
   gap: 10px;
   padding-left: 12px;
   margin-left: 6px;
-  border-left: 1px solid rgba(255, 255, 255, 0.07);
+  border-left: 1px solid var(--color-border-subtle);
 }
 
 .layerRowGrouped .layerMainButton {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02)),
-    rgba(12, 18, 37, 0.36);
+  background: var(--color-surface-frost);
 }
 
 .layerRowGrouped .layerDeleteButton {
@@ -2764,7 +2805,7 @@ textarea {
 .layerMainMeta {
   margin-top: 4px;
   font-size: 12px;
-  color: rgba(230, 232, 242, 0.70);
+  color: var(--color-text-muted);
 }
 
 .layerDeleteButton {
@@ -2836,11 +2877,9 @@ textarea {
 }
 
 .accessRoot {
-  min-height: 100vh;
-  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  min-height: 0;
 }
 
 .accessLayout {
@@ -2848,10 +2887,14 @@ textarea {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
-  gap: 12px;
+  gap: var(--space-3);
+  padding: var(--space-3);
 }
 
 .accessSidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 12px;
@@ -2859,16 +2902,74 @@ textarea {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
     rgba(8, 12, 28, 0.50);
+}
+
+.accessSidebar .modalSectionTitle {
+  margin-bottom: 0;
 }
 
 .accessMain {
   border: 1px solid var(--border);
   border-radius: 14px;
-  padding: 12px;
-  overflow: auto;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
     rgba(8, 12, 28, 0.50);
+}
+
+.accessMain > .settingsStatusMuted {
+  padding: 14px;
+}
+
+.accessMain > .errorText {
+  margin: var(--space-3);
+}
+
+.accessMain .settingsContent {
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+  padding-bottom: var(--space-3);
+}
+
+.accessLayout .card {
+  display: grid;
+  gap: var(--space-2);
+  align-content: start;
+}
+
+.accessLayout .card > .authLabel {
+  margin-top: var(--space-1);
+}
+
+.accessLayout .input {
+  width: 100%;
+}
+
+.accessLayout .settingsStatusMuted {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: initial;
+}
+
+.accessTopbarActions {
+  margin-left: auto;
+  gap: var(--space-2);
+}
+
+.accessGrantsList {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.accessGrantHeaderRow {
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-2);
 }
 
 @media (max-width: 900px) {
@@ -2915,6 +3016,22 @@ textarea {
   box-shadow:
     0 0 0 2px var(--color-focus-ring-inner),
     0 0 0 4px var(--color-focus-ring-outer);
+}
+
+.chipButton:focus-visible,
+.pillButton:focus-visible,
+.primaryButton:focus-visible,
+.dangerButton:focus-visible,
+.iconButton:focus-visible,
+.sceneIconButton:focus-visible,
+.elementTypeButton:focus-visible,
+.layerDragHandle:focus-visible,
+.layerToggleButton:focus-visible,
+.layerMainButton:focus-visible,
+.layerDeleteButton:focus-visible,
+.compositionSelectButton:focus-visible {
+  outline: none;
+  outline-offset: 0;
 }
 
 :where(button, input, textarea, select) {
@@ -3128,8 +3245,8 @@ textarea {
 }
 
 .chipButton:hover,
-.pillButton:hover,
-.iconButton:hover,
+.pillButton:not(.pillButtonPrimary):not(.pillButtonDanger):hover,
+.iconButton:not(.iconButtonPrimary):not(.iconButtonDanger):hover,
 .sceneIconButton:hover,
 .layerDragHandle:hover,
 .layerToggleButton:hover,
@@ -3137,6 +3254,8 @@ textarea {
 .layerMainButton:hover,
 .compositionSelectButton:hover {
   border-color: var(--color-border-strong);
+  background: var(--color-surface-frost);
+  box-shadow: var(--shadow-elevation-2), var(--shadow-inner-highlight);
   transform: translateY(var(--hover-translate-y));
 }
 
@@ -3145,6 +3264,12 @@ textarea {
 .primaryButton:active,
 .dangerButton:active,
 .iconButton:active,
+.sceneIconButton:active,
+.layerDragHandle:active,
+.layerToggleButton:active,
+.layerMainButton:active,
+.layerDeleteButton:active,
+.compositionSelectButton:active,
 .elementTypeButton:active {
   transform: translateY(var(--press-translate-y));
 }
@@ -3164,6 +3289,11 @@ textarea {
 .pillButtonPrimary:hover,
 .iconButtonPrimary:hover {
   border-color: color-mix(in srgb, var(--color-accent-teal) 65%, var(--color-accent-blue) 42%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-accent-teal) 88%, white), var(--color-accent-teal)),
+    linear-gradient(135deg, color-mix(in srgb, var(--color-accent-teal) 90%, transparent), color-mix(in srgb, var(--color-accent-blue) 46%, transparent));
+  box-shadow: var(--shadow-elevation-3), inset 0 1px 0 rgba(255, 255, 255, 0.32);
+  transform: translateY(var(--hover-translate-y));
 }
 
 .dangerButton,
@@ -3184,13 +3314,28 @@ textarea {
 .iconButtonDanger:hover,
 .layerDeleteButton:hover {
   border-color: color-mix(in srgb, var(--color-danger) 68%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-danger) 90%, white),
+    color-mix(in srgb, var(--color-danger) 72%, black)
+  );
+  box-shadow: var(--shadow-elevation-3), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  transform: translateY(var(--hover-translate-y));
 }
 
 .pipelinesInput,
 .pipelinesSelect,
-.input {
+input.input,
+select.input {
   height: var(--control-height-m);
   padding: 0 var(--space-3);
+}
+
+textarea.input {
+  min-height: 88px;
+  height: auto;
+  padding: var(--space-3);
+  resize: vertical;
 }
 
 .pipelinesInput,
@@ -3277,6 +3422,8 @@ select {
 .settingsNavItem.isSelected,
 .settingsTab.isSelected,
 .choiceItem.isSelected,
+.pillButton.isActive,
+.iconButton.isActive,
 .layerMainButton.isSelected,
 .layerToggleButton.isActive,
 .elementTypeButton.isSelected,

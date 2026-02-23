@@ -429,11 +429,28 @@ textarea {
 .pipelinesServerRow {
   display: flex;
   align-items: center;
-  gap: 10px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 10px;
-  background: rgba(15, 23, 48, 0.70);
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.pipelinesServerRow + .pipelinesServerRow {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.pipelinesServerRow:hover {
+  background: linear-gradient(135deg, var(--color-accent-background-soft), var(--color-accent-background-soft-2));
+}
+
+.pipelinesServerRow.isBuiltIn {
+  background: color-mix(in srgb, var(--color-text-muted) 6%, transparent);
+}
+
+.pipelinesServerRow.isBuiltIn:hover {
+  background: color-mix(in srgb, var(--color-text-muted) 8%, transparent);
 }
 
 .pipelinesServerMain {
@@ -475,15 +492,49 @@ textarea {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 14px;
+  padding: var(--space-4);
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.processingServersContent {
+  width: 100%;
+  max-width: min(960px, var(--content-max-width));
+  margin: 0 auto;
   display: grid;
-  gap: 12px;
-  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+  gap: var(--space-3);
+  align-content: start;
+}
+
+.processingServersIntro {
+  color: var(--color-text-muted);
+  line-height: var(--line-height-relaxed);
 }
 
 .processingServersList {
-  display: grid;
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface-frost);
+  box-shadow: var(--shadow-elevation-1);
+  backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+  -webkit-backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+}
+
+.processingServersList .pipelinesServerRow:first-child {
+  border-top-left-radius: var(--radius-panel);
+  border-top-right-radius: var(--radius-panel);
+}
+
+.processingServersList .pipelinesServerRow:last-child {
+  border-bottom-left-radius: var(--radius-panel);
+  border-bottom-right-radius: var(--radius-panel);
+}
+
+.processingServersEmpty {
+  padding: var(--space-4) var(--space-3);
+  color: var(--color-text-muted);
 }
 
 .processingServerForm {
@@ -3104,8 +3155,7 @@ textarea {
 .settingsConfirmPanel,
 .authCard,
 .accessSidebar,
-.accessMain,
-.pipelinesServerRow {
+.accessMain {
   background: var(--color-surface-frost);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-panel);

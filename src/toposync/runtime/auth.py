@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timedelta, timezone
 import fnmatch
 import hashlib
 import hmac
@@ -20,6 +21,8 @@ from fastapi import HTTPException, Request, Response
 
 RoleName = Literal["owner", "admin", "member", "service"]
 CookieSecureMode = Literal["auto", "true", "false"]
+DEFAULT_ACCESS_TTL_S = 30 * 60  # 30 minutes
+DEFAULT_REFRESH_TTL_S = 10 * 365 * 24 * 3600  # 10 years
 
 
 def _now() -> float:
@@ -687,6 +690,39 @@ CREATE INDEX IF NOT EXISTS idx_auth_grant_user ON auth_grant(user_id);
             return None
         return next_session, new_raw, expires_at
 
+    def extend_refresh_token(self, raw_refresh_token: str, *, ttl_s: int, device_label: str | None = None) -> float | None:
+        token_hash = _sha256(str(raw_refresh_token or ""))
+        now = _now()
+        next_expires = now + max(60, int(ttl_s))
+        device = str(device_label or "").strip()[:80]
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT id, revoked_at, expires_at
+                FROM auth_refresh_token
+                WHERE token_hash = ?
+                LIMIT 1
+                """,
+                (token_hash,),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["revoked_at"] is not None:
+                return None
+            current_expires = float(row["expires_at"] or 0.0)
+            if current_expires <= now:
+                return None
+            expires_at = max(current_expires, next_expires)
+            self._conn.execute(
+                """
+                UPDATE auth_refresh_token
+                SET expires_at = ?, last_used_at = ?, device_label = COALESCE(NULLIF(?, ''), device_label)
+                WHERE id = ?
+                """,
+                (expires_at, now, device, str(row["id"])),
+            )
+        return expires_at
+
     def revoke_refresh_token(self, raw_refresh_token: str) -> None:
         token_hash = _sha256(str(raw_refresh_token or ""))
         now = _now()
@@ -828,8 +864,8 @@ class AuthRuntime:
     def __init__(self, *, data_dir: Path) -> None:
         self.mode = _parse_mode(os.getenv("TOPOSYNC_AUTH_MODE"))
         self.cookie_secure_mode = _parse_cookie_secure_mode(os.getenv("TOPOSYNC_AUTH_COOKIE_SECURE"))
-        self.access_ttl_s = int(os.getenv("TOPOSYNC_AUTH_ACCESS_TTL_S") or 900)
-        self.refresh_ttl_s = int(os.getenv("TOPOSYNC_AUTH_REFRESH_TTL_S") or (90 * 24 * 3600))
+        self.access_ttl_s = int(os.getenv("TOPOSYNC_AUTH_ACCESS_TTL_S") or DEFAULT_ACCESS_TTL_S)
+        self.refresh_ttl_s = int(os.getenv("TOPOSYNC_AUTH_REFRESH_TTL_S") or DEFAULT_REFRESH_TTL_S)
         self.store = AuthStore(data_dir / "auth" / "auth.sqlite3")
         self._access_secret = self.store.get_or_create_secret("access_secret")
 
@@ -911,13 +947,13 @@ class AuthRuntime:
         return self._principal_from_user(user)
 
     def _tokens_from_refresh(self, raw_refresh_token: str) -> tuple[AuthPrincipal, tuple[str, str]] | None:
-        rotated = self.store.rotate_refresh_token(raw_refresh_token, ttl_s=self.refresh_ttl_s)
-        if rotated is None:
+        session = self.store.get_refresh_session(raw_refresh_token)
+        if session is None:
             return None
-        next_session, next_refresh, _ = rotated
-        user = next_session.user
+        self.store.extend_refresh_token(raw_refresh_token, ttl_s=self.refresh_ttl_s)
+        user = session.user
         access_token, _ = self._issue_access_token(user)
-        return self._principal_from_user(user), (access_token, next_refresh)
+        return self._principal_from_user(user), (access_token, raw_refresh_token)
 
     def _authorization_header_token(self, request: Request) -> str:
         header = str(request.headers.get("authorization") or "")
@@ -976,6 +1012,9 @@ class AuthRuntime:
         refresh_token: str,
         request: Request | None = None,
     ) -> None:
+        access_max_age = max(60, int(self.access_ttl_s))
+        refresh_max_age = max(60, int(self.refresh_ttl_s))
+        now = datetime.now(timezone.utc)
         secure = False
         if self.cookie_secure_mode == "true":
             secure = True
@@ -988,7 +1027,8 @@ class AuthRuntime:
             secure=secure,
             samesite="lax",
             path="/",
-            max_age=max(60, int(self.access_ttl_s)),
+            max_age=access_max_age,
+            expires=now + timedelta(seconds=access_max_age),
         )
         response.set_cookie(
             key=self.refresh_cookie_name,
@@ -997,7 +1037,8 @@ class AuthRuntime:
             secure=secure,
             samesite="lax",
             path="/",
-            max_age=max(60, int(self.refresh_ttl_s)),
+            max_age=refresh_max_age,
+            expires=now + timedelta(seconds=refresh_max_age),
         )
 
     def clear_session_cookies(self, response: Response) -> None:

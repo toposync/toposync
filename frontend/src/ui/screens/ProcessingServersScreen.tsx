@@ -183,106 +183,97 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
       </div>
 
       <div className="processingServersBody">
-        <div className="card">
-          <div className="cardBody">{t("core.ui.processing_servers.description")}</div>
-        </div>
+        <div className="processingServersContent">
+          <div className="processingServersIntro">{t("core.ui.processing_servers.description")}</div>
 
-        {loading ? (
-          <div className="card">
-            <div className="cardBody">{t("core.ui.loading")}</div>
-          </div>
-        ) : null}
+          {loading ? <div className="settingsStatusMuted">{t("core.ui.loading")}</div> : null}
 
-        {error ? (
-          <div className="card cardDanger">
-            <div className="cardBody">{error}</div>
-          </div>
-        ) : null}
+          {error ? <div className="errorText">{error}</div> : null}
 
-        <div className="processingServersList">
-          {servers.map((server) => {
-            const probe = serverStatusById[server.id] ?? null;
-            const testing = !!serverTestingById[server.id];
-            const statusLabel = testing
-              ? ` • ${t("core.ui.processing_servers.status.testing")}`
-              : probe
-                ? probe.ok
-                  ? ` • ${t("core.ui.processing_servers.status.online")}`
-                  : ` • ${t("core.ui.processing_servers.status.offline")}`
-                : "";
-            const statusTitle = testing ? t("core.ui.processing_servers.status.testing") : probe && !probe.ok ? String(probe.error || "") : "";
-            const diagnosticsLine = probe && probe.ok ? buildDiagnosticsSummary(probe.status) : null;
-            return (
-              <div key={server.id} className="pipelinesServerRow">
-                <button
-                  className="pipelinesServerMain"
-                  type="button"
-                  disabled={server.id === "local"}
-                  onClick={() => {
-                    if (server.id === "local") return;
-                    setServerModalTarget(server);
-                    setServerModalOpen(true);
-                  }}
-                >
-                  <div className="pipelinesServerId">
-                    {server.id}
-                    {server.id === "local" ? ` ${t("core.ui.processing_servers.built_in")}` : ""}
-                  </div>
-                  <div className="pipelinesServerMeta" title={statusTitle}>
-                    {server.kind}
-                    {server.url ? ` • ${server.url}` : ""}
-                    {statusLabel}
-                  </div>
-                  {diagnosticsLine ? (
-                    <div className="pipelinesServerMeta pipelinesServerMetaDiag" title={diagnosticsLine}>
-                      {diagnosticsLine}
+          <div className="processingServersList">
+            {servers.map((server) => {
+              const probe = serverStatusById[server.id] ?? null;
+              const testing = !!serverTestingById[server.id];
+              const statusLabel = testing
+                ? ` • ${t("core.ui.processing_servers.status.testing")}`
+                : probe
+                  ? probe.ok
+                    ? ` • ${t("core.ui.processing_servers.status.online")}`
+                    : ` • ${t("core.ui.processing_servers.status.offline")}`
+                  : "";
+              const statusTitle =
+                testing ? t("core.ui.processing_servers.status.testing") : probe && !probe.ok ? String(probe.error || "") : "";
+              const diagnosticsLine = probe && probe.ok ? buildDiagnosticsSummary(probe.status) : null;
+              return (
+                <div key={server.id} className={["pipelinesServerRow", server.id === "local" ? "isBuiltIn" : ""].filter(Boolean).join(" ")}>
+                  <button
+                    className="pipelinesServerMain"
+                    type="button"
+                    disabled={server.id === "local"}
+                    onClick={() => {
+                      if (server.id === "local") return;
+                      setServerModalTarget(server);
+                      setServerModalOpen(true);
+                    }}
+                  >
+                    <div className="pipelinesServerId">
+                      {server.id}
+                      {server.id === "local" ? ` ${t("core.ui.processing_servers.built_in")}` : ""}
                     </div>
+                    <div className="pipelinesServerMeta" title={statusTitle}>
+                      {server.kind}
+                      {server.url ? ` • ${server.url}` : ""}
+                      {statusLabel}
+                    </div>
+                    {diagnosticsLine ? (
+                      <div className="pipelinesServerMeta pipelinesServerMetaDiag" title={diagnosticsLine}>
+                        {diagnosticsLine}
+                      </div>
+                    ) : null}
+                  </button>
+
+                  <button
+                    className="iconButton iconButtonPrimary"
+                    type="button"
+                    disabled={testing}
+                    onClick={() => void handleTestServer(server.id)}
+                    title={t("core.ui.processing_servers.actions.test_connection")}
+                  >
+                    <i className="fa-solid fa-plug" aria-hidden="true" />
+                  </button>
+
+                  {server.id !== "local" ? (
+                    <>
+                      <button
+                        className="iconButton"
+                        type="button"
+                        onClick={() => {
+                          setServerModalTarget(server);
+                          setServerModalOpen(true);
+                        }}
+                        title={t("core.ui.processing_servers.actions.edit_server")}
+                      >
+                        <i className="fa-solid fa-pen-to-square" aria-hidden="true" />
+                      </button>
+
+                      <button
+                        className="iconButton iconButtonDanger"
+                        type="button"
+                        onClick={() => void handleDeleteServer(server.id)}
+                        title={t("core.ui.processing_servers.actions.delete_server")}
+                      >
+                        <i className="fa-solid fa-trash" aria-hidden="true" />
+                      </button>
+                    </>
                   ) : null}
-                </button>
+                </div>
+              );
+            })}
 
-                <button
-                  className="iconButton iconButtonPrimary"
-                  type="button"
-                  disabled={testing}
-                  onClick={() => void handleTestServer(server.id)}
-                  title={t("core.ui.processing_servers.actions.test_connection")}
-                >
-                  <i className="fa-solid fa-plug" aria-hidden="true" />
-                </button>
-
-                {server.id !== "local" ? (
-                  <>
-                    <button
-                      className="iconButton"
-                      type="button"
-                      onClick={() => {
-                        setServerModalTarget(server);
-                        setServerModalOpen(true);
-                      }}
-                      title={t("core.ui.processing_servers.actions.edit_server")}
-                    >
-                      <i className="fa-solid fa-pen-to-square" aria-hidden="true" />
-                    </button>
-
-                    <button
-                      className="iconButton iconButtonDanger"
-                      type="button"
-                      onClick={() => void handleDeleteServer(server.id)}
-                      title={t("core.ui.processing_servers.actions.delete_server")}
-                    >
-                      <i className="fa-solid fa-trash" aria-hidden="true" />
-                    </button>
-                  </>
-                ) : null}
-              </div>
-            );
-          })}
-
-          {!loading && servers.length === 0 ? (
-            <div className="card">
-              <div className="cardBody">{t("core.ui.processing_servers.none")}</div>
-            </div>
-          ) : null}
+            {!loading && servers.length === 0 ? (
+              <div className="processingServersEmpty">{t("core.ui.processing_servers.none")}</div>
+            ) : null}
+          </div>
         </div>
       </div>
 

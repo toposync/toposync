@@ -69,6 +69,21 @@ export type AccessUsersPayload = {
   grants_catalog: Record<string, string[]>;
 };
 
+export type AccessOptionItem = {
+  id: string;
+  name: string;
+};
+
+export type AccessOptionsPayload = {
+  extensions: AccessOptionItem[];
+  compositions: Array<{
+    id: string;
+    name: string;
+    areas: AccessOptionItem[];
+  }>;
+  event_patterns: string[];
+};
+
 export type Pipeline = {
   name: string;
   type: "reuse" | "final";
@@ -250,6 +265,12 @@ export async function logout(): Promise<void> {
 export async function listAccessUsers(): Promise<AccessUsersPayload> {
   const res = await fetch("/api/access/users");
   if (!res.ok) throw new Error(`Failed to list access users: ${res.status}`);
+  return res.json();
+}
+
+export async function getAccessOptions(): Promise<AccessOptionsPayload> {
+  const res = await fetch("/api/access/options");
+  if (!res.ok) throw new Error(`Failed to fetch access options: ${res.status}`);
   return res.json();
 }
 

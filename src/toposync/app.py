@@ -234,6 +234,23 @@ class AccessUsersResponse(BaseModel):
     grants_catalog: dict[str, list[str]] = Field(default_factory=dict)
 
 
+class AccessOptionItem(BaseModel):
+    id: str
+    name: str
+
+
+class AccessCompositionOptions(BaseModel):
+    id: str
+    name: str
+    areas: list[AccessOptionItem] = Field(default_factory=list)
+
+
+class AccessOptionsResponse(BaseModel):
+    extensions: list[AccessOptionItem] = Field(default_factory=list)
+    compositions: list[AccessCompositionOptions] = Field(default_factory=list)
+    event_patterns: list[str] = Field(default_factory=list)
+
+
 class AccessUserCreateRequest(BaseModel):
     username: str
     password: str
@@ -593,6 +610,49 @@ def create_app() -> FastAPI:
         auth: AuthRuntime = request.app.state.auth
         users = [AuthUserPublic.model_validate(auth.serialize_user(item, include_grants=True)) for item in auth.store.list_users()]
         return AccessUsersResponse(users=users, grants_catalog=auth.configurable_actions)
+
+    @app.get("/api/access/options", response_model=AccessOptionsResponse)
+    async def access_options(request: Request) -> AccessOptionsResponse:
+        _require(request, action="core:access:manage")
+        config_store: ConfigStore = request.app.state.config_store
+        _active_id, compositions = await config_store.list_compositions()
+
+        ext_manager: ExtensionManager = request.app.state.extensions
+        extensions: list[AccessOptionItem] = []
+        for item in ext_manager.public_extensions():
+            if not isinstance(item, dict):
+                continue
+            ext_id = str(item.get("id") or "").strip()
+            if not ext_id:
+                continue
+            name = str(item.get("name") or "").strip() or ext_id
+            extensions.append(AccessOptionItem(id=ext_id, name=name))
+
+        # NOTE: For now, areas are derived from Structural extension's area element type.
+        # This keeps the access UX practical without exposing internal element IDs/selector syntax.
+        AREA_ELEMENT_TYPE_ID = "com.toposync.structural.area"
+        composition_options: list[AccessCompositionOptions] = []
+        for comp in compositions:
+            areas: list[AccessOptionItem] = []
+            for el in comp.elements:
+                if el.type != AREA_ELEMENT_TYPE_ID:
+                    continue
+                area_id = str(el.id or "").strip()
+                if not area_id:
+                    continue
+                area_name = str(el.name or "").strip() or area_id
+                areas.append(AccessOptionItem(id=area_id, name=area_name))
+            areas.sort(key=lambda a: a.name.lower())
+            composition_options.append(AccessCompositionOptions(id=comp.id, name=comp.name, areas=areas))
+
+        composition_options.sort(key=lambda c: c.name.lower())
+        extensions.sort(key=lambda e: e.name.lower())
+
+        return AccessOptionsResponse(
+            extensions=extensions,
+            compositions=composition_options,
+            event_patterns=list(event_allowlist),
+        )
 
     @app.post("/api/access/users", response_model=AuthUserPublic)
     async def create_access_user(request: Request, body: AccessUserCreateRequest) -> AuthUserPublic:

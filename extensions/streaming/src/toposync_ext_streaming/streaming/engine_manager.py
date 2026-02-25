@@ -26,6 +26,10 @@ class MediaMtxPorts:
     hls: int
     webrtc: int
     api: int
+    # Comentário: MediaMTX usa estes ports quando RTSP via UDP está habilitado.
+    # Eles precisam ser consecutivos (RTP/RTCP).
+    rtp: int
+    rtcp: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +61,8 @@ class MediaMtxEngineManager:
         self._last_error: str | None = None
 
         self._bind_host = "127.0.0.1"
-        self._ports = MediaMtxPorts(rtsp=8554, hls=8888, webrtc=8889, api=9997)
+        # Comentário: valores default são fallback; ports reais são resolvidos no start.
+        self._ports = MediaMtxPorts(rtsp=8554, hls=8888, webrtc=8889, api=9997, rtp=50000, rtcp=50001)
         self._warnings: tuple[str, ...] = ()
 
         self._config_hash: str | None = None
@@ -450,7 +455,14 @@ class MediaMtxEngineManager:
 
         config_text = render_mediamtx_config(
             bind_host=bind_host,
-            ports=MediaMTXResolvedPorts(rtsp=ports.rtsp, hls=ports.hls, api=ports.api, webrtc=ports.webrtc),
+            ports=MediaMTXResolvedPorts(
+                rtsp=ports.rtsp,
+                hls=ports.hls,
+                api=ports.api,
+                webrtc=ports.webrtc,
+                rtp=ports.rtp,
+                rtcp=ports.rtcp,
+            ),
             paths=list(self._engine_paths),
             enable_webrtc=True,
             webrtc_ice_servers=list(getattr(engine_settings, "webrtc_ice_servers", []) or []),
@@ -631,7 +643,14 @@ def _resolve_ports(
     if changed:
         warnings.append(f"API port {preferred_api} unavailable; using {api}.")
 
-    return MediaMtxPorts(rtsp=rtsp, hls=hls, webrtc=webrtc, api=api), tuple(warnings)
+    # Comentário: MediaMTX usa RTP/RTCP (UDP) por default em 8000/8001 e falha ao subir se já estiver ocupado.
+    # Como 8000 é comum em dev servers, escolhemos automaticamente um par livre (consecutivo).
+    preferred_rtp = 50000
+    rtp, rtcp, udp_changed = _pick_udp_ports_pair(bind_host=bind_host, preferred=preferred_rtp, used=used)
+    if udp_changed:
+        warnings.append(f"RTP/RTCP port pair {preferred_rtp}/{preferred_rtp + 1} unavailable; using {rtp}/{rtcp}.")
+
+    return MediaMtxPorts(rtsp=rtsp, hls=hls, webrtc=webrtc, api=api, rtp=rtp, rtcp=rtcp), tuple(warnings)
 
 
 def _pick_port(*, bind_host: str, preferred: int, used: set[int]) -> tuple[int, bool]:
@@ -672,6 +691,75 @@ def _can_bind(bind_host: str, port: int) -> bool:
 
         try:
             with socket.socket(family, socket.SOCK_STREAM) as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if family == socket.AF_INET6 and hasattr(socket, "IPPROTO_IPV6") and hasattr(socket, "IPV6_V6ONLY"):
+                    with contextlib.suppress(OSError):
+                        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                sock.bind(bind_payload)
+        except OSError as exc:
+            if family == socket.AF_INET6 and exc.errno in {errno.EAFNOSUPPORT, errno.EPROTONOSUPPORT, errno.EINVAL}:
+                continue
+            return False
+    return True
+
+
+def _pick_udp_ports_pair(*, bind_host: str, preferred: int, used: set[int]) -> tuple[int, int, bool]:
+    """Seleciona um par RTP/RTCP (UDP) livre e consecutivo.
+
+    Comentário: MediaMTX exige ports consecutivos para RTP/RTCP.
+    """
+    normalized = max(1024, min(65534, int(preferred)))
+    if normalized % 2 != 0:
+        normalized += 1
+    if normalized >= 65534:
+        normalized = 65532
+
+    def ok(candidate: int) -> bool:
+        if candidate in used or (candidate + 1) in used:
+            return False
+        if candidate <= 0 or (candidate + 1) >= 65535:
+            return False
+        return _can_bind_udp(bind_host, candidate) and _can_bind_udp(bind_host, candidate + 1)
+
+    if ok(normalized):
+        used.add(normalized)
+        used.add(normalized + 1)
+        return normalized, normalized + 1, False
+
+    for candidate in range(normalized + 2, min(65534, normalized + 2000), 2):
+        if ok(candidate):
+            used.add(candidate)
+            used.add(candidate + 1)
+            return candidate, candidate + 1, True
+
+    for candidate in range(10000, 65000, 2):
+        if ok(candidate):
+            used.add(candidate)
+            used.add(candidate + 1)
+            return candidate, candidate + 1, True
+
+    raise RuntimeError("Failed to find free UDP RTP/RTCP port pair for MediaMTX")
+
+
+def _can_bind_udp(bind_host: str, port: int) -> bool:
+    normalized_host = str(bind_host or "").strip() or "127.0.0.1"
+    candidates: list[tuple[int, str]] = [(socket.AF_INET, normalized_host)]
+
+    # Comentário: evitamos colisões sutis entre listeners IPv4/IPv6 no mesmo port.
+    if normalized_host == "127.0.0.1":
+        candidates.append((socket.AF_INET6, "::1"))
+    elif normalized_host == "0.0.0.0":
+        candidates.append((socket.AF_INET6, "::"))
+
+    for family, host in candidates:
+        bind_payload: tuple[str, int] | tuple[str, int, int, int]
+        if family == socket.AF_INET6:
+            bind_payload = (host, int(port), 0, 0)
+        else:
+            bind_payload = (host, int(port))
+
+        try:
+            with socket.socket(family, socket.SOCK_DGRAM) as sock:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 if family == socket.AF_INET6 and hasattr(socket, "IPPROTO_IPV6") and hasattr(socket, "IPV6_V6ONLY"):
                     with contextlib.suppress(OSError):

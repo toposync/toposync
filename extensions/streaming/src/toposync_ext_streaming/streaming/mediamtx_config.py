@@ -9,6 +9,10 @@ class MediaMTXResolvedPorts:
     hls: int
     api: int
     webrtc: int | None = None
+    # Comentário: usados apenas quando RTSP via UDP está habilitado.
+    # MediaMTX exige que RTP/RTCP sejam consecutivos.
+    rtp: int = 8000
+    rtcp: int = 8001
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +162,12 @@ def render_mediamtx_config(
     lines.append("")
     lines.append("rtsp: true")
     lines.append(f"rtspAddress: {_address(bind_host, ports.rtsp)}")
+    rtp_port = int(getattr(ports, "rtp", 8000))
+    rtcp_port = int(getattr(ports, "rtcp", rtp_port + 1))
+    if rtcp_port != (rtp_port + 1):
+        raise ValueError("RTP and RTCP ports must be consecutive")
+    lines.append(f"rtpAddress: {_address(bind_host, rtp_port)}")
+    lines.append(f"rtcpAddress: {_address(bind_host, rtcp_port)}")
     # Comentário: habilitar UDP+TCP melhora compatibilidade (ffplay/VLC tentam UDP por padrão).
     # Em redes mais restritivas, TCP costuma funcionar melhor e pode ser forçado no cliente.
     lines.append("rtspTransports: [udp, tcp]")

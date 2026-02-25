@@ -1276,6 +1276,68 @@ def create_app() -> FastAPI:
             skipped=skipped,
         )
 
+    def _normalize_server_id(value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        return normalized or "local"
+
+    def _extract_stream_write_transmission_ids(pipeline: Pipeline) -> set[str]:
+        graph = pipeline.graph if isinstance(pipeline.graph, dict) else {}
+        nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+        transmission_ids: set[str] = set()
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            operator_id = str(node.get("operator") or "").strip()
+            if operator_id != "stream.write":
+                continue
+            config = node.get("config") if isinstance(node.get("config"), dict) else {}
+            transmission_id = str(config.get("transmission_id") or "").strip()
+            if transmission_id:
+                transmission_ids.add(transmission_id)
+        return transmission_ids
+
+    async def _validate_stream_write_host_affinity(config_store: ConfigStore, pipeline: Pipeline) -> None:
+        transmission_ids = _extract_stream_write_transmission_ids(pipeline)
+        if not transmission_ids:
+            return
+
+        pipeline_server_id = _normalize_server_id(getattr(pipeline, "processing_server_id", "local"))
+        settings = await config_store.get_settings()
+        ext_settings = settings.extensions if isinstance(settings.extensions, dict) else {}
+        streaming_settings = ext_settings.get("com.toposync.streaming") if isinstance(ext_settings, dict) else None
+        transmissions = (
+            streaming_settings.get("transmissions")
+            if isinstance(streaming_settings, dict) and isinstance(streaming_settings.get("transmissions"), list)
+            else []
+        )
+        host_by_transmission_id: dict[str, str] = {}
+        for item in transmissions:
+            if not isinstance(item, dict):
+                continue
+            transmission_id = str(item.get("id") or "").strip()
+            if not transmission_id:
+                continue
+            host_by_transmission_id[transmission_id] = _normalize_server_id(str(item.get("host_server_id") or "local"))
+
+        mismatches: list[str] = []
+        for transmission_id in sorted(transmission_ids):
+            host_server_id = host_by_transmission_id.get(transmission_id)
+            if not host_server_id:
+                continue
+            if host_server_id != pipeline_server_id:
+                mismatches.append(
+                    f"{transmission_id} (host_server_id={host_server_id}, processing_server_id={pipeline_server_id})"
+                )
+        if mismatches:
+            joined = "; ".join(mismatches)
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "stream.write host mismatch: each referenced transmission must run on the same "
+                    f"processing_server_id as the pipeline. {joined}"
+                ),
+            )
+
     @app.post("/api/pipelines", response_model=Pipeline, status_code=201)
     async def create_pipeline(request: Request, body: Pipeline) -> Pipeline:
         _require(request, action="core:pipelines:write")
@@ -1297,6 +1359,7 @@ def create_app() -> FastAPI:
                 except PythonDslCompileError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
                 body = body.model_copy(update={"graph": graph})
+            await _validate_stream_write_host_affinity(config_store, body)
             compiler.compile_pipeline(body)
             saved = await config_store.create_pipeline(body)
             orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
@@ -1395,6 +1458,7 @@ def create_app() -> FastAPI:
                 except PythonDslCompileError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
                 body = body.model_copy(update={"graph": graph})
+            await _validate_stream_write_host_affinity(config_store, body)
             compiler.compile_pipeline(body)
             saved = await config_store.replace_pipeline(pipeline_name, body)
             orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)

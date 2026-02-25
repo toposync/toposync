@@ -19,6 +19,7 @@ import { Icon } from "../Icon";
 import { Viewport3D } from "../Viewport3D";
 import { MainViewport2D } from "../main2d/MainViewport2D";
 import { notificationImageItems, notificationPriority, notificationThumbnailUrl } from "../notifications/pipelinesNotifications";
+import { StreamsDashboard } from "../streams/StreamsDashboard";
 
 type Props = {
   compositionName: string;
@@ -162,6 +163,11 @@ function loadNotificationsShowLow(): boolean {
   }
 }
 
+type RenderMode = "3d" | "2d" | "streams";
+
+const RENDER_MODE_STORAGE_KEY = "toposync.render_mode.v1";
+const STREAMS_OVERLAY_IDLE_MS = 2500;
+
 export function MainScreen({
   compositionName,
   compositions,
@@ -194,16 +200,77 @@ export function MainScreen({
   const [notificationImageIndex, setNotificationImageIndex] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(() => loadNotificationsOpen());
   const [showLowPriority, setShowLowPriority] = useState(() => loadNotificationsShowLow());
-  const [renderMode, setRenderMode] = useState<"3d" | "2d">(() => {
+  const [renderMode, setRenderMode] = useState<RenderMode>(() => {
     try {
-      const saved = localStorage.getItem("toposync.render_mode.v1");
-      return saved === "2d" ? "2d" : "3d";
+      const saved = localStorage.getItem(RENDER_MODE_STORAGE_KEY);
+      return saved === "2d" || saved === "streams" ? saved : "3d";
     } catch {
       return "3d";
     }
   });
+  const [streamsOverlayVisible, setStreamsOverlayVisible] = useState(true);
   const notificationScrollRef = useRef<HTMLDivElement | null>(null);
   const notificationSentinelRef = useRef<HTMLDivElement | null>(null);
+  const streamsOverlayTimerRef = useRef<number | null>(null);
+
+  const clearStreamsOverlayTimer = useCallback(() => {
+    const timerId = streamsOverlayTimerRef.current;
+    if (timerId == null) return;
+    window.clearTimeout(timerId);
+    streamsOverlayTimerRef.current = null;
+  }, []);
+
+  const scheduleStreamsOverlayHide = useCallback(() => {
+    clearStreamsOverlayTimer();
+    if (renderMode !== "streams") {
+      setStreamsOverlayVisible(true);
+      return;
+    }
+    if (document.visibilityState !== "visible") {
+      setStreamsOverlayVisible(false);
+      return;
+    }
+    streamsOverlayTimerRef.current = window.setTimeout(() => {
+      streamsOverlayTimerRef.current = null;
+      setStreamsOverlayVisible(false);
+    }, STREAMS_OVERLAY_IDLE_MS);
+  }, [clearStreamsOverlayTimer, renderMode]);
+
+  useEffect(() => {
+    if (renderMode !== "streams") {
+      clearStreamsOverlayTimer();
+      setStreamsOverlayVisible(true);
+      return;
+    }
+
+    const showOverlays = () => {
+      setStreamsOverlayVisible(true);
+      scheduleStreamsOverlayHide();
+    };
+
+    const onMouseMove = () => showOverlays();
+    const onKeyDown = () => showOverlays();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        showOverlays();
+        return;
+      }
+      clearStreamsOverlayTimer();
+      setStreamsOverlayVisible(false);
+    };
+
+    showOverlays();
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("keydown", onKeyDown);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      clearStreamsOverlayTimer();
+    };
+  }, [clearStreamsOverlayTimer, renderMode, scheduleStreamsOverlayHide]);
 
   const activeNotification = useMemo(() => {
     if (!activeNotificationId) return null;
@@ -316,7 +383,7 @@ export function MainScreen({
 
   useEffect(() => {
     try {
-      localStorage.setItem("toposync.render_mode.v1", renderMode);
+      localStorage.setItem(RENDER_MODE_STORAGE_KEY, renderMode);
     } catch {
       // ignore
     }
@@ -426,6 +493,9 @@ export function MainScreen({
     });
   }, [activeNotificationId, notifications, showLowPriority]);
 
+  const renderModeLabel =
+    renderMode === "3d" ? "3D" : renderMode === "2d" ? "2D" : t("core.ui.render_modal.option_streams.title", {}, "Streams");
+
   return (
     <div className="screenRoot">
       {renderMode === "3d" ? (
@@ -446,17 +516,31 @@ export function MainScreen({
           }}
         />
       ) : (
-        <MainViewport2D
-          elements={elements}
-          elementTypesById={elementTypesById}
-          compositionId={activeCompositionId}
-          onElementActivated={handleElementActivated}
-        />
+        <>
+          {renderMode === "2d" ? (
+            <MainViewport2D
+              elements={elements}
+              elementTypesById={elementTypesById}
+              compositionId={activeCompositionId}
+              onElementActivated={handleElementActivated}
+            />
+          ) : (
+            <StreamsDashboard uiVisible={streamsOverlayVisible} isActive={renderMode === "streams"} />
+          )}
+        </>
       )}
 
-      <div className="overlayTopRight">
+      <div
+        className={[
+          "overlayTopRight",
+          renderMode === "streams" ? "streamsOverlayAutoHide" : "",
+          renderMode === "streams" && !streamsOverlayVisible ? "isHidden" : "isVisible",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
         <button className="chipButton" type="button" onClick={() => setIsRenderModalOpen(true)}>
-          {t("core.ui.rendering")}: {renderMode === "3d" ? "3D" : "2D"}
+          {t("core.ui.rendering")}: {renderModeLabel}
         </button>
         <button className="chipButton" type="button" onClick={() => setIsCompositionModalOpen(true)}>
           {t("core.ui.composition")}: {compositionName}
@@ -489,7 +573,16 @@ export function MainScreen({
         </button>
       </div>
 
-      <div className={["overlayLeft", notificationsOpen ? "isOpen" : "isCollapsed"].filter(Boolean).join(" ")}>
+      <div
+        className={[
+          "overlayLeft",
+          notificationsOpen ? "isOpen" : "isCollapsed",
+          renderMode === "streams" ? "streamsOverlayAutoHide" : "",
+          renderMode === "streams" && !streamsOverlayVisible ? "isHidden" : "isVisible",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
         {notificationsOpen ? (
           <div className="rail railNotifications">
             <div className="railHeader">
@@ -628,7 +721,7 @@ export function MainScreen({
         )}
       </div>
 
-      {elements.length === 0 ? (
+      {renderMode !== "streams" && elements.length === 0 ? (
         <div className="emptyHint">
           <div className="card">
             <div className="cardTitle">{t("core.ui.empty_title")}</div>
@@ -678,6 +771,26 @@ export function MainScreen({
           >
             <div className="choiceTitle">{t("core.ui.render_modal.option_2d.title")}</div>
             <div className="choiceDesc">{t("core.ui.render_modal.option_2d.desc")}</div>
+          </div>
+          <div
+            className={["choiceItem", renderMode === "streams" ? "isSelected" : ""].filter(Boolean).join(" ")}
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              setRenderMode("streams");
+              setIsRenderModalOpen(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                setRenderMode("streams");
+                setIsRenderModalOpen(false);
+              }
+            }}
+          >
+            <div className="choiceTitle">{t("core.ui.render_modal.option_streams.title", {}, "Streams")}</div>
+            <div className="choiceDesc">
+              {t("core.ui.render_modal.option_streams.desc", {}, "Display configured transmissions in a paged live dashboard.")}
+            </div>
           </div>
         </div>
       </Modal>

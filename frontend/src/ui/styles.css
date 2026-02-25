@@ -1287,6 +1287,347 @@ textarea {
   padding: 14px 10px;
 }
 
+.streamsOverlayAutoHide {
+  transition: opacity 220ms ease, transform 220ms ease, filter 220ms ease;
+}
+
+.streamsOverlayAutoHide.isVisible {
+  opacity: 1;
+  filter: blur(0);
+}
+
+.streamsOverlayAutoHide.isHidden {
+  opacity: 0;
+  pointer-events: none;
+  filter: blur(2px);
+}
+
+.overlayTopRight.streamsOverlayAutoHide.isHidden {
+  transform: translateY(-8px);
+}
+
+.overlayLeft.streamsOverlayAutoHide.isHidden {
+  transform: translateX(-10px);
+}
+
+.streamsRoot {
+  background:
+    radial-gradient(900px 640px at 16% 8%, color-mix(in srgb, var(--color-accent-teal) 12%, transparent), transparent 62%),
+    radial-gradient(900px 640px at 86% 92%, color-mix(in srgb, var(--color-accent-blue) 11%, transparent), transparent 64%),
+    linear-gradient(165deg, var(--color-application-background), var(--color-application-background-secondary));
+}
+
+.streamsGrid {
+  position: absolute;
+  inset: var(--space-3);
+  padding: 0 0 calc(var(--control-height-m) + var(--space-6));
+  display: grid;
+  gap: var(--space-3);
+}
+
+.streamsGrid.is1x1 {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.streamsGrid.is2x2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+.streamsTile {
+  min-height: 0;
+  border-radius: var(--radius-panel);
+  border: 1px solid var(--color-border-subtle);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-surface-frost-strong) 88%, transparent),
+    color-mix(in srgb, var(--color-surface-frost) 86%, transparent)
+  );
+  box-shadow: var(--shadow-elevation-2), var(--shadow-inner-highlight);
+  backdrop-filter: blur(var(--frost-blur-small)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+  -webkit-backdrop-filter: blur(var(--frost-blur-small)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.streamsTileEmpty {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--color-border-subtle) 70%, transparent);
+  background: color-mix(in srgb, var(--color-surface-frost) 62%, transparent);
+}
+
+.streamsTileHeader {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+}
+
+.streamsTileTitle {
+  min-width: 0;
+  font-size: var(--font-size-13);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.streamsTileMeta {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-11);
+  color: var(--color-text-muted);
+}
+
+.streamsTileMeta span {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--color-border-subtle) 85%, transparent);
+  background: color-mix(in srgb, var(--color-surface-solid) 72%, transparent);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.streamsTileStatus {
+  padding: 0 var(--space-3) var(--space-2);
+  font-size: var(--font-size-12);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-muted);
+}
+
+.streamsTileStatusError {
+  color: color-mix(in srgb, var(--color-danger) 85%, var(--color-text-primary));
+}
+
+.streamsTileStatusWarn {
+  color: color-mix(in srgb, var(--color-warning) 84%, var(--color-text-primary));
+}
+
+.streamsPlayerFrame {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border-top: 1px solid color-mix(in srgb, var(--color-border-subtle) 70%, transparent);
+  background: #000;
+}
+
+.streamsVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+  display: block;
+}
+
+.streamsTilePlayback {
+  position: absolute;
+  left: var(--space-2);
+  right: var(--space-2);
+  bottom: var(--space-2);
+  min-height: 30px;
+  border-radius: var(--radius-control);
+  padding: 0 var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-11);
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-surface-solid) 80%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border-subtle) 78%, transparent);
+  box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
+  backdrop-filter: blur(var(--frost-blur-small)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-small)) saturate(var(--frost-saturate));
+}
+
+.streamsPlaybackDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  background: color-mix(in srgb, var(--color-text-muted) 78%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-text-muted) 24%, transparent);
+}
+
+.streamsPlaybackDot.is-playing {
+  background: var(--color-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 28%, transparent);
+}
+
+.streamsPlaybackDot.is-loading {
+  background: var(--color-warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 28%, transparent);
+}
+
+.streamsPlaybackDot.is-error {
+  background: var(--color-danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-danger) 28%, transparent);
+}
+
+.streamsPlaybackText {
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.streamsPlaybackError {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--color-danger) 90%, var(--color-text-primary));
+}
+
+.streamsHud {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-3);
+  transform: translateX(-50%);
+  z-index: 22;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  transition: opacity 200ms ease, transform 200ms ease, filter 200ms ease;
+}
+
+.streamsHud.isVisible {
+  opacity: 1;
+  filter: blur(0);
+}
+
+.streamsHud.isHidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 8px);
+  filter: blur(1px);
+}
+
+.streamsHudGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  min-height: calc(var(--control-height-m) + var(--space-1));
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--color-border-subtle) 86%, transparent);
+  background: color-mix(in srgb, var(--color-surface-solid) 64%, transparent);
+  box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
+  backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate));
+}
+
+.streamsHudModeButton.chipButton {
+  display: inline-flex;
+  align-items: center;
+  min-width: 58px;
+  justify-content: center;
+}
+
+.streamsHudModeButton.chipButton.isActive,
+.streamsHudModeButton.chipButton[aria-pressed="true"] {
+  border-color: var(--color-accent-border);
+  background: linear-gradient(135deg, var(--color-accent-background-strong), var(--color-accent-background-strong-2));
+}
+
+.streamsHudNavButton.iconButton {
+  width: 34px;
+  height: 34px;
+}
+
+.streamsHudNavButton:disabled {
+  opacity: 0.45;
+}
+
+.streamsHudPager {
+  min-width: 192px;
+  justify-content: space-between;
+}
+
+.streamsHudPageLabel {
+  min-width: 80px;
+  text-align: center;
+  font-size: var(--font-size-12);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 960px) {
+  .streamsGrid.is2x2 {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(4, minmax(0, 1fr));
+  }
+
+  .streamsGrid {
+    inset: var(--space-2);
+    gap: var(--space-2);
+    padding-bottom: calc((var(--control-height-m) * 2) + var(--space-5));
+  }
+
+  .streamsHud {
+    width: calc(100% - (var(--space-2) * 2));
+    left: var(--space-2);
+    transform: none;
+    justify-content: space-between;
+  }
+
+  .streamsHud.isHidden {
+    transform: translateY(8px);
+  }
+
+  .streamsHudGroup {
+    flex: 1;
+    min-width: 0;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  .streamsHudPager {
+    min-width: 0;
+  }
+
+  .streamsTileMeta {
+    font-size: var(--font-size-11);
+  }
+
+  .streamsTileMeta span {
+    height: 20px;
+    padding: 0 var(--space-1);
+  }
+}
+
+@media (max-width: 680px) {
+  .streamsHud {
+    width: calc(100% - (var(--space-2) * 2));
+    left: var(--space-2);
+    bottom: var(--space-2);
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .streamsHud.isHidden {
+    transform: translateY(8px);
+  }
+
+  .streamsHudGroup {
+    width: 100%;
+  }
+
+  .streamsHudPager {
+    justify-content: space-between;
+  }
+}
+
 .rail {
   height: 100%;
   display: flex;
@@ -2310,6 +2651,92 @@ textarea {
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
+}
+
+.streamingSettingsPanel {
+  display: grid;
+  gap: 12px;
+}
+
+.streamingSettingsPanel > .sectionDivider {
+  margin: 0;
+}
+
+.streamingSettingsPanel .cardBody {
+  margin-top: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.streamingSettingsPanel .field {
+  margin: 0;
+}
+
+.streamingSettingsPanel .settingsDetailHeader {
+  row-gap: 10px;
+}
+
+.streamingStatusOk {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--color-success) 82%, var(--color-text-primary));
+}
+
+.streamingStatusOk::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-success);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-success) 22%, transparent);
+}
+
+.streamingQuickSteps {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.streamingQuickStepsTitle {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.streamingQuickStepsList {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.streamingQuickStepsListCompact {
+  margin-top: 0;
+}
+
+.streamingWizard {
+  display: grid;
+  gap: 10px;
+}
+
+.streamingWizard .cardBody {
+  margin-top: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.streamingWizard .field {
+  margin: 0;
+}
+
+.streamingWizardFeedback {
+  margin: 0;
 }
 
 .settingsListItemRow {

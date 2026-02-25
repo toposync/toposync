@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "com.toposync.streaming",
+  "name": "Streaming",
+  "version": "0.1.0",
+  "description": "Toposync extension for transmission and stream outputs.",
+  "api_prefixes": ["/api/streams"],
+  "frontend": {
+    "kind": "module-federation",
+    "remote_entry": "remoteEntry.js",
+    "scope": "streaming",
+    "module": "./activate"
+  }
+}

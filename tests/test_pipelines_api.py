@@ -84,6 +84,45 @@ def test_pipeline_payload_validation(tmp_path: Path, monkeypatch: pytest.MonkeyP
         assert res.status_code == 422
 
 
+def test_pipeline_stream_write_host_mismatch_returns_400(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        patch_res = client.patch(
+            "/api/settings/extensions/com.toposync.streaming",
+            json={
+                "transmissions": [
+                    {
+                        "id": "tx_edge",
+                        "name": "Edge transmission",
+                        "host_server_id": "edge_gpu",
+                        "path": "edge-cam",
+                        "outputs": [],
+                    }
+                ]
+            },
+        )
+        assert patch_res.status_code == 200
+
+        payload = {
+            "name": "pipeline_with_stream_write",
+            "type": "final",
+            "processing_server_id": "local",
+            "graph": {
+                "schema_version": 1,
+                "nodes": [
+                    {
+                        "id": "stream_sink",
+                        "operator": "stream.write",
+                        "config": {"transmission_id": "tx_edge"},
+                    }
+                ],
+                "edges": [],
+            },
+        }
+        res = client.post("/api/pipelines", json=payload)
+        assert res.status_code == 400
+        assert "stream.write host mismatch" in str(res.json().get("detail") or "")
+
+
 def test_processing_servers_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         res = client.get("/api/processing-servers")

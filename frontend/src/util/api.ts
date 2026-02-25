@@ -211,6 +211,70 @@ export type NotificationsPage = {
   next_cursor: number | null;
 };
 
+export type StreamingTransmissionOutput = {
+  id: string;
+  protocol: "hls" | "rtsp" | "webrtc";
+  enabled?: boolean;
+  authentication?: {
+    enabled?: boolean;
+    username?: string | null;
+    password?: string | null;
+  };
+};
+
+export type StreamingTransmission = {
+  id: string;
+  name: string;
+  path: string;
+  enabled?: boolean;
+  host_server_id?: string;
+  outputs?: StreamingTransmissionOutput[];
+};
+
+export type StreamingTransmissionUrlOutput = {
+  output_id: string;
+  protocol: "hls" | "rtsp" | "webrtc";
+  resolved_engine_path: string;
+  url: string;
+  requires_auth?: boolean;
+  auth_username?: string | null;
+};
+
+export type StreamingTransmissionUrlsResponse = {
+  transmission_id: string;
+  engine_running: boolean;
+  outputs: StreamingTransmissionUrlOutput[];
+  warnings?: string[];
+};
+
+export type StreamingTransmissionDemandPrimeResponse = {
+  transmission_id: string;
+  primed: boolean;
+  primed_outputs: number;
+};
+
+export type StreamingOutputRuntimeStatus = {
+  output_key: string;
+  output_id: string;
+  transmission_id: string;
+  protocol: "hls" | "rtsp" | "webrtc";
+  resolved_engine_path: string;
+  viewer_count: number;
+  demand_signal: boolean;
+  publisher_running: boolean;
+  publisher_pid?: number | null;
+  publisher_frames_sent: number;
+  publisher_last_error?: string | null;
+  publisher_active_codec?: string | null;
+  publisher_hardware_accelerated?: boolean;
+  publisher_restart_count?: number;
+};
+
+export type StreamingOutputsRuntimeResponse = {
+  updated_at_unix: number;
+  outputs: StreamingOutputRuntimeStatus[];
+};
+
 export async function getAuthStatus(): Promise<AuthStatus> {
   const res = await fetch("/api/auth/status");
   if (!res.ok) throw new Error(`Failed to load auth status: ${res.status}`);
@@ -613,4 +677,32 @@ export async function listPipelineOperators(): Promise<PipelineOperatorDefinitio
   if (!res.ok) throw new Error(`Failed to list pipeline operators: ${res.status}`);
   const body = (await res.json()) as { operators?: PipelineOperatorDefinition[] };
   return body.operators ?? [];
+}
+
+export async function listStreamingTransmissions(): Promise<StreamingTransmission[]> {
+  const res = await fetch("/api/streams/transmissions");
+  if (!res.ok) throw new Error(`Failed to list streaming transmissions: ${res.status}`);
+  return (await res.json()) as StreamingTransmission[];
+}
+
+export async function getStreamingTransmissionUrls(transmissionId: string): Promise<StreamingTransmissionUrlsResponse> {
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/urls`);
+  if (!res.ok) throw new Error(`Failed to fetch streaming URLs for ${transmissionId}: ${res.status}`);
+  return (await res.json()) as StreamingTransmissionUrlsResponse;
+}
+
+export async function primeStreamingTransmissionDemand(
+  transmissionId: string,
+): Promise<StreamingTransmissionDemandPrimeResponse> {
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/demand/prime`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`Failed to prime streaming demand for ${transmissionId}: ${res.status}`);
+  return (await res.json()) as StreamingTransmissionDemandPrimeResponse;
+}
+
+export async function getStreamingOutputsRuntime(): Promise<StreamingOutputsRuntimeResponse> {
+  const res = await fetch("/api/streams/runtime/outputs");
+  if (!res.ok) throw new Error(`Failed to fetch streaming runtime outputs: ${res.status}`);
+  return (await res.json()) as StreamingOutputsRuntimeResponse;
 }

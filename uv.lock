@@ -1474,6 +1474,7 @@ extensions = [
     { name = "toposync-ext-home-assistant" },
     { name = "toposync-ext-images" },
     { name = "toposync-ext-models" },
+    { name = "toposync-ext-streaming" },
     { name = "toposync-ext-structural" },
 ]
 
@@ -1496,6 +1497,7 @@ extensions = [
     { name = "toposync-ext-home-assistant", editable = "extensions/home_assistant" },
     { name = "toposync-ext-images", editable = "extensions/images" },
     { name = "toposync-ext-models", editable = "extensions/models" },
+    { name = "toposync-ext-streaming", editable = "extensions/streaming" },
     { name = "toposync-ext-structural", editable = "extensions/structural" },
 ]
 
@@ -1563,6 +1565,23 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "toposync", specifier = ">=0.1.0" }]
+
+[[package]]
+name = "toposync-ext-streaming"
+version = "0.1.0"
+source = { editable = "extensions/streaming" }
+dependencies = [
+    { name = "numpy" },
+    { name = "opencv-python-headless" },
+    { name = "toposync" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "opencv-python-headless", specifier = ">=4.10" },
+    { name = "toposync", specifier = ">=0.1.0" },
+]
 
 [[package]]
 name = "toposync-ext-structural"

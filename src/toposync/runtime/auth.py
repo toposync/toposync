@@ -1100,6 +1100,9 @@ class AuthRuntime:
         )
         self.store = AuthStore(data_dir / "auth" / "auth.sqlite3")
         self._access_secret = self.store.get_or_create_secret("access_secret")
+        # Comentário: credenciais opcionais para autenticação serviço->serviço (ex: sync de extensões).
+        self._streaming_sync_username = str(os.getenv("TOPOSYNC_STREAMING_SYNC_USERNAME") or "").strip()
+        self._streaming_sync_password = str(os.getenv("TOPOSYNC_STREAMING_SYNC_PASSWORD") or "").strip()
 
     @property
     def bypass_principal(self) -> AuthPrincipal:
@@ -1201,6 +1204,22 @@ class AuthRuntime:
             return ""
         return header.split(" ", 1)[1].strip()
 
+    def _authorization_header_basic_credentials(self, request: Request) -> tuple[str, str] | None:
+        header = str(request.headers.get("authorization") or "")
+        if not header.lower().startswith("basic "):
+            return None
+        encoded = header.split(" ", 1)[1].strip()
+        if not encoded:
+            return None
+        try:
+            decoded = base64.b64decode(encoded.encode("ascii"), validate=True).decode("utf-8", errors="replace")
+        except Exception:
+            return None
+        if ":" not in decoded:
+            return None
+        username, password = decoded.split(":", 1)
+        return username, password
+
     def resolve_request(self, request: Request) -> AuthContext:
         if self.mode == "bypass":
             return AuthContext(
@@ -1214,6 +1233,24 @@ class AuthRuntime:
 
         if path == "/api/auth/setup":
             return AuthContext(principal=None, mode=self.mode, requires_setup=requires_setup)
+
+        # Comentário: autenticação por Basic para sync interno do streaming (processing -> core).
+        # Mantemos escopo estreito por path para evitar expor Basic globalmente.
+        if path.startswith("/api/streams/distributed/settings/"):
+            if self._streaming_sync_username and self._streaming_sync_password:
+                maybe_basic = self._authorization_header_basic_credentials(request)
+                if maybe_basic is not None:
+                    username, password = maybe_basic
+                    if hmac.compare_digest(username, self._streaming_sync_username) and hmac.compare_digest(
+                        password, self._streaming_sync_password
+                    ):
+                        principal = AuthPrincipal(
+                            user_id="service:streaming_sync",
+                            username="streaming-sync",
+                            display_name="Streaming Sync",
+                            role="service",
+                        )
+                        return AuthContext(principal=principal, mode=self.mode, requires_setup=requires_setup)
 
         bearer = self._authorization_header_token(request)
         if bearer:

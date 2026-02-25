@@ -25,6 +25,7 @@ extensions = [
   "toposync-ext-home-assistant",
   "toposync-ext-images",
   "toposync-ext-cameras",
+  "toposync-ext-streaming",
 ]
 
 # Heavy dependencies for object detection/tracking (YOLO). Install only when needed.
@@ -39,6 +40,7 @@ toposync-ext-models = { path = "extensions/models", editable = true }
 toposync-ext-home-assistant = { path = "extensions/home_assistant", editable = true }
 toposync-ext-images = { path = "extensions/images", editable = true }
 toposync-ext-cameras = { path = "extensions/cameras", editable = true }
+toposync-ext-streaming = { path = "extensions/streaming", editable = true }
 
 [build-system]
 requires = ["hatchling>=1.25"]
@@ -50,3 +52,8 @@ packages = ["src/toposync"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.pytest.ini_options]
+markers = [
+  "integration: marks tests that depend on external runtime processes (ffmpeg/mediamtx).",
+]

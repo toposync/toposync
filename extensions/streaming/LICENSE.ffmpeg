@@ -1,0 +1,15 @@
+FFmpeg licensing notice
+=======================
+
+This extension supports using an embedded FFmpeg binary when available.
+
+FFmpeg is licensed under GNU LGPL v2.1+ or GNU GPL v2+ depending on how the
+binary is built and which optional codecs/libraries are enabled.
+
+When distributing embedded binaries, include:
+- The exact FFmpeg build information and configuration flags.
+- The applicable LGPL/GPL license text.
+- Any third-party codec/library license notices required by that build.
+
+Official project and licensing details:
+https://ffmpeg.org/legal.html

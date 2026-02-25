@@ -4,7 +4,7 @@
   - Prefer `feat: ...`, `fix: ...`, `docs: ...`, `test: ...`, `refactor: ...`, `i18n: ...`.
   - Use an optional scope when it helps (`feat(pipelines): ...`).
   - Keep the summary short, imperative, and without a trailing period.
-- Sempre que adicionar uma entrada/opcao de UI para o usuario, ela precisa ter valor claro e fazer sentido (nao exponha identificadores internos; gere automaticamente).
-- Não apague código que você não entende só por “limpeza”; se achar que pode ser trabalho em paralelo (do usuário ou de outro agente), deixe no working tree e apenas não inclua no commit (ex.: `git add -p`).
-- Se o `toposync` estiver em execução, não edite `/.toposync-data/config.json` diretamente: alterações manuais podem ser sobrescritas pelo estado gravado/syncado pela UI e pelo serviço.
-- Prefira editar via wizard/API e reiniciar/reativar a composição depois para que a persistência fique estável.
+- Whenever you add a UI entry/option for the user, it must have clear value and make sense (don’t expose internal identifiers; generate them automatically).
+- Don’t delete code you don’t understand just for “cleanup”; if you think it might be parallel work (by the user or another agent), leave it in the working tree and simply don’t include it in the commit (e.g., `git add -p`).
+- If `toposync` is running, don’t edit `/.toposync-data/config.json` directly: manual changes can be overwritten by state saved/synced by the UI and the service.
+- Prefer editing via the wizard/API and then restarting/reactivating the composition to keep persistence stable.

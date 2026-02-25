@@ -34,6 +34,8 @@ def choose_active_writer(
     transmission_id: str,
     state: TransmissionArbitrationState,
     now_monotonic: float,
+    *,
+    mode: str = "latest",
 ) -> str | None:
     transmission_key = str(transmission_id or "").strip()
     if not transmission_key:
@@ -50,6 +52,7 @@ def choose_active_writer(
         now_monotonic=now_monotonic,
         frame_freshness_timeout_s=state.frame_freshness_timeout_s,
         sticky_window_s=state.sticky_window_s,
+        mode=mode,
     )
 
     if decision.writer_id is None:
@@ -70,9 +73,13 @@ def choose_active_writer_decision(
     now_monotonic: float,
     frame_freshness_timeout_s: float,
     sticky_window_s: float,
+    mode: str = "latest",
 ) -> ActiveWriterDecision:
     freshness_timeout_s = max(0.1, float(frame_freshness_timeout_s))
     sticky_window_s = max(0.0, float(sticky_window_s))
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode not in {"latest", "priority_latest"}:
+        normalized_mode = "latest"
 
     eligible_by_writer_id: dict[str, WriterArbitrationRecord] = {}
     for writer in writers.values():
@@ -83,7 +90,10 @@ def choose_active_writer_decision(
     if not eligible_by_writer_id:
         return ActiveWriterDecision(writer_id=None, sticky_until_monotonic=0.0)
 
-    best_writer = max(eligible_by_writer_id.values(), key=_selection_key)
+    if normalized_mode == "priority_latest":
+        best_writer = max(eligible_by_writer_id.values(), key=_selection_key_priority_latest)
+    else:
+        best_writer = max(eligible_by_writer_id.values(), key=_selection_key_latest)
 
     current_key = str(current_writer_id or "").strip()
     current_writer = eligible_by_writer_id.get(current_key) if current_key else None
@@ -117,9 +127,23 @@ def _is_eligible(
 
 
 def _selection_key(writer: WriterArbitrationRecord) -> tuple[float, int, float, str]:
+    # Back-compat: alias do comportamento "latest".
+    return _selection_key_latest(writer)
+
+
+def _selection_key_latest(writer: WriterArbitrationRecord) -> tuple[float, int, float, str]:
     return (
         float(writer.last_frame_monotonic),
         int(writer.writer_priority),
+        float(writer.updated_at_monotonic),
+        str(writer.writer_id),
+    )
+
+
+def _selection_key_priority_latest(writer: WriterArbitrationRecord) -> tuple[int, float, float, str]:
+    return (
+        int(writer.writer_priority),
+        float(writer.last_frame_monotonic),
         float(writer.updated_at_monotonic),
         str(writer.writer_id),
     )

@@ -37,8 +37,10 @@ class ResolvedOutputTarget:
     output_key: str
     output_id: str
     transmission_id: str
+    arbitration_mode: str
     protocol: str
     publish_path: str
+    placeholder_mode: str
     width: int
     height: int
     fps: float
@@ -152,8 +154,10 @@ class StreamWriterBridge:
                     "output_key": target.output_key,
                     "output_id": target.output_id,
                     "transmission_id": target.transmission_id,
+                    "arbitration_mode": target.arbitration_mode,
                     "protocol": target.protocol,
                     "publish_path": target.publish_path,
+                    "placeholder_mode": target.placeholder_mode,
                     "width": target.width,
                     "height": target.height,
                     "fps": target.fps,
@@ -253,6 +257,15 @@ class StreamWriterBridge:
             await self._runtime_state.prune_transmissions(set())
             await self._runtime_state.prune_output_viewers(set())
             return
+
+        arbitration_by_transmission: dict[str, str] = {}
+        for target in targets:
+            arbitration_by_transmission.setdefault(target.transmission_id, str(target.arbitration_mode or "priority_latest"))
+        for transmission_id, arbitration_mode in arbitration_by_transmission.items():
+            await self._runtime_state.set_transmission_arbitration(
+                transmission_id=transmission_id,
+                arbitration_mode=arbitration_mode,
+            )
 
         engine_status = await self._engine_manager.ensure_running(
             engine_settings,
@@ -368,7 +381,7 @@ class StreamWriterBridge:
     def _resolve_frame_for_output(self, selected: SelectedWriterFrame, target: ResolvedOutputTarget) -> numpy.ndarray:
         frame = selected.frame
         if frame is None:
-            return get_placeholder_frame(target.width, target.height, mode="gray")
+            return get_placeholder_frame(target.width, target.height, mode=target.placeholder_mode)
 
         if target.resize_mode == "contain":
             return resize_frame_contain(frame, target.width, target.height)
@@ -639,6 +652,14 @@ def _resolve_output_targets(transmissions: list[Any], *, host_server_id: str) ->
             or transmission_id,
         )
 
+        placeholder_mode = _as_str(transmission_raw.get("placeholder")).lower() or "gray"
+        if placeholder_mode not in {"gray", "black"}:
+            placeholder_mode = "gray"
+
+        arbitration_mode = _as_str(transmission_raw.get("arbitration")).lower() or "priority_latest"
+        if arbitration_mode not in {"latest", "priority_latest"}:
+            arbitration_mode = "priority_latest"
+
         outputs_raw = transmission_raw.get("outputs") if isinstance(transmission_raw.get("outputs"), list) else []
         enabled_outputs_raw = [item for item in outputs_raw if isinstance(item, dict) and _as_bool(item.get("enabled"), default=True)]
 
@@ -681,8 +702,10 @@ def _resolve_output_targets(transmissions: list[Any], *, host_server_id: str) ->
                     output_key=output_key,
                     output_id=output_id,
                     transmission_id=transmission_id,
+                    arbitration_mode=arbitration_mode,
                     protocol=protocol,
                     publish_path=output_path,
+                    placeholder_mode=placeholder_mode,
                     width=width,
                     height=height,
                     fps=fps,

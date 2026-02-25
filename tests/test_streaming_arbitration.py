@@ -127,6 +127,40 @@ def test_choose_active_writer_respects_sticky_window() -> None:
     assert post_sticky_selected == "writer_a"
 
 
+def test_choose_active_writer_priority_latest_prefers_priority_over_recency() -> None:
+    transmission_id = "transmission_priority_latest"
+    state = TransmissionArbitrationState(
+        last_frame_by_writer={
+            transmission_id: {
+                "writer_a": _WriterState(
+                    writer_id="writer_a",
+                    lifecycle_state=Lifecycle.UPDATE,
+                    writer_priority=10,
+                    updated_at_monotonic=50.00,
+                    last_frame_monotonic=50.00,
+                    frame=object(),
+                ),
+                "writer_b": _WriterState(
+                    writer_id="writer_b",
+                    lifecycle_state=Lifecycle.UPDATE,
+                    writer_priority=1,
+                    updated_at_monotonic=50.30,
+                    last_frame_monotonic=50.30,
+                    frame=object(),
+                ),
+            }
+        },
+        active_writer_by_transmission={},
+        sticky_until_by_transmission={},
+        frame_freshness_timeout_s=1.0,
+        sticky_window_s=0.0,
+    )
+
+    selected_writer = choose_active_writer(transmission_id, state, now_monotonic=50.35, mode="priority_latest")
+
+    assert selected_writer == "writer_a"
+
+
 def test_choose_active_writer_returns_none_when_all_writers_are_closed() -> None:
     transmission_id = "transmission_closed"
     state = TransmissionArbitrationState(

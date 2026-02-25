@@ -59,6 +59,7 @@ class TransmissionRuntimeState:
         self._last_frame_by_writer: dict[str, dict[str, WriterFrameState]] = {}
         self._active_writer_by_transmission: dict[str, str] = {}
         self._sticky_until_by_transmission: dict[str, float] = {}
+        self._arbitration_mode_by_transmission: dict[str, str] = {}
         self._viewer_count_by_output: dict[str, int] = {}
         self._output_to_transmission: dict[str, str] = {}
         self._arbitration_state = TransmissionArbitrationState(
@@ -183,6 +184,7 @@ class TransmissionRuntimeState:
                 transmissions[transmission_id] = {
                     "active_writer": self._active_writer_by_transmission.get(transmission_id),
                     "sticky_until_monotonic": self._sticky_until_by_transmission.get(transmission_id),
+                    "arbitration_mode": self._arbitration_mode_by_transmission.get(transmission_id),
                     "demand_signal": self._transmission_has_demand_locked(transmission_id),
                     "writers": {
                         writer_id: {
@@ -209,6 +211,16 @@ class TransmissionRuntimeState:
                     output_key: int(viewers) for output_key, viewers in self._viewer_count_by_output.items()
                 },
             }
+
+    async def set_transmission_arbitration(self, *, transmission_id: str, arbitration_mode: str) -> None:
+        transmission_key = _normalize_key(transmission_id)
+        if not transmission_key:
+            return
+        normalized_mode = str(arbitration_mode or "").strip().lower()
+        if normalized_mode not in {"latest", "priority_latest"}:
+            normalized_mode = "priority_latest"
+        async with self._lock:
+            self._arbitration_mode_by_transmission[transmission_key] = normalized_mode
 
     async def update_output_viewer_count(
         self,
@@ -364,10 +376,12 @@ class TransmissionRuntimeState:
             self._cleanup_transmission_locked(transmission_id)
             return None
 
+        arbitration_mode = self._arbitration_mode_by_transmission.get(transmission_id) or "priority_latest"
         selected_writer_id = choose_active_writer(
             transmission_id=transmission_id,
             state=self._arbitration_state,
             now_monotonic=self._monotonic() if now_monotonic is None else float(now_monotonic),
+            mode=arbitration_mode,
         )
         if selected_writer_id is None:
             self._active_writer_by_transmission.pop(transmission_id, None)
@@ -379,6 +393,7 @@ class TransmissionRuntimeState:
         self._last_frame_by_writer.pop(transmission_id, None)
         self._active_writer_by_transmission.pop(transmission_id, None)
         self._sticky_until_by_transmission.pop(transmission_id, None)
+        self._arbitration_mode_by_transmission.pop(transmission_id, None)
 
     def _transmission_has_demand_locked(self, transmission_id: str) -> bool:
         for output_key, owner in self._output_to_transmission.items():

@@ -542,9 +542,11 @@ export function MainScreen({
         <button className="chipButton" type="button" onClick={() => setIsRenderModalOpen(true)}>
           {t("core.ui.rendering")}: {renderModeLabel}
         </button>
-        <button className="chipButton" type="button" onClick={() => setIsCompositionModalOpen(true)}>
-          {t("core.ui.composition")}: {compositionName}
-        </button>
+        {renderMode !== "streams" ? (
+          <button className="chipButton" type="button" onClick={() => setIsCompositionModalOpen(true)}>
+            {t("core.ui.composition")}: {compositionName}
+          </button>
+        ) : null}
         <button
           className="iconButton"
           type="button"
@@ -562,15 +564,17 @@ export function MainScreen({
         >
           <Icon name="diagram-project" />
         </button>
-        <button
-          className="iconButton iconButtonPrimary"
-          type="button"
-          aria-label={t("core.actions.edit")}
-          title={t("core.actions.edit")}
-          onClick={onEditComposition}
-        >
-          <Icon name="pen-to-square" />
-        </button>
+        {renderMode !== "streams" ? (
+          <button
+            className="iconButton iconButtonPrimary"
+            type="button"
+            aria-label={t("core.actions.edit")}
+            title={t("core.actions.edit")}
+            onClick={onEditComposition}
+          >
+            <Icon name="pen-to-square" />
+          </button>
+        ) : null}
       </div>
 
       <div

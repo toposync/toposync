@@ -1319,10 +1319,10 @@ textarea {
 
 .streamsGrid {
   position: absolute;
-  inset: var(--space-3);
-  padding: 0 0 calc(var(--control-height-m) + var(--space-6));
+  inset: 0;
+  padding: 0;
   display: grid;
-  gap: var(--space-3);
+  gap: 0;
 }
 
 .streamsGrid.is1x1 {
@@ -1337,25 +1337,20 @@ textarea {
 
 .streamsTile {
   min-height: 0;
-  border-radius: var(--radius-panel);
-  border: 1px solid var(--color-border-subtle);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--color-surface-frost-strong) 88%, transparent),
-    color-mix(in srgb, var(--color-surface-frost) 86%, transparent)
-  );
-  box-shadow: var(--shadow-elevation-2), var(--shadow-inner-highlight);
-  backdrop-filter: blur(var(--frost-blur-small)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
-  -webkit-backdrop-filter: blur(var(--frost-blur-small)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness));
+  border-radius: 0;
+  border: 0;
+  background: #000;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
 .streamsTileEmpty {
-  border-style: dashed;
-  border-color: color-mix(in srgb, var(--color-border-subtle) 70%, transparent);
-  background: color-mix(in srgb, var(--color-surface-frost) 62%, transparent);
+  border: 0;
+  background: #000;
 }
 
 .streamsTileHeader {
@@ -1417,36 +1412,126 @@ textarea {
   position: relative;
   flex: 1;
   min-height: 0;
-  border-top: 1px solid color-mix(in srgb, var(--color-border-subtle) 70%, transparent);
+  border-top: 0;
   background: #000;
 }
 
 .streamsVideo {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
   background: #000;
   display: block;
 }
 
-.streamsTilePlayback {
+.streamsTileOverlay {
   position: absolute;
   left: var(--space-2);
-  right: var(--space-2);
-  bottom: var(--space-2);
-  min-height: 30px;
-  border-radius: var(--radius-control);
+  top: var(--space-2);
+  max-width: calc(100% - (var(--space-2) * 2));
+  min-height: 34px;
+  border-radius: var(--radius-pill);
   padding: 0 var(--space-2);
   display: flex;
   align-items: center;
   gap: var(--space-2);
   font-size: var(--font-size-11);
   color: var(--color-text-primary);
-  background: color-mix(in srgb, var(--color-surface-solid) 80%, transparent);
+  background: color-mix(in srgb, var(--color-surface-solid) 64%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border-subtle) 86%, transparent);
+  box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
+  backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate));
+  transition: opacity 200ms ease, transform 200ms ease, filter 200ms ease;
+  z-index: 3;
+}
+
+.streamsTileOverlay.isVisible {
+  opacity: 1;
+  pointer-events: auto;
+  filter: blur(0);
+  transform: translateY(0);
+}
+
+.streamsTileOverlay.isHidden {
+  opacity: 0;
+  pointer-events: none;
+  filter: blur(1px);
+  transform: translateY(-6px);
+}
+
+.streamsTileOverlayLeft {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.streamsTileOverlayTitle {
+  min-width: 0;
+  max-width: 340px;
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-12);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.streamsTileOverlayMeta {
+  flex: 0 0 auto;
+  font-size: var(--font-size-11);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.streamsTileOverlayActions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.streamsTileOverlayButton.iconButton {
+  width: 30px;
+  height: 30px;
+}
+
+.streamsTileOverlayButton:disabled {
+  opacity: 0.45;
+}
+
+.streamsTileOverlayHint {
+  position: absolute;
+  left: var(--space-2);
+  right: var(--space-2);
+  top: calc(var(--space-2) + 40px);
+  min-height: 30px;
+  border-radius: var(--radius-control);
+  padding: 8px var(--space-2);
+  font-size: var(--font-size-11);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-surface-solid) 72%, transparent);
   border: 1px solid color-mix(in srgb, var(--color-border-subtle) 78%, transparent);
   box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
-  backdrop-filter: blur(var(--frost-blur-small)) saturate(var(--frost-saturate));
-  -webkit-backdrop-filter: blur(var(--frost-blur-small)) saturate(var(--frost-saturate));
+  backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate));
+  z-index: 3;
+  pointer-events: none;
+}
+
+.streamsTileOverlayHint.is-muted {
+  color: var(--color-text-muted);
+}
+
+.streamsTileOverlayHint.is-warn {
+  color: color-mix(in srgb, var(--color-warning) 84%, var(--color-text-primary));
+}
+
+.streamsTileOverlayHint.is-error {
+  color: color-mix(in srgb, var(--color-danger) 90%, var(--color-text-primary));
 }
 
 .streamsPlaybackDot {
@@ -1569,9 +1654,9 @@ textarea {
   }
 
   .streamsGrid {
-    inset: var(--space-2);
-    gap: var(--space-2);
-    padding-bottom: calc((var(--control-height-m) * 2) + var(--space-5));
+    inset: 0;
+    gap: 0;
+    padding: 0;
   }
 
   .streamsHud {

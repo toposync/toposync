@@ -2,12 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import type Hls from "hls.js";
 
 import {
-  getStreamingOutputsRuntime,
   getStreamingTransmissionUrls,
   listStreamingTransmissions,
   primeStreamingTransmissionDemand,
-  type StreamingOutputRuntimeStatus,
-  type StreamingOutputsRuntimeResponse,
   type StreamingTransmission,
   type StreamingTransmissionUrlsResponse,
 } from "../../util/api";
@@ -37,7 +34,6 @@ type PlaybackOutputSelection = {
 };
 
 const GRID_MODE_STORAGE_KEY = "toposync.streams.grid_mode.v1";
-const RUNTIME_REFRESH_MS = 2000;
 const TRANSMISSIONS_REFRESH_MS = 15000;
 const RETRY_BASE_MS = 900;
 const RETRY_MAX_MS = 8000;
@@ -57,12 +53,6 @@ function readGridMode(): GridMode {
 function normalizeText(value: unknown, fallback: string): string {
   const normalized = typeof value === "string" ? value.trim() : "";
   return normalized || fallback;
-}
-
-function buildOutputKey(transmissionId: string, outputId: string): string {
-  const transmission = String(transmissionId || "").trim();
-  const output = String(outputId || "").trim();
-  return transmission && output ? `${transmission}:${output}` : "";
 }
 
 function selectOutputByProtocol(
@@ -132,17 +122,6 @@ function canUseWebRtc(): boolean {
   return typeof RTCPeerConnection !== "undefined";
 }
 
-function normalizeRuntimeMap(payload: StreamingOutputsRuntimeResponse): Record<string, StreamingOutputRuntimeStatus> {
-  const out: Record<string, StreamingOutputRuntimeStatus> = {};
-  const outputs = Array.isArray(payload.outputs) ? payload.outputs : [];
-  for (const item of outputs) {
-    const key = String(item?.output_key || "").trim();
-    if (!key) continue;
-    out[key] = item;
-  }
-  return out;
-}
-
 function waitForIceGatheringComplete(peerConnection: RTCPeerConnection, timeoutMs: number): Promise<void> {
   if (peerConnection.iceGatheringState === "complete") return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -208,6 +187,10 @@ function waitForPeerConnectionReady(peerConnection: RTCPeerConnection, timeoutMs
 
 function StreamTilePlayer({
   transmissionId,
+  label,
+  overlayVisible,
+  sourceHint,
+  sourceHintTone,
   webrtcUrl,
   webrtcAuthHeader,
   hlsUrl,
@@ -216,6 +199,10 @@ function StreamTilePlayer({
   active,
 }: {
   transmissionId: string;
+  label: string;
+  overlayVisible: boolean;
+  sourceHint: string | null;
+  sourceHintTone: "muted" | "warn" | "error";
   webrtcUrl: string | null;
   webrtcAuthHeader: string | null;
   hlsUrl: string | null;
@@ -224,6 +211,7 @@ function StreamTilePlayer({
   active: boolean;
 }): React.ReactElement {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const frameRef = useRef<HTMLDivElement | null>(null);
 
   const [status, setStatus] = useState<TilePlaybackStatus>("idle");
   const [transport, setTransport] = useState<TilePlaybackTransport>("none");
@@ -611,19 +599,100 @@ function StreamTilePlayer({
     };
   }, [active, hlsAuthHeader, hlsNativeUrl, hlsUrl, transmissionId, webrtcAuthHeader, webrtcUrl]);
 
-  const playbackStatusLabel =
-    transport === "none"
-      ? status
-      : `${status} (${transport})`;
+  const playbackStatusLabel = (() => {
+    if (status === "playing") {
+      return transport === "none" ? "online" : transport;
+    }
+    if (transport === "none") return status;
+    return `${status} (${transport})`;
+  })();
+
+  const toggleFullscreen = async () => {
+    const el = frameRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+      await el.requestFullscreen();
+    } catch {
+      // ignore
+    }
+  };
+
+  const togglePip = async () => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    try {
+      const anyDoc = document as unknown as { pictureInPictureElement?: Element | null; pictureInPictureEnabled?: boolean; exitPictureInPicture?: () => Promise<void> };
+      if (anyDoc.pictureInPictureElement && typeof anyDoc.exitPictureInPicture === "function") {
+        await anyDoc.exitPictureInPicture();
+        return;
+      }
+
+      const anyVideo = video as unknown as { requestPictureInPicture?: () => Promise<void>; webkitSetPresentationMode?: (mode: string) => void; webkitPresentationMode?: string };
+      if (anyDoc.pictureInPictureEnabled && typeof anyVideo.requestPictureInPicture === "function") {
+        await anyVideo.requestPictureInPicture();
+        return;
+      }
+      if (typeof anyVideo.webkitSetPresentationMode === "function") {
+        const current = String(anyVideo.webkitPresentationMode || "inline");
+        anyVideo.webkitSetPresentationMode(current === "picture-in-picture" ? "inline" : "picture-in-picture");
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const pipSupported =
+    typeof document !== "undefined" &&
+    (Boolean((document as any).pictureInPictureEnabled && (HTMLVideoElement.prototype as any).requestPictureInPicture) ||
+      Boolean((HTMLVideoElement.prototype as any).webkitSetPresentationMode));
+
+  const fullscreenSupported = typeof document !== "undefined" && Boolean((document as any).fullscreenEnabled && (HTMLElement.prototype as any).requestFullscreen);
 
   return (
-    <div className="streamsPlayerFrame">
+    <div className="streamsPlayerFrame" ref={frameRef}>
       <video ref={videoRef} className="streamsVideo" muted playsInline autoPlay />
-      <div className="streamsTilePlayback">
-        <span className={["streamsPlaybackDot", `is-${status}`].join(" ")} />
-        <span className="streamsPlaybackText">{playbackStatusLabel}</span>
-        {errorText ? <span className="streamsPlaybackError">{errorText}</span> : null}
+
+      <div className={["streamsTileOverlay", overlayVisible ? "isVisible" : "isHidden"].join(" ")}>
+        <div className="streamsTileOverlayLeft" title={label}>
+          <span className={["streamsPlaybackDot", `is-${status}`].join(" ")} />
+          <span className="streamsTileOverlayTitle">{label}</span>
+          <span className="streamsTileOverlayMeta">{playbackStatusLabel}</span>
+        </div>
+
+        <div className="streamsTileOverlayActions">
+          <button
+            type="button"
+            className="iconButton streamsTileOverlayButton"
+            aria-label="Picture in picture"
+            title="Picture in picture"
+            onClick={togglePip}
+            disabled={!pipSupported}
+          >
+            <Icon name="window-restore" />
+          </button>
+          <button
+            type="button"
+            className="iconButton streamsTileOverlayButton"
+            aria-label="Fullscreen"
+            title="Fullscreen"
+            onClick={toggleFullscreen}
+            disabled={!fullscreenSupported}
+          >
+            <Icon name="up-right-and-down-left-from-center" />
+          </button>
+        </div>
       </div>
+
+      {overlayVisible && (sourceHint || errorText) ? (
+        <div className={["streamsTileOverlayHint", `is-${errorText ? "error" : sourceHintTone}`].join(" ")}>
+          {errorText || sourceHint}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -641,8 +710,6 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
   const [urlsLoadingByTransmissionId, setUrlsLoadingByTransmissionId] = useState<Record<string, boolean>>({});
   const [urlErrorByTransmissionId, setUrlErrorByTransmissionId] = useState<Record<string, string>>({});
 
-  const [runtimeByOutputKey, setRuntimeByOutputKey] = useState<Record<string, StreamingOutputRuntimeStatus>>({});
-  const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [tabVisible, setTabVisible] = useState<boolean>(() => {
     if (typeof document === "undefined") return true;
     return document.visibilityState === "visible";
@@ -686,32 +753,6 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
     const intervalId = window.setInterval(() => {
       void loadTransmissions(false);
     }, TRANSMISSIONS_REFRESH_MS);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadRuntime = async () => {
-      try {
-        const payload = await getStreamingOutputsRuntime();
-        if (cancelled) return;
-        setRuntimeByOutputKey(normalizeRuntimeMap(payload));
-        setRuntimeError(null);
-      } catch (loadError) {
-        if (cancelled) return;
-        setRuntimeError(asErrorMessage(loadError));
-      }
-    };
-
-    void loadRuntime();
-    const intervalId = window.setInterval(() => {
-      void loadRuntime();
-    }, RUNTIME_REFRESH_MS);
 
     return () => {
       cancelled = true;
@@ -825,14 +866,6 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
             const urls = urlsByTransmissionId[transmissionId];
             const webrtcOutput = selectOutputByProtocol(transmission, urls, "webrtc");
             const hlsOutput = selectOutputByProtocol(transmission, urls, "hls");
-
-            const webrtcOutputKey = buildOutputKey(transmissionId, webrtcOutput?.outputId ?? "");
-            const hlsOutputKey = buildOutputKey(transmissionId, hlsOutput?.outputId ?? "");
-            const webrtcRuntime = webrtcOutputKey ? runtimeByOutputKey[webrtcOutputKey] : undefined;
-            const hlsRuntime = hlsOutputKey ? runtimeByOutputKey[hlsOutputKey] : undefined;
-
-            const viewers = (webrtcRuntime?.viewer_count ?? 0) + (hlsRuntime?.viewer_count ?? 0);
-            const publisherRunning = Boolean(webrtcRuntime?.publisher_running || hlsRuntime?.publisher_running);
             const urlError = urlErrorByTransmissionId[transmissionId];
             const urlLoading = Boolean(urlsLoadingByTransmissionId[transmissionId]);
             const webrtcUrl = webrtcOutput?.url ?? null;
@@ -842,27 +875,27 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
             const hlsNativeUrl = hlsUrl ? withBasicAuthInUrl(hlsUrl, hlsOutput?.auth ?? null) : null;
             const tileActive = playersActive && Boolean(webrtcUrl || hlsUrl);
 
+            let sourceHint: string | null = null;
+            let sourceHintTone: "muted" | "warn" | "error" = "muted";
+            if (urlLoading) {
+              sourceHint = "Loading stream URL…";
+              sourceHintTone = "muted";
+            } else if (urlError) {
+              sourceHint = urlError;
+              sourceHintTone = "error";
+            } else if (!webrtcUrl && !hlsUrl) {
+              sourceHint = "No WebRTC/HLS output configured for this transmission.";
+              sourceHintTone = "warn";
+            }
+
             return (
               <div key={transmissionId} className="streamsTile">
-                <div className="streamsTileHeader">
-                  <div className="streamsTileTitle" title={transmissionName}>
-                    {transmissionName}
-                  </div>
-                  <div className="streamsTileMeta">
-                    <span>{publisherRunning ? "publisher:on" : "publisher:off"}</span>
-                    <span>{`viewers:${viewers}`}</span>
-                  </div>
-                </div>
-
-                {urlLoading ? <div className="streamsTileStatus">Loading stream URL…</div> : null}
-                {urlError ? <div className="streamsTileStatus streamsTileStatusError">{urlError}</div> : null}
-                {!urlLoading && !urlError && !webrtcUrl && !hlsUrl ? (
-                  <div className="streamsTileStatus streamsTileStatusWarn">No WebRTC/HLS output configured for this transmission.</div>
-                ) : null}
-                {runtimeError ? <div className="streamsTileStatus streamsTileStatusWarn">{runtimeError}</div> : null}
-
                 <StreamTilePlayer
                   transmissionId={transmissionId}
+                  label={transmissionName}
+                  overlayVisible={uiVisible}
+                  sourceHint={sourceHint}
+                  sourceHintTone={sourceHintTone}
                   webrtcUrl={webrtcUrl}
                   webrtcAuthHeader={webrtcAuthHeader}
                   hlsUrl={hlsUrl}

@@ -41,7 +41,7 @@ def _create_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Tes
 
     @app.middleware("http")
     async def auth_guard(request: Request, call_next) -> Response:  # type: ignore[valid-type]
-        # Comentário: middleware mínimo inspirado no core para validar service Basic.
+        # Minimal middleware inspired by the core auth guard to validate service Basic auth.
         auth_runtime: AuthRuntime = request.app.state.auth
         context = auth_runtime.resolve_request(request)
         request.state.auth_context = context
@@ -111,7 +111,6 @@ def test_distributed_settings_service_basic_auth(tmp_path: Path, monkeypatch: py
         assert transmissions[0]["host_server_id"] == "edge_gpu"
         assert transmissions[0]["path"] == "cam-edge"
 
-        # O Basic do service eh intencionalmente escopado ao endpoint distribuido.
+        # Service Basic auth is intentionally scoped to the distributed endpoint.
         res = client.get("/api/streams/settings", headers=headers)
         assert res.status_code == 401
-

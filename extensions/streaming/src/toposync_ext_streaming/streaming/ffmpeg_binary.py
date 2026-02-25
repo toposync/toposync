@@ -28,9 +28,9 @@ def extract_ffmpeg_binary(
     platform: MediaMTXPlatform,
     version: str = FFMPEG_VERSION,
 ) -> Path:
-    """Extrai o FFmpeg embarcado para um diretório gravável.
+    """Extract the bundled FFmpeg binary into a writable directory.
 
-    Comentário: arquivo empacotado pode ser read-only; runtime precisa de chmod +x e path estável.
+    The packaged file can be read-only; the runtime needs a stable path and an executable bit.
     """
     runtime_dir = data_dir / "runtime" / "streaming" / "ffmpeg" / version / platform.key
     runtime_dir.mkdir(parents=True, exist_ok=True)

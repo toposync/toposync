@@ -29,7 +29,7 @@ def _create_client(tmp_path: Path) -> TestClient:
     app = FastAPI()
     config_store = ConfigStore(paths=paths)
     app.state.config_store = config_store
-    # Comentário: engine pode ficar desligada nos testes; precisamos apenas do objeto.
+    # NOTE: the engine can be disabled in tests; we only need the manager instance.
     app.state.streaming_engine_manager = MediaMtxEngineManager(data_dir=paths.data_dir)
     app.include_router(create_streaming_router())
     return TestClient(app)
@@ -83,7 +83,7 @@ def test_update_transmission_preserves_created_at_and_updates_updated_at(tmp_pat
         created_at = datetime.fromisoformat(created["created_at"])
         updated_at = datetime.fromisoformat(created["updated_at"])
 
-        # Comentário: garantir que updated_at mude de fato (resolução de timestamp pode ser alta).
+        # NOTE: ensure updated_at actually changes (timestamp resolution can be coarse).
         time.sleep(0.02)
 
         update_payload = dict(created)

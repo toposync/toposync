@@ -1100,7 +1100,7 @@ class AuthRuntime:
         )
         self.store = AuthStore(data_dir / "auth" / "auth.sqlite3")
         self._access_secret = self.store.get_or_create_secret("access_secret")
-        # Comentário: credenciais opcionais para autenticação serviço->serviço (ex: sync de extensões).
+        # Optional credentials for service-to-service authentication (e.g. extension sync).
         self._streaming_sync_username = str(os.getenv("TOPOSYNC_STREAMING_SYNC_USERNAME") or "").strip()
         self._streaming_sync_password = str(os.getenv("TOPOSYNC_STREAMING_SYNC_PASSWORD") or "").strip()
 
@@ -1234,8 +1234,8 @@ class AuthRuntime:
         if path == "/api/auth/setup":
             return AuthContext(principal=None, mode=self.mode, requires_setup=requires_setup)
 
-        # Comentário: autenticação por Basic para sync interno do streaming (processing -> core).
-        # Mantemos escopo estreito por path para evitar expor Basic globalmente.
+        # Basic auth for internal streaming sync (processing -> core).
+        # Keep a tight path scope to avoid exposing Basic auth globally.
         if path.startswith("/api/streams/distributed/settings/"):
             if self._streaming_sync_username and self._streaming_sync_password:
                 maybe_basic = self._authorization_header_basic_credentials(request)

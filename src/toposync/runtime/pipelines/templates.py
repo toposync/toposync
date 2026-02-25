@@ -94,6 +94,5 @@ def instantiate_camera_template_graph(*, template_graph: dict[str, Any], camera_
 
 
 def default_instance_name(*, template_name: str, camera_id: str) -> str:
-    # Mantém o nome previsível e compatível com identificador Python.
+    # Keep the name predictable and compatible with a Python identifier.
     return safe_pipeline_name(f"{template_name}__{camera_id}")
-

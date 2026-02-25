@@ -291,7 +291,7 @@ def _normalize_config(config: AppConfig) -> AppConfig:
             cfg = dict(cfg_raw)
             node_changed = False
 
-            # Migração: defaults antigos eram agressivos demais e causavam tracking "flickery" e updates excessivos.
+            # Migration: old defaults were too aggressive and caused flickery tracking and excessive updates.
             close_after = _as_float(cfg.get("close_after_seconds"))
             if close_after is not None and abs(close_after - 1.2) < 1e-9:
                 cfg["close_after_seconds"] = 4.0

@@ -406,7 +406,7 @@ function StreamTilePlayer({
     };
 
     const normalizeWhepSdp = (sdp: string): string => {
-      // Comentário: o MediaMTX exige SDP com terminadores CRLF; `trim()` remove o último CRLF e quebra o parse (EOF).
+      // MediaMTX expects SDP with CRLF terminators; using `trim()` can remove the trailing CRLF and break parsing (EOF).
       const normalized = sdp.replace(/\r?\n/g, "\r\n");
       return normalized.endsWith("\r\n") ? normalized : `${normalized}\r\n`;
     };
@@ -526,7 +526,7 @@ function StreamTilePlayer({
         try {
           await primeStreamingTransmissionDemand(transmissionId);
         } catch (primeError) {
-          // Comentário: priming é melhor esforço; se falhar, seguimos e deixamos o fallback/retry lidar.
+          // Priming is best-effort; if it fails, fallback/retry will handle it.
           setErrorText(`Failed to prime stream: ${asErrorMessage(primeError)}`);
         }
       }

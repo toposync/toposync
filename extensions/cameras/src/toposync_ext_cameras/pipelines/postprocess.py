@@ -891,7 +891,7 @@ def _resize_packet_artifacts_opencv(
         if artifact is None:
             continue
         if artifact.reference:
-            # Evita inconsistência: artifact já persistido e referenciado (o resize é em memória).
+            # Avoid inconsistency: the artifact is already persisted and referenced (resize happens in memory).
             continue
         if artifact.data is None:
             continue
@@ -1171,7 +1171,7 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
 
         samples = state.samples
         if samples and now_ts <= float(samples[-1].ts):
-            # Timestamp fora de ordem: não atualiza estado para evitar velocidade negativa/instável.
+            # Out-of-order timestamp: do not update state to avoid negative/unstable speed.
             out_packet = self._annotate_packet(
                 packet,
                 speed=float(state.last_speed_mps),
@@ -1193,7 +1193,7 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
             return self._apply_filter_mode(out_packet, valid=False, moving=False, ever_stopped=ever_stopped)
 
         samples.append(_VelocitySample(x=float(x), z=float(z), ts=float(now_ts)))
-        # Mantém memória estável mesmo se algum stream ficar aberto por muito tempo.
+        # Keep memory stable even if a stream stays open for a long time.
         while len(samples) > 1 and (now_ts - float(samples[0].ts)) > _VELOCITY_HISTORY_SECONDS:
             samples.popleft()
 
@@ -1211,7 +1211,7 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
                 raw_distance = math.sqrt((raw_dx * raw_dx) + (raw_dz * raw_dz))
                 raw_speed = raw_distance / raw_elapsed if raw_elapsed > 0.0 else 0.0
 
-        # Janela: calcula velocidade usando um ponto ~N segundos atrás para reduzir jitter.
+        # Window: compute speed using a point ~N seconds ago to reduce jitter.
         ref = samples[0]
         cutoff = now_ts - float(_VELOCITY_WINDOW_SECONDS)
         for sample in samples:
@@ -1676,7 +1676,7 @@ def _reproject_bbox01_to_crop(
     bbox01: tuple[float, float, float, float],
     crop_bbox01: tuple[float, float, float, float],
 ) -> tuple[float, float, float, float] | None:
-    # Converte bbox no espaço do frame original para o espaço do frame "cropped" (stream frame).
+    # Convert bbox in original-frame space to the "cropped" (stream frame) space.
     x1, y1, x2, y2 = [float(v) for v in bbox01]
     cx1, cy1, cx2, cy2 = [float(v) for v in crop_bbox01]
     cw = float(cx2) - float(cx1)
@@ -1769,7 +1769,7 @@ def _resolve_image_point(packet: Packet, *, bbox_field: str, image_uv_field: str
     if bbox is None:
         return None
     x1, y1, x2, y2 = bbox
-    # Para mapear no "chão" (plano world x/z), o ponto mais estável tende a ser a base do bbox (bottom-center).
+    # To map to the "ground" (world x/z plane), the most stable point tends to be the bbox base (bottom-center).
     return ((x1 + x2) / 2.0, float(y2))
 
 
@@ -1867,9 +1867,9 @@ def _normalize_bbox01(bbox: tuple[float, float, float, float]) -> tuple[float, f
 
 
 def _resolve_tracking_key(packet: Packet) -> str:
-    # Evita colisões quando operadores são "shared" entre múltiplas câmeras/streams:
-    # - `tracking_id` (ex: ByteTrack) pode se repetir entre fontes.
-    # - `correlation_id` (uuid por evento/track) é o identificador mais seguro para estado por objeto.
+    # Avoid collisions when operators are shared across multiple cameras/streams:
+    # - `tracking_id` (e.g., ByteTrack) can repeat across sources.
+    # - `correlation_id` (UUID per event/track) is the safest identifier for per-object state.
     event_id = str(packet.payload.get("event_id") or "").strip()
     if event_id:
         source_stream_id = str(packet.payload.get("source_stream_id") or packet.metadata.get("source_stream_id") or "").strip()

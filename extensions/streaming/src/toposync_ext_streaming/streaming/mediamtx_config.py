@@ -9,8 +9,8 @@ class MediaMTXResolvedPorts:
     hls: int
     api: int
     webrtc: int | None = None
-    # Comentário: usados apenas quando RTSP via UDP está habilitado.
-    # MediaMTX exige que RTP/RTCP sejam consecutivos.
+    # Used only when RTSP over UDP is enabled.
+    # MediaMTX requires RTP/RTCP ports to be consecutive.
     rtp: int = 8000
     rtcp: int = 8001
 
@@ -70,9 +70,9 @@ def render_mediamtx_config(
     webrtc_local_udp_address: str = ":0",
     webrtc_local_tcp_address: str = "",
 ) -> str:
-    """Gera YAML para MediaMTX com auth por path e publish interno.
+    """Generate a MediaMTX YAML config with per-path auth and internal publish credentials.
 
-    Comentário: manter geração manual evita dependência adicional de PyYAML.
+    We build YAML manually to avoid adding a PyYAML dependency.
     """
     unique_paths: list[str] = []
     seen_paths: set[str] = set()
@@ -110,7 +110,7 @@ def render_mediamtx_config(
         if permission not in permissions:
             permissions.append(permission)
 
-    # API/metrics/pprof precisam ficar restritos ao localhost.
+    # Restrict API/metrics/pprof to localhost only.
     add_permission(user="any", password="", ips=localhost_ips, action="api")
     add_permission(user="any", password="", ips=localhost_ips, action="metrics")
     add_permission(user="any", password="", ips=localhost_ips, action="pprof")
@@ -168,8 +168,8 @@ def render_mediamtx_config(
         raise ValueError("RTP and RTCP ports must be consecutive")
     lines.append(f"rtpAddress: {_address(bind_host, rtp_port)}")
     lines.append(f"rtcpAddress: {_address(bind_host, rtcp_port)}")
-    # Comentário: habilitar UDP+TCP melhora compatibilidade (ffplay/VLC tentam UDP por padrão).
-    # Em redes mais restritivas, TCP costuma funcionar melhor e pode ser forçado no cliente.
+    # Enabling UDP+TCP improves compatibility (ffplay/VLC default to UDP).
+    # In more restricted networks, TCP tends to work better and can be forced by the client.
     lines.append("rtspTransports: [udp, tcp]")
     lines.append("")
     lines.append("rtmp: false")
@@ -179,7 +179,7 @@ def render_mediamtx_config(
     lines.append("hls: true")
     lines.append(f"hlsAddress: {_address(bind_host, ports.hls)}")
     lines.append(f"hlsAllowOrigins: {_as_yaml_list(default_hls_origins)}")
-    # Evita LL-HLS por padrão (Safari pode exigir TLS).
+    # Avoid LL-HLS by default (Safari may require TLS).
     lines.append("hlsVariant: mpegts")
     lines.append("")
     lines.append(f"webrtc: {'true' if enable_webrtc else 'false'}")

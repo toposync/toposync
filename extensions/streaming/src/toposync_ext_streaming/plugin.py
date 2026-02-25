@@ -37,9 +37,9 @@ class StreamingExtension(BaseExtension):
             "auth": {
                 "action": "core:extension:use",
                 "resource_type": "core:extension",
-                # Comentário: protegemos as rotas interativas da extensão via guard do core.
-                # O endpoint `/api/streams/distributed/settings/*` é usado para sync interno (processing -> core)
-                # e tem autenticação dedicada (service Basic) no core, por isso fica fora desta lista.
+                # The core auth guard protects interactive routes for this extension.
+                # The `/api/streams/distributed/settings/*` endpoint is used for internal sync (processing -> core)
+                # and has dedicated auth (service Basic) in the core, therefore it is excluded from this list.
                 "api_prefixes": [
                     "/api/streams/settings",
                     "/api/streams/engine",

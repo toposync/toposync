@@ -264,7 +264,7 @@ async def _resolve_local_transmission_urls(
         try:
             await prime_demand(transmission.id)
         except Exception:
-            # Comentário: priming é melhor esforço; não deve quebrar resolução de URL.
+            # Priming is best-effort; it should not break URL resolution.
             pass
 
     manager = _engine_manager(request)
@@ -770,7 +770,7 @@ def create_streaming_router() -> APIRouter:
         payload["created_at"] = existing.created_at
         payload["updated_at"] = existing.updated_at
         payload["host_server_id"] = await _validate_host_server_id_for_request(request, body.host_server_id)
-        # Atualiza updated_at no servidor para manter consistência.
+        # Update updated_at on the server for consistency.
         payload["updated_at"] = datetime.now(timezone.utc)
         updated = Transmission.model_validate(payload)
 
@@ -992,8 +992,8 @@ def create_streaming_router() -> APIRouter:
 
     @router.get("/distributed/settings/{server_id}", response_model=StreamingExtensionSettings)
     async def distributed_settings(request: Request, server_id: str) -> StreamingExtensionSettings:
-        # Comentário: no core, este endpoint pode ser consumido por processing servers via Basic auth (service).
-        # Na UI, segue exigindo permissão de settings/read.
+        # In the core, this endpoint can be consumed by processing servers via service Basic auth.
+        # In the UI, it still requires settings/read permission.
         if not _is_streaming_sync_service_request(request):
             _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)

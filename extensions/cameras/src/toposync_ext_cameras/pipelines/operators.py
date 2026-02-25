@@ -220,7 +220,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             self._gate_known = True
             return
 
-        # Quando existe um gate ligado, default seguro é "fechado" até recebermos o primeiro sinal.
+        # When a gate input is connected, the safe default is "closed" until we receive the first signal.
         if not self._gate_known:
             self._gate_open = False
 
@@ -342,7 +342,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
 
     async def idle_sleep(self, context) -> None:  # noqa: ANN001
         if not self._gate_open:
-            # Evita ficar em loop apertado quando o gate está fechado.
+            # Avoid a tight loop when the gate is closed.
             await context.sleep(max(0.05, float(self._config.poll_interval_ms) / 1000.0))
             return
         sleep_s = max(0.001, float(self._config.poll_interval_ms) / 1000.0)
@@ -1179,7 +1179,7 @@ def _uncrop_bbox01(
     bbox01: tuple[float, float, float, float],
     crop_bbox01: tuple[float, float, float, float],
 ) -> tuple[float, float, float, float]:
-    # Converte bbox relativo ao frame "cropped" para o espaço do frame original.
+    # Convert a bbox relative to the cropped frame back into the original frame space.
     x1, y1, x2, y2 = [float(v) for v in bbox01]
     cx1, cy1, cx2, cy2 = [float(v) for v in crop_bbox01]
     cw = max(0.0, cx2 - cx1)

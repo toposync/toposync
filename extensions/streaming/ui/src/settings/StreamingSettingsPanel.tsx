@@ -7,7 +7,6 @@ import {
   deleteTransmission,
   fetchEngineStatus,
   fetchProcessingServers,
-  fetchStreamingOutputsRuntime,
   fetchStreamsHealth,
   fetchStreamingSettings,
   fetchTransmissionUrls,
@@ -27,7 +26,6 @@ import type {
   Transmission,
   TransmissionOutput,
   TransmissionUrlsResponse,
-  StreamingOutputRuntimeStatus,
 } from "../types";
 import { SubModal } from "./SubModal";
 import { WizardCreatePipelineFromTransmission } from "./WizardCreatePipelineFromTransmission";
@@ -136,10 +134,6 @@ function defaultOutput(protocol: "hls" | "rtsp" | "webrtc"): TransmissionOutput 
   };
 }
 
-function buildOutputKey(transmissionId: string, outputId: string): string {
-  return `${String(transmissionId || "").trim()}:${String(outputId || "").trim()}`;
-}
-
 function normalizeServerId(value: string | undefined): string {
   const normalized = String(value || "").trim().toLowerCase();
   return normalized || "local";
@@ -205,9 +199,6 @@ function StreamingSettingsPanelContent({
   const [urlsByTransmissionId, setUrlsByTransmissionId] = useState<Record<string, TransmissionUrlsResponse>>({});
   const [urlsLoadingId, setUrlsLoadingId] = useState<string | null>(null);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
-  const [runtimeLoading, setRuntimeLoading] = useState(true);
-  const [runtimeError, setRuntimeError] = useState<string | null>(null);
-  const [runtimeByOutputKey, setRuntimeByOutputKey] = useState<Record<string, StreamingOutputRuntimeStatus>>({});
   const [processingServersLoading, setProcessingServersLoading] = useState(true);
   const [processingServersError, setProcessingServersError] = useState<string | null>(null);
   const [processingServers, setProcessingServers] = useState<ProcessingServer[]>([
@@ -301,24 +292,6 @@ function StreamingSettingsPanelContent({
     }
   }, []);
 
-  const fetchRuntimeData = useCallback(async (signal?: AbortSignal) => {
-    setRuntimeError(null);
-    try {
-      const payload = await fetchStreamingOutputsRuntime(signal);
-      const next: Record<string, StreamingOutputRuntimeStatus> = {};
-      for (const item of payload.outputs || []) {
-        if (!item || !item.output_key) continue;
-        next[item.output_key] = item;
-      }
-      setRuntimeByOutputKey(next);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setRuntimeError(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (!signal?.aborted) setRuntimeLoading(false);
-    }
-  }, []);
-
   const fetchProcessingServersData = useCallback(async (signal?: AbortSignal) => {
     setProcessingServersLoading(true);
     setProcessingServersError(null);
@@ -341,17 +314,9 @@ function StreamingSettingsPanelContent({
     void fetchEngineData(controller.signal);
     void fetchSettingsData(controller.signal);
     void fetchTransmissionsData(controller.signal);
-    void fetchRuntimeData(controller.signal);
     void fetchProcessingServersData(controller.signal);
     return () => controller.abort();
-  }, [fetchEngineData, fetchHealthData, fetchProcessingServersData, fetchRuntimeData, fetchSettingsData, fetchTransmissionsData]);
-
-  useEffect(() => {
-    const intervalId = window.setInterval(() => {
-      void fetchRuntimeData();
-    }, 2000);
-    return () => window.clearInterval(intervalId);
-  }, [fetchRuntimeData]);
+  }, [fetchEngineData, fetchHealthData, fetchProcessingServersData, fetchSettingsData, fetchTransmissionsData]);
 
   useEffect(() => {
     if (activeTransmissionId && transmissions.some((item) => item.id === activeTransmissionId)) return;
@@ -609,14 +574,6 @@ function StreamingSettingsPanelContent({
   }
 
   const activeUrls = activeTransmissionId ? urlsByTransmissionId[activeTransmissionId] ?? null : null;
-  const activeDemandSignal = useMemo(() => {
-    if (!activeTransmissionId) return false;
-    for (const status of Object.values(runtimeByOutputKey)) {
-      if (status.transmission_id !== activeTransmissionId) continue;
-      if ((status.viewer_count ?? 0) > 0) return true;
-    }
-    return false;
-  }, [activeTransmissionId, runtimeByOutputKey]);
 
   return (
     <div className="streamingSettingsPanel">
@@ -916,8 +873,6 @@ function StreamingSettingsPanelContent({
 
           {transmissionsLoading ? <div className="settingsStatusMuted" style={{ marginTop: 10 }}>{t("ext.streaming.transmissions.loading", {}, "Carregando…")}</div> : null}
           {transmissionsError ? <div className="errorText" style={{ marginTop: 10 }}>{transmissionsError}</div> : null}
-          {runtimeLoading ? <div className="settingsStatusMuted" style={{ marginTop: 10 }}>{t("ext.streaming.runtime.loading", {}, "Atualizando demanda…")}</div> : null}
-          {runtimeError ? <div className="errorText" style={{ marginTop: 10 }}>{runtimeError}</div> : null}
           {processingServersLoading ? <div className="settingsStatusMuted" style={{ marginTop: 10 }}>Carregando processing servers…</div> : null}
           {processingServersError ? <div className="errorText" style={{ marginTop: 10 }}>{processingServersError}</div> : null}
 
@@ -1009,11 +964,6 @@ function StreamingSettingsPanelContent({
 
                 <div className="rowWrap" style={{ gap: 10, justifyContent: "flex-end" }}>
                   {transmissionDraftDirty ? <span className="pillBadge" title="Unsaved changes">edited</span> : null}
-                  <span className="pillBadge" title="Transmission demand">
-                    {activeDemandSignal
-                      ? t("ext.streaming.runtime.demand_on", {}, "demand:on")
-                      : t("ext.streaming.runtime.demand_off", {}, "demand:off")}
-                  </span>
                   <button className="chipButton" type="button" disabled={!transmissionDraftDirty || transmissionDraftBusy} onClick={discardDraftChanges}>
                     {t("ext.streaming.transmissions.discard", {}, "Descartar")}
                   </button>
@@ -1169,16 +1119,6 @@ function StreamingSettingsPanelContent({
                     ? transmissionDraft.outputs.map((output) => {
                         const auth = output.authentication ?? defaultAuthentication();
                         const resolution = output.resolution ?? { width: 1280, height: 720 };
-                        const runtime = runtimeByOutputKey[buildOutputKey(transmissionDraft.id, output.id)];
-                        const viewerCount = runtime?.viewer_count ?? 0;
-                        const publisherStatus = runtime?.publisher_running
-                          ? t("ext.streaming.runtime.publisher_running", {}, "running")
-                          : t("ext.streaming.runtime.publisher_stopped", {}, "stopped");
-                        const publisherCodec = String(runtime?.publisher_active_codec || "").trim();
-                        const publisherHardware = Boolean(runtime?.publisher_hardware_accelerated);
-                        const publisherRestarts = Number.isFinite(Number(runtime?.publisher_restart_count))
-                          ? Number(runtime?.publisher_restart_count)
-                          : 0;
                         return (
                           <div key={output.id} className="card" style={{ marginTop: 10 }}>
                             <div className="cardBody">
@@ -1191,20 +1131,6 @@ function StreamingSettingsPanelContent({
                                     </span>
                                   </div>
                                   <div className="settingsListItemMeta">Output id: {output.id}</div>
-                                  <div className="settingsListItemMeta">
-                                    {t("ext.streaming.runtime.output_status", {}, "Viewers/publisher")}: {viewerCount} / {publisherStatus}
-                                  </div>
-                                  {publisherCodec ? (
-                                    <div className="settingsListItemMeta">
-                                      Codec: {publisherCodec}
-                                      {publisherHardware ? " (hw)" : " (cpu)"} - restarts: {publisherRestarts}
-                                    </div>
-                                  ) : null}
-                                  {runtime?.publisher_last_error ? (
-                                    <div className="errorText" style={{ marginTop: 4 }}>
-                                      {runtime.publisher_last_error}
-                                    </div>
-                                  ) : null}
                                 </div>
                                 <div className="rowWrap" style={{ gap: 10, justifyContent: "flex-end" }}>
                                   <label className="rowWrap" style={{ gap: 8 }}>
@@ -1245,7 +1171,7 @@ function StreamingSettingsPanelContent({
                                     onChange={(event) => {
                                       const width = toOptionalInt(event.target.value);
                                       if (width === null) {
-                                        // Comentário: evitar enviar resolution parcial (backend exige width+height).
+                                        // Avoid sending a partial resolution (backend requires width+height).
                                         updateDraftOutput(output.id, { resolution: null });
                                         return;
                                       }
@@ -1268,7 +1194,7 @@ function StreamingSettingsPanelContent({
                                     onChange={(event) => {
                                       const height = toOptionalInt(event.target.value);
                                       if (height === null) {
-                                        // Comentário: evitar enviar resolution parcial (backend exige width+height).
+                                        // Avoid sending a partial resolution (backend requires width+height).
                                         updateDraftOutput(output.id, { resolution: null });
                                         return;
                                       }

@@ -788,7 +788,7 @@ class NotifyRuntime(SinkRuntime):
         return []
 
     async def shutdown(self) -> None:
-        # Garante invariant "close must happen" para notificações abertas quando o runtime for encerrado.
+        # Ensure the "close must happen" invariant for open notifications when the runtime shuts down.
         self._shutting_down = True
         upsert = getattr(self._dependencies, "notifications_upsert", None)
         if not callable(upsert):
@@ -956,8 +956,8 @@ def _select_best_confidence_stored_image(stored_images: dict[str, Any], *, prefe
         if not should_take and conf == best_conf:
             if key_rank != best_key_rank:
                 should_take = key_rank < best_key_rank
-            # Em empate de confiança e prioridade, preferimos o frame mais cedo para evitar
-            # que o CLOSE substitua a miniatura por um frame tardio sem objeto.
+            # When confidence and priority tie, prefer the earlier frame to avoid
+            # CLOSE replacing the thumbnail with a late frame that has no object.
             elif ts != best_ts:
                 should_take = ts < best_ts
             else:

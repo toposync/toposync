@@ -37,7 +37,7 @@ class CameraHub:
         async with self._lock:
             entry = self._entries.get(hub_key)
             if entry is None:
-                # Um hub por câmera evita múltiplas conexões RTSP quando há vários pipelines (ex.: schedules diferentes).
+                # One hub per camera avoids multiple RTSP connections when multiple pipelines are running (e.g., different schedules).
                 grabber = self._frame_grabber_factory(rtsp_url, target_fps=float(target_fps), backend=str(backend))
                 started = grabber.start()
                 entry = _HubEntry(

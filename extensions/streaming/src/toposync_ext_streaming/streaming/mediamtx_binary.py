@@ -28,9 +28,9 @@ def extract_mediamtx_binary(
     platform: MediaMTXPlatform,
     version: str = MEDIAMTX_VERSION,
 ) -> Path:
-    """Extrai o binário embarcado para um diretório gravável.
+    """Extract the bundled MediaMTX binary into a writable directory.
 
-    Comentário: arquivos do pacote podem ser read-only; copiar para data_dir permite chmod e execução.
+    Packaged files can be read-only; copying to data_dir allows chmod and execution.
     """
     runtime_dir = data_dir / "runtime" / "streaming" / "mediamtx" / version / platform.key
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -38,7 +38,7 @@ def extract_mediamtx_binary(
     source = packaged_mediamtx_binary(platform)
     target = runtime_dir / platform.exe_name
 
-    # Atualiza apenas quando necessário (evita I/O e evita perder permissões customizadas).
+    # Only update when necessary (avoid I/O and preserve custom permissions).
     needs_copy = True
     if target.is_file():
         try:
@@ -58,13 +58,12 @@ def extract_mediamtx_binary(
         os.replace(temp, target)
 
     if platform.os != "windows":
-        # Garante permissão de execução no Unix.
+        # Ensure executable permission on Unix.
         try:
             st_mode = target.stat().st_mode
             os.chmod(target, st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         except Exception:
-            # Falhar aqui não deve derrubar a API; o start do engine reporta o erro.
+            # Failing here should not break the API; engine start will report the error.
             pass
 
     return target
-

@@ -11,8 +11,8 @@ function formatNumber(value: number): string {
 }
 
 function isIntermediateNumberText(text: string): boolean {
-  // Permite o comportamento padrão do navegador enquanto o usuário digita:
-  // "", "-", ".", "-." são estados intermediários válidos.
+  // Allow the browser default behavior while the user is typing:
+  // "", "-", ".", "-." are valid intermediate states.
   return text === "" || text === "-" || text === "." || text === "-.";
 }
 
@@ -64,4 +64,3 @@ export function PipelinesNumberInput({ value, onChange, onBlur, onFocus, onKeyDo
     />
   );
 }
-

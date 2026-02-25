@@ -108,13 +108,13 @@ class Transmission(BaseModel):
     @field_validator("path", mode="before")
     @classmethod
     def validate_path_slug(cls, value: Any, info) -> str:  # noqa: ANN001
-        # Comentário: manter slug seguro para URLs e para o engine.
+        # Keep a safe slug for URLs and for the engine.
         fallback = str(getattr(info, "data", {}).get("id") or "test")
         return normalize_path_slug(str(value or ""), fallback=fallback)
 
 
 def resolve_output_engine_path(transmission: Transmission, output: TransmissionOutput) -> str:
-    # Comentário: manter compatibilidade com o writer_bridge (path opcional por output).
+    # Keep compatibility with writer_bridge (optional per-output path).
     enabled_outputs = [item for item in transmission.outputs if bool(getattr(item, "enabled", True))]
     output_count = len(enabled_outputs) if enabled_outputs else 1
 
@@ -475,7 +475,7 @@ def list_path_read_auth_for_host(
                 auth_by_path[path] = (username, password)
                 continue
             if auth_by_path[path] != (username, password):
-                # Comentário: evita quebrar toda a configuração; o primeiro output ganha.
+                # Avoid breaking the entire config; the first output wins.
                 continue
     return auth_by_path
 

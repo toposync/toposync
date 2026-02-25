@@ -16,7 +16,7 @@ def test_resize_frame_contain_keeps_aspect_ratio_and_black_bars() -> None:
     assert int(output[10, 10, 0]) == 0
     assert int(output[289, 289, 1]) == 0
 
-    # Centro deve conter o conteúdo redimensionado.
+    # The center should contain the resized content.
     assert int(output[150, 150, 2]) == 220
 
 

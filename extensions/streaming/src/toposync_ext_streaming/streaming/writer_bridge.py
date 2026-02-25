@@ -106,8 +106,8 @@ class StreamWriterBridge:
         self._last_viewer_load_monotonic = 0.0
         self._bypass_mode_by_output: dict[str, str] = {}
         self._primed_demand_until_by_output: dict[str, float] = {}
-        # Comentário: demanda sintética via logs do MediaMTX para clientes externos (RTSP) que recebem 404
-        # quando ainda não há publisher. Mantemos uma janela curta para permitir retries.
+        # Synthetic demand derived from MediaMTX logs for external RTSP clients that get 404 when there is no
+        # publisher yet. Keep a short window to allow client retries to succeed.
         self._no_stream_hint_until_by_path: dict[str, float] = {}
         self._mediamtx_log_path: str | None = None
         self._mediamtx_log_offset: int = 0
@@ -456,16 +456,16 @@ class StreamWriterBridge:
         return self._cached_viewer_count_by_path
 
     async def _scan_engine_logs_for_no_stream_demand(self, engine_status: Any, now_monotonic: float) -> None:
-        """Atualiza demanda sintética olhando o log do MediaMTX.
+        """Update synthetic demand by scanning the MediaMTX logs.
 
-        Comentário: MediaMTX fecha conexões RTSP rapidamente com 'no stream is available' quando não há publisher.
-        Isso faz com que viewer_count fique 0 e o on-demand nunca ligue. Tratamos esses eventos como "hint"
-        de demanda por alguns segundos para que clientes externos (ffplay/VLC) consigam dar retry e conectar.
+        MediaMTX closes RTSP connections quickly with "no stream is available" when there is no publisher.
+        That keeps viewer_count at 0 and prevents on-demand from starting. We treat these events as a short-lived
+        demand hint so external clients (ffplay/VLC) can retry and connect.
         """
         if not self._on_demand_enabled:
             return
 
-        # Evitar IO em excesso.
+        # Avoid excessive I/O.
         if (now_monotonic - float(self._last_log_scan_monotonic or 0.0)) < 0.5:
             return
         self._last_log_scan_monotonic = float(now_monotonic)
@@ -477,7 +477,7 @@ class StreamWriterBridge:
         if log_path != self._mediamtx_log_path:
             self._mediamtx_log_path = log_path
             self._mediamtx_log_remainder = ""
-            # Comentário: começamos no fim do arquivo para ignorar histórico antigo.
+            # Start at EOF to ignore old history.
             try:
                 self._mediamtx_log_offset = int(os.path.getsize(log_path))
             except Exception:
@@ -500,7 +500,7 @@ class StreamWriterBridge:
             text = f"{self._mediamtx_log_remainder}{text}"
             self._mediamtx_log_remainder = ""
 
-        # Se o chunk termina no meio de uma linha, guardamos o resto para o próximo scan.
+        # If the chunk ends mid-line, keep the remainder for the next scan.
         if text and not text.endswith("\n"):
             parts = text.splitlines(keepends=True)
             if parts and not parts[-1].endswith("\n"):

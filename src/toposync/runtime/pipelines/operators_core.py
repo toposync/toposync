@@ -493,7 +493,7 @@ class StreamStateSnapshotRuntime(TransformOperatorRuntime):
         for name, artifact in packet.artifacts.items():
             if self._artifact_allowlist and name not in self._artifact_allowlist:
                 continue
-            # Nunca inclui blobs em memória: snapshots são para UI/debug e devem ser leves.
+            # Never include in-memory blobs: snapshots are for UI/debug and should be lightweight.
             artifacts[name] = Artifact(
                 name=str(artifact.name),
                 data=None,

@@ -24,6 +24,7 @@ CookieSecureMode = Literal["auto", "true", "false"]
 DEFAULT_ACCESS_TTL_S = 30 * 60  # 30 minutes
 DEFAULT_REFRESH_TTL_S = 90 * 24 * 3600  # 90 days
 DEFAULT_PAIRING_TTL_S = 5 * 60  # 5 minutes
+DEFAULT_REFRESH_ROTATION_GRACE_S = 30  # seconds
 
 
 def _now() -> float:
@@ -105,7 +106,9 @@ def _hash_password(password: str) -> str:
 
 def _verify_password(password: str, stored_hash: str) -> bool:
     try:
-        algo, rounds_raw, block_raw, parallel_raw, salt_b64, key_b64 = str(stored_hash or "").split("$", 5)
+        algo, rounds_raw, block_raw, parallel_raw, salt_b64, key_b64 = str(stored_hash or "").split(
+            "$", 5
+        )
         if algo != "scrypt":
             return False
         rounds = int(rounds_raw)
@@ -360,7 +363,9 @@ CREATE INDEX IF NOT EXISTS idx_auth_pairing_expires ON auth_pairing_code(expires
         self._db_path = db_path
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False, isolation_level=None)
+        self._conn = sqlite3.connect(
+            str(self._db_path), check_same_thread=False, isolation_level=None
+        )
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(self._INIT_SQL)
@@ -405,7 +410,9 @@ CREATE INDEX IF NOT EXISTS idx_auth_pairing_expires ON auth_pairing_code(expires
     def get_or_create_secret(self, key: str) -> str:
         now = _now()
         with self._lock:
-            row = self._conn.execute("SELECT value FROM auth_meta WHERE key = ? LIMIT 1", (key,)).fetchone()
+            row = self._conn.execute(
+                "SELECT value FROM auth_meta WHERE key = ? LIMIT 1", (key,)
+            ).fetchone()
             if row is not None:
                 return str(row["value"])
             secret = secrets.token_urlsafe(48)
@@ -420,7 +427,9 @@ CREATE INDEX IF NOT EXISTS idx_auth_pairing_expires ON auth_pairing_code(expires
         if not user_id:
             return None
         with self._lock:
-            row = self._conn.execute("SELECT * FROM auth_user WHERE id = ? LIMIT 1", (user_id,)).fetchone()
+            row = self._conn.execute(
+                "SELECT * FROM auth_user WHERE id = ? LIMIT 1", (user_id,)
+            ).fetchone()
         return self._row_to_user(row)
 
     def get_user_by_username(self, username: str) -> AuthUser | None:
@@ -428,7 +437,9 @@ CREATE INDEX IF NOT EXISTS idx_auth_pairing_expires ON auth_pairing_code(expires
         if not username_lc:
             return None
         with self._lock:
-            row = self._conn.execute("SELECT * FROM auth_user WHERE username_lc = ? LIMIT 1", (username_lc,)).fetchone()
+            row = self._conn.execute(
+                "SELECT * FROM auth_user WHERE username_lc = ? LIMIT 1", (username_lc,)
+            ).fetchone()
         return self._row_to_user(row)
 
     def bootstrap_owner(self, *, username: str, display_name: str, password: str) -> AuthUser:
@@ -590,7 +601,9 @@ CREATE INDEX IF NOT EXISTS idx_auth_pairing_expires ON auth_pairing_code(expires
         if not uid:
             raise KeyError("Unknown user")
         with self._lock:
-            row = self._conn.execute("SELECT id FROM auth_user WHERE id = ? LIMIT 1", (uid,)).fetchone()
+            row = self._conn.execute(
+                "SELECT id FROM auth_user WHERE id = ? LIMIT 1", (uid,)
+            ).fetchone()
             if row is None:
                 raise KeyError("Unknown user")
             self._conn.execute("DELETE FROM auth_user WHERE id = ?", (uid,))
@@ -626,7 +639,9 @@ CREATE INDEX IF NOT EXISTS idx_auth_pairing_expires ON auth_pairing_code(expires
             ).fetchone()
         return int(row["c"] if row else 0)
 
-    def issue_refresh_token(self, *, user_id: str, device_label: str, ttl_s: int) -> tuple[str, float]:
+    def issue_refresh_token(
+        self, *, user_id: str, device_label: str, ttl_s: int
+    ) -> tuple[str, float]:
         user = self.get_user_by_id(user_id)
         if user is None:
             raise KeyError("Unknown user")
@@ -685,7 +700,9 @@ CREATE INDEX IF NOT EXISTS idx_auth_pairing_expires ON auth_pairing_code(expires
             return None
         if bool(int(row["revoked_at"] is not None)):
             return None
-        return RefreshSession(token_id=str(row["rt_id"]), user=user, expires_at=float(row["expires_at"] or 0.0))
+        return RefreshSession(
+            token_id=str(row["rt_id"]), user=user, expires_at=float(row["expires_at"] or 0.0)
+        )
 
     def get_refresh_session(self, raw_refresh_token: str) -> RefreshSession | None:
         token_hash = _sha256(str(raw_refresh_token or ""))
@@ -722,21 +739,79 @@ CREATE INDEX IF NOT EXISTS idx_auth_pairing_expires ON auth_pairing_code(expires
             return None
         return session
 
-    def rotate_refresh_token(self, raw_refresh_token: str, *, ttl_s: int, device_label: str | None = None) -> tuple[RefreshSession, str, float] | None:
-        session = self.get_refresh_session(raw_refresh_token)
-        if session is None:
-            return None
+    def rotate_refresh_token(
+        self,
+        raw_refresh_token: str,
+        *,
+        ttl_s: int,
+        rotation_grace_s: int = 0,
+        device_label: str | None = None,
+    ) -> tuple[RefreshSession, str, float] | None:
+        token_hash = _sha256(str(raw_refresh_token or ""))
         now = _now()
+        grace_s = max(0, int(rotation_grace_s))
         new_raw = secrets.token_urlsafe(54)
         new_hash = _sha256(new_raw)
         new_id = _uuid()
         expires_at = now + max(60, int(ttl_s))
-        device = str(device_label or "").strip()[:80]
         with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT
+                  rt.id AS rt_id,
+                  rt.device_label AS rt_device_label,
+                  rt.expires_at AS rt_expires_at,
+                  rt.revoked_at AS rt_revoked_at,
+                  u.*
+                FROM auth_refresh_token rt
+                JOIN auth_user u ON u.id = rt.user_id
+                WHERE rt.token_hash = ?
+                LIMIT 1
+                """,
+                (token_hash,),
+            ).fetchone()
+            if row is None:
+                return None
+
+            if float(row["rt_expires_at"] or 0.0) <= now:
+                return None
+
+            token_id = str(row["rt_id"])
+            revoked_at_raw = row["rt_revoked_at"]
+            revoked_at = float(revoked_at_raw or 0.0) if revoked_at_raw is not None else None
+
+            if revoked_at is not None:
+                # If a refresh token was revoked because of rotation, we allow a small grace window
+                # for concurrent requests to still refresh. Manual revocation (no successor) stays strict.
+                rotated = self._conn.execute(
+                    "SELECT 1 FROM auth_refresh_token WHERE rotated_from = ? LIMIT 1",
+                    (token_id,),
+                ).fetchone()
+                if rotated is None:
+                    return None
+                if grace_s <= 0:
+                    return None
+                if revoked_at + grace_s < now:
+                    return None
+
+            user = self._row_to_user(row)
+            if user is None or user.is_disabled:
+                return None
+
+            current_device = str(row["rt_device_label"] or "").strip()
+            device = str(device_label or "").strip()[:80] or current_device or "device"
+
             self._conn.execute(
-                "UPDATE auth_refresh_token SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
-                (now, session.token_id),
+                "UPDATE auth_refresh_token SET last_used_at = ? WHERE id = ?",
+                (now, token_id),
             )
+
+            if revoked_at is None:
+                self._conn.execute(
+                    "UPDATE auth_refresh_token SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                    (now, token_id),
+                )
+
             self._conn.execute(
                 """
                 INSERT INTO auth_refresh_token(
@@ -746,13 +821,13 @@ CREATE INDEX IF NOT EXISTS idx_auth_pairing_expires ON auth_pairing_code(expires
                 """,
                 (
                     new_id,
-                    session.user.id,
+                    user.id,
                     new_hash,
                     device,
                     now,
                     expires_at,
                     now,
-                    session.token_id,
+                    token_id,
                 ),
             )
         next_session = self.get_refresh_session(new_raw)
@@ -802,7 +877,9 @@ CREATE INDEX IF NOT EXISTS idx_auth_pairing_expires ON auth_pairing_code(expires
                 (now, user_id),
             )
 
-    def create_pairing_code(self, *, user_id: str, ttl_s: int, device_label: str | None = None) -> tuple[str, float]:
+    def create_pairing_code(
+        self, *, user_id: str, ttl_s: int, device_label: str | None = None
+    ) -> tuple[str, float]:
         user = self.get_user_by_id(user_id)
         if user is None:
             raise KeyError("Unknown user")
@@ -836,7 +913,9 @@ CREATE INDEX IF NOT EXISTS idx_auth_pairing_expires ON auth_pairing_code(expires
                     continue
         raise RuntimeError("Failed to create pairing code")
 
-    def consume_pairing_code(self, *, code: str, device_label: str | None = None) -> PairingSession | None:
+    def consume_pairing_code(
+        self, *, code: str, device_label: str | None = None
+    ) -> PairingSession | None:
         normalized = _normalize_pairing_code(code)
         if not normalized:
             return None
@@ -862,7 +941,9 @@ CREATE INDEX IF NOT EXISTS idx_auth_pairing_expires ON auth_pairing_code(expires
         user = self._row_to_user(row)
         if user is None or user.is_disabled:
             return None
-        next_device_label = str(device_label or "").strip()[:80] or str(row["pair_device_label"] or "mobile")
+        next_device_label = str(device_label or "").strip()[:80] or str(
+            row["pair_device_label"] or "mobile"
+        )
         return PairingSession(
             user=user,
             device_label=next_device_label or "mobile",
@@ -898,8 +979,12 @@ CREATE INDEX IF NOT EXISTS idx_auth_pairing_expires ON auth_pairing_code(expires
     ) -> GrantRule:
         if self.get_user_by_id(user_id) is None:
             raise KeyError("Unknown user")
-        include_norm = sorted({_normalize_selector(item) for item in include if _normalize_selector(item)})
-        exclude_norm = sorted({_normalize_selector(item) for item in exclude if _normalize_selector(item)})
+        include_norm = sorted(
+            {_normalize_selector(item) for item in include if _normalize_selector(item)}
+        )
+        exclude_norm = sorted(
+            {_normalize_selector(item) for item in exclude if _normalize_selector(item)}
+        )
         now = _now()
 
         with self._lock:
@@ -1004,10 +1089,15 @@ class AuthRuntime:
 
     def __init__(self, *, data_dir: Path) -> None:
         self.mode = _parse_mode(os.getenv("TOPOSYNC_AUTH_MODE"))
-        self.cookie_secure_mode = _parse_cookie_secure_mode(os.getenv("TOPOSYNC_AUTH_COOKIE_SECURE"))
+        self.cookie_secure_mode = _parse_cookie_secure_mode(
+            os.getenv("TOPOSYNC_AUTH_COOKIE_SECURE")
+        )
         self.access_ttl_s = int(os.getenv("TOPOSYNC_AUTH_ACCESS_TTL_S") or DEFAULT_ACCESS_TTL_S)
         self.refresh_ttl_s = int(os.getenv("TOPOSYNC_AUTH_REFRESH_TTL_S") or DEFAULT_REFRESH_TTL_S)
         self.pairing_ttl_s = int(os.getenv("TOPOSYNC_AUTH_PAIRING_TTL_S") or DEFAULT_PAIRING_TTL_S)
+        self.refresh_rotation_grace_s = int(
+            os.getenv("TOPOSYNC_AUTH_REFRESH_ROTATION_GRACE_S") or DEFAULT_REFRESH_ROTATION_GRACE_S
+        )
         self.store = AuthStore(data_dir / "auth" / "auth.sqlite3")
         self._access_secret = self.store.get_or_create_secret("access_secret")
 
@@ -1027,7 +1117,9 @@ class AuthRuntime:
     def _sign_access_payload(self, payload: dict[str, Any]) -> str:
         blob = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         payload_b64 = _b64url_encode(blob)
-        sig = hmac.new(self._access_secret.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256).digest()
+        sig = hmac.new(
+            self._access_secret.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256
+        ).digest()
         return f"{payload_b64}.{_b64url_encode(sig)}"
 
     def _verify_access_token(self, token: str) -> dict[str, Any] | None:
@@ -1088,8 +1180,14 @@ class AuthRuntime:
             return None
         return self._principal_from_user(user)
 
-    def _tokens_from_refresh(self, raw_refresh_token: str) -> tuple[AuthPrincipal, tuple[str, str]] | None:
-        rotated = self.store.rotate_refresh_token(raw_refresh_token, ttl_s=self.refresh_ttl_s)
+    def _tokens_from_refresh(
+        self, raw_refresh_token: str
+    ) -> tuple[AuthPrincipal, tuple[str, str]] | None:
+        rotated = self.store.rotate_refresh_token(
+            raw_refresh_token,
+            ttl_s=self.refresh_ttl_s,
+            rotation_grace_s=self.refresh_rotation_grace_s,
+        )
         if rotated is None:
             return None
         next_session, next_refresh, _ = rotated
@@ -1105,7 +1203,9 @@ class AuthRuntime:
 
     def resolve_request(self, request: Request) -> AuthContext:
         if self.mode == "bypass":
-            return AuthContext(principal=self.bypass_principal, mode=self.mode, requires_setup=False)
+            return AuthContext(
+                principal=self.bypass_principal, mode=self.mode, requires_setup=False
+            )
 
         requires_setup = self.requires_setup()
         path = request.url.path
@@ -1124,7 +1224,9 @@ class AuthRuntime:
         if access_cookie:
             principal = self._principal_from_access(access_cookie)
             if principal is not None:
-                return AuthContext(principal=principal, mode=self.mode, requires_setup=requires_setup)
+                return AuthContext(
+                    principal=principal, mode=self.mode, requires_setup=requires_setup
+                )
 
         refresh_cookie = str(request.cookies.get(self.refresh_cookie_name) or "")
         if refresh_cookie:
@@ -1140,11 +1242,15 @@ class AuthRuntime:
 
         return AuthContext(principal=None, mode=self.mode, requires_setup=requires_setup)
 
-    def apply_context_cookies(self, response: Response, context: AuthContext, *, request: Request | None = None) -> None:
+    def apply_context_cookies(
+        self, response: Response, context: AuthContext, *, request: Request | None = None
+    ) -> None:
         if context.cookies_to_set is None:
             return
         access_token, refresh_token = context.cookies_to_set
-        self.apply_session_cookies(response, access_token=access_token, refresh_token=refresh_token, request=request)
+        self.apply_session_cookies(
+            response, access_token=access_token, refresh_token=refresh_token, request=request
+        )
 
     def apply_session_cookies(
         self,
@@ -1187,7 +1293,9 @@ class AuthRuntime:
         response.delete_cookie(self.access_cookie_name, path="/")
         response.delete_cookie(self.refresh_cookie_name, path="/")
 
-    def login(self, *, username: str, password: str, device_label: str) -> tuple[AuthPrincipal, str, str]:
+    def login(
+        self, *, username: str, password: str, device_label: str
+    ) -> tuple[AuthPrincipal, str, str]:
         if self.mode == "bypass":
             raise HTTPException(status_code=400, detail="Login is disabled in bypass mode")
         user = self.store.verify_credentials(username, password)
@@ -1207,9 +1315,13 @@ class AuthRuntime:
             self.store.revoke_refresh_token(token)
 
     def start_pairing(self, *, user_id: str, device_label: str | None = None) -> tuple[str, float]:
-        return self.store.create_pairing_code(user_id=user_id, ttl_s=self.pairing_ttl_s, device_label=device_label)
+        return self.store.create_pairing_code(
+            user_id=user_id, ttl_s=self.pairing_ttl_s, device_label=device_label
+        )
 
-    def complete_pairing(self, *, code: str, device_label: str | None = None) -> tuple[AuthPrincipal, str, str]:
+    def complete_pairing(
+        self, *, code: str, device_label: str | None = None
+    ) -> tuple[AuthPrincipal, str, str]:
         pairing = self.store.consume_pairing_code(code=code, device_label=device_label)
         if pairing is None:
             raise HTTPException(status_code=401, detail="Invalid or expired pairing code")
@@ -1227,7 +1339,9 @@ class AuthRuntime:
         if not self.requires_setup():
             raise HTTPException(status_code=409, detail="Auth is already configured")
         try:
-            return self.store.bootstrap_owner(username=username, display_name=display_name, password=password)
+            return self.store.bootstrap_owner(
+                username=username, display_name=display_name, password=password
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1246,7 +1360,9 @@ class AuthRuntime:
             return True
         return action in allowed
 
-    def _allow_by_grant(self, *, user_id: str, action: str, resource_type: str, resource_selector: str) -> bool | None:
+    def _allow_by_grant(
+        self, *, user_id: str, action: str, resource_type: str, resource_selector: str
+    ) -> bool | None:
         grant = self.store.get_grant(user_id, action, resource_type)
         if grant is None:
             return None

@@ -48,7 +48,9 @@ def test_auth_requires_setup_blocks_api(tmp_path: Path, monkeypatch: pytest.Monk
         assert res.json()["detail"] == "Auth setup is required"
 
 
-def test_auth_setup_then_requires_authentication(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_auth_setup_then_requires_authentication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         _setup_owner(client)
 
@@ -97,7 +99,9 @@ def test_auth_login_logout_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         assert res.status_code == 200
 
 
-def test_event_grant_exclude_overrides_role(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_event_grant_exclude_overrides_role(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         _setup_owner(client)
 
@@ -143,12 +147,17 @@ def test_event_grant_exclude_overrides_role(tmp_path: Path, monkeypatch: pytest.
 
         res = client.post(
             "/api/events/home_assistant.service_call",
-            json={"payload": {"domain": "light", "service": "toggle", "service_data": {}}, "context": {}},
+            json={
+                "payload": {"domain": "light", "service": "toggle", "service_data": {}},
+                "context": {},
+            },
         )
         assert res.status_code == 200
 
 
-def test_cameras_pipeline_wizard_requires_pipelines_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cameras_pipeline_wizard_requires_pipelines_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     class _EP:
         name = "cameras"
         value = "toposync_ext_cameras.plugin:CamerasExtension"
@@ -196,7 +205,9 @@ def test_cameras_pipeline_wizard_requires_pipelines_write(tmp_path: Path, monkey
         assert res.json()["detail"] == "Permission denied"
 
 
-def test_auth_store_deletes_tokens_and_grants_on_user_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_auth_store_deletes_tokens_and_grants_on_user_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         _setup_owner(client)
 
@@ -215,7 +226,9 @@ def test_auth_store_deletes_tokens_and_grants_on_user_delete(tmp_path: Path, mon
             include=[],
             exclude=["device.action_requested"],
         )
-        token, _ = auth.store.issue_refresh_token(user_id=member.id, device_label="pytest", ttl_s=3600)
+        token, _ = auth.store.issue_refresh_token(
+            user_id=member.id, device_label="pytest", ttl_s=3600
+        )
         assert token
         assert auth.store.active_sessions_count(member.id) == 1
         assert len(auth.store.list_grants(member.id)) == 1
@@ -225,7 +238,9 @@ def test_auth_store_deletes_tokens_and_grants_on_user_delete(tmp_path: Path, mon
         assert len(auth.store.list_grants(member.id)) == 0
 
 
-def test_refresh_flow_rotates_refresh_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_refresh_flow_rotates_refresh_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         _setup_owner(client)
         auth = client.app.state.auth
@@ -241,7 +256,31 @@ def test_refresh_flow_rotates_refresh_token(tmp_path: Path, monkeypatch: pytest.
         assert auth.store.get_refresh_session(next_refresh) is not None
 
 
-def test_pairing_code_exchanges_for_session_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_refresh_rotation_grace_allows_concurrent_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        _setup_owner(client)
+        auth = client.app.state.auth
+        current_refresh = client.cookies.get(auth.refresh_cookie_name)
+        assert current_refresh
+
+        first = auth._tokens_from_refresh(str(current_refresh))
+        assert first is not None
+        _principal, (_access, next_refresh) = first
+        assert next_refresh != current_refresh
+
+        # Simulate concurrent requests using the same (now revoked) refresh token.
+        second = auth._tokens_from_refresh(str(current_refresh))
+        assert second is not None
+        _principal2, (_access2, next_refresh2) = second
+        assert next_refresh2 != current_refresh
+        assert auth.store.get_refresh_session(next_refresh2) is not None
+
+
+def test_pairing_code_exchanges_for_session_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         owner = _setup_owner(client)["user"]
 
@@ -251,14 +290,18 @@ def test_pairing_code_exchanges_for_session_once(tmp_path: Path, monkeypatch: py
         assert code
 
         client.cookies.clear()
-        complete = client.post("/api/auth/pair/complete", json={"code": code, "device_label": "owner-phone"})
+        complete = client.post(
+            "/api/auth/pair/complete", json={"code": code, "device_label": "owner-phone"}
+        )
         assert complete.status_code == 200
         assert complete.json()["user"]["id"] == owner["id"]
 
         auth = client.app.state.auth
         assert client.cookies.get(auth.refresh_cookie_name)
 
-        replay = client.post("/api/auth/pair/complete", json={"code": code, "device_label": "owner-phone"})
+        replay = client.post(
+            "/api/auth/pair/complete", json={"code": code, "device_label": "owner-phone"}
+        )
         assert replay.status_code == 401
 
 
@@ -297,7 +340,9 @@ def test_guest_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         assert res.status_code == 403
 
 
-def test_owner_can_revoke_session_by_device(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_owner_can_revoke_session_by_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         setup = _setup_owner(client)
         owner = setup["user"]
@@ -316,7 +361,9 @@ def test_owner_can_revoke_session_by_device(tmp_path: Path, monkeypatch: pytest.
         assert sessions.status_code == 200
         entries = sessions.json()["sessions"]
         assert len(entries) >= 1
-        tablet_entry = next((item for item in entries if item["device_label"] == "owner-tablet"), None)
+        tablet_entry = next(
+            (item for item in entries if item["device_label"] == "owner-tablet"), None
+        )
         assert tablet_entry is not None
 
         revoke = client.delete(f"/api/access/users/{owner['id']}/sessions/{tablet_entry['id']}")

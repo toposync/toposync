@@ -35,7 +35,7 @@ export type AppSettings = {
   extensions: Record<string, Record<string, unknown>>;
 };
 
-export type AuthRole = "owner" | "admin" | "member" | "service";
+export type AuthRole = "owner" | "admin" | "member" | "guest" | "service";
 
 export type AuthUser = {
   id: string;
@@ -260,6 +260,32 @@ export async function login(params: {
 export async function logout(): Promise<void> {
   const res = await fetch("/api/auth/logout", { method: "POST" });
   if (!res.ok) throw new Error(`Failed to logout: ${res.status}`);
+}
+
+export async function startPairing(params?: { device_label?: string }): Promise<{ code: string; expires_at: number }> {
+  const res = await fetch("/api/auth/pair/start", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      device_label: params?.device_label ?? "mobile",
+    }),
+  });
+  if (!res.ok) throw new Error(`Failed to start pairing: ${res.status}`);
+  return res.json();
+}
+
+export async function completePairing(params: { code: string; device_label?: string }): Promise<AuthUser> {
+  const res = await fetch("/api/auth/pair/complete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      code: params.code,
+      device_label: params.device_label ?? "mobile",
+    }),
+  });
+  if (!res.ok) throw new Error(`Failed to complete pairing: ${res.status}`);
+  const body = await res.json();
+  return body.user;
 }
 
 export async function listAccessUsers(): Promise<AccessUsersPayload> {

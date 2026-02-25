@@ -194,6 +194,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.auth.role.owner": "Owner",
     "core.ui.auth.role.admin": "Admin",
     "core.ui.auth.role.member": "Member",
+    "core.ui.auth.role.guest": "Guest",
     "core.ui.auth.role.service": "Service account",
 
     "core.ui.access.title": "Access",
@@ -869,6 +870,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.auth.role.owner": "Owner",
     "core.ui.auth.role.admin": "Admin",
     "core.ui.auth.role.member": "Membro",
+    "core.ui.auth.role.guest": "Visitante",
     "core.ui.auth.role.service": "Conta de serviço",
 
     "core.ui.access.title": "Acesso",

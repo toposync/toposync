@@ -197,7 +197,7 @@ class AuthUserPublic(BaseModel):
     id: str
     username: str
     display_name: str
-    role: Literal["owner", "admin", "member", "service"]
+    role: Literal["owner", "admin", "member", "guest", "service"]
     is_disabled: bool = False
     sessions: int = 0
     grants: list[dict[str, Any]] = Field(default_factory=list)
@@ -229,6 +229,20 @@ class AuthLoginResponse(BaseModel):
     user: AuthUserPublic
 
 
+class AuthPairStartRequest(BaseModel):
+    device_label: str = "mobile"
+
+
+class AuthPairStartResponse(BaseModel):
+    code: str
+    expires_at: float
+
+
+class AuthPairCompleteRequest(BaseModel):
+    code: str
+    device_label: str = "mobile"
+
+
 class AccessUsersResponse(BaseModel):
     users: list[AuthUserPublic] = Field(default_factory=list)
     grants_catalog: dict[str, list[str]] = Field(default_factory=dict)
@@ -254,13 +268,13 @@ class AccessOptionsResponse(BaseModel):
 class AccessUserCreateRequest(BaseModel):
     username: str
     password: str
-    role: Literal["owner", "admin", "member", "service"] = "member"
+    role: Literal["owner", "admin", "member", "guest", "service"] = "member"
     display_name: str = ""
 
 
 class AccessUserPatchRequest(BaseModel):
     display_name: str | None = None
-    role: Literal["owner", "admin", "member", "service"] | None = None
+    role: Literal["owner", "admin", "member", "guest", "service"] | None = None
     password: str | None = None
     is_disabled: bool | None = None
 
@@ -270,6 +284,18 @@ class AccessGrantUpsertRequest(BaseModel):
     resource_type: str
     include: list[str] = Field(default_factory=list)
     exclude: list[str] = Field(default_factory=list)
+
+
+class AccessSessionPublic(BaseModel):
+    id: str
+    device_label: str
+    created_at: float
+    last_used_at: float
+    expires_at: float
+
+
+class AccessSessionsResponse(BaseModel):
+    sessions: list[AccessSessionPublic] = Field(default_factory=list)
 
 
 def _guess_media_type(path: str) -> str:
@@ -604,12 +630,72 @@ def create_app() -> FastAPI:
         auth.clear_session_cookies(response)
         return response
 
+    @app.post("/api/auth/pair/start", response_model=AuthPairStartResponse)
+    async def auth_pair_start(request: Request, body: AuthPairStartRequest) -> AuthPairStartResponse:
+        _require(request, action="core:auth:pair")
+        auth: AuthRuntime = request.app.state.auth
+        principal = auth.require_authenticated(_auth_context(request))
+        code, expires_at = auth.start_pairing(user_id=principal.user_id, device_label=body.device_label)
+        return AuthPairStartResponse(code=code, expires_at=expires_at)
+
+    @app.post("/api/auth/pair/complete", response_model=AuthLoginResponse)
+    async def auth_pair_complete(request: Request, body: AuthPairCompleteRequest) -> Response:
+        auth: AuthRuntime = request.app.state.auth
+        principal, access_token, refresh_token = auth.complete_pairing(
+            code=body.code,
+            device_label=body.device_label,
+        )
+        user = auth.store.get_user_by_id(principal.user_id)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Invalid pairing")
+        payload = AuthLoginResponse(user=AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True)))
+        response = JSONResponse(payload.model_dump(mode="json"))
+        auth.apply_session_cookies(response, access_token=access_token, refresh_token=refresh_token, request=request)
+        return response
+
     @app.get("/api/access/users", response_model=AccessUsersResponse)
     async def list_access_users(request: Request) -> AccessUsersResponse:
         _require(request, action="core:access:manage")
         auth: AuthRuntime = request.app.state.auth
         users = [AuthUserPublic.model_validate(auth.serialize_user(item, include_grants=True)) for item in auth.store.list_users()]
         return AccessUsersResponse(users=users, grants_catalog=auth.configurable_actions)
+
+    @app.get("/api/access/users/{user_id}/sessions", response_model=AccessSessionsResponse)
+    async def list_access_user_sessions(request: Request, user_id: str) -> AccessSessionsResponse:
+        _require(request, action="core:access:manage")
+        auth: AuthRuntime = request.app.state.auth
+        context = _auth_context(request)
+        target = auth.store.get_user_by_id(user_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Unknown user")
+        if context.principal is not None and context.principal.role != "owner" and target.role == "owner":
+            raise HTTPException(status_code=403, detail="Only owners can manage owner sessions")
+        sessions = [
+            AccessSessionPublic(
+                id=item.id,
+                device_label=item.device_label,
+                created_at=item.created_at,
+                last_used_at=item.last_used_at,
+                expires_at=item.expires_at,
+            )
+            for item in auth.store.list_refresh_sessions(user_id)
+        ]
+        return AccessSessionsResponse(sessions=sessions)
+
+    @app.delete("/api/access/users/{user_id}/sessions/{session_id}")
+    async def revoke_access_user_session(request: Request, user_id: str, session_id: str) -> dict[str, bool]:
+        _require(request, action="core:access:manage")
+        auth: AuthRuntime = request.app.state.auth
+        context = _auth_context(request)
+        target = auth.store.get_user_by_id(user_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Unknown user")
+        if context.principal is not None and context.principal.role != "owner" and target.role == "owner":
+            raise HTTPException(status_code=403, detail="Only owners can manage owner sessions")
+        revoked = auth.store.revoke_refresh_session(token_id=session_id, user_id=user_id)
+        if not revoked:
+            raise HTTPException(status_code=404, detail="Unknown session")
+        return {"ok": True}
 
     @app.get("/api/access/options", response_model=AccessOptionsResponse)
     async def access_options(request: Request) -> AccessOptionsResponse:

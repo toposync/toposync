@@ -223,3 +223,103 @@ def test_auth_store_deletes_tokens_and_grants_on_user_delete(tmp_path: Path, mon
         auth.store.delete_user(member.id)
         assert auth.store.active_sessions_count(member.id) == 0
         assert len(auth.store.list_grants(member.id)) == 0
+
+
+def test_refresh_flow_rotates_refresh_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        _setup_owner(client)
+        auth = client.app.state.auth
+        current_refresh = client.cookies.get(auth.refresh_cookie_name)
+        assert current_refresh
+
+        refreshed = auth._tokens_from_refresh(str(current_refresh))
+        assert refreshed is not None
+        _principal, (_access, next_refresh) = refreshed
+
+        assert next_refresh != current_refresh
+        assert auth.store.get_refresh_session(str(current_refresh)) is None
+        assert auth.store.get_refresh_session(next_refresh) is not None
+
+
+def test_pairing_code_exchanges_for_session_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        owner = _setup_owner(client)["user"]
+
+        start = client.post("/api/auth/pair/start", json={"device_label": "owner-phone"})
+        assert start.status_code == 200
+        code = str(start.json()["code"])
+        assert code
+
+        client.cookies.clear()
+        complete = client.post("/api/auth/pair/complete", json={"code": code, "device_label": "owner-phone"})
+        assert complete.status_code == 200
+        assert complete.json()["user"]["id"] == owner["id"]
+
+        auth = client.app.state.auth
+        assert client.cookies.get(auth.refresh_cookie_name)
+
+        replay = client.post("/api/auth/pair/complete", json={"code": code, "device_label": "owner-phone"})
+        assert replay.status_code == 401
+
+
+def test_guest_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        _setup_owner(client)
+
+        res = client.post(
+            "/api/access/users",
+            json={
+                "username": "guest1",
+                "display_name": "Guest",
+                "role": "guest",
+                "password": "password123",
+            },
+        )
+        assert res.status_code == 200
+
+        res = client.post(
+            "/api/auth/login",
+            json={
+                "username": "guest1",
+                "password": "password123",
+                "device_label": "pytest-guest",
+            },
+        )
+        assert res.status_code == 200
+
+        res = client.get("/api/compositions")
+        assert res.status_code == 200
+
+        res = client.post(
+            "/api/events/device.action_requested",
+            json={"payload": {"device_id": "lamp", "action": "toggle"}, "context": {}},
+        )
+        assert res.status_code == 403
+
+
+def test_owner_can_revoke_session_by_device(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        setup = _setup_owner(client)
+        owner = setup["user"]
+
+        res = client.post(
+            "/api/auth/login",
+            json={"username": "owner", "password": "password123", "device_label": "owner-tablet"},
+        )
+        assert res.status_code == 200
+
+        auth = client.app.state.auth
+        tablet_refresh = client.cookies.get(auth.refresh_cookie_name)
+        assert tablet_refresh
+
+        sessions = client.get(f"/api/access/users/{owner['id']}/sessions")
+        assert sessions.status_code == 200
+        entries = sessions.json()["sessions"]
+        assert len(entries) >= 1
+        tablet_entry = next((item for item in entries if item["device_label"] == "owner-tablet"), None)
+        assert tablet_entry is not None
+
+        revoke = client.delete(f"/api/access/users/{owner['id']}/sessions/{tablet_entry['id']}")
+        assert revoke.status_code == 200
+        assert revoke.json()["ok"] is True
+        assert auth.store.get_refresh_session(str(tablet_refresh)) is None

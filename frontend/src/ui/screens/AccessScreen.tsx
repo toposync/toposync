@@ -5,7 +5,7 @@ import { getAccessOptions, type AccessOptionsPayload, type AccessUsersPayload, t
 import { i18n } from "../../util/i18n";
 import { pipelinesReactSelectStyles } from "./pipelines/constants";
 
-const ROLE_OPTIONS: AuthRole[] = ["owner", "admin", "member", "service"];
+const ROLE_OPTIONS: AuthRole[] = ["owner", "admin", "member", "guest", "service"];
 type SelectOption = { value: string; label: string };
 
 type Translate = (key: string, params?: Record<string, unknown>, fallback?: string) => string;

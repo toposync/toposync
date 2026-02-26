@@ -54,6 +54,7 @@ function shouldHideScalarGrid(operatorId: string): boolean {
     operatorId === "core.debug" ||
     operatorId === "core.notify" ||
     operatorId === "core.store_images" ||
+    operatorId === "stream.write" ||
     operatorId === "core.category_gate" ||
     operatorId === "core.filter" ||
     operatorId === "vision.object_tracking_yolo" ||

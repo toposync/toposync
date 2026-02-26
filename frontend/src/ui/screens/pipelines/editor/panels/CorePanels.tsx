@@ -1,7 +1,8 @@
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Select, { type MultiValue } from "react-select";
 import CreatableSelect from "react-select/creatable";
 
+import { listStreamingTransmissions, type StreamingTransmission } from "../../../../../util/api";
 import { buildArtifactSuggestions, buildScheduleWeekdayOptions, pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constants";
 import type { SelectOption } from "../../types";
 import { i18n } from "../../../../../util/i18n";
@@ -818,6 +819,219 @@ type NotifyProps = {
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
 };
+
+type StreamWriteProps = {
+  config: Record<string, unknown>;
+  showAdvanced: boolean;
+  onUpdateConfig: UpdateConfig;
+};
+
+const STREAM_WRITE_DEFAULT_INPUTS = ["frame", "best_frame", "segmented", "frame_original"];
+
+function parseStreamWriteInputs(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    const out = value
+      .map((item) => String(item || "").trim())
+      .filter((item) => item.length > 0);
+    return [...new Set(out)];
+  }
+  if (typeof value === "string") {
+    const out = value
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    return [...new Set(out)];
+  }
+  return [];
+}
+
+export function StreamWriteConfigCard({ config, showAdvanced, onUpdateConfig }: StreamWriteProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const [transmissions, setTransmissions] = useState<StreamingTransmission[]>([]);
+  const [loadingTransmissions, setLoadingTransmissions] = useState(false);
+  const [transmissionsError, setTransmissionsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingTransmissions(true);
+    setTransmissionsError(null);
+
+    void listStreamingTransmissions()
+      .then((payload) => {
+        if (cancelled) return;
+        setTransmissions(Array.isArray(payload) ? payload : []);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setTransmissionsError(String(error instanceof Error ? error.message : error || "unknown error"));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoadingTransmissions(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const transmissionId = String((config as any).transmission_id ?? "").trim();
+  const resizeModeRaw = String((config as any).resize_mode ?? "contain").trim().toLowerCase();
+  const resizeMode = resizeModeRaw === "none" ? "none" : "contain";
+  const bypassModeRaw = String((config as any).bypass_mode ?? "auto").trim().toLowerCase();
+  const bypassMode = bypassModeRaw === "force_on" || bypassModeRaw === "force_off" ? bypassModeRaw : "auto";
+  const writerPriorityRaw = Number((config as any).writer_priority ?? 0);
+  const writerPriority = Number.isFinite(writerPriorityRaw) ? writerPriorityRaw : 0;
+  const fallbackValues = (() => {
+    const parsed = parseStreamWriteInputs((config as any).input_with_fallback);
+    return parsed.length > 0 ? parsed : STREAM_WRITE_DEFAULT_INPUTS;
+  })();
+
+  const transmissionOptions = useMemo<SelectOption[]>(() => {
+    const disabledSuffix = t("core.ui.pipelines.panels.stream_write.transmission_disabled_suffix", {}, "disabled");
+    return transmissions
+      .map((item) => {
+        const id = String(item?.id || "").trim();
+        if (!id) return null;
+        const name = String(item?.name || "").trim();
+        const path = String(item?.path || "").trim();
+        const enabled = item?.enabled !== false;
+        const title = name || path || id;
+        const details = [path ? `/${path}` : "", enabled ? "" : disabledSuffix].filter(Boolean).join(" • ");
+        return {
+          value: id,
+          label: details ? `${title} (${details})` : title,
+        };
+      })
+      .filter((option): option is SelectOption => Boolean(option))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [t, transmissions]);
+
+  const selectedTransmissionOption = transmissionId
+    ? transmissionOptions.find((option) => option.value === transmissionId) ?? { value: transmissionId, label: transmissionId }
+    : null;
+
+  const fallbackOptions = useMemo<SelectOption[]>(() => {
+    const options: SelectOption[] = [
+      { value: "frame", label: t("core.ui.pipelines.artifacts.frame", {}, "Frame") },
+      { value: "frame_original", label: t("core.ui.pipelines.artifacts.frame_original", {}, "Full frame") },
+      ...buildArtifactSuggestions(t),
+    ];
+    const deduped = new Map<string, SelectOption>();
+    for (const option of options) {
+      const key = String(option.value || "").trim();
+      if (!key || deduped.has(key)) continue;
+      deduped.set(key, option);
+    }
+    return [...deduped.values()];
+  }, [t]);
+
+  const selectedFallbackOptions = fallbackValues.map(
+    (value) => fallbackOptions.find((option) => option.value === value) ?? { value, label: value },
+  );
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.stream_write.transmission")}</span>
+        <CreatableSelect<SelectOption, false>
+          styles={pipelinesReactSelectStyles}
+          options={transmissionOptions}
+          value={selectedTransmissionOption}
+          isClearable
+          placeholder={t("core.ui.pipelines.panels.stream_write.transmission_placeholder")}
+          onChange={(value) => {
+            onUpdateConfig((prev) => ({ ...prev, transmission_id: String(value?.value || "").trim() }));
+          }}
+        />
+      </label>
+      {loadingTransmissions ? (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.stream_write.transmission_loading")}</div>
+      ) : transmissionsError ? (
+        <div className="pipelinesInlineError">{t("core.ui.pipelines.panels.stream_write.transmission_load_failed", { error: transmissionsError })}</div>
+      ) : transmissionOptions.length === 0 ? (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.stream_write.transmission_empty")}</div>
+      ) : (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.stream_write.transmission_hint")}</div>
+      )}
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.stream_write.input_fallback")}</span>
+        <CreatableSelect<SelectOption, true>
+          isMulti
+          styles={pipelinesReactSelectStyles}
+          options={fallbackOptions}
+          value={selectedFallbackOptions}
+          placeholder={t("core.ui.pipelines.panels.stream_write.input_fallback_placeholder")}
+          onChange={(value: MultiValue<SelectOption>) => {
+            const nextValues = value
+              .map((item) => String(item.value || "").trim())
+              .filter((item) => item.length > 0);
+            onUpdateConfig((prev) => ({
+              ...prev,
+              input_with_fallback: nextValues.length > 0 ? [...new Set(nextValues)] : [...STREAM_WRITE_DEFAULT_INPUTS],
+            }));
+          }}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.stream_write.resize_mode")}</span>
+        <select
+          className="pipelinesSelect"
+          value={resizeMode}
+          onChange={(event) => {
+            const nextValue = String(event.target.value || "contain").trim().toLowerCase();
+            onUpdateConfig((prev) => ({ ...prev, resize_mode: nextValue === "none" ? "none" : "contain" }));
+          }}
+        >
+          <option value="contain">{t("core.ui.pipelines.panels.stream_write.resize_mode.contain")}</option>
+          <option value="none">{t("core.ui.pipelines.panels.stream_write.resize_mode.none")}</option>
+        </select>
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.stream_write.resize_mode_hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.stream_write.bypass_mode")}</span>
+        <select
+          className="pipelinesSelect"
+          value={bypassMode}
+          onChange={(event) => {
+            const nextValue = String(event.target.value || "auto").trim().toLowerCase();
+            onUpdateConfig((prev) => ({
+              ...prev,
+              bypass_mode: nextValue === "force_on" || nextValue === "force_off" ? nextValue : "auto",
+            }));
+          }}
+        >
+          <option value="auto">{t("core.ui.pipelines.panels.stream_write.bypass_mode.auto")}</option>
+          <option value="force_off">{t("core.ui.pipelines.panels.stream_write.bypass_mode.force_off")}</option>
+          {showAdvanced ? <option value="force_on">{t("core.ui.pipelines.panels.stream_write.bypass_mode.force_on")}</option> : null}
+        </select>
+      </label>
+
+      {showAdvanced ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.stream_write.writer_priority")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={-100}
+              max={100}
+              step={1}
+              value={writerPriority}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(-100, Math.min(100, Math.round(nextValue))) : 0;
+                onUpdateConfig((prev) => ({ ...prev, writer_priority: normalized }));
+              }}
+            />
+          </label>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.stream_write.writer_priority_hint")}</div>
+        </>
+      ) : null}
+    </div>
+  );
+}
 
 export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: NotifyProps): React.ReactElement {
   const { t } = i18n.useI18n();

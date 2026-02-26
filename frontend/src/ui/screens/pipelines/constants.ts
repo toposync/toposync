@@ -26,6 +26,7 @@ export const PIPELINE_PRESET_OPERATOR_IDS = [
   "core.debug",
   "core.store_images",
   "core.notify",
+  "stream.write",
 ];
 
 export const NODE_ID_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
@@ -54,6 +55,7 @@ export const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "core.debug": "Debug",
   "core.store_images": "Store images",
   "core.notify": "Notification",
+  "stream.write": "Transmit stream",
 };
 
 export const pipelinesReactSelectStyles: StylesConfig<SelectOption, boolean> = {

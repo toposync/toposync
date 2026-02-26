@@ -111,7 +111,7 @@ def register_streaming_pipeline_operators(registry: OperatorRegistry) -> None:
 
     registry.register_operator(
         operator_id="stream.write",
-        description="Writes pipeline frames into a configured streaming transmission.",
+        description="Publishes pipeline frames to a configured transmission output.",
         config_model=StreamWriteConfig,
         inputs=[{"name": "in", "required": True}],
         outputs=[],

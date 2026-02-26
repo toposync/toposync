@@ -275,6 +275,10 @@ class StreamWriterBridge:
         await self._scan_engine_logs_for_no_stream_demand(engine_status, now_monotonic)
         viewer_count_by_path = await self._load_viewer_count_by_path(now_monotonic)
 
+        target_count_by_transmission: dict[str, int] = {}
+        for target in targets:
+            target_count_by_transmission[target.transmission_id] = target_count_by_transmission.get(target.transmission_id, 0) + 1
+
         selected_by_transmission: dict[str, SelectedWriterFrame] = {}
         for target in targets:
             viewer_count = max(0, int(viewer_count_by_path.get(target.publish_path, 0)))
@@ -311,6 +315,17 @@ class StreamWriterBridge:
 
             publish_url = await self._engine_manager.get_publish_url_for_path(target.publish_path, host="127.0.0.1")
             input_settings = PublisherInputSettings()
+            bypass_block_reason = "no_simple_candidate"
+            if bypass_candidate is not None:
+                # Bypass uses FFmpeg to pull RTSP directly from the camera. With multiple outputs, we'd spawn
+                # one RTSP pull per output path which is unreliable (many cameras limit concurrent sessions).
+                # For reliability, only allow bypass when the transmission resolves to a single active output.
+                if int(target_count_by_transmission.get(target.transmission_id, 1)) > 1:
+                    bypass_block_reason = "multi_output_transmission"
+                    bypass_candidate = None
+                else:
+                    bypass_block_reason = ""
+
             if bypass_candidate is not None:
                 input_settings = PublisherInputSettings(
                     mode="rtsp_pull",
@@ -326,7 +341,7 @@ class StreamWriterBridge:
                     ),
                 )
             else:
-                self._maybe_log_bypass_state(target.output_key, mode="off", details="no_simple_candidate")
+                self._maybe_log_bypass_state(target.output_key, mode="off", details=bypass_block_reason)
 
             await self._publisher_manager.start_publisher(
                 output=PublisherOutput(

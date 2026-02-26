@@ -13,6 +13,7 @@ import {
   VelocityThrottleConfigCard,
   ScheduleGateConfigCard,
   StoreImagesConfigCard,
+  StreamWriteConfigCard,
   ThrottleConfigCard,
 } from "./CorePanels";
 import {
@@ -147,6 +148,9 @@ export function OperatorConfigPanel({
   }
   if (operatorId === "core.notify") {
     return <NotifyConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
+  }
+  if (operatorId === "stream.write") {
+    return <StreamWriteConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
 
   return null;

@@ -217,6 +217,40 @@ function StreamTilePlayer({
   const [status, setStatus] = useState<TilePlaybackStatus>("idle");
   const [transport, setTransport] = useState<TilePlaybackTransport>("none");
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
+  const playbackActive = active || pictureInPictureActive;
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const updatePictureInPictureState = () => {
+      const anyDocument = document as unknown as {
+        pictureInPictureElement?: Element | null;
+      };
+      const anyVideo = video as unknown as {
+        webkitPresentationMode?: string;
+      };
+      const standardPictureInPicture = anyDocument.pictureInPictureElement === video;
+      const webkitPictureInPicture = anyVideo.webkitPresentationMode === "picture-in-picture";
+      setPictureInPictureActive(Boolean(standardPictureInPicture || webkitPictureInPicture));
+    };
+
+    const onEnterPictureInPicture = () => updatePictureInPictureState();
+    const onLeavePictureInPicture = () => updatePictureInPictureState();
+    const onWebkitPresentationModeChanged = () => updatePictureInPictureState();
+
+    video.addEventListener("enterpictureinpicture", onEnterPictureInPicture);
+    video.addEventListener("leavepictureinpicture", onLeavePictureInPicture);
+    video.addEventListener("webkitpresentationmodechanged", onWebkitPresentationModeChanged as EventListener);
+    updatePictureInPictureState();
+
+    return () => {
+      video.removeEventListener("enterpictureinpicture", onEnterPictureInPicture);
+      video.removeEventListener("leavepictureinpicture", onLeavePictureInPicture);
+      video.removeEventListener("webkitpresentationmodechanged", onWebkitPresentationModeChanged as EventListener);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -307,7 +341,7 @@ function StreamTilePlayer({
     };
 
     const scheduleRetry = (reason: string) => {
-      if (cancelled || !active || (!hlsUrl && !webrtcUrl) || retryTimerId != null) return;
+      if (cancelled || !playbackActive || (!hlsUrl && !webrtcUrl) || retryTimerId != null) return;
       const delayMs = Math.min(RETRY_BASE_MS * Math.max(1, 2 ** attempt), RETRY_MAX_MS);
       retryTimerId = window.setTimeout(() => {
         retryTimerId = null;
@@ -525,7 +559,7 @@ function StreamTilePlayer({
     };
 
     const startPlayback = async () => {
-      if (cancelled || !active || (!hlsUrl && !webrtcUrl)) return;
+      if (cancelled || !playbackActive || (!hlsUrl && !webrtcUrl)) return;
       const video = videoRef.current;
       if (!video) return;
 
@@ -602,7 +636,7 @@ function StreamTilePlayer({
       scheduleRetry(message);
     };
 
-    if (!active || (!hlsUrl && !webrtcUrl)) {
+    if (!playbackActive || (!hlsUrl && !webrtcUrl)) {
       attempt = 0;
       destroyPlayback();
       setStatus("idle");
@@ -621,7 +655,7 @@ function StreamTilePlayer({
       cancelled = true;
       destroyPlayback();
     };
-  }, [active, hlsAuthHeader, hlsNativeUrl, hlsUrl, transmissionId, webrtcAuthHeader, webrtcUrl]);
+  }, [hlsAuthHeader, hlsNativeUrl, hlsUrl, playbackActive, transmissionId, webrtcAuthHeader, webrtcUrl]);
 
   const playbackStatusLabel = useMemo(() => {
     const onlineLabel = t("core.ui.streams.status.online", {}, "online");

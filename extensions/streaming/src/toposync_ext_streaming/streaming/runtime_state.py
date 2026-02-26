@@ -37,6 +37,14 @@ class SelectedWriterFrame:
     updated_at_monotonic: float
 
 
+@dataclass(slots=True)
+class TransmissionFrameState:
+    frame: numpy.ndarray
+    writer_id: str | None
+    frame_ts: float
+    updated_at_monotonic: float
+
+
 class TransmissionRuntimeState:
     def __init__(
         self,
@@ -57,6 +65,8 @@ class TransmissionRuntimeState:
         self._logger = logger or LOGGER
 
         self._last_frame_by_writer: dict[str, dict[str, WriterFrameState]] = {}
+        self._last_incoming_frame_by_transmission: dict[str, TransmissionFrameState] = {}
+        self._last_selected_frame_by_transmission: dict[str, TransmissionFrameState] = {}
         self._active_writer_by_transmission: dict[str, str] = {}
         self._sticky_until_by_transmission: dict[str, float] = {}
         self._arbitration_mode_by_transmission: dict[str, str] = {}
@@ -97,9 +107,16 @@ class TransmissionRuntimeState:
             state.writer_priority = int(writer_priority)
             state.updated_at_monotonic = now_monotonic
             if frame is not None:
-                state.frame = _normalize_frame(frame)
+                normalized_frame = _normalize_frame(frame)
+                state.frame = normalized_frame
                 state.frame_ts = float(frame_ts)
                 state.last_frame_monotonic = now_monotonic
+                self._last_incoming_frame_by_transmission[transmission_key] = TransmissionFrameState(
+                    frame=normalized_frame,
+                    writer_id=writer_key,
+                    frame_ts=float(frame_ts),
+                    updated_at_monotonic=float(now_monotonic),
+                )
 
             self._evict_stale_locked(transmission_key, now_monotonic)
             self._evict_excess_locked(transmission_key)
@@ -141,6 +158,17 @@ class TransmissionRuntimeState:
             self._evict_stale_locked(transmission_key, now_monotonic)
             selected_writer_id = self._refresh_active_writer_locked(transmission_key, now_monotonic)
             if not selected_writer_id:
+                fallback = self._last_selected_frame_by_transmission.get(transmission_key) or self._last_incoming_frame_by_transmission.get(transmission_key)
+                if fallback is not None:
+                    return SelectedWriterFrame(
+                        transmission_id=transmission_key,
+                        writer_id=None,
+                        frame=fallback.frame,
+                        lifecycle_state=None,
+                        writer_priority=0,
+                        frame_ts=float(fallback.frame_ts),
+                        updated_at_monotonic=float(fallback.updated_at_monotonic),
+                    )
                 return SelectedWriterFrame(
                     transmission_id=transmission_key,
                     writer_id=None,
@@ -154,6 +182,17 @@ class TransmissionRuntimeState:
             by_writer = self._last_frame_by_writer.get(transmission_key) or {}
             selected = by_writer.get(selected_writer_id)
             if selected is None:
+                fallback = self._last_selected_frame_by_transmission.get(transmission_key) or self._last_incoming_frame_by_transmission.get(transmission_key)
+                if fallback is not None:
+                    return SelectedWriterFrame(
+                        transmission_id=transmission_key,
+                        writer_id=None,
+                        frame=fallback.frame,
+                        lifecycle_state=None,
+                        writer_priority=0,
+                        frame_ts=float(fallback.frame_ts),
+                        updated_at_monotonic=float(fallback.updated_at_monotonic),
+                    )
                 return SelectedWriterFrame(
                     transmission_id=transmission_key,
                     writer_id=None,
@@ -163,14 +202,32 @@ class TransmissionRuntimeState:
                     frame_ts=0.0,
                     updated_at_monotonic=now_monotonic,
                 )
+            if selected.frame is not None:
+                self._last_selected_frame_by_transmission[transmission_key] = TransmissionFrameState(
+                    frame=selected.frame,
+                    writer_id=selected.writer_id,
+                    frame_ts=float(selected.frame_ts),
+                    updated_at_monotonic=float(selected.updated_at_monotonic),
+                )
+
+            resolved_frame = selected.frame
+            resolved_frame_ts = float(selected.frame_ts)
+            resolved_updated_monotonic = float(selected.updated_at_monotonic)
+            if resolved_frame is None:
+                fallback = self._last_selected_frame_by_transmission.get(transmission_key) or self._last_incoming_frame_by_transmission.get(transmission_key)
+                if fallback is not None:
+                    resolved_frame = fallback.frame
+                    resolved_frame_ts = float(fallback.frame_ts)
+                    resolved_updated_monotonic = float(fallback.updated_at_monotonic)
+
             return SelectedWriterFrame(
                 transmission_id=transmission_key,
-                writer_id=selected.writer_id,
-                frame=selected.frame,
-                lifecycle_state=selected.lifecycle_state,
-                writer_priority=int(selected.writer_priority),
-                frame_ts=float(selected.frame_ts),
-                updated_at_monotonic=float(selected.updated_at_monotonic),
+                writer_id=selected.writer_id if selected.frame is not None else None,
+                frame=resolved_frame,
+                lifecycle_state=selected.lifecycle_state if selected.frame is not None else None,
+                writer_priority=int(selected.writer_priority) if selected.frame is not None else 0,
+                frame_ts=resolved_frame_ts,
+                updated_at_monotonic=resolved_updated_monotonic,
             )
 
     async def snapshot(self) -> dict[str, Any]:
@@ -251,7 +308,11 @@ class TransmissionRuntimeState:
     async def prune_transmissions(self, desired_transmission_ids: set[str]) -> None:
         desired = {_normalize_key(item) for item in desired_transmission_ids if _normalize_key(item)}
         async with self._lock:
-            for transmission_id in list(self._last_frame_by_writer.keys()):
+            known_transmissions = set(self._last_frame_by_writer.keys())
+            known_transmissions.update(self._last_incoming_frame_by_transmission.keys())
+            known_transmissions.update(self._last_selected_frame_by_transmission.keys())
+
+            for transmission_id in list(known_transmissions):
                 if transmission_id in desired:
                     continue
                 self._cleanup_transmission_locked(transmission_id)
@@ -310,7 +371,7 @@ class TransmissionRuntimeState:
     def _evict_stale_locked(self, transmission_id: str, now_monotonic: float) -> None:
         by_writer = self._last_frame_by_writer.get(transmission_id)
         if not by_writer:
-            self._cleanup_transmission_locked(transmission_id)
+            self._cleanup_transmission_locked(transmission_id, preserve_frames=True)
             return
 
         stale_cutoff = float(now_monotonic) - float(self._stale_timeout_s)
@@ -323,7 +384,7 @@ class TransmissionRuntimeState:
             by_writer.pop(writer_id, None)
 
         if not by_writer:
-            self._cleanup_transmission_locked(transmission_id)
+            self._cleanup_transmission_locked(transmission_id, preserve_frames=True)
             return
         active_writer_id = self._active_writer_by_transmission.get(transmission_id)
         if active_writer_id and active_writer_id not in by_writer:
@@ -348,7 +409,7 @@ class TransmissionRuntimeState:
             removed_writer_ids.append(item.writer_id)
 
         if not by_writer:
-            self._cleanup_transmission_locked(transmission_id)
+            self._cleanup_transmission_locked(transmission_id, preserve_frames=True)
             return
 
         if removed_writer_ids:
@@ -389,11 +450,14 @@ class TransmissionRuntimeState:
             return None
         return selected_writer_id
 
-    def _cleanup_transmission_locked(self, transmission_id: str) -> None:
+    def _cleanup_transmission_locked(self, transmission_id: str, *, preserve_frames: bool = False) -> None:
         self._last_frame_by_writer.pop(transmission_id, None)
         self._active_writer_by_transmission.pop(transmission_id, None)
         self._sticky_until_by_transmission.pop(transmission_id, None)
         self._arbitration_mode_by_transmission.pop(transmission_id, None)
+        if not preserve_frames:
+            self._last_incoming_frame_by_transmission.pop(transmission_id, None)
+            self._last_selected_frame_by_transmission.pop(transmission_id, None)
 
     def _transmission_has_demand_locked(self, transmission_id: str) -> bool:
         for output_key, owner in self._output_to_transmission.items():

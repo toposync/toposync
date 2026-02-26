@@ -691,7 +691,6 @@ def _can_bind(bind_host: str, port: int) -> bool:
 
         try:
             with socket.socket(family, socket.SOCK_STREAM) as sock:
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 if family == socket.AF_INET6 and hasattr(socket, "IPPROTO_IPV6") and hasattr(socket, "IPV6_V6ONLY"):
                     with contextlib.suppress(OSError):
                         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
@@ -760,7 +759,6 @@ def _can_bind_udp(bind_host: str, port: int) -> bool:
 
         try:
             with socket.socket(family, socket.SOCK_DGRAM) as sock:
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 if family == socket.AF_INET6 and hasattr(socket, "IPPROTO_IPV6") and hasattr(socket, "IPV6_V6ONLY"):
                     with contextlib.suppress(OSError):
                         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)

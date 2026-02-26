@@ -273,10 +273,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.render_modal.option_2d.title": "2D (Snapshot)",
     "core.ui.render_modal.option_2d.desc": "Top-down snapshot with Home Assistant overlays.",
     "core.ui.render_modal.option_streams.title": "Streams",
-    "core.ui.render_modal.option_streams.desc": "Display configured transmissions in a paged live dashboard.",
+    "core.ui.render_modal.option_streams.desc": "Display configured streams in a paged live dashboard.",
 
     "core.ui.streams.unavailable": "Streaming extension unavailable.",
-    "core.ui.streams.empty": "No enabled transmissions. Create one in Settings > Transmissions.",
+    "core.ui.streams.empty": "No enabled streams. Create one in Settings > Streams.",
     "core.ui.streams.prev_page": "Previous page",
     "core.ui.streams.page": "{{current}}/{{total}}",
     "core.ui.streams.next_page": "Next page",

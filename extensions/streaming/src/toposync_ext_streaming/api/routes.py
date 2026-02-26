@@ -23,6 +23,7 @@ from toposync.runtime.pipelines.compiler import GraphCompileError, PipelineGraph
 from toposync.runtime.pipelines.templates import safe_pipeline_name
 
 from ..streaming.engine_manager import MediaMtxEngineManager
+from ..streaming.camera_ingest import build_camera_ingest_definitions, build_camera_ingest_path_configs
 from ..streaming.mediamtx_binary import extract_mediamtx_binary, find_installed_mediamtx_binary
 from ..streaming.platform import detect_mediamtx_platform
 from ..streaming.publisher_manager import PublisherManager
@@ -559,20 +560,29 @@ def create_streaming_router() -> APIRouter:
 
         manager = _engine_manager(request)
         try:
-            engine_paths = list_engine_paths_for_host(updated, host_server_id=_current_server_id(request))
+            app_settings = await config_store.get_settings()
+            camera_ingest_by_id = build_camera_ingest_definitions(
+                app_settings=app_settings,
+                ingest_settings=updated.camera_ingest,
+            )
+            ingest_paths = [item.path_slug for item in camera_ingest_by_id.values()]
+            engine_paths = list_engine_paths_for_host(updated, host_server_id=_current_server_id(request)) + ingest_paths
             path_auth = list_path_read_auth_for_host(updated, host_server_id=_current_server_id(request))
+            path_configs = build_camera_ingest_path_configs(camera_ingest_by_id)
             if patch.engine is not None:
                 await manager.apply_settings(
                     updated.engine,
                     previous_engine_settings=previous.engine,
                     engine_paths=engine_paths,
                     path_auth=path_auth,
+                    path_configs=path_configs,
                 )
             else:
                 await manager.ensure_running(
                     updated.engine,
                     engine_paths=engine_paths,
                     path_auth=path_auth,
+                    path_configs=path_configs,
                 )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to apply streaming settings: {exc}") from exc
@@ -678,10 +688,17 @@ def create_streaming_router() -> APIRouter:
         settings = await _save_settings(config_store, settings)
 
         try:
+            app_settings = await config_store.get_settings()
+            camera_ingest_by_id = build_camera_ingest_definitions(
+                app_settings=app_settings,
+                ingest_settings=settings.camera_ingest,
+            )
             await manager.ensure_running(
                 settings.engine,
-                engine_paths=list_engine_paths_for_host(settings, host_server_id=_current_server_id(request)),
+                engine_paths=list_engine_paths_for_host(settings, host_server_id=_current_server_id(request))
+                + [item.path_slug for item in camera_ingest_by_id.values()],
                 path_auth=list_path_read_auth_for_host(settings, host_server_id=_current_server_id(request)),
+                path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to start streaming engine: {exc}") from exc
@@ -720,10 +737,17 @@ def create_streaming_router() -> APIRouter:
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
         try:
+            app_settings = await config_store.get_settings()
+            camera_ingest_by_id = build_camera_ingest_definitions(
+                app_settings=app_settings,
+                ingest_settings=settings.camera_ingest,
+            )
             await manager.restart(
                 settings.engine,
-                engine_paths=list_engine_paths_for_host(settings, host_server_id=_current_server_id(request)),
+                engine_paths=list_engine_paths_for_host(settings, host_server_id=_current_server_id(request))
+                + [item.path_slug for item in camera_ingest_by_id.values()],
                 path_auth=list_path_read_auth_for_host(settings, host_server_id=_current_server_id(request)),
+                path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to restart streaming engine: {exc}") from exc
@@ -765,10 +789,17 @@ def create_streaming_router() -> APIRouter:
 
         manager = _engine_manager(request)
         try:
+            app_settings = await config_store.get_settings()
+            camera_ingest_by_id = build_camera_ingest_definitions(
+                app_settings=app_settings,
+                ingest_settings=saved.camera_ingest,
+            )
             await manager.ensure_running(
                 saved.engine,
-                engine_paths=list_engine_paths_for_host(saved, host_server_id=_current_server_id(request)),
+                engine_paths=list_engine_paths_for_host(saved, host_server_id=_current_server_id(request))
+                + [item.path_slug for item in camera_ingest_by_id.values()],
                 path_auth=list_path_read_auth_for_host(saved, host_server_id=_current_server_id(request)),
+                path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to apply streaming settings: {exc}") from exc
@@ -810,10 +841,17 @@ def create_streaming_router() -> APIRouter:
 
         manager = _engine_manager(request)
         try:
+            app_settings = await config_store.get_settings()
+            camera_ingest_by_id = build_camera_ingest_definitions(
+                app_settings=app_settings,
+                ingest_settings=saved.camera_ingest,
+            )
             await manager.ensure_running(
                 saved.engine,
-                engine_paths=list_engine_paths_for_host(saved, host_server_id=_current_server_id(request)),
+                engine_paths=list_engine_paths_for_host(saved, host_server_id=_current_server_id(request))
+                + [item.path_slug for item in camera_ingest_by_id.values()],
                 path_auth=list_path_read_auth_for_host(saved, host_server_id=_current_server_id(request)),
+                path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to apply streaming settings: {exc}") from exc
@@ -842,10 +880,17 @@ def create_streaming_router() -> APIRouter:
 
         manager = _engine_manager(request)
         try:
+            app_settings = await config_store.get_settings()
+            camera_ingest_by_id = build_camera_ingest_definitions(
+                app_settings=app_settings,
+                ingest_settings=saved.camera_ingest,
+            )
             await manager.ensure_running(
                 saved.engine,
-                engine_paths=list_engine_paths_for_host(saved, host_server_id=_current_server_id(request)),
+                engine_paths=list_engine_paths_for_host(saved, host_server_id=_current_server_id(request))
+                + [item.path_slug for item in camera_ingest_by_id.values()],
                 path_auth=list_path_read_auth_for_host(saved, host_server_id=_current_server_id(request)),
+                path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to apply streaming settings: {exc}") from exc

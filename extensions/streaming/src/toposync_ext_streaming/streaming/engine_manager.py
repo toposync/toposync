@@ -74,6 +74,7 @@ class MediaMtxEngineManager:
 
         self._test_path = "test"
         self._engine_paths: tuple[str, ...] = (self._test_path,)
+        self._path_configs_by_path: dict[str, dict[str, object]] = {}
         self._mediamtx_version: str = MEDIAMTX_VERSION
 
         self._publish_credentials_by_path: dict[str, tuple[str, str]] = {}
@@ -91,11 +92,13 @@ class MediaMtxEngineManager:
         *,
         engine_paths: list[str] | None = None,
         path_auth: dict[str, tuple[str, str]] | None = None,
+        path_configs: dict[str, dict[str, object]] | None = None,
     ) -> MediaMtxEngineStatus:
         async with self._lock:
             now_monotonic = time.monotonic()
             self._refresh_process_state_locked(now_monotonic)
             self._update_engine_paths_locked(engine_paths)
+            self._update_path_configs_locked(path_configs)
             if not engine_settings.enabled:
                 await self._stop_locked(clear_error=False)
                 self._reset_restart_backoff_locked()
@@ -130,12 +133,14 @@ class MediaMtxEngineManager:
         previous_engine_settings: StreamingEngineSettings | None = None,
         engine_paths: list[str] | None = None,
         path_auth: dict[str, tuple[str, str]] | None = None,
+        path_configs: dict[str, dict[str, object]] | None = None,
     ) -> MediaMtxEngineStatus:
         _ = previous_engine_settings
         async with self._lock:
             now_monotonic = time.monotonic()
             self._refresh_process_state_locked(now_monotonic)
             self._update_engine_paths_locked(engine_paths)
+            self._update_path_configs_locked(path_configs)
             if not engine_settings.enabled:
                 await self._stop_locked(clear_error=False)
                 self._reset_restart_backoff_locked()
@@ -169,11 +174,13 @@ class MediaMtxEngineManager:
         *,
         engine_paths: list[str] | None = None,
         path_auth: dict[str, tuple[str, str]] | None = None,
+        path_configs: dict[str, dict[str, object]] | None = None,
     ) -> MediaMtxEngineStatus:
         async with self._lock:
             now_monotonic = time.monotonic()
             self._refresh_process_state_locked(now_monotonic)
             self._update_engine_paths_locked(engine_paths)
+            self._update_path_configs_locked(path_configs)
             if not engine_settings.enabled:
                 await self._stop_locked(clear_error=False)
                 self._reset_restart_backoff_locked()
@@ -467,6 +474,7 @@ class MediaMtxEngineManager:
             enable_webrtc=True,
             webrtc_ice_servers=list(getattr(engine_settings, "webrtc_ice_servers", []) or []),
             path_auth=path_auth_entries,
+            path_configs=dict(self._path_configs_by_path),
             api_allow_origins=["*"],
             hls_allow_origins=["*"],
             webrtc_allow_origins=["*"],
@@ -507,6 +515,19 @@ class MediaMtxEngineManager:
             normalized = [self._test_path]
 
         self._engine_paths = tuple(normalized)
+
+    def _update_path_configs_locked(self, path_configs: dict[str, dict[str, object]] | None) -> None:
+        if path_configs is None:
+            return
+        normalized: dict[str, dict[str, object]] = {}
+        if isinstance(path_configs, dict):
+            for raw_path, raw_config in path_configs.items():
+                path_slug = _normalize_path(str(raw_path or ""))
+                if not path_slug:
+                    continue
+                cfg = raw_config if isinstance(raw_config, dict) else {}
+                normalized[path_slug] = dict(cfg)
+        self._path_configs_by_path = normalized
 
     def _prune_logs(self, logs_dir: Path, *, keep: int) -> None:
         try:

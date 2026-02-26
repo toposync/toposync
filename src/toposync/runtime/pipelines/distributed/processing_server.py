@@ -53,12 +53,14 @@ class ProcessingServerRuntime:
         self,
         *,
         config_store: ConfigStore,
+        services: ServiceRegistry,
         operator_registry: OperatorRegistry,
         compiler: PipelineGraphCompiler,
         max_recent_events: int = 2500,
         max_replay_events: int = 500,
     ) -> None:
         self._config_store = config_store
+        self._services = services
         self._registry = operator_registry
         self._compiler = compiler
         self.broadcaster = EventBroadcaster(max_queue_size=500)
@@ -158,6 +160,7 @@ class ProcessingServerRuntime:
         )
         deps = PipelineRuntimeDependencies(
             config_store=self._config_store,
+            services=self._services,
             logger=logger,
             processing_emit_projected_event=self._emit_projected_event,
             execution_scheduler=ExecutionScheduler(),
@@ -238,6 +241,7 @@ def create_processing_app() -> FastAPI:
 
     runtime = ProcessingServerRuntime(
         config_store=config_store,
+        services=services,
         operator_registry=operator_registry,
         compiler=pipeline_compiler,
     )

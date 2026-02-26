@@ -257,6 +257,7 @@ class PipelinesOrchestrator:
         base = self._runtime_deps_base
         return PipelineRuntimeDependencies(
             config_store=self._config_store,
+            services=base.services,
             files_dir=self._files_dir,
             notifications_upsert=self._notifications.upsert,
             origin_inbox=origin_inbox,

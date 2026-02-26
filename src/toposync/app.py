@@ -428,6 +428,7 @@ async def _lifespan(app: FastAPI):
         files_dir=config_store.paths.files_dir,
         poll_interval_s=1.0,
         runtime_dependencies=PipelineRuntimeDependencies(
+            services=services,
             pipeline_stats_store=pipeline_stats_store,
             execution_scheduler=ExecutionScheduler(),
             artifact_max_bytes_per_packet=artifact_max_bytes_per_packet,

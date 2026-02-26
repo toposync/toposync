@@ -29,8 +29,15 @@ class _EngineManagerStub:
     def __init__(self) -> None:
         self.ensure_running_calls = 0
 
-    async def ensure_running(self, _engine_settings, *, engine_paths=None, path_auth=None) -> None:  # noqa: ANN001
-        _ = engine_paths, path_auth
+    async def ensure_running(  # noqa: ANN001
+        self,
+        _engine_settings,
+        *,
+        engine_paths=None,
+        path_auth=None,
+        path_configs=None,
+    ) -> None:
+        _ = engine_paths, path_auth, path_configs
         self.ensure_running_calls += 1
 
     async def get_urls_for_path(self, path_slug: str, *, host: str | None = None) -> dict[str, str]:
@@ -159,15 +166,15 @@ async def _on_demand_start_stop_scenario() -> None:
 
     mediamtx_api_client.viewers_by_path["ondemand-path"] = 1
     await bridge._tick_once(1.3)
-    assert publisher_manager.start_calls == ["transmission_ondemand:main"]
-    assert publisher_manager.frames_by_output.get("transmission_ondemand:main", 0) >= 1
+    assert publisher_manager.start_calls == ["transmission_ondemand:ondemand-path"]
+    assert publisher_manager.frames_by_output.get("transmission_ondemand:ondemand-path", 0) >= 1
 
     mediamtx_api_client.viewers_by_path["ondemand-path"] = 0
     await bridge._tick_once(1.6)
     assert publisher_manager.stop_calls == []
 
     await bridge._tick_once(3.9)
-    assert publisher_manager.stop_calls == ["transmission_ondemand:main"]
+    assert publisher_manager.stop_calls == ["transmission_ondemand:ondemand-path"]
 
     viewer_counts = await runtime_state.get_viewer_count_by_output()
     assert viewer_counts["transmission_ondemand:main"] == 0
@@ -221,7 +228,7 @@ async def _on_demand_no_flap_scenario() -> None:
     )
 
     await bridge._tick_once(10.0)
-    assert publisher_manager.start_calls == ["transmission_flap:main"]
+    assert publisher_manager.start_calls == ["transmission_flap:flap-path"]
 
     mediamtx_api_client.viewers_by_path["flap-path"] = 0
     await bridge._tick_once(10.3)
@@ -235,7 +242,7 @@ async def _on_demand_no_flap_scenario() -> None:
     await bridge._tick_once(11.0)
     assert publisher_manager.stop_calls == []
     await bridge._tick_once(13.2)
-    assert publisher_manager.stop_calls == ["transmission_flap:main"]
+    assert publisher_manager.stop_calls == ["transmission_flap:flap-path"]
 
 
 async def _on_demand_prime_scenario() -> None:
@@ -291,7 +298,7 @@ async def _on_demand_prime_scenario() -> None:
     assert primed_outputs == 1
 
     await bridge._tick_once(100.1)
-    assert publisher_manager.start_calls == ["transmission_prime:main"]
+    assert publisher_manager.start_calls == ["transmission_prime:prime-path"]
 
     await bridge._tick_once(104.2)
     assert publisher_manager.stop_calls == []
@@ -300,4 +307,4 @@ async def _on_demand_prime_scenario() -> None:
     assert publisher_manager.stop_calls == []
 
     await bridge._tick_once(108.4)
-    assert publisher_manager.stop_calls == ["transmission_prime:main"]
+    assert publisher_manager.stop_calls == ["transmission_prime:prime-path"]

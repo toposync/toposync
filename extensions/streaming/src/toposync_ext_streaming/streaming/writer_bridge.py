@@ -19,6 +19,7 @@ from ..api.models import (
     normalize_streaming_settings,
 )
 from .engine_manager import MediaMtxEngineManager
+from .camera_ingest import CameraIngestDefinition, build_camera_ingest_definitions, build_camera_ingest_path_configs
 from .mediamtx_api_client import MediaMtxApiClient
 from .mediamtx_config import normalize_path_slug
 from .placeholder import get_placeholder_frame
@@ -53,6 +54,7 @@ class ResolvedOutputTarget:
 class WriterBypassCandidate:
     writer_id: str
     transmission_id: str
+    camera_id: str | None
     source_rtsp_url: str
     source_fps: float | None
     source_backend: str
@@ -101,6 +103,8 @@ class StreamWriterBridge:
         self._cached_engine: StreamingEngineSettings | None = None
         self._cached_targets: tuple[ResolvedOutputTarget, ...] = ()
         self._cached_path_auth_by_path: dict[str, tuple[str, str]] = {}
+        self._cached_camera_ingest_by_id: dict[str, CameraIngestDefinition] = {}
+        self._cached_camera_ingest_path_configs: dict[str, dict[str, Any]] = {}
         self._enable_bypass = bool(int(str(os.getenv("TOPOSYNC_STREAMING_ENABLE_BYPASS", "0") or "0").strip() or "0"))
         self._cached_bypass_by_writer: dict[str, WriterBypassCandidate] = {}
         self._cached_viewer_count_by_path: dict[str, int] = {}
@@ -196,7 +200,7 @@ class StreamWriterBridge:
 
         now_monotonic = self._monotonic()
         ttl = self._on_demand_prime_ttl_s if ttl_s is None else min(120.0, max(1.0, float(ttl_s)))
-        _engine_settings, targets, _path_auth, _bypass = await self._load_settings(now_monotonic)
+        _engine_settings, targets, _path_auth, _bypass, _ingest, _ingest_configs = await self._load_settings(now_monotonic)
 
         primed_publishers: set[str] = set()
         until_monotonic = now_monotonic + ttl
@@ -228,7 +232,9 @@ class StreamWriterBridge:
                 continue
 
     async def _tick_once(self, now_monotonic: float) -> None:
-        engine_settings, targets, path_auth_by_path, bypass_by_writer = await self._load_settings(now_monotonic)
+        engine_settings, targets, path_auth_by_path, bypass_by_writer, camera_ingest_by_id, camera_ingest_path_configs = (
+            await self._load_settings(now_monotonic)
+        )
 
         if not engine_settings.enabled:
             await self._publisher_manager.stop_all()
@@ -248,6 +254,20 @@ class StreamWriterBridge:
         desired_publisher_ids = {_publisher_id_for_target(target) for target in targets}
         desired_transmission_ids = {target.transmission_id for target in targets}
         await self._runtime_state.prune_transmissions(desired_transmission_ids)
+
+        desired_engine_paths: list[str] = []
+        for target in targets:
+            desired_engine_paths.append(target.publish_path)
+        for item in camera_ingest_by_id.values():
+            desired_engine_paths.append(item.path_slug)
+
+        engine_status = await self._engine_manager.ensure_running(
+            engine_settings,
+            engine_paths=desired_engine_paths,
+            path_auth=path_auth_by_path,
+            path_configs=camera_ingest_path_configs,
+        )
+
         if not desired_output_keys:
             await self._publisher_manager.stop_all()
             self._next_due_by_publisher.clear()
@@ -270,12 +290,6 @@ class StreamWriterBridge:
                 transmission_id=transmission_id,
                 arbitration_mode=arbitration_mode,
             )
-
-        engine_status = await self._engine_manager.ensure_running(
-            engine_settings,
-            engine_paths=[target.publish_path for target in targets],
-            path_auth=path_auth_by_path,
-        )
         await self._scan_engine_logs_for_no_stream_demand(engine_status, now_monotonic)
         viewer_count_by_path = await self._load_viewer_count_by_path(now_monotonic)
 
@@ -342,9 +356,15 @@ class StreamWriterBridge:
                     bypass_block_reason = ""
 
             if bypass_candidate is not None:
+                resolved_rtsp_url = bypass_candidate.source_rtsp_url
+                camera_id = str(bypass_candidate.camera_id or "").strip()
+                if camera_id:
+                    ingest = camera_ingest_by_id.get(camera_id)
+                    if ingest is not None:
+                        resolved_rtsp_url = f"rtsp://127.0.0.1:{engine_status.ports.rtsp}/{ingest.path_slug}"
                 input_settings = PublisherInputSettings(
                     mode="rtsp_pull",
-                    rtsp_url=bypass_candidate.source_rtsp_url,
+                    rtsp_url=resolved_rtsp_url,
                     source_fps=bypass_candidate.source_fps,
                 )
                 self._maybe_log_bypass_state(
@@ -430,6 +450,8 @@ class StreamWriterBridge:
         tuple[ResolvedOutputTarget, ...],
         dict[str, tuple[str, str]],
         dict[str, WriterBypassCandidate],
+        dict[str, CameraIngestDefinition],
+        dict[str, dict[str, Any]],
     ]:
         if (
             self._cached_engine is not None
@@ -441,6 +463,8 @@ class StreamWriterBridge:
                 self._cached_targets,
                 dict(self._cached_path_auth_by_path),
                 dict(self._cached_bypass_by_writer),
+                dict(self._cached_camera_ingest_by_id),
+                dict(self._cached_camera_ingest_path_configs),
             )
 
         settings = await self._config_store.get_settings()
@@ -453,6 +477,11 @@ class StreamWriterBridge:
         targets = _resolve_output_targets(transmissions, host_server_id=self._host_server_id)
 
         path_auth_by_path = list_path_read_auth_for_host(normalized_settings, host_server_id=self._host_server_id)
+        camera_ingest_by_id = build_camera_ingest_definitions(
+            app_settings=settings,
+            ingest_settings=normalized_settings.camera_ingest,
+        )
+        camera_ingest_path_configs = build_camera_ingest_path_configs(camera_ingest_by_id)
         bypass_by_writer: dict[str, WriterBypassCandidate] = {}
         if self._enable_bypass:
             bypass_by_writer = await self._resolve_bypass_candidates(settings)
@@ -461,12 +490,16 @@ class StreamWriterBridge:
         self._cached_targets = tuple(targets)
         self._cached_path_auth_by_path = dict(path_auth_by_path)
         self._cached_bypass_by_writer = dict(bypass_by_writer)
+        self._cached_camera_ingest_by_id = dict(camera_ingest_by_id)
+        self._cached_camera_ingest_path_configs = dict(camera_ingest_path_configs)
         self._last_settings_load_monotonic = now_monotonic
         return (
             self._cached_engine,
             self._cached_targets,
             dict(self._cached_path_auth_by_path),
             dict(self._cached_bypass_by_writer),
+            dict(self._cached_camera_ingest_by_id),
+            dict(self._cached_camera_ingest_path_configs),
         )
 
     async def _load_viewer_count_by_path(self, now_monotonic: float) -> dict[str, int]:
@@ -620,7 +653,7 @@ class StreamWriterBridge:
                 if chain is None:
                     continue
 
-                source_rtsp_url, source_fps, source_backend = _resolve_chain_rtsp_source(
+                source_rtsp_url, source_fps, source_backend, camera_id = _resolve_chain_rtsp_source(
                     camera_node=chain["camera_node"],
                     camera_by_id=camera_by_id,
                 )
@@ -640,6 +673,7 @@ class StreamWriterBridge:
                 resolved[writer_id] = WriterBypassCandidate(
                     writer_id=writer_id,
                     transmission_id=transmission_id,
+                    camera_id=str(camera_id or "").strip() or None,
                     source_rtsp_url=source_rtsp_url,
                     source_fps=float(source_fps) if source_fps else None,
                     source_backend=str(source_backend or "auto"),
@@ -975,7 +1009,7 @@ def _resolve_chain_rtsp_source(
     *,
     camera_node: dict[str, Any],
     camera_by_id: dict[str, dict[str, Any]],
-) -> tuple[str, float | None, str]:
+) -> tuple[str, float | None, str, str | None]:
     config = camera_node.get("config") if isinstance(camera_node.get("config"), dict) else {}
     source_backend = str(config.get("backend") or "auto").strip().lower() or "auto"
     direct_rtsp_url = str(config.get("rtsp_url") or "").strip()
@@ -983,21 +1017,21 @@ def _resolve_chain_rtsp_source(
     direct_password = str(config.get("password") or "").strip()
     fps_value = _coerce_float(config.get("fps"))
     if direct_rtsp_url:
-        return _apply_rtsp_auth(direct_rtsp_url, direct_username, direct_password), fps_value, source_backend
+        return _apply_rtsp_auth(direct_rtsp_url, direct_username, direct_password), fps_value, source_backend, None
 
     camera_id = str(config.get("camera_id") or "").strip()
     if not camera_id:
-        return "", None, source_backend
+        return "", None, source_backend, None
     camera = camera_by_id.get(camera_id) or {}
     camera_rtsp = str(camera.get("rtsp_url") or "").strip()
     if not camera_rtsp:
-        return "", None, source_backend
+        return "", None, source_backend, camera_id
     username = str(camera.get("username") or "").strip()
     password = str(camera.get("password") or "").strip()
     camera_fps = _coerce_float(camera.get("fps"))
     if fps_value is not None:
         camera_fps = fps_value
-    return _apply_rtsp_auth(camera_rtsp, username, password), camera_fps, source_backend
+    return _apply_rtsp_auth(camera_rtsp, username, password), camera_fps, source_backend, camera_id
 
 
 def _apply_rtsp_auth(url: str, username: str, password: str) -> str:

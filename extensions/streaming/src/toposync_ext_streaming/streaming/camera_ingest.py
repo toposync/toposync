@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+import urllib.parse
+from dataclasses import dataclass
+from typing import Any
+
+from ..api.models import StreamingCameraIngestSettings
+from .mediamtx_config import normalize_path_slug
+
+
+@dataclass(frozen=True, slots=True)
+class CameraIngestDefinition:
+    camera_id: str
+    path_slug: str
+    source_rtsp_url: str
+
+
+def build_camera_ingest_definitions(
+    *,
+    app_settings: Any,
+    ingest_settings: StreamingCameraIngestSettings,
+) -> dict[str, CameraIngestDefinition]:
+    if not bool(getattr(ingest_settings, "enabled", True)):
+        return {}
+
+    extensions = getattr(app_settings, "extensions", None)
+    if not isinstance(extensions, dict):
+        return {}
+
+    cameras_ext = extensions.get("com.toposync.cameras", {})
+    cameras_record = cameras_ext if isinstance(cameras_ext, dict) else {}
+    cameras_raw = cameras_record.get("cameras")
+    cameras = cameras_raw if isinstance(cameras_raw, list) else []
+
+    prefix = normalize_path_slug(str(getattr(ingest_settings, "path_prefix", "") or "ingest"), fallback="ingest")
+
+    out: dict[str, CameraIngestDefinition] = {}
+    for item in cameras:
+        if not isinstance(item, dict):
+            continue
+        camera_id = str(item.get("id") or "").strip()
+        if not camera_id or camera_id in out:
+            continue
+
+        rtsp_url = str(item.get("rtsp_url") or "").strip()
+        if not rtsp_url:
+            continue
+        username = str(item.get("username") or "").strip()
+        password = str(item.get("password") or "").strip()
+
+        source = _rtsp_url_with_auth(rtsp_url, username=username, password=password)
+        if not source:
+            continue
+
+        path_slug = normalize_path_slug(f"{prefix}-{camera_id}", fallback=prefix)
+        out[camera_id] = CameraIngestDefinition(
+            camera_id=camera_id,
+            path_slug=path_slug,
+            source_rtsp_url=source,
+        )
+
+    return out
+
+
+def build_camera_ingest_path_configs(definitions: dict[str, CameraIngestDefinition]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for item in definitions.values():
+        path_slug = normalize_path_slug(item.path_slug, fallback="")
+        if not path_slug:
+            continue
+        source = str(item.source_rtsp_url or "").strip()
+        if not source:
+            continue
+        out[path_slug] = {
+            "source": source,
+            "sourceOnDemand": True,
+        }
+    return out
+
+
+def _rtsp_url_with_auth(url: str, *, username: str, password: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+    except Exception:
+        return raw
+
+    if str(parsed.scheme or "").lower() != "rtsp" or not parsed.netloc:
+        return raw
+
+    # If credentials already exist, keep the URL unchanged.
+    if "@" in parsed.netloc:
+        return raw
+
+    user = str(username or "").strip()
+    pwd = str(password or "").strip()
+    if not user and not pwd:
+        return raw
+
+    user_enc = urllib.parse.quote(user, safe="")
+    pwd_enc = urllib.parse.quote(pwd, safe="")
+
+    if pwd_enc:
+        netloc = f"{user_enc}:{pwd_enc}@{parsed.netloc}"
+    else:
+        netloc = f"{user_enc}@{parsed.netloc}"
+
+    return urllib.parse.urlunsplit(parsed._replace(netloc=netloc))
+

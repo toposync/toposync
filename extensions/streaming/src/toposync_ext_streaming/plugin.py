@@ -16,9 +16,11 @@ from .api.models import (
     list_engine_paths_for_host,
     list_path_read_auth_for_host,
     normalize_server_id,
+    normalize_streaming_settings,
 )
 from .api.routes import create_streaming_router, ensure_streaming_settings_defaults
 from .pipelines import StreamingRuntimeBindings, register_streaming_pipeline_operators, set_streaming_runtime_bindings
+from .streaming.camera_ingest import build_camera_ingest_definitions, build_camera_ingest_path_configs
 from .streaming.distributed_sync import DistributedSettingsSync
 from .streaming.engine_manager import MediaMtxEngineManager
 from .streaming.publisher_manager import PublisherManager
@@ -103,11 +105,56 @@ class StreamingExtension(BaseExtension):
 
             await writer_bridge.start()
 
+            async def _resolve_camera_ingest_rtsp_url(*, camera_id: str) -> str | None:
+                cid = str(camera_id or "").strip()
+                if not cid:
+                    return None
+
+                app_settings = await config_store.get_settings()
+                raw_streaming = app_settings.extensions.get("com.toposync.streaming", None)
+                normalized_streaming = normalize_streaming_settings(raw_streaming)
+                streaming_settings = StreamingExtensionSettings.model_validate(normalized_streaming)
+                if not streaming_settings.engine.enabled:
+                    return None
+                if not streaming_settings.camera_ingest.enabled:
+                    return None
+
+                ingest_by_id = build_camera_ingest_definitions(
+                    app_settings=app_settings,
+                    ingest_settings=streaming_settings.camera_ingest,
+                )
+                ingest = ingest_by_id.get(cid)
+                if ingest is None:
+                    return None
+
+                engine_paths = list_engine_paths_for_host(streaming_settings, host_server_id=server_id)
+                engine_paths.extend([item.path_slug for item in ingest_by_id.values()])
+                path_auth = list_path_read_auth_for_host(streaming_settings, host_server_id=server_id)
+                path_configs = build_camera_ingest_path_configs(ingest_by_id)
+
+                await engine_manager.ensure_running(
+                    streaming_settings.engine,
+                    engine_paths=engine_paths,
+                    path_auth=path_auth,
+                    path_configs=path_configs,
+                )
+                status = await engine_manager.get_status()
+                return f"rtsp://127.0.0.1:{status.ports.rtsp}/{ingest.path_slug}"
+
+            services.register("streaming.ingest.resolve_rtsp_url", _resolve_camera_ingest_rtsp_url)
+
             try:
+                app_settings = await config_store.get_settings()
+                camera_ingest_by_id = build_camera_ingest_definitions(
+                    app_settings=app_settings,
+                    ingest_settings=settings.camera_ingest,
+                )
+                camera_ingest_paths = [item.path_slug for item in camera_ingest_by_id.values()]
                 await engine_manager.ensure_running(
                     settings.engine,
-                    engine_paths=list_engine_paths_for_host(settings, host_server_id=server_id),
+                    engine_paths=list_engine_paths_for_host(settings, host_server_id=server_id) + camera_ingest_paths,
                     path_auth=list_path_read_auth_for_host(settings, host_server_id=server_id),
+                    path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
                 )
             except Exception:
                 logger.warning("Streaming engine failed to apply settings during extension setup.", exc_info=True)

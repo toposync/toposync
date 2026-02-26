@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
+from toposync.runtime.services import ServiceRegistry
+
 from .compiler import CompiledPipeline
 from .execution_scheduler import ExecutionMode, ExecutionScheduler
 from .operator_registry import OperatorRegistry
@@ -30,6 +32,7 @@ class PipelineExecutionError(RuntimeError):
 @dataclass(slots=True)
 class PipelineRuntimeDependencies:
     config_store: Any | None = None
+    services: ServiceRegistry | None = None
     logger: logging.Logger | None = None
     yolo_backend_factory: Callable[[Any], Any] | None = None
     files_dir: Path | None = None

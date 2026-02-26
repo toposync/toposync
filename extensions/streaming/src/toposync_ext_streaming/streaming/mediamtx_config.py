@@ -56,6 +56,20 @@ def _as_yaml_list(values: list[str]) -> str:
     return "[" + ", ".join(_yaml_single_quote(item) for item in normalized) + "]"
 
 
+def _yaml_value(value) -> str:  # noqa: ANN001
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(int(value))
+    if isinstance(value, float):
+        return str(float(value))
+    if isinstance(value, list):
+        # Keep it minimal: only support list[str] without nested structures.
+        items = [str(item or "").strip() for item in value if str(item or "").strip()]
+        return _as_yaml_list(items)
+    return _yaml_single_quote(str(value or ""))
+
+
 def render_mediamtx_config(
     *,
     bind_host: str,
@@ -64,6 +78,7 @@ def render_mediamtx_config(
     enable_webrtc: bool = False,
     webrtc_ice_servers: list[str] | None = None,
     path_auth: list[MediaMTXPathAuth] | None = None,
+    path_configs: dict[str, dict[str, object]] | None = None,
     api_allow_origins: list[str] | None = None,
     hls_allow_origins: list[str] | None = None,
     webrtc_allow_origins: list[str] | None = None,
@@ -201,7 +216,24 @@ def render_mediamtx_config(
         lines.append("  all_others: {}")
     else:
         for p in unique_paths:
-            lines.append(f"  {p}: {{}}")
+            cfg = (path_configs or {}).get(p) if isinstance(path_configs, dict) else None
+            normalized_cfg = cfg if isinstance(cfg, dict) else {}
+            if not normalized_cfg:
+                lines.append(f"  {p}: {{}}")
+                continue
+
+            lines.append(f"  {p}:")
+            keys = list(normalized_cfg.keys())
+            # Prefer stable and readable ordering for known keys.
+            preferred = ["source", "sourceOnDemand"]
+            ordered_keys: list[str] = []
+            for key in preferred:
+                if key in normalized_cfg and key not in ordered_keys:
+                    ordered_keys.append(key)
+            ordered_keys.extend(sorted([key for key in keys if key not in ordered_keys]))
+            for key in ordered_keys:
+                value = normalized_cfg.get(key)
+                lines.append(f"    {key}: {_yaml_value(value)}")
         lines.append("  all_others: {}")
 
     lines.append("")

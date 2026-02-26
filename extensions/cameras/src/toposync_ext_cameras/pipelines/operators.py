@@ -83,7 +83,7 @@ class MotionGateConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _drop_legacy_fields(cls, values: Any) -> Any:
-        # Aceita graphs antigos sem expor esses campos no schema atual
+        # Accept legacy graphs without exposing those fields in the current schema.
         if isinstance(values, dict):
             values = dict(values)
             values.pop("key_field", None)
@@ -1121,7 +1121,33 @@ async def _resolve_camera_source(
     if config.fps is not None:
         camera_fps = float(config.fps)
     camera_fps = max(1.0, min(60.0, camera_fps))
+    ingest_url = await _maybe_resolve_ingest_rtsp_url(camera_id=camera_id, dependencies=dependencies)
+    if ingest_url:
+        url = ingest_url
     return url, camera_fps, camera_id, str(camera.get("name", "")).strip()
+
+
+async def _maybe_resolve_ingest_rtsp_url(*, camera_id: str, dependencies: PipelineRuntimeDependencies) -> str | None:
+    cid = str(camera_id or "").strip()
+    if not cid:
+        return None
+
+    services = getattr(dependencies, "services", None)
+    call = getattr(services, "call", None)
+    if not callable(call):
+        return None
+
+    try:
+        value = await call("streaming.ingest.resolve_rtsp_url", camera_id=cid)
+    except KeyError:
+        return None
+    except Exception:
+        return None
+
+    if not isinstance(value, str):
+        return None
+    resolved = value.strip()
+    return resolved or None
 
 
 def _apply_rtsp_auth(url: str, username: str, password: str) -> str:

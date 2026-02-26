@@ -243,6 +243,18 @@ class StreamingEngineSettings(BaseModel):
         return _normalize_ice_servers_value(value)
 
 
+class StreamingCameraIngestSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    path_prefix: str = "ingest"
+
+    @field_validator("path_prefix", mode="before")
+    @classmethod
+    def _normalize_path_prefix(cls, value: Any) -> str:
+        return normalize_path_slug(str(value or ""), fallback="ingest")
+
+
 class StreamingEngineSettingsPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -263,6 +275,7 @@ class StreamingExtensionSettings(BaseModel):
 
     transmissions: list[Transmission] = Field(default_factory=list)
     engine: StreamingEngineSettings = Field(default_factory=StreamingEngineSettings)
+    camera_ingest: StreamingCameraIngestSettings = Field(default_factory=StreamingCameraIngestSettings)
 
     @model_validator(mode="after")
     def _validate_uniqueness(self) -> "StreamingExtensionSettings":
@@ -296,6 +309,7 @@ class StreamingSettingsPatchRequest(BaseModel):
 
     transmissions: list[Transmission] | None = None
     engine: StreamingEngineSettingsPatch | None = None
+    camera_ingest: StreamingCameraIngestSettings | None = None
 
 
 class StreamingHealthResponse(BaseModel):

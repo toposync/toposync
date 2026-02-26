@@ -16,6 +16,7 @@ from ..api.models import (
     normalize_streaming_settings,
 )
 from .engine_manager import MediaMtxEngineManager
+from .camera_ingest import build_camera_ingest_definitions, build_camera_ingest_path_configs
 
 
 class DistributedSettingsSync:
@@ -86,10 +87,16 @@ class DistributedSettingsSync:
         if local_normalized != remote_dump:
             await self._config_store.patch_extension_settings(EXTENSION_ID, remote_dump)
 
+        camera_ingest_by_id = build_camera_ingest_definitions(
+            app_settings=local_settings,
+            ingest_settings=remote_settings.camera_ingest,
+        )
         await self._engine_manager.ensure_running(
             remote_settings.engine,
-            engine_paths=list_engine_paths_for_host(remote_settings, host_server_id=self._host_server_id),
+            engine_paths=list_engine_paths_for_host(remote_settings, host_server_id=self._host_server_id)
+            + [item.path_slug for item in camera_ingest_by_id.values()],
             path_auth=list_path_read_auth_for_host(remote_settings, host_server_id=self._host_server_id),
+            path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
         )
         return remote_settings
 

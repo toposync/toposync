@@ -110,7 +110,7 @@ function withBasicAuthInUrl(url: string, auth: BasicAuthCredentials | null): str
 
 function asErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
-  return String(error || "unknown error");
+  return String(error || i18n.t("core.ui.streams.error_unknown", {}, "unknown error"));
 }
 
 function canPlayNativeHls(video: HTMLVideoElement): boolean {
@@ -127,7 +127,7 @@ function waitForIceGatheringComplete(peerConnection: RTCPeerConnection, timeoutM
   return new Promise((resolve, reject) => {
     const timeoutId = window.setTimeout(() => {
       peerConnection.removeEventListener("icegatheringstatechange", onStateChange);
-      reject(new Error("Timed out waiting for ICE gathering."));
+      reject(new Error(i18n.t("core.ui.streams.errors.webrtc_ice_timeout", {}, "Timed out waiting for ICE gathering.")));
     }, Math.max(500, timeoutMs));
     const onStateChange = () => {
       if (peerConnection.iceGatheringState !== "complete") return;
@@ -154,12 +154,12 @@ function waitForPeerConnectionReady(peerConnection: RTCPeerConnection, timeoutMs
     peerConnection.iceConnectionState === "closed";
 
   if (isConnected()) return Promise.resolve();
-  if (isFailed()) return Promise.reject(new Error("WebRTC connection failed."));
+  if (isFailed()) return Promise.reject(new Error(i18n.t("core.ui.streams.errors.webrtc_connection_failed", {}, "WebRTC connection failed.")));
 
   return new Promise((resolve, reject) => {
     const timeoutId = window.setTimeout(() => {
       cleanup();
-      reject(new Error("WebRTC connection timed out."));
+      reject(new Error(i18n.t("core.ui.streams.errors.webrtc_connection_timeout", {}, "WebRTC connection timed out.")));
     }, Math.max(1000, timeoutMs));
 
     const onStateChange = () => {
@@ -170,7 +170,7 @@ function waitForPeerConnectionReady(peerConnection: RTCPeerConnection, timeoutMs
       }
       if (isFailed()) {
         cleanup();
-        reject(new Error("WebRTC connection failed."));
+        reject(new Error(i18n.t("core.ui.streams.errors.webrtc_connection_failed", {}, "WebRTC connection failed.")));
       }
     };
 
@@ -210,6 +210,7 @@ function StreamTilePlayer({
   hlsNativeUrl: string | null;
   active: boolean;
 }): React.ReactElement {
+  const { t } = i18n.useI18n();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
 
@@ -333,7 +334,7 @@ function StreamTilePlayer({
       };
       const onError = () => {
         setStatus("error");
-        const message = "Native HLS playback error.";
+        const message = i18n.t("core.ui.streams.errors.hls_native_error", {}, "Native HLS playback error.");
         setErrorText(message);
         destroyPlayback();
         scheduleRetry(message);
@@ -363,7 +364,7 @@ function StreamTilePlayer({
       const HlsConstructor = hlsModule.default;
       if (!HlsConstructor.isSupported()) {
         setStatus("unsupported");
-        setErrorText("HLS playback is not supported in this browser.");
+        setErrorText(i18n.t("core.ui.streams.errors.hls_unsupported_browser", {}, "HLS playback is not supported in this browser."));
         return;
       }
 
@@ -393,7 +394,9 @@ function StreamTilePlayer({
       hls.on(HlsConstructor.Events.ERROR, (_event, data) => {
         if (!data?.fatal) return;
         setStatus("error");
-        const details = String(data.details || data.type || "hls.js fatal error");
+        const details = String(
+          data.details || data.type || i18n.t("core.ui.streams.errors.hlsjs_fatal", {}, "hls.js fatal error"),
+        );
         setErrorText(details);
         destroyPlayback();
         scheduleRetry(details);
@@ -412,8 +415,8 @@ function StreamTilePlayer({
     };
 
     const startWebRtcPlayback = async (video: HTMLVideoElement): Promise<void> => {
-      if (!webrtcUrl) throw new Error("WebRTC URL is not available.");
-      if (!canUseWebRtc()) throw new Error("WebRTC is not supported in this browser.");
+      if (!webrtcUrl) throw new Error(i18n.t("core.ui.streams.errors.webrtc_url_missing", {}, "WebRTC URL is not available."));
+      if (!canUseWebRtc()) throw new Error(i18n.t("core.ui.streams.errors.webrtc_unsupported_browser", {}, "WebRTC is not supported in this browser."));
 
       setTransport("webrtc");
       const nextPeerConnection = new RTCPeerConnection();
@@ -445,7 +448,7 @@ function StreamTilePlayer({
         const localDescription = nextPeerConnection.localDescription;
         const offerSdpRaw = String(localDescription?.sdp || "");
         if (!offerSdpRaw.trim()) {
-          throw new Error("Failed to create WebRTC SDP offer.");
+          throw new Error(i18n.t("core.ui.streams.errors.webrtc_sdp_offer_failed", {}, "Failed to create WebRTC SDP offer."));
         }
         const offerSdp = normalizeWhepSdp(offerSdpRaw);
 
@@ -469,12 +472,22 @@ function StreamTilePlayer({
           } catch {
             detail = "";
           }
-          const suffix = detail ? ` Response: ${detail.slice(0, 280)}` : "";
-          throw new Error(`WHEP negotiation failed (${response.status}).${suffix}`);
+          const base = i18n.t(
+            "core.ui.streams.errors.whep_negotiation_failed",
+            { status: response.status },
+            "WHEP negotiation failed ({{status}}).",
+          );
+          const snippet = detail ? detail.slice(0, 280) : "";
+          const responseHint = snippet
+            ? i18n.t("core.ui.streams.errors.http_response_snippet", { detail: snippet }, "Response: {{detail}}")
+            : "";
+          throw new Error(responseHint ? `${base} ${responseHint}` : base);
         }
 
         const answerSdpRaw = String(await response.text());
-        if (!answerSdpRaw.trim()) throw new Error("WHEP answer is empty.");
+        if (!answerSdpRaw.trim()) {
+          throw new Error(i18n.t("core.ui.streams.errors.whep_answer_empty", {}, "WHEP answer is empty."));
+        }
         const answerSdp = normalizeWhepSdp(answerSdpRaw);
 
         const locationHeader = response.headers.get("location");
@@ -503,7 +516,7 @@ function StreamTilePlayer({
     };
 
     const startHlsPlayback = async (video: HTMLVideoElement): Promise<void> => {
-      if (!hlsUrl) throw new Error("HLS URL is not available.");
+      if (!hlsUrl) throw new Error(i18n.t("core.ui.streams.errors.hls_url_missing", {}, "HLS URL is not available."));
       if (canPlayNativeHls(video)) {
         await startNativeHlsPlayback(video);
         return;
@@ -527,7 +540,13 @@ function StreamTilePlayer({
           await primeStreamingTransmissionDemand(transmissionId);
         } catch (primeError) {
           // Priming is best-effort; if it fails, fallback/retry will handle it.
-          setErrorText(`Failed to prime stream: ${asErrorMessage(primeError)}`);
+          setErrorText(
+            i18n.t(
+              "core.ui.streams.errors.prime_failed",
+              { error: asErrorMessage(primeError) },
+              "Failed to prime stream: {{error}}",
+            ),
+          );
         }
       }
       if (cancelled) return;
@@ -561,7 +580,11 @@ function StreamTilePlayer({
         } catch (error) {
           const hlsError = asErrorMessage(error);
           const combinedError = webRtcError
-            ? `WebRTC failed: ${webRtcError}. HLS fallback failed: ${hlsError}`
+            ? i18n.t(
+                "core.ui.streams.errors.webrtc_hls_fallback_failed",
+                { webrtcError: webRtcError, hlsError },
+                "WebRTC failed: {{webrtcError}}. HLS fallback failed: {{hlsError}}",
+              )
             : hlsError;
           setStatus("error");
           setErrorText(combinedError);
@@ -571,7 +594,8 @@ function StreamTilePlayer({
         }
       }
 
-      const message = webRtcError || "No supported playback output available.";
+      const message =
+        webRtcError || i18n.t("core.ui.streams.errors.no_supported_playback", {}, "No supported playback output available.");
       setStatus("error");
       setErrorText(message);
       destroyPlayback();
@@ -599,13 +623,37 @@ function StreamTilePlayer({
     };
   }, [active, hlsAuthHeader, hlsNativeUrl, hlsUrl, transmissionId, webrtcAuthHeader, webrtcUrl]);
 
-  const playbackStatusLabel = (() => {
+  const playbackStatusLabel = useMemo(() => {
+    const onlineLabel = t("core.ui.streams.status.online", {}, "online");
+    const waitingLabel = t("core.ui.streams.status.waiting", {}, "waiting");
+    const statusLabel =
+      status === "idle"
+        ? waitingLabel
+        : status === "loading"
+          ? t("core.ui.streams.status.loading", {}, "loading")
+          : status === "error"
+            ? t("core.ui.streams.status.error", {}, "error")
+            : status === "unsupported"
+              ? t("core.ui.streams.status.unsupported", {}, "unsupported")
+              : waitingLabel;
+
+    const transportLabel =
+      transport === "webrtc"
+        ? t("core.ui.streams.transport.webrtc", {}, "WebRTC")
+        : transport === "hls"
+          ? t("core.ui.streams.transport.hls", {}, "HLS")
+          : onlineLabel;
+
     if (status === "playing") {
-      return transport === "none" ? "online" : transport;
+      return transport === "none" ? onlineLabel : transportLabel;
     }
-    if (transport === "none") return status;
-    return `${status} (${transport})`;
-  })();
+    if (transport === "none") return statusLabel;
+    return t(
+      "core.ui.streams.status.with_transport",
+      { status: statusLabel, transport: transportLabel },
+      `${statusLabel} (${transportLabel})`,
+    );
+  }, [status, t, transport]);
 
   const toggleFullscreen = async () => {
     const el = frameRef.current;
@@ -657,34 +705,34 @@ function StreamTilePlayer({
     <div className="streamsPlayerFrame" ref={frameRef}>
       <video ref={videoRef} className="streamsVideo" muted playsInline autoPlay />
 
-      <div className={["streamsTileOverlay", overlayVisible ? "isVisible" : "isHidden"].join(" ")}>
+	      <div className={["streamsTileOverlay", overlayVisible ? "isVisible" : "isHidden"].join(" ")}>
         <div className="streamsTileOverlayLeft" title={label}>
           <span className={["streamsPlaybackDot", `is-${status}`].join(" ")} />
           <span className="streamsTileOverlayTitle">{label}</span>
           <span className="streamsTileOverlayMeta">{playbackStatusLabel}</span>
         </div>
 
-        <div className="streamsTileOverlayActions">
-          <button
-            type="button"
-            className="iconButton streamsTileOverlayButton"
-            aria-label="Picture in picture"
-            title="Picture in picture"
-            onClick={togglePip}
-            disabled={!pipSupported}
-          >
-            <Icon name="window-restore" />
-          </button>
-          <button
-            type="button"
-            className="iconButton streamsTileOverlayButton"
-            aria-label="Fullscreen"
-            title="Fullscreen"
-            onClick={toggleFullscreen}
-            disabled={!fullscreenSupported}
-          >
-            <Icon name="up-right-and-down-left-from-center" />
-          </button>
+	        <div className="streamsTileOverlayActions">
+	          <button
+	            type="button"
+	            className="iconButton streamsTileOverlayButton"
+	            aria-label={t("core.ui.streams.actions.pip", {}, "Picture-in-picture")}
+	            title={t("core.ui.streams.actions.pip", {}, "Picture-in-picture")}
+	            onClick={togglePip}
+	            disabled={!pipSupported}
+	          >
+	            <Icon name="window-restore" />
+	          </button>
+	          <button
+	            type="button"
+	            className="iconButton streamsTileOverlayButton"
+	            aria-label={t("core.ui.streams.actions.fullscreen", {}, "Fullscreen")}
+	            title={t("core.ui.streams.actions.fullscreen", {}, "Fullscreen")}
+	            onClick={toggleFullscreen}
+	            disabled={!fullscreenSupported}
+	          >
+	            <Icon name="up-right-and-down-left-from-center" />
+	          </button>
         </div>
       </div>
 
@@ -878,13 +926,13 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
             let sourceHint: string | null = null;
             let sourceHintTone: "muted" | "warn" | "error" = "muted";
             if (urlLoading) {
-              sourceHint = "Loading stream URL…";
+              sourceHint = t("core.ui.streams.hint.loading_url", {}, "Loading stream URL…");
               sourceHintTone = "muted";
             } else if (urlError) {
               sourceHint = urlError;
               sourceHintTone = "error";
             } else if (!webrtcUrl && !hlsUrl) {
-              sourceHint = "No WebRTC/HLS output configured for this transmission.";
+              sourceHint = t("core.ui.streams.hint.no_outputs", {}, "No WebRTC/HLS output configured for this transmission.");
               sourceHintTone = "warn";
             }
 

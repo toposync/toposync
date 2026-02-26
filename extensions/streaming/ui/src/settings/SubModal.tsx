@@ -5,16 +5,20 @@ export function SubModal({
   title,
   open,
   onClose,
+  closeAriaLabel,
   children,
   panelStyle,
 }: {
   title: string;
   open: boolean;
   onClose: () => void;
+  closeAriaLabel?: string;
   children: React.ReactNode;
   panelStyle?: React.CSSProperties;
 }): React.ReactElement | null {
   if (!open) return null;
+
+  const resolvedCloseAriaLabel = String(closeAriaLabel || "").trim() || "Close";
 
   return createPortal(
     <div
@@ -34,7 +38,7 @@ export function SubModal({
       >
         <div className="modalHeader">
           <div className="modalTitle">{title}</div>
-          <button className="iconButton" type="button" onClick={onClose} aria-label="Close">
+          <button className="iconButton" type="button" onClick={onClose} aria-label={resolvedCloseAriaLabel}>
             <i className="fa-solid fa-xmark" aria-hidden="true" />
           </button>
         </div>
@@ -44,4 +48,3 @@ export function SubModal({
     document.body,
   );
 }
-

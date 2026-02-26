@@ -16,35 +16,47 @@ type WizardStep = "form" | "done";
 
 type PresetOption = {
   id: StreamingWizardPresetId;
-  title: string;
-  description: string;
+  titleKey: string;
+  descriptionKey: string;
+  fallbackTitle: string;
+  fallbackDescription: string;
 };
 
 const PRESET_OPTIONS: PresetOption[] = [
   {
     id: "simple_stream",
-    title: "Simple stream",
-    description: "camera.source + optional fps reducer + stream.write",
+    titleKey: "ext.streaming.wizard.presets.simple_stream.title",
+    descriptionKey: "ext.streaming.wizard.presets.simple_stream.desc",
+    fallbackTitle: "Simple stream",
+    fallbackDescription: "camera.source + optional fps reducer + stream.write",
   },
   {
     id: "motion_gate_stream",
-    title: "Motion gate stream",
-    description: "camera.source + motion gate + fps reducer + stream.write",
+    titleKey: "ext.streaming.wizard.presets.motion_gate_stream.title",
+    descriptionKey: "ext.streaming.wizard.presets.motion_gate_stream.desc",
+    fallbackTitle: "Motion gate stream",
+    fallbackDescription: "camera.source + motion gate + fps reducer + stream.write",
   },
   {
     id: "detection_stream",
-    title: "Detection stream",
-    description: "camera.source + object detection + stream.write",
+    titleKey: "ext.streaming.wizard.presets.detection_stream.title",
+    descriptionKey: "ext.streaming.wizard.presets.detection_stream.desc",
+    fallbackTitle: "Detection stream",
+    fallbackDescription: "camera.source + object detection + stream.write",
   },
   {
     id: "tracking_stream",
-    title: "Tracking stream",
-    description: "camera.source + object tracking + stream.write",
+    titleKey: "ext.streaming.wizard.presets.tracking_stream.title",
+    descriptionKey: "ext.streaming.wizard.presets.tracking_stream.desc",
+    fallbackTitle: "Tracking stream",
+    fallbackDescription: "camera.source + object tracking + stream.write",
   },
   {
     id: "segmentation_stream",
-    title: "Segmentation stream",
-    description: "camera.source + object segmentation + stream.write",
+    titleKey: "ext.streaming.wizard.presets.segmentation_stream.title",
+    descriptionKey: "ext.streaming.wizard.presets.segmentation_stream.desc",
+    fallbackTitle: "Segmentation stream",
+    fallbackDescription: "camera.source + object segmentation + stream.write",
   },
 ];
 
@@ -217,16 +229,26 @@ export function WizardCreatePipelineFromTransmission({
   async function createPipeline(): Promise<void> {
     if (!transmission) return;
     if (!cameraId.trim()) {
-      setCreateError("Selecione uma câmera.");
+      setCreateError(t("ext.streaming.wizard.errors.select_camera", {}, "Select a camera."));
       return;
     }
     if (!knownProcessingServerIds.has(selectedProcessingServerId)) {
-      setCreateError(`Processing server inválido: ${selectedProcessingServerId}`);
+      setCreateError(
+        t(
+          "ext.streaming.wizard.errors.invalid_processing_server",
+          { serverId: selectedProcessingServerId },
+          `Invalid processing server: ${selectedProcessingServerId}`,
+        ),
+      );
       return;
     }
     if (hostMismatch) {
       setCreateError(
-        `A transmissão está no host '${transmissionHostServerId}'. Selecione o mesmo processing server para o pipeline.`,
+        t(
+          "ext.streaming.wizard.errors.host_mismatch",
+          { transmissionHost: transmissionHostServerId, pipelineHost: selectedProcessingServerId },
+          `Transmission is hosted on '${transmissionHostServerId}'. Select the same processing server for the pipeline.`,
+        ),
       );
       return;
     }
@@ -269,6 +291,7 @@ export function WizardCreatePipelineFromTransmission({
     <SubModal
       open={open}
       title={t("ext.streaming.wizard.title", {}, "Criar pipeline para transmissão")}
+      closeAriaLabel={t("core.actions.close", {}, "Close")}
       onClose={() => {
         if (createBusy) return;
         onClose();
@@ -325,11 +348,11 @@ export function WizardCreatePipelineFromTransmission({
                 <select className="input" value={presetId} onChange={(event) => setPresetId(event.target.value as StreamingWizardPresetId)}>
                   {PRESET_OPTIONS.map((preset) => (
                     <option key={preset.id} value={preset.id}>
-                      {preset.title}
+                      {t(preset.titleKey, {}, preset.fallbackTitle)}
                     </option>
                   ))}
                 </select>
-                <div className="label">{selectedPreset.description}</div>
+                <div className="label">{t(selectedPreset.descriptionKey, {}, selectedPreset.fallbackDescription)}</div>
               </div>
 
               <div className="rowWrap" style={{ gap: 10 }}>
@@ -346,7 +369,13 @@ export function WizardCreatePipelineFromTransmission({
                   >
                     {sortedProcessingServers.map((server) => {
                       const serverId = normalizeServerId(server.id);
-                      const label = server.name?.trim() ? `${serverId} (${server.name})` : serverId;
+                      const serverName = String(server.name || "").trim();
+                      const label =
+                        serverId === "local"
+                          ? t("ext.streaming.processing_servers.local_label", {}, "local (this machine)")
+                          : serverName
+                            ? `${serverId} (${serverName})`
+                            : serverId;
                       return (
                         <option key={serverId} value={serverId}>
                           {label}
@@ -362,8 +391,11 @@ export function WizardCreatePipelineFromTransmission({
 
               {hostMismatch ? (
                 <div className="errorText">
-                  A transmissão está em <strong>{transmissionHostServerId}</strong> e o pipeline em{" "}
-                  <strong>{selectedProcessingServerId}</strong>. Eles precisam estar no mesmo host.
+                  {t(
+                    "ext.streaming.wizard.host_mismatch_inline",
+                    { transmissionHost: transmissionHostServerId, pipelineHost: selectedProcessingServerId },
+                    `Transmission is hosted on ${transmissionHostServerId} and pipeline is on ${selectedProcessingServerId}. They must match.`,
+                  )}
                 </div>
               ) : null}
 
@@ -378,18 +410,26 @@ export function WizardCreatePipelineFromTransmission({
                 </div>
                 <div className="field" style={{ width: 180 }}>
                   <label className="label">{t("ext.streaming.wizard.source_backend", {}, "Backend da câmera")}</label>
-                  <select className="input" value={sourceBackend} onChange={(event) => setSourceBackend(event.target.value as "auto" | "opencv" | "ffmpeg")}>
-                    <option value="auto">auto</option>
-                    <option value="opencv">opencv</option>
-                    <option value="ffmpeg">ffmpeg</option>
+                  <select
+                    className="input"
+                    value={sourceBackend}
+                    onChange={(event) => setSourceBackend(event.target.value as "auto" | "opencv" | "ffmpeg")}
+                  >
+                    <option value="auto">{t("ext.streaming.wizard.source_backend.option.auto", {}, "Auto")}</option>
+                    <option value="opencv">{t("ext.streaming.wizard.source_backend.option.opencv", {}, "OpenCV")}</option>
+                    <option value="ffmpeg">{t("ext.streaming.wizard.source_backend.option.ffmpeg", {}, "FFmpeg")}</option>
                   </select>
                 </div>
                 <div className="field" style={{ width: 180 }}>
                   <label className="label">{t("ext.streaming.wizard.bypass_mode", {}, "Bypass mode")}</label>
-                  <select className="input" value={bypassMode} onChange={(event) => setBypassMode(event.target.value as "auto" | "force_on" | "force_off")}>
-                    <option value="auto">auto</option>
-                    <option value="force_on">force_on</option>
-                    <option value="force_off">force_off</option>
+                  <select
+                    className="input"
+                    value={bypassMode}
+                    onChange={(event) => setBypassMode(event.target.value as "auto" | "force_on" | "force_off")}
+                  >
+                    <option value="auto">{t("ext.streaming.wizard.bypass_mode.option.auto", {}, "Auto")}</option>
+                    <option value="force_on">{t("ext.streaming.wizard.bypass_mode.option.force_on", {}, "Force on")}</option>
+                    <option value="force_off">{t("ext.streaming.wizard.bypass_mode.option.force_off", {}, "Force off")}</option>
                   </select>
                 </div>
               </div>
@@ -398,8 +438,8 @@ export function WizardCreatePipelineFromTransmission({
                 <div className="field" style={{ width: 180 }}>
                   <label className="label">{t("ext.streaming.wizard.resize_mode", {}, "Resize mode")}</label>
                   <select className="input" value={resizeMode} onChange={(event) => setResizeMode(event.target.value as "contain" | "none")}>
-                    <option value="contain">contain</option>
-                    <option value="none">none</option>
+                    <option value="contain">{t("ext.streaming.wizard.resize_mode.option.contain", {}, "Contain")}</option>
+                    <option value="none">{t("ext.streaming.wizard.resize_mode.option.none", {}, "No resize")}</option>
                   </select>
                 </div>
 
@@ -472,7 +512,9 @@ export function WizardCreatePipelineFromTransmission({
               <div className="modalSectionTitle" style={{ marginBottom: 6 }}>
                 {t("ext.streaming.wizard.done_title", {}, "Pipeline criado")}
               </div>
-              <div className="cardMeta">Name: {created.pipeline_name}</div>
+              <div className="cardMeta">
+                {t("ext.streaming.wizard.pipeline_created_name", {}, "Pipeline")}: {created.pipeline_name}
+              </div>
               {Array.isArray(created.warnings) && created.warnings.length > 0 ? (
                 <div className="cardMeta" style={{ marginTop: 8 }}>
                   {created.warnings.join(" ")}

@@ -367,7 +367,6 @@ function StreamingSettingsPanelContent({
       const payload = await postEngineAction(action);
       setEngineStatus(payload);
       void fetchSettingsData();
-      void fetchRuntimeData();
     } catch (error) {
       setEngineError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -382,7 +381,6 @@ function StreamingSettingsPanelContent({
       const payload = await postEngineDownload();
       setEngineStatus(payload);
       void fetchSettingsData();
-      void fetchRuntimeData();
     } catch (error) {
       setEngineError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -426,9 +424,17 @@ function StreamingSettingsPanelContent({
     try {
       const hostServerId = normalizeServerId(newTransmissionHostServerId);
       if (!knownProcessingServerIds.has(hostServerId)) {
-        throw new Error(`Host server inválido: ${hostServerId}`);
+        setCreateError(
+          t(
+            "ext.streaming.errors.invalid_host_server",
+            { serverId: hostServerId },
+            `Invalid host server: ${hostServerId}`,
+          ),
+        );
+        return;
       }
-      const suggestedName = newTransmissionName.trim() || "Transmission";
+      const suggestedName =
+        newTransmissionName.trim() || t("ext.streaming.transmissions.default_name", {}, "Transmission");
       const suggestedPath = slugifyPath(newTransmissionPath.trim() || suggestedName) || "stream";
 
       const payload = await createTransmission({
@@ -457,7 +463,6 @@ function StreamingSettingsPanelContent({
       setNewTransmissionName("");
       setNewTransmissionPath("");
       setNewTransmissionHostServerId("local");
-      void fetchRuntimeData();
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -535,7 +540,14 @@ function StreamingSettingsPanelContent({
     try {
       const hostServerId = normalizeServerId(transmissionDraft.host_server_id);
       if (!knownProcessingServerIds.has(hostServerId)) {
-        throw new Error(`Host server inválido: ${hostServerId}`);
+        setTransmissionDraftError(
+          t(
+            "ext.streaming.errors.invalid_host_server",
+            { serverId: hostServerId },
+            `Invalid host server: ${hostServerId}`,
+          ),
+        );
+        return;
       }
       const payload: Transmission = {
         ...transmissionDraft,
@@ -547,7 +559,6 @@ function StreamingSettingsPanelContent({
       setTransmissionDraft(deepClone(updated));
       setTransmissionDraftDirty(false);
       void loadUrls(updated.id);
-      void fetchRuntimeData();
     } catch (error) {
       setTransmissionDraftError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -571,7 +582,6 @@ function StreamingSettingsPanelContent({
       setTransmissionDraft(null);
       setTransmissionDraftDirty(false);
       setConfirmDeleteOpen(false);
-      void fetchRuntimeData();
     } catch (error) {
       setDeleteError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -672,12 +682,21 @@ function StreamingSettingsPanelContent({
 
           {engineStatus?.urls?.rtsp_url ? (
             <div className="cardMeta" style={{ marginTop: 6 }}>
-              RTSP (test): {engineStatus.urls.rtsp_url}
+              {t("ext.streaming.engine.test_rtsp", {}, "RTSP (test)")}: {engineStatus.urls.rtsp_url}
             </div>
           ) : null}
 
-          {engineStatus?.urls?.hls_url ? <div className="cardMeta">HLS (test): {engineStatus.urls.hls_url}</div> : null}
-          {engineStatus?.urls?.webrtc_url ? <div className="cardMeta">WebRTC/WHEP (test): {engineStatus.urls.webrtc_url}</div> : null}
+          {engineStatus?.urls?.hls_url ? (
+            <div className="cardMeta">
+              {t("ext.streaming.engine.test_hls", {}, "HLS (test)")}: {engineStatus.urls.hls_url}
+            </div>
+          ) : null}
+
+          {engineStatus?.urls?.webrtc_url ? (
+            <div className="cardMeta">
+              {t("ext.streaming.engine.test_webrtc", {}, "WebRTC/WHEP (test)")}: {engineStatus.urls.webrtc_url}
+            </div>
+          ) : null}
 
           {Array.isArray(engineStatus?.warnings) && engineStatus.warnings.length > 0 ? (
             <div className="cardMeta" style={{ marginTop: 6 }}>
@@ -758,7 +777,7 @@ function StreamingSettingsPanelContent({
 
               <div className="streamingFormGrid streamingFormGridEnginePorts" style={{ marginTop: 10 }}>
                 <div className="field">
-                  <label className="label">RTSP port</label>
+                  <label className="label">{t("ext.streaming.engine.port_rtsp", {}, "RTSP port")}</label>
                   <input
                     className="input"
                     value={String(engineSettingsDraft.preferred_ports?.rtsp ?? "")}
@@ -773,7 +792,7 @@ function StreamingSettingsPanelContent({
                   />
                 </div>
                 <div className="field">
-                  <label className="label">HLS port</label>
+                  <label className="label">{t("ext.streaming.engine.port_hls", {}, "HLS port")}</label>
                   <input
                     className="input"
                     value={String(engineSettingsDraft.preferred_ports?.hls ?? "")}
@@ -788,7 +807,7 @@ function StreamingSettingsPanelContent({
                   />
                 </div>
                 <div className="field">
-                  <label className="label">WebRTC port</label>
+                  <label className="label">{t("ext.streaming.engine.port_webrtc", {}, "WebRTC port")}</label>
                   <input
                     className="input"
                     value={String(engineSettingsDraft.preferred_ports?.webrtc ?? "")}
@@ -803,7 +822,7 @@ function StreamingSettingsPanelContent({
                   />
                 </div>
                 <div className="field">
-                  <label className="label">API port</label>
+                  <label className="label">{t("ext.streaming.engine.port_api", {}, "API port")}</label>
                   <input
                     className="input"
                     value={String(engineSettingsDraft.preferred_ports?.api ?? "")}
@@ -820,7 +839,9 @@ function StreamingSettingsPanelContent({
               </div>
 
               <div className="field" style={{ marginTop: 10 }}>
-                <label className="label">STUN/TURN servers (optional, one per line)</label>
+                <label className="label">
+                  {t("ext.streaming.engine.ice_servers_label", {}, "STUN/TURN servers (optional, one per line)")}
+                </label>
                 <textarea
                   className="input"
                   style={{ minHeight: 84, padding: "8px 10px" }}
@@ -835,7 +856,11 @@ function StreamingSettingsPanelContent({
                   }}
                 />
                 <div className="cardMeta" style={{ marginTop: 6 }}>
-                  Use somente quando precisar atravessar NAT. Em LAN simples, deixe vazio.
+                  {t(
+                    "ext.streaming.engine.ice_servers_hint",
+                    {},
+                    "Use only when you need to traverse NAT. On a simple LAN, leave it empty.",
+                  )}
                 </div>
               </div>
 
@@ -893,7 +918,11 @@ function StreamingSettingsPanelContent({
 
           {transmissionsLoading ? <div className="settingsStatusMuted" style={{ marginTop: 10 }}>{t("ext.streaming.transmissions.loading", {}, "Carregando…")}</div> : null}
           {transmissionsError ? <div className="errorText" style={{ marginTop: 10 }}>{transmissionsError}</div> : null}
-          {processingServersLoading ? <div className="settingsStatusMuted" style={{ marginTop: 10 }}>Carregando processing servers…</div> : null}
+          {processingServersLoading ? (
+            <div className="settingsStatusMuted" style={{ marginTop: 10 }}>
+              {t("ext.streaming.processing_servers.loading", {}, "Loading processing servers…")}
+            </div>
+          ) : null}
           {processingServersError ? <div className="errorText" style={{ marginTop: 10 }}>{processingServersError}</div> : null}
 
           {filteredTransmissions.length === 0 && !transmissionsLoading ? (
@@ -924,7 +953,13 @@ function StreamingSettingsPanelContent({
               {filteredTransmissions.map((item) => {
                 const selected = item.id === activeTransmissionId;
                 const name = String(item.name || "").trim() || String(item.path || "").trim() || item.id;
-                const meta = `host: ${normalizeServerId(item.host_server_id)} • path: ${item.path || "-"} • outputs: ${Array.isArray(item.outputs) ? item.outputs.length : 0}`;
+                const hostServerId = normalizeServerId(item.host_server_id);
+                const outputCount = Array.isArray(item.outputs) ? item.outputs.length : 0;
+                const meta = t(
+                  "ext.streaming.transmissions.meta_line",
+                  { host: hostServerId, path: item.path || "-", outputs: outputCount },
+                  `host: ${hostServerId} • path: ${item.path || "-"} • outputs: ${outputCount}`,
+                );
                 return (
                   <button
                     key={item.id}
@@ -941,7 +976,14 @@ function StreamingSettingsPanelContent({
                           {meta}
                         </div>
                       </div>
-                      {!item.enabled ? <span className="pillBadge" title="Disabled">off</span> : null}
+                      {!item.enabled ? (
+                        <span
+                          className="pillBadge"
+                          title={t("ext.streaming.transmissions.badge_disabled_title", {}, "Disabled")}
+                        >
+                          {t("ext.streaming.transmissions.badge_disabled", {}, "off")}
+                        </span>
+                      ) : null}
                     </div>
                   </button>
                 );
@@ -983,7 +1025,14 @@ function StreamingSettingsPanelContent({
                 </div>
 
                 <div className="rowWrap" style={{ gap: 10, justifyContent: "flex-end" }}>
-                  {transmissionDraftDirty ? <span className="pillBadge" title="Unsaved changes">edited</span> : null}
+                  {transmissionDraftDirty ? (
+                    <span
+                      className="pillBadge"
+                      title={t("ext.streaming.transmissions.badge_unsaved_title", {}, "Unsaved changes")}
+                    >
+                      {t("ext.streaming.transmissions.badge_unsaved", {}, "pending")}
+                    </span>
+                  ) : null}
                   <button className="chipButton" type="button" disabled={!transmissionDraftDirty || transmissionDraftBusy} onClick={discardDraftChanges}>
                     {t("ext.streaming.transmissions.discard", {}, "Descartar")}
                   </button>
@@ -1055,7 +1104,13 @@ function StreamingSettingsPanelContent({
                       >
                         {processingServers.map((server) => {
                           const serverId = normalizeServerId(server.id);
-                          const label = server.name?.trim() ? `${serverId} (${server.name})` : serverId;
+                          const serverName = String(server.name || "").trim();
+                          const label =
+                            serverId === "local"
+                              ? t("ext.streaming.processing_servers.local_label", {}, "local (this machine)")
+                              : serverName
+                                ? `${serverId} (${serverName})`
+                                : serverId;
                           return (
                             <option key={serverId} value={serverId}>
                               {label}
@@ -1080,8 +1135,8 @@ function StreamingSettingsPanelContent({
                         value={transmissionDraft.placeholder ?? "gray"}
                         onChange={(event) => updateDraft({ placeholder: event.target.value as "gray" | "black" })}
                       >
-                        <option value="gray">gray</option>
-                        <option value="black">black</option>
+                        <option value="gray">{t("ext.streaming.transmissions.placeholder.gray", {}, "Gray")}</option>
+                        <option value="black">{t("ext.streaming.transmissions.placeholder.black", {}, "Black")}</option>
                       </select>
                     </div>
 
@@ -1094,15 +1149,23 @@ function StreamingSettingsPanelContent({
                           updateDraft({ arbitration: event.target.value as "latest" | "priority_latest" })
                         }
                       >
-                        <option value="priority_latest">priority_latest</option>
-                        <option value="latest">latest</option>
+                        <option value="priority_latest">
+                          {t("ext.streaming.transmissions.arbitration.priority_latest", {}, "Priority, then latest")}
+                        </option>
+                        <option value="latest">
+                          {t("ext.streaming.transmissions.arbitration.latest", {}, "Latest writer wins")}
+                        </option>
                       </select>
                     </div>
                   </div>
 
                   {!knownProcessingServerIds.has(normalizeServerId(transmissionDraft.host_server_id)) ? (
                     <div className="errorText" style={{ marginTop: 10 }}>
-                      Host server não existe mais. Selecione outro antes de salvar.
+                      {t(
+                        "ext.streaming.transmissions.host_server_missing",
+                        {},
+                        "This host server no longer exists. Select another one before saving.",
+                      )}
                     </div>
                   ) : null}
                 </div>
@@ -1123,13 +1186,13 @@ function StreamingSettingsPanelContent({
                     </div>
                     <div className="rowWrap" style={{ gap: 8, justifyContent: "flex-end" }}>
                       <button className="chipButton" type="button" onClick={() => addDraftOutput("hls")}>
-                        + HLS
+                        {t("ext.streaming.outputs.add_hls", {}, "+ HLS")}
                       </button>
                       <button className="chipButton" type="button" onClick={() => addDraftOutput("rtsp")}>
-                        + RTSP
+                        {t("ext.streaming.outputs.add_rtsp", {}, "+ RTSP")}
                       </button>
                       <button className="chipButton" type="button" onClick={() => addDraftOutput("webrtc")}>
-                        + WebRTC
+                        {t("ext.streaming.outputs.add_webrtc", {}, "+ WebRTC")}
                       </button>
                     </div>
                   </div>
@@ -1153,7 +1216,9 @@ function StreamingSettingsPanelContent({
                                       ({resolution.width ?? "-"}x{resolution.height ?? "-"})
                                     </span>
                                   </div>
-                                  <div className="settingsListItemMeta">Output id: {output.id}</div>
+                                  <div className="settingsListItemMeta">
+                                    {t("ext.streaming.outputs.output_id", {}, "Output ID")}: {output.id}
+                                  </div>
                                 </div>
                                 <div className="rowWrap" style={{ gap: 10, justifyContent: "flex-end" }}>
                                   <label className="rowWrap" style={{ gap: 8 }}>
@@ -1180,9 +1245,9 @@ function StreamingSettingsPanelContent({
                                       updateDraftOutput(output.id, { protocol: event.target.value as "hls" | "rtsp" | "webrtc" })
                                     }
                                   >
-                                    <option value="hls">hls</option>
-                                    <option value="rtsp">rtsp</option>
-                                    <option value="webrtc">webrtc</option>
+                                    <option value="hls">HLS</option>
+                                    <option value="rtsp">RTSP</option>
+                                    <option value="webrtc">WebRTC</option>
                                   </select>
                                 </div>
 
@@ -1257,9 +1322,13 @@ function StreamingSettingsPanelContent({
                                       updateDraftOutput(output.id, { latency_profile: event.target.value as "normal" | "low" | "ultra_low" })
                                     }
                                   >
-                                    <option value="normal">normal</option>
-                                    <option value="low">low</option>
-                                    <option value="ultra_low">ultra_low</option>
+                                    <option value="normal">
+                                      {t("ext.streaming.outputs.latency_option.normal", {}, "Normal")}
+                                    </option>
+                                    <option value="low">{t("ext.streaming.outputs.latency_option.low", {}, "Low")}</option>
+                                    <option value="ultra_low">
+                                      {t("ext.streaming.outputs.latency_option.ultra_low", {}, "Ultra low")}
+                                    </option>
                                   </select>
                                 </div>
                               </div>
@@ -1376,15 +1445,22 @@ function StreamingSettingsPanelContent({
                             <div className="settingsListItemTitle" style={{ marginBottom: 6 }}>
                               {item.protocol.toUpperCase()}
                             </div>
-                            <div className="cardMeta">Engine path: {item.resolved_engine_path}</div>
+                            <div className="cardMeta">
+                              {t("ext.streaming.transmissions.engine_path", {}, "Engine path")}: {item.resolved_engine_path}
+                            </div>
                             {item.requires_auth ? (
                               <div className="cardMeta" style={{ marginTop: 6 }}>
-                                Requer autenticação
-                                {item.auth_username ? ` (usuário: ${item.auth_username})` : ""}.
+                                {item.auth_username
+                                  ? t(
+                                      "ext.streaming.transmissions.auth_required_user",
+                                      { username: item.auth_username },
+                                      `Requires authentication (username: ${item.auth_username}).`,
+                                    )
+                                  : t("ext.streaming.transmissions.auth_required", {}, "Requires authentication.")}
                               </div>
                             ) : (
                               <div className="cardMeta" style={{ marginTop: 6 }}>
-                                Acesso sem autenticação.
+                                {t("ext.streaming.transmissions.auth_not_required", {}, "No authentication.")}
                               </div>
                             )}
                             <div className="rowWrap" style={{ gap: 8, marginTop: 10 }}>
@@ -1392,7 +1468,7 @@ function StreamingSettingsPanelContent({
                               <button
                                 className="iconButton"
                                 type="button"
-                                aria-label="Copy URL"
+                                aria-label={t("ext.streaming.transmissions.copy_url", {}, "Copy URL")}
                                 onClick={() => {
                                   void copyToClipboard(item.url).then(() => {
                                     setCopiedUrl(item.url);
@@ -1430,6 +1506,7 @@ function StreamingSettingsPanelContent({
       <SubModal
         open={createModalOpen}
         title={t("ext.streaming.transmissions.create", {}, "Criar transmissão")}
+        closeAriaLabel={t("core.actions.close", {}, "Close")}
         onClose={() => {
           if (createBusy) return;
           setCreateModalOpen(false);
@@ -1460,7 +1537,13 @@ function StreamingSettingsPanelContent({
             >
               {processingServers.map((server) => {
                 const serverId = normalizeServerId(server.id);
-                const label = server.name?.trim() ? `${serverId} (${server.name})` : serverId;
+                const serverName = String(server.name || "").trim();
+                const label =
+                  serverId === "local"
+                    ? t("ext.streaming.processing_servers.local_label", {}, "local (this machine)")
+                    : serverName
+                      ? `${serverId} (${serverName})`
+                      : serverId;
                 return (
                   <option key={serverId} value={serverId}>
                     {label}
@@ -1504,6 +1587,7 @@ function StreamingSettingsPanelContent({
       <SubModal
         open={confirmDiscardOpen}
         title={t("ext.streaming.transmissions.discard_title", {}, "Descartar alterações?")}
+        closeAriaLabel={t("core.actions.close", {}, "Close")}
         onClose={() => {
           setConfirmDiscardOpen(false);
           setPendingTransmissionId(null);
@@ -1561,6 +1645,7 @@ function StreamingSettingsPanelContent({
       <SubModal
         open={confirmDeleteOpen}
         title={t("ext.streaming.transmissions.delete_title", {}, "Excluir transmissão")}
+        closeAriaLabel={t("core.actions.close", {}, "Close")}
         onClose={() => {
           if (deleteBusy) return;
           setConfirmDeleteOpen(false);

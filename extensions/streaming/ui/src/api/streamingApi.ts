@@ -46,7 +46,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 async function parseErrorResponse(response: Response): Promise<string> {
-  const fallback = `Request failed: ${response.status}`;
+  const fallback = `HTTP ${response.status}`;
   try {
     const json = await response.json();
     if (!isRecord(json)) return fallback;

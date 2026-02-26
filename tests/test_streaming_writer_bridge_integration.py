@@ -14,6 +14,8 @@ import pytest
 from toposync.runtime.pipelines.runtime import Lifecycle
 from toposync_ext_streaming.api.models import EXTENSION_ID
 from toposync_ext_streaming.streaming.engine_manager import MediaMtxEngineManager
+from toposync_ext_streaming.streaming.mediamtx_binary import find_installed_mediamtx_binary
+from toposync_ext_streaming.streaming.platform import detect_mediamtx_platform
 from toposync_ext_streaming.streaming.publisher_manager import PublisherManager
 from toposync_ext_streaming.streaming.runtime_state import TransmissionRuntimeState
 from toposync_ext_streaming.streaming.writer_bridge import StreamWriterBridge
@@ -35,6 +37,15 @@ class _ConfigStoreStub:
 def test_writer_bridge_publishes_hls_playlist(tmp_path) -> None:
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg not available in PATH")
+
+    try:
+        platform = detect_mediamtx_platform()
+        if find_installed_mediamtx_binary(platform=platform) is None:
+            pytest.skip(
+                "mediamtx not installed (set TOPOSYNC_STREAMING_ENGINE_PATH or use /api/streams/engine/download)"
+            )
+    except Exception as exc:
+        pytest.skip(f"mediamtx platform unsupported: {exc}")
 
     asyncio.run(_run_writer_bridge_scenario(tmp_path))
 

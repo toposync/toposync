@@ -83,6 +83,10 @@ export async function postEngineAction(action: EngineAction): Promise<EngineStat
   return requestJson<EngineStatusResponse>(`/api/streams/engine/${action}`, { method: "POST" });
 }
 
+export async function postEngineDownload(): Promise<EngineStatusResponse> {
+  return requestJson<EngineStatusResponse>("/api/streams/engine/download", { method: "POST" });
+}
+
 export async function fetchStreamingSettings(signal?: AbortSignal): Promise<StreamingExtensionSettings> {
   return requestJson<StreamingExtensionSettings>("/api/streams/settings", { signal });
 }

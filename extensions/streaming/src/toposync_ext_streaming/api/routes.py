@@ -23,7 +23,7 @@ from toposync.runtime.pipelines.compiler import GraphCompileError, PipelineGraph
 from toposync.runtime.pipelines.templates import safe_pipeline_name
 
 from ..streaming.engine_manager import MediaMtxEngineManager
-from ..streaming.mediamtx_binary import extract_mediamtx_binary
+from ..streaming.mediamtx_binary import extract_mediamtx_binary, find_installed_mediamtx_binary
 from ..streaming.platform import detect_mediamtx_platform
 from ..streaming.publisher_manager import PublisherManager
 from ..streaming.runtime_state import TransmissionRuntimeState
@@ -602,15 +602,20 @@ def create_streaming_router() -> APIRouter:
         try:
             platform_info = detect_mediamtx_platform()
             platform = platform_info.key
-            binary_path = str(
-                extract_mediamtx_binary(
-                    data_dir=_config_store(request).paths.data_dir,
-                    platform=platform_info,
-                    version=settings.engine.mediamtx_version,
-                )
+            installed = find_installed_mediamtx_binary(
+                platform=platform_info,
+                version=settings.engine.mediamtx_version,
             )
+            if installed is not None:
+                binary_path = str(installed)
         except Exception:
             pass
+
+        if settings.engine.enabled and not status.running and not binary_path:
+            warnings.append(
+                "MediaMTX binary is not installed yet. Starting the engine will download it (internet required), "
+                "or set TOPOSYNC_STREAMING_ENGINE_PATH to a local path."
+            )
 
         return StreamingEngineStatusResponse(
             running=status.running,
@@ -633,6 +638,29 @@ def create_streaming_router() -> APIRouter:
             },
             warnings=warnings,
         )
+
+    @router.post("/engine/download", response_model=StreamingEngineStatusResponse)
+    async def engine_download(request: Request) -> StreamingEngineStatusResponse:
+        _require_auth(
+            request,
+            action="core:extension:settings:write",
+            resource_type="core:extension",
+            resource_selector=EXTENSION_ID,
+        )
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+
+        try:
+            platform = detect_mediamtx_platform()
+            extract_mediamtx_binary(
+                data_dir=config_store.paths.data_dir,
+                platform=platform,
+                version=settings.engine.mediamtx_version,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to download MediaMTX engine: {exc}") from exc
+
+        return await engine_status(request)
 
     @router.post("/engine/start", response_model=StreamingEngineStatusResponse)
     async def engine_start(request: Request) -> StreamingEngineStatusResponse:

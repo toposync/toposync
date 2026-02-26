@@ -28,3 +28,7 @@ ignore/
 test-results/
 playwright-report/
 yolo*.pt
+
+# Streaming extension engines are downloaded at runtime.
+extensions/streaming/src/toposync_ext_streaming/bin/mediamtx/**/mediamtx*
+extensions/streaming/src/toposync_ext_streaming/bin/ffmpeg/**/ffmpeg*

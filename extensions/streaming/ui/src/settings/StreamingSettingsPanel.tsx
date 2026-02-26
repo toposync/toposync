@@ -13,6 +13,7 @@ import {
   fetchTransmissions,
   patchStreamingSettings,
   postEngineAction,
+  postEngineDownload,
   updateTransmission,
 } from "../api/streamingApi";
 import { STREAMING_EXTENSION_ID } from "../constants";
@@ -374,6 +375,21 @@ function StreamingSettingsPanelContent({
     }
   }
 
+  async function downloadEngine(): Promise<void> {
+    setEngineBusy(true);
+    setEngineError(null);
+    try {
+      const payload = await postEngineDownload();
+      setEngineStatus(payload);
+      void fetchSettingsData();
+      void fetchRuntimeData();
+    } catch (error) {
+      setEngineError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setEngineBusy(false);
+    }
+  }
+
   async function applyEngineSettings(): Promise<void> {
     if (!engineSettingsDraft) return;
     setEngineSettingsBusy(true);
@@ -689,6 +705,10 @@ function StreamingSettingsPanelContent({
               onClick={() => void runEngineAction("start")}
             >
               {t("ext.streaming.engine.start", {}, "Start")}
+            </button>
+            <button className="chipButton" type="button" disabled={engineBusy} onClick={() => void downloadEngine()}>
+              <i className="fa-solid fa-download" aria-hidden="true" />{" "}
+              {t("ext.streaming.engine.download", {}, "Download engine")}
             </button>
             <button
               className="chipButton"

@@ -1312,9 +1312,8 @@ textarea {
 
 .streamsRoot {
   background:
-    radial-gradient(900px 640px at 16% 8%, color-mix(in srgb, var(--color-accent-teal) 12%, transparent), transparent 62%),
-    radial-gradient(900px 640px at 86% 92%, color-mix(in srgb, var(--color-accent-blue) 11%, transparent), transparent 64%),
-    linear-gradient(165deg, var(--color-application-background), var(--color-application-background-secondary));
+    radial-gradient(circle at center, transparent 48%, var(--color-viewport3d-vignette)),
+    linear-gradient(160deg, var(--color-viewport3d-background-start), var(--color-viewport3d-background-end));
 }
 
 .streamsGrid {
@@ -1339,7 +1338,9 @@ textarea {
   min-height: 0;
   border-radius: 0;
   border: 0;
-  background: #000;
+  background:
+    radial-gradient(circle at center, transparent 48%, var(--color-viewport3d-vignette)),
+    linear-gradient(160deg, var(--color-viewport3d-background-start), var(--color-viewport3d-background-end));
   box-shadow: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -1350,7 +1351,9 @@ textarea {
 
 .streamsTileEmpty {
   border: 0;
-  background: #000;
+  background:
+    radial-gradient(circle at center, transparent 48%, var(--color-viewport3d-vignette)),
+    linear-gradient(160deg, var(--color-viewport3d-background-start), var(--color-viewport3d-background-end));
 }
 
 .streamsTileHeader {
@@ -1413,7 +1416,7 @@ textarea {
   flex: 1;
   min-height: 0;
   border-top: 0;
-  background: #000;
+  background: transparent;
 }
 
 .streamsVideo {
@@ -1421,14 +1424,16 @@ textarea {
   height: 100%;
   object-fit: contain;
   object-position: center;
-  background: #000;
+  background:
+    radial-gradient(circle at center, transparent 48%, var(--color-viewport3d-vignette)),
+    linear-gradient(160deg, var(--color-viewport3d-background-start), var(--color-viewport3d-background-end));
   display: block;
 }
 
 .streamsTileOverlay {
   position: absolute;
-  right: var(--space-2);
-  bottom: var(--space-2);
+  left: 50%;
+  top: 50%;
   max-width: calc(100% - (var(--space-2) * 2));
   min-height: 34px;
   border-radius: var(--radius-pill);
@@ -1444,6 +1449,7 @@ textarea {
   backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate));
   -webkit-backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate));
   transition: opacity 200ms ease, transform 200ms ease, filter 200ms ease;
+  transform: translate(-50%, -50%);
   z-index: 3;
 }
 
@@ -1451,14 +1457,14 @@ textarea {
   opacity: 1;
   pointer-events: auto;
   filter: blur(0);
-  transform: translateY(0);
+  transform: translate(-50%, -50%);
 }
 
 .streamsTileOverlay.isHidden {
   opacity: 0;
   pointer-events: none;
   filter: blur(1px);
-  transform: translateY(6px);
+  transform: translate(-50%, -50%) translateY(6px);
 }
 
 .streamsTileOverlayLeft {

@@ -114,7 +114,6 @@ class Transmission(BaseModel):
 
 
 def resolve_output_engine_path(transmission: Transmission, output: TransmissionOutput) -> str:
-    # Keep compatibility with writer_bridge (optional per-output path).
     enabled_outputs = [item for item in transmission.outputs if bool(getattr(item, "enabled", True))]
     output_count = len(enabled_outputs) if enabled_outputs else 1
 
@@ -124,7 +123,91 @@ def resolve_output_engine_path(transmission: Transmission, output: TransmissionO
         return direct
     if output_count <= 1:
         return transmission.path
+    if _outputs_can_share_engine_path(enabled_outputs):
+        return transmission.path
     return normalize_path_slug(f"{transmission.path}-{output.id}", fallback=transmission.path)
+
+
+def _outputs_can_share_engine_path(outputs: list[TransmissionOutput]) -> bool:
+    if len(outputs) <= 1:
+        return True
+
+    encoding_keys: set[tuple[Any, ...]] = set()
+    auth_keys: set[tuple[Any, ...]] = set()
+    for output in outputs:
+        payload = output.model_dump(mode="python")
+        direct = normalize_path_slug(str(payload.get("path") or ""), fallback="")
+        if direct:
+            return False
+
+        encoding_keys.add(_normalize_output_encoding_key(payload))
+        auth_keys.add(_normalize_output_auth_key(output))
+
+    return len(encoding_keys) == 1 and len(auth_keys) == 1
+
+
+def _normalize_output_encoding_key(payload: dict[str, Any]) -> tuple[Any, ...]:
+    width = payload.get("width")
+    height = payload.get("height")
+    resolution = payload.get("resolution") if isinstance(payload.get("resolution"), dict) else {}
+    if width is None:
+        width = resolution.get("width")
+    if height is None:
+        height = resolution.get("height")
+
+    resolved_width = max(16, int(_int_like(width) or 0)) if _int_like(width) else 1280
+    resolved_height = max(16, int(_int_like(height) or 0)) if _int_like(height) else 720
+
+    fps_raw = payload.get("fps_limit")
+    if fps_raw is None:
+        fps_raw = payload.get("fps")
+    resolved_fps = max(1, int(_int_like(fps_raw) or 0)) if _int_like(fps_raw) else 12
+
+    bitrate_raw = payload.get("bitrate_kbps")
+    resolved_bitrate = int(_int_like(bitrate_raw) or 0) if _int_like(bitrate_raw) else None
+
+    latency_profile = str(payload.get("latency_profile") or "normal").strip().lower()
+    if latency_profile not in {"normal", "low", "ultra_low"}:
+        latency_profile = "normal"
+
+    resize_mode = str(payload.get("resize_mode") or "contain").strip().lower()
+    if resize_mode not in {"contain", "none"}:
+        resize_mode = "contain"
+
+    return (
+        resolved_width,
+        resolved_height,
+        resolved_fps,
+        resolved_bitrate,
+        latency_profile,
+        resize_mode,
+    )
+
+
+def _normalize_output_auth_key(output: TransmissionOutput) -> tuple[Any, ...]:
+    auth = output.authentication
+    if auth is None or not bool(getattr(auth, "enabled", False)):
+        return (False, "", "")
+
+    username = str(getattr(auth, "username", "") or "").strip()
+    password = str(getattr(auth, "password", "") or "").strip()
+    return (True, username, password)
+
+
+def _int_like(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(value)
+    except Exception:
+        try:
+            return int(float(str(value).strip()))
+        except Exception:
+            return None
 
 
 class StreamingPreferredPorts(BaseModel):

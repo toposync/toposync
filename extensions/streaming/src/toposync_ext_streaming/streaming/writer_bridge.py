@@ -95,17 +95,18 @@ class StreamWriterBridge:
 
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
-        self._next_due_by_output: dict[str, float] = {}
-        self._idle_since_by_output: dict[str, float] = {}
+        self._next_due_by_publisher: dict[str, float] = {}
+        self._idle_since_by_publisher: dict[str, float] = {}
         self._last_settings_load_monotonic = 0.0
         self._cached_engine: StreamingEngineSettings | None = None
         self._cached_targets: tuple[ResolvedOutputTarget, ...] = ()
         self._cached_path_auth_by_path: dict[str, tuple[str, str]] = {}
+        self._enable_bypass = bool(int(str(os.getenv("TOPOSYNC_STREAMING_ENABLE_BYPASS", "0") or "0").strip() or "0"))
         self._cached_bypass_by_writer: dict[str, WriterBypassCandidate] = {}
         self._cached_viewer_count_by_path: dict[str, int] = {}
         self._last_viewer_load_monotonic = 0.0
-        self._bypass_mode_by_output: dict[str, str] = {}
-        self._primed_demand_until_by_output: dict[str, float] = {}
+        self._bypass_mode_by_publisher: dict[str, str] = {}
+        self._primed_demand_until_by_publisher: dict[str, float] = {}
         # Synthetic demand derived from MediaMTX logs for external RTSP clients that get 404 when there is no
         # publisher yet. Keep a short window to allow client retries to succeed.
         self._no_stream_hint_until_by_path: dict[str, float] = {}
@@ -133,12 +134,12 @@ class StreamWriterBridge:
             except Exception:
                 self._logger.exception("Streaming writer bridge stopped with error")
 
-        self._next_due_by_output.clear()
-        self._idle_since_by_output.clear()
+        self._next_due_by_publisher.clear()
+        self._idle_since_by_publisher.clear()
         self._cached_viewer_count_by_path.clear()
         self._last_viewer_load_monotonic = 0.0
-        self._bypass_mode_by_output.clear()
-        self._primed_demand_until_by_output.clear()
+        self._bypass_mode_by_publisher.clear()
+        self._primed_demand_until_by_publisher.clear()
         self._no_stream_hint_until_by_path.clear()
         self._mediamtx_log_path = None
         self._mediamtx_log_offset = 0
@@ -181,10 +182,11 @@ class StreamWriterBridge:
             "publisher": await self._publisher_manager.snapshot(),
             "runtime": await self._runtime_state.snapshot(),
             "host_server_id": self._host_server_id,
-            "primed_demand_until_by_output": {
-                output_key: float(until_monotonic)
-                for output_key, until_monotonic in self._primed_demand_until_by_output.items()
+            "primed_demand_until_by_publisher": {
+                publisher_id: float(until_monotonic)
+                for publisher_id, until_monotonic in self._primed_demand_until_by_publisher.items()
             },
+            "enable_bypass": bool(self._enable_bypass),
         }
 
     async def prime_transmission_demand(self, transmission_id: str, *, ttl_s: float | None = None) -> int:
@@ -196,16 +198,17 @@ class StreamWriterBridge:
         ttl = self._on_demand_prime_ttl_s if ttl_s is None else min(120.0, max(1.0, float(ttl_s)))
         _engine_settings, targets, _path_auth, _bypass = await self._load_settings(now_monotonic)
 
-        primed_count = 0
+        primed_publishers: set[str] = set()
         until_monotonic = now_monotonic + ttl
         for target in targets:
             if target.transmission_id != normalized_transmission_id:
                 continue
-            previous_until = float(self._primed_demand_until_by_output.get(target.output_key, 0.0))
+            publisher_id = _publisher_id_for_target(target)
+            previous_until = float(self._primed_demand_until_by_publisher.get(publisher_id, 0.0))
             if until_monotonic > previous_until:
-                self._primed_demand_until_by_output[target.output_key] = until_monotonic
-            primed_count += 1
-        return primed_count
+                self._primed_demand_until_by_publisher[publisher_id] = until_monotonic
+            primed_publishers.add(publisher_id)
+        return len(primed_publishers)
 
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -229,9 +232,9 @@ class StreamWriterBridge:
 
         if not engine_settings.enabled:
             await self._publisher_manager.stop_all()
-            self._next_due_by_output.clear()
-            self._idle_since_by_output.clear()
-            self._bypass_mode_by_output.clear()
+            self._next_due_by_publisher.clear()
+            self._idle_since_by_publisher.clear()
+            self._bypass_mode_by_publisher.clear()
             self._no_stream_hint_until_by_path.clear()
             self._mediamtx_log_path = None
             self._mediamtx_log_offset = 0
@@ -241,14 +244,15 @@ class StreamWriterBridge:
             await self._runtime_state.prune_output_viewers(set())
             return
 
-        desired_output_ids = {target.output_key for target in targets}
+        desired_output_keys = {target.output_key for target in targets}
+        desired_publisher_ids = {_publisher_id_for_target(target) for target in targets}
         desired_transmission_ids = {target.transmission_id for target in targets}
         await self._runtime_state.prune_transmissions(desired_transmission_ids)
-        if not desired_output_ids:
+        if not desired_output_keys:
             await self._publisher_manager.stop_all()
-            self._next_due_by_output.clear()
-            self._idle_since_by_output.clear()
-            self._bypass_mode_by_output.clear()
+            self._next_due_by_publisher.clear()
+            self._idle_since_by_publisher.clear()
+            self._bypass_mode_by_publisher.clear()
             self._no_stream_hint_until_by_path.clear()
             self._mediamtx_log_path = None
             self._mediamtx_log_offset = 0
@@ -275,34 +279,43 @@ class StreamWriterBridge:
         await self._scan_engine_logs_for_no_stream_demand(engine_status, now_monotonic)
         viewer_count_by_path = await self._load_viewer_count_by_path(now_monotonic)
 
-        target_count_by_transmission: dict[str, int] = {}
+        publisher_rep_by_id: dict[str, ResolvedOutputTarget] = {}
+        output_targets_by_publisher: dict[str, list[ResolvedOutputTarget]] = {}
+        publisher_count_by_transmission: dict[str, int] = {}
         for target in targets:
-            target_count_by_transmission[target.transmission_id] = target_count_by_transmission.get(target.transmission_id, 0) + 1
+            publisher_id = _publisher_id_for_target(target)
+            output_targets_by_publisher.setdefault(publisher_id, []).append(target)
+            if publisher_id not in publisher_rep_by_id:
+                publisher_rep_by_id[publisher_id] = target
+
+        for publisher_id, rep in publisher_rep_by_id.items():
+            publisher_count_by_transmission[rep.transmission_id] = publisher_count_by_transmission.get(rep.transmission_id, 0) + 1
 
         selected_by_transmission: dict[str, SelectedWriterFrame] = {}
-        for target in targets:
+        for publisher_id, target in publisher_rep_by_id.items():
             viewer_count = max(0, int(viewer_count_by_path.get(target.publish_path, 0)))
-            primed_until = float(self._primed_demand_until_by_output.get(target.output_key, 0.0))
+            primed_until = float(self._primed_demand_until_by_publisher.get(publisher_id, 0.0))
             demand_primed = primed_until > now_monotonic
             hint_until = float(self._no_stream_hint_until_by_path.get(target.publish_path, 0.0))
             demand_hint = hint_until > now_monotonic
-            await self._runtime_state.update_output_viewer_count(
-                output_key=target.output_key,
-                transmission_id=target.transmission_id,
-                viewer_count=viewer_count,
-            )
+            for output_target in output_targets_by_publisher.get(publisher_id, []):
+                await self._runtime_state.update_output_viewer_count(
+                    output_key=output_target.output_key,
+                    transmission_id=output_target.transmission_id,
+                    viewer_count=viewer_count,
+                )
 
             if self._on_demand_enabled and viewer_count <= 0 and not demand_primed and not demand_hint:
-                idle_since = self._idle_since_by_output.get(target.output_key)
+                idle_since = self._idle_since_by_publisher.get(publisher_id)
                 if idle_since is None:
-                    self._idle_since_by_output[target.output_key] = now_monotonic
+                    self._idle_since_by_publisher[publisher_id] = now_monotonic
                 elif (now_monotonic - idle_since) >= self._on_demand_stop_debounce_s:
-                    await self._publisher_manager.stop_publisher(target.output_key)
-                    self._next_due_by_output.pop(target.output_key, None)
-                    self._maybe_log_bypass_state(target.output_key, mode="off", details="viewer_count=0")
+                    await self._publisher_manager.stop_publisher(publisher_id)
+                    self._next_due_by_publisher.pop(publisher_id, None)
+                    self._maybe_log_bypass_state(publisher_id, mode="off", details="viewer_count=0")
                 continue
 
-            self._idle_since_by_output.pop(target.output_key, None)
+            self._idle_since_by_publisher.pop(publisher_id, None)
 
             selected = selected_by_transmission.get(target.transmission_id)
             if selected is None:
@@ -317,11 +330,13 @@ class StreamWriterBridge:
             input_settings = PublisherInputSettings()
             bypass_block_reason = "no_simple_candidate"
             if bypass_candidate is not None:
-                # Bypass uses FFmpeg to pull RTSP directly from the camera. With multiple outputs, we'd spawn
-                # one RTSP pull per output path which is unreliable (many cameras limit concurrent sessions).
-                # For reliability, only allow bypass when the transmission resolves to a single active output.
-                if int(target_count_by_transmission.get(target.transmission_id, 1)) > 1:
-                    bypass_block_reason = "multi_output_transmission"
+                if not self._enable_bypass:
+                    bypass_block_reason = "disabled"
+                    bypass_candidate = None
+                # Bypass pulls RTSP directly from the camera and should be enabled only when there is a single
+                # publisher per transmission. Otherwise we'd need fan-out from one pull to multiple publishes.
+                elif int(publisher_count_by_transmission.get(target.transmission_id, 1)) > 1:
+                    bypass_block_reason = "multi_publisher_transmission"
                     bypass_candidate = None
                 else:
                     bypass_block_reason = ""
@@ -333,7 +348,7 @@ class StreamWriterBridge:
                     source_fps=bypass_candidate.source_fps,
                 )
                 self._maybe_log_bypass_state(
-                    target.output_key,
+                    publisher_id,
                     mode="on",
                     details=(
                         f"writer={bypass_candidate.writer_id} "
@@ -341,13 +356,13 @@ class StreamWriterBridge:
                     ),
                 )
             else:
-                self._maybe_log_bypass_state(target.output_key, mode="off", details=bypass_block_reason)
+                self._maybe_log_bypass_state(publisher_id, mode="off", details=bypass_block_reason)
 
             await self._publisher_manager.start_publisher(
                 output=PublisherOutput(
-                    output_id=target.output_key,
+                    output_id=publisher_id,
                     transmission_id=target.transmission_id,
-                    protocol=target.protocol,
+                    protocol="all",
                 ),
                 engine_path=target.publish_path,
                 publish_url=publish_url,
@@ -357,36 +372,37 @@ class StreamWriterBridge:
                     fps=target.fps,
                     bitrate_kbps=target.bitrate_kbps,
                     latency_profile=_resolve_latency_profile(target.latency_profile),
+                    prefer_hardware=True,
                 ),
                 input_settings=input_settings,
             )
 
-            due_at = self._next_due_by_output.get(target.output_key, 0.0)
+            due_at = self._next_due_by_publisher.get(publisher_id, 0.0)
             if now_monotonic < due_at:
                 continue
 
             if bypass_candidate is not None:
-                self._next_due_by_output[target.output_key] = now_monotonic + (1.0 / max(1.0, target.fps))
+                self._next_due_by_publisher[publisher_id] = now_monotonic + (1.0 / max(1.0, target.fps))
                 continue
 
             frame = self._resolve_frame_for_output(selected, target)
-            await self._publisher_manager.submit_frame(target.output_key, frame)
-            self._next_due_by_output[target.output_key] = now_monotonic + (1.0 / max(1.0, target.fps))
+            await self._publisher_manager.submit_frame(publisher_id, frame)
+            self._next_due_by_publisher[publisher_id] = now_monotonic + (1.0 / max(1.0, target.fps))
 
-        await self._publisher_manager.stop_missing(desired_output_ids)
-        await self._runtime_state.prune_output_viewers(desired_output_ids)
+        await self._publisher_manager.stop_missing(desired_publisher_ids)
+        await self._runtime_state.prune_output_viewers(desired_output_keys)
 
-        for output_key in list(self._next_due_by_output.keys()):
-            if output_key not in desired_output_ids:
-                self._next_due_by_output.pop(output_key, None)
-                self._bypass_mode_by_output.pop(output_key, None)
-        for output_key in list(self._idle_since_by_output.keys()):
-            if output_key not in desired_output_ids:
-                self._idle_since_by_output.pop(output_key, None)
-        for output_key in list(self._primed_demand_until_by_output.keys()):
-            until_monotonic = float(self._primed_demand_until_by_output.get(output_key, 0.0))
-            if output_key not in desired_output_ids or until_monotonic <= now_monotonic:
-                self._primed_demand_until_by_output.pop(output_key, None)
+        for publisher_id in list(self._next_due_by_publisher.keys()):
+            if publisher_id not in desired_publisher_ids:
+                self._next_due_by_publisher.pop(publisher_id, None)
+                self._bypass_mode_by_publisher.pop(publisher_id, None)
+        for publisher_id in list(self._idle_since_by_publisher.keys()):
+            if publisher_id not in desired_publisher_ids:
+                self._idle_since_by_publisher.pop(publisher_id, None)
+        for publisher_id in list(self._primed_demand_until_by_publisher.keys()):
+            until_monotonic = float(self._primed_demand_until_by_publisher.get(publisher_id, 0.0))
+            if publisher_id not in desired_publisher_ids or until_monotonic <= now_monotonic:
+                self._primed_demand_until_by_publisher.pop(publisher_id, None)
 
         for path_slug in list(self._no_stream_hint_until_by_path.keys()):
             until_monotonic = float(self._no_stream_hint_until_by_path.get(path_slug, 0.0))
@@ -437,7 +453,9 @@ class StreamWriterBridge:
         targets = _resolve_output_targets(transmissions, host_server_id=self._host_server_id)
 
         path_auth_by_path = list_path_read_auth_for_host(normalized_settings, host_server_id=self._host_server_id)
-        bypass_by_writer = await self._resolve_bypass_candidates(settings)
+        bypass_by_writer: dict[str, WriterBypassCandidate] = {}
+        if self._enable_bypass:
+            bypass_by_writer = await self._resolve_bypass_candidates(settings)
 
         self._cached_engine = engine_settings
         self._cached_targets = tuple(targets)
@@ -629,19 +647,23 @@ class StreamWriterBridge:
                 )
         return resolved
 
-    def _maybe_log_bypass_state(self, output_key: str, *, mode: str, details: str) -> None:
+    def _maybe_log_bypass_state(self, publisher_id: str, *, mode: str, details: str) -> None:
         normalized_mode = "on" if mode == "on" else "off"
-        previous = self._bypass_mode_by_output.get(output_key)
+        previous = self._bypass_mode_by_publisher.get(publisher_id)
         if previous == normalized_mode:
             return
-        self._bypass_mode_by_output[output_key] = normalized_mode
+        self._bypass_mode_by_publisher[publisher_id] = normalized_mode
         log_info = getattr(self._logger, "info", None)
         if not callable(log_info):
             return
         if normalized_mode == "on":
-            log_info("Streaming bypass enabled for output '%s' (%s)", output_key, details)
+            log_info("Streaming bypass enabled for publisher '%s' (%s)", publisher_id, details)
         else:
-            log_info("Streaming bypass disabled for output '%s' (%s)", output_key, details)
+            log_info("Streaming bypass disabled for publisher '%s' (%s)", publisher_id, details)
+
+
+def _publisher_id_for_target(target: ResolvedOutputTarget) -> str:
+    return f"{target.transmission_id}:{target.publish_path}"
 
 
 def _resolve_output_targets(transmissions: list[Any], *, host_server_id: str) -> list[ResolvedOutputTarget]:
@@ -688,6 +710,28 @@ def _resolve_output_targets(transmissions: list[Any], *, host_server_id: str) ->
             ]
 
         output_count = len(enabled_outputs_raw)
+        share_publish_path = False
+        if output_count > 1:
+            encoding_keys: set[tuple[Any, ...]] = set()
+            auth_keys: set[tuple[Any, ...]] = set()
+            has_direct_path = False
+
+            for output_raw in enabled_outputs_raw:
+                direct = normalize_path_slug(_as_str(output_raw.get("path")), fallback="")
+                if direct:
+                    has_direct_path = True
+
+                width, height = _resolve_resolution(output_raw)
+                fps = _resolve_fps(output_raw)
+                bitrate_kbps = _resolve_bitrate(output_raw)
+                latency_profile = _resolve_latency_profile(output_raw.get("latency_profile"))
+                resize_mode = _as_str(output_raw.get("resize_mode")).lower() or "contain"
+                if resize_mode not in {"contain", "none"}:
+                    resize_mode = "contain"
+                encoding_keys.add((width, height, round(float(fps), 3), bitrate_kbps, latency_profile, resize_mode))
+                auth_keys.add(_resolve_output_auth_key(output_raw))
+
+            share_publish_path = (not has_direct_path and len(encoding_keys) == 1 and len(auth_keys) == 1)
 
         for output_raw in enabled_outputs_raw:
             output_id = _as_str(output_raw.get("id")) or "default"
@@ -705,7 +749,7 @@ def _resolve_output_targets(transmissions: list[Any], *, host_server_id: str) ->
 
             output_path = normalize_path_slug(_as_str(output_raw.get("path")), fallback="")
             if not output_path:
-                if output_count <= 1:
+                if share_publish_path or output_count <= 1:
                     output_path = base_path
                 else:
                     output_path = normalize_path_slug(f"{base_path}-{output_id}")
@@ -731,6 +775,16 @@ def _resolve_output_targets(transmissions: list[Any], *, host_server_id: str) ->
             )
 
     return targets
+
+
+def _resolve_output_auth_key(output_raw: dict[str, Any]) -> tuple[Any, ...]:
+    auth = output_raw.get("authentication") if isinstance(output_raw.get("authentication"), dict) else {}
+    enabled = _as_bool(auth.get("enabled"), default=False)
+    if not enabled:
+        return (False, "", "")
+    username = _as_str(auth.get("username")) or ""
+    password = _as_str(auth.get("password")) or ""
+    return (True, username, password)
 
 
 def _resolve_resolution(output_raw: dict[str, Any]) -> tuple[int, int]:

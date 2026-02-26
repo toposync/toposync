@@ -1051,7 +1051,8 @@ def create_streaming_router() -> APIRouter:
                     output_id=output_id,
                 )
                 viewer_count = int(viewer_count_by_output.get(output_key, 0))
-                publisher_status = publisher_status_by_output.get(output_key)
+                publisher_key = f"{transmission.id}:{resolved_engine_path}"
+                publisher_status = publisher_status_by_output.get(publisher_key)
                 outputs.append(
                     StreamingOutputRuntimeStatus(
                         output_key=output_key,

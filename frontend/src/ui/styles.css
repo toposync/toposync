@@ -2762,6 +2762,48 @@ textarea {
   row-gap: 10px;
 }
 
+.streamingFormGrid {
+  display: grid;
+  gap: 10px;
+  align-items: end;
+}
+
+.streamingFormGrid .field {
+  min-width: 0;
+}
+
+.streamingFormGridEnginePorts {
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+}
+
+.streamingFormGridTransmissionPrimary {
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+}
+
+.streamingFormGridTransmissionSecondary {
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+}
+
+.streamingFormGridOutputMain {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.streamingFormGridOutputAuth {
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+}
+
+.streamingOutputAuthNote {
+  grid-column: 1 / -1;
+}
+
+.streamingFormGridCreatePrimary {
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
+}
+
+.streamingFormGridCreateOutput {
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+}
+
 .streamingStatusOk {
   display: inline-flex;
   align-items: center;
@@ -2868,6 +2910,39 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+@media (max-width: 1280px) {
+  .streamingFormGridTransmissionSecondary {
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
+  }
+
+  .streamingFormGridCreatePrimary {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+  }
+}
+
+@media (max-width: 1100px) {
+  .settingsSplit {
+    flex-direction: column;
+  }
+
+  .settingsSplitSidebar {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 900px) {
+  .streamingFormGridEnginePorts,
+  .streamingFormGridTransmissionPrimary,
+  .streamingFormGridTransmissionSecondary,
+  .streamingFormGridOutputMain,
+  .streamingFormGridOutputAuth,
+  .streamingFormGridCreatePrimary,
+  .streamingFormGridCreateOutput {
+    grid-template-columns: 1fr;
+  }
 }
 
 .modalSectionTitle {

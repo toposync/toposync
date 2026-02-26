@@ -756,8 +756,8 @@ function StreamingSettingsPanelContent({
                 </label>
               </div>
 
-              <div className="rowWrap" style={{ gap: 10, marginTop: 10 }}>
-                <div className="field" style={{ width: 140 }}>
+              <div className="streamingFormGrid streamingFormGridEnginePorts" style={{ marginTop: 10 }}>
+                <div className="field">
                   <label className="label">RTSP port</label>
                   <input
                     className="input"
@@ -772,7 +772,7 @@ function StreamingSettingsPanelContent({
                     }}
                   />
                 </div>
-                <div className="field" style={{ width: 140 }}>
+                <div className="field">
                   <label className="label">HLS port</label>
                   <input
                     className="input"
@@ -787,7 +787,7 @@ function StreamingSettingsPanelContent({
                     }}
                   />
                 </div>
-                <div className="field" style={{ width: 140 }}>
+                <div className="field">
                   <label className="label">WebRTC port</label>
                   <input
                     className="input"
@@ -802,7 +802,7 @@ function StreamingSettingsPanelContent({
                     }}
                   />
                 </div>
-                <div className="field" style={{ width: 140 }}>
+                <div className="field">
                   <label className="label">API port</label>
                   <input
                     className="input"
@@ -1011,8 +1011,8 @@ function StreamingSettingsPanelContent({
                     {t("ext.streaming.transmissions.basic", {}, "Básico")}
                   </div>
 
-                  <div className="rowWrap" style={{ gap: 10 }}>
-                    <div className="field" style={{ flex: 1, minWidth: 240 }}>
+                  <div className="streamingFormGrid streamingFormGridTransmissionPrimary">
+                    <div className="field">
                       <label className="label">{t("ext.streaming.transmissions.name", {}, "Nome")}</label>
                       <input
                         className="input"
@@ -1020,7 +1020,7 @@ function StreamingSettingsPanelContent({
                         onChange={(event) => updateDraft({ name: event.target.value })}
                       />
                     </div>
-                    <div className="field" style={{ flex: 1, minWidth: 240 }}>
+                    <div className="field">
                       <label className="label">{t("ext.streaming.transmissions.path", {}, "Path/slug")}</label>
                       <input
                         className="input"
@@ -1043,7 +1043,10 @@ function StreamingSettingsPanelContent({
                       <span className="cardMeta">{t("ext.streaming.transmissions.enabled", {}, "Ativa")}</span>
                     </label>
 
-                    <div className="field" style={{ width: 200 }}>
+                  </div>
+
+                  <div className="streamingFormGrid streamingFormGridTransmissionSecondary" style={{ marginTop: 10 }}>
+                    <div className="field">
                       <label className="label">{t("ext.streaming.transmissions.host_server", {}, "Host server")}</label>
                       <select
                         className="input"
@@ -1070,7 +1073,7 @@ function StreamingSettingsPanelContent({
                       </div>
                     </div>
 
-                    <div className="field" style={{ width: 200 }}>
+                    <div className="field">
                       <label className="label">{t("ext.streaming.transmissions.placeholder", {}, "Placeholder")}</label>
                       <select
                         className="input"
@@ -1082,7 +1085,7 @@ function StreamingSettingsPanelContent({
                       </select>
                     </div>
 
-                    <div className="field" style={{ width: 220 }}>
+                    <div className="field">
                       <label className="label">{t("ext.streaming.transmissions.arbitration", {}, "Arbitragem")}</label>
                       <select
                         className="input"
@@ -1167,8 +1170,8 @@ function StreamingSettingsPanelContent({
                                 </div>
                               </div>
 
-                              <div className="rowWrap" style={{ gap: 10, marginTop: 10 }}>
-                                <div className="field" style={{ width: 160 }}>
+                              <div className="streamingFormGrid streamingFormGridOutputMain" style={{ marginTop: 10 }}>
+                                <div className="field">
                                   <label className="label">{t("ext.streaming.outputs.protocol", {}, "Protocolo")}</label>
                                   <select
                                     className="input"
@@ -1183,7 +1186,7 @@ function StreamingSettingsPanelContent({
                                   </select>
                                 </div>
 
-                                <div className="field" style={{ width: 140 }}>
+                                <div className="field">
                                   <label className="label">{t("ext.streaming.outputs.width", {}, "Largura")}</label>
                                   <input
                                     className="input"
@@ -1206,7 +1209,7 @@ function StreamingSettingsPanelContent({
                                     }}
                                   />
                                 </div>
-                                <div className="field" style={{ width: 140 }}>
+                                <div className="field">
                                   <label className="label">{t("ext.streaming.outputs.height", {}, "Altura")}</label>
                                   <input
                                     className="input"
@@ -1229,7 +1232,7 @@ function StreamingSettingsPanelContent({
                                     }}
                                   />
                                 </div>
-                                <div className="field" style={{ width: 140 }}>
+                                <div className="field">
                                   <label className="label">{t("ext.streaming.outputs.fps", {}, "FPS")}</label>
                                   <input
                                     className="input"
@@ -1237,7 +1240,7 @@ function StreamingSettingsPanelContent({
                                     onChange={(event) => updateDraftOutput(output.id, { fps_limit: toOptionalInt(event.target.value) })}
                                   />
                                 </div>
-                                <div className="field" style={{ width: 180 }}>
+                                <div className="field">
                                   <label className="label">{t("ext.streaming.outputs.bitrate", {}, "Bitrate (kbps)")}</label>
                                   <input
                                     className="input"
@@ -1245,7 +1248,7 @@ function StreamingSettingsPanelContent({
                                     onChange={(event) => updateDraftOutput(output.id, { bitrate_kbps: toOptionalInt(event.target.value) })}
                                   />
                                 </div>
-                                <div className="field" style={{ width: 200 }}>
+                                <div className="field">
                                   <label className="label">{t("ext.streaming.outputs.latency", {}, "Latência")}</label>
                                   <select
                                     className="input"
@@ -1284,8 +1287,8 @@ function StreamingSettingsPanelContent({
                               </div>
 
                               {auth.enabled ? (
-                                <div className="rowWrap" style={{ gap: 10, marginTop: 10 }}>
-                                  <div className="field" style={{ flex: 1, minWidth: 220 }}>
+                                <div className="streamingFormGrid streamingFormGridOutputAuth" style={{ marginTop: 10 }}>
+                                  <div className="field">
                                     <label className="label">{t("ext.streaming.outputs.username", {}, "Usuário")}</label>
                                     <input
                                       className="input"
@@ -1297,7 +1300,7 @@ function StreamingSettingsPanelContent({
                                       }
                                     />
                                   </div>
-                                  <div className="field" style={{ flex: 1, minWidth: 220 }}>
+                                  <div className="field">
                                     <label className="label">{t("ext.streaming.outputs.password", {}, "Senha")}</label>
                                     <input
                                       className="input"
@@ -1310,7 +1313,7 @@ function StreamingSettingsPanelContent({
                                       }
                                     />
                                   </div>
-                                  <div className="cardMeta" style={{ marginTop: 26 }}>
+                                  <div className="cardMeta streamingOutputAuthNote">
                                     {t("ext.streaming.outputs.auth_note", {}, "As credenciais são aplicadas no MediaMTX para leitura/playback deste output.")}
                                   </div>
                                 </div>
@@ -1434,12 +1437,12 @@ function StreamingSettingsPanelContent({
       >
         {createError ? <div className="errorText" style={{ marginBottom: 10 }}>{createError}</div> : null}
 
-        <div className="rowWrap" style={{ gap: 10 }}>
-          <div className="field" style={{ flex: 1, minWidth: 220 }}>
+        <div className="streamingFormGrid streamingFormGridCreatePrimary">
+          <div className="field">
             <label className="label">{t("ext.streaming.transmissions.name", {}, "Nome")}</label>
             <input className="input" value={newTransmissionName} onChange={(event) => setNewTransmissionName(event.target.value)} />
           </div>
-          <div className="field" style={{ flex: 1, minWidth: 220 }}>
+          <div className="field">
             <label className="label">{t("ext.streaming.transmissions.path", {}, "Path/slug")}</label>
             <input
               className="input"
@@ -1448,7 +1451,7 @@ function StreamingSettingsPanelContent({
               placeholder={slugifyPath(newTransmissionName) || "stream"}
             />
           </div>
-          <div className="field" style={{ width: 260 }}>
+          <div className="field">
             <label className="label">{t("ext.streaming.transmissions.host_server", {}, "Host server")}</label>
             <select
               className="input"
@@ -1468,8 +1471,8 @@ function StreamingSettingsPanelContent({
           </div>
         </div>
 
-        <div className="rowWrap" style={{ gap: 10, marginTop: 10 }}>
-          <div className="field" style={{ width: 160 }}>
+        <div className="streamingFormGrid streamingFormGridCreateOutput" style={{ marginTop: 10 }}>
+          <div className="field">
             <label className="label">{t("ext.streaming.transmissions.protocol", {}, "Saída")}</label>
             <select className="input" value={newOutputProtocol} onChange={(event) => setNewOutputProtocol(event.target.value as "hls" | "rtsp" | "webrtc")}>
               <option value="hls">HLS</option>
@@ -1477,15 +1480,15 @@ function StreamingSettingsPanelContent({
               <option value="webrtc">WebRTC</option>
             </select>
           </div>
-          <div className="field" style={{ width: 140 }}>
+          <div className="field">
             <label className="label">{t("ext.streaming.transmissions.width", {}, "Largura")}</label>
             <input className="input" value={newOutputWidth} onChange={(event) => setNewOutputWidth(event.target.value)} />
           </div>
-          <div className="field" style={{ width: 140 }}>
+          <div className="field">
             <label className="label">{t("ext.streaming.transmissions.height", {}, "Altura")}</label>
             <input className="input" value={newOutputHeight} onChange={(event) => setNewOutputHeight(event.target.value)} />
           </div>
-          <div className="field" style={{ width: 140 }}>
+          <div className="field">
             <label className="label">{t("ext.streaming.transmissions.fps", {}, "FPS")}</label>
             <input className="input" value={newOutputFps} onChange={(event) => setNewOutputFps(event.target.value)} />
           </div>

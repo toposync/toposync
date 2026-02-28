@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import threading
+import time
 from typing import Any
 
 import pytest
@@ -212,3 +214,101 @@ def test_resolve_camera_source_can_bypass_ingest_service(tmp_path: Path) -> None
     assert ingest_flag is True
     assert direct_url == "rtsp://10.0.0.1/live"
     assert direct_flag is False
+
+
+def test_camera_hub_starts_different_keys_without_global_lock_serialization() -> None:
+    from toposync_ext_cameras.processing.camera_hub import CameraHub
+
+    class _FakeFrameGrabber:
+        _lock = threading.Lock()
+        concurrent_starts = 0
+        max_concurrent_starts = 0
+
+        def __init__(self, rtsp_url: str, *, target_fps: float, backend: str) -> None:
+            _ = rtsp_url
+            _ = target_fps
+            _ = backend
+
+        def start(self) -> "_FakeFrameGrabber":
+            with type(self)._lock:
+                type(self).concurrent_starts += 1
+                type(self).max_concurrent_starts = max(type(self).max_concurrent_starts, type(self).concurrent_starts)
+            time.sleep(0.12)
+            with type(self)._lock:
+                type(self).concurrent_starts -= 1
+            return self
+
+        def stop(self) -> None:
+            return None
+
+    async def scenario() -> int:
+        _FakeFrameGrabber.concurrent_starts = 0
+        _FakeFrameGrabber.max_concurrent_starts = 0
+        hub = CameraHub(frame_grabber_factory=_FakeFrameGrabber)
+
+        await asyncio.gather(
+            hub.acquire(key="camera:a", rtsp_url="rtsp://a", target_fps=5.0, backend="auto"),
+            hub.acquire(key="camera:b", rtsp_url="rtsp://b", target_fps=5.0, backend="auto"),
+        )
+        await asyncio.gather(
+            hub.release(key="camera:a"),
+            hub.release(key="camera:b"),
+        )
+        return int(_FakeFrameGrabber.max_concurrent_starts)
+
+    max_concurrent_starts = asyncio.run(scenario())
+    assert max_concurrent_starts >= 2
+
+
+def test_camera_source_disables_ffmpeg_failover_override_after_hard_open_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import toposync_ext_cameras.pipelines.operators as camera_ops
+
+    class _Logger:
+        def warning(self, *args: Any, **kwargs: Any) -> None:
+            _ = args
+            _ = kwargs
+
+    class _Context:
+        node_id = "camera-node"
+        logger = _Logger()
+
+    async def scenario() -> tuple[str | None, float, int]:
+        runtime = camera_ops.CameraSourceRuntime(
+            {"rtsp_url": "rtsp://example", "backend": "auto"},
+            PipelineRuntimeDependencies(),
+        )
+        runtime._grabber = object()
+        runtime._grabber_started_monotonic = time.monotonic() - 120.0
+        runtime._reacquire_after_s = 1.0
+        runtime._reacquire_cooldown_s = 0.0
+        runtime._backend_override = "ffmpeg"
+        runtime._backend_override_until_monotonic = time.monotonic() + 180.0
+        runtime._backend_failover_cooldown_s = 120.0
+        runtime._last_backend_failover_monotonic = 0.0
+
+        stop_calls = 0
+
+        async def _fake_stop_grabber_if_needed() -> None:
+            nonlocal stop_calls
+            stop_calls += 1
+            runtime._grabber = None
+
+        monkeypatch.setattr(runtime, "_stop_grabber_if_needed", _fake_stop_grabber_if_needed)
+
+        await runtime._maybe_reacquire_grabber(
+            _Context(),
+            metrics={
+                "opened": False,
+                "backend": "ffmpeg",
+                "restarts": 12,
+                "last_frame_ts": 0.0,
+                "last_error": "Error opening input files: Server returned 404 Not Found",
+            },
+        )
+
+        return runtime._backend_override, float(runtime._backend_override_until_monotonic), stop_calls
+
+    backend_override, backend_override_until, stop_calls = asyncio.run(scenario())
+    assert backend_override is None
+    assert backend_override_until == 0.0
+    assert stop_calls == 1

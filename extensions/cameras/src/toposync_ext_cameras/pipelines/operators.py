@@ -56,6 +56,23 @@ def _read_env_float(name: str, fallback: float, *, min_value: float, max_value: 
     return max(float(min_value), min(float(max_value), float(value)))
 
 
+def _is_hard_capture_open_error(message: str) -> bool:
+    text = str(message or "").strip().lower()
+    if not text:
+        return False
+    return any(
+        token in text
+        for token in (
+            "error opening input files",
+            "404",
+            "not found",
+            "connection refused",
+            "connection reset",
+            "timed out",
+        )
+    )
+
+
 _GLOBAL_CAMERA_HUB = CameraHub(frame_grabber_factory=_frame_grabber_factory)
 
 
@@ -241,6 +258,13 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             min_value=5.0,
             max_value=900.0,
         )
+        self._backend_failover_cooldown_s = _read_env_float(
+            "TOPOSYNC_CAMERA_SOURCE_BACKEND_FAILOVER_COOLDOWN_S",
+            120.0,
+            min_value=5.0,
+            max_value=1_800.0,
+        )
+        self._last_backend_failover_monotonic = 0.0
 
     async def _ensure_grabber(self) -> None:
         if self._grabber is not None:
@@ -357,10 +381,25 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             return
 
         failover_note = ""
-        if backend == "opencv" and self._config.backend in {"auto", "opencv"}:
+        if (
+            backend == "opencv"
+            and self._config.backend in {"auto", "opencv"}
+            and (now_mono - self._last_backend_failover_monotonic) >= self._backend_failover_cooldown_s
+        ):
             self._backend_override = "ffmpeg"
             self._backend_override_until_monotonic = now_mono + self._backend_failover_s
+            self._last_backend_failover_monotonic = now_mono
             failover_note = f" Switching backend to ffmpeg for {self._backend_failover_s:.0f}s."
+        elif (
+            backend == "ffmpeg"
+            and self._backend_override == "ffmpeg"
+            and self._config.backend in {"auto", "opencv"}
+            and _is_hard_capture_open_error(last_error)
+        ):
+            self._backend_override = None
+            self._backend_override_until_monotonic = 0.0
+            self._last_backend_failover_monotonic = now_mono
+            failover_note = " Disabling ffmpeg failover override due hard open errors."
 
         self._last_reacquire_monotonic = now_mono
         if self._source_uses_ingest:

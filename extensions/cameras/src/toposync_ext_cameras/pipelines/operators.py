@@ -21,6 +21,7 @@ from toposync.runtime.pipelines.execution import (
 from toposync.runtime.pipelines.images import resolve_image_artifact_for_data
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
+from toposync.runtime.pipelines.telemetry import METRIC_MOTION_SCORE, METRIC_YOLO_CONFIDENCE
 
 from ..processing.frame_grabber import FrameGrabber
 from ..processing.camera_hub import CameraHub
@@ -54,6 +55,30 @@ def _read_env_float(name: str, fallback: float, *, min_value: float, max_value: 
     if not math.isfinite(value):
         return float(fallback)
     return max(float(min_value), min(float(max_value), float(value)))
+
+
+def _read_env_int(name: str, fallback: int, *, min_value: int, max_value: int) -> int:
+    raw = str(os.getenv(name, "") or "").strip()
+    if not raw:
+        return int(fallback)
+    try:
+        value = int(raw)
+    except Exception:
+        return int(fallback)
+    return max(int(min_value), min(int(max_value), int(value)))
+
+
+def _packet_ts_seconds(packet: Packet, *, fallback: float | None = None) -> float:
+    raw = packet.payload.get("frame_ts")
+    try:
+        parsed = float(raw)
+    except Exception:
+        parsed = 0.0
+    if math.isfinite(parsed) and parsed > 0.0:
+        return parsed
+    if fallback is None:
+        return time.time()
+    return float(fallback)
 
 
 def _is_hard_capture_open_error(message: str) -> bool:
@@ -558,6 +583,16 @@ class MotionGateRuntime(TransformOperatorRuntime):
             motion = await run_blocking(detector.process, frame)
         else:
             motion = await asyncio.to_thread(detector.process, frame)
+        observe_numeric = getattr(context, "observe_telemetry_numeric", None)
+        if callable(observe_numeric):
+            try:
+                observe_numeric(
+                    METRIC_MOTION_SCORE,
+                    float(motion.score),
+                    now_s=_packet_ts_seconds(packet),
+                )
+            except Exception:
+                pass
         now = time.monotonic()
         state = self._state_by_key.setdefault(key, {"active_frames": 0, "hold_until": 0.0})
 
@@ -611,6 +646,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         self._categories_set = set(config.categories)
         self._last_inference_by_stream: dict[str, float] = {}
         self._last_emit_by_category: dict[str, float] = {}
+        self._telemetry_top_k = _read_env_int("TOPOSYNC_TELEMETRY_YOLO_TOP_K", 3, min_value=1, max_value=16)
 
     def _ensure_backend(self) -> YoloBackend:
         if self._backend is not None:
@@ -720,6 +756,20 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
             concurrency_key=concurrency_key,
         )
         return self._normalize_objects(raw, packet=packet)
+
+    def _record_confidence_telemetry(self, *, packet: Packet, context: Any, detections: list[YoloObject]) -> None:
+        if not detections:
+            return
+        observe_numeric = getattr(context, "observe_telemetry_numeric", None)
+        if not callable(observe_numeric):
+            return
+        ts_s = _packet_ts_seconds(packet)
+        sample_count = min(len(detections), max(1, int(self._telemetry_top_k)))
+        for index in range(sample_count):
+            try:
+                observe_numeric(METRIC_YOLO_CONFIDENCE, float(detections[index].confidence), now_s=ts_s)
+            except Exception:
+                continue
 
     def _copy_payload_with_object(self, packet: Packet, *, object_data: dict[str, Any]) -> dict[str, Any]:
         payload = dict(packet.payload)
@@ -959,6 +1009,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
 
         self._mark_resumed(source_stream_id, now_monotonic=now_monotonic)
         detections = await self._track_objects(packet, context)
+        self._record_confidence_telemetry(packet=packet, context=context, detections=detections)
         outputs: list[Packet] = []
         active_keys: set[str] = set()
         used_keys: set[str] = set()
@@ -1065,6 +1116,7 @@ class ObjectDetectionYOLORuntime(_BaseYoloRuntime):
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         detections = await self._detect_objects(packet, context)
+        self._record_confidence_telemetry(packet=packet, context=context, detections=detections)
         now_monotonic = time.monotonic()
         outputs: list[Packet] = []
 

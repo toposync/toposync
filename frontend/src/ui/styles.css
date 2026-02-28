@@ -959,6 +959,196 @@ textarea {
   gap: 4px;
 }
 
+.pipelinesScalarLabelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pipelinesTelemetryFieldButton {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+}
+
+.pipelinesTelemetryModalPanel {
+  width: min(860px, 94vw);
+}
+
+.pipelinesTelemetryModalBody {
+  display: grid;
+  gap: 12px;
+}
+
+.pipelinesTelemetrySummaryRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.pipelinesTelemetryHistogramWrap {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: var(--panel2);
+}
+
+.pipelinesTelemetryHistogram {
+  width: 100%;
+  height: 220px;
+  display: block;
+}
+
+.pipelinesTelemetryHistogramBar {
+  fill: color-mix(in srgb, var(--color-accent-teal) 66%, transparent);
+}
+
+.pipelinesTelemetryMarkerLine {
+  stroke: var(--color-accent-blue);
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+}
+
+.pipelinesTelemetryHistogramAxis {
+  margin-top: 6px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pipelinesTelemetryValueRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pipelinesTelemetryQuickRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pipelinesTelemetryLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.pipelinesTelemetryLegendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pipelinesTelemetryLegendSwatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 99px;
+}
+
+.pipelinesTelemetryLegendSwatch.isImage {
+  background: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+.pipelinesTelemetryTimelineWrap {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: var(--panel2);
+  overflow: visible;
+}
+
+.pipelinesTelemetryTimeline {
+  width: 100%;
+  height: 320px;
+  display: block;
+}
+
+.pipelinesTelemetryAxis {
+  stroke: color-mix(in srgb, var(--muted) 26%, transparent);
+  stroke-width: 1;
+}
+
+.pipelinesTelemetryCursorLine {
+  stroke: color-mix(in srgb, var(--muted) 45%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.pipelinesTelemetryMarkerDot {
+  fill: color-mix(in srgb, var(--text) 88%, transparent);
+  stroke: var(--panelSolid);
+  stroke-width: 1;
+  cursor: pointer;
+}
+
+.pipelinesTelemetryHoverTooltip {
+  position: absolute;
+  top: 12px;
+  z-index: 3;
+  min-width: 180px;
+  max-width: 320px;
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--borderStrong);
+  background: color-mix(in srgb, var(--panelSolid) 92%, transparent);
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+}
+
+.pipelinesTelemetryHoverRow {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.pipelinesTelemetryHoverSwatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.pipelinesTelemetryMarkerOverlay {
+  position: absolute;
+  bottom: 10px;
+  z-index: 4;
+  width: min(320px, calc(100% - 24px));
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--borderStrong);
+  background: color-mix(in srgb, var(--panelSolid) 92%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.pipelinesTelemetryMarkerOverlay.isTransient {
+  pointer-events: none;
+}
+
+.pipelinesTelemetryMarkerImage {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  justify-self: center;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panelSolid);
+}
+
 .pipelinesTextArea,
 .pipelinesStepConfigTextarea {
   width: 100%;

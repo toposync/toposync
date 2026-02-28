@@ -28,6 +28,7 @@ from ..execution_scheduler import ExecutionScheduler
 from ..operator_registry import OperatorRegistry
 from ..shared_runtime import PipelineBundleRuntime
 from ..runtime import ArtifactMemoryCounter
+from ..telemetry import PipelineTelemetryStore, create_default_pipeline_telemetry_store
 from .plan import build_distributed_graphs
 
 
@@ -56,6 +57,7 @@ class ProcessingServerRuntime:
         services: ServiceRegistry,
         operator_registry: OperatorRegistry,
         compiler: PipelineGraphCompiler,
+        pipeline_telemetry_store: PipelineTelemetryStore | None = None,
         max_recent_events: int = 2500,
         max_replay_events: int = 500,
     ) -> None:
@@ -63,6 +65,7 @@ class ProcessingServerRuntime:
         self._services = services
         self._registry = operator_registry
         self._compiler = compiler
+        self._pipeline_telemetry_store = pipeline_telemetry_store
         self.broadcaster = EventBroadcaster(max_queue_size=500)
         self._recent_events: deque[dict[str, Any]] = deque(maxlen=max(200, int(max_recent_events)))
         self._replay_events: deque[dict[str, Any]] = deque(maxlen=max(50, int(max_replay_events)))
@@ -163,6 +166,7 @@ class ProcessingServerRuntime:
             services=self._services,
             logger=logger,
             processing_emit_projected_event=self._emit_projected_event,
+            pipeline_telemetry_store=self._pipeline_telemetry_store,
             execution_scheduler=ExecutionScheduler(),
             artifact_max_bytes_per_packet=artifact_max_bytes_per_packet,
             artifact_max_total_bytes_per_pipeline=artifact_max_total_bytes_per_pipeline,
@@ -244,6 +248,7 @@ def create_processing_app() -> FastAPI:
         services=services,
         operator_registry=operator_registry,
         compiler=pipeline_compiler,
+        pipeline_telemetry_store=create_default_pipeline_telemetry_store(),
     )
 
     def _processing_basic_auth() -> tuple[str, str] | None:

@@ -23,6 +23,7 @@ from .runtime import (
     QueueOperationStatus,
 )
 from .stats import PipelineStatsStore
+from .telemetry import PipelineTelemetryStore
 
 
 class PipelineExecutionError(RuntimeError):
@@ -41,6 +42,7 @@ class PipelineRuntimeDependencies:
     processing_emit_projected_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None
     pipeline_stats_store: PipelineStatsStore | None = None
     pipeline_stats_node_occurrences: dict[str, tuple[tuple[str, str], ...]] | None = None
+    pipeline_telemetry_store: PipelineTelemetryStore | None = None
     execution_scheduler: ExecutionScheduler | None = None
     artifact_max_bytes_per_packet: int | None = 128 * 1024 * 1024
     artifact_max_total_bytes_per_pipeline: int | None = 512 * 1024 * 1024
@@ -98,6 +100,7 @@ class NodeExecutionContext:
     metrics: NodeRuntimeMetrics
     logger: logging.Logger
     stats_store: PipelineStatsStore | None = None
+    telemetry_store: PipelineTelemetryStore | None = None
     stats_node_occurrences: tuple[tuple[str, str], ...] = ()
     stats_count_outputs_on_read: bool = False
     stats_count_terminal_outputs_on_emit: bool = False
@@ -184,6 +187,59 @@ class NodeExecutionContext:
 
     def is_cancelled(self) -> bool:
         return self.cancel_event.is_set()
+
+    def _telemetry_occurrences(self) -> tuple[tuple[str, str], ...]:
+        if self.stats_node_occurrences:
+            return self.stats_node_occurrences
+        return ((self.pipeline_name, self.node_id),)
+
+    def _normalize_telemetry_pipeline_name(self, pipeline_name: str) -> str:
+        normalized = str(pipeline_name or "").strip()
+        if normalized.endswith("__processing") and len(normalized) > len("__processing"):
+            return normalized[: -len("__processing")]
+        return normalized
+
+    def observe_telemetry_numeric(self, metric_id: str, value: float, *, now_s: float | None = None) -> None:
+        store = self.telemetry_store
+        if store is None:
+            return
+        for pipeline_name, node_id in self._telemetry_occurrences():
+            try:
+                store.observe_numeric(
+                    self._normalize_telemetry_pipeline_name(pipeline_name),
+                    str(node_id or "").strip(),
+                    metric_id,
+                    float(value),
+                    now_s=now_s,
+                )
+            except Exception:
+                continue
+
+    def record_telemetry_image_marker(
+        self,
+        metric_id: str,
+        *,
+        rel_path: str,
+        ts_s: float | None = None,
+        image_key: str | None = None,
+        confidence: float | None = None,
+    ) -> None:
+        store = self.telemetry_store
+        if store is None:
+            return
+        for pipeline_name, node_id in self._telemetry_occurrences():
+            try:
+                store.record_image_marker(
+                    self._normalize_telemetry_pipeline_name(pipeline_name),
+                    node_id=str(node_id or "").strip(),
+                    rel_path=rel_path,
+                    metric_id=metric_id,
+                    ts_s=ts_s,
+                    image_key=image_key,
+                    confidence=confidence,
+                )
+            except Exception:
+                continue
 
 
 class BaseOperatorRuntime:
@@ -437,6 +493,7 @@ class PipelineRuntime:
                 metrics=metrics,
                 logger=self.logger,
                 stats_store=self.dependencies.pipeline_stats_store,
+                telemetry_store=self.dependencies.pipeline_telemetry_store,
             )
             occurrences_map = self.dependencies.pipeline_stats_node_occurrences
             if occurrences_map is not None:

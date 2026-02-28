@@ -12,7 +12,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Any, Awaitable, Callable, Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.responses import StreamingResponse
 from starlette.staticfiles import StaticFiles
@@ -49,6 +49,7 @@ from toposync.runtime.pipelines.execution_scheduler import ExecutionScheduler
 from toposync.runtime.pipelines.python_dsl import PythonDslCompileError, compile_python_source_to_graph
 from toposync.runtime.pipelines.recommendations import PipelineAlert, analyze_compiled_pipeline
 from toposync.runtime.pipelines.stats import PipelineStatsStore
+from toposync.runtime.pipelines.telemetry import create_default_pipeline_telemetry_store
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
 from toposync.runtime.pipelines.distributed.transport import HttpProcessingTransport, ProcessingTransportError
 from toposync.runtime.pipelines.migration_legacy_cameras import (
@@ -174,6 +175,45 @@ class PipelineStatsResponse(BaseModel):
     bucket_seconds: int = 0
     node_outputs: dict[str, int] = Field(default_factory=dict)
     updated_at: float = 0.0
+
+
+class PipelineTelemetryNumericPoint(BaseModel):
+    bucket_start_s: float = 0.0
+    count: int = 0
+    min: float = 0.0
+    max: float = 0.0
+    avg: float = 0.0
+
+
+class PipelineTelemetryNumericResponse(BaseModel):
+    pipeline_name: str
+    node_id: str
+    metric_id: str
+    window_seconds: int = 0
+    bucket_seconds: int = 0
+    histogram_min: float = 0.0
+    histogram_max: float = 0.0
+    histogram_bins: list[int] = Field(default_factory=list)
+    points: list[PipelineTelemetryNumericPoint] = Field(default_factory=list)
+    total_count: int = 0
+    total_min: float = 0.0
+    total_max: float = 0.0
+    total_avg: float = 0.0
+    updated_at: float = 0.0
+
+
+class PipelineTelemetryImageMarker(BaseModel):
+    ts: float = 0.0
+    node_id: str = ""
+    metric_id: str = ""
+    rel_path: str = ""
+    image_key: str | None = None
+    confidence: float | None = None
+
+
+class PipelineTelemetryImageMarkersResponse(BaseModel):
+    pipeline_name: str
+    markers: list[PipelineTelemetryImageMarker] = Field(default_factory=list)
 
 
 class PipelineTemplateApplyCamerasRequest(BaseModel):
@@ -399,6 +439,8 @@ async def _lifespan(app: FastAPI):
     app.state.pipeline_graph_compiler = pipeline_compiler
     pipeline_stats_store = PipelineStatsStore()
     app.state.pipeline_stats_store = pipeline_stats_store
+    pipeline_telemetry_store = create_default_pipeline_telemetry_store()
+    app.state.pipeline_telemetry_store = pipeline_telemetry_store
 
     def _env_int(name: str, default: int) -> int:
         raw = str(os.getenv(name) or "").strip()
@@ -430,6 +472,7 @@ async def _lifespan(app: FastAPI):
         runtime_dependencies=PipelineRuntimeDependencies(
             services=services,
             pipeline_stats_store=pipeline_stats_store,
+            pipeline_telemetry_store=pipeline_telemetry_store,
             execution_scheduler=ExecutionScheduler(),
             artifact_max_bytes_per_packet=artifact_max_bytes_per_packet,
             artifact_max_total_bytes_per_pipeline=artifact_max_total_bytes_per_pipeline,
@@ -1426,6 +1469,12 @@ def create_app() -> FastAPI:
         if stats_store is None:
             return PipelineStatsResponse(pipeline_name=pipeline.name)
         stats_store.reset(pipeline.name)
+        telemetry_store = getattr(request.app.state, "pipeline_telemetry_store", None)
+        if telemetry_store is not None:
+            try:
+                telemetry_store.reset(pipeline.name)
+            except Exception:
+                pass
         node_ids: set[str] = set()
         raw_nodes = pipeline.graph.get("nodes")
         if isinstance(raw_nodes, list):
@@ -1437,6 +1486,74 @@ def create_app() -> FastAPI:
                     node_ids.add(node_id)
         snapshot = stats_store.snapshot(pipeline.name, node_ids=node_ids or None)
         return PipelineStatsResponse.model_validate(snapshot)
+
+    @app.get("/api/pipelines/{pipeline_name}/telemetry/numeric", response_model=PipelineTelemetryNumericResponse)
+    async def get_pipeline_telemetry_numeric(
+        request: Request,
+        pipeline_name: str,
+        node_id: str = Query(min_length=1),
+        metric_id: str = Query(min_length=1),
+        point_limit: int = Query(default=720, ge=50, le=5000),
+    ) -> PipelineTelemetryNumericResponse:
+        _require(request, action="core:pipelines:read")
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            pipeline = await config_store.get_pipeline(pipeline_name)
+        except PipelineValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if pipeline is None:
+            raise HTTPException(status_code=404, detail="Unknown pipeline")
+        telemetry_store = getattr(request.app.state, "pipeline_telemetry_store", None)
+        if telemetry_store is None:
+            return PipelineTelemetryNumericResponse(
+                pipeline_name=pipeline.name,
+                node_id=str(node_id),
+                metric_id=str(metric_id),
+            )
+        snapshot = telemetry_store.snapshot_numeric_metric(
+            pipeline.name,
+            node_id=str(node_id),
+            metric_id=str(metric_id),
+            max_points=int(point_limit),
+        )
+        if snapshot is None:
+            return PipelineTelemetryNumericResponse(
+                pipeline_name=pipeline.name,
+                node_id=str(node_id),
+                metric_id=str(metric_id),
+            )
+        return PipelineTelemetryNumericResponse.model_validate(snapshot)
+
+    @app.get("/api/pipelines/{pipeline_name}/telemetry/image-markers", response_model=PipelineTelemetryImageMarkersResponse)
+    async def get_pipeline_telemetry_image_markers(
+        request: Request,
+        pipeline_name: str,
+        limit: int = Query(default=500, ge=1, le=5000),
+        node_id: str | None = Query(default=None),
+        metric_id: str | None = Query(default=None),
+    ) -> PipelineTelemetryImageMarkersResponse:
+        _require(request, action="core:pipelines:read")
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            pipeline = await config_store.get_pipeline(pipeline_name)
+        except PipelineValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if pipeline is None:
+            raise HTTPException(status_code=404, detail="Unknown pipeline")
+        telemetry_store = getattr(request.app.state, "pipeline_telemetry_store", None)
+        if telemetry_store is None:
+            return PipelineTelemetryImageMarkersResponse(pipeline_name=pipeline.name)
+
+        markers = telemetry_store.list_image_markers(
+            pipeline.name,
+            limit=int(limit),
+            node_id=(str(node_id or "").strip() or None),
+            metric_id=(str(metric_id or "").strip() or None),
+        )
+        return PipelineTelemetryImageMarkersResponse(
+            pipeline_name=pipeline.name,
+            markers=[PipelineTelemetryImageMarker.model_validate(item) for item in markers],
+        )
 
     @app.put("/api/pipelines/{pipeline_name}", response_model=Pipeline)
     async def replace_pipeline(request: Request, pipeline_name: str, body: Pipeline) -> Pipeline:
@@ -1484,6 +1601,12 @@ def create_app() -> FastAPI:
         config_store: ConfigStore = request.app.state.config_store
         try:
             removed = await config_store.delete_pipeline(pipeline_name)
+            telemetry_store = getattr(request.app.state, "pipeline_telemetry_store", None)
+            if telemetry_store is not None:
+                try:
+                    telemetry_store.reset(removed.name)
+                except Exception:
+                    pass
             orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
             if orchestrator is not None:
                 try:

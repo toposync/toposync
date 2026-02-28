@@ -29,8 +29,10 @@ import {
   resetPipelineStats,
 } from "../../util/api";
 import { InteractivePipelineEditor } from "./pipelines/InteractivePipelineEditor";
+import { PipelineTelemetryFieldModal } from "./pipelines/PipelineTelemetryFieldModal";
+import { PipelineTelemetryOverviewCard } from "./pipelines/PipelineTelemetryOverviewCard";
 import { PipelineTemplateApplyModal } from "./pipelines/PipelineTemplateApplyModal";
-import type { EditorMode, InteractiveStep } from "./pipelines/types";
+import type { EditorMode, InteractiveStep, TelemetryFieldInspectorRequest } from "./pipelines/types";
 import {
   buildGraphFromInteractiveSteps,
   buildInteractiveStepsFromGraph,
@@ -48,7 +50,7 @@ type Props = {
 };
 
 export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): React.ReactElement {
-  const { t } = i18n.useI18n();
+  const { t, locale } = i18n.useI18n();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
@@ -86,11 +88,13 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
   const [pipelineStats, setPipelineStats] = useState<PipelineStats | null>(null);
   const [pipelineStatsError, setPipelineStatsError] = useState<string | null>(null);
   const [pipelineStatsLoading, setPipelineStatsLoading] = useState(false);
+  const [telemetryFieldInspector, setTelemetryFieldInspector] = useState<TelemetryFieldInspectorRequest | null>(null);
 
   const operatorsById = useMemo(() => {
     const entries = operators.map((operator) => [operator.id, operator] as const);
     return Object.fromEntries(entries);
   }, [operators]);
+  const integerFormatter = useMemo(() => new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }), [locale]);
 
   const selected = useMemo(() => {
     if (!selectedName) return null;
@@ -173,6 +177,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
     setPythonText(String(selected.python_source ?? ""));
     setMode((selected.editor_mode as EditorMode) ?? "interactive");
     setCompileOutput(null);
+    setTelemetryFieldInspector(null);
 
     const loaded = buildInteractiveStepsFromGraph(selected.graph, operatorsById);
     setInteractiveSteps(loaded.steps);
@@ -354,6 +359,29 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
     if (!raw || typeof raw !== "object") return null;
     return raw as Record<string, number>;
   }, [pipelineStats]);
+
+  const openTelemetryFieldInspector = useCallback((request: TelemetryFieldInspectorRequest) => {
+    setTelemetryFieldInspector(request);
+  }, []);
+
+  const applyTelemetryFieldValue = useCallback(
+    async (value: number) => {
+      const target = telemetryFieldInspector;
+      if (!target) return;
+      const nextValue = Number.isFinite(value) ? value : 0;
+      setInteractiveSteps((prev) =>
+        prev.map((step) => {
+          if (step.uid !== target.stepUid) return step;
+          const parsed = safeJsonParse(step.configText || "{}");
+          const base = parsed.ok && isRecord(parsed.data) ? { ...(parsed.data as Record<string, unknown>) } : {};
+          base[target.configKey] = nextValue;
+          return { ...step, configText: jsonPretty(base) };
+        }),
+      );
+      setTelemetryFieldInspector((prev) => (prev ? { ...prev, value: nextValue } : prev));
+    },
+    [telemetryFieldInspector],
+  );
 
   const handleCreate = async () => {
     const name = createName.trim();
@@ -759,6 +787,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                       interactiveWarning={interactiveWarning}
                       setInteractiveWarning={setInteractiveWarning}
                       interactiveGraph={interactiveGraph}
+                      onOpenTelemetryField={openTelemetryFieldInspector}
                     />
                   ) : (
                     <div className="pipelinesMonacoWrap">
@@ -819,7 +848,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                           <div key={`step-stat:${step.nodeId}:${step.uid}`} className="pipelinesStepStatsRow">
                             <div className="pipelinesStepStatsName">{prettyOperatorName(step.operatorId) || step.operatorId}</div>
                             <div className="pipelinesStepStatsValue">
-                              {Number((stepOutputsByNodeId?.[step.nodeId] ?? 0) as number).toLocaleString()}
+                              {integerFormatter.format(Number((stepOutputsByNodeId?.[step.nodeId] ?? 0) as number))}
                             </div>
                           </div>
                         ))
@@ -828,10 +857,20 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                   )}
                 </div>
               </div>
+
+              <PipelineTelemetryOverviewCard pipelineName={draft?.name ?? null} steps={interactiveSteps} />
             </div>
           )}
         </div>
       </div>
+
+      <PipelineTelemetryFieldModal
+        open={Boolean(telemetryFieldInspector && draft)}
+        pipelineName={draft?.name ?? null}
+        request={telemetryFieldInspector}
+        onClose={() => setTelemetryFieldInspector(null)}
+        onApplyValue={(value) => void applyTelemetryFieldValue(value)}
+      />
 
       <PipelineTemplateApplyModal
         open={templateApplyOpen}

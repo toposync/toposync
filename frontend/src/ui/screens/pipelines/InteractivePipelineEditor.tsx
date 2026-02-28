@@ -3,7 +3,7 @@ import React, { useCallback, useMemo, useState } from "react";
 import type { CamerasIndexResponse, PipelineOperatorDefinition } from "../../../util/api";
 
 import { PIPELINE_PRESET_OPERATOR_IDS } from "./constants";
-import type { DragInsertPosition, InteractiveBuildResult, InteractiveStep, SelectOption } from "./types";
+import type { DragInsertPosition, InteractiveBuildResult, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "./types";
 import { createInteractiveStep, isRecord, jsonPretty, moveStep, safeJsonParse } from "./utils";
 
 import { InteractiveStepsList } from "./editor/InteractiveStepsList";
@@ -19,6 +19,7 @@ type Props = {
   interactiveWarning: string | null;
   setInteractiveWarning: React.Dispatch<React.SetStateAction<string | null>>;
   interactiveGraph: InteractiveBuildResult;
+  onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
 };
 
 export function InteractivePipelineEditor({
@@ -30,6 +31,7 @@ export function InteractivePipelineEditor({
   interactiveWarning,
   setInteractiveWarning,
   interactiveGraph,
+  onOpenTelemetryField,
 }: Props): React.ReactElement {
   const [draggingStepUid, setDraggingStepUid] = useState<string | null>(null);
   const [dragOverStep, setDragOverStep] = useState<{ uid: string; position: DragInsertPosition } | null>(null);
@@ -212,6 +214,7 @@ export function InteractivePipelineEditor({
         onRemoveStep={removeInteractiveStep}
         onUpdateStepScalar={updateInteractiveStepScalar}
         onUpdateStepConfig={updateInteractiveStepConfig}
+        onOpenTelemetryField={onOpenTelemetryField}
       />
     </div>
   );

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 from fastapi.testclient import TestClient
 import pytest
@@ -186,3 +187,53 @@ def test_pipeline_compile_returns_recommendations(tmp_path: Path, monkeypatch: p
         body = res.json()
         assert isinstance(body.get("alerts"), list)
         assert any(item.get("code") == "notify_missing_store_images" for item in body["alerts"])
+
+
+def test_pipeline_telemetry_endpoints_return_numeric_and_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        payload = Pipeline(
+            name="telemetry_pipeline",
+            type="final",
+            graph={
+                "schema_version": 1,
+                "nodes": [],
+                "edges": [],
+            },
+        ).model_dump(mode="json")
+        created = client.post("/api/pipelines", json=payload)
+        assert created.status_code == 201
+
+        telemetry_store = getattr(client.app.state, "pipeline_telemetry_store", None)
+        assert telemetry_store is not None
+        now = time.time()
+        telemetry_store.observe_numeric("telemetry_pipeline", "gate", "motion.score", 0.021, now_s=now)
+        telemetry_store.observe_numeric("telemetry_pipeline", "gate", "motion.score", 0.037, now_s=now + 1.0)
+        telemetry_store.record_image_marker(
+            "telemetry_pipeline",
+            node_id="store",
+            metric_id="store.image",
+            rel_path="pipelines/telemetry_pipeline/frame_1.png",
+        )
+
+        numeric_res = client.get(
+            "/api/pipelines/telemetry_pipeline/telemetry/numeric",
+            params={"node_id": "gate", "metric_id": "motion.score", "point_limit": 200},
+        )
+        assert numeric_res.status_code == 200
+        numeric_body = numeric_res.json()
+        assert numeric_body["pipeline_name"] == "telemetry_pipeline"
+        assert numeric_body["node_id"] == "gate"
+        assert numeric_body["metric_id"] == "motion.score"
+        assert int(numeric_body["total_count"]) == 2
+        assert isinstance(numeric_body.get("histogram_bins"), list)
+
+        markers_res = client.get(
+            "/api/pipelines/telemetry_pipeline/telemetry/image-markers",
+            params={"metric_id": "store.image", "limit": 10},
+        )
+        assert markers_res.status_code == 200
+        markers_body = markers_res.json()
+        assert markers_body["pipeline_name"] == "telemetry_pipeline"
+        assert isinstance(markers_body.get("markers"), list)
+        assert len(markers_body["markers"]) == 1
+        assert markers_body["markers"][0]["rel_path"] == "pipelines/telemetry_pipeline/frame_1.png"

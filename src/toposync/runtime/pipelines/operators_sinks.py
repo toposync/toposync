@@ -22,12 +22,12 @@ from .images import (
     add_stored_image_entry,
     ensure_packet_image_keys,
     parse_fallback_keys,
-    resolve_image_artifact_for_data,
     resolve_image_artifact_for_reference,
     resolve_image_artifact_name,
 )
 from .operator_registry import OperatorRegistry
 from .runtime import Artifact, Lifecycle, Packet
+from .telemetry import METRIC_STORE_IMAGE
 
 
 _SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -448,6 +448,7 @@ class StoreImagesRuntime(TransformOperatorRuntime):
 
         ts = _resolve_ts(packet, "frame_ts")
         ts_ms = int(max(0.0, float(ts)) * 1000)
+        record_marker = getattr(context, "record_telemetry_image_marker", None)
 
         targets: list[tuple[str, str]] = []
 
@@ -541,14 +542,26 @@ class StoreImagesRuntime(TransformOperatorRuntime):
 
             if rel:
                 stored_artifact = packet.artifacts.get(artifact_name) or artifact
+                confidence = _resolve_image_confidence(packet, stored_artifact)
                 packet = add_stored_image_entry(
                     packet,
                     key=image_key or artifact_name,
                     artifact=stored_artifact,
                     rel_path=rel,
                     stored_ts_ms=ts_ms,
-                    confidence=_resolve_image_confidence(packet, stored_artifact),
+                    confidence=confidence,
                 )
+                if callable(record_marker):
+                    try:
+                        record_marker(
+                            METRIC_STORE_IMAGE,
+                            rel_path=rel,
+                            ts_s=ts,
+                            image_key=image_key or artifact_name,
+                            confidence=confidence,
+                        )
+                    except Exception:
+                        pass
 
         return [packet]
 

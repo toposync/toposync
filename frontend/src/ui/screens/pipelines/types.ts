@@ -22,3 +22,12 @@ export type InteractiveFromGraphResult = {
 
 export type SelectOption = { value: string; label: string };
 
+export type TelemetryFieldInspectorRequest = {
+  stepUid: string;
+  nodeId: string;
+  operatorId: string;
+  configKey: string;
+  metricId: string;
+  label: string;
+  value: number;
+};

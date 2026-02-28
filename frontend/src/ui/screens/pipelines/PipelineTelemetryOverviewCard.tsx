@@ -644,7 +644,6 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
                     alt="marker preview"
                     className="pipelinesTelemetryMarkerImage"
                   />
-                  <div className="pipelinesHint">{activeMarker.marker.rel_path}</div>
                 </div>
               ) : null}
             </div>

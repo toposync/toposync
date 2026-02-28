@@ -49,7 +49,10 @@ from toposync.runtime.pipelines.execution_scheduler import ExecutionScheduler
 from toposync.runtime.pipelines.python_dsl import PythonDslCompileError, compile_python_source_to_graph
 from toposync.runtime.pipelines.recommendations import PipelineAlert, analyze_compiled_pipeline
 from toposync.runtime.pipelines.stats import PipelineStatsStore
-from toposync.runtime.pipelines.telemetry import create_default_pipeline_telemetry_store
+from toposync.runtime.pipelines.telemetry import (
+    create_default_pipeline_telemetry_disk_checkpoint,
+    create_default_pipeline_telemetry_store,
+)
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
 from toposync.runtime.pipelines.distributed.transport import HttpProcessingTransport, ProcessingTransportError
 from toposync.runtime.pipelines.migration_legacy_cameras import (
@@ -441,6 +444,20 @@ async def _lifespan(app: FastAPI):
     app.state.pipeline_stats_store = pipeline_stats_store
     pipeline_telemetry_store = create_default_pipeline_telemetry_store()
     app.state.pipeline_telemetry_store = pipeline_telemetry_store
+    pipeline_telemetry_checkpoint = create_default_pipeline_telemetry_disk_checkpoint(
+        pipeline_telemetry_store,
+        data_dir=config_store.paths.data_dir,
+    )
+    app.state.pipeline_telemetry_checkpoint = pipeline_telemetry_checkpoint
+    if pipeline_telemetry_checkpoint is not None:
+        try:
+            await pipeline_telemetry_checkpoint.load()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to load telemetry checkpoint: %s", exc)
+        try:
+            pipeline_telemetry_checkpoint.start()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to start telemetry checkpoint loop: %s", exc)
 
     def _env_int(name: str, default: int) -> int:
         raw = str(os.getenv(name) or "").strip()
@@ -499,6 +516,11 @@ async def _lifespan(app: FastAPI):
             await orchestrator.stop()
         except Exception:
             pass
+        if pipeline_telemetry_checkpoint is not None:
+            try:
+                await pipeline_telemetry_checkpoint.close()
+            except Exception:
+                pass
 
 
 def create_app() -> FastAPI:

@@ -214,3 +214,67 @@ def test_pipeline_runtime_collects_numeric_and_image_telemetry() -> None:
         assert all(str(item.get("metric_id") or "") == "test.image" for item in markers)
 
     asyncio.run(scenario())
+
+
+def test_pipeline_telemetry_store_roundtrips_checkpoint_bytes() -> None:
+    store = PipelineTelemetryStore(
+        metric_specs=[
+            NumericMetricSpec(
+                metric_id="test.score",
+                window_seconds=20,
+                bucket_seconds=5,
+                histogram_min=0.0,
+                histogram_max=1.0,
+                histogram_bins=10,
+                min_sample_interval_s=0.0,
+            )
+        ],
+        max_numeric_series=8,
+        max_image_markers_per_pipeline=16,
+        max_image_pipelines=4,
+    )
+
+    assert store.observe_numeric("pipe", "node", "test.score", 0.10, now_s=100.0)
+    assert store.observe_numeric("pipe", "node", "test.score", 0.30, now_s=101.0)
+    assert store.observe_numeric("pipe", "node", "test.score", 0.90, now_s=104.0)
+    assert store.record_image_marker(
+        "pipe",
+        node_id="node",
+        rel_path="pipelines/test/frame_0.png",
+        metric_id="test.image",
+        ts_s=103.0,
+        image_key="original",
+        confidence=0.5,
+    )
+
+    checkpoint = store.dump_checkpoint_bytes(include_hist=True, now_s=110.0)
+
+    restored = PipelineTelemetryStore(
+        metric_specs=[
+            NumericMetricSpec(
+                metric_id="test.score",
+                window_seconds=20,
+                bucket_seconds=5,
+                histogram_min=0.0,
+                histogram_max=1.0,
+                histogram_bins=10,
+                min_sample_interval_s=0.0,
+            )
+        ],
+        max_numeric_series=8,
+        max_image_markers_per_pipeline=16,
+        max_image_pipelines=4,
+    )
+    restored.load_checkpoint_bytes(checkpoint)
+    assert not restored.is_dirty()
+
+    snap = restored.snapshot_numeric_metric("pipe", "node", "test.score", now_s=110.0)
+    assert snap is not None
+    assert int(snap["total_count"]) == 3
+    assert float(snap["total_min"]) == 0.10
+    assert float(snap["total_max"]) == 0.90
+    assert int(sum(int(item) for item in snap["histogram_bins"])) == 3
+
+    markers = restored.list_image_markers("pipe")
+    assert len(markers) == 1
+    assert str(markers[0].get("rel_path") or "") == "pipelines/test/frame_0.png"

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import math
 import os
+import struct
+import tempfile
 import time
+import zlib
 from array import array
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 
@@ -13,11 +19,20 @@ METRIC_MOTION_SCORE = "motion.score"
 METRIC_YOLO_CONFIDENCE = "yolo.confidence"
 METRIC_STORE_IMAGE = "store.image"
 
+logger = logging.getLogger("toposync.pipelines.telemetry")
+
 DEFAULT_WINDOW_SECONDS = 6 * 60 * 60
 DEFAULT_BUCKET_SECONDS = 5
 DEFAULT_MAX_NUMERIC_SERIES = 512
 DEFAULT_MAX_IMAGE_MARKERS_PER_PIPELINE = 2_000
 DEFAULT_MAX_IMAGE_PIPELINES = 128
+
+DEFAULT_PERSIST_INTERVAL_S = 90.0
+DEFAULT_PERSIST_COMPRESSION_LEVEL = 3
+DEFAULT_PERSIST_MAX_READ_BYTES = 64 * 1024 * 1024
+DEFAULT_PERSIST_MAX_DECOMPRESSED_BYTES = 256 * 1024 * 1024
+
+_PERSIST_MAGIC = b"TOPOSYNC_PIPELINE_TELEMETRY_V1\n"
 
 
 @dataclass(slots=True)
@@ -247,9 +262,35 @@ class PipelineTelemetryStore:
         self._numeric_series: dict[tuple[str, str, str], _NumericMetricSeries] = {}
         self._image_markers_by_pipeline: dict[str, deque[dict[str, Any]]] = {}
         self._image_pipeline_updated_at: dict[str, float] = {}
+        self._dirty = False
 
         for spec in metric_specs or []:
             self.register_metric(spec)
+
+    def is_dirty(self) -> bool:
+        return bool(self._dirty)
+
+    def mark_clean(self) -> None:
+        self._dirty = False
+
+    def dump_checkpoint_bytes(
+        self,
+        *,
+        include_hist: bool = False,
+        compression_level: int = DEFAULT_PERSIST_COMPRESSION_LEVEL,
+        now_s: float | None = None,
+    ) -> bytes:
+        view = _capture_persistence_view(self, now_s=now_s)
+        return _encode_persisted_view(view, include_hist=include_hist, compression_level=compression_level)
+
+    def load_checkpoint_bytes(
+        self,
+        data: bytes,
+        *,
+        max_decompressed_bytes: int = DEFAULT_PERSIST_MAX_DECOMPRESSED_BYTES,
+    ) -> None:
+        payload = _decode_persisted_payload(data, max_decompressed_bytes=max_decompressed_bytes)
+        _load_persisted_payload_into_store(self, payload)
 
     def register_metric(self, spec: NumericMetricSpec) -> None:
         metric_id = str(spec.metric_id or "").strip().lower()
@@ -331,7 +372,10 @@ class PipelineTelemetryStore:
                 self._metric_specs[metric] = spec
             series = _NumericMetricSeries(spec=spec)
             self._numeric_series[key] = series
-        return bool(series.observe(numeric_value, now_s=timestamp))
+        changed = bool(series.observe(numeric_value, now_s=timestamp))
+        if changed:
+            self._dirty = True
+        return changed
 
     def record_image_marker(
         self,
@@ -392,6 +436,7 @@ class PipelineTelemetryStore:
                 marker["confidence"] = max(0.0, min(1.0, parsed_confidence))
         markers.append(marker)
         self._image_pipeline_updated_at[pipeline] = timestamp
+        self._dirty = True
         return True
 
     def reset(self, pipeline_name: str) -> None:
@@ -402,6 +447,7 @@ class PipelineTelemetryStore:
             self._numeric_series.pop(key, None)
         self._image_markers_by_pipeline.pop(pipeline, None)
         self._image_pipeline_updated_at.pop(pipeline, None)
+        self._dirty = True
 
     def snapshot_numeric_metric(
         self,
@@ -465,6 +511,609 @@ class PipelineTelemetryStore:
             "image_pipelines": len(self._image_markers_by_pipeline),
             "image_markers": total_markers,
         }
+
+
+@dataclass(slots=True)
+class _TelemetryPersistenceView:
+    captured_at: float
+    numeric_series: list[tuple[tuple[str, str, str], _NumericMetricSeries]]
+    image_markers: list[tuple[str, list[dict[str, Any]]]]
+
+
+def _safe_role_component(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return "core"
+    out = []
+    for ch in raw:
+        if ch.isalnum() or ch in {"-", "_"}:
+            out.append(ch)
+        else:
+            out.append("_")
+    text = "".join(out).strip("_")
+    return text or "core"
+
+
+class _PersistWriter:
+    def __init__(self, fp, *, compression_level: int) -> None:  # noqa: ANN001
+        self._fp = fp
+        self._compressor = zlib.compressobj(level=max(1, min(9, int(compression_level))))
+
+    def _write(self, data: bytes) -> None:
+        chunk = self._compressor.compress(data)
+        if chunk:
+            self._fp.write(chunk)
+
+    def finish(self) -> None:
+        chunk = self._compressor.flush()
+        if chunk:
+            self._fp.write(chunk)
+
+    def u32(self, value: int) -> None:
+        self._write(struct.pack("<I", int(value) & 0xFFFFFFFF))
+
+    def f64(self, value: float) -> None:
+        self._write(struct.pack("<d", float(value)))
+
+    def bytes(self, blob: bytes) -> None:
+        self.u32(len(blob))
+        if blob:
+            self._write(blob)
+
+    def text(self, value: str) -> None:
+        encoded = str(value or "").encode("utf-8", errors="replace")
+        self.bytes(encoded)
+
+
+class _PersistReader:
+    def __init__(self, data: bytes) -> None:
+        self._data = memoryview(data)
+        self._pos = 0
+
+    def _read(self, n: int) -> memoryview:
+        size = int(n)
+        if size < 0:
+            raise ValueError("invalid length")
+        end = self._pos + size
+        if end > len(self._data):
+            raise ValueError("unexpected end of data")
+        out = self._data[self._pos : end]
+        self._pos = end
+        return out
+
+    def u32(self) -> int:
+        out = struct.unpack_from("<I", self._data, self._pos)[0]
+        self._pos += 4
+        return int(out)
+
+    def f64(self) -> float:
+        out = struct.unpack_from("<d", self._data, self._pos)[0]
+        self._pos += 8
+        return float(out)
+
+    def bytes_view(self, *, max_size: int = 128 * 1024 * 1024) -> memoryview:
+        length = int(self.u32())
+        if length < 0 or length > int(max_size):
+            raise ValueError("invalid blob length")
+        return self._read(length)
+
+    def text(self, *, max_size: int = 256 * 1024) -> str:
+        view = self.bytes_view(max_size=int(max_size))
+        if not view:
+            return ""
+        return view.tobytes().decode("utf-8", errors="replace")
+
+
+def _decompress_limited(blob: bytes, *, max_decompressed_bytes: int) -> bytes:
+    limit = max(0, int(max_decompressed_bytes))
+    if limit <= 0:
+        return b""
+    decomp = zlib.decompressobj()
+    out = bytearray()
+    chunk_size = 256 * 1024
+    pos = 0
+    while pos < len(blob):
+        piece = blob[pos : pos + chunk_size]
+        pos += chunk_size
+        part = decomp.decompress(piece, max_length=max(0, limit - len(out)))
+        if part:
+            out.extend(part)
+            if len(out) > limit:
+                raise ValueError("telemetry checkpoint too large")
+        if decomp.unconsumed_tail and len(out) >= limit:
+            raise ValueError("telemetry checkpoint too large")
+    part = decomp.flush()
+    if part:
+        out.extend(part)
+    if len(out) > limit:
+        raise ValueError("telemetry checkpoint too large")
+    return bytes(out)
+
+
+def _encode_persisted_view(
+    view: _TelemetryPersistenceView,
+    *,
+    include_hist: bool,
+    compression_level: int,
+) -> bytes:
+    import io
+
+    bio = io.BytesIO()
+    bio.write(_PERSIST_MAGIC)
+    writer = _PersistWriter(bio, compression_level=compression_level)
+    _write_persisted_payload(writer, view, include_hist=include_hist)
+    writer.finish()
+    return bio.getvalue()
+
+
+def _write_persisted_view_atomic(
+    path: Path,
+    view: _TelemetryPersistenceView,
+    *,
+    include_hist: bool,
+    compression_level: int,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=str(path.parent), delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(_PERSIST_MAGIC)
+            writer = _PersistWriter(tmp, compression_level=compression_level)
+            _write_persisted_payload(writer, view, include_hist=include_hist)
+            writer.finish()
+        os.replace(str(tmp_path), str(path))
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+
+
+def _write_persisted_payload(writer: _PersistWriter, view: _TelemetryPersistenceView, *, include_hist: bool) -> None:
+    writer.u32(1)  # payload version
+    flags = 1 if include_hist else 0
+    writer.u32(flags)
+    writer.f64(float(view.captured_at or 0.0))
+
+    numeric_items = list(view.numeric_series)
+    writer.u32(len(numeric_items))
+    for key, series in numeric_items:
+        pipeline, node, metric = key
+        writer.text(pipeline)
+        writer.text(node)
+        writer.text(metric)
+        writer.f64(float(series.updated_at or 0.0))
+        writer.f64(float(series.last_sample_at or 0.0))
+
+        spec = series.spec
+        writer.u32(int(spec.window_seconds))
+        writer.u32(int(spec.bucket_seconds))
+        writer.f64(float(spec.histogram_min))
+        writer.f64(float(spec.histogram_max))
+        writer.u32(int(spec.histogram_bins))
+        writer.f64(float(spec.min_sample_interval_s))
+
+        writer.u32(int(series.bucket_count))
+        writer.bytes(series._bucket_ids.tobytes())
+        writer.bytes(series._counts.tobytes())
+        writer.bytes(series._sums.tobytes())
+        writer.bytes(series._mins.tobytes())
+        writer.bytes(series._maxs.tobytes())
+        if include_hist:
+            writer.bytes(series._hist.tobytes())
+
+    image_items = list(view.image_markers)
+    writer.u32(len(image_items))
+    for pipeline_name, markers in image_items:
+        writer.text(pipeline_name)
+        writer.u32(len(markers))
+        for marker in markers:
+            try:
+                ts = float(marker.get("ts") or 0.0)
+            except Exception:
+                ts = 0.0
+            writer.f64(ts)
+            writer.text(str(marker.get("node_id") or ""))
+            writer.text(str(marker.get("metric_id") or ""))
+            writer.text(str(marker.get("rel_path") or ""))
+            writer.text(str(marker.get("image_key") or ""))
+            confidence = marker.get("confidence")
+            if confidence is None:
+                writer.f64(float("nan"))
+            else:
+                try:
+                    writer.f64(float(confidence))
+                except Exception:
+                    writer.f64(float("nan"))
+
+
+def _decode_persisted_payload(
+    data: bytes,
+    *,
+    max_decompressed_bytes: int,
+) -> bytes:
+    blob = bytes(data or b"")
+    if not blob.startswith(_PERSIST_MAGIC):
+        raise ValueError("invalid telemetry checkpoint header")
+    compressed = blob[len(_PERSIST_MAGIC) :]
+    return _decompress_limited(compressed, max_decompressed_bytes=max_decompressed_bytes)
+
+
+def _float_almost_equal(a: float, b: float, *, eps: float = 1e-9) -> bool:
+    return abs(float(a) - float(b)) <= float(eps)
+
+
+def _spec_compatible(
+    spec: NumericMetricSpec,
+    *,
+    window_seconds: int,
+    bucket_seconds: int,
+    histogram_min: float,
+    histogram_max: float,
+    histogram_bins: int,
+) -> bool:
+    if int(spec.window_seconds) != int(window_seconds):
+        return False
+    if int(spec.bucket_seconds) != int(bucket_seconds):
+        return False
+    if int(spec.histogram_bins) != int(histogram_bins):
+        return False
+    if not _float_almost_equal(float(spec.histogram_min), float(histogram_min)):
+        return False
+    if not _float_almost_equal(float(spec.histogram_max), float(histogram_max)):
+        return False
+    return True
+
+
+def _read_array_from_bytes(typecode: str, blob: memoryview) -> array:
+    arr = array(typecode)
+    if blob:
+        arr.frombytes(blob)
+    return arr
+
+
+def _nan() -> float:
+    return float("nan")
+
+
+def _is_nan(value: float) -> bool:
+    return value != value  # noqa: PLR0124
+
+
+def _clamp01(value: float) -> float:
+    if value < 0.0:
+        return 0.0
+    if value > 1.0:
+        return 1.0
+    return value
+
+
+def _sanitize_marker_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _sanitize_marker_metric(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _sanitize_marker_node(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _sanitize_marker_path(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _sanitize_marker_key(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _sanitize_marker_confidence(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(parsed) or _is_nan(parsed):
+        return None
+    return _clamp01(parsed)
+
+
+def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: bytes) -> None:
+    reader = _PersistReader(payload)
+    version = reader.u32()
+    if version != 1:
+        raise ValueError("unsupported telemetry checkpoint version")
+    flags = reader.u32()
+    include_hist = bool(flags & 1)
+    _captured_at = reader.f64()
+
+    numeric_count = int(reader.u32())
+
+    store._numeric_series.clear()
+    store._image_markers_by_pipeline.clear()
+    store._image_pipeline_updated_at.clear()
+
+    imported_numeric = 0
+    max_numeric = max(0, int(store.max_numeric_series))
+    for _ in range(max(0, numeric_count)):
+        pipeline = store._sanitize_pipeline_name(reader.text())
+        node = store._sanitize_node_id(reader.text())
+        metric = store._sanitize_metric_id(reader.text())
+        updated_at = reader.f64()
+        last_sample_at = reader.f64()
+
+        window_seconds = int(reader.u32())
+        bucket_seconds = int(reader.u32())
+        hist_min = reader.f64()
+        hist_max = reader.f64()
+        hist_bins = int(reader.u32())
+        min_sample_interval_s = reader.f64()
+
+        bucket_count = int(reader.u32())
+        bucket_ids_blob = reader.bytes_view()
+        counts_blob = reader.bytes_view()
+        sums_blob = reader.bytes_view()
+        mins_blob = reader.bytes_view()
+        maxs_blob = reader.bytes_view()
+        hist_blob = reader.bytes_view() if include_hist else None
+
+        if not pipeline or not node or not metric:
+            continue
+        if max_numeric <= 0 or imported_numeric >= max_numeric:
+            continue
+
+        spec = store._metric_specs.get(metric)
+        if spec is not None and not _spec_compatible(
+            spec,
+            window_seconds=window_seconds,
+            bucket_seconds=bucket_seconds,
+            histogram_min=hist_min,
+            histogram_max=hist_max,
+            histogram_bins=hist_bins,
+        ):
+            continue
+
+        if spec is None:
+            try:
+                spec = NumericMetricSpec(
+                    metric_id=metric,
+                    window_seconds=window_seconds,
+                    bucket_seconds=bucket_seconds,
+                    histogram_min=hist_min,
+                    histogram_max=hist_max,
+                    histogram_bins=hist_bins,
+                    min_sample_interval_s=min_sample_interval_s,
+                )
+            except Exception:
+                continue
+            store._metric_specs[metric] = spec
+
+        series = _NumericMetricSeries(spec=spec)
+        if int(series.bucket_count) != int(bucket_count):
+            continue
+
+        expected_bucket_len = int(bucket_count) * 8
+        expected_counts_len = int(bucket_count) * 4
+        expected_float_len = int(bucket_count) * 8
+        if len(bucket_ids_blob) != expected_bucket_len:
+            continue
+        if len(counts_blob) != expected_counts_len:
+            continue
+        if len(sums_blob) != expected_float_len:
+            continue
+        if len(mins_blob) != expected_float_len:
+            continue
+        if len(maxs_blob) != expected_float_len:
+            continue
+
+        series._bucket_ids = _read_array_from_bytes("q", bucket_ids_blob)
+        series._counts = _read_array_from_bytes("I", counts_blob)
+        series._sums = _read_array_from_bytes("d", sums_blob)
+        series._mins = _read_array_from_bytes("d", mins_blob)
+        series._maxs = _read_array_from_bytes("d", maxs_blob)
+        if include_hist and hist_blob is not None:
+            expected_hist_len = int(bucket_count) * int(spec.histogram_bins) * 4
+            if len(hist_blob) == expected_hist_len:
+                series._hist = _read_array_from_bytes("I", hist_blob)
+
+        series.updated_at = float(updated_at or 0.0)
+        series.last_sample_at = float(last_sample_at or 0.0)
+        store._numeric_series[(pipeline, node, metric)] = series
+        imported_numeric += 1
+
+    image_pipeline_count = int(reader.u32())
+    max_image_pipelines = max(0, int(store.max_image_pipelines))
+    max_markers_per_pipeline = max(0, int(store.max_image_markers_per_pipeline))
+    imported_pipelines = 0
+    for _ in range(max(0, image_pipeline_count)):
+        pipeline_name = store._sanitize_pipeline_name(reader.text())
+        marker_count = int(reader.u32())
+        should_store = (
+            bool(pipeline_name)
+            and max_image_pipelines > 0
+            and max_markers_per_pipeline > 0
+            and imported_pipelines < max_image_pipelines
+        )
+        if should_store and pipeline_name not in store._image_markers_by_pipeline:
+            store._image_markers_by_pipeline[pipeline_name] = deque(maxlen=max_markers_per_pipeline)
+        max_ts = 0.0
+        for _ in range(max(0, marker_count)):
+            ts = reader.f64()
+            node_id = _sanitize_marker_node(reader.text())
+            metric_id = _sanitize_marker_metric(reader.text()) or METRIC_STORE_IMAGE
+            rel_path = _sanitize_marker_path(reader.text())
+            image_key = _sanitize_marker_key(reader.text())
+            confidence_raw = reader.f64()
+            confidence = None if _is_nan(confidence_raw) else _sanitize_marker_confidence(confidence_raw)
+
+            if should_store and rel_path and node_id:
+                marker: dict[str, Any] = {
+                    "ts": float(ts or 0.0),
+                    "node_id": node_id,
+                    "metric_id": metric_id,
+                    "rel_path": rel_path,
+                }
+                if image_key:
+                    marker["image_key"] = image_key
+                if confidence is not None:
+                    marker["confidence"] = confidence
+                store._image_markers_by_pipeline[pipeline_name].append(marker)
+                if ts > max_ts:
+                    max_ts = ts
+
+        if should_store:
+            if max_ts <= 0.0 and pipeline_name in store._image_markers_by_pipeline:
+                for marker in store._image_markers_by_pipeline[pipeline_name]:
+                    try:
+                        ts = float(marker.get("ts") or 0.0)
+                    except Exception:
+                        ts = 0.0
+                    if ts > max_ts:
+                        max_ts = ts
+            store._image_pipeline_updated_at[pipeline_name] = max_ts
+            imported_pipelines += 1
+
+    store.mark_clean()
+
+
+def _capture_persistence_view(store: PipelineTelemetryStore, *, now_s: float | None = None) -> _TelemetryPersistenceView:
+    now = time.time() if now_s is None else float(now_s)
+    if not math.isfinite(now) or now <= 0.0:
+        now = time.time()
+
+    numeric_items: list[tuple[tuple[str, str, str], _NumericMetricSeries]] = []
+    for key, series in store._numeric_series.items():
+        updated_at = float(series.updated_at or 0.0)
+        if updated_at <= 0.0:
+            continue
+        window = float(series.spec.window_seconds)
+        if window > 0.0 and updated_at < (now - window - float(series.spec.bucket_seconds) * 2.0):
+            continue
+        numeric_items.append((key, series))
+
+    numeric_items.sort(key=lambda item: (float(item[1].updated_at or 0.0), item[0]), reverse=True)
+
+    image_items: list[tuple[str, list[dict[str, Any]]]] = []
+    for pipeline_name, markers in store._image_markers_by_pipeline.items():
+        image_items.append((pipeline_name, list(markers)))
+    image_items.sort(
+        key=lambda item: (float(store._image_pipeline_updated_at.get(item[0], 0.0) or 0.0), item[0]),
+        reverse=True,
+    )
+
+    return _TelemetryPersistenceView(
+        captured_at=now,
+        numeric_series=numeric_items,
+        image_markers=image_items,
+    )
+
+
+class PipelineTelemetryDiskCheckpoint:
+    def __init__(
+        self,
+        *,
+        store: PipelineTelemetryStore,
+        path: Path,
+        interval_s: float = DEFAULT_PERSIST_INTERVAL_S,
+        compression_level: int = DEFAULT_PERSIST_COMPRESSION_LEVEL,
+        include_hist: bool = False,
+        max_read_bytes: int = DEFAULT_PERSIST_MAX_READ_BYTES,
+        max_decompressed_bytes: int = DEFAULT_PERSIST_MAX_DECOMPRESSED_BYTES,
+    ) -> None:
+        self._store = store
+        self._path = Path(path)
+        self._interval_s = max(5.0, float(interval_s))
+        self._compression_level = max(1, min(9, int(compression_level)))
+        self._include_hist = bool(include_hist)
+        self._max_read_bytes = max(0, int(max_read_bytes))
+        self._max_decompressed_bytes = max(0, int(max_decompressed_bytes))
+        self._task: asyncio.Task[None] | None = None
+        self._lock = asyncio.Lock()
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    async def load(self) -> None:
+        path = self._path
+        if not path.is_file():
+            return
+        if self._max_read_bytes > 0:
+            try:
+                if int(path.stat().st_size) > int(self._max_read_bytes):
+                    logger.warning("Skipping telemetry checkpoint (too large): %s", path)
+                    return
+            except Exception:
+                pass
+        try:
+            data = await asyncio.to_thread(path.read_bytes)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to read telemetry checkpoint: %s", exc)
+            return
+        try:
+            payload = _decode_persisted_payload(data, max_decompressed_bytes=self._max_decompressed_bytes)
+            _load_persisted_payload_into_store(self._store, payload)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to load telemetry checkpoint: %s", exc)
+            try:
+                bad = path.with_suffix(path.suffix + ".corrupt")
+                os.replace(str(path), str(bad))
+            except Exception:
+                pass
+
+    def start(self) -> None:
+        if self._task is not None:
+            return
+        self._task = asyncio.create_task(self._run(), name="toposync.telemetry.checkpoint")
+
+    async def close(self) -> None:
+        await self.flush(force=True)
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+    async def flush(self, *, force: bool = False) -> None:
+        if not force and not self._store.is_dirty():
+            return
+        async with self._lock:
+            if not force and not self._store.is_dirty():
+                return
+            self._store.mark_clean()
+            view = _capture_persistence_view(self._store)
+            try:
+                await asyncio.to_thread(
+                    _write_persisted_view_atomic,
+                    self._path,
+                    view,
+                    include_hist=self._include_hist,
+                    compression_level=self._compression_level,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._store._dirty = True
+                logger.warning("Failed to persist telemetry checkpoint: %s", exc)
+                return
+
+    async def _run(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self._interval_s)
+                try:
+                    await self.flush()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Telemetry checkpoint loop crashed")
+        except asyncio.CancelledError:
+            return
+
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -575,3 +1224,52 @@ def create_default_pipeline_telemetry_store() -> PipelineTelemetryStore | None:
         max_image_pipelines=max_image_pipelines,
     )
     return store
+
+
+def create_default_pipeline_telemetry_disk_checkpoint(
+    store: PipelineTelemetryStore | None,
+    *,
+    data_dir: Path,
+) -> PipelineTelemetryDiskCheckpoint | None:
+    if store is None:
+        return None
+    if not _env_bool("TOPOSYNC_TELEMETRY_PERSIST_ENABLED", True):
+        return None
+
+    interval_s = _env_float(
+        "TOPOSYNC_TELEMETRY_PERSIST_INTERVAL_S",
+        DEFAULT_PERSIST_INTERVAL_S,
+        min_value=5.0,
+        max_value=3_600.0,
+    )
+    compression_level = _env_int(
+        "TOPOSYNC_TELEMETRY_PERSIST_COMPRESSION_LEVEL",
+        DEFAULT_PERSIST_COMPRESSION_LEVEL,
+        min_value=1,
+        max_value=9,
+    )
+    include_hist = _env_bool("TOPOSYNC_TELEMETRY_PERSIST_INCLUDE_HIST", False)
+    max_read_bytes = _env_int(
+        "TOPOSYNC_TELEMETRY_PERSIST_MAX_READ_BYTES",
+        DEFAULT_PERSIST_MAX_READ_BYTES,
+        min_value=1024,
+        max_value=1024 * 1024 * 1024,
+    )
+    max_decompressed_bytes = _env_int(
+        "TOPOSYNC_TELEMETRY_PERSIST_MAX_DECOMPRESSED_BYTES",
+        DEFAULT_PERSIST_MAX_DECOMPRESSED_BYTES,
+        min_value=1024 * 1024,
+        max_value=2 * 1024 * 1024 * 1024,
+    )
+
+    role = _safe_role_component(os.getenv("TOPOSYNC_ROLE") or "core")
+    path = Path(data_dir) / "telemetry" / f"pipeline_telemetry_{role}.tlm1"
+    return PipelineTelemetryDiskCheckpoint(
+        store=store,
+        path=path,
+        interval_s=float(interval_s),
+        compression_level=int(compression_level),
+        include_hist=bool(include_hist),
+        max_read_bytes=int(max_read_bytes),
+        max_decompressed_bytes=int(max_decompressed_bytes),
+    )

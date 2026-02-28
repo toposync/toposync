@@ -28,7 +28,11 @@ from ..execution_scheduler import ExecutionScheduler
 from ..operator_registry import OperatorRegistry
 from ..shared_runtime import PipelineBundleRuntime
 from ..runtime import ArtifactMemoryCounter
-from ..telemetry import PipelineTelemetryStore, create_default_pipeline_telemetry_store
+from ..telemetry import (
+    PipelineTelemetryStore,
+    create_default_pipeline_telemetry_disk_checkpoint,
+    create_default_pipeline_telemetry_store,
+)
 from .plan import build_distributed_graphs
 
 
@@ -233,6 +237,10 @@ class ProcessingServerRuntime:
     def last_acked_event_id(self) -> int:
         return self._last_acked_event_id
 
+    @property
+    def telemetry_store(self) -> PipelineTelemetryStore | None:
+        return self._pipeline_telemetry_store
+
 
 def create_processing_app() -> FastAPI:
     app = FastAPI(title="Toposync Processing Server", version="0.1.0")
@@ -250,6 +258,7 @@ def create_processing_app() -> FastAPI:
         compiler=pipeline_compiler,
         pipeline_telemetry_store=create_default_pipeline_telemetry_store(),
     )
+    telemetry_checkpoint = None
 
     def _processing_basic_auth() -> tuple[str, str] | None:
         username = str(os.getenv("TOPOSYNC_PROCESSING_USERNAME") or "").strip()
@@ -281,9 +290,24 @@ def create_processing_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _startup() -> None:
+        nonlocal telemetry_checkpoint
         os.environ.setdefault("TOPOSYNC_ROLE", "processing")
         await config_store.load()
         runtime.start()
+        telemetry_checkpoint = create_default_pipeline_telemetry_disk_checkpoint(
+            runtime.telemetry_store,
+            data_dir=config_store.paths.data_dir,
+        )
+        app.state.pipeline_telemetry_checkpoint = telemetry_checkpoint
+        if telemetry_checkpoint is not None:
+            try:
+                await telemetry_checkpoint.load()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to load telemetry checkpoint: %s", exc)
+            try:
+                telemetry_checkpoint.start()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to start telemetry checkpoint loop: %s", exc)
 
         ext_manager = ExtensionManager(group="toposync.extensions")
         app.state.bus = bus
@@ -297,6 +321,11 @@ def create_processing_app() -> FastAPI:
     @app.on_event("shutdown")
     async def _shutdown() -> None:
         await runtime.stop()
+        if telemetry_checkpoint is not None:
+            try:
+                await telemetry_checkpoint.close()
+            except Exception:
+                pass
 
     @app.post("/api/processing/config")
     async def set_processing_config(body: ProcessingConfig) -> dict[str, Any]:

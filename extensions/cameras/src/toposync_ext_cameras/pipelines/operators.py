@@ -4,6 +4,7 @@ import asyncio
 import dataclasses
 import hashlib
 import math
+import os
 import time
 import uuid
 from dataclasses import dataclass, replace
@@ -40,6 +41,19 @@ def _camera_hub_key(*, camera_id: str, rtsp_url: str, backend: str) -> str:
 
 def _frame_grabber_factory(rtsp_url: str, *, target_fps: float, backend: str) -> FrameGrabber:
     return FrameGrabber(rtsp_url, target_fps=float(target_fps), backend=str(backend))
+
+
+def _read_env_float(name: str, fallback: float, *, min_value: float, max_value: float) -> float:
+    raw = str(os.getenv(name, "") or "").strip()
+    if not raw:
+        return float(fallback)
+    try:
+        value = float(raw)
+    except Exception:
+        return float(fallback)
+    if not math.isfinite(value):
+        return float(fallback)
+    return max(float(min_value), min(float(max_value), float(value)))
 
 
 _GLOBAL_CAMERA_HUB = CameraHub(frame_grabber_factory=_frame_grabber_factory)
@@ -189,29 +203,75 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._config = CameraSourceConfig.model_validate(config)
         self._dependencies = dependencies
         self._grabber: FrameGrabber | None = None
+        self._grabber_started_monotonic = 0.0
         self._hub_key: str = ""
         self._last_ts = 0.0
         self._camera_name = ""
         self._camera_id = ""
+        self._source_uses_ingest = False
         self._gate_open = True
         self._gate_known = False
         self._waiting_for_source_config = False
         self._last_wait_log_monotonic = 0.0
+        self._force_direct_rtsp_until_monotonic = 0.0
+        self._backend_override: str | None = None
+        self._backend_override_until_monotonic = 0.0
+        self._last_reacquire_monotonic = 0.0
+        self._reacquire_after_s = _read_env_float(
+            "TOPOSYNC_CAMERA_SOURCE_REACQUIRE_AFTER_S",
+            15.0,
+            min_value=5.0,
+            max_value=300.0,
+        )
+        self._reacquire_cooldown_s = _read_env_float(
+            "TOPOSYNC_CAMERA_SOURCE_REACQUIRE_COOLDOWN_S",
+            5.0,
+            min_value=1.0,
+            max_value=120.0,
+        )
+        self._ingest_backoff_s = _read_env_float(
+            "TOPOSYNC_CAMERA_SOURCE_INGEST_BACKOFF_S",
+            90.0,
+            min_value=5.0,
+            max_value=900.0,
+        )
+        self._backend_failover_s = _read_env_float(
+            "TOPOSYNC_CAMERA_SOURCE_BACKEND_FAILOVER_S",
+            180.0,
+            min_value=5.0,
+            max_value=900.0,
+        )
 
     async def _ensure_grabber(self) -> None:
         if self._grabber is not None:
             return
-        rtsp_url, fps, camera_id, camera_name = await _resolve_camera_source(self._config, self._dependencies)
+        prefer_ingest = time.monotonic() >= self._force_direct_rtsp_until_monotonic
+        rtsp_url, fps, camera_id, camera_name, used_ingest = await _resolve_camera_source(
+            self._config,
+            self._dependencies,
+            prefer_ingest=prefer_ingest,
+        )
         self._waiting_for_source_config = False
         self._camera_id = camera_id
         self._camera_name = camera_name
-        self._hub_key = _camera_hub_key(camera_id=camera_id, rtsp_url=rtsp_url, backend=self._config.backend)
+        self._source_uses_ingest = bool(used_ingest)
+        selected_backend = str(self._config.backend or "").strip().lower() or "auto"
+        if self._backend_override:
+            now_mono = time.monotonic()
+            if now_mono < self._backend_override_until_monotonic:
+                selected_backend = self._backend_override
+            else:
+                self._backend_override = None
+                self._backend_override_until_monotonic = 0.0
+
+        self._hub_key = _camera_hub_key(camera_id=camera_id, rtsp_url=rtsp_url, backend=selected_backend)
         self._grabber = await _GLOBAL_CAMERA_HUB.acquire(
             key=self._hub_key,
             rtsp_url=rtsp_url,
             target_fps=float(fps),
-            backend=self._config.backend,
+            backend=selected_backend,
         )
+        self._grabber_started_monotonic = time.monotonic()
 
     async def _consume_gate_packets(self, context) -> None:  # noqa: ANN001
         gate_channel = context.inputs.get("gate")
@@ -251,10 +311,85 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             return
         hub_key = self._hub_key
         self._grabber = None
+        self._grabber_started_monotonic = 0.0
+        self._source_uses_ingest = False
         self._hub_key = ""
         if hub_key:
             await _GLOBAL_CAMERA_HUB.release(key=hub_key)
         self._last_ts = 0.0
+
+    def _capture_metrics_snapshot(self) -> dict[str, Any]:
+        if self._grabber is None:
+            return {}
+        try:
+            payload = dataclasses.asdict(self._grabber.metrics_snapshot())
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    async def _maybe_reacquire_grabber(self, context, *, metrics: dict[str, Any] | None = None) -> None:  # noqa: ANN001
+        if self._grabber is None:
+            return
+        now_mono = time.monotonic()
+        if (now_mono - self._last_reacquire_monotonic) < self._reacquire_cooldown_s:
+            return
+
+        details = metrics if isinstance(metrics, dict) else self._capture_metrics_snapshot()
+        opened = bool(details.get("opened"))
+        backend = str(details.get("backend") or "")
+        last_error = str(details.get("last_error") or "").strip()
+        restarts_raw = details.get("restarts")
+        try:
+            restarts = int(restarts_raw) if restarts_raw is not None else 0
+        except Exception:
+            restarts = 0
+
+        stale_for_s = max(0.0, now_mono - self._grabber_started_monotonic)
+        last_frame_ts_raw = details.get("last_frame_ts")
+        try:
+            last_frame_ts = float(last_frame_ts_raw)
+        except Exception:
+            last_frame_ts = 0.0
+        if last_frame_ts > 0.0:
+            stale_for_s = max(0.0, time.time() - last_frame_ts)
+
+        if stale_for_s < self._reacquire_after_s:
+            return
+
+        failover_note = ""
+        if backend == "opencv" and self._config.backend in {"auto", "opencv"}:
+            self._backend_override = "ffmpeg"
+            self._backend_override_until_monotonic = now_mono + self._backend_failover_s
+            failover_note = f" Switching backend to ffmpeg for {self._backend_failover_s:.0f}s."
+
+        self._last_reacquire_monotonic = now_mono
+        if self._source_uses_ingest:
+            self._force_direct_rtsp_until_monotonic = now_mono + self._ingest_backoff_s
+            context.logger.warning(
+                "Node '%s' camera source stalled for %.1fs (opened=%s backend=%s restarts=%d). "
+                "Re-resolving source and bypassing ingest for %.0fs.%s last_error=%s",
+                context.node_id,
+                stale_for_s,
+                opened,
+                backend or "-",
+                restarts,
+                self._ingest_backoff_s,
+                failover_note,
+                last_error or "-",
+            )
+        else:
+            context.logger.warning(
+                "Node '%s' camera source stalled for %.1fs (opened=%s backend=%s restarts=%d). "
+                "Re-resolving source.%s last_error=%s",
+                context.node_id,
+                stale_for_s,
+                opened,
+                backend or "-",
+                restarts,
+                failover_note,
+                last_error or "-",
+            )
+        await self._stop_grabber_if_needed()
 
     async def produce(self, context) -> Packet | None:  # noqa: ANN001
         await self._consume_gate_packets(context)
@@ -280,6 +415,8 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             return None
         frame, frame_ts = self._grabber.get_latest()
         if frame is None or not frame_ts:
+            capture_metrics = self._capture_metrics_snapshot()
+            await self._maybe_reacquire_grabber(context, metrics=capture_metrics)
             return None
         if frame_ts <= self._last_ts:
             return None
@@ -288,11 +425,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         height = int(getattr(frame, "shape", [0, 0])[0]) if getattr(frame, "shape", None) is not None else 0
         width = int(getattr(frame, "shape", [0, 0])[1]) if getattr(frame, "shape", None) is not None else 0
         stream_suffix = self._camera_id or "adhoc"
-        capture_metrics = {}
-        try:
-            capture_metrics = dataclasses.asdict(self._grabber.metrics_snapshot())
-        except Exception:
-            capture_metrics = {}
+        capture_metrics = self._capture_metrics_snapshot()
         frame_artifacts = {
             "frame_original": Artifact(
                 name="frame_original",
@@ -1075,12 +1208,14 @@ class _UltralyticsYoloBackend:
 async def _resolve_camera_source(
     config: CameraSourceConfig,
     dependencies: PipelineRuntimeDependencies,
-) -> tuple[str, float, str, str]:
+    *,
+    prefer_ingest: bool = True,
+) -> tuple[str, float, str, str, bool]:
     camera_id = config.camera_id.strip()
     if config.rtsp_url:
         url = _apply_rtsp_auth(config.rtsp_url, config.username, config.password)
         fps = float(config.fps if config.fps is not None else 5.0)
-        return url, max(1.0, min(60.0, fps)), camera_id, ""
+        return url, max(1.0, min(60.0, fps)), camera_id, "", False
 
     if not camera_id:
         raise RuntimeError("camera.source requires either camera_id or rtsp_url")
@@ -1121,10 +1256,13 @@ async def _resolve_camera_source(
     if config.fps is not None:
         camera_fps = float(config.fps)
     camera_fps = max(1.0, min(60.0, camera_fps))
-    ingest_url = await _maybe_resolve_ingest_rtsp_url(camera_id=camera_id, dependencies=dependencies)
-    if ingest_url:
-        url = ingest_url
-    return url, camera_fps, camera_id, str(camera.get("name", "")).strip()
+    used_ingest = False
+    if prefer_ingest:
+        ingest_url = await _maybe_resolve_ingest_rtsp_url(camera_id=camera_id, dependencies=dependencies)
+        if ingest_url:
+            url = ingest_url
+            used_ingest = True
+    return url, camera_fps, camera_id, str(camera.get("name", "")).strip(), used_ingest
 
 
 async def _maybe_resolve_ingest_rtsp_url(*, camera_id: str, dependencies: PipelineRuntimeDependencies) -> str | None:

@@ -39,7 +39,8 @@ class CameraHub:
             if entry is None:
                 # One hub per camera avoids multiple RTSP connections when multiple pipelines are running (e.g., different schedules).
                 grabber = self._frame_grabber_factory(rtsp_url, target_fps=float(target_fps), backend=str(backend))
-                started = grabber.start()
+                # Starting a grabber may block on network/camera open. Keep the event loop responsive.
+                started = await asyncio.to_thread(grabber.start)
                 entry = _HubEntry(
                     grabber=started,
                     refcount=0,
@@ -71,7 +72,8 @@ class CameraHub:
         if grabber is None:
             return
         try:
-            grabber.stop()
+            # Stopping may block while draining/releasing native capture resources.
+            await asyncio.to_thread(grabber.stop)
         except Exception:
             return
 

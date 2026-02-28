@@ -72,7 +72,21 @@ class MotionDetector:
             self._update_metrics(t0, t1)
             return MotionResult(score=0.0, active=False, last_latency_ms=self._last_latency_ms, fps=self._fps)
 
-        diff = cv2.absdiff(self._prev_gray, gray)
+        prev_gray = self._prev_gray
+        if getattr(prev_gray, "shape", None) != gray.shape:
+            self._prev_gray = gray
+            t1 = time.time()
+            self._update_metrics(t0, t1)
+            return MotionResult(score=0.0, active=False, last_latency_ms=self._last_latency_ms, fps=self._fps)
+
+        try:
+            diff = cv2.absdiff(prev_gray, gray)
+        except Exception:
+            self._prev_gray = gray
+            t1 = time.time()
+            self._update_metrics(t0, t1)
+            return MotionResult(score=0.0, active=False, last_latency_ms=self._last_latency_ms, fps=self._fps)
+
         self._prev_gray = gray
 
         _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)

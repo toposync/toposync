@@ -14,6 +14,7 @@ from toposync.runtime.pipelines import (
     PipelineRuntimeDependencies,
     register_builtin_operators,
 )
+from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 
 
@@ -161,3 +162,53 @@ def test_camera_source_waits_for_camera_settings_without_crashing(
     start_calls, snapshot = asyncio.run(scenario())
     assert start_calls == 1
     assert int(((snapshot.get("nodes") or {}).get("camera") or {}).get("error_count") or 0) == 0
+
+
+def test_resolve_camera_source_can_bypass_ingest_service(tmp_path: Path) -> None:
+    import toposync_ext_cameras.pipelines.operators as camera_ops
+
+    async def scenario() -> tuple[str, bool, str, bool]:
+        data_dir = tmp_path / "data"
+        store = ConfigStore(
+            paths=UserDataPaths(
+                data_dir=data_dir,
+                config_path=data_dir / "config.json",
+                files_dir=data_dir / "files",
+            ),
+        )
+        await store.load()
+        await store.patch_extension_settings(
+            "com.toposync.cameras",
+            {
+                "cameras": [
+                    {
+                        "id": "cam1",
+                        "name": "Cam 1",
+                        "rtsp_url": "rtsp://10.0.0.1/live",
+                        "username": "",
+                        "password": "",
+                        "fps": 5.0,
+                    }
+                ]
+            },
+        )
+
+        services = ServiceRegistry()
+
+        async def _resolve_ingest(*, camera_id: str) -> str:
+            assert camera_id == "cam1"
+            return "rtsp://127.0.0.1:8555/ingest-cam1"
+
+        services.register("streaming.ingest.resolve_rtsp_url", _resolve_ingest)
+
+        config = camera_ops.CameraSourceConfig(camera_id="cam1")
+        deps = PipelineRuntimeDependencies(config_store=store, services=services)
+        via_ingest = await camera_ops._resolve_camera_source(config, deps, prefer_ingest=True)
+        direct = await camera_ops._resolve_camera_source(config, deps, prefer_ingest=False)
+        return str(via_ingest[0]), bool(via_ingest[4]), str(direct[0]), bool(direct[4])
+
+    ingest_url, ingest_flag, direct_url, direct_flag = asyncio.run(scenario())
+    assert ingest_url == "rtsp://127.0.0.1:8555/ingest-cam1"
+    assert ingest_flag is True
+    assert direct_url == "rtsp://10.0.0.1/live"
+    assert direct_flag is False

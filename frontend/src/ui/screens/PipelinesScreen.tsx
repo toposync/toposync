@@ -26,7 +26,6 @@ import {
   listPipelines,
   listProcessingServers,
   putPipeline,
-  resetPipelineStats,
 } from "../../util/api";
 import { InteractivePipelineEditor } from "./pipelines/InteractivePipelineEditor";
 import { PipelineTelemetryFieldModal } from "./pipelines/PipelineTelemetryFieldModal";
@@ -86,15 +85,12 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
   const [interactiveWarning, setInteractiveWarning] = useState<string | null>(null);
 
   const [pipelineStats, setPipelineStats] = useState<PipelineStats | null>(null);
-  const [pipelineStatsError, setPipelineStatsError] = useState<string | null>(null);
-  const [pipelineStatsLoading, setPipelineStatsLoading] = useState(false);
   const [telemetryFieldInspector, setTelemetryFieldInspector] = useState<TelemetryFieldInspectorRequest | null>(null);
 
   const operatorsById = useMemo(() => {
     const entries = operators.map((operator) => [operator.id, operator] as const);
     return Object.fromEntries(entries);
   }, [operators]);
-  const integerFormatter = useMemo(() => new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }), [locale]);
 
   const selected = useMemo(() => {
     if (!selectedName) return null;
@@ -308,50 +304,26 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
   useEffect(() => {
     if (!draft) {
       setPipelineStats(null);
-      setPipelineStatsError(null);
-      setPipelineStatsLoading(false);
       return;
     }
 
     let cancelled = false;
-    setPipelineStatsLoading(true);
-    setPipelineStatsError(null);
+    setPipelineStats(null);
 
     getPipelineStats(draft.name)
       .then((stats) => {
         if (cancelled) return;
         setPipelineStats(stats);
       })
-      .catch((err: any) => {
+      .catch(() => {
         if (cancelled) return;
         setPipelineStats(null);
-        setPipelineStatsError(String(err?.message ?? err));
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setPipelineStatsLoading(false);
       });
 
     return () => {
       cancelled = true;
     };
   }, [draft?.name]);
-
-  const resetStats = useCallback(async () => {
-    if (!draft) return;
-    if (!confirm(t("core.ui.pipelines.stats.confirm_reset", { name: draft.name }))) return;
-    setPipelineStatsLoading(true);
-    setPipelineStatsError(null);
-    try {
-      const stats = await resetPipelineStats(draft.name);
-      setPipelineStats(stats);
-    } catch (err: any) {
-      setPipelineStats(null);
-      setPipelineStatsError(String(err?.message ?? err));
-    } finally {
-      setPipelineStatsLoading(false);
-    }
-  }, [draft, t]);
 
   const stepOutputsByNodeId = useMemo(() => {
     if (!pipelineStats || typeof pipelineStats !== "object") return null;
@@ -817,46 +789,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                   </div>
                 </div>
               ) : null}
-
-              <div className="card">
-                <div className="cardTitle">{t("core.ui.pipelines.stats.title")}</div>
-                <div className="cardBody">
-                  <div className="pipelinesStepStatsHeader">
-                    <div className="pipelinesHint">
-                      {pipelineStats
-                        ? t("core.ui.pipelines.stats.window_hint", {
-                            days: Math.max(1, Math.round(Number(pipelineStats.window_seconds || 0) / 86400)),
-                          })
-                        : t("core.ui.pipelines.stats.no_data")}
-                    </div>
-                    <button className="pillButton" type="button" onClick={() => void resetStats()} disabled={pipelineStatsLoading}>
-                      <i className="fa-solid fa-rotate" aria-hidden="true" />
-                      {t("core.ui.pipelines.stats.reset")}
-                    </button>
-                  </div>
-
-                  {pipelineStatsLoading ? (
-                    <div className="pipelinesHint">{t("core.ui.pipelines.stats.loading")}</div>
-                  ) : pipelineStatsError ? (
-                    <div className="pipelinesHint">{t("core.ui.pipelines.stats.unavailable", { error: pipelineStatsError })}</div>
-                  ) : (
-                    <div className="pipelinesStepStatsGrid">
-                      {interactiveSteps.length === 0 ? (
-                        <div className="pipelinesHint">{t("core.ui.pipelines.stats.no_data")}</div>
-                      ) : (
-                        interactiveSteps.map((step) => (
-                          <div key={`step-stat:${step.nodeId}:${step.uid}`} className="pipelinesStepStatsRow">
-                            <div className="pipelinesStepStatsName">{prettyOperatorName(step.operatorId) || step.operatorId}</div>
-                            <div className="pipelinesStepStatsValue">
-                              {integerFormatter.format(Number((stepOutputsByNodeId?.[step.nodeId] ?? 0) as number))}
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
 
               <PipelineTelemetryOverviewCard pipelineName={draft?.name ?? null} steps={interactiveSteps} />
             </div>

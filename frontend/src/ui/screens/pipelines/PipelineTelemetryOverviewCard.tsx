@@ -34,6 +34,14 @@ type ActiveMarkerSelection = {
   x: number;
 };
 
+type TimelineSegment = {
+  points: AggregatedPoint[];
+  startS: number;
+  endS: number;
+  min: number;
+  max: number;
+};
+
 type HoverTimelineSample = {
   metricId: string;
   label: string;
@@ -196,6 +204,19 @@ function splitIntoSegments(points: AggregatedPoint[], bucketSeconds: number): Ag
   return out;
 }
 
+function segmentRangeFromZero(points: AggregatedPoint[]): { min: number; max: number } {
+  if (points.length <= 0) return { min: 0, max: 0 };
+  const max = Math.max(0, ...points.map((point) => point.max));
+  return { min: 0, max };
+}
+
+function findSegmentAtTs(segments: TimelineSegment[], ts: number): TimelineSegment | null {
+  for (const segment of segments) {
+    if (ts >= segment.startS && ts <= segment.endS) return segment;
+  }
+  return null;
+}
+
 export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): React.ReactElement {
   const { t, locale } = i18n.useI18n();
   const [loading, setLoading] = useState(false);
@@ -351,12 +372,20 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
   };
   const yScale = (value01: number) => paddingTop + (1 - Math.max(0, Math.min(1, value01))) * innerHeight;
 
-  const seriesRanges = useMemo(() => {
-    const out = new Map<string, { min: number; max: number }>();
+  const timelineSegmentsByMetric = useMemo(() => {
+    const out = new Map<string, TimelineSegment[]>();
     for (const item of series) {
-      const values = item.points.flatMap((point) => [point.min, point.max]);
-      if (!values.length) continue;
-      out.set(item.metricId, { min: Math.min(...values), max: Math.max(...values) });
+      const segments = splitIntoSegments(item.points, item.bucketSeconds).map((points) => {
+        const range = segmentRangeFromZero(points);
+        return {
+          points,
+          startS: points[0]?.bucket_start_s ?? 0,
+          endS: points[points.length - 1]?.bucket_start_s ?? 0,
+          min: range.min,
+          max: range.max,
+        };
+      });
+      out.set(item.metricId, segments);
     }
     return out;
   }, [series]);
@@ -485,9 +514,10 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
                       const distance = Math.abs(Number(nearest.bucket_start_s) - cursorTs);
                       if (distance > metric.bucketSeconds * 0.9) continue;
                     }
-                    const range = seriesRanges.get(metric.metricId);
-                    if (!range) continue;
-                    const span = Math.max(1e-9, range.max - range.min);
+                    const segments = timelineSegmentsByMetric.get(metric.metricId) ?? [];
+                    const segment = findSegmentAtTs(segments, nearest.bucket_start_s);
+                    if (!segment) continue;
+                    const span = Math.max(1e-9, segment.max - segment.min);
                     samples.push({
                       metricId: metric.metricId,
                       label: metricLabel(metric.metricId, t),
@@ -496,7 +526,7 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
                       avg: nearest.avg,
                       min: nearest.min,
                       max: nearest.max,
-                      y: yScale((nearest.avg - range.min) / span),
+                      y: yScale((nearest.avg - segment.min) / span),
                     });
                   }
                   if (!samples.length) {
@@ -512,16 +542,13 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
               >
                 <line x1={paddingLeft} x2={chartWidth - paddingRight} y1={paddingTop + innerHeight} y2={paddingTop + innerHeight} className="pipelinesTelemetryAxis" />
                 {series.map((item) => {
-                  const range = seriesRanges.get(item.metricId);
-                  if (!range) return null;
-                  const minValue = range.min;
-                  const maxValue = range.max;
-                  const segments = splitIntoSegments(item.points, item.bucketSeconds);
+                  const segments = timelineSegmentsByMetric.get(item.metricId) ?? [];
+                  if (!segments.length) return null;
                   return (
                     <g key={`series:${item.metricId}`}>
                       {segments.map((segment, segIndex) => {
-                        const linePath = buildLinePath(segment, xScale, yScale, minValue, maxValue);
-                        const bandPath = buildBandPath(segment, xScale, yScale, minValue, maxValue);
+                        const linePath = buildLinePath(segment.points, xScale, yScale, segment.min, segment.max);
+                        const bandPath = buildBandPath(segment.points, xScale, yScale, segment.min, segment.max);
                         return (
                           <g key={`seg:${segIndex}`}>
                             {bandPath ? <path d={bandPath} fill={item.color} fillOpacity={0.16} stroke="none" /> : null}

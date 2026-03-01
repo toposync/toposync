@@ -602,6 +602,8 @@ textarea {
   grid-template-columns: 320px 1fr;
   gap: 12px;
   min-height: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .pipelinesForm {

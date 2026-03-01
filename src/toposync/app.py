@@ -1591,6 +1591,7 @@ def create_app() -> FastAPI:
         pipeline_name: str,
         node_id: str = Query(min_length=1),
         metric_id: str = Query(min_length=1),
+        window_seconds: int | None = Query(default=None, ge=1, le=30 * 24 * 60 * 60),
         point_limit: int = Query(default=720, ge=50, le=5000),
     ) -> PipelineTelemetryNumericResponse:
         _require(request, action="core:pipelines:read")
@@ -1613,6 +1614,7 @@ def create_app() -> FastAPI:
             node_id=str(node_id),
             metric_id=str(metric_id),
             max_points=int(point_limit),
+            window_seconds=(int(window_seconds) if window_seconds is not None else None),
         )
         if snapshot is None:
             return PipelineTelemetryNumericResponse(

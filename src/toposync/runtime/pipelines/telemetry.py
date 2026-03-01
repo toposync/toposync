@@ -165,10 +165,29 @@ class _NumericMetricSeries:
         self.updated_at = now_s
         return True
 
-    def snapshot(self, *, now_s: float | None = None, max_points: int | None = None) -> dict[str, Any]:
+    def snapshot(
+        self,
+        *,
+        now_s: float | None = None,
+        max_points: int | None = None,
+        window_seconds: int | None = None,
+    ) -> dict[str, Any]:
         now = time.time() if now_s is None else float(now_s)
         current_bucket = self._bucket_number(now)
-        min_bucket = current_bucket - (self.bucket_count - 1)
+        effective_window_seconds = int(self.spec.window_seconds)
+        if window_seconds is not None:
+            try:
+                requested_window_seconds = int(window_seconds)
+            except Exception:
+                requested_window_seconds = 0
+            if requested_window_seconds > 0:
+                effective_window_seconds = min(effective_window_seconds, requested_window_seconds)
+
+        requested_bucket_count = effective_window_seconds // int(self.spec.bucket_seconds)
+        if effective_window_seconds % int(self.spec.bucket_seconds):
+            requested_bucket_count += 1
+        requested_bucket_count = max(1, min(self.bucket_count, int(requested_bucket_count)))
+        min_bucket = current_bucket - (requested_bucket_count - 1)
 
         bins = self.spec.histogram_bins
         histogram = [0] * bins
@@ -231,7 +250,7 @@ class _NumericMetricSeries:
         total_avg = (total_sum / float(total_count)) if total_count > 0 else 0.0
         return {
             "metric_id": self.spec.metric_id,
-            "window_seconds": int(self.spec.window_seconds),
+            "window_seconds": int(effective_window_seconds),
             "bucket_seconds": int(self.spec.bucket_seconds),
             "histogram_min": float(self.spec.histogram_min),
             "histogram_max": float(self.spec.histogram_max),
@@ -457,6 +476,7 @@ class PipelineTelemetryStore:
         *,
         now_s: float | None = None,
         max_points: int | None = None,
+        window_seconds: int | None = None,
     ) -> dict[str, Any] | None:
         key = (
             self._sanitize_pipeline_name(pipeline_name),
@@ -466,7 +486,7 @@ class PipelineTelemetryStore:
         series = self._numeric_series.get(key)
         if series is None:
             return None
-        snapshot = series.snapshot(now_s=now_s, max_points=max_points)
+        snapshot = series.snapshot(now_s=now_s, max_points=max_points, window_seconds=window_seconds)
         snapshot["pipeline_name"] = key[0]
         snapshot["node_id"] = key[1]
         return snapshot

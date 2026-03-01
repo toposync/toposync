@@ -61,6 +61,10 @@ type HoverTimelineState = {
 
 type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: string) => string;
 
+const RANGE_SHORT_SECONDS = 2 * 60 * 60;
+const RANGE_DEFAULT_SECONDS = 24 * 60 * 60;
+const RANGE_LONG_SECONDS = 3 * 24 * 60 * 60;
+
 function metricLabel(metricId: string, t: TranslateFn): string {
   if (metricId === "motion.score") return t("core.ui.pipelines.telemetry.metric.motion_score", {}, "Motion score");
   if (metricId === "yolo.confidence") return t("core.ui.pipelines.telemetry.metric.yolo_confidence", {}, "YOLO confidence");
@@ -223,7 +227,7 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
   const [error, setError] = useState<string | null>(null);
   const [series, setSeries] = useState<MetricSeries[]>([]);
   const [markers, setMarkers] = useState<PipelineTelemetryImageMarker[]>([]);
-  const [pointLimit, setPointLimit] = useState(720);
+  const [rangeSeconds, setRangeSeconds] = useState(RANGE_DEFAULT_SECONDS);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [hoveredMarker, setHoveredMarker] = useState<ActiveMarkerSelection | null>(null);
@@ -288,10 +292,11 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
     setLoading(true);
     setError(null);
 
-    const run = async () => {
+        const run = async () => {
       try {
+        const pointLimit = 5000;
         const numericPromises = metricTargets.map((target) =>
-          getPipelineTelemetryNumeric(pipelineName, target.nodeId, target.metricId, pointLimit),
+          getPipelineTelemetryNumeric(pipelineName, target.nodeId, target.metricId, pointLimit, rangeSeconds),
         );
         const [numericResponses, markerResponse] = await Promise.all([
           Promise.all(numericPromises),
@@ -339,13 +344,13 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
     return () => {
       cancelled = true;
     };
-  }, [pipelineName, metricTargetsKey, pointLimit, refreshNonce]);
+  }, [pipelineName, metricTargetsKey, rangeSeconds, refreshNonce]);
 
   useEffect(() => {
     setPinnedMarker(null);
     setHoveredMarker(null);
     setHoverTimeline(null);
-  }, [pipelineName, markers.length]);
+  }, [pipelineName, markers.length, rangeSeconds]);
 
   const allPoints = useMemo(() => series.flatMap((item) => item.points), [series]);
   const xMin = useMemo(
@@ -433,23 +438,23 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
           </div>
           <div className="pipelinesModes">
             <button
-              className={["pillButton", pointLimit === 360 ? "isActive" : ""].filter(Boolean).join(" ")}
+              className={["pillButton", rangeSeconds === RANGE_SHORT_SECONDS ? "isActive" : ""].filter(Boolean).join(" ")}
               type="button"
-              onClick={() => setPointLimit(360)}
+              onClick={() => setRangeSeconds(RANGE_SHORT_SECONDS)}
             >
               {t("core.ui.pipelines.telemetry.overview.range.short", {}, "Short")}
             </button>
             <button
-              className={["pillButton", pointLimit === 720 ? "isActive" : ""].filter(Boolean).join(" ")}
+              className={["pillButton", rangeSeconds === RANGE_DEFAULT_SECONDS ? "isActive" : ""].filter(Boolean).join(" ")}
               type="button"
-              onClick={() => setPointLimit(720)}
+              onClick={() => setRangeSeconds(RANGE_DEFAULT_SECONDS)}
             >
               {t("core.ui.pipelines.telemetry.overview.range.default", {}, "Default")}
             </button>
             <button
-              className={["pillButton", pointLimit === 1440 ? "isActive" : ""].filter(Boolean).join(" ")}
+              className={["pillButton", rangeSeconds === RANGE_LONG_SECONDS ? "isActive" : ""].filter(Boolean).join(" ")}
               type="button"
-              onClick={() => setPointLimit(1440)}
+              onClick={() => setRangeSeconds(RANGE_LONG_SECONDS)}
             >
               {t("core.ui.pipelines.telemetry.overview.range.long", {}, "Long")}
             </button>

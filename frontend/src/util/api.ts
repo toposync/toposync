@@ -673,12 +673,16 @@ export async function getPipelineTelemetryNumeric(
   nodeId: string,
   metricId: string,
   pointLimit: number = 720,
+  windowSeconds?: number,
 ): Promise<PipelineTelemetryNumeric> {
   const params = new URLSearchParams({
     node_id: String(nodeId || ""),
     metric_id: String(metricId || ""),
     point_limit: String(Math.max(50, Math.min(5000, Math.floor(pointLimit || 720)))),
   });
+  if (Number.isFinite(windowSeconds) && (windowSeconds ?? 0) > 0) {
+    params.set("window_seconds", String(Math.max(1, Math.floor(windowSeconds ?? 0))));
+  }
   const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/telemetry/numeric?${params.toString()}`);
   if (!res.ok) throw new Error(`Failed to fetch pipeline telemetry numeric ${name}/${nodeId}/${metricId}: ${res.status}`);
   return res.json();

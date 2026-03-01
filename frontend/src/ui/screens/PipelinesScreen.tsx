@@ -72,7 +72,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
   const [camerasIndex, setCamerasIndex] = useState<CamerasIndexResponse>({ cameras: [] });
 
   const [createName, setCreateName] = useState("");
-  const [createType, setCreateType] = useState<"reuse" | "final">("final");
 
   const [draft, setDraft] = useState<Pipeline | null>(null);
   const [graphText, setGraphText] = useState<string>("");
@@ -363,7 +362,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
     if (!name) return;
     setError(null);
     try {
-      const created = await createPipeline(defaultPipeline(name, createType));
+      const created = await createPipeline(defaultPipeline(name, "final"));
       setPipelines((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
       setSelectedName(created.name);
       if (compactLayout) setSidebarOpen(false);
@@ -547,10 +546,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
               value={createName}
               onChange={(event) => setCreateName(event.target.value)}
             />
-            <select className="pipelinesSelect" value={createType} onChange={(event) => setCreateType(event.target.value as any)}>
-              <option value="final">{t("core.ui.pipelines.type.final")}</option>
-              <option value="reuse">{t("core.ui.pipelines.type.reuse")}</option>
-            </select>
             <button className="pillButton" type="button" onClick={() => void handleCreate()}>
               <i className="fa-solid fa-plus" aria-hidden="true" />
               {t("core.ui.pipelines.create.button")}

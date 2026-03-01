@@ -621,7 +621,11 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
                     <div key={`hover:row:${sample.metricId}`} className="pipelinesTelemetryHoverRow">
                       <span className="pipelinesTelemetryHoverSwatch" style={{ backgroundColor: sample.color }} />
                       <span>{sample.label}</span>
-                      <span>{decimalFormatter.format(sample.avg)}</span>
+                      <span>
+                        {t("core.ui.pipelines.telemetry.total_avg", {}, "Avg")}: {decimalFormatter.format(sample.avg)} ·{" "}
+                        {t("core.ui.pipelines.telemetry.total_min", {}, "Min")}: {decimalFormatter.format(sample.min)} ·{" "}
+                        {t("core.ui.pipelines.telemetry.total_max", {}, "Max")}: {decimalFormatter.format(sample.max)}
+                      </span>
                     </div>
                   ))}
                 </div>

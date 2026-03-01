@@ -355,6 +355,8 @@ export function CropRectangleDrawModal({
   }, [rect01]);
 
   const canInteract = open && Boolean(snapshot.url) && Boolean(dims);
+  const snapshotError = snapshot.loading ? null : snapshot.error;
+  const showNoSnapshot = !snapshot.loading && !snapshot.url && !snapshotError;
 
   return (
     <Modal
@@ -380,8 +382,8 @@ export function CropRectangleDrawModal({
         </div>
       </div>
 
-      {snapshot.error ? <div className="pipelinesInlineError">{snapshot.error}</div> : null}
-      {!snapshot.error && snapshot.loading ? (
+      {snapshotError ? <div className="pipelinesInlineError">{snapshotError}</div> : null}
+      {!snapshotError && snapshot.loading ? (
         <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.loading")}</div>
       ) : null}
 
@@ -477,10 +479,12 @@ export function CropRectangleDrawModal({
               })}
             </div>
           </div>
-        ) : (
+        ) : showNoSnapshot ? (
           <div className="pipelinesHint">
             {t("core.ui.pipelines.panels.image_draw.no_snapshot")}
           </div>
+        ) : (
+          <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.loading")}</div>
         )}
       </div>
 
@@ -623,6 +627,8 @@ export function PerspectiveCropDrawModal({
   }, [points01]);
 
   const canInteract = open && Boolean(snapshot.url) && Boolean(dims);
+  const snapshotError = snapshot.loading ? null : snapshot.error;
+  const showNoSnapshot = !snapshot.loading && !snapshot.url && !snapshotError;
 
   const onPointPointerDown = useCallback(
     (index: number, event: React.PointerEvent<HTMLDivElement>) => {
@@ -737,8 +743,8 @@ export function PerspectiveCropDrawModal({
         </div>
       </div>
 
-      {snapshot.error ? <div className="pipelinesInlineError">{snapshot.error}</div> : null}
-      {!snapshot.error && snapshot.loading ? (
+      {snapshotError ? <div className="pipelinesInlineError">{snapshotError}</div> : null}
+      {!snapshotError && snapshot.loading ? (
         <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.loading")}</div>
       ) : null}
 
@@ -833,8 +839,10 @@ export function PerspectiveCropDrawModal({
               ))}
             </div>
           </div>
-        ) : (
+        ) : showNoSnapshot ? (
           <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.no_snapshot")}</div>
+        ) : (
+          <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.loading")}</div>
         )}
       </div>
 

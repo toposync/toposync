@@ -353,7 +353,10 @@ class MediaMtxEngineManager:
         try:
             await self._wait_until_ready_locked(timeout_s=8.0)
         except Exception as exc:
+            log_hint = _mediamtx_log_error_hint(self._log_path)
             self._last_error = str(exc)
+            if log_hint:
+                self._last_error = f"{self._last_error}. {log_hint}"
             await self._stop_locked(clear_error=False)
             raise
 
@@ -546,12 +549,15 @@ class MediaMtxEngineManager:
         if process is None or process.returncode is None:
             return
         return_code = int(process.returncode)
+        log_hint = _mediamtx_log_error_hint(self._log_path)
         self._process = None
         self._started_at_unix = None
         self._config_hash = None
         self._publish_credentials_by_path.clear()
         self._read_auth_by_path.clear()
         self._last_error = f"MediaMTX exited unexpectedly (code={return_code})"
+        if log_hint:
+            self._last_error = f"{self._last_error}. {log_hint}"
         self._record_restart_failure_locked(now_monotonic, reason=self._last_error)
         if self._log_file is not None:
             try:
@@ -812,3 +818,45 @@ def _normalize_path(value: str) -> str:
     filtered = "".join(ch if (ch.isalnum() or ch in {"-", "_"}) else "-" for ch in raw)
     cleaned = filtered.strip("-_")
     return cleaned or "test"
+
+
+def _mediamtx_log_error_hint(log_path: Path | None, *, max_bytes: int = 4096) -> str:
+    """Extract the last error reason from the MediaMTX log tail, if available.
+
+    MediaMTX can exit with a generic code, while the real failure reason is printed to stdout/stderr.
+    We capture stdout/stderr into a file, so we can surface a short, user-facing hint.
+    """
+    if log_path is None:
+        return ""
+
+    try:
+        with log_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = int(handle.tell())
+            if size <= 0:
+                return ""
+            handle.seek(max(0, size - int(max_bytes)))
+            chunk = handle.read(int(max_bytes))
+    except Exception:
+        return ""
+
+    if not chunk:
+        return ""
+
+    text = chunk.decode("utf-8", errors="replace")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+
+    # Prefer the last error-level line in the tail. Example:
+    # "2026/02/28 16:51:22 ERR listen udp :50000: bind: address already in use"
+    for line in reversed(lines[-30:]):
+        if " ERR " in line:
+            detail = line.split(" ERR ", 1)[1].strip()
+            if detail:
+                return f"MediaMTX log: {detail}"
+        if " FTL " in line:
+            detail = line.split(" FTL ", 1)[1].strip()
+            if detail:
+                return f"MediaMTX log: {detail}"
+    return ""

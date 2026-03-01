@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
+import signal
+import subprocess
 from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib import error as urllib_error
@@ -134,6 +137,107 @@ def _require_auth(
 
 def _request_host(request: Request) -> str:
     return str(request.url.hostname or "127.0.0.1").strip() or "127.0.0.1"
+
+
+def _escape_powershell_single_quote(value: str) -> str:
+    # PowerShell escapes single quotes in single-quoted strings by doubling them.
+    return str(value or "").replace("'", "''")
+
+
+def _find_mediamtx_pids_for_config_path(config_path: str) -> list[int]:
+    config = str(config_path or "").strip()
+    if not config:
+        return []
+
+    if os.name == "nt":
+        script = (
+            "$ErrorActionPreference='SilentlyContinue';"
+            f"$cp='{_escape_powershell_single_quote(config)}';"
+            "Get-CimInstance Win32_Process | "
+            "Where-Object { $_.CommandLine -and ($_.CommandLine -like ('*' + $cp + '*')) -and ($_.CommandLine -like '*mediamtx*') } | "
+            "Select-Object -ExpandProperty ProcessId"
+        )
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", script],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception:
+            return []
+        out = str(result.stdout or "")
+        pids: list[int] = []
+        for token in out.split():
+            try:
+                pid = int(token)
+            except Exception:
+                continue
+            if pid > 0:
+                pids.append(pid)
+        return sorted(set(pids))
+
+    try:
+        result = subprocess.run(
+            ["ps", "ax", "-o", "pid=,command="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        return []
+
+    pids: list[int] = []
+    for raw_line in str(result.stdout or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        pid_raw, command = parts
+        if "mediamtx" not in command:
+            continue
+        if config not in command:
+            continue
+        try:
+            pid = int(pid_raw)
+        except Exception:
+            continue
+        if pid > 0:
+            pids.append(pid)
+    return sorted(set(pids))
+
+
+def _kill_mediamtx_processes_for_config_path(config_path: str) -> list[int]:
+    pids = _find_mediamtx_pids_for_config_path(config_path)
+    if not pids:
+        return []
+
+    killed: list[int] = []
+    if os.name == "nt":
+        for pid in pids:
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                killed.append(pid)
+            except Exception:
+                continue
+        return killed
+
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            killed.append(pid)
+        except ProcessLookupError:
+            continue
+        except Exception:
+            continue
+    return killed
 
 
 def _status_host(request: Request, settings: StreamingExtensionSettings) -> str:
@@ -752,6 +856,53 @@ def create_streaming_router() -> APIRouter:
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to restart streaming engine: {exc}") from exc
         return await engine_status(request)
+
+    @router.post("/engine/reclaim", response_model=StreamingEngineStatusResponse)
+    async def engine_reclaim(request: Request) -> StreamingEngineStatusResponse:
+        """Attempt to recover control by terminating stale MediaMTX processes for this data-dir."""
+        _require_auth(
+            request,
+            action="core:extension:settings:write",
+            resource_type="core:extension",
+            resource_selector=EXTENSION_ID,
+        )
+        manager = _engine_manager(request)
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+
+        try:
+            await manager.stop()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to stop streaming engine: {exc}") from exc
+
+        config_path = config_store.paths.data_dir / "runtime" / "streaming" / "mediamtx.yml"
+        killed_pids = await asyncio.to_thread(_kill_mediamtx_processes_for_config_path, str(config_path))
+        if killed_pids:
+            # Allow sockets to be released before re-starting.
+            await asyncio.sleep(0.4)
+
+        if settings.engine.enabled:
+            try:
+                app_settings = await config_store.get_settings()
+                camera_ingest_by_id = build_camera_ingest_definitions(
+                    app_settings=app_settings,
+                    ingest_settings=settings.camera_ingest,
+                )
+                await manager.ensure_running(
+                    settings.engine,
+                    engine_paths=list_engine_paths_for_host(settings, host_server_id=_current_server_id(request))
+                    + [item.path_slug for item in camera_ingest_by_id.values()],
+                    path_auth=list_path_read_auth_for_host(settings, host_server_id=_current_server_id(request)),
+                    path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
+                )
+            except Exception as exc:
+                suffix = f" (killed {len(killed_pids)} stale process(es))" if killed_pids else ""
+                raise HTTPException(status_code=500, detail=f"Failed to reclaim streaming engine: {exc}{suffix}") from exc
+
+        payload = await engine_status(request)
+        if killed_pids:
+            payload.warnings.insert(0, f"Cleaned up {len(killed_pids)} stale MediaMTX process(es).")
+        return payload
 
     @router.get("/transmissions", response_model=list[Transmission])
     async def list_transmissions(request: Request) -> list[Transmission]:

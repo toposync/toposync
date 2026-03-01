@@ -118,6 +118,8 @@ class StreamWriterBridge:
         self._mediamtx_log_offset: int = 0
         self._mediamtx_log_remainder: str = ""
         self._last_log_scan_monotonic: float = 0.0
+        self._last_engine_start_error_key: str = ""
+        self._last_engine_start_error_monotonic: float = 0.0
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -261,12 +263,39 @@ class StreamWriterBridge:
         for item in camera_ingest_by_id.values():
             desired_engine_paths.append(item.path_slug)
 
-        engine_status = await self._engine_manager.ensure_running(
-            engine_settings,
-            engine_paths=desired_engine_paths,
-            path_auth=path_auth_by_path,
-            path_configs=camera_ingest_path_configs,
-        )
+        try:
+            engine_status = await self._engine_manager.ensure_running(
+                engine_settings,
+                engine_paths=desired_engine_paths,
+                path_auth=path_auth_by_path,
+                path_configs=camera_ingest_path_configs,
+            )
+        except Exception as exc:
+            # Don't spam stack traces for a common operational error (ports in use, stale processes).
+            # Surface a clear hint on stdout and keep the bridge loop running.
+            last_error = ""
+            log_path = ""
+            try:
+                status = await self._engine_manager.get_status()
+                last_error = str(getattr(status, "last_error", "") or "").strip()
+                log_path = str(getattr(status, "log_path", "") or "").strip()
+            except Exception:
+                status = None  # noqa: F841
+
+            hint = last_error or str(exc)
+            key = f"{hint}|{log_path}"
+            now_monotonic = float(now_monotonic)
+            if key != self._last_engine_start_error_key or (now_monotonic - self._last_engine_start_error_monotonic) > 10.0:
+                self._last_engine_start_error_key = key
+                self._last_engine_start_error_monotonic = now_monotonic
+                suffix = f" (log: {log_path})" if log_path else ""
+                self._logger.error("Streaming engine (MediaMTX) failed to start%s: %s", suffix, hint)
+                self._logger.error(
+                    "This is usually caused by stale instances or ports already in use. "
+                    "If you recently restarted/crashed, check for old processes and stop them. "
+                    "You can also try the Engine -> Reclaim action in the Streaming settings UI.",
+                )
+            return
 
         if not desired_output_keys:
             await self._publisher_manager.stop_all()

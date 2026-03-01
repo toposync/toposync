@@ -360,7 +360,17 @@ function StreamingSettingsPanelContent({
     return ids;
   }, [processingServers]);
 
-  async function runEngineAction(action: "start" | "stop" | "restart"): Promise<void> {
+  async function runEngineAction(action: "start" | "stop" | "restart" | "reclaim"): Promise<void> {
+    if (action === "reclaim") {
+      const ok = confirm(
+        t(
+          "ext.streaming.engine.reclaim_confirm",
+          {},
+          "This will try to stop and cleanup stale MediaMTX processes for this data directory. Continue?",
+        ),
+      );
+      if (!ok) return;
+    }
     setEngineBusy(true);
     setEngineError(null);
     try {
@@ -744,6 +754,9 @@ function StreamingSettingsPanelContent({
               onClick={() => void runEngineAction("restart")}
             >
               {t("ext.streaming.engine.restart", {}, "Restart")}
+            </button>
+            <button className="chipButton" type="button" disabled={engineBusy} onClick={() => void runEngineAction("reclaim")}>
+              <i className="fa-solid fa-broom" aria-hidden="true" /> {t("ext.streaming.engine.reclaim", {}, "Reclaim")}
             </button>
             <button className="chipButton" type="button" disabled={engineBusy} onClick={() => void fetchEngineData()}>
               <i className="fa-solid fa-rotate-right" aria-hidden="true" /> {t("ext.streaming.engine.refresh", {}, "Refresh")}

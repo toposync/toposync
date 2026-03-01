@@ -14,7 +14,7 @@ import type {
   TransmissionUrlsResponse,
 } from "../types";
 
-type EngineAction = "start" | "stop" | "restart";
+type EngineAction = "start" | "stop" | "restart" | "reclaim";
 
 type CreateTransmissionRequest = {
   name: string;

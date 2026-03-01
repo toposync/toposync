@@ -7,7 +7,7 @@ import { i18n } from "../../../../../util/i18n";
 
 import { buildArtifactSuggestions, pipelinesReactSelectStyles } from "../../constants";
 import type { InteractiveStep, SelectOption } from "../../types";
-import { isRecord, safeJsonParse } from "../../utils";
+import { isRecord, prettyOperatorName, safeJsonParse } from "../../utils";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
 import { CropRectangleDrawModal, PerspectiveCropDrawModal, type SnapshotSource } from "./ImageDrawModals";
 
@@ -424,7 +424,7 @@ export function ImageCropConfigCard({ config, steps, index, showAdvanced, onUpda
               ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
               : drawEligibility.reason.code === "no_camera_selected"
                 ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
-                : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: drawEligibility.reason.operatorId ?? "" })}
+                : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: prettyOperatorName(drawEligibility.reason.operatorId ?? "") })}
           </div>
         ) : null}
       </div>
@@ -693,7 +693,7 @@ export function ImagePerspectiveCropConfigCard({
               ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
               : drawEligibility.reason.code === "no_camera_selected"
                 ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
-                : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: drawEligibility.reason.operatorId ?? "" })}
+                : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: prettyOperatorName(drawEligibility.reason.operatorId ?? "") })}
           </div>
         ) : null}
       </div>

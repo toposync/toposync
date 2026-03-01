@@ -20,6 +20,7 @@ import {
   compilePipelinePython,
   createPipeline,
   deletePipeline,
+  duplicatePipeline,
   getPipelineStats,
   listCamerasIndex,
   listPipelineOperators,
@@ -28,6 +29,7 @@ import {
   putPipeline,
 } from "../../util/api";
 import { InteractivePipelineEditor } from "./pipelines/InteractivePipelineEditor";
+import { PipelineDuplicateModal } from "./pipelines/PipelineDuplicateModal";
 import { PipelineTelemetryFieldModal } from "./pipelines/PipelineTelemetryFieldModal";
 import { PipelineTelemetryOverviewCard } from "./pipelines/PipelineTelemetryOverviewCard";
 import { PipelineTemplateApplyModal } from "./pipelines/PipelineTemplateApplyModal";
@@ -64,6 +66,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
   });
   const [sidebarOpen, setSidebarOpen] = useState(() => !compactLayout);
   const [templateApplyOpen, setTemplateApplyOpen] = useState(false);
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
   const [operators, setOperators] = useState<PipelineOperatorDefinition[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [camerasIndex, setCamerasIndex] = useState<CamerasIndexResponse>({ cameras: [] });
@@ -457,6 +460,17 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
     }
   };
 
+  const handleDuplicate = useCallback(
+    async (newName: string) => {
+      if (!draft) return;
+      const created = await duplicatePipeline(draft.name, newName);
+      setPipelines((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setSelectedName(created.name);
+      if (compactLayout) setSidebarOpen(false);
+    },
+    [draft, compactLayout],
+  );
+
   const handleDelete = async () => {
     if (!draft) return;
     if (!confirm(t("core.ui.pipelines.confirm_delete", { name: draft.name }))) return;
@@ -609,6 +623,10 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                   <button className="pillButton pillButtonPrimary" type="button" onClick={() => void handleSave()}>
                     <i className="fa-solid fa-floppy-disk" aria-hidden="true" />
                     {t("core.actions.save")}
+                  </button>
+                  <button className="pillButton" type="button" onClick={() => setDuplicateOpen(true)}>
+                    <i className="fa-solid fa-copy" aria-hidden="true" />
+                    {t("core.ui.pipelines.actions.duplicate")}
                   </button>
                   <button className="pillButton pillButtonDanger" type="button" onClick={() => void handleDelete()}>
                     <i className="fa-solid fa-trash" aria-hidden="true" />
@@ -802,6 +820,14 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
         request={telemetryFieldInspector}
         onClose={() => setTelemetryFieldInspector(null)}
         onApplyValue={(value) => void applyTelemetryFieldValue(value)}
+      />
+
+      <PipelineDuplicateModal
+        open={duplicateOpen}
+        pipeline={draft}
+        existingNames={pipelines.map((pipeline) => pipeline.name)}
+        onClose={() => setDuplicateOpen(false)}
+        onDuplicate={handleDuplicate}
       />
 
       <PipelineTemplateApplyModal

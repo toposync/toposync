@@ -66,6 +66,64 @@ def test_pipelines_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         assert res.json() == {"pipelines": []}
 
 
+def test_pipelines_api_duplicate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        payload = Pipeline(
+            name="camera1_tracking",
+            type="reuse",
+            graph={"schema_version": 1, "nodes": [], "edges": []},
+        ).model_dump()
+        res = client.post("/api/pipelines", json=payload)
+        assert res.status_code == 201
+
+        res = client.post("/api/pipelines/camera1_tracking/duplicate", json={"new_name": "camera1_tracking_2"})
+        assert res.status_code == 201
+        assert res.json()["name"] == "camera1_tracking_2"
+        assert res.json()["type"] == "reuse"
+        assert res.json()["graph"]["schema_version"] == 1
+
+        res = client.post("/api/pipelines/camera1_tracking/duplicate")
+        assert res.status_code == 201
+        assert res.json()["name"] == "camera1_tracking_3"
+
+        res = client.get("/api/pipelines")
+        assert res.status_code == 200
+        names = {item["name"] for item in res.json()["pipelines"]}
+        assert names == {"camera1_tracking", "camera1_tracking_2", "camera1_tracking_3"}
+
+        res = client.post("/api/pipelines/camera1_tracking/duplicate", json={"new_name": "camera1_tracking_2"})
+        assert res.status_code == 409
+
+        res = client.post("/api/pipelines/unknown_pipeline/duplicate", json={"new_name": "unknown_pipeline_2"})
+        assert res.status_code == 404
+
+
+def test_pipelines_api_duplicate_python_pipeline_adds_pipeline_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        payload = Pipeline(
+            name="dsl_pipeline",
+            type="final",
+            editor_mode="python",
+            python_source='dsl_pipeline = core.demo_frame_sequence_source(_id="source") | core.notify(_id="notify")',
+            graph={"schema_version": 1, "nodes": [], "edges": []},
+        ).model_dump(mode="json")
+        res = client.post("/api/pipelines", json=payload)
+        assert res.status_code == 201
+
+        res = client.post("/api/pipelines/dsl_pipeline/duplicate", json={"new_name": "dsl_pipeline_2"})
+        assert res.status_code == 201
+        duplicated = res.json()
+        assert duplicated["name"] == "dsl_pipeline_2"
+        assert duplicated["editor_mode"] == "python"
+        assert "PIPELINE = dsl_pipeline" in str(duplicated.get("python_source") or "")
+
+        res = client.post("/api/pipelines/compile-python", json={"pipeline": duplicated})
+        assert res.status_code == 200
+        compiled = res.json()
+        assert compiled["graph"]["schema_version"] == 1
+        assert {node["id"] for node in compiled["graph"]["nodes"]} == {"source", "notify"}
+
+
 def test_pipeline_payload_validation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         invalid_name = {

@@ -636,6 +636,20 @@ export async function putPipeline(name: string, pipeline: Pipeline): Promise<Pip
   return res.json();
 }
 
+export async function duplicatePipeline(name: string, newName: string): Promise<Pipeline> {
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/duplicate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ new_name: String(newName || "") }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const detail = (body as any)?.detail ? String((body as any).detail) : String(res.status);
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 export async function deletePipeline(name: string): Promise<Pipeline> {
   const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`Failed to delete pipeline ${name}: ${res.status}`);

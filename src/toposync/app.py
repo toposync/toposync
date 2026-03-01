@@ -158,6 +158,10 @@ class PipelineCompilePythonResponse(BaseModel):
     alerts: list[PipelineAlert] = Field(default_factory=list)
 
 
+class PipelineDuplicateRequest(BaseModel):
+    new_name: str = ""
+
+
 class LegacyCamerasMigrationRequest(BaseModel):
     dry_run: bool = True
 
@@ -1404,6 +1408,25 @@ def create_app() -> FastAPI:
                 ),
             )
 
+    def _suggest_duplicate_pipeline_name(*, base_name: str, existing_names: set[str]) -> str:
+        base = str(base_name or "").strip() or "pipeline"
+        suffix = 2
+        while True:
+            candidate = f"{base}_{suffix}"
+            if candidate not in existing_names:
+                return candidate
+            suffix += 1
+
+    def _maybe_add_python_pipeline_alias(python_source: str, *, source_name: str) -> str:
+        source = str(python_source or "")
+        if not source.strip():
+            return source
+        if re.search(r"(?m)^[ \t]*PIPELINE[ \t]*=", source):
+            return source
+        if re.search(rf"(?m)^[ \t]*{re.escape(str(source_name))}[ \t]*=", source):
+            return source.rstrip() + f"\n\nPIPELINE = {source_name}\n"
+        return source
+
     @app.post("/api/pipelines", response_model=Pipeline, status_code=201)
     async def create_pipeline(request: Request, body: Pipeline) -> Pipeline:
         _require(request, action="core:pipelines:write")
@@ -1439,6 +1462,59 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PipelineAlreadyExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/pipelines/{pipeline_name}/duplicate", response_model=Pipeline, status_code=201)
+    async def duplicate_pipeline(
+        request: Request,
+        pipeline_name: str,
+        body: PipelineDuplicateRequest | None = None,
+    ) -> Pipeline:
+        _require(request, action="core:pipelines:write")
+        config_store: ConfigStore = request.app.state.config_store
+        compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
+
+        try:
+            source = await config_store.get_pipeline(pipeline_name)
+        except PipelineValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if source is None:
+            raise HTTPException(status_code=404, detail="Unknown pipeline")
+
+        existing_names = {p.name for p in await config_store.list_pipelines()}
+        requested_name = str(getattr(body, "new_name", "") or "").strip() if body is not None else ""
+        new_name = requested_name or _suggest_duplicate_pipeline_name(base_name=source.name, existing_names=existing_names)
+        if new_name in existing_names:
+            raise HTTPException(status_code=409, detail=f"Pipeline already exists: {new_name}")
+
+        payload = source.model_dump(mode="json")
+        payload["name"] = new_name
+        if str(getattr(source, "editor_mode", "json")) == "python":
+            payload["python_source"] = _maybe_add_python_pipeline_alias(
+                str(payload.get("python_source") or ""),
+                source_name=source.name,
+            )
+
+        try:
+            duplicated = Pipeline.model_validate(payload)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            await _validate_stream_write_host_affinity(config_store, duplicated)
+            compiler.compile_pipeline(duplicated)
+            saved = await config_store.create_pipeline(duplicated)
+        except GraphCompileError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except PipelineAlreadyExistsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+        if orchestrator is not None:
+            try:
+                orchestrator.trigger_reload()
+            except Exception:
+                pass
+        return saved
 
     @app.get("/api/pipelines/{pipeline_name}", response_model=Pipeline)
     async def get_pipeline(request: Request, pipeline_name: str) -> Pipeline:

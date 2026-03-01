@@ -7,8 +7,6 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-import pytest
-
 import toposync_ext_streaming.streaming.mediamtx_binary as mediamtx_binary
 from toposync_ext_streaming.streaming.mediamtx_binary import (
     expected_mediamtx_binary_path,

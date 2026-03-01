@@ -22,6 +22,7 @@ import {
   CameraSourceConfigCard,
   ImageAdjustConfigCard,
   ImageCropConfigCard,
+  ImagePerspectiveCropConfigCard,
   ImageResizeConfigCard,
   ObjectSegmentationConfigCard,
   VelocityEstimationConfigCard,
@@ -119,6 +120,9 @@ export function OperatorConfigPanel({
   }
   if (operatorId === "camera.image_crop") {
     return <ImageCropConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
+  }
+  if (operatorId === "camera.image_perspective_crop") {
+    return <ImagePerspectiveCropConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "camera.image_adjust") {
     return <ImageAdjustConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;

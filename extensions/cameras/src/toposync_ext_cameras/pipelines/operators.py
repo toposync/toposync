@@ -678,6 +678,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
 
     def _normalize_objects(self, raw_objects: list[YoloObject], *, packet: Packet) -> list[YoloObject]:
         crop_bbox01 = _read_frame_crop_bbox01(packet)
+        warp = _read_frame_warp(packet)
         objects: list[YoloObject] = []
         for raw in raw_objects:
             category = str(raw.category or "").strip().lower()
@@ -686,6 +687,11 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
             if self._categories_set and category not in self._categories_set:
                 continue
             bbox = raw.bbox01
+            if warp is not None:
+                unwarped = _unwarp_bbox01(bbox, warp)
+                if unwarped is None:
+                    continue
+                bbox = unwarped
             if crop_bbox01 is not None:
                 bbox = _uncrop_bbox01(bbox, crop_bbox01)
             bbox = _normalize_bbox01(bbox)
@@ -1428,6 +1434,110 @@ def _read_frame_crop_bbox01(packet: Packet) -> tuple[float, float, float, float]
         if values:
             return _normalize_bbox01((values[0], values[1], values[2], values[3]))
     return None
+
+
+def _read_frame_warp(packet: Packet) -> dict[str, Any] | None:
+    warp = packet.payload.get("frame_warp")
+    if not isinstance(warp, dict):
+        return None
+    apply_to_stream = warp.get("set_stream_frame")
+    if apply_to_stream is None:
+        apply_to_stream = warp.get("set_payload_frame")  # legacy
+    if apply_to_stream is False:
+        return None
+    if str(warp.get("kind", "")).strip().lower() != "perspective":
+        return None
+
+    raw_inv = warp.get("homography_inv")
+    if not isinstance(raw_inv, list) or len(raw_inv) != 3:
+        return None
+    inv: list[list[float]] = []
+    try:
+        for row in raw_inv:
+            if not isinstance(row, list) or len(row) != 3:
+                return None
+            inv.append([float(row[0]), float(row[1]), float(row[2])])
+    except Exception:
+        return None
+
+    try:
+        src_w = int(warp.get("source_frame_width"))
+        src_h = int(warp.get("source_frame_height"))
+        dst_w = int(warp.get("dest_frame_width"))
+        dst_h = int(warp.get("dest_frame_height"))
+    except Exception:
+        return None
+    if src_w <= 1 or src_h <= 1 or dst_w <= 1 or dst_h <= 1:
+        return None
+
+    return {
+        "homography_inv": inv,
+        "source_frame_width": src_w,
+        "source_frame_height": src_h,
+        "dest_frame_width": dst_w,
+        "dest_frame_height": dst_h,
+    }
+
+
+def _unwarp_bbox01(
+    bbox01: tuple[float, float, float, float],
+    warp: dict[str, Any],
+) -> tuple[float, float, float, float] | None:
+    try:
+        import numpy as np  # type: ignore
+    except Exception:
+        return None
+
+    inv = warp.get("homography_inv")
+    if not isinstance(inv, list) or len(inv) != 3:
+        return None
+    try:
+        H_inv = np.asarray(inv, dtype=np.float32).reshape(3, 3)
+    except Exception:
+        return None
+
+    dst_w = int(warp.get("dest_frame_width", 0))
+    dst_h = int(warp.get("dest_frame_height", 0))
+    src_w = int(warp.get("source_frame_width", 0))
+    src_h = int(warp.get("source_frame_height", 0))
+    if dst_w <= 1 or dst_h <= 1 or src_w <= 1 or src_h <= 1:
+        return None
+
+    x1, y1, x2, y2 = [float(v) for v in bbox01]
+    denom_dx = float(dst_w - 1)
+    denom_dy = float(dst_h - 1)
+    denom_sx = float(src_w - 1)
+    denom_sy = float(src_h - 1)
+    if denom_dx <= 1e-6 or denom_dy <= 1e-6 or denom_sx <= 1e-6 or denom_sy <= 1e-6:
+        return None
+
+    corners_dst = np.asarray(
+        [
+            [x1 * denom_dx, y1 * denom_dy, 1.0],
+            [x2 * denom_dx, y1 * denom_dy, 1.0],
+            [x2 * denom_dx, y2 * denom_dy, 1.0],
+            [x1 * denom_dx, y2 * denom_dy, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    src_hom = corners_dst @ H_inv.T
+    w = src_hom[:, 2:3]
+    if not np.isfinite(src_hom).all() or not np.isfinite(w).all():
+        return None
+    valid = np.abs(w) > 1e-9
+    if not bool(valid.all()):
+        return None
+    src_xy = src_hom[:, 0:2] / w
+    if not np.isfinite(src_xy).all():
+        return None
+
+    xs = src_xy[:, 0] / denom_sx
+    ys = src_xy[:, 1] / denom_sy
+    min_x = float(np.min(xs))
+    min_y = float(np.min(ys))
+    max_x = float(np.max(xs))
+    max_y = float(np.max(ys))
+    return (min_x, min_y, max_x, max_y)
 
 
 def _uncrop_bbox01(

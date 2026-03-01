@@ -4,7 +4,7 @@ import builtins
 import keyword
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, MutableMapping
+from typing import Any, Mapping
 
 from .operator_registry import OperatorRegistry
 from .runtime import DropPolicy

@@ -289,6 +289,91 @@ def test_segmentation_reprojects_bbox_for_cropped_stream_frame() -> None:
     asyncio.run(scenario())
 
 
+def test_segmentation_reprojects_bbox_for_perspective_warped_stream_frame() -> None:
+    async def scenario() -> None:
+        try:
+            import cv2  # type: ignore
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("opencv-python-headless is required for this test") from exc
+
+        frame_original = np.zeros((100, 100, 3), dtype=np.uint8)
+        frame_original[30:50, 30:50] = 123
+
+        src = np.asarray([[25, 25], [75, 25], [75, 75], [25, 75]], dtype=np.float32)
+        dst_w = 51
+        dst_h = 51
+        dst = np.asarray([[0, 0], [50, 0], [50, 50], [0, 50]], dtype=np.float32)
+        H = cv2.getPerspectiveTransform(src, dst)
+        stream_frame = cv2.warpPerspective(frame_original, H, (dst_w, dst_h))
+
+        sequence: list[dict[str, Any]] = [
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {
+                    "frame_ts": 1.0,
+                    "tracking_id": "trk-1",
+                    "object_bbox01": [0.30, 0.30, 0.50, 0.50],
+                    "frame_warp": {
+                        "kind": "perspective",
+                        "set_stream_frame": True,
+                        "source_frame_width": 100,
+                        "source_frame_height": 100,
+                        "dest_frame_width": dst_w,
+                        "dest_frame_height": dst_h,
+                        "homography": [[float(v) for v in row] for row in H.tolist()],
+                    },
+                    "images": {
+                        "original": "frame_original",
+                        "treated": "frame",
+                    },
+                },
+                "artifacts": _frame_artifacts_with_stream(frame_original, stream_frame),
+            },
+        ]
+
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "segment",
+                    "operator": "camera.object_segmentation",
+                    "config": {
+                        "input_artifact_names": ["treated"],
+                        "fallback_to_stream_frame": False,
+                        "output_artifact_name": "segmented",
+                        "bbox_field": "object_bbox01",
+                        "padding_ratio": 0.0,
+                        "min_crop_size_px": 1,
+                    },
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "segment", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+                {"from": {"node": "segment", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+            ],
+        }
+
+        collector: dict[str, list[Packet]] = {}
+        runtime = _pipeline_runtime(graph=graph, sequence=sequence, collector=collector)
+        await runtime.run_for(0.2)
+
+        packets = collector.get("sink", [])
+        assert len(packets) == 1
+        packet = packets[0]
+        segmented = packet.artifacts["segmented"].data
+        assert segmented is not None
+
+        meta = packet.artifacts["segmented"].metadata
+        assert isinstance(meta, dict)
+        assert "reproject:frame_warp" in str(meta.get("bbox_source", ""))
+
+        assert int(segmented.max()) == 123
+
+    asyncio.run(scenario())
+
+
 def test_segmentation_uses_bbox_from_best_frame_metadata() -> None:
     async def scenario() -> None:
         frame1 = np.zeros((100, 100, 3), dtype=np.uint8)

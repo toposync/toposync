@@ -1012,6 +1012,7 @@ def _select_notification_data(packet: Packet) -> dict[str, Any]:
         "images",
         "stored_images",
         "frame_crop",
+        "frame_warp",
     }
     selected = {k: v for k, v in payload.items() if k in allow}
     return _sanitize_for_json(selected)

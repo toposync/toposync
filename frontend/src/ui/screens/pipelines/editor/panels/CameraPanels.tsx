@@ -429,6 +429,290 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
   );
 }
 
+type ImagePerspectiveCropProps = {
+  config: Record<string, unknown>;
+  showAdvanced: boolean;
+  onUpdateConfig: UpdateConfig;
+};
+
+function readPerspectivePoints(config: Record<string, unknown>, units: "percent" | "pixels"): number[][] {
+  const raw = (config as any).points;
+  const defaultPoints = [
+    [0, 0],
+    [100, 0],
+    [100, 100],
+    [0, 100],
+  ];
+
+  const base: number[][] = Array.isArray(raw) ? raw : [];
+  const out: number[][] = [];
+  for (let i = 0; i < 4; i += 1) {
+    const fallback = defaultPoints[i] ?? [0, 0];
+    const item = base[i];
+    if (Array.isArray(item) && item.length >= 2) {
+      const x = Number(item[0]);
+      const y = Number(item[1]);
+      out.push([Number.isFinite(x) ? x : fallback[0], Number.isFinite(y) ? y : fallback[1]]);
+      continue;
+    }
+    if (item && typeof item === "object") {
+      const x = Number((item as any).x);
+      const y = Number((item as any).y);
+      out.push([Number.isFinite(x) ? x : fallback[0], Number.isFinite(y) ? y : fallback[1]]);
+      continue;
+    }
+    out.push(fallback);
+  }
+
+  const clampPercent = (value: number) => Math.max(0, Math.min(100, value));
+  return out.map(([x, y]) => [
+    units === "percent" ? clampPercent(x) : Math.max(0, x),
+    units === "percent" ? clampPercent(y) : Math.max(0, y),
+  ]);
+}
+
+export function ImagePerspectiveCropConfigCard({
+  config,
+  showAdvanced,
+  onUpdateConfig,
+}: ImagePerspectiveCropProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const unitsRaw = String((config as any).units ?? "percent").trim().toLowerCase();
+  const units = unitsRaw === "pixels" ? "pixels" : "percent";
+
+  const points = readPerspectivePoints(config, units);
+
+  const outputRatioRaw = String((config as any).output_ratio_preset ?? "auto").trim().toLowerCase();
+  const outputRatio =
+    outputRatioRaw === "1:1" || outputRatioRaw === "4:3" || outputRatioRaw === "16:9" || outputRatioRaw === "3:4" || outputRatioRaw === "9:16"
+      ? outputRatioRaw
+      : "auto";
+
+  const outputArtifactName = String((config as any).output_artifact_name ?? "frame").trim() || "frame";
+  const minOutputEdgePx = Number((config as any).min_output_edge_px ?? 8);
+  const maxOutputEdgePx = Number((config as any).max_output_edge_px ?? 0);
+  const setStreamFrame = (config as any).set_stream_frame ?? (config as any).set_payload_frame ?? true;
+
+  const interpolationRaw = String((config as any).interpolation ?? "linear").trim().toLowerCase();
+  const interpolation =
+    interpolationRaw === "nearest" || interpolationRaw === "cubic" || interpolationRaw === "area" ? interpolationRaw : "linear";
+  const borderModeRaw = String((config as any).border_mode ?? "constant").trim().toLowerCase();
+  const borderMode = borderModeRaw === "replicate" ? "replicate" : "constant";
+  const borderValueRaw = Number((config as any).border_value ?? 0);
+  const borderValue = Number.isFinite(borderValueRaw) ? Math.max(0, Math.min(255, borderValueRaw)) : 0;
+
+  const updatePoint = (index: number, axis: 0 | 1, value: number) => {
+    onUpdateConfig((prev) => {
+      const prevUnitsRaw = String((prev as any).units ?? "percent").trim().toLowerCase();
+      const prevUnits = prevUnitsRaw === "pixels" ? "pixels" : "percent";
+      const prevPoints = readPerspectivePoints(prev, prevUnits);
+
+      const normalizedValue = Number.isFinite(value)
+        ? prevUnits === "percent"
+          ? Math.max(0, Math.min(100, value))
+          : Math.max(0, value)
+        : 0;
+
+      const nextPoints = prevPoints.map((p) => p.slice());
+      if (!nextPoints[index]) nextPoints[index] = [0, 0];
+      nextPoints[index]![axis] = normalizedValue;
+      return { ...prev, points: nextPoints };
+    });
+  };
+
+  const step = units === "percent" ? 0.5 : 1;
+  const max = units === "percent" ? 100 : undefined;
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_perspective_crop.hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.image_perspective_crop.units")}</span>
+        <select
+          className="pipelinesSelect"
+          value={units}
+          onChange={(event) => {
+            const next = String(event.target.value || "percent").trim().toLowerCase();
+            onUpdateConfig((prev) => ({ ...prev, units: next === "pixels" ? "pixels" : "percent" }));
+          }}
+        >
+          <option value="percent">{t("core.ui.pipelines.panels.image_perspective_crop.units.percent")}</option>
+          <option value="pixels">{t("core.ui.pipelines.panels.image_perspective_crop.units.pixels")}</option>
+        </select>
+      </label>
+
+      <div className="pipelinesScalarGrid" style={{ marginTop: 8 }}>
+        {points.map(([x, y], idx) => (
+          <React.Fragment key={`point-${idx}`}>
+            <label className="pipelinesLabel pipelinesScalarLabel">
+              <span>{t(`core.ui.pipelines.panels.image_perspective_crop.p${idx + 1}_x`)}</span>
+              <PipelinesNumberInput
+                className="pipelinesInput"
+                min={0}
+                max={max}
+                step={step}
+                value={Number.isFinite(x) ? x : 0}
+                onChange={(nextValue) => updatePoint(idx, 0, nextValue)}
+              />
+            </label>
+            <label className="pipelinesLabel pipelinesScalarLabel">
+              <span>{t(`core.ui.pipelines.panels.image_perspective_crop.p${idx + 1}_y`)}</span>
+              <PipelinesNumberInput
+                className="pipelinesInput"
+                min={0}
+                max={max}
+                step={step}
+                value={Number.isFinite(y) ? y : 0}
+                onChange={(nextValue) => updatePoint(idx, 1, nextValue)}
+              />
+            </label>
+          </React.Fragment>
+        ))}
+      </div>
+
+      <label className="pipelinesLabel" style={{ marginTop: 10 }}>
+        <span>{t("core.ui.pipelines.panels.image_perspective_crop.output_ratio")}</span>
+        <select
+          className="pipelinesSelect"
+          value={outputRatio}
+          onChange={(event) => {
+            const next = String(event.target.value || "auto").trim().toLowerCase() || "auto";
+            onUpdateConfig((prev) => ({ ...prev, output_ratio_preset: next }));
+          }}
+        >
+          <option value="auto">{t("core.ui.pipelines.panels.image_perspective_crop.output_ratio.auto")}</option>
+          <option value="1:1">1:1</option>
+          <option value="4:3">4:3</option>
+          <option value="16:9">16:9</option>
+          <option value="3:4">3:4</option>
+          <option value="9:16">9:16</option>
+        </select>
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_perspective_crop.output_ratio_hint")}</div>
+
+      <div className="rowWrap" style={{ marginTop: 10, justifyContent: "space-between" }}>
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_perspective_crop.points_hint")}</div>
+        <button
+          className="chipButton"
+          type="button"
+          onClick={() =>
+            onUpdateConfig((prev) => ({
+              ...prev,
+              units: "percent",
+              points: [
+                [0, 0],
+                [100, 0],
+                [100, 100],
+                [0, 100],
+              ],
+              output_ratio_preset: "auto",
+            }))
+          }
+        >
+          {t("core.ui.pipelines.panels.image_perspective_crop.reset")}
+        </button>
+      </div>
+
+      {showAdvanced ? (
+        <>
+          <div className="sectionDivider" />
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.image_perspective_crop.output_artifact_name")}</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={outputArtifactName}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, output_artifact_name: event.target.value }))}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.image_perspective_crop.min_output_edge_px")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={1}
+              max={4096}
+              step={1}
+              value={Number.isFinite(minOutputEdgePx) ? Math.max(1, Math.min(4096, minOutputEdgePx)) : 8}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(4096, nextValue)) : 8;
+                onUpdateConfig((prev) => ({ ...prev, min_output_edge_px: normalized }));
+              }}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.image_perspective_crop.max_output_edge_px")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={16384}
+              step={8}
+              value={Number.isFinite(maxOutputEdgePx) ? Math.max(0, Math.min(16384, maxOutputEdgePx)) : 0}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(16384, nextValue)) : 0;
+                onUpdateConfig((prev) => ({ ...prev, max_output_edge_px: normalized }));
+              }}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.image_perspective_crop.interpolation")}</span>
+            <select
+              className="pipelinesSelect"
+              value={interpolation}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, interpolation: event.target.value }))}
+            >
+              <option value="linear">{t("core.ui.pipelines.panels.image_perspective_crop.interpolation.linear")}</option>
+              <option value="cubic">{t("core.ui.pipelines.panels.image_perspective_crop.interpolation.cubic")}</option>
+              <option value="area">{t("core.ui.pipelines.panels.image_perspective_crop.interpolation.area")}</option>
+              <option value="nearest">{t("core.ui.pipelines.panels.image_perspective_crop.interpolation.nearest")}</option>
+            </select>
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.image_perspective_crop.border_mode")}</span>
+            <select
+              className="pipelinesSelect"
+              value={borderMode}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, border_mode: event.target.value }))}
+            >
+              <option value="constant">{t("core.ui.pipelines.panels.image_perspective_crop.border_mode.constant")}</option>
+              <option value="replicate">{t("core.ui.pipelines.panels.image_perspective_crop.border_mode.replicate")}</option>
+            </select>
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.image_perspective_crop.border_value")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={255}
+              step={1}
+              value={borderValue}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(255, nextValue)) : 0;
+                onUpdateConfig((prev) => ({ ...prev, border_value: normalized }));
+              }}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.image_perspective_crop.use_warped_frame")}</span>
+            <input
+              type="checkbox"
+              checked={Boolean(setStreamFrame)}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, set_stream_frame: event.target.checked }))}
+            />
+          </label>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 type ImageAdjustProps = {
   config: Record<string, unknown>;
   showAdvanced: boolean;

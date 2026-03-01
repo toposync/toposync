@@ -106,6 +106,75 @@ class ImageCropConfig(BaseModel):
         return name
 
 
+class ImagePerspectiveCropConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
+    fallback_to_stream_frame: bool = True
+
+    units: Literal["percent", "pixels"] = "percent"
+    points: list[tuple[float, float]] = Field(
+        default_factory=lambda: [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)],
+        description="Four points (x, y) describing a quadrilateral region to be rectified.",
+    )
+
+    output_ratio_preset: Literal["auto", "1:1", "4:3", "16:9", "3:4", "9:16"] = "auto"
+    interpolation: Literal["linear", "cubic", "area", "nearest"] = "linear"
+    border_mode: Literal["constant", "replicate"] = "constant"
+    border_value: int = Field(default=0, ge=0, le=255)
+
+    output_artifact_name: str = "frame"
+    min_output_edge_px: int = Field(default=8, ge=1, le=4096)
+    max_output_edge_px: int = Field(default=0, ge=0, le=16384, description="0 disables downscaling.")
+    set_stream_frame: bool = True
+
+    @field_validator("input_artifact_names", mode="after")
+    @classmethod
+    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
+        return _normalize_artifact_names(value)
+
+    @field_validator("points", mode="before")
+    @classmethod
+    def _normalize_points(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        if not isinstance(value, list):
+            raise ValueError("points must be a list of 4 (x, y) pairs")
+        out: list[tuple[float, float]] = []
+        for item in value:
+            if isinstance(item, dict):
+                try:
+                    x = float(item.get("x"))
+                    y = float(item.get("y"))
+                except Exception as exc:  # noqa: BLE001
+                    raise ValueError("points must contain x/y numbers") from exc
+                out.append((x, y))
+                continue
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                try:
+                    x = float(item[0])
+                    y = float(item[1])
+                except Exception as exc:  # noqa: BLE001
+                    raise ValueError("points must contain numeric (x, y) pairs") from exc
+                out.append((x, y))
+                continue
+            raise ValueError("points must contain (x, y) pairs")
+        return out
+
+    @model_validator(mode="after")
+    def _validate_points_len(self) -> "ImagePerspectiveCropConfig":
+        if len(self.points) != 4:
+            raise ValueError("points must contain exactly 4 points")
+        return self
+
+    @field_validator("output_artifact_name")
+    @classmethod
+    def _validate_output_artifact_name(cls, value: str) -> str:
+        name = str(value or "").strip()
+        if not name:
+            raise ValueError("output_artifact_name is required")
+        return name
+
+
 class ImageAdjustConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
@@ -342,10 +411,16 @@ class ObjectSegmentationRuntime(TransformOperatorRuntime):
         if selected_name == treated_name:
             crop_bbox01 = _read_frame_crop_bbox01(packet)
             if crop_bbox01 is not None:
-                reproj = _reproject_bbox01_to_crop(bbox01_input, crop_bbox01)
+                reproj = _reproject_bbox01_to_crop(bbox01_selected, crop_bbox01)
                 if reproj is not None:
                     bbox01_selected = reproj
                     bbox_source = f"{bbox_source}|reproject:frame_crop" if bbox_source else "reproject:frame_crop"
+            frame_warp = _read_frame_warp(packet)
+            if frame_warp is not None:
+                warped_bbox01 = _reproject_bbox01_to_warp(bbox01_selected, frame_warp)
+                if warped_bbox01 is not None:
+                    bbox01_selected = warped_bbox01
+                    bbox_source = f"{bbox_source}|reproject:frame_warp" if bbox_source else "reproject:frame_warp"
 
         bbox01_used = _expand_bbox01(bbox01_selected, padding_ratio=float(self._config.padding_ratio))
         crop = _crop_bbox01(image=image, bbox01=bbox01_used, min_crop_size_px=self._config.min_crop_size_px)
@@ -534,6 +609,156 @@ class ImageCropRuntime(TransformOperatorRuntime):
                     payload["frame_width"] = int(cshape[1])
                 except Exception:
                     pass
+
+        payload = _annotate_artifact_contract(
+            payload,
+            packet=out,
+            preferred_input_artifact_names=self._config.input_artifact_names,
+            selected_input_artifact_name=selected_name,
+            latest_artifact_name=self._config.output_artifact_name,
+        )
+        return [replace(out, payload=payload)]
+
+
+class ImagePerspectiveCropRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = ImagePerspectiveCropConfig.model_validate(config)
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        packet = _ensure_original_artifact(packet)
+        selected_name, frame = _resolve_input_image(
+            packet,
+            preferred_artifact_names=self._config.input_artifact_names,
+            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+        )
+        if frame is None:
+            return [packet]
+        if isinstance(frame, (bytes, bytearray, memoryview)):
+            return [packet]
+
+        shape = getattr(frame, "shape", None)
+        if not shape or len(shape) < 2:
+            return [packet]
+        try:
+            src_h = int(shape[0])
+            src_w = int(shape[1])
+        except Exception:
+            return [packet]
+        if src_h <= 1 or src_w <= 1:
+            return [packet]
+
+        points_px = _points_to_pixels(
+            list(self._config.points),
+            units=str(self._config.units),
+            width=src_w,
+            height=src_h,
+        )
+        if points_px is None:
+            return [packet]
+
+        ordered = _order_quad_points(points_px)
+        if ordered is None:
+            return [packet]
+
+        size = _resolve_perspective_output_size(
+            ordered,
+            output_ratio_preset=str(self._config.output_ratio_preset),
+            min_output_edge_px=int(self._config.min_output_edge_px),
+            max_output_edge_px=int(self._config.max_output_edge_px),
+        )
+        if size is None:
+            return [packet]
+        dst_w, dst_h = size
+
+        run_blocking = getattr(context, "run_blocking", None)
+        if callable(run_blocking):
+            result = await run_blocking(
+                _warp_perspective_opencv,
+                frame,
+                ordered,
+                dst_w,
+                dst_h,
+                interpolation=str(self._config.interpolation),
+                border_mode=str(self._config.border_mode),
+                border_value=int(self._config.border_value),
+            )
+        else:
+            result = _warp_perspective_opencv(
+                frame,
+                ordered,
+                dst_w,
+                dst_h,
+                interpolation=str(self._config.interpolation),
+                border_mode=str(self._config.border_mode),
+                border_value=int(self._config.border_value),
+            )
+
+        warped = result.get("image")
+        if warped is None:
+            return [packet]
+
+        out = packet.with_artifact(
+            Artifact(
+                name=self._config.output_artifact_name,
+                data=warped,
+                mime_type="image/raw",
+                metadata={
+                    "source": "camera.image_perspective_crop",
+                    "source_artifact_name": selected_name,
+                    "units": str(self._config.units),
+                    "points": [list(p) for p in self._config.points],
+                    "ordered_points_px": [list(p) for p in ordered],
+                    "output_size_px": [int(dst_w), int(dst_h)],
+                    "output_ratio_preset": str(self._config.output_ratio_preset),
+                    "interpolation": str(self._config.interpolation),
+                    "border_mode": str(self._config.border_mode),
+                    "border_value": int(self._config.border_value),
+                },
+            ),
+        )
+
+        payload = dict(out.payload)
+        payload["frame_warp"] = {
+            "kind": "perspective",
+            "source": "camera.image_perspective_crop",
+            "units": str(self._config.units),
+            "points": [list(p) for p in self._config.points],
+            "ordered_points_px": [list(p) for p in ordered],
+            "source_frame_width": int(src_w),
+            "source_frame_height": int(src_h),
+            "dest_frame_width": int(dst_w),
+            "dest_frame_height": int(dst_h),
+            "homography": result.get("homography"),
+            "homography_inv": result.get("homography_inv"),
+            "output_ratio_preset": str(self._config.output_ratio_preset),
+            "interpolation": str(self._config.interpolation),
+            "border_mode": str(self._config.border_mode),
+            "border_value": int(self._config.border_value),
+            "set_stream_frame": bool(self._config.set_stream_frame),
+            "set_payload_frame": bool(self._config.set_stream_frame),  # legacy mirror for old readers
+            "output_artifact_name": self._config.output_artifact_name,
+        }
+
+        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
+            out = out.with_artifact(
+                Artifact(
+                    name="frame",
+                    data=warped,
+                    mime_type="image/raw",
+                    metadata={
+                        "source": "camera.image_perspective_crop",
+                        "derived_from": self._config.output_artifact_name,
+                    },
+                ),
+            )
+
+        wshape = getattr(warped, "shape", None)
+        if wshape and len(wshape) >= 2:
+            try:
+                payload["frame_height"] = int(wshape[0])
+                payload["frame_width"] = int(wshape[1])
+            except Exception:
+                pass
 
         payload = _annotate_artifact_contract(
             payload,
@@ -1444,6 +1669,22 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         runtime_factory=lambda config, _deps: ImageCropRuntime(config),
     )
     registry.register_operator(
+        operator_id="camera.image_perspective_crop",
+        description="Crops a quadrilateral region by perspective (homography) into a frontal rectangle and writes artifact.",
+        config_model=ImagePerspectiveCropConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["camera", "artifact", "crop", "perspective"],
+        defaults=ImagePerspectiveCropConfig().model_dump(),
+        execution_mode="thread_pool",
+        requires_artifacts=["frame_original"],
+        produces_payload_keys=["frame_warp", "artifact_contract", "artifact_names"],
+        produces_artifacts=["frame"],
+        share_strategy="by_signature",
+        owner="com.toposync.cameras",
+        runtime_factory=lambda config, _deps: ImagePerspectiveCropRuntime(config),
+    )
+    registry.register_operator(
         operator_id="camera.image_adjust",
         description="Adjusts image color/levels (saturation/brightness/contrast/gamma) and writes artifact.",
         config_model=ImageAdjustConfig,
@@ -1672,6 +1913,110 @@ def _read_frame_crop_bbox01(packet: Packet) -> tuple[float, float, float, float]
     return None
 
 
+def _read_frame_warp(packet: Packet) -> dict[str, Any] | None:
+    warp = packet.payload.get("frame_warp")
+    if not isinstance(warp, dict):
+        return None
+    apply_to_stream = warp.get("set_stream_frame")
+    if apply_to_stream is None:
+        apply_to_stream = warp.get("set_payload_frame")  # legacy
+    if apply_to_stream is False:
+        return None
+    if str(warp.get("kind", "")).strip().lower() != "perspective":
+        return None
+
+    raw = warp.get("homography")
+    if not isinstance(raw, list) or len(raw) != 3:
+        return None
+    H: list[list[float]] = []
+    try:
+        for row in raw:
+            if not isinstance(row, list) or len(row) != 3:
+                return None
+            H.append([float(row[0]), float(row[1]), float(row[2])])
+    except Exception:
+        return None
+
+    try:
+        src_w = int(warp.get("source_frame_width"))
+        src_h = int(warp.get("source_frame_height"))
+        dst_w = int(warp.get("dest_frame_width"))
+        dst_h = int(warp.get("dest_frame_height"))
+    except Exception:
+        return None
+    if src_w <= 1 or src_h <= 1 or dst_w <= 1 or dst_h <= 1:
+        return None
+
+    return {
+        "homography": H,
+        "source_frame_width": src_w,
+        "source_frame_height": src_h,
+        "dest_frame_width": dst_w,
+        "dest_frame_height": dst_h,
+    }
+
+
+def _reproject_bbox01_to_warp(
+    bbox01: tuple[float, float, float, float],
+    warp: dict[str, Any],
+) -> tuple[float, float, float, float] | None:
+    try:
+        import numpy as np  # type: ignore
+    except Exception:
+        return None
+
+    raw = warp.get("homography")
+    if not isinstance(raw, list) or len(raw) != 3:
+        return None
+    try:
+        H = np.asarray(raw, dtype=np.float32).reshape(3, 3)
+    except Exception:
+        return None
+
+    src_w = int(warp.get("source_frame_width", 0))
+    src_h = int(warp.get("source_frame_height", 0))
+    dst_w = int(warp.get("dest_frame_width", 0))
+    dst_h = int(warp.get("dest_frame_height", 0))
+    if src_w <= 1 or src_h <= 1 or dst_w <= 1 or dst_h <= 1:
+        return None
+
+    x1, y1, x2, y2 = [float(v) for v in bbox01]
+    denom_sx = float(src_w - 1)
+    denom_sy = float(src_h - 1)
+    denom_dx = float(dst_w - 1)
+    denom_dy = float(dst_h - 1)
+    if denom_sx <= 1e-6 or denom_sy <= 1e-6 or denom_dx <= 1e-6 or denom_dy <= 1e-6:
+        return None
+
+    corners_src = np.asarray(
+        [
+            [x1 * denom_sx, y1 * denom_sy, 1.0],
+            [x2 * denom_sx, y1 * denom_sy, 1.0],
+            [x2 * denom_sx, y2 * denom_sy, 1.0],
+            [x1 * denom_sx, y2 * denom_sy, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    dst_hom = corners_src @ H.T
+    w = dst_hom[:, 2:3]
+    if not np.isfinite(dst_hom).all() or not np.isfinite(w).all():
+        return None
+    valid = np.abs(w) > 1e-9
+    if not bool(valid.all()):
+        return None
+    dst_xy = dst_hom[:, 0:2] / w
+    if not np.isfinite(dst_xy).all():
+        return None
+
+    xs = dst_xy[:, 0] / denom_dx
+    ys = dst_xy[:, 1] / denom_dy
+    min_x = float(np.min(xs))
+    min_y = float(np.min(ys))
+    max_x = float(np.max(xs))
+    max_y = float(np.max(ys))
+    return (min_x, min_y, max_x, max_y)
+
+
 def _reproject_bbox01_to_crop(
     bbox01: tuple[float, float, float, float],
     crop_bbox01: tuple[float, float, float, float],
@@ -1753,6 +2098,206 @@ def _crop_bbox01(
         return crop.copy()
     except Exception:
         return crop
+
+
+def _points_to_pixels(
+    points: list[tuple[float, float]],
+    *,
+    units: str,
+    width: int,
+    height: int,
+) -> list[tuple[float, float]] | None:
+    w = int(width)
+    h = int(height)
+    if w <= 1 or h <= 1:
+        return None
+    mode = str(units or "").strip().lower() or "percent"
+    out: list[tuple[float, float]] = []
+    for x_raw, y_raw in points:
+        try:
+            x = float(x_raw)
+            y = float(y_raw)
+        except Exception:
+            return None
+        if not math.isfinite(x) or not math.isfinite(y):
+            return None
+        if mode == "percent":
+            x = (x / 100.0) * float(w)
+            y = (y / 100.0) * float(h)
+        x = max(0.0, min(float(w - 1), x))
+        y = max(0.0, min(float(h - 1), y))
+        out.append((x, y))
+    if len(out) != 4:
+        return None
+    return out
+
+
+def _order_quad_points(points_px: list[tuple[float, float]]) -> list[tuple[float, float]] | None:
+    try:
+        import numpy as np  # type: ignore
+    except Exception:
+        return None
+    if len(points_px) != 4:
+        return None
+    pts = np.asarray(points_px, dtype=np.float32).reshape(4, 2)
+    if not np.isfinite(pts).all():
+        return None
+
+    s = pts.sum(axis=1)
+    diff = np.diff(pts, axis=1).reshape(-1)
+    tl = pts[int(np.argmin(s))]
+    br = pts[int(np.argmax(s))]
+    tr = pts[int(np.argmin(diff))]
+    bl = pts[int(np.argmax(diff))]
+    ordered = np.asarray([tl, tr, br, bl], dtype=np.float32)
+
+    unique = np.unique(ordered, axis=0)
+    if unique.shape[0] != 4:
+        return None
+    return [(float(p[0]), float(p[1])) for p in ordered]
+
+
+def _parse_ratio_preset(value: str) -> tuple[float, float] | None:
+    preset = str(value or "").strip().lower()
+    if preset == "1:1":
+        return (1.0, 1.0)
+    if preset == "4:3":
+        return (4.0, 3.0)
+    if preset == "16:9":
+        return (16.0, 9.0)
+    if preset == "3:4":
+        return (3.0, 4.0)
+    if preset == "9:16":
+        return (9.0, 16.0)
+    return None
+
+
+def _resolve_perspective_output_size(
+    ordered_points_px: list[tuple[float, float]],
+    *,
+    output_ratio_preset: str,
+    min_output_edge_px: int,
+    max_output_edge_px: int,
+) -> tuple[int, int] | None:
+    if len(ordered_points_px) != 4:
+        return None
+    tl, tr, br, bl = ordered_points_px
+
+    def dist(a: tuple[float, float], b: tuple[float, float]) -> float:
+        return math.hypot(float(a[0]) - float(b[0]), float(a[1]) - float(b[1]))
+
+    width_est = max(dist(tl, tr), dist(bl, br))
+    height_est = max(dist(tl, bl), dist(tr, br))
+    if not math.isfinite(width_est) or not math.isfinite(height_est):
+        return None
+    if width_est <= 1.0 or height_est <= 1.0:
+        return None
+
+    ratio = _parse_ratio_preset(output_ratio_preset)
+    if ratio is None:
+        out_w = int(round(width_est))
+        out_h = int(round(height_est))
+    else:
+        rw, rh = ratio
+        if rw <= 0.0 or rh <= 0.0:
+            return None
+        scale = math.sqrt((width_est * height_est) / (rw * rh))
+        out_w = int(round(scale * rw))
+        out_h = int(round(scale * rh))
+
+    out_w = max(1, out_w)
+    out_h = max(1, out_h)
+
+    max_edge = max(out_w, out_h)
+    limit = int(max_output_edge_px)
+    if limit > 0 and max_edge > limit:
+        factor = float(limit) / float(max_edge)
+        out_w = int(round(out_w * factor))
+        out_h = int(round(out_h * factor))
+
+    min_edge = min(out_w, out_h)
+    if out_w < int(min_output_edge_px) or out_h < int(min_output_edge_px) or min_edge <= 1:
+        return None
+    return (out_w, out_h)
+
+
+def _warp_perspective_opencv(
+    image: Any,
+    ordered_points_px: list[tuple[float, float]],
+    dst_w: int,
+    dst_h: int,
+    *,
+    interpolation: str,
+    border_mode: str,
+    border_value: int,
+) -> dict[str, Any]:
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("camera.image_perspective_crop requires opencv-python-headless and numpy") from exc
+
+    arr = np.asarray(image)
+    if arr.size == 0:
+        return {"image": None}
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8, copy=False)
+    src = np.asarray(ordered_points_px, dtype=np.float32).reshape(4, 2)
+    if not np.isfinite(src).all():
+        return {"image": None}
+
+    w = int(dst_w)
+    h = int(dst_h)
+    if w <= 1 or h <= 1:
+        return {"image": None}
+
+    dst = np.asarray(
+        [
+            [0.0, 0.0],
+            [float(w - 1), 0.0],
+            [float(w - 1), float(h - 1)],
+            [0.0, float(h - 1)],
+        ],
+        dtype=np.float32,
+    )
+    try:
+        H = cv2.getPerspectiveTransform(src, dst)
+    except Exception:
+        return {"image": None}
+    try:
+        H_inv = np.linalg.inv(H)
+    except Exception:
+        return {"image": None}
+
+    interp = str(interpolation or "").strip().lower()
+    if interp == "nearest":
+        flags = cv2.INTER_NEAREST
+    elif interp == "cubic":
+        flags = cv2.INTER_CUBIC
+    elif interp == "area":
+        flags = cv2.INTER_AREA
+    else:
+        flags = cv2.INTER_LINEAR
+
+    border = str(border_mode or "").strip().lower()
+    if border == "replicate":
+        bmode = cv2.BORDER_REPLICATE
+    else:
+        bmode = cv2.BORDER_CONSTANT
+
+    warped = cv2.warpPerspective(
+        np.ascontiguousarray(arr),
+        H,
+        (w, h),
+        flags=flags,
+        borderMode=bmode,
+        borderValue=int(border_value),
+    )
+    return {
+        "image": warped,
+        "homography": [[float(v) for v in row] for row in H.tolist()],
+        "homography_inv": [[float(v) for v in row] for row in H_inv.tolist()],
+    }
 
 
 def _resolve_image_point(packet: Packet, *, bbox_field: str, image_uv_field: str) -> tuple[float, float] | None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from .compiler import CompiledPipeline
 from .operator_registry import OperatorRegistry
@@ -311,7 +311,6 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
         if not bool(drop_data_after_store):
             continue
         # If Store Images is fed directly by split/track streams without downstream rate control, it can be very heavy.
-        upstream_ops = [nodes_by_id[nid].operator_id for nid in _upstream_nodes(store_node_id) if nid in nodes_by_id]
         tracking_ids = [nid for nid in _upstream_nodes(store_node_id) if nid in nodes_by_id and nodes_by_id[nid].operator_id == "vision.object_tracking_yolo"]
         if tracking_ids:
             tracking_idx = min(order_index.get(nid, 0) for nid in tracking_ids)

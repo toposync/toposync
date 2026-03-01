@@ -7,9 +7,112 @@ import { i18n } from "../../../../../util/i18n";
 
 import { buildArtifactSuggestions, pipelinesReactSelectStyles } from "../../constants";
 import type { InteractiveStep, SelectOption } from "../../types";
+import { isRecord, safeJsonParse } from "../../utils";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
+import { CropRectangleDrawModal, PerspectiveCropDrawModal, type SnapshotSource } from "./ImageDrawModals";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
+
+type ImageDrawEligibility =
+  | { enabled: true; snapshotSource: SnapshotSource }
+  | { enabled: false; snapshotSource: SnapshotSource | null; reason: { code: "no_camera_source" | "no_camera_selected" | "blocked"; operatorId?: string } };
+
+function parseInteractiveStepConfig(step: InteractiveStep): Record<string, unknown> {
+  const parsed = safeJsonParse(step.configText || "{}");
+  if (!parsed.ok) return {};
+  if (!isRecord(parsed.data)) return {};
+  return parsed.data as Record<string, unknown>;
+}
+
+function readStringList(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return fallback;
+  return value.map((item) => String(item || "").trim()).filter((item) => item.length > 0);
+}
+
+function readBool(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    if (v === "true" || v === "1" || v === "yes" || v === "on") return true;
+    if (v === "false" || v === "0" || v === "no" || v === "off") return false;
+  }
+  return fallback;
+}
+
+function resolveSnapshotSourceFromCameraSourceConfig(config: Record<string, unknown>): SnapshotSource | null {
+  const cameraId = String((config as any).camera_id ?? "").trim();
+  if (cameraId) return { kind: "camera", cameraId };
+  const rtspUrl = String((config as any).rtsp_url ?? "").trim();
+  if (!rtspUrl) return null;
+  const username = String((config as any).username ?? "").trim();
+  const password = String((config as any).password ?? "").trim();
+  return { kind: "rtsp", url: rtspUrl, username, password };
+}
+
+function resolveImageDrawEligibility(
+  steps: InteractiveStep[],
+  currentIndex: number,
+  currentConfig: Record<string, unknown>,
+): ImageDrawEligibility {
+  let sourceIndex = -1;
+  for (let idx = currentIndex - 1; idx >= 0; idx -= 1) {
+    if (steps[idx]?.operatorId === "camera.source") {
+      sourceIndex = idx;
+      break;
+    }
+  }
+  if (sourceIndex < 0) {
+    return { enabled: false, snapshotSource: null, reason: { code: "no_camera_source" } };
+  }
+
+  const sourceConfig = parseInteractiveStepConfig(steps[sourceIndex]!);
+  const snapshotSource = resolveSnapshotSourceFromCameraSourceConfig(sourceConfig);
+  if (!snapshotSource) {
+    return { enabled: false, snapshotSource: null, reason: { code: "no_camera_selected" } };
+  }
+
+  const inputNamesRaw = (currentConfig as any).input_artifact_names;
+  const inputArtifactNames = readStringList(inputNamesRaw, ["segmented", "treated", "original"]);
+  const wantsSegmented = inputArtifactNames.includes("segmented");
+
+  for (let idx = sourceIndex + 1; idx < currentIndex; idx += 1) {
+    const step = steps[idx];
+    if (!step) continue;
+    const operatorId = String(step.operatorId || "").trim();
+    if (!operatorId) continue;
+
+    if (operatorId === "camera.image_crop" || operatorId === "camera.image_perspective_crop") {
+      const cfg = parseInteractiveStepConfig(step);
+      const setStreamFrame = readBool((cfg as any).set_stream_frame ?? (cfg as any).set_payload_frame, true);
+      if (setStreamFrame) {
+        return { enabled: false, snapshotSource, reason: { code: "blocked", operatorId } };
+      }
+      continue;
+    }
+
+    if (operatorId === "camera.object_segmentation" && wantsSegmented) {
+      return { enabled: false, snapshotSource, reason: { code: "blocked", operatorId } };
+    }
+
+    if (operatorId === "camera.image_resize") {
+      const cfg = parseInteractiveStepConfig(step);
+      const names = readStringList((cfg as any).artifact_names, ["segmented", "treated"]);
+      const touchesTreated = names.includes("treated") || names.includes("frame");
+      const touchesSegmented = wantsSegmented && (names.includes("segmented") || names.includes("segmented_frame"));
+      if (touchesTreated || touchesSegmented) {
+        return { enabled: false, snapshotSource, reason: { code: "blocked", operatorId } };
+      }
+      continue;
+    }
+
+    if (operatorId === "camera.frame_attach") {
+      return { enabled: false, snapshotSource, reason: { code: "blocked", operatorId } };
+    }
+  }
+
+  return { enabled: true, snapshotSource };
+}
 
 type CameraSourceProps = {
   config: Record<string, unknown>;
@@ -278,11 +381,13 @@ export function VelocityEstimationConfigCard({
 
 type ImageCropProps = {
   config: Record<string, unknown>;
+  steps: InteractiveStep[];
+  index: number;
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
 };
 
-export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: ImageCropProps): React.ReactElement {
+export function ImageCropConfigCard({ config, steps, index, showAdvanced, onUpdateConfig }: ImageCropProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const unitsRaw = String((config as any).units ?? "percent").trim().toLowerCase();
   const units = unitsRaw === "pixels" ? "pixels" : "percent";
@@ -297,9 +402,32 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
   const percentMax = 100;
   const clampPercent = (value: number) => Math.max(0, Math.min(percentMax, value));
 
+  const drawEligibility = React.useMemo(() => resolveImageDrawEligibility(steps, index, config), [steps, index, config]);
+  const [isDrawOpen, setIsDrawOpen] = React.useState(false);
+
   return (
     <div className="pipelinesOperatorConfigCard">
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_crop.hint")}</div>
+
+      <div className="rowWrap" style={{ marginTop: 10, justifyContent: "space-between" }}>
+        <button
+          className="chipButton"
+          type="button"
+          disabled={!drawEligibility.enabled}
+          onClick={() => setIsDrawOpen(true)}
+        >
+          {t("core.ui.pipelines.panels.image_draw.button")}
+        </button>
+        {!drawEligibility.enabled ? (
+          <div className="pipelinesStepHint" style={{ textAlign: "right" }}>
+            {drawEligibility.reason.code === "no_camera_source"
+              ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
+              : drawEligibility.reason.code === "no_camera_selected"
+                ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
+                : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: drawEligibility.reason.operatorId ?? "" })}
+          </div>
+        ) : null}
+      </div>
 
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.image_crop.units")}</span>
@@ -425,12 +553,31 @@ export function ImageCropConfigCard({ config, showAdvanced, onUpdateConfig }: Im
           </label>
         </>
       ) : null}
+
+      <CropRectangleDrawModal
+        open={isDrawOpen}
+        onClose={() => setIsDrawOpen(false)}
+        snapshotSource={drawEligibility.snapshotSource}
+        units={units}
+        values={{ left, top, right, bottom }}
+        onChange={(nextValues) =>
+          onUpdateConfig((prev) => ({
+            ...prev,
+            left: nextValues.left,
+            top: nextValues.top,
+            right: nextValues.right,
+            bottom: nextValues.bottom,
+          }))
+        }
+      />
     </div>
   );
 }
 
 type ImagePerspectiveCropProps = {
   config: Record<string, unknown>;
+  steps: InteractiveStep[];
+  index: number;
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
 };
@@ -473,6 +620,8 @@ function readPerspectivePoints(config: Record<string, unknown>, units: "percent"
 
 export function ImagePerspectiveCropConfigCard({
   config,
+  steps,
+  index,
   showAdvanced,
   onUpdateConfig,
 }: ImagePerspectiveCropProps): React.ReactElement {
@@ -481,6 +630,8 @@ export function ImagePerspectiveCropConfigCard({
   const units = unitsRaw === "pixels" ? "pixels" : "percent";
 
   const points = readPerspectivePoints(config, units);
+  const drawEligibility = React.useMemo(() => resolveImageDrawEligibility(steps, index, config), [steps, index, config]);
+  const [isDrawOpen, setIsDrawOpen] = React.useState(false);
 
   const outputRatioRaw = String((config as any).output_ratio_preset ?? "auto").trim().toLowerCase();
   const outputRatio =
@@ -526,6 +677,26 @@ export function ImagePerspectiveCropConfigCard({
   return (
     <div className="pipelinesOperatorConfigCard">
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_perspective_crop.hint")}</div>
+
+      <div className="rowWrap" style={{ marginTop: 10, justifyContent: "space-between" }}>
+        <button
+          className="chipButton"
+          type="button"
+          disabled={!drawEligibility.enabled}
+          onClick={() => setIsDrawOpen(true)}
+        >
+          {t("core.ui.pipelines.panels.image_draw.button")}
+        </button>
+        {!drawEligibility.enabled ? (
+          <div className="pipelinesStepHint" style={{ textAlign: "right" }}>
+            {drawEligibility.reason.code === "no_camera_source"
+              ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
+              : drawEligibility.reason.code === "no_camera_selected"
+                ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
+                : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: drawEligibility.reason.operatorId ?? "" })}
+          </div>
+        ) : null}
+      </div>
 
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.image_perspective_crop.units")}</span>
@@ -709,6 +880,15 @@ export function ImagePerspectiveCropConfigCard({
           </label>
         </>
       ) : null}
+
+      <PerspectiveCropDrawModal
+        open={isDrawOpen}
+        onClose={() => setIsDrawOpen(false)}
+        snapshotSource={drawEligibility.snapshotSource}
+        units={units}
+        points={points}
+        onChange={(nextPoints) => onUpdateConfig((prev) => ({ ...prev, points: nextPoints }))}
+      />
     </div>
   );
 }

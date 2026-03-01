@@ -741,6 +741,36 @@ export async function getCameraContexts(cameraId: string): Promise<CameraContext
   return res.json();
 }
 
+export async function fetchCameraSnapshot(cameraId: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/snapshot`, { signal });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Snapshot failed: ${response.status}`);
+  }
+  return response.blob();
+}
+
+export async function fetchRtspSnapshot(
+  options: { url: string; username?: string; password?: string },
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const response = await fetch("/api/cameras/rtsp/snapshot", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: options.url,
+      username: options.username ?? "",
+      password: options.password ?? "",
+    }),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Snapshot failed: ${response.status}`);
+  }
+  return response.blob();
+}
+
 export async function listPipelineOperators(): Promise<PipelineOperatorDefinition[]> {
   const res = await fetch("/api/pipelines/operators");
   if (!res.ok) throw new Error(`Failed to list pipeline operators: ${res.status}`);

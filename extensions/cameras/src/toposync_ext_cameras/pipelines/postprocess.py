@@ -215,6 +215,264 @@ class ImageAdjustConfig(BaseModel):
         return name
 
 
+class LocalContrastCLAHEConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
+    fallback_to_stream_frame: bool = True
+    output_artifact_name: str = "frame"
+
+    clip_limit: float = Field(default=2.0, ge=0.1, le=10.0)
+    tile_grid_size: tuple[int, int] = Field(default=(8, 8), description="(tiles_x, tiles_y)")
+    colorspace: Literal["lab", "ycrcb"] = "lab"
+
+    set_stream_frame: bool = True
+    preserve_alpha: bool = True
+
+    @field_validator("input_artifact_names", mode="after")
+    @classmethod
+    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
+        return _normalize_artifact_names(value)
+
+    @field_validator("tile_grid_size", mode="before")
+    @classmethod
+    def _normalize_tile_grid_size(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            try:
+                return (int(value[0]), int(value[1]))
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError("tile_grid_size must contain two integers") from exc
+        raise ValueError("tile_grid_size must be a (tiles_x, tiles_y) pair")
+
+    @model_validator(mode="after")
+    def _validate_tile_grid_size(self) -> "LocalContrastCLAHEConfig":
+        tx, ty = self.tile_grid_size
+        if tx <= 0 or ty <= 0:
+            raise ValueError("tile_grid_size values must be > 0")
+        if tx > 64 or ty > 64:
+            raise ValueError("tile_grid_size values must be <= 64")
+        return self
+
+    @field_validator("output_artifact_name")
+    @classmethod
+    def _validate_output_artifact_name(cls, value: str) -> str:
+        name = str(value or "").strip()
+        if not name:
+            raise ValueError("output_artifact_name is required")
+        return name
+
+
+class UnsharpMaskConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
+    fallback_to_stream_frame: bool = True
+    output_artifact_name: str = "frame"
+
+    amount: float = Field(default=0.35, ge=0.0, le=2.0)
+    sigma: float = Field(default=1.0, ge=0.1, le=10.0)
+    threshold: int = Field(default=0, ge=0, le=255, description="Apply sharpening only when |src-blur| > threshold.")
+    luma_only: bool = True
+
+    set_stream_frame: bool = True
+    preserve_alpha: bool = True
+
+    @field_validator("input_artifact_names", mode="after")
+    @classmethod
+    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
+        return _normalize_artifact_names(value)
+
+    @field_validator("output_artifact_name")
+    @classmethod
+    def _validate_output_artifact_name(cls, value: str) -> str:
+        name = str(value or "").strip()
+        if not name:
+            raise ValueError("output_artifact_name is required")
+        return name
+
+
+class DenoiseLumaConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
+    fallback_to_stream_frame: bool = True
+    output_artifact_name: str = "frame"
+
+    method: Literal["bilateral", "nlmeans"] = "bilateral"
+    bilateral_diameter: int = Field(default=5, ge=1, le=31)
+    bilateral_sigma_color: float = Field(default=25.0, ge=0.0, le=250.0)
+    bilateral_sigma_space: float = Field(default=25.0, ge=0.0, le=250.0)
+
+    nlmeans_h: float = Field(default=3.5, ge=0.0, le=30.0)
+    nlmeans_template_window_size: int = Field(default=7, ge=3, le=21)
+    nlmeans_search_window_size: int = Field(default=21, ge=7, le=51)
+
+    set_stream_frame: bool = True
+    preserve_alpha: bool = True
+
+    @field_validator("input_artifact_names", mode="after")
+    @classmethod
+    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
+        return _normalize_artifact_names(value)
+
+    @field_validator("output_artifact_name")
+    @classmethod
+    def _validate_output_artifact_name(cls, value: str) -> str:
+        name = str(value or "").strip()
+        if not name:
+            raise ValueError("output_artifact_name is required")
+        return name
+
+    @model_validator(mode="after")
+    def _validate_nlmeans_sizes(self) -> "DenoiseLumaConfig":
+        if self.method != "nlmeans":
+            return self
+        if int(self.nlmeans_template_window_size) % 2 == 0:
+            raise ValueError("nlmeans_template_window_size must be odd")
+        if int(self.nlmeans_search_window_size) % 2 == 0:
+            raise ValueError("nlmeans_search_window_size must be odd")
+        if int(self.nlmeans_search_window_size) < int(self.nlmeans_template_window_size):
+            raise ValueError("nlmeans_search_window_size must be >= nlmeans_template_window_size")
+        return self
+
+
+class AutoGammaConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
+    fallback_to_stream_frame: bool = True
+    output_artifact_name: str = "frame"
+
+    measurement: Literal["mean", "p50"] = "p50"
+    target_luma: float = Field(default=0.5, ge=0.05, le=0.95)
+    min_gamma: float = Field(default=0.5, ge=0.1, le=5.0)
+    max_gamma: float = Field(default=2.5, ge=0.1, le=5.0)
+    smoothing: float = Field(
+        default=0.9,
+        ge=0.0,
+        le=0.99,
+        description="EMA factor for gamma: next = smoothing*prev + (1-smoothing)*new.",
+    )
+    epsilon: float = Field(default=1e-3, ge=1e-6, le=0.05, description="Clamps luminance away from 0/1.")
+
+    set_stream_frame: bool = True
+    preserve_alpha: bool = True
+
+    @field_validator("input_artifact_names", mode="after")
+    @classmethod
+    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
+        return _normalize_artifact_names(value)
+
+    @model_validator(mode="after")
+    def _validate_gamma_range(self) -> "AutoGammaConfig":
+        if float(self.max_gamma) < float(self.min_gamma):
+            raise ValueError("max_gamma must be >= min_gamma")
+        return self
+
+    @field_validator("output_artifact_name")
+    @classmethod
+    def _validate_output_artifact_name(cls, value: str) -> str:
+        name = str(value or "").strip()
+        if not name:
+            raise ValueError("output_artifact_name is required")
+        return name
+
+
+class GlobalStabilizeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
+    fallback_to_stream_frame: bool = True
+    output_artifact_name: str = "frame"
+
+    response_threshold: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=1.0,
+        description="Phase correlation response threshold; lower values skip stabilization.",
+    )
+    max_translation_px: float = Field(
+        default=12.0,
+        ge=0.0,
+        le=250.0,
+        description="Maximum absolute translation allowed (pixels). 0 disables the check.",
+    )
+    smoothing: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=0.99,
+        description="EMA factor for translation (dx/dy). Use >0 to reduce jitter in the warp itself.",
+    )
+    interpolation: Literal["linear", "nearest"] = "linear"
+    border_mode: Literal["constant", "replicate"] = "replicate"
+    border_value: int = Field(default=0, ge=0, le=255)
+    reset_on_lifecycle: bool = True
+
+    set_stream_frame: bool = True
+    preserve_alpha: bool = True
+
+    @field_validator("input_artifact_names", mode="after")
+    @classmethod
+    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
+        return _normalize_artifact_names(value)
+
+    @field_validator("output_artifact_name")
+    @classmethod
+    def _validate_output_artifact_name(cls, value: str) -> str:
+        name = str(value or "").strip()
+        if not name:
+            raise ValueError("output_artifact_name is required")
+        return name
+
+
+class LensUndistortConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
+    fallback_to_stream_frame: bool = True
+    output_artifact_name: str = "frame"
+
+    camera_matrix: list[list[float]] = Field(
+        default_factory=lambda: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        description="3x3 camera intrinsic matrix.",
+    )
+    dist_coeffs: list[float] = Field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0],
+        description="Distortion coefficients (k1,k2,p1,p2[,k3...]).",
+    )
+    alpha: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Free scaling parameter for optimal new camera matrix: 0=crop, 1=keep all pixels.",
+    )
+    use_optimal_new_camera_matrix: bool = False
+    crop_to_valid_roi: bool = False
+    interpolation: Literal["linear", "nearest", "cubic", "area"] = "linear"
+    border_mode: Literal["constant", "replicate"] = "constant"
+    border_value: int = Field(default=0, ge=0, le=255)
+
+    set_stream_frame: bool = True
+    preserve_alpha: bool = True
+
+    @field_validator("input_artifact_names", mode="after")
+    @classmethod
+    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
+        return _normalize_artifact_names(value)
+
+    @model_validator(mode="after")
+    def _validate_calibration(self) -> "LensUndistortConfig":
+        if len(self.camera_matrix) != 3 or any(len(row) != 3 for row in self.camera_matrix):
+            raise ValueError("camera_matrix must be a 3x3 list")
+        if len(self.dist_coeffs) < 4:
+            raise ValueError("dist_coeffs must contain at least 4 values")
+        return self
+
+    @field_validator("output_artifact_name")
+    @classmethod
+    def _validate_output_artifact_name(cls, value: str) -> str:
+        name = str(value or "").strip()
+        if not name:
+            raise ValueError("output_artifact_name is required")
+        return name
+
+
 class CameraMappingControlPointImage(BaseModel):
     x: float = Field(ge=0.0, le=1.0)
     y: float = Field(ge=0.0, le=1.0)
@@ -929,6 +1187,1183 @@ def _adjust_image_opencv(
         except Exception:
             pass
     return bgr
+
+
+class LocalContrastCLAHERuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = LocalContrastCLAHEConfig.model_validate(config)
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        packet = _ensure_original_artifact(packet)
+        selected_name, image = _resolve_input_image(
+            packet,
+            preferred_artifact_names=self._config.input_artifact_names,
+            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+        )
+        if image is None:
+            payload = _annotate_artifact_contract(
+                packet.payload,
+                packet=packet,
+                preferred_input_artifact_names=self._config.input_artifact_names,
+                selected_input_artifact_name=selected_name,
+            )
+            return [replace(packet, payload=payload)]
+
+        if isinstance(image, (bytes, bytearray, memoryview)):
+            return [packet]
+
+        run_blocking = getattr(context, "run_blocking", None)
+        clip_limit = float(self._config.clip_limit)
+        tile_grid_size = tuple(self._config.tile_grid_size)
+        colorspace = str(self._config.colorspace)
+        preserve_alpha = bool(self._config.preserve_alpha)
+        if callable(run_blocking):
+            out_image = await run_blocking(
+                _clahe_image_opencv,
+                image,
+                clip_limit=clip_limit,
+                tile_grid_size=tile_grid_size,
+                colorspace=colorspace,
+                preserve_alpha=preserve_alpha,
+            )
+        else:
+            out_image = await asyncio.to_thread(
+                _clahe_image_opencv,
+                image,
+                clip_limit=clip_limit,
+                tile_grid_size=tile_grid_size,
+                colorspace=colorspace,
+                preserve_alpha=preserve_alpha,
+            )
+
+        if out_image is None:
+            return [packet]
+
+        out = packet.with_artifact(
+            Artifact(
+                name=self._config.output_artifact_name,
+                data=out_image,
+                mime_type="image/raw",
+                metadata={
+                    "source_artifact_name": selected_name,
+                    "clip_limit": float(clip_limit),
+                    "tile_grid_size": [int(tile_grid_size[0]), int(tile_grid_size[1])],
+                    "colorspace": str(colorspace),
+                },
+            ),
+        )
+
+        payload = dict(out.payload)
+        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
+            out = out.with_artifact(
+                Artifact(
+                    name="frame",
+                    data=out_image,
+                    mime_type="image/raw",
+                    metadata={
+                        "source": "camera.local_contrast_clahe",
+                        "derived_from": self._config.output_artifact_name,
+                    },
+                ),
+            )
+
+        shape = getattr(out_image, "shape", None)
+        if (self._config.set_stream_frame and self._config.output_artifact_name != "frame") or self._config.output_artifact_name == "frame":
+            if shape and len(shape) >= 2:
+                try:
+                    payload["frame_height"] = int(shape[0])
+                    payload["frame_width"] = int(shape[1])
+                except Exception:
+                    pass
+
+        payload = _annotate_artifact_contract(
+            payload,
+            packet=out,
+            preferred_input_artifact_names=self._config.input_artifact_names,
+            selected_input_artifact_name=selected_name,
+            latest_artifact_name=self._config.output_artifact_name,
+        )
+        return [replace(out, payload=payload)]
+
+
+def _clahe_image_opencv(
+    image: Any,
+    *,
+    clip_limit: float,
+    tile_grid_size: tuple[int, int],
+    colorspace: str,
+    preserve_alpha: bool,
+) -> Any | None:
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("camera.local_contrast_clahe requires opencv-python-headless and numpy") from exc
+
+    arr = np.asarray(image)
+    if arr.size == 0:
+        return None
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8, copy=False)
+
+    alpha: Any | None = None
+    if arr.ndim == 3 and int(arr.shape[2]) == 4 and preserve_alpha:
+        alpha = arr[..., 3].copy()
+        arr = arr[..., :3]
+
+    clahe = cv2.createCLAHE(clipLimit=float(clip_limit), tileGridSize=(int(tile_grid_size[0]), int(tile_grid_size[1])))
+
+    if arr.ndim == 2:
+        out = clahe.apply(np.ascontiguousarray(arr))
+        if alpha is not None:
+            try:
+                out = np.dstack([out, alpha])
+            except Exception:
+                pass
+        return out
+
+    if arr.ndim != 3 or int(arr.shape[2]) != 3:
+        return None
+
+    bgr = np.ascontiguousarray(arr)
+    key = str(colorspace or "").strip().lower()
+    if key == "ycrcb":
+        converted = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb)
+        channels = list(cv2.split(converted))
+        channels[0] = clahe.apply(channels[0])
+        merged = cv2.merge(channels)
+        out_bgr = cv2.cvtColor(merged, cv2.COLOR_YCrCb2BGR)
+    else:
+        converted = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+        channels = list(cv2.split(converted))
+        channels[0] = clahe.apply(channels[0])
+        merged = cv2.merge(channels)
+        out_bgr = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+
+    if alpha is not None:
+        try:
+            out_bgr = np.dstack([out_bgr, alpha])
+        except Exception:
+            pass
+    return out_bgr
+
+
+class UnsharpMaskRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = UnsharpMaskConfig.model_validate(config)
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        packet = _ensure_original_artifact(packet)
+        selected_name, image = _resolve_input_image(
+            packet,
+            preferred_artifact_names=self._config.input_artifact_names,
+            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+        )
+        if image is None:
+            payload = _annotate_artifact_contract(
+                packet.payload,
+                packet=packet,
+                preferred_input_artifact_names=self._config.input_artifact_names,
+                selected_input_artifact_name=selected_name,
+            )
+            return [replace(packet, payload=payload)]
+
+        if isinstance(image, (bytes, bytearray, memoryview)):
+            return [packet]
+
+        run_blocking = getattr(context, "run_blocking", None)
+        amount = float(self._config.amount)
+        sigma = float(self._config.sigma)
+        threshold = int(self._config.threshold)
+        luma_only = bool(self._config.luma_only)
+        preserve_alpha = bool(self._config.preserve_alpha)
+        if callable(run_blocking):
+            out_image = await run_blocking(
+                _unsharp_mask_image_opencv,
+                image,
+                amount=amount,
+                sigma=sigma,
+                threshold=threshold,
+                luma_only=luma_only,
+                preserve_alpha=preserve_alpha,
+            )
+        else:
+            out_image = await asyncio.to_thread(
+                _unsharp_mask_image_opencv,
+                image,
+                amount=amount,
+                sigma=sigma,
+                threshold=threshold,
+                luma_only=luma_only,
+                preserve_alpha=preserve_alpha,
+            )
+
+        if out_image is None:
+            return [packet]
+
+        out = packet.with_artifact(
+            Artifact(
+                name=self._config.output_artifact_name,
+                data=out_image,
+                mime_type="image/raw",
+                metadata={
+                    "source_artifact_name": selected_name,
+                    "amount": float(amount),
+                    "sigma": float(sigma),
+                    "threshold": int(threshold),
+                    "luma_only": bool(luma_only),
+                },
+            ),
+        )
+
+        payload = dict(out.payload)
+        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
+            out = out.with_artifact(
+                Artifact(
+                    name="frame",
+                    data=out_image,
+                    mime_type="image/raw",
+                    metadata={"source": "camera.unsharp_mask", "derived_from": self._config.output_artifact_name},
+                ),
+            )
+
+        shape = getattr(out_image, "shape", None)
+        if (self._config.set_stream_frame and self._config.output_artifact_name != "frame") or self._config.output_artifact_name == "frame":
+            if shape and len(shape) >= 2:
+                try:
+                    payload["frame_height"] = int(shape[0])
+                    payload["frame_width"] = int(shape[1])
+                except Exception:
+                    pass
+
+        payload = _annotate_artifact_contract(
+            payload,
+            packet=out,
+            preferred_input_artifact_names=self._config.input_artifact_names,
+            selected_input_artifact_name=selected_name,
+            latest_artifact_name=self._config.output_artifact_name,
+        )
+        return [replace(out, payload=payload)]
+
+
+def _unsharp_mask_image_opencv(
+    image: Any,
+    *,
+    amount: float,
+    sigma: float,
+    threshold: int,
+    luma_only: bool,
+    preserve_alpha: bool,
+) -> Any | None:
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("camera.unsharp_mask requires opencv-python-headless and numpy") from exc
+
+    arr = np.asarray(image)
+    if arr.size == 0:
+        return None
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8, copy=False)
+
+    alpha: Any | None = None
+    if arr.ndim == 3 and int(arr.shape[2]) == 4 and preserve_alpha:
+        alpha = arr[..., 3].copy()
+        arr = arr[..., :3]
+
+    if arr.ndim == 2:
+        src = np.ascontiguousarray(arr)
+        blur = cv2.GaussianBlur(src, (0, 0), float(sigma))
+        sharp = cv2.addWeighted(src, 1.0 + float(amount), blur, -float(amount), 0.0)
+        if int(threshold) > 0:
+            diff = cv2.absdiff(src, blur)
+            mask = diff > int(threshold)
+            out = src.copy()
+            out[mask] = sharp[mask]
+        else:
+            out = sharp
+        if alpha is not None:
+            try:
+                out = np.dstack([out, alpha])
+            except Exception:
+                pass
+        return out
+
+    if arr.ndim != 3 or int(arr.shape[2]) != 3:
+        return None
+
+    bgr = np.ascontiguousarray(arr)
+    if bool(luma_only):
+        ycc = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb)
+        y, cr, cb = cv2.split(ycc)
+        blur = cv2.GaussianBlur(y, (0, 0), float(sigma))
+        sharp = cv2.addWeighted(y, 1.0 + float(amount), blur, -float(amount), 0.0)
+        if int(threshold) > 0:
+            diff = cv2.absdiff(y, blur)
+            mask = diff > int(threshold)
+            y_out = y.copy()
+            y_out[mask] = sharp[mask]
+        else:
+            y_out = sharp
+        merged = cv2.merge([y_out, cr, cb])
+        out_bgr = cv2.cvtColor(merged, cv2.COLOR_YCrCb2BGR)
+    else:
+        blur = cv2.GaussianBlur(bgr, (0, 0), float(sigma))
+        sharp = cv2.addWeighted(bgr, 1.0 + float(amount), blur, -float(amount), 0.0)
+        if int(threshold) > 0:
+            diff = cv2.absdiff(bgr, blur)
+            mask = diff > int(threshold)
+            out_bgr = bgr.copy()
+            out_bgr[mask] = sharp[mask]
+        else:
+            out_bgr = sharp
+
+    if alpha is not None:
+        try:
+            out_bgr = np.dstack([out_bgr, alpha])
+        except Exception:
+            pass
+    return out_bgr
+
+
+class DenoiseLumaRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = DenoiseLumaConfig.model_validate(config)
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        packet = _ensure_original_artifact(packet)
+        selected_name, image = _resolve_input_image(
+            packet,
+            preferred_artifact_names=self._config.input_artifact_names,
+            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+        )
+        if image is None:
+            payload = _annotate_artifact_contract(
+                packet.payload,
+                packet=packet,
+                preferred_input_artifact_names=self._config.input_artifact_names,
+                selected_input_artifact_name=selected_name,
+            )
+            return [replace(packet, payload=payload)]
+
+        if isinstance(image, (bytes, bytearray, memoryview)):
+            return [packet]
+
+        run_blocking = getattr(context, "run_blocking", None)
+        method = str(self._config.method)
+        if callable(run_blocking):
+            out_image = await run_blocking(
+                _denoise_luma_image_opencv,
+                image,
+                method=method,
+                bilateral_diameter=int(self._config.bilateral_diameter),
+                bilateral_sigma_color=float(self._config.bilateral_sigma_color),
+                bilateral_sigma_space=float(self._config.bilateral_sigma_space),
+                nlmeans_h=float(self._config.nlmeans_h),
+                nlmeans_template_window_size=int(self._config.nlmeans_template_window_size),
+                nlmeans_search_window_size=int(self._config.nlmeans_search_window_size),
+                preserve_alpha=bool(self._config.preserve_alpha),
+            )
+        else:
+            out_image = await asyncio.to_thread(
+                _denoise_luma_image_opencv,
+                image,
+                method=method,
+                bilateral_diameter=int(self._config.bilateral_diameter),
+                bilateral_sigma_color=float(self._config.bilateral_sigma_color),
+                bilateral_sigma_space=float(self._config.bilateral_sigma_space),
+                nlmeans_h=float(self._config.nlmeans_h),
+                nlmeans_template_window_size=int(self._config.nlmeans_template_window_size),
+                nlmeans_search_window_size=int(self._config.nlmeans_search_window_size),
+                preserve_alpha=bool(self._config.preserve_alpha),
+            )
+
+        if out_image is None:
+            return [packet]
+
+        out = packet.with_artifact(
+            Artifact(
+                name=self._config.output_artifact_name,
+                data=out_image,
+                mime_type="image/raw",
+                metadata={
+                    "source_artifact_name": selected_name,
+                    "method": str(method),
+                    "bilateral_diameter": int(self._config.bilateral_diameter),
+                    "bilateral_sigma_color": float(self._config.bilateral_sigma_color),
+                    "bilateral_sigma_space": float(self._config.bilateral_sigma_space),
+                    "nlmeans_h": float(self._config.nlmeans_h),
+                },
+            ),
+        )
+
+        payload = dict(out.payload)
+        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
+            out = out.with_artifact(
+                Artifact(
+                    name="frame",
+                    data=out_image,
+                    mime_type="image/raw",
+                    metadata={"source": "camera.denoise_luma", "derived_from": self._config.output_artifact_name},
+                ),
+            )
+
+        shape = getattr(out_image, "shape", None)
+        if (self._config.set_stream_frame and self._config.output_artifact_name != "frame") or self._config.output_artifact_name == "frame":
+            if shape and len(shape) >= 2:
+                try:
+                    payload["frame_height"] = int(shape[0])
+                    payload["frame_width"] = int(shape[1])
+                except Exception:
+                    pass
+
+        payload = _annotate_artifact_contract(
+            payload,
+            packet=out,
+            preferred_input_artifact_names=self._config.input_artifact_names,
+            selected_input_artifact_name=selected_name,
+            latest_artifact_name=self._config.output_artifact_name,
+        )
+        return [replace(out, payload=payload)]
+
+
+def _denoise_luma_image_opencv(
+    image: Any,
+    *,
+    method: str,
+    bilateral_diameter: int,
+    bilateral_sigma_color: float,
+    bilateral_sigma_space: float,
+    nlmeans_h: float,
+    nlmeans_template_window_size: int,
+    nlmeans_search_window_size: int,
+    preserve_alpha: bool,
+) -> Any | None:
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("camera.denoise_luma requires opencv-python-headless and numpy") from exc
+
+    arr = np.asarray(image)
+    if arr.size == 0:
+        return None
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8, copy=False)
+
+    alpha: Any | None = None
+    if arr.ndim == 3 and int(arr.shape[2]) == 4 and preserve_alpha:
+        alpha = arr[..., 3].copy()
+        arr = arr[..., :3]
+
+    key = str(method or "").strip().lower()
+    if arr.ndim == 2:
+        gray = np.ascontiguousarray(arr)
+        if key == "nlmeans":
+            out = cv2.fastNlMeansDenoising(
+                gray,
+                None,
+                float(nlmeans_h),
+                int(nlmeans_template_window_size),
+                int(nlmeans_search_window_size),
+            )
+        else:
+            out = cv2.bilateralFilter(
+                gray,
+                d=int(bilateral_diameter),
+                sigmaColor=float(bilateral_sigma_color),
+                sigmaSpace=float(bilateral_sigma_space),
+            )
+        if alpha is not None:
+            try:
+                out = np.dstack([out, alpha])
+            except Exception:
+                pass
+        return out
+
+    if arr.ndim != 3 or int(arr.shape[2]) != 3:
+        return None
+
+    bgr = np.ascontiguousarray(arr)
+    ycc = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb)
+    y, cr, cb = cv2.split(ycc)
+    if key == "nlmeans":
+        y_out = cv2.fastNlMeansDenoising(
+            y,
+            None,
+            float(nlmeans_h),
+            int(nlmeans_template_window_size),
+            int(nlmeans_search_window_size),
+        )
+    else:
+        y_out = cv2.bilateralFilter(
+            y,
+            d=int(bilateral_diameter),
+            sigmaColor=float(bilateral_sigma_color),
+            sigmaSpace=float(bilateral_sigma_space),
+        )
+    merged = cv2.merge([y_out, cr, cb])
+    out_bgr = cv2.cvtColor(merged, cv2.COLOR_YCrCb2BGR)
+    if alpha is not None:
+        try:
+            out_bgr = np.dstack([out_bgr, alpha])
+        except Exception:
+            pass
+    return out_bgr
+
+
+class AutoGammaRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = AutoGammaConfig.model_validate(config)
+        self._gamma_by_stream: dict[str, float] = {}
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        packet = _ensure_original_artifact(packet)
+        selected_name, image = _resolve_input_image(
+            packet,
+            preferred_artifact_names=self._config.input_artifact_names,
+            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+        )
+        if image is None:
+            payload = _annotate_artifact_contract(
+                packet.payload,
+                packet=packet,
+                preferred_input_artifact_names=self._config.input_artifact_names,
+                selected_input_artifact_name=selected_name,
+            )
+            return [replace(packet, payload=payload)]
+
+        if isinstance(image, (bytes, bytearray, memoryview)):
+            return [packet]
+
+        stream_key = str(packet.stream_id or "").strip() or "stream"
+        prev_gamma = float(self._gamma_by_stream.get(stream_key, 1.0))
+
+        run_blocking = getattr(context, "run_blocking", None)
+        if callable(run_blocking):
+            result = await run_blocking(
+                _auto_gamma_image_opencv,
+                image,
+                prev_gamma=prev_gamma,
+                measurement=str(self._config.measurement),
+                target_luma=float(self._config.target_luma),
+                min_gamma=float(self._config.min_gamma),
+                max_gamma=float(self._config.max_gamma),
+                smoothing=float(self._config.smoothing),
+                epsilon=float(self._config.epsilon),
+                preserve_alpha=bool(self._config.preserve_alpha),
+            )
+        else:
+            result = await asyncio.to_thread(
+                _auto_gamma_image_opencv,
+                image,
+                prev_gamma=prev_gamma,
+                measurement=str(self._config.measurement),
+                target_luma=float(self._config.target_luma),
+                min_gamma=float(self._config.min_gamma),
+                max_gamma=float(self._config.max_gamma),
+                smoothing=float(self._config.smoothing),
+                epsilon=float(self._config.epsilon),
+                preserve_alpha=bool(self._config.preserve_alpha),
+            )
+
+        if not isinstance(result, dict):
+            return [packet]
+        out_image = result.get("image")
+        if out_image is None:
+            return [packet]
+
+        gamma_next = float(result.get("gamma") or prev_gamma)
+        self._gamma_by_stream[stream_key] = gamma_next
+        if packet.lifecycle == Lifecycle.CLOSE:
+            self._gamma_by_stream.pop(stream_key, None)
+
+        out = packet.with_artifact(
+            Artifact(
+                name=self._config.output_artifact_name,
+                data=out_image,
+                mime_type="image/raw",
+                metadata={
+                    "source_artifact_name": selected_name,
+                    "measurement": str(self._config.measurement),
+                    "target_luma": float(self._config.target_luma),
+                    "measured_luma": float(result.get("measured_luma") or 0.0),
+                    "gamma_raw": float(result.get("gamma_raw") or 1.0),
+                    "gamma": float(gamma_next),
+                    "smoothing": float(self._config.smoothing),
+                },
+            ),
+        )
+
+        payload = dict(out.payload)
+        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
+            out = out.with_artifact(
+                Artifact(
+                    name="frame",
+                    data=out_image,
+                    mime_type="image/raw",
+                    metadata={"source": "camera.auto_gamma", "derived_from": self._config.output_artifact_name},
+                ),
+            )
+
+        shape = getattr(out_image, "shape", None)
+        if (self._config.set_stream_frame and self._config.output_artifact_name != "frame") or self._config.output_artifact_name == "frame":
+            if shape and len(shape) >= 2:
+                try:
+                    payload["frame_height"] = int(shape[0])
+                    payload["frame_width"] = int(shape[1])
+                except Exception:
+                    pass
+
+        payload = _annotate_artifact_contract(
+            payload,
+            packet=out,
+            preferred_input_artifact_names=self._config.input_artifact_names,
+            selected_input_artifact_name=selected_name,
+            latest_artifact_name=self._config.output_artifact_name,
+        )
+        return [replace(out, payload=payload)]
+
+
+def _auto_gamma_image_opencv(
+    image: Any,
+    *,
+    prev_gamma: float,
+    measurement: str,
+    target_luma: float,
+    min_gamma: float,
+    max_gamma: float,
+    smoothing: float,
+    epsilon: float,
+    preserve_alpha: bool,
+) -> dict[str, Any]:
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("camera.auto_gamma requires opencv-python-headless and numpy") from exc
+
+    arr = np.asarray(image)
+    if arr.size == 0:
+        return {"image": None}
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8, copy=False)
+
+    alpha: Any | None = None
+    if arr.ndim == 3 and int(arr.shape[2]) == 4 and preserve_alpha:
+        alpha = arr[..., 3].copy()
+        arr = arr[..., :3]
+
+    if arr.ndim == 2:
+        gray = np.ascontiguousarray(arr)
+        bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    elif arr.ndim == 3 and int(arr.shape[2]) == 3:
+        bgr = np.ascontiguousarray(arr)
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    else:
+        return {"image": None}
+
+    key = str(measurement or "").strip().lower()
+    if key == "mean":
+        measured = float(np.mean(gray)) / 255.0
+    else:
+        measured = float(np.percentile(gray, 50.0)) / 255.0
+
+    eps = max(1e-6, min(0.1, float(epsilon)))
+    measured = max(eps, min(1.0 - eps, measured))
+    target = max(eps, min(1.0 - eps, float(target_luma)))
+
+    gamma_raw = 1.0
+    try:
+        gamma_raw = float(math.log(measured) / math.log(target))
+    except Exception:
+        gamma_raw = 1.0
+    if not math.isfinite(gamma_raw) or gamma_raw <= 0.0:
+        gamma_raw = 1.0
+
+    lo = float(min_gamma)
+    hi = float(max_gamma)
+    if hi < lo:
+        lo, hi = hi, lo
+    gamma_raw = max(lo, min(hi, gamma_raw))
+
+    smooth = max(0.0, min(0.999, float(smoothing)))
+    prev = float(prev_gamma)
+    if not math.isfinite(prev) or prev <= 0.0:
+        prev = 1.0
+    prev = max(lo, min(hi, prev))
+    gamma = (smooth * prev) + ((1.0 - smooth) * gamma_raw)
+    gamma = max(lo, min(hi, gamma))
+
+    f = bgr.astype(np.float32) / 255.0
+    f = np.clip(f, 0.0, 1.0)
+    if float(gamma) != 1.0:
+        f = np.power(f, 1.0 / float(gamma))
+    out_bgr = np.clip(np.round(f * 255.0), 0.0, 255.0).astype(np.uint8)
+    if arr.ndim == 2:
+        out = cv2.cvtColor(out_bgr, cv2.COLOR_BGR2GRAY)
+    else:
+        out = out_bgr
+    if alpha is not None:
+        try:
+            out = np.dstack([out, alpha])
+        except Exception:
+            pass
+    return {"image": out, "measured_luma": measured, "gamma_raw": gamma_raw, "gamma": gamma}
+
+
+class GlobalStabilizeRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = GlobalStabilizeConfig.model_validate(config)
+        self._reference_by_stream: dict[str, dict[str, Any]] = {}
+
+    async def shutdown(self) -> None:
+        self._reference_by_stream.clear()
+        return None
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        packet = _ensure_original_artifact(packet)
+        selected_name, image = _resolve_input_image(
+            packet,
+            preferred_artifact_names=self._config.input_artifact_names,
+            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+        )
+        if image is None:
+            payload = _annotate_artifact_contract(
+                packet.payload,
+                packet=packet,
+                preferred_input_artifact_names=self._config.input_artifact_names,
+                selected_input_artifact_name=selected_name,
+            )
+            return [replace(packet, payload=payload)]
+
+        if isinstance(image, (bytes, bytearray, memoryview)):
+            return [packet]
+
+        stream_key = str(packet.stream_id or "").strip() or "stream"
+        if bool(self._config.reset_on_lifecycle) and packet.lifecycle in (Lifecycle.OPEN, Lifecycle.CLOSE):
+            self._reference_by_stream.pop(stream_key, None)
+
+        state = self._reference_by_stream.get(stream_key) or {}
+        reference_gray = state.get("reference_gray")
+        prev_dx = float(state.get("dx") or 0.0)
+        prev_dy = float(state.get("dy") or 0.0)
+
+        run_blocking = getattr(context, "run_blocking", None)
+        if callable(run_blocking):
+            result = await run_blocking(
+                _stabilize_global_translation_opencv,
+                image,
+                reference_gray=reference_gray,
+                prev_dx=prev_dx,
+                prev_dy=prev_dy,
+                response_threshold=float(self._config.response_threshold),
+                max_translation_px=float(self._config.max_translation_px),
+                smoothing=float(self._config.smoothing),
+                interpolation=str(self._config.interpolation),
+                border_mode=str(self._config.border_mode),
+                border_value=int(self._config.border_value),
+                preserve_alpha=bool(self._config.preserve_alpha),
+            )
+        else:
+            result = await asyncio.to_thread(
+                _stabilize_global_translation_opencv,
+                image,
+                reference_gray=reference_gray,
+                prev_dx=prev_dx,
+                prev_dy=prev_dy,
+                response_threshold=float(self._config.response_threshold),
+                max_translation_px=float(self._config.max_translation_px),
+                smoothing=float(self._config.smoothing),
+                interpolation=str(self._config.interpolation),
+                border_mode=str(self._config.border_mode),
+                border_value=int(self._config.border_value),
+                preserve_alpha=bool(self._config.preserve_alpha),
+            )
+
+        if not isinstance(result, dict):
+            return [packet]
+        out_image = result.get("image")
+        reference_next = result.get("reference_gray")
+        if out_image is None:
+            return [packet]
+
+        if reference_next is not None:
+            self._reference_by_stream[stream_key] = {
+                "reference_gray": reference_next,
+                "dx": float(result.get("dx") or 0.0),
+                "dy": float(result.get("dy") or 0.0),
+            }
+
+        if packet.lifecycle == Lifecycle.CLOSE:
+            self._reference_by_stream.pop(stream_key, None)
+
+        out = packet.with_artifact(
+            Artifact(
+                name=self._config.output_artifact_name,
+                data=out_image,
+                mime_type="image/raw",
+                metadata={
+                    "source_artifact_name": selected_name,
+                    "dx": float(result.get("dx") or 0.0),
+                    "dy": float(result.get("dy") or 0.0),
+                    "response": float(result.get("response") or 0.0),
+                },
+            ),
+        )
+
+        payload = dict(out.payload)
+        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
+            out = out.with_artifact(
+                Artifact(
+                    name="frame",
+                    data=out_image,
+                    mime_type="image/raw",
+                    metadata={"source": "camera.global_stabilize", "derived_from": self._config.output_artifact_name},
+                ),
+            )
+
+        shape = getattr(out_image, "shape", None)
+        if (self._config.set_stream_frame and self._config.output_artifact_name != "frame") or self._config.output_artifact_name == "frame":
+            if shape and len(shape) >= 2:
+                try:
+                    payload["frame_height"] = int(shape[0])
+                    payload["frame_width"] = int(shape[1])
+                except Exception:
+                    pass
+
+        payload = _annotate_artifact_contract(
+            payload,
+            packet=out,
+            preferred_input_artifact_names=self._config.input_artifact_names,
+            selected_input_artifact_name=selected_name,
+            latest_artifact_name=self._config.output_artifact_name,
+        )
+        return [replace(out, payload=payload)]
+
+
+def _stabilize_global_translation_opencv(
+    image: Any,
+    *,
+    reference_gray: Any | None,
+    prev_dx: float,
+    prev_dy: float,
+    response_threshold: float,
+    max_translation_px: float,
+    smoothing: float,
+    interpolation: str,
+    border_mode: str,
+    border_value: int,
+    preserve_alpha: bool,
+) -> dict[str, Any]:
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("camera.global_stabilize requires opencv-python-headless and numpy") from exc
+
+    arr = np.asarray(image)
+    if arr.size == 0:
+        return {"image": None, "reference_gray": reference_gray}
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8, copy=False)
+
+    alpha: Any | None = None
+    if arr.ndim == 3 and int(arr.shape[2]) == 4 and preserve_alpha:
+        alpha = arr[..., 3]
+        bgr = np.ascontiguousarray(arr[..., :3])
+        gray_u8 = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    elif arr.ndim == 3 and int(arr.shape[2]) == 3:
+        bgr = np.ascontiguousarray(arr)
+        gray_u8 = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    elif arr.ndim == 2:
+        gray_u8 = np.ascontiguousarray(arr)
+        bgr = cv2.cvtColor(gray_u8, cv2.COLOR_GRAY2BGR)
+    else:
+        return {"image": None, "reference_gray": reference_gray}
+
+    gray_f = gray_u8.astype(np.float32)
+    if reference_gray is None:
+        return {"image": arr, "reference_gray": gray_f, "dx": 0.0, "dy": 0.0, "response": 0.0}
+
+    ref = np.asarray(reference_gray)
+    if ref.shape != gray_f.shape:
+        return {"image": arr, "reference_gray": gray_f, "dx": 0.0, "dy": 0.0, "response": 0.0}
+
+    try:
+        shift, response = cv2.phaseCorrelate(ref.astype(np.float32, copy=False), gray_f)
+        dx, dy = float(shift[0]), float(shift[1])
+    except Exception:
+        return {"image": arr, "reference_gray": gray_f, "dx": 0.0, "dy": 0.0, "response": 0.0}
+
+    if not math.isfinite(dx) or not math.isfinite(dy):
+        return {"image": arr, "reference_gray": gray_f, "dx": 0.0, "dy": 0.0, "response": float(response or 0.0)}
+
+    resp = float(response or 0.0)
+    if resp < float(response_threshold):
+        return {"image": arr, "reference_gray": gray_f, "dx": 0.0, "dy": 0.0, "response": resp}
+
+    limit = float(max_translation_px)
+    if limit > 0.0 and math.hypot(dx, dy) > limit:
+        return {"image": arr, "reference_gray": gray_f, "dx": 0.0, "dy": 0.0, "response": resp}
+
+    smooth = max(0.0, min(0.999, float(smoothing)))
+    dx_s = (smooth * float(prev_dx)) + ((1.0 - smooth) * dx)
+    dy_s = (smooth * float(prev_dy)) + ((1.0 - smooth) * dy)
+
+    interp = str(interpolation or "").strip().lower()
+    if interp == "nearest":
+        flags = cv2.INTER_NEAREST
+    else:
+        flags = cv2.INTER_LINEAR
+
+    border = str(border_mode or "").strip().lower()
+    if border == "replicate":
+        bmode = cv2.BORDER_REPLICATE
+    else:
+        bmode = cv2.BORDER_CONSTANT
+
+    M = np.asarray([[1.0, 0.0, -dx_s], [0.0, 1.0, -dy_s]], dtype=np.float32)
+    h, w = int(gray_u8.shape[0]), int(gray_u8.shape[1])
+    out_bgr = cv2.warpAffine(bgr, M, (w, h), flags=flags, borderMode=bmode, borderValue=int(border_value))
+    out_gray = cv2.warpAffine(gray_f, M, (w, h), flags=flags, borderMode=bmode, borderValue=float(border_value))
+
+    if arr.ndim == 2:
+        out = cv2.cvtColor(out_bgr, cv2.COLOR_BGR2GRAY)
+    else:
+        out = out_bgr
+        if alpha is not None:
+            try:
+                out_alpha = cv2.warpAffine(alpha, M, (w, h), flags=flags, borderMode=bmode, borderValue=255)
+                out = np.dstack([out_bgr, out_alpha])
+            except Exception:
+                pass
+
+    return {"image": out, "reference_gray": out_gray, "dx": dx_s, "dy": dy_s, "response": resp}
+
+
+class LensUndistortRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = LensUndistortConfig.model_validate(config)
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        packet = _ensure_original_artifact(packet)
+        selected_name, image = _resolve_input_image(
+            packet,
+            preferred_artifact_names=self._config.input_artifact_names,
+            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+        )
+        if image is None:
+            payload = _annotate_artifact_contract(
+                packet.payload,
+                packet=packet,
+                preferred_input_artifact_names=self._config.input_artifact_names,
+                selected_input_artifact_name=selected_name,
+            )
+            return [replace(packet, payload=payload)]
+
+        if isinstance(image, (bytes, bytearray, memoryview)):
+            return [packet]
+
+        run_blocking = getattr(context, "run_blocking", None)
+        if callable(run_blocking):
+            result = await run_blocking(
+                _undistort_image_opencv,
+                image,
+                camera_matrix=list(self._config.camera_matrix),
+                dist_coeffs=list(self._config.dist_coeffs),
+                alpha=float(self._config.alpha),
+                use_optimal_new_camera_matrix=bool(self._config.use_optimal_new_camera_matrix),
+                crop_to_valid_roi=bool(self._config.crop_to_valid_roi),
+                interpolation=str(self._config.interpolation),
+                border_mode=str(self._config.border_mode),
+                border_value=int(self._config.border_value),
+                preserve_alpha=bool(self._config.preserve_alpha),
+            )
+        else:
+            result = await asyncio.to_thread(
+                _undistort_image_opencv,
+                image,
+                camera_matrix=list(self._config.camera_matrix),
+                dist_coeffs=list(self._config.dist_coeffs),
+                alpha=float(self._config.alpha),
+                use_optimal_new_camera_matrix=bool(self._config.use_optimal_new_camera_matrix),
+                crop_to_valid_roi=bool(self._config.crop_to_valid_roi),
+                interpolation=str(self._config.interpolation),
+                border_mode=str(self._config.border_mode),
+                border_value=int(self._config.border_value),
+                preserve_alpha=bool(self._config.preserve_alpha),
+            )
+
+        if not isinstance(result, dict):
+            return [packet]
+        out_image = result.get("image")
+        if out_image is None:
+            return [packet]
+
+        out = packet.with_artifact(
+            Artifact(
+                name=self._config.output_artifact_name,
+                data=out_image,
+                mime_type="image/raw",
+                metadata={
+                    "source_artifact_name": selected_name,
+                    "alpha": float(self._config.alpha),
+                    "use_optimal_new_camera_matrix": bool(self._config.use_optimal_new_camera_matrix),
+                    "crop_to_valid_roi": bool(self._config.crop_to_valid_roi),
+                    "roi": result.get("roi"),
+                },
+            ),
+        )
+
+        payload = dict(out.payload)
+        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
+            out = out.with_artifact(
+                Artifact(
+                    name="frame",
+                    data=out_image,
+                    mime_type="image/raw",
+                    metadata={"source": "camera.lens_undistort", "derived_from": self._config.output_artifact_name},
+                ),
+            )
+
+        shape = getattr(out_image, "shape", None)
+        if (self._config.set_stream_frame and self._config.output_artifact_name != "frame") or self._config.output_artifact_name == "frame":
+            if shape and len(shape) >= 2:
+                try:
+                    payload["frame_height"] = int(shape[0])
+                    payload["frame_width"] = int(shape[1])
+                except Exception:
+                    pass
+
+        payload = _annotate_artifact_contract(
+            payload,
+            packet=out,
+            preferred_input_artifact_names=self._config.input_artifact_names,
+            selected_input_artifact_name=selected_name,
+            latest_artifact_name=self._config.output_artifact_name,
+        )
+        return [replace(out, payload=payload)]
+
+
+def _undistort_image_opencv(
+    image: Any,
+    *,
+    camera_matrix: list[list[float]],
+    dist_coeffs: list[float],
+    alpha: float,
+    use_optimal_new_camera_matrix: bool,
+    crop_to_valid_roi: bool,
+    interpolation: str,
+    border_mode: str,
+    border_value: int,
+    preserve_alpha: bool,
+) -> dict[str, Any]:
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("camera.lens_undistort requires opencv-python-headless and numpy") from exc
+
+    arr = np.asarray(image)
+    if arr.size == 0:
+        return {"image": None}
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8, copy=False)
+
+    alpha_channel: Any | None = None
+    if arr.ndim == 3 and int(arr.shape[2]) == 4 and preserve_alpha:
+        alpha_channel = arr[..., 3].copy()
+        arr = arr[..., :3]
+
+    if arr.ndim == 2:
+        img = np.ascontiguousarray(arr)
+    elif arr.ndim == 3 and int(arr.shape[2]) == 3:
+        img = np.ascontiguousarray(arr)
+    else:
+        return {"image": None}
+
+    h, w = int(img.shape[0]), int(img.shape[1])
+    if h <= 1 or w <= 1:
+        return {"image": None}
+
+    K = np.asarray(camera_matrix, dtype=np.float64)
+    dist = np.asarray(dist_coeffs, dtype=np.float64).reshape(-1, 1)
+    if K.shape != (3, 3):
+        return {"image": None}
+    if not np.isfinite(K).all() or not np.isfinite(dist).all():
+        return {"image": None}
+
+    roi = None
+    newK = K
+    if bool(use_optimal_new_camera_matrix):
+        try:
+            newK, roi = cv2.getOptimalNewCameraMatrix(K, dist, (w, h), float(alpha), (w, h))
+        except Exception:
+            newK, roi = K, None
+
+    interp = str(interpolation or "").strip().lower()
+    if interp == "nearest":
+        flags = cv2.INTER_NEAREST
+    elif interp == "cubic":
+        flags = cv2.INTER_CUBIC
+    elif interp == "area":
+        flags = cv2.INTER_AREA
+    else:
+        flags = cv2.INTER_LINEAR
+
+    border = str(border_mode or "").strip().lower()
+    if border == "replicate":
+        bmode = cv2.BORDER_REPLICATE
+    else:
+        bmode = cv2.BORDER_CONSTANT
+
+    map1 = None
+    map2 = None
+    try:
+        map1, map2 = cv2.initUndistortRectifyMap(K, dist, None, newK, (w, h), cv2.CV_16SC2)
+        undistorted = cv2.remap(img, map1, map2, interpolation=flags, borderMode=bmode, borderValue=int(border_value))
+    except Exception:
+        try:
+            undistorted = cv2.undistort(img, K, dist, None, newK)
+        except Exception:
+            return {"image": None}
+
+    if bool(crop_to_valid_roi) and roi is not None:
+        try:
+            x, y, rw, rh = [int(v) for v in roi]
+            if rw > 0 and rh > 0:
+                undistorted = undistorted[max(0, y) : max(0, y) + rh, max(0, x) : max(0, x) + rw]
+                roi = [x, y, rw, rh]
+            else:
+                roi = None
+        except Exception:
+            roi = None
+    else:
+        roi = [int(v) for v in roi] if isinstance(roi, (list, tuple)) and len(roi) >= 4 else None
+
+    out: Any = undistorted
+    if alpha_channel is not None:
+        try:
+            if map1 is not None and map2 is not None:
+                out_alpha = cv2.remap(
+                    alpha_channel,
+                    map1,
+                    map2,
+                    interpolation=flags,
+                    borderMode=bmode,
+                    borderValue=255,
+                )
+            else:
+                out_alpha = cv2.undistort(alpha_channel, K, dist, None, newK)
+            if bool(crop_to_valid_roi) and roi is not None:
+                x, y, rw, rh = roi
+                out_alpha = out_alpha[max(0, y) : max(0, y) + rh, max(0, x) : max(0, x) + rw]
+            out = np.dstack([undistorted, out_alpha])
+        except Exception:
+            pass
+    return {"image": out, "roi": roi}
 
 
 class ImageResizeRuntime(TransformOperatorRuntime):
@@ -1699,6 +3134,102 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: ImageAdjustRuntime(config),
+    )
+    registry.register_operator(
+        operator_id="camera.local_contrast_clahe",
+        description="Applies CLAHE (local contrast) on luminance and writes artifact.",
+        config_model=LocalContrastCLAHEConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["camera", "artifact", "preprocess", "clahe"],
+        defaults=LocalContrastCLAHEConfig().model_dump(),
+        execution_mode="thread_pool",
+        requires_artifacts=["frame_original"],
+        produces_payload_keys=["artifact_contract", "artifact_names"],
+        produces_artifacts=["frame"],
+        share_strategy="by_signature",
+        owner="com.toposync.cameras",
+        runtime_factory=lambda config, _deps: LocalContrastCLAHERuntime(config),
+    )
+    registry.register_operator(
+        operator_id="camera.unsharp_mask",
+        description="Applies a light unsharp mask (sharpening) and writes artifact.",
+        config_model=UnsharpMaskConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["camera", "artifact", "preprocess", "sharpen"],
+        defaults=UnsharpMaskConfig().model_dump(),
+        execution_mode="thread_pool",
+        requires_artifacts=["frame_original"],
+        produces_payload_keys=["artifact_contract", "artifact_names"],
+        produces_artifacts=["frame"],
+        share_strategy="by_signature",
+        owner="com.toposync.cameras",
+        runtime_factory=lambda config, _deps: UnsharpMaskRuntime(config),
+    )
+    registry.register_operator(
+        operator_id="camera.denoise_luma",
+        description="Denoises luminance (Y) using a conservative filter and writes artifact.",
+        config_model=DenoiseLumaConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["camera", "artifact", "preprocess", "denoise"],
+        defaults=DenoiseLumaConfig().model_dump(),
+        execution_mode="thread_pool",
+        requires_artifacts=["frame_original"],
+        produces_payload_keys=["artifact_contract", "artifact_names"],
+        produces_artifacts=["frame"],
+        share_strategy="by_signature",
+        owner="com.toposync.cameras",
+        runtime_factory=lambda config, _deps: DenoiseLumaRuntime(config),
+    )
+    registry.register_operator(
+        operator_id="camera.auto_gamma",
+        description="Auto-adjusts gamma from luminance statistics with temporal smoothing and writes artifact.",
+        config_model=AutoGammaConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["camera", "artifact", "preprocess", "auto_levels"],
+        defaults=AutoGammaConfig().model_dump(),
+        execution_mode="thread_pool",
+        requires_artifacts=["frame_original"],
+        produces_payload_keys=["artifact_contract", "artifact_names"],
+        produces_artifacts=["frame"],
+        share_strategy="by_signature",
+        owner="com.toposync.cameras",
+        runtime_factory=lambda config, _deps: AutoGammaRuntime(config),
+    )
+    registry.register_operator(
+        operator_id="camera.global_stabilize",
+        description="Stabilizes frame translation (phase correlation) and writes artifact.",
+        config_model=GlobalStabilizeConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["camera", "artifact", "preprocess", "stabilize"],
+        defaults=GlobalStabilizeConfig().model_dump(),
+        execution_mode="thread_pool",
+        requires_artifacts=["frame_original"],
+        produces_payload_keys=["artifact_contract", "artifact_names"],
+        produces_artifacts=["frame"],
+        share_strategy="by_signature",
+        owner="com.toposync.cameras",
+        runtime_factory=lambda config, _deps: GlobalStabilizeRuntime(config),
+    )
+    registry.register_operator(
+        operator_id="camera.lens_undistort",
+        description="Undistorts lens distortion using camera calibration and writes artifact.",
+        config_model=LensUndistortConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["camera", "artifact", "preprocess", "undistort"],
+        defaults=LensUndistortConfig().model_dump(),
+        execution_mode="thread_pool",
+        requires_artifacts=["frame_original"],
+        produces_payload_keys=["artifact_contract", "artifact_names"],
+        produces_artifacts=["frame"],
+        share_strategy="by_signature",
+        owner="com.toposync.cameras",
+        runtime_factory=lambda config, _deps: LensUndistortRuntime(config),
     )
     registry.register_operator(
         operator_id="camera.image_resize",

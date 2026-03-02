@@ -21,8 +21,10 @@ METRIC_STORE_IMAGE = "store.image"
 
 logger = logging.getLogger("toposync.pipelines.telemetry")
 
-DEFAULT_WINDOW_SECONDS = 6 * 60 * 60
-DEFAULT_BUCKET_SECONDS = 5
+# Default window/bucket are tuned to match the UI presets (2h / 24h / 3d)
+# while keeping memory usage bounded (bucket_count stays ~4k).
+DEFAULT_WINDOW_SECONDS = 3 * 24 * 60 * 60
+DEFAULT_BUCKET_SECONDS = 60
 DEFAULT_MAX_NUMERIC_SERIES = 512
 DEFAULT_MAX_IMAGE_MARKERS_PER_PIPELINE = 2_000
 DEFAULT_MAX_IMAGE_PIPELINES = 128

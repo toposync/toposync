@@ -18,7 +18,11 @@ from toposync.runtime.pipelines import (
     TransformOperatorRuntime,
     register_builtin_operators,
 )
-from toposync.runtime.pipelines.telemetry import NumericMetricSpec, PipelineTelemetryStore
+from toposync.runtime.pipelines.telemetry import (
+    NumericMetricSpec,
+    PipelineTelemetryStore,
+    create_default_pipeline_telemetry_store,
+)
 
 
 class _TelemetrySourceConfig(BaseModel):
@@ -278,3 +282,27 @@ def test_pipeline_telemetry_store_roundtrips_checkpoint_bytes() -> None:
     markers = restored.list_image_markers("pipe")
     assert len(markers) == 1
     assert str(markers[0].get("rel_path") or "") == "pipelines/test/frame_0.png"
+
+
+def test_default_pipeline_telemetry_store_supports_ui_range_presets(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setenv("TOPOSYNC_TELEMETRY_ENABLED", "true")
+    monkeypatch.delenv("TOPOSYNC_TELEMETRY_WINDOW_SECONDS", raising=False)
+    monkeypatch.delenv("TOPOSYNC_TELEMETRY_BUCKET_SECONDS", raising=False)
+
+    store = create_default_pipeline_telemetry_store()
+    assert store is not None
+
+    now = 1_700_000_000.0
+    assert store.observe_numeric("pipe", "node", "motion.score", 0.10, now_s=now)
+
+    short = store.snapshot_numeric_metric("pipe", "node", "motion.score", now_s=now, window_seconds=2 * 60 * 60)
+    assert short is not None
+    assert int(short["window_seconds"]) == 2 * 60 * 60
+
+    default = store.snapshot_numeric_metric("pipe", "node", "motion.score", now_s=now, window_seconds=24 * 60 * 60)
+    assert default is not None
+    assert int(default["window_seconds"]) == 24 * 60 * 60
+
+    long = store.snapshot_numeric_metric("pipe", "node", "motion.score", now_s=now, window_seconds=3 * 24 * 60 * 60)
+    assert long is not None
+    assert int(long["window_seconds"]) == 3 * 24 * 60 * 60

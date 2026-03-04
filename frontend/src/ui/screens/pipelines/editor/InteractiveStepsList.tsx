@@ -10,6 +10,7 @@ import { InteractiveStepCard } from "./InteractiveStepCard";
 type Props = {
   steps: InteractiveStep[];
   operatorsById: Record<string, PipelineOperatorDefinition>;
+  pipelineName: string | null;
 
   interactiveCameraId: string;
   cameraSelectOptions: SelectOption[];

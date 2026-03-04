@@ -4,9 +4,12 @@ import CreatableSelect from "react-select/creatable";
 
 import { listStreamingTransmissions, type StreamingTransmission } from "../../../../../util/api";
 import { buildArtifactSuggestions, buildScheduleWeekdayOptions, pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constants";
-import type { SelectOption } from "../../types";
+import type { InteractiveStep, SelectOption } from "../../types";
+import { isRecord, safeJsonParse } from "../../utils";
 import { i18n } from "../../../../../util/i18n";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
+import type { PipelineStepSnapshotKey } from "./pipelineStepSnapshots";
+import { buildPipelineStepSnapshotUrl } from "./pipelineStepSnapshots";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
 
@@ -583,10 +586,64 @@ export function DebounceConfigCard({ config, showAdvanced, onUpdateConfig }: Deb
 
 type DebugProps = {
   config: Record<string, unknown>;
+  pipelineName: string | null;
+  steps: InteractiveStep[];
+  index: number;
+  showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
 };
 
-export function DebugConfigCard({ config, onUpdateConfig }: DebugProps): React.ReactElement {
+function parseInteractiveStepConfig(step: InteractiveStep): Record<string, unknown> {
+  const parsed = safeJsonParse(step.configText || "{}");
+  if (!parsed.ok) return {};
+  if (!isRecord(parsed.data)) return {};
+  return parsed.data as Record<string, unknown>;
+}
+
+function resolvePipelineStepSourceIdFromCameraSourceConfig(config: Record<string, unknown>): string | null {
+  const cameraId = String((config as any).camera_id ?? "").trim();
+  if (cameraId) return cameraId;
+  const rtspUrl = String((config as any).rtsp_url ?? "").trim();
+  if (!rtspUrl) return null;
+  return "camera:adhoc";
+}
+
+type DebugPreviewEligibility =
+  | { enabled: true; key: PipelineStepSnapshotKey }
+  | { enabled: false; reason: { code: "no_camera_source" | "no_camera_selected" | "no_pipeline_name" } };
+
+function resolveDebugPreviewEligibility(
+  steps: InteractiveStep[],
+  currentIndex: number,
+  pipelineName: string | null,
+  nodeId: string,
+): DebugPreviewEligibility {
+  let sourceIndex = -1;
+  for (let idx = currentIndex - 1; idx >= 0; idx -= 1) {
+    if (steps[idx]?.operatorId === "camera.source") {
+      sourceIndex = idx;
+      break;
+    }
+  }
+  if (sourceIndex < 0) return { enabled: false, reason: { code: "no_camera_source" } };
+  const sourceConfig = parseInteractiveStepConfig(steps[sourceIndex]!);
+  const sourceId = resolvePipelineStepSourceIdFromCameraSourceConfig(sourceConfig);
+  if (!sourceId) return { enabled: false, reason: { code: "no_camera_selected" } };
+  const safePipeline = String(pipelineName ?? "").trim();
+  if (!safePipeline) return { enabled: false, reason: { code: "no_pipeline_name" } };
+
+  return {
+    enabled: true,
+    key: {
+      pipelineName: safePipeline,
+      nodeId: String(nodeId || "").trim() || "node",
+      sourceId,
+      filename: "input.png",
+    },
+  };
+}
+
+export function DebugConfigCard({ config, pipelineName, steps, index, showAdvanced, onUpdateConfig }: DebugProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const enabled = Boolean((config as any).enabled ?? true);
   const saveImages = Boolean((config as any).save_images ?? true);
@@ -595,6 +652,19 @@ export function DebugConfigCard({ config, onUpdateConfig }: DebugProps): React.R
   const printArtifacts = Boolean((config as any).print_artifacts ?? true);
   const maxImagesPerPacket = Number((config as any).max_images_per_packet ?? 4);
   const outputDir = String((config as any).output_dir ?? "").trim();
+  const snapshotEnabled = (config as any).snapshot_enabled !== false;
+  const snapshotIntervalRaw = Number((config as any).snapshot_interval_seconds ?? 10);
+  const snapshotIntervalSeconds = Number.isFinite(snapshotIntervalRaw) ? Math.max(0, Math.min(3600, snapshotIntervalRaw)) : 10;
+
+  const nodeId = String(steps[index]?.nodeId ?? "").trim();
+  const previewEligibility = React.useMemo(
+    () => resolveDebugPreviewEligibility(steps, index, pipelineName, nodeId),
+    [steps, index, pipelineName, nodeId],
+  );
+  const [previewNonce, setPreviewNonce] = useState(0);
+  const [previewDims, setPreviewDims] = useState<{ width: number; height: number } | null>(null);
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const previewUrl = previewEligibility.enabled ? buildPipelineStepSnapshotUrl(previewEligibility.key, previewNonce) : null;
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -654,6 +724,110 @@ export function DebugConfigCard({ config, onUpdateConfig }: DebugProps): React.R
         <span>{t("core.ui.pipelines.panels.debug.print_artifacts")}</span>
         <input type="checkbox" checked={printArtifacts} onChange={(event) => onUpdateConfig((prev) => ({ ...prev, print_artifacts: event.target.checked }))} />
       </label>
+
+      <div className="sectionDivider" />
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.debug.preview_hint")}</div>
+
+      {showAdvanced ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.debug.snapshot_enabled")}</span>
+            <input
+              type="checkbox"
+              checked={Boolean(snapshotEnabled)}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, snapshot_enabled: event.target.checked }))}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.debug.snapshot_interval_seconds")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={3600}
+              step={0.5}
+              value={snapshotIntervalSeconds}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(3600, nextValue)) : 10;
+                onUpdateConfig((prev) => ({ ...prev, snapshot_interval_seconds: normalized }));
+              }}
+            />
+          </label>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.debug.snapshot_interval_hint")}</div>
+        </>
+      ) : null}
+
+      <div className="rowWrap" style={{ marginTop: 10, justifyContent: "space-between", alignItems: "center" }}>
+        <button
+          className="chipButton"
+          type="button"
+          disabled={!previewUrl}
+          onClick={() => {
+            setPreviewFailed(false);
+            setPreviewDims(null);
+            setPreviewNonce((prev) => prev + 1);
+          }}
+        >
+          {t("core.ui.pipelines.panels.image_draw.refresh")}
+        </button>
+
+        {!previewEligibility.enabled ? (
+          <div className="pipelinesStepHint" style={{ textAlign: "right" }}>
+            {previewEligibility.reason.code === "no_camera_source"
+              ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
+              : previewEligibility.reason.code === "no_camera_selected"
+                ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
+                : t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline")}
+          </div>
+        ) : null}
+      </div>
+
+      <div
+        style={{
+          marginTop: 10,
+          borderRadius: 16,
+          border: "1px solid var(--color-border-subtle)",
+          background: "rgba(0,0,0,0.22)",
+          overflow: "hidden",
+          padding: 10,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          minHeight: 120,
+        }}
+      >
+        {previewUrl && !previewFailed ? (
+          <img
+            src={previewUrl}
+            alt={t("core.ui.pipelines.panels.image_draw.snapshot_alt")}
+            style={{
+              display: "block",
+              maxWidth: "100%",
+              maxHeight: 320,
+              borderRadius: 14,
+              border: "1px solid rgba(255,255,255,0.12)",
+              userSelect: "none",
+              WebkitUserSelect: "none",
+            }}
+            onLoad={(event) => {
+              const img = event.currentTarget;
+              const width = Number(img.naturalWidth || 0);
+              const height = Number(img.naturalHeight || 0);
+              if (width > 1 && height > 1) setPreviewDims({ width, height });
+            }}
+            onError={() => setPreviewFailed(true)}
+            draggable={false}
+          />
+        ) : (
+          <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.no_snapshot")}</div>
+        )}
+      </div>
+
+      {previewDims ? (
+        <div className="pipelinesHint">
+          {t("core.ui.pipelines.panels.image_draw.snapshot_meta", { w: previewDims.width, h: previewDims.height, units: "px" })}
+        </div>
+      ) : null}
     </div>
   );
 }

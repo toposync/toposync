@@ -53,6 +53,7 @@ from toposync.runtime.pipelines.telemetry import (
     create_default_pipeline_telemetry_disk_checkpoint,
     create_default_pipeline_telemetry_store,
 )
+from toposync.runtime.pipelines.step_snapshots import PipelineStepSnapshotStore
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
 from toposync.runtime.pipelines.distributed.transport import HttpProcessingTransport, ProcessingTransportError
 from toposync.runtime.pipelines.migration_legacy_cameras import (
@@ -494,6 +495,7 @@ async def _lifespan(app: FastAPI):
             services=services,
             pipeline_stats_store=pipeline_stats_store,
             pipeline_telemetry_store=pipeline_telemetry_store,
+            pipeline_snapshot_store=PipelineStepSnapshotStore(files_dir=config_store.paths.files_dir),
             execution_scheduler=ExecutionScheduler(),
             artifact_max_bytes_per_packet=artifact_max_bytes_per_packet,
             artifact_max_total_bytes_per_pipeline=artifact_max_total_bytes_per_pipeline,

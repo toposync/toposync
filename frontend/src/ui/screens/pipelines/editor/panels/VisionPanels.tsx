@@ -3,7 +3,7 @@ import CreatableSelect from "react-select/creatable";
 import { type MultiValue } from "react-select";
 
 import { pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constants";
-import type { SelectOption } from "../../types";
+import type { SelectOption, TelemetryFieldInspectorRequest } from "../../types";
 import { i18n } from "../../../../../util/i18n";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
 
@@ -11,11 +11,14 @@ type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string
 
 type Props = {
   operatorId: string;
+  stepUid: string;
+  nodeId: string;
   config: Record<string, unknown>;
   onUpdateConfig: UpdateConfig;
+  onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
 };
 
-export function YoloVisionConfigCard({ operatorId, config, onUpdateConfig }: Props): React.ReactElement {
+export function YoloVisionConfigCard({ operatorId, stepUid, nodeId, config, onUpdateConfig, onOpenTelemetryField }: Props): React.ReactElement {
   const { t } = i18n.useI18n();
   const yoloCategoriesRaw = (config as any).categories;
   const yoloCategories = Array.isArray(yoloCategoriesRaw)
@@ -23,6 +26,8 @@ export function YoloVisionConfigCard({ operatorId, config, onUpdateConfig }: Pro
     : [];
   const yoloConfidenceRaw = Number((config as any).confidence_threshold ?? 0.4);
   const yoloConfidence = Number.isFinite(yoloConfidenceRaw) ? Math.max(0, Math.min(1, yoloConfidenceRaw)) : 0.4;
+  const emitModeRaw = String((config as any).emit_mode ?? "").trim().toLowerCase();
+  const filterFramesEnabled = emitModeRaw !== "annotate";
 
   const defaultIntervalRaw = Number((config as any).default_interval_seconds ?? 0.2);
   const defaultInterval = Number.isFinite(defaultIntervalRaw) ? Math.max(0, Math.min(120, defaultIntervalRaw)) : 0.2;
@@ -33,7 +38,29 @@ export function YoloVisionConfigCard({ operatorId, config, onUpdateConfig }: Pro
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>{t("core.ui.pipelines.panels.yolo.min_confidence")}</span>
+        <div className="pipelinesScalarLabelHeader">
+          <span>{t("core.ui.pipelines.panels.yolo.min_confidence")}</span>
+          {onOpenTelemetryField ? (
+            <button
+              className="iconButton pipelinesTelemetryFieldButton"
+              type="button"
+              title={t("core.ui.pipelines.telemetry.field.open_histogram")}
+              onClick={() =>
+                onOpenTelemetryField({
+                  stepUid,
+                  nodeId,
+                  operatorId,
+                  configKey: "confidence_threshold",
+                  metricId: "yolo.confidence",
+                  label: t("core.ui.pipelines.panels.yolo.min_confidence"),
+                  value: yoloConfidence,
+                })
+              }
+            >
+              <i className="fa-solid fa-chart-column" aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
         <PipelinesNumberInput
           className="pipelinesInput"
           min={0}
@@ -49,6 +76,22 @@ export function YoloVisionConfigCard({ operatorId, config, onUpdateConfig }: Pro
         />
       </label>
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.min_confidence_hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.yolo.filter_frames")}</span>
+        <input
+          type="checkbox"
+          checked={filterFramesEnabled}
+          onChange={(event) => {
+            const enabled = event.target.checked;
+            onUpdateConfig((prev) => ({
+              ...prev,
+              emit_mode: enabled ? "events" : "annotate",
+            }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.filter_frames_hint")}</div>
 
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.yolo.categories")}</span>

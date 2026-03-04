@@ -28,6 +28,7 @@ from ..execution_scheduler import ExecutionScheduler
 from ..operator_registry import OperatorRegistry
 from ..shared_runtime import PipelineBundleRuntime
 from ..runtime import ArtifactMemoryCounter
+from ..step_snapshots import PipelineStepSnapshotStore
 from ..telemetry import (
     PipelineTelemetryStore,
     create_default_pipeline_telemetry_disk_checkpoint,
@@ -70,6 +71,7 @@ class ProcessingServerRuntime:
         self._registry = operator_registry
         self._compiler = compiler
         self._pipeline_telemetry_store = pipeline_telemetry_store
+        self._snapshot_store = PipelineStepSnapshotStore(files_dir=config_store.paths.files_dir)
         self.broadcaster = EventBroadcaster(max_queue_size=500)
         self._recent_events: deque[dict[str, Any]] = deque(maxlen=max(200, int(max_recent_events)))
         self._replay_events: deque[dict[str, Any]] = deque(maxlen=max(50, int(max_replay_events)))
@@ -169,6 +171,8 @@ class ProcessingServerRuntime:
             config_store=self._config_store,
             services=self._services,
             logger=logger,
+            files_dir=self._config_store.paths.files_dir,
+            pipeline_snapshot_store=self._snapshot_store,
             processing_emit_projected_event=self._emit_projected_event,
             pipeline_telemetry_store=self._pipeline_telemetry_store,
             execution_scheduler=ExecutionScheduler(),

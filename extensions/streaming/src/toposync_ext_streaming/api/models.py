@@ -453,6 +453,7 @@ class StreamingWizardOptionalParameters(BaseModel):
     writer_priority: int | None = None
     bypass_mode: Literal["auto", "force_on", "force_off"] | None = None
     yolo_confidence_threshold: float | None = Field(default=None, gt=0.0, le=1.0)
+    yolo_filter_enabled: bool | None = None
     detection_categories: list[str] | None = None
     tracking_categories: list[str] | None = None
 

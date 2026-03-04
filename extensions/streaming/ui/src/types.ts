@@ -175,6 +175,7 @@ export type StreamingWizardCreatePipelineRequest = {
     writer_priority?: number;
     bypass_mode?: "auto" | "force_on" | "force_off";
     yolo_confidence_threshold?: number;
+    yolo_filter_enabled?: boolean;
     detection_categories?: string[];
     tracking_categories?: string[];
   };

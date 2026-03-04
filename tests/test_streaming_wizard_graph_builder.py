@@ -28,6 +28,18 @@ def _stream_config(graph: dict) -> dict:
     return {}
 
 
+def _operator_config(graph: dict, *, operator_id: str) -> dict:
+    nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("operator") or "") != operator_id:
+            continue
+        config = node.get("config")
+        return config if isinstance(config, dict) else {}
+    return {}
+
+
 @pytest.mark.parametrize("preset_id", STREAMING_WIZARD_PRESETS)
 def test_wizard_graph_always_has_source_and_stream(preset_id: str) -> None:
     graph = build_streaming_wizard_graph(
@@ -96,3 +108,32 @@ def test_motion_preset_has_fps_reducer_even_without_optional_parameters() -> Non
     operators = _operator_ids(graph)
     assert "core.fps_reducer" in operators
 
+
+def test_wizard_graph_defaults_to_yolo_filter_enabled() -> None:
+    for preset_id, operator_id in (
+        ("detection_stream", "vision.object_detection_yolo"),
+        ("tracking_stream", "vision.object_tracking_yolo"),
+    ):
+        graph = build_streaming_wizard_graph(
+            transmission_id="transmission_main",
+            camera_id="camera_a",
+            preset_id=preset_id,  # type: ignore[arg-type]
+            optional_parameters=None,
+        )
+        config = _operator_config(graph, operator_id=operator_id)
+        assert config.get("emit_mode") == "events"
+
+
+def test_wizard_graph_disables_yolo_filter_when_requested() -> None:
+    for preset_id, operator_id in (
+        ("detection_stream", "vision.object_detection_yolo"),
+        ("tracking_stream", "vision.object_tracking_yolo"),
+    ):
+        graph = build_streaming_wizard_graph(
+            transmission_id="transmission_main",
+            camera_id="camera_a",
+            preset_id=preset_id,  # type: ignore[arg-type]
+            optional_parameters={"yolo_filter_enabled": False},
+        )
+        config = _operator_config(graph, operator_id=operator_id)
+        assert config.get("emit_mode") == "annotate"

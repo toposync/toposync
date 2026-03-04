@@ -14,6 +14,7 @@ type Props = {
   index: number;
   steps: InteractiveStep[];
   operatorsById: Record<string, PipelineOperatorDefinition>;
+  pipelineName: string | null;
 
   interactiveCameraId: string;
   cameraSelectOptions: SelectOption[];
@@ -47,6 +48,7 @@ function shouldHideScalarGrid(operatorId: string): boolean {
     operatorId === "camera.image_adjust" ||
     operatorId === "camera.image_resize" ||
     operatorId === "camera.object_segmentation" ||
+    operatorId === "camera.motion_gate" ||
     operatorId === "camera.camera_mapping" ||
     operatorId === "camera.area_restriction" ||
     operatorId === "camera.velocity_estimation" ||
@@ -89,6 +91,7 @@ export function InteractiveStepCard({
   index,
   steps,
   operatorsById,
+  pipelineName,
   interactiveCameraId,
   cameraSelectOptions,
   cameraSelectOptionById,
@@ -229,6 +232,7 @@ export function InteractiveStepCard({
             index={index}
             steps={steps}
             config={config}
+            pipelineName={pipelineName}
             interactiveCameraId={interactiveCameraId}
             cameraSelectOptions={cameraSelectOptions}
             cameraSelectOptionById={cameraSelectOptionById}
@@ -237,6 +241,7 @@ export function InteractiveStepCard({
             cameraAreaOptions={cameraAreaOptions}
             showAdvanced={step.showAdvanced}
             onUpdateConfig={(updater) => onUpdateStepConfig(step.uid, updater)}
+            onOpenTelemetryField={onOpenTelemetryField}
           />
 
           {shouldShowScalarGrid ? (

@@ -12,6 +12,9 @@ import type { InteractiveStep } from "./types";
 type Props = {
   pipelineName: string | null;
   steps: InteractiveStep[];
+  externalRefreshNonce?: number;
+  resetting?: boolean;
+  onReset?: () => void | Promise<void>;
 };
 
 type MetricSeries = {
@@ -221,7 +224,13 @@ function findSegmentAtTs(segments: TimelineSegment[], ts: number): TimelineSegme
   return null;
 }
 
-export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): React.ReactElement {
+export function PipelineTelemetryOverviewCard({
+  pipelineName,
+  steps,
+  externalRefreshNonce,
+  resetting,
+  onReset,
+}: Props): React.ReactElement {
   const { t, locale } = i18n.useI18n();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -344,7 +353,7 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
     return () => {
       cancelled = true;
     };
-  }, [pipelineName, metricTargetsKey, rangeSeconds, refreshNonce]);
+  }, [pipelineName, metricTargetsKey, rangeSeconds, refreshNonce, externalRefreshNonce]);
 
   useEffect(() => {
     setPinnedMarker(null);
@@ -428,15 +437,15 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
     <div className="card">
       <div className="cardTitle">{t("core.ui.pipelines.telemetry.overview.title", {}, "Telemetry timeline")}</div>
       <div className="cardBody">
-        <div className="pipelinesStepStatsHeader">
-          <div className="pipelinesHint">
-            {t(
-              "core.ui.pipelines.telemetry.overview.subtitle",
-              {},
-              "Bands show min/max per time bucket. Solid lines show weighted averages.",
-            )}
-          </div>
-          <div className="pipelinesModes">
+	        <div className="pipelinesStepStatsHeader">
+	          <div className="pipelinesHint">
+	            {t(
+	              "core.ui.pipelines.telemetry.overview.subtitle",
+	              {},
+	              "Bands show min/max per time bucket. Solid lines show weighted averages.",
+	            )}
+	          </div>
+	          <div className="pipelinesModes">
             <button
               className={["pillButton", rangeSeconds === RANGE_SHORT_SECONDS ? "isActive" : ""].filter(Boolean).join(" ")}
               type="button"
@@ -458,12 +467,12 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
             >
               {t("core.ui.pipelines.telemetry.overview.range.long", {}, "Long")}
             </button>
-            <button className="pillButton" type="button" onClick={() => setRefreshNonce((value) => value + 1)} disabled={loading}>
-              <i className="fa-solid fa-rotate" aria-hidden="true" />
-              {t("core.actions.refresh")}
-            </button>
-          </div>
-        </div>
+	            <button className="pillButton" type="button" onClick={() => setRefreshNonce((value) => value + 1)} disabled={loading}>
+	              <i className="fa-solid fa-rotate" aria-hidden="true" />
+	              {t("core.actions.refresh")}
+	            </button>
+	          </div>
+	        </div>
         {lastUpdatedAt ? (
           <div className="pipelinesHint">
             {t(
@@ -486,8 +495,8 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
           </div>
         ) : null}
 
-        {!loading && !error && series.length > 0 ? (
-          <>
+	        {!loading && !error && series.length > 0 ? (
+	          <>
             <div className="pipelinesTelemetryLegend">
               {series.map((item) => (
                 <div key={`legend:${item.metricId}`} className="pipelinesTelemetryLegendItem">
@@ -497,7 +506,7 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
               ))}
             </div>
 
-            <div className="pipelinesTelemetryTimelineWrap">
+	            <div className="pipelinesTelemetryTimelineWrap">
               <svg
                 className="pipelinesTelemetryTimeline"
                 viewBox={`0 0 ${chartWidth} ${chartHeight}`}
@@ -682,10 +691,36 @@ export function PipelineTelemetryOverviewCard({ pipelineName, steps }: Props): R
                   />
                 </div>
               ) : null}
-            </div>
-          </>
-        ) : null}
-      </div>
-    </div>
-  );
-}
+	            </div>
+	          </>
+	        ) : null}
+
+	        {onReset && pipelineName ? (
+	          <div className="rowWrap" style={{ justifyContent: "flex-end", marginTop: 10 }}>
+	            <button
+	              className="iconButton"
+	              type="button"
+	              disabled={Boolean(resetting)}
+	              aria-label={
+	                resetting
+	                  ? t("core.ui.pipelines.telemetry.overview.resetting", {}, "Clearing…")
+	                  : t("core.ui.pipelines.telemetry.overview.reset", {}, "Clear stats & telemetry")
+	              }
+	              title={
+	                resetting
+	                  ? t("core.ui.pipelines.telemetry.overview.resetting", {}, "Clearing…")
+	                  : t("core.ui.pipelines.telemetry.overview.reset", {}, "Clear stats & telemetry")
+	              }
+	              onClick={() => {
+	                if (!confirm(t("core.ui.pipelines.telemetry.overview.confirm_reset", { name: pipelineName }, `Clear stats & telemetry for '${pipelineName}'?`))) return;
+	                void onReset();
+	              }}
+	            >
+	              <i className={["fa-solid", resetting ? "fa-rotate fa-spin" : "fa-broom"].join(" ")} aria-hidden="true" />
+	            </button>
+	          </div>
+	        ) : null}
+	      </div>
+	    </div>
+	  );
+	}

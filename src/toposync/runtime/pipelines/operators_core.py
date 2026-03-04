@@ -222,6 +222,8 @@ class DebugStdoutConfig(BaseModel):
     save_images: bool = True
     max_images_per_packet: int = Field(default=12, ge=0, le=256)
     output_dir: str = ""
+    snapshot_enabled: bool = True
+    snapshot_interval_seconds: float = Field(default=10.0, ge=0.0, le=3600.0)
 
     print_payload: bool = True
     print_metadata: bool = True
@@ -238,8 +240,9 @@ class DebugStdoutConfig(BaseModel):
 
 
 class DebugStdoutRuntime(TransformOperatorRuntime):
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any], dependencies: Any) -> None:
         self._config = DebugStdoutConfig.model_validate(config)
+        self._dependencies = dependencies
         self._root_dir: Path | None = None
         self._root_dir_ready = False
 
@@ -249,6 +252,44 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
 
         pipeline_name = getattr(context, "pipeline_name", "") or "pipeline"
         node_id = getattr(context, "node_id", "") or "node"
+
+        snapshot_store = getattr(self._dependencies, "pipeline_snapshot_store", None)
+        if (
+            snapshot_store is not None
+            and self._config.snapshot_enabled
+            and packet.lifecycle != Lifecycle.CLOSE
+            and float(self._config.snapshot_interval_seconds) >= 0.0
+        ):
+            image = self._resolve_snapshot_image(packet)
+            if image is not None:
+                camera_id = str(packet.payload.get("camera_id") or packet.metadata.get("camera_id") or "").strip()
+                source_id = camera_id or str(packet.stream_id or "").strip() or "-"
+                occurrences = getattr(context, "stats_node_occurrences", None)
+                if isinstance(occurrences, (list, tuple)) and occurrences:
+                    for logical_pipeline_name, logical_node_id in occurrences:
+                        snapshot_store.schedule_input_snapshot(
+                            context=context,
+                            packet_created_at=float(packet.created_at),
+                            pipeline_name=str(logical_pipeline_name or ""),
+                            node_id=str(logical_node_id or ""),
+                            source_id=source_id,
+                            image=image,
+                            interval_seconds=float(self._config.snapshot_interval_seconds),
+                            fmt="png",
+                            jpeg_quality=85,
+                        )
+                else:
+                    snapshot_store.schedule_input_snapshot(
+                        context=context,
+                        packet_created_at=float(packet.created_at),
+                        pipeline_name=str(pipeline_name),
+                        node_id=str(node_id),
+                        source_id=source_id,
+                        image=image,
+                        interval_seconds=float(self._config.snapshot_interval_seconds),
+                        fmt="png",
+                        jpeg_quality=85,
+                    )
 
         saved: list[dict[str, str]] = []
         if self._config.save_images and self._config.max_images_per_packet > 0:
@@ -306,6 +347,36 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
 
         print(json.dumps(out, ensure_ascii=False, sort_keys=True, indent=2), flush=True)
         return [packet]
+
+    def _resolve_snapshot_image(self, packet: Packet) -> Any | None:
+        preferred = (
+            "frame",
+            "frame_original",
+            "best_frame",
+            "treated",
+            "original",
+            "segmented",
+        )
+        for name in preferred:
+            artifact = packet.artifacts.get(name)
+            if artifact is None:
+                continue
+            if artifact.reference:
+                continue
+            if artifact.data is None:
+                continue
+            if _debug_is_image_like(artifact.data):
+                return artifact.data
+
+        for artifact in packet.artifacts.values():
+            if artifact.reference:
+                continue
+            if artifact.data is None:
+                continue
+            if _debug_is_image_like(artifact.data):
+                return artifact.data
+
+        return None
 
     async def _save_images(self, packet: Packet, *, context, pipeline_name: str, node_id: str) -> list[dict[str, str]]:  # noqa: ANN001
         root = await self._ensure_root_dir()
@@ -924,7 +995,7 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         max_concurrency=2,
         share_strategy="never",
         owner="core",
-        runtime_factory=lambda config, _deps: DebugStdoutRuntime(config),
+        runtime_factory=lambda config, deps: DebugStdoutRuntime(config, deps),
     )
     registry.register_operator(
         operator_id="core.passthrough",

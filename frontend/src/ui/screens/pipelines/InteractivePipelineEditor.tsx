@@ -13,6 +13,7 @@ import { useCameraContexts } from "./editor/useCameraContexts";
 type Props = {
   operatorsById: Record<string, PipelineOperatorDefinition>;
   camerasIndex: CamerasIndexResponse;
+  pipelineName: string | null;
   stepOutputsByNodeId: Record<string, number> | null;
   interactiveSteps: InteractiveStep[];
   setInteractiveSteps: React.Dispatch<React.SetStateAction<InteractiveStep[]>>;
@@ -25,6 +26,7 @@ type Props = {
 export function InteractivePipelineEditor({
   operatorsById,
   camerasIndex,
+  pipelineName,
   stepOutputsByNodeId,
   interactiveSteps,
   setInteractiveSteps,
@@ -197,6 +199,7 @@ export function InteractivePipelineEditor({
       <InteractiveStepsList
         steps={interactiveSteps}
         operatorsById={operatorsById}
+        pipelineName={pipelineName}
         interactiveCameraId={interactiveCameraId}
         cameraSelectOptions={cameraSelectOptions}
         cameraSelectOptionById={cameraSelectOptionById}

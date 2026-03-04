@@ -37,6 +37,7 @@ class PipelineRuntimeDependencies:
     logger: logging.Logger | None = None
     yolo_backend_factory: Callable[[Any], Any] | None = None
     files_dir: Path | None = None
+    pipeline_snapshot_store: Any | None = None
     notifications_upsert: Callable[..., Any] | None = None
     origin_inbox: BoundedChannel[dict[str, Any]] | None = None
     processing_emit_projected_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None

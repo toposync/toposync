@@ -6,16 +6,20 @@ import type { CameraContextsResponse } from "../../../../../util/api";
 import { i18n } from "../../../../../util/i18n";
 
 import { buildArtifactSuggestions, pipelinesReactSelectStyles } from "../../constants";
-import type { InteractiveStep, SelectOption } from "../../types";
+import type { InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
 import { isRecord, prettyOperatorName, safeJsonParse } from "../../utils";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
-import { CropRectangleDrawModal, PerspectiveCropDrawModal, type SnapshotSource } from "./ImageDrawModals";
+import { CropRectangleDrawModal, MotionMaskDrawModal, PerspectiveCropDrawModal, type SnapshotSource } from "./ImageDrawModals";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
 
 type ImageDrawEligibility =
   | { enabled: true; snapshotSource: SnapshotSource }
-  | { enabled: false; snapshotSource: SnapshotSource | null; reason: { code: "no_camera_source" | "no_camera_selected" | "blocked"; operatorId?: string } };
+  | {
+      enabled: false;
+      snapshotSource: SnapshotSource | null;
+      reason: { code: "no_camera_source" | "no_camera_selected" | "no_pipeline_name" | "blocked"; operatorId?: string };
+    };
 
 function parseInteractiveStepConfig(step: InteractiveStep): Record<string, unknown> {
   const parsed = safeJsonParse(step.configText || "{}");
@@ -24,36 +28,19 @@ function parseInteractiveStepConfig(step: InteractiveStep): Record<string, unkno
   return parsed.data as Record<string, unknown>;
 }
 
-function readStringList(value: unknown, fallback: string[]): string[] {
-  if (!Array.isArray(value)) return fallback;
-  return value.map((item) => String(item || "").trim()).filter((item) => item.length > 0);
-}
-
-function readBool(value: unknown, fallback: boolean): boolean {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value !== 0;
-  if (typeof value === "string") {
-    const v = value.trim().toLowerCase();
-    if (v === "true" || v === "1" || v === "yes" || v === "on") return true;
-    if (v === "false" || v === "0" || v === "no" || v === "off") return false;
-  }
-  return fallback;
-}
-
-function resolveSnapshotSourceFromCameraSourceConfig(config: Record<string, unknown>): SnapshotSource | null {
+function resolvePipelineStepSourceIdFromCameraSourceConfig(config: Record<string, unknown>): string | null {
   const cameraId = String((config as any).camera_id ?? "").trim();
-  if (cameraId) return { kind: "camera", cameraId };
+  if (cameraId) return cameraId;
   const rtspUrl = String((config as any).rtsp_url ?? "").trim();
   if (!rtspUrl) return null;
-  const username = String((config as any).username ?? "").trim();
-  const password = String((config as any).password ?? "").trim();
-  return { kind: "rtsp", url: rtspUrl, username, password };
+  return "camera:adhoc";
 }
 
 function resolveImageDrawEligibility(
   steps: InteractiveStep[],
   currentIndex: number,
-  currentConfig: Record<string, unknown>,
+  pipelineName: string | null,
+  nodeId: string,
 ): ImageDrawEligibility {
   let sourceIndex = -1;
   for (let idx = currentIndex - 1; idx >= 0; idx -= 1) {
@@ -67,51 +54,15 @@ function resolveImageDrawEligibility(
   }
 
   const sourceConfig = parseInteractiveStepConfig(steps[sourceIndex]!);
-  const snapshotSource = resolveSnapshotSourceFromCameraSourceConfig(sourceConfig);
-  if (!snapshotSource) {
+  const sourceId = resolvePipelineStepSourceIdFromCameraSourceConfig(sourceConfig);
+  if (!sourceId) {
     return { enabled: false, snapshotSource: null, reason: { code: "no_camera_selected" } };
   }
 
-  const inputNamesRaw = (currentConfig as any).input_artifact_names;
-  const inputArtifactNames = readStringList(inputNamesRaw, ["segmented", "treated", "original"]);
-  const wantsSegmented = inputArtifactNames.includes("segmented");
+  const safePipeline = String(pipelineName ?? "").trim();
+  if (!safePipeline) return { enabled: false, snapshotSource: null, reason: { code: "no_pipeline_name" } };
 
-  for (let idx = sourceIndex + 1; idx < currentIndex; idx += 1) {
-    const step = steps[idx];
-    if (!step) continue;
-    const operatorId = String(step.operatorId || "").trim();
-    if (!operatorId) continue;
-
-    if (operatorId === "camera.image_crop" || operatorId === "camera.image_perspective_crop") {
-      const cfg = parseInteractiveStepConfig(step);
-      const setStreamFrame = readBool((cfg as any).set_stream_frame ?? (cfg as any).set_payload_frame, true);
-      if (setStreamFrame) {
-        return { enabled: false, snapshotSource, reason: { code: "blocked", operatorId } };
-      }
-      continue;
-    }
-
-    if (operatorId === "camera.object_segmentation" && wantsSegmented) {
-      return { enabled: false, snapshotSource, reason: { code: "blocked", operatorId } };
-    }
-
-    if (operatorId === "camera.image_resize") {
-      const cfg = parseInteractiveStepConfig(step);
-      const names = readStringList((cfg as any).artifact_names, ["segmented", "treated"]);
-      const touchesTreated = names.includes("treated") || names.includes("frame");
-      const touchesSegmented = wantsSegmented && (names.includes("segmented") || names.includes("segmented_frame"));
-      if (touchesTreated || touchesSegmented) {
-        return { enabled: false, snapshotSource, reason: { code: "blocked", operatorId } };
-      }
-      continue;
-    }
-
-    if (operatorId === "camera.frame_attach") {
-      return { enabled: false, snapshotSource, reason: { code: "blocked", operatorId } };
-    }
-  }
-
-  return { enabled: true, snapshotSource };
+  return { enabled: true, snapshotSource: { kind: "pipeline_step", pipelineName: safePipeline, nodeId, sourceId } };
 }
 
 type CameraSourceProps = {
@@ -379,15 +330,282 @@ export function VelocityEstimationConfigCard({
   );
 }
 
+type MotionGateProps = {
+  config: Record<string, unknown>;
+  stepUid: string;
+  nodeId: string;
+  pipelineName: string | null;
+  steps: InteractiveStep[];
+  index: number;
+  showAdvanced: boolean;
+  onUpdateConfig: UpdateConfig;
+  onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
+};
+
+type MotionMaskMode = "include" | "exclude";
+
+function parseMotionMaskMode(value: unknown): MotionMaskMode {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "exclude" ? "exclude" : "include";
+}
+
+type MotionMaskStroke = { op?: "paint" | "erase"; points01?: Array<[number, number] | { x: number; y: number }> };
+
+function parseMotionMaskStrokes(value: unknown): MotionMaskStroke[] {
+  return Array.isArray(value) ? (value as MotionMaskStroke[]) : [];
+}
+
+export function MotionGateConfigCard({
+  config,
+  stepUid,
+  nodeId,
+  pipelineName,
+  steps,
+  index,
+  showAdvanced,
+  onUpdateConfig,
+  onOpenTelemetryField,
+}: MotionGateProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+
+  const thresholdRaw = Number((config as any).threshold ?? 0.01);
+  const threshold = Number.isFinite(thresholdRaw) ? Math.max(0, Math.min(1, thresholdRaw)) : 0.01;
+
+  const holdSecondsRaw = Number((config as any).hold_seconds ?? 2.5);
+  const holdSeconds = Number.isFinite(holdSecondsRaw) ? Math.max(0, Math.min(120, holdSecondsRaw)) : 2.5;
+
+  const activationFramesRaw = Number((config as any).activation_frames ?? 1);
+  const activationFrames = Number.isFinite(activationFramesRaw) ? Math.max(1, Math.min(100, Math.round(activationFramesRaw))) : 1;
+
+	  const emitWhenIdle = Boolean((config as any).emit_when_idle ?? false);
+
+	  const maskEnabled = Boolean((config as any).mask_enabled ?? false);
+	  const maskMode = parseMotionMaskMode((config as any).mask_mode);
+	  const maskBrushDiameter01Raw = Number((config as any).mask_brush_diameter01 ?? 0.1);
+	  const maskBrushDiameter01 = Number.isFinite(maskBrushDiameter01Raw)
+	    ? Math.max(0.002, Math.min(0.25, maskBrushDiameter01Raw))
+	    : 0.1;
+	  const maskStrokes = parseMotionMaskStrokes((config as any).mask_strokes);
+
+  const inputWithFallback = String((config as any).input_with_fallback ?? "segmented,treated,original").trim() || "segmented,treated,original";
+  const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? (config as any).fallback_to_payload_frame ?? true;
+
+  const drawEligibility = React.useMemo(
+    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId),
+    [steps, index, pipelineName, nodeId],
+  );
+
+  const [isDrawOpen, setIsDrawOpen] = React.useState(false);
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.motion_gate.hint")}</div>
+
+      <label className="pipelinesLabel">
+        <div className="pipelinesScalarLabelHeader">
+          <span>{t("core.ui.pipelines.panels.motion_gate.threshold")}</span>
+          {onOpenTelemetryField ? (
+            <button
+              className="iconButton pipelinesTelemetryFieldButton"
+              type="button"
+              title={t("core.ui.pipelines.telemetry.field.open_histogram")}
+              onClick={() =>
+                onOpenTelemetryField({
+                  stepUid,
+                  nodeId,
+                  operatorId: "camera.motion_gate",
+                  configKey: "threshold",
+                  metricId: "motion.score",
+                  label: t("core.ui.pipelines.panels.motion_gate.threshold"),
+                  value: threshold,
+                })
+              }
+            >
+              <i className="fa-solid fa-chart-column" aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0}
+          max={1}
+          step={0.001}
+          value={threshold}
+          onChange={(nextValue) => {
+            const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(1, nextValue)) : 0.01;
+            onUpdateConfig((prev) => ({ ...prev, threshold: normalized }));
+          }}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_gate.hold_seconds")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0}
+          max={120}
+          step={0.05}
+          value={holdSeconds}
+          onChange={(nextValue) => {
+            const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(120, nextValue)) : 2.5;
+            onUpdateConfig((prev) => ({ ...prev, hold_seconds: normalized }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.motion_gate.hold_seconds_hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_gate.activation_frames")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={1}
+          max={100}
+          step={1}
+          value={activationFrames}
+          onChange={(nextValue) => {
+            const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(100, Math.round(nextValue))) : 1;
+            onUpdateConfig((prev) => ({ ...prev, activation_frames: normalized }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.motion_gate.activation_frames_hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_gate.emit_when_idle")}</span>
+        <input
+          type="checkbox"
+          checked={emitWhenIdle}
+          onChange={(event) => onUpdateConfig((prev) => ({ ...prev, emit_when_idle: event.target.checked }))}
+        />
+      </label>
+
+      <div className="sectionDivider" />
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.motion_gate.mask.hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_gate.mask.enabled")}</span>
+        <input
+          type="checkbox"
+          checked={maskEnabled}
+          onChange={(event) => onUpdateConfig((prev) => ({ ...prev, mask_enabled: event.target.checked }))}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_gate.mask.mode")}</span>
+        <select
+          className="pipelinesSelect"
+          value={maskMode}
+          onChange={(event) => {
+            const next = parseMotionMaskMode(event.target.value);
+            onUpdateConfig((prev) => ({ ...prev, mask_mode: next }));
+          }}
+        >
+          <option value="include">{t("core.ui.pipelines.panels.motion_gate.mask.mode.include")}</option>
+          <option value="exclude">{t("core.ui.pipelines.panels.motion_gate.mask.mode.exclude")}</option>
+        </select>
+      </label>
+
+      <div className="rowWrap" style={{ marginTop: 10, justifyContent: "space-between" }}>
+        <button
+          className="chipButton"
+          type="button"
+          disabled={!drawEligibility.enabled}
+          onClick={() => setIsDrawOpen(true)}
+        >
+          {t("core.ui.pipelines.panels.motion_gate.mask.draw")}
+        </button>
+
+        <button
+          className="chipButton"
+          type="button"
+          disabled={maskStrokes.length === 0}
+          onClick={() => onUpdateConfig((prev) => ({ ...prev, mask_strokes: [] }))}
+        >
+          {t("core.ui.pipelines.panels.motion_gate.mask.clear")}
+        </button>
+      </div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.motion_gate.mask.strokes_count", { count: maskStrokes.length })}</div>
+
+      {!drawEligibility.enabled ? (
+        <div className="pipelinesStepHint" style={{ textAlign: "right" }}>
+          {drawEligibility.reason.code === "no_camera_source"
+            ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
+            : drawEligibility.reason.code === "no_camera_selected"
+              ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
+              : drawEligibility.reason.code === "no_pipeline_name"
+                ? t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline")
+              : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: prettyOperatorName(drawEligibility.reason.operatorId ?? "") })}
+        </div>
+      ) : null}
+
+      {showAdvanced ? (
+        <>
+          <div className="sectionDivider" />
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_gate.input_with_fallback")}</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={inputWithFallback}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, input_with_fallback: event.target.value }))}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_gate.fallback_to_stream_frame")}</span>
+            <input
+              type="checkbox"
+              checked={Boolean(fallbackToStreamFrame)}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, fallback_to_stream_frame: event.target.checked }))}
+            />
+          </label>
+	          <label className="pipelinesLabel">
+	            <span>{t("core.ui.pipelines.panels.motion_gate.mask.brush_diameter")}</span>
+	            <PipelinesNumberInput
+	              className="pipelinesInput"
+	              min={0.002}
+	              max={0.25}
+	              step={0.001}
+	              value={maskBrushDiameter01}
+	              onChange={(nextValue) => {
+	                const normalized = Number.isFinite(nextValue) ? Math.max(0.002, Math.min(0.25, nextValue)) : 0.05;
+	                onUpdateConfig((prev) => ({ ...prev, mask_brush_diameter01: normalized }));
+	              }}
+	            />
+	          </label>
+	        </>
+	      ) : null}
+
+      <MotionMaskDrawModal
+        open={isDrawOpen}
+        onClose={() => setIsDrawOpen(false)}
+        snapshotSource={drawEligibility.snapshotSource}
+        mode={maskMode}
+        brushDiameter01={maskBrushDiameter01}
+        strokes={maskStrokes}
+        onApply={(next) =>
+          onUpdateConfig((prev) => ({
+            ...prev,
+            mask_enabled: true,
+            mask_mode: next.mode,
+            mask_strokes: next.strokes,
+          }))
+        }
+      />
+    </div>
+  );
+}
+
 type ImageCropProps = {
   config: Record<string, unknown>;
+  pipelineName: string | null;
   steps: InteractiveStep[];
   index: number;
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
 };
 
-export function ImageCropConfigCard({ config, steps, index, showAdvanced, onUpdateConfig }: ImageCropProps): React.ReactElement {
+export function ImageCropConfigCard({ config, pipelineName, steps, index, showAdvanced, onUpdateConfig }: ImageCropProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const unitsRaw = String((config as any).units ?? "percent").trim().toLowerCase();
   const units = unitsRaw === "pixels" ? "pixels" : "percent";
@@ -402,7 +620,11 @@ export function ImageCropConfigCard({ config, steps, index, showAdvanced, onUpda
   const percentMax = 100;
   const clampPercent = (value: number) => Math.max(0, Math.min(percentMax, value));
 
-  const drawEligibility = React.useMemo(() => resolveImageDrawEligibility(steps, index, config), [steps, index, config]);
+  const nodeId = String(steps[index]?.nodeId ?? "").trim();
+  const drawEligibility = React.useMemo(
+    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId),
+    [steps, index, pipelineName, nodeId],
+  );
   const [isDrawOpen, setIsDrawOpen] = React.useState(false);
 
   return (
@@ -424,6 +646,8 @@ export function ImageCropConfigCard({ config, steps, index, showAdvanced, onUpda
               ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
               : drawEligibility.reason.code === "no_camera_selected"
                 ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
+                : drawEligibility.reason.code === "no_pipeline_name"
+                  ? t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline")
                 : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: prettyOperatorName(drawEligibility.reason.operatorId ?? "") })}
           </div>
         ) : null}
@@ -576,6 +800,7 @@ export function ImageCropConfigCard({ config, steps, index, showAdvanced, onUpda
 
 type ImagePerspectiveCropProps = {
   config: Record<string, unknown>;
+  pipelineName: string | null;
   steps: InteractiveStep[];
   index: number;
   showAdvanced: boolean;
@@ -620,6 +845,7 @@ function readPerspectivePoints(config: Record<string, unknown>, units: "percent"
 
 export function ImagePerspectiveCropConfigCard({
   config,
+  pipelineName,
   steps,
   index,
   showAdvanced,
@@ -630,7 +856,11 @@ export function ImagePerspectiveCropConfigCard({
   const units = unitsRaw === "pixels" ? "pixels" : "percent";
 
   const points = readPerspectivePoints(config, units);
-  const drawEligibility = React.useMemo(() => resolveImageDrawEligibility(steps, index, config), [steps, index, config]);
+  const nodeId = String(steps[index]?.nodeId ?? "").trim();
+  const drawEligibility = React.useMemo(
+    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId),
+    [steps, index, pipelineName, nodeId],
+  );
   const [isDrawOpen, setIsDrawOpen] = React.useState(false);
 
   const outputRatioRaw = String((config as any).output_ratio_preset ?? "auto").trim().toLowerCase();
@@ -693,6 +923,8 @@ export function ImagePerspectiveCropConfigCard({
               ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
               : drawEligibility.reason.code === "no_camera_selected"
                 ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
+                : drawEligibility.reason.code === "no_pipeline_name"
+                  ? t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline")
                 : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: prettyOperatorName(drawEligibility.reason.operatorId ?? "") })}
           </div>
         ) : null}

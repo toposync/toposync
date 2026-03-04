@@ -718,8 +718,9 @@ class ObjectSegmentationRuntime(TransformOperatorRuntime):
 
 
 class ImageCropRuntime(TransformOperatorRuntime):
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = ImageCropConfig.model_validate(config)
+        self._dependencies = dependencies
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         packet = _ensure_original_artifact(packet)
@@ -730,6 +731,39 @@ class ImageCropRuntime(TransformOperatorRuntime):
         )
         if frame is None:
             return [packet]
+        if isinstance(frame, (bytes, bytearray, memoryview)):
+            return [packet]
+
+        snapshot_store = getattr(self._dependencies, "pipeline_snapshot_store", None)
+        if snapshot_store is not None and packet.lifecycle != Lifecycle.CLOSE:
+            camera_id = str(packet.payload.get("camera_id") or packet.metadata.get("camera_id") or "").strip()
+            source_id = camera_id or str(packet.stream_id or "").strip() or "-"
+            occurrences = getattr(context, "stats_node_occurrences", None)
+            if isinstance(occurrences, (list, tuple)) and occurrences:
+                for pipeline_name, node_id in occurrences:
+                    snapshot_store.schedule_input_snapshot(
+                        context=context,
+                        packet_created_at=float(packet.created_at),
+                        pipeline_name=str(pipeline_name or ""),
+                        node_id=str(node_id or ""),
+                        source_id=source_id,
+                        image=frame,
+                        interval_seconds=60.0,
+                        fmt="png",
+                        jpeg_quality=85,
+                    )
+            else:
+                snapshot_store.schedule_input_snapshot(
+                    context=context,
+                    packet_created_at=float(packet.created_at),
+                    pipeline_name=str(getattr(context, "pipeline_name", "") or ""),
+                    node_id=str(getattr(context, "node_id", "") or ""),
+                    source_id=source_id,
+                    image=frame,
+                    interval_seconds=60.0,
+                    fmt="png",
+                    jpeg_quality=85,
+                )
 
         shape = getattr(frame, "shape", None)
         if not shape or len(shape) < 2:
@@ -879,8 +913,9 @@ class ImageCropRuntime(TransformOperatorRuntime):
 
 
 class ImagePerspectiveCropRuntime(TransformOperatorRuntime):
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = ImagePerspectiveCropConfig.model_validate(config)
+        self._dependencies = dependencies
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         packet = _ensure_original_artifact(packet)
@@ -893,6 +928,37 @@ class ImagePerspectiveCropRuntime(TransformOperatorRuntime):
             return [packet]
         if isinstance(frame, (bytes, bytearray, memoryview)):
             return [packet]
+
+        snapshot_store = getattr(self._dependencies, "pipeline_snapshot_store", None)
+        if snapshot_store is not None and packet.lifecycle != Lifecycle.CLOSE:
+            camera_id = str(packet.payload.get("camera_id") or packet.metadata.get("camera_id") or "").strip()
+            source_id = camera_id or str(packet.stream_id or "").strip() or "-"
+            occurrences = getattr(context, "stats_node_occurrences", None)
+            if isinstance(occurrences, (list, tuple)) and occurrences:
+                for pipeline_name, node_id in occurrences:
+                    snapshot_store.schedule_input_snapshot(
+                        context=context,
+                        packet_created_at=float(packet.created_at),
+                        pipeline_name=str(pipeline_name or ""),
+                        node_id=str(node_id or ""),
+                        source_id=source_id,
+                        image=frame,
+                        interval_seconds=60.0,
+                        fmt="png",
+                        jpeg_quality=85,
+                    )
+            else:
+                snapshot_store.schedule_input_snapshot(
+                    context=context,
+                    packet_created_at=float(packet.created_at),
+                    pipeline_name=str(getattr(context, "pipeline_name", "") or ""),
+                    node_id=str(getattr(context, "node_id", "") or ""),
+                    source_id=source_id,
+                    image=frame,
+                    interval_seconds=60.0,
+                    fmt="png",
+                    jpeg_quality=85,
+                )
 
         shape = getattr(frame, "shape", None)
         if not shape or len(shape) < 2:
@@ -3101,7 +3167,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         produces_artifacts=["frame"],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
-        runtime_factory=lambda config, _deps: ImageCropRuntime(config),
+        runtime_factory=lambda config, deps: ImageCropRuntime(config, deps),
     )
     registry.register_operator(
         operator_id="camera.image_perspective_crop",
@@ -3117,7 +3183,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         produces_artifacts=["frame"],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
-        runtime_factory=lambda config, _deps: ImagePerspectiveCropRuntime(config),
+        runtime_factory=lambda config, deps: ImagePerspectiveCropRuntime(config, deps),
     )
     registry.register_operator(
         operator_id="camera.image_adjust",

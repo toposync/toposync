@@ -2,11 +2,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { fetchCameraSnapshot, fetchRtspSnapshot } from "../../../../../util/api";
 import { i18n } from "../../../../../util/i18n";
+import { Icon } from "../../../../Icon";
 import { Modal } from "../../../../Modal";
+import { buildPipelineStepSnapshotUrl } from "./pipelineStepSnapshots";
 
 export type SnapshotSource =
   | { kind: "camera"; cameraId: string }
-  | { kind: "rtsp"; url: string; username?: string; password?: string };
+  | { kind: "rtsp"; url: string; username?: string; password?: string }
+  | { kind: "pipeline_step"; pipelineName: string; nodeId: string; sourceId: string };
 
 type SnapshotState = {
   url: string | null;
@@ -52,10 +55,28 @@ function useSnapshotObjectUrl(open: boolean, source: SnapshotSource | null): Sna
       const blob =
         source.kind === "camera"
           ? await fetchCameraSnapshot(source.cameraId, controller.signal)
-          : await fetchRtspSnapshot(
-              { url: source.url, username: source.username, password: source.password },
-              controller.signal,
-            );
+          : source.kind === "rtsp"
+            ? await fetchRtspSnapshot(
+                { url: source.url, username: source.username, password: source.password },
+                controller.signal,
+              )
+            : await (async () => {
+                const url = buildPipelineStepSnapshotUrl(
+                  {
+                    pipelineName: source.pipelineName,
+                    nodeId: source.nodeId,
+                    sourceId: source.sourceId,
+                    filename: "input.png",
+                  },
+                  nonce,
+                );
+                const response = await fetch(url, { signal: controller.signal });
+                if (!response.ok) {
+                  const detail = await response.text().catch(() => "");
+                  throw new Error(detail || `Snapshot failed: ${response.status}`);
+                }
+                return response.blob();
+              })();
       if (cancelled) return;
       const nextUrl = URL.createObjectURL(blob);
       setUrl((previous) => {
@@ -83,7 +104,18 @@ function useSnapshotObjectUrl(open: boolean, source: SnapshotSource | null): Sna
       cancelled = true;
       controller.abort();
     };
-  }, [open, source?.kind, (source as any)?.cameraId, (source as any)?.url, (source as any)?.username, (source as any)?.password, nonce]);
+  }, [
+    open,
+    source?.kind,
+    (source as any)?.cameraId,
+    (source as any)?.url,
+    (source as any)?.username,
+    (source as any)?.password,
+    (source as any)?.pipelineName,
+    (source as any)?.nodeId,
+    (source as any)?.sourceId,
+    nonce,
+  ]);
 
   return { url, loading, error, refresh };
 }
@@ -91,6 +123,8 @@ function useSnapshotObjectUrl(open: boolean, source: SnapshotSource | null): Sna
 type ImageDims = { width: number; height: number };
 
 type Point01 = { x: number; y: number };
+
+const IMAGE_DRAW_STAGE_PADDING_PX = 10;
 
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -106,6 +140,57 @@ function point01FromPointerEvent(event: React.PointerEvent, rect: DOMRect): Poin
   const x = clamp01((event.clientX - rect.left) / Math.max(1, rect.width));
   const y = clamp01((event.clientY - rect.top) / Math.max(1, rect.height));
   return { x, y };
+}
+
+type ElementClientSize = { width: number; height: number };
+
+function useElementClientSize(open: boolean, elementRef: React.RefObject<HTMLElement | null>): ElementClientSize | null {
+  const [size, setSize] = useState<ElementClientSize | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setSize(null);
+      return;
+    }
+
+    const el = elementRef.current;
+    if (!el) return;
+
+    let lastW = -1;
+    let lastH = -1;
+
+    const update = () => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w === lastW && h === lastH) return;
+      lastW = w;
+      lastH = h;
+      setSize({ width: w, height: h });
+    };
+
+    update();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", update);
+      return () => window.removeEventListener("resize", update);
+    }
+
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [open, elementRef]);
+
+  return size;
+}
+
+function computeContainedImageSize(natural: ImageDims, stage: ElementClientSize, paddingPx: number): { width: number; height: number; scale: number } {
+  const stageW = Math.max(1, stage.width - paddingPx * 2);
+  const stageH = Math.max(1, stage.height - paddingPx * 2);
+  const scale = Math.min(stageW / Math.max(1, natural.width), stageH / Math.max(1, natural.height));
+  return {
+    scale,
+    width: Math.max(1, Math.min(stageW, natural.width * scale)),
+    height: Math.max(1, Math.min(stageH, natural.height * scale)),
+  };
 }
 
 type CropRectValues = { left: number; top: number; right: number; bottom: number };
@@ -185,6 +270,12 @@ export function CropRectangleDrawModal({
   const { t } = i18n.useI18n();
   const snapshot = useSnapshotObjectUrl(open, snapshotSource);
   const [dims, setDims] = useState<ImageDims | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const stageSize = useElementClientSize(open, stageRef);
+  const renderDims = useMemo(
+    () => (dims && stageSize ? computeContainedImageSize(dims, stageSize, IMAGE_DRAW_STAGE_PADDING_PX) : null),
+    [dims, stageSize],
+  );
   const containerRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
 
@@ -368,7 +459,7 @@ export function CropRectangleDrawModal({
         height: "calc(100vh - 28px)",
         maxHeight: "calc(100vh - 28px)",
       }}
-      bodyStyle={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden" }}
+      bodyStyle={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden", flex: 1, minHeight: 0 }}
     >
       <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
         <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_draw.crop_instructions")}</div>
@@ -387,29 +478,39 @@ export function CropRectangleDrawModal({
         <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.loading")}</div>
       ) : null}
 
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          borderRadius: 16,
-          border: "1px solid var(--color-border-subtle)",
-          background: "rgba(0,0,0,0.22)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 10,
-          overflow: "auto",
-        }}
-      >
-        {snapshot.url ? (
-          <div ref={containerRef} style={{ position: "relative", display: "inline-block" }}>
-            <img
-              src={snapshot.url}
-              alt={t("core.ui.pipelines.panels.image_draw.snapshot_alt")}
-              style={{
-                display: "block",
-                maxWidth: "100%",
-                maxHeight: "100%",
+	      <div
+	        ref={stageRef}
+	        style={{
+	          flex: 1,
+	          minHeight: 0,
+	          borderRadius: 16,
+	          border: "1px solid var(--color-border-subtle)",
+	          background: "rgba(0,0,0,0.22)",
+	          display: "flex",
+	          alignItems: "flex-start",
+	          justifyContent: "flex-start",
+	          padding: 10,
+	          overflow: "auto",
+	        }}
+	      >
+	        {snapshot.url ? (
+	          <div
+	            ref={containerRef}
+	            style={{
+	              position: "relative",
+	              display: "inline-block",
+	              margin: "auto",
+	              width: renderDims?.width,
+	              height: renderDims?.height,
+	            }}
+	          >
+	            <img
+	              src={snapshot.url}
+	              alt={t("core.ui.pipelines.panels.image_draw.snapshot_alt")}
+	              style={{
+	                display: "block",
+                width: "100%",
+                height: "100%",
                 borderRadius: 14,
                 border: "1px solid rgba(255,255,255,0.12)",
                 userSelect: "none",
@@ -500,6 +601,465 @@ export function CropRectangleDrawModal({
   );
 }
 
+type MotionMaskMode = "include" | "exclude";
+type MotionMaskTool = "paint" | "erase";
+type MotionMaskPoint01 = [number, number];
+type MotionMaskStroke = { op: MotionMaskTool; points01: MotionMaskPoint01[] };
+
+function normalizeMotionMaskMode(value: unknown): MotionMaskMode {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "exclude" ? "exclude" : "include";
+}
+
+function normalizeMotionMaskTool(value: unknown): MotionMaskTool {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "erase" ? "erase" : "paint";
+}
+
+function normalizeMotionMaskPoint01(value: unknown): MotionMaskPoint01 | null {
+  if (Array.isArray(value) && value.length >= 2) {
+    const x = clamp01(Number(value[0]));
+    const y = clamp01(Number(value[1]));
+    return [x, y];
+  }
+  if (value && typeof value === "object") {
+    const x = clamp01(Number((value as any).x));
+    const y = clamp01(Number((value as any).y));
+    return [x, y];
+  }
+  return null;
+}
+
+function normalizeMotionMaskStrokes(value: unknown): MotionMaskStroke[] {
+  if (!Array.isArray(value)) return [];
+  const out: MotionMaskStroke[] = [];
+  for (const stroke of value) {
+    if (!stroke || typeof stroke !== "object") continue;
+    const op = normalizeMotionMaskTool((stroke as any).op);
+    const pointsRaw = (stroke as any).points01;
+    if (!Array.isArray(pointsRaw) || pointsRaw.length === 0) continue;
+    const points01: MotionMaskPoint01[] = [];
+    for (const point of pointsRaw) {
+      const normalized = normalizeMotionMaskPoint01(point);
+      if (!normalized) continue;
+      points01.push(normalized);
+      if (points01.length >= 50_000) break;
+    }
+    if (points01.length === 0) continue;
+    out.push({ op, points01 });
+    if (out.length >= 1024) break;
+  }
+  return out;
+}
+
+function motionMaskOverlayColor(mode: MotionMaskMode): string {
+  return mode === "exclude" ? "rgba(239,68,68,0.42)" : "rgba(34,197,94,0.42)";
+}
+
+function computeBrushDiameterPx(dims: ImageDims, brushDiameter01: number): number {
+  const base = Number.isFinite(brushDiameter01) ? brushDiameter01 : 0.05;
+  const raw = Math.round(base * Math.min(dims.width, dims.height));
+  return Math.max(1, Math.min(256, raw));
+}
+
+function redrawMotionMaskCanvas(
+  canvas: HTMLCanvasElement,
+  {
+    dims,
+    brushDiameter01,
+    mode,
+    strokes,
+  }: {
+    dims: ImageDims;
+    brushDiameter01: number;
+    mode: MotionMaskMode;
+    strokes: MotionMaskStroke[];
+  },
+): void {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const diameter = computeBrushDiameterPx(dims, brushDiameter01);
+  const radius = Math.max(1, Math.floor(diameter / 2));
+  const thickness = diameter;
+  const color = motionMaskOverlayColor(mode);
+
+  const scaleX = Math.max(1, dims.width - 1);
+  const scaleY = Math.max(1, dims.height - 1);
+
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.lineWidth = thickness;
+
+  for (const stroke of strokes) {
+    if (!stroke.points01 || stroke.points01.length === 0) continue;
+    const op = stroke.op === "erase" ? "erase" : "paint";
+    ctx.globalCompositeOperation = op === "erase" ? "destination-out" : "source-over";
+    ctx.strokeStyle = op === "erase" ? "rgba(0,0,0,1)" : color;
+    ctx.fillStyle = ctx.strokeStyle;
+
+    const first = stroke.points01[0]!;
+    const x0 = first[0] * scaleX;
+    const y0 = first[1] * scaleY;
+
+    if (stroke.points01.length === 1) {
+      ctx.beginPath();
+      ctx.arc(x0, y0, radius, 0, Math.PI * 2);
+      ctx.fill();
+      continue;
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    for (const [x01, y01] of stroke.points01.slice(1)) {
+      ctx.lineTo(x01 * scaleX, y01 * scaleY);
+    }
+    ctx.stroke();
+
+    const last = stroke.points01[stroke.points01.length - 1]!;
+    ctx.beginPath();
+    ctx.arc(last[0] * scaleX, last[1] * scaleY, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+type MotionMaskDrawModalProps = {
+  open: boolean;
+  onClose: () => void;
+  snapshotSource: SnapshotSource | null;
+  mode: MotionMaskMode;
+  brushDiameter01: number;
+  strokes: unknown;
+  onApply: (next: { mode: MotionMaskMode; strokes: MotionMaskStroke[] }) => void;
+};
+
+type MotionMaskDrawState = {
+  pointerId: number;
+  op: MotionMaskTool;
+  lastPx: { x: number; y: number };
+  points01: MotionMaskPoint01[];
+};
+
+export function MotionMaskDrawModal({
+  open,
+  onClose,
+  snapshotSource,
+  mode: initialMode,
+  brushDiameter01,
+  strokes: initialStrokes,
+  onApply,
+}: MotionMaskDrawModalProps): React.ReactElement | null {
+  const { t } = i18n.useI18n();
+  const snapshot = useSnapshotObjectUrl(open, snapshotSource);
+
+  const [dims, setDims] = useState<ImageDims | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const stageSize = useElementClientSize(open, stageRef);
+  const renderDims = useMemo(
+    () => (dims && stageSize ? computeContainedImageSize(dims, stageSize, IMAGE_DRAW_STAGE_PADDING_PX) : null),
+    [dims, stageSize],
+  );
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [draftMode, setDraftMode] = useState<MotionMaskMode>("include");
+  const [tool, setTool] = useState<MotionMaskTool>("paint");
+  const [draftStrokes, setDraftStrokes] = useState<MotionMaskStroke[]>([]);
+  const drawStateRef = useRef<MotionMaskDrawState | null>(null);
+  const initializedRef = useRef(false);
+
+  useEffect(() => {
+    if (!open) {
+      setDims(null);
+      drawStateRef.current = null;
+      initializedRef.current = false;
+      return;
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (initializedRef.current) return;
+    initializedRef.current = true;
+    setDraftMode(normalizeMotionMaskMode(initialMode));
+    setTool("paint");
+    setDraftStrokes(normalizeMotionMaskStrokes(initialStrokes));
+  }, [open, initialMode, initialStrokes]);
+
+  useEffect(() => {
+    if (!open || !dims) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    if (canvas.width !== dims.width) canvas.width = dims.width;
+    if (canvas.height !== dims.height) canvas.height = dims.height;
+    redrawMotionMaskCanvas(canvas, { dims, brushDiameter01, mode: draftMode, strokes: draftStrokes });
+  }, [open, dims, brushDiameter01, draftMode, draftStrokes]);
+
+  const canInteract = open && Boolean(snapshot.url) && Boolean(dims);
+  const snapshotError = snapshot.loading ? null : snapshot.error;
+  const showNoSnapshot = !snapshot.loading && !snapshot.url && !snapshotError;
+
+  const clear = useCallback(() => {
+    setDraftStrokes([]);
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext("2d");
+      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  }, []);
+
+  const apply = useCallback(() => {
+    onApply({ mode: draftMode, strokes: normalizeMotionMaskStrokes(draftStrokes) });
+    onClose();
+  }, [draftMode, draftStrokes, onApply, onClose]);
+
+  const onCanvasPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!canInteract || !dims) return;
+      if (drawStateRef.current) return;
+      event.preventDefault();
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      const rect = event.currentTarget.getBoundingClientRect();
+      const p01 = point01FromPointerEvent(event, rect);
+      const op: MotionMaskTool = event.shiftKey ? "erase" : tool;
+      const xPx = p01.x * Math.max(1, dims.width - 1);
+      const yPx = p01.y * Math.max(1, dims.height - 1);
+
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext("2d");
+      if (ctx) {
+        const diameter = computeBrushDiameterPx(dims, brushDiameter01);
+        const radius = Math.max(1, Math.floor(diameter / 2));
+        ctx.globalCompositeOperation = op === "erase" ? "destination-out" : "source-over";
+        ctx.fillStyle = op === "erase" ? "rgba(0,0,0,1)" : motionMaskOverlayColor(draftMode);
+        ctx.beginPath();
+        ctx.arc(xPx, yPx, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      drawStateRef.current = { pointerId: event.pointerId, op, lastPx: { x: xPx, y: yPx }, points01: [[p01.x, p01.y]] };
+    },
+    [brushDiameter01, canInteract, dims, draftMode, tool],
+  );
+
+  const onCanvasPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      const drawState = drawStateRef.current;
+      if (!drawState || !dims) return;
+      if (event.pointerId !== drawState.pointerId) return;
+      event.preventDefault();
+
+      const rect = event.currentTarget.getBoundingClientRect();
+      const p01 = point01FromPointerEvent(event, rect);
+      const xPx = p01.x * Math.max(1, dims.width - 1);
+      const yPx = p01.y * Math.max(1, dims.height - 1);
+
+      const diameter = computeBrushDiameterPx(dims, brushDiameter01);
+      const samplePx = Math.max(1, Math.round(Math.max(1, diameter / 2) / 3));
+      const dx = xPx - drawState.lastPx.x;
+      const dy = yPx - drawState.lastPx.y;
+      if (dx * dx + dy * dy < samplePx * samplePx) return;
+
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext("2d");
+      if (ctx) {
+        ctx.globalCompositeOperation = drawState.op === "erase" ? "destination-out" : "source-over";
+        ctx.strokeStyle = drawState.op === "erase" ? "rgba(0,0,0,1)" : motionMaskOverlayColor(draftMode);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = diameter;
+        ctx.beginPath();
+        ctx.moveTo(drawState.lastPx.x, drawState.lastPx.y);
+        ctx.lineTo(xPx, yPx);
+        ctx.stroke();
+      }
+
+      drawState.lastPx = { x: xPx, y: yPx };
+      if (drawState.points01.length < 50_000) drawState.points01.push([p01.x, p01.y]);
+    },
+    [brushDiameter01, dims, draftMode],
+  );
+
+  const onCanvasPointerUp = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      const drawState = drawStateRef.current;
+      if (!drawState) return;
+      if (event.pointerId !== drawState.pointerId) return;
+      event.preventDefault();
+      drawStateRef.current = null;
+      if (drawState.points01.length === 0) return;
+      setDraftStrokes((prev) => {
+        const next = [...prev, { op: drawState.op, points01: drawState.points01 }];
+        if (next.length > 1024) return next.slice(-1024);
+        return next;
+      });
+    },
+    [],
+  );
+
+  return (
+    <Modal
+      open={open}
+      title={t("core.ui.pipelines.panels.image_draw.modal_title.motion_mask")}
+      onClose={onClose}
+      panelStyle={{
+        width: "min(1200px, calc(100vw - 28px))",
+        height: "calc(100vh - 28px)",
+        maxHeight: "calc(100vh - 28px)",
+      }}
+      bodyStyle={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden", flex: 1, minHeight: 0 }}
+    >
+      <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_draw.motion_mask_instructions")}</div>
+        <div className="rowWrap" style={{ gap: 8 }}>
+          <button className="chipButton" type="button" onClick={snapshot.refresh} disabled={!open || snapshot.loading}>
+            {t("core.ui.pipelines.panels.image_draw.refresh")}
+          </button>
+          <button className="chipButton" type="button" onClick={clear} disabled={!canInteract || draftStrokes.length === 0}>
+            {t("core.ui.pipelines.panels.image_draw.reset")}
+          </button>
+        </div>
+      </div>
+
+      <div className="rowWrap" style={{ gap: 10, alignItems: "center", justifyContent: "space-between" }}>
+        <div className="rowWrap" style={{ gap: 8, alignItems: "center" }}>
+          <label className="pipelinesLabel" style={{ margin: 0 }}>
+            <span>{t("core.ui.pipelines.panels.image_draw.motion_mask.mode")}</span>
+            <select
+              className="pipelinesSelect"
+              value={draftMode}
+              disabled={!open}
+              onChange={(event) => setDraftMode(normalizeMotionMaskMode(event.target.value))}
+              style={{ marginLeft: 8 }}
+            >
+              <option value="include">{t("core.ui.pipelines.panels.motion_gate.mask.mode.include")}</option>
+              <option value="exclude">{t("core.ui.pipelines.panels.motion_gate.mask.mode.exclude")}</option>
+            </select>
+          </label>
+
+	          <div className="rowWrap" style={{ gap: 6 }}>
+	            <button
+	              className={["iconButton", tool === "paint" ? "isActive" : ""].filter(Boolean).join(" ")}
+	              type="button"
+	              disabled={!canInteract}
+	              aria-label={t("core.ui.pipelines.panels.image_draw.motion_mask.paint")}
+	              title={t("core.ui.pipelines.panels.image_draw.motion_mask.paint")}
+	              aria-pressed={tool === "paint"}
+	              onClick={() => setTool("paint")}
+	            >
+	              <Icon name="paintbrush" />
+	            </button>
+	            <button
+	              className={["iconButton", tool === "erase" ? "isActive" : ""].filter(Boolean).join(" ")}
+	              type="button"
+	              disabled={!canInteract}
+	              aria-label={t("core.ui.pipelines.panels.image_draw.motion_mask.erase")}
+	              title={t("core.ui.pipelines.panels.image_draw.motion_mask.erase")}
+	              aria-pressed={tool === "erase"}
+	              onClick={() => setTool("erase")}
+	            >
+	              <Icon name="eraser" />
+	            </button>
+	          </div>
+	        </div>
+
+        <div className="rowWrap" style={{ gap: 8, alignItems: "center" }}>
+          <div className="pipelinesHint">
+            {t("core.ui.pipelines.panels.motion_gate.mask.strokes_count", { count: draftStrokes.length })}
+          </div>
+          <button className="primaryButton" type="button" onClick={apply} disabled={!canInteract}>
+            {t("core.ui.pipelines.panels.image_draw.apply")}
+          </button>
+          <button className="chipButton" type="button" onClick={onClose}>
+            {t("core.ui.pipelines.panels.image_draw.close")}
+          </button>
+        </div>
+      </div>
+
+      {snapshotError ? <div className="pipelinesInlineError">{snapshotError}</div> : null}
+      {!snapshotError && snapshot.loading ? <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.loading")}</div> : null}
+
+	      <div
+	        ref={stageRef}
+	        style={{
+	          flex: 1,
+	          minHeight: 0,
+	          borderRadius: 16,
+	          border: "1px solid var(--color-border-subtle)",
+	          background: "rgba(0,0,0,0.22)",
+	          display: "flex",
+	          alignItems: "flex-start",
+	          justifyContent: "flex-start",
+	          padding: 10,
+	          overflow: "auto",
+	        }}
+	      >
+	        {snapshot.url ? (
+	          <div
+	            style={{
+	              position: "relative",
+	              display: "inline-block",
+	              margin: "auto",
+	              width: renderDims?.width,
+	              height: renderDims?.height,
+	            }}
+	          >
+	            <img
+	              src={snapshot.url}
+	              alt={t("core.ui.pipelines.panels.image_draw.snapshot_alt")}
+	              style={{
+	                display: "block",
+                width: "100%",
+                height: "100%",
+                borderRadius: 14,
+                border: "1px solid rgba(255,255,255,0.12)",
+                userSelect: "none",
+                WebkitUserSelect: "none",
+              }}
+              onLoad={(event) => {
+                const img = event.currentTarget;
+                const width = Number(img.naturalWidth || 0);
+                const height = Number(img.naturalHeight || 0);
+                if (width > 1 && height > 1) setDims({ width, height });
+              }}
+              draggable={false}
+            />
+
+            <canvas
+              ref={canvasRef}
+              onPointerDown={onCanvasPointerDown}
+              onPointerMove={onCanvasPointerMove}
+              onPointerUp={onCanvasPointerUp}
+              onPointerCancel={onCanvasPointerUp}
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                borderRadius: 14,
+                cursor: canInteract ? "crosshair" : "default",
+                touchAction: "none",
+                opacity: canInteract ? 1 : 0.7,
+                pointerEvents: canInteract ? "auto" : "none",
+              }}
+            />
+          </div>
+        ) : showNoSnapshot ? (
+          <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.no_snapshot")}</div>
+        ) : (
+          <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.loading")}</div>
+        )}
+      </div>
+
+      <div className="modalFooter" style={{ justifyContent: "space-between" }}>
+        <div className="pipelinesHint">
+          {dims ? t("core.ui.pipelines.panels.image_draw.snapshot_meta", { w: dims.width, h: dims.height, units: "px" }) : ""}
+        </div>
+        <div />
+      </div>
+    </Modal>
+  );
+}
+
 type PerspectiveModalProps = {
   open: boolean;
   onClose: () => void;
@@ -556,6 +1116,12 @@ export function PerspectiveCropDrawModal({
   const { t } = i18n.useI18n();
   const snapshot = useSnapshotObjectUrl(open, snapshotSource);
   const [dims, setDims] = useState<ImageDims | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const stageSize = useElementClientSize(open, stageRef);
+  const renderDims = useMemo(
+    () => (dims && stageSize ? computeContainedImageSize(dims, stageSize, IMAGE_DRAW_STAGE_PADDING_PX) : null),
+    [dims, stageSize],
+  );
   const containerRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
 
@@ -729,7 +1295,7 @@ export function PerspectiveCropDrawModal({
         height: "calc(100vh - 28px)",
         maxHeight: "calc(100vh - 28px)",
       }}
-      bodyStyle={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden" }}
+      bodyStyle={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden", flex: 1, minHeight: 0 }}
     >
       <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
         <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_draw.perspective_instructions")}</div>
@@ -748,29 +1314,39 @@ export function PerspectiveCropDrawModal({
         <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.loading")}</div>
       ) : null}
 
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          borderRadius: 16,
-          border: "1px solid var(--color-border-subtle)",
-          background: "rgba(0,0,0,0.22)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 10,
-          overflow: "auto",
-        }}
-      >
-        {snapshot.url ? (
-          <div ref={containerRef} style={{ position: "relative", display: "inline-block" }}>
-            <img
-              src={snapshot.url}
-              alt={t("core.ui.pipelines.panels.image_draw.snapshot_alt")}
-              style={{
-                display: "block",
-                maxWidth: "100%",
-                maxHeight: "100%",
+	      <div
+	        ref={stageRef}
+	        style={{
+	          flex: 1,
+	          minHeight: 0,
+	          borderRadius: 16,
+	          border: "1px solid var(--color-border-subtle)",
+	          background: "rgba(0,0,0,0.22)",
+	          display: "flex",
+	          alignItems: "flex-start",
+	          justifyContent: "flex-start",
+	          padding: 10,
+	          overflow: "auto",
+	        }}
+	      >
+	        {snapshot.url ? (
+	          <div
+	            ref={containerRef}
+	            style={{
+	              position: "relative",
+	              display: "inline-block",
+	              margin: "auto",
+	              width: renderDims?.width,
+	              height: renderDims?.height,
+	            }}
+	          >
+	            <img
+	              src={snapshot.url}
+	              alt={t("core.ui.pipelines.panels.image_draw.snapshot_alt")}
+	              style={{
+	                display: "block",
+                width: "100%",
+                height: "100%",
                 borderRadius: 14,
                 border: "1px solid rgba(255,255,255,0.12)",
                 userSelect: "none",

@@ -54,7 +54,13 @@ class MotionDetector:
             "last_latency_ms": float(self._last_latency_ms),
         }
 
-    def process(self, frame: Any) -> MotionResult:
+    def process(
+        self,
+        frame: Any,
+        *,
+        roi_mask: Any | None = None,
+        roi_total: float | None = None,
+    ) -> MotionResult:
         if cv2 is None:
             raise RuntimeError(
                 "OpenCV (cv2) is required for motion detection. Install with: "
@@ -90,8 +96,20 @@ class MotionDetector:
         self._prev_gray = gray
 
         _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
-        changed = float(cv2.countNonZero(thresh))
+
         total = float(thresh.shape[0] * thresh.shape[1]) if thresh is not None else 1.0
+        if roi_mask is not None:
+            try:
+                if getattr(roi_mask, "shape", None) == getattr(thresh, "shape", None):
+                    thresh = cv2.bitwise_and(thresh, roi_mask)
+                    if roi_total is not None:
+                        total = float(roi_total)
+                    else:
+                        total = float(cv2.countNonZero(roi_mask))
+            except Exception:
+                pass
+
+        changed = float(cv2.countNonZero(thresh))
 
         score = max(0.0, min(1.0, changed / max(1.0, total)))
         active = score >= self._threshold if self._threshold > 0 else score > 0

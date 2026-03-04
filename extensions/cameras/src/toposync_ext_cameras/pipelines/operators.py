@@ -8,7 +8,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, replace
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -66,6 +66,16 @@ def _read_env_int(name: str, fallback: int, *, min_value: int, max_value: int) -
     except Exception:
         return int(fallback)
     return max(int(min_value), min(int(max_value), int(value)))
+
+
+def _clamp01(value: float) -> float:
+    try:
+        v = float(value)
+    except Exception:
+        return 0.0
+    if not math.isfinite(v):
+        return 0.0
+    return max(0.0, min(1.0, v))
 
 
 def _packet_ts_seconds(packet: Packet, *, fallback: float | None = None) -> float:
@@ -127,6 +137,52 @@ class CameraSourceConfig(BaseModel):
         raise ValueError("backend must be one of: auto, opencv, ffmpeg")
 
 
+class MotionMaskStroke(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    op: Literal["paint", "erase"] = "paint"
+    points01: list[tuple[float, float]] = Field(default_factory=list)
+
+    @field_validator("op")
+    @classmethod
+    def _normalize_op(cls, value: str) -> str:
+        op = str(value or "").strip().lower()
+        if op in {"paint", "erase"}:
+            return op
+        if not op:
+            return "paint"
+        raise ValueError("op must be one of: paint, erase")
+
+    @field_validator("points01", mode="before")
+    @classmethod
+    def _normalize_points(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError("points01 must be a list of (x, y) pairs")
+        out: list[tuple[float, float]] = []
+        for item in value:
+            if isinstance(item, dict):
+                try:
+                    x = float(item.get("x"))
+                    y = float(item.get("y"))
+                except Exception as exc:  # noqa: BLE001
+                    raise ValueError("points01 must contain x/y numbers") from exc
+                out.append((_clamp01(x), _clamp01(y)))
+                continue
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                try:
+                    x = float(item[0])
+                    y = float(item[1])
+                except Exception as exc:  # noqa: BLE001
+                    raise ValueError("points01 must contain numeric (x, y) pairs") from exc
+                out.append((_clamp01(x), _clamp01(y)))
+                continue
+            raise ValueError("points01 must contain (x, y) pairs")
+        if len(out) > 50_000:
+            out = out[:50_000]
+        return out
+
+
 class MotionGateConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input_with_fallback: str = "segmented,treated,original"
@@ -135,6 +191,15 @@ class MotionGateConfig(BaseModel):
     hold_seconds: float = Field(default=2.5, ge=0.0, le=120.0)
     activation_frames: int = Field(default=1, ge=1, le=100)
     emit_when_idle: bool = False
+    mask_enabled: bool = False
+    mask_mode: Literal["include", "exclude"] = "include"
+    mask_brush_diameter01: float = Field(
+        default=0.1,
+        ge=0.002,
+        le=0.25,
+        description="Brush diameter relative to min(frame_width, frame_height).",
+    )
+    mask_strokes: list[MotionMaskStroke] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -144,6 +209,24 @@ class MotionGateConfig(BaseModel):
             values = dict(values)
             values.pop("key_field", None)
         return values
+
+    @field_validator("mask_mode")
+    @classmethod
+    def _normalize_mask_mode(cls, value: str) -> str:
+        mode = str(value or "").strip().lower()
+        if mode in {"include", "exclude"}:
+            return mode
+        if not mode:
+            return "include"
+        raise ValueError("mask_mode must be one of: include, exclude")
+
+    @field_validator("mask_strokes", mode="after")
+    @classmethod
+    def _normalize_mask_strokes(cls, value: list[MotionMaskStroke]) -> list[MotionMaskStroke]:
+        strokes = list(value or [])
+        if len(strokes) > 1024:
+            strokes = strokes[-1024:]
+        return strokes
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +255,9 @@ class YoloBackendConfig:
     tracker: str
 
 
+YoloEmitMode = Literal["events", "annotate"]
+
+
 class _YoloBaseConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model_name: str = "yolo11n"
@@ -180,6 +266,14 @@ class _YoloBaseConfig(BaseModel):
     image_size: int = Field(default=640, ge=64, le=2048)
     device: str = ""
     tracker: str = "bytetrack"
+    emit_mode: YoloEmitMode = Field(
+        default="events",
+        description=(
+            "Controls what the operator emits. "
+            "'events' outputs per-object lifecycle packets (and filters frames with no detections). "
+            "'annotate' passes through the input packet and annotates it with detection fields."
+        ),
+    )
     categories: list[str] = Field(default_factory=list)
     max_objects_per_frame: int = Field(default=32, ge=1, le=512)
     inference_interval_seconds: float = Field(default=0.0, ge=0.0, le=60.0)
@@ -212,6 +306,18 @@ class _YoloBaseConfig(BaseModel):
                 raise ValueError("Category interval must be a finite number >= 0")
             out[category] = seconds
         return out
+
+    @field_validator("emit_mode", mode="before")
+    @classmethod
+    def _normalize_emit_mode(cls, value: Any) -> str:
+        if value is None:
+            return "events"
+        mode = str(value or "").strip().lower()
+        if mode in {"events", "event"}:
+            return "events"
+        if mode in {"annotate", "passthrough", "pass_through", "pass-through"}:
+            return "annotate"
+        raise ValueError("emit_mode must be one of: events, annotate")
 
     @field_validator("device", "tracker", "model_name")
     @classmethod
@@ -552,16 +658,114 @@ class CameraSourceRuntime(SourceOperatorRuntime):
 
 
 class MotionGateRuntime(TransformOperatorRuntime):
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         parsed = MotionGateConfig.model_validate(config)
+        self._dependencies = dependencies
         self._input_with_fallback = str(parsed.input_with_fallback or "").strip() or "segmented,treated,original"
         self._fallback_to_stream_frame = bool(parsed.fallback_to_stream_frame)
         self._threshold = float(parsed.threshold)
         self._hold_seconds = float(parsed.hold_seconds)
         self._activation_frames = int(parsed.activation_frames)
         self._emit_when_idle = bool(parsed.emit_when_idle)
+        self._mask_enabled = bool(parsed.mask_enabled)
+        self._mask_mode = str(parsed.mask_mode or "include").strip().lower() or "include"
+        self._mask_brush_diameter01 = float(parsed.mask_brush_diameter01)
+        self._mask_strokes = list(parsed.mask_strokes or [])
         self._detector_by_key: dict[str, MotionDetector] = {}
         self._state_by_key: dict[str, dict[str, Any]] = {}
+        self._roi_cache_by_key: dict[str, dict[str, Any]] = {}
+
+    def _resolve_roi(self, frame: Any, *, key: str) -> tuple[Any | None, float | None]:
+        if not self._mask_enabled or not self._mask_strokes:
+            return None, None
+        shape = getattr(frame, "shape", None)
+        if not shape or len(shape) < 2:
+            return None, None
+        try:
+            height = int(shape[0])
+            width = int(shape[1])
+        except Exception:
+            return None, None
+        if height <= 1 or width <= 1:
+            return None, None
+
+        cached = self._roi_cache_by_key.get(key)
+        if cached is not None and cached.get("w") == width and cached.get("h") == height:
+            roi = cached.get("mask")
+            total = cached.get("total")
+            if roi is None or not total:
+                return None, None
+            try:
+                return roi, float(total)
+            except Exception:
+                return roi, None
+
+        try:
+            import cv2  # type: ignore
+        except Exception:
+            cv2 = None  # type: ignore[assignment]
+        try:
+            import numpy as np  # type: ignore
+        except Exception:
+            np = None  # type: ignore[assignment]
+
+        if cv2 is None or np is None:
+            self._roi_cache_by_key[key] = {"w": width, "h": height, "mask": None, "total": 0}
+            return None, None
+
+        diameter_px = int(round(float(self._mask_brush_diameter01) * float(min(width, height))))
+        diameter_px = max(1, min(256, diameter_px))
+        thickness = diameter_px
+        radius = max(1, diameter_px // 2)
+
+        painted = np.zeros((height, width), dtype=np.uint8)
+        for stroke in self._mask_strokes:
+            try:
+                op = str(getattr(stroke, "op", "paint") or "paint").strip().lower()
+            except Exception:
+                op = "paint"
+            color = 255 if op != "erase" else 0
+            points01 = getattr(stroke, "points01", None)
+            if not isinstance(points01, list) or not points01:
+                continue
+            pts: list[tuple[int, int]] = []
+            for x01, y01 in points01:
+                x = int(round(_clamp01(float(x01)) * float(max(1, width - 1))))
+                y = int(round(_clamp01(float(y01)) * float(max(1, height - 1))))
+                pts.append((x, y))
+            if not pts:
+                continue
+            if len(pts) == 1:
+                cv2.circle(painted, pts[0], radius, color, thickness=-1, lineType=cv2.LINE_AA)
+                continue
+            prev = pts[0]
+            cv2.circle(painted, prev, radius, color, thickness=-1, lineType=cv2.LINE_AA)
+            for cur in pts[1:]:
+                cv2.line(painted, prev, cur, color, thickness=thickness, lineType=cv2.LINE_AA)
+                prev = cur
+            cv2.circle(painted, prev, radius, color, thickness=-1, lineType=cv2.LINE_AA)
+
+        total_pixels = int(width * height)
+        try:
+            painted_nonzero = int(cv2.countNonZero(painted))
+        except Exception:
+            painted_nonzero = 0
+
+        allowed_mask = None
+        allowed_total = 0
+        if painted_nonzero > 0:
+            if self._mask_mode == "exclude":
+                if painted_nonzero < total_pixels:
+                    allowed_mask = cv2.bitwise_not(painted)
+                    allowed_total = total_pixels - painted_nonzero
+            else:
+                allowed_mask = painted
+                allowed_total = painted_nonzero
+
+        self._roi_cache_by_key[key] = {"w": width, "h": height, "mask": allowed_mask, "total": int(allowed_total)}
+        if allowed_mask is None or allowed_total <= 0:
+            return None, None
+        return allowed_mask, float(allowed_total)
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         _key, _artifact_name, frame = resolve_image_artifact_for_data(
@@ -571,6 +775,41 @@ class MotionGateRuntime(TransformOperatorRuntime):
         )
         if frame is None:
             return []
+        if isinstance(frame, (bytes, bytearray, memoryview)):
+            return []
+
+        snapshot_store = getattr(self._dependencies, "pipeline_snapshot_store", None)
+        if snapshot_store is not None and packet.lifecycle != Lifecycle.CLOSE:
+            camera_id = str(packet.payload.get("camera_id") or packet.metadata.get("camera_id") or "").strip()
+            source_id = camera_id or str(packet.stream_id or "").strip() or "-"
+            occurrences = getattr(context, "stats_node_occurrences", None)
+            if isinstance(occurrences, (list, tuple)) and occurrences:
+                for pipeline_name, node_id in occurrences:
+                    snapshot_store.schedule_input_snapshot(
+                        context=context,
+                        packet_created_at=float(packet.created_at),
+                        pipeline_name=str(pipeline_name or ""),
+                        node_id=str(node_id or ""),
+                        source_id=source_id,
+                        image=frame,
+                        interval_seconds=60.0,
+                        fmt="png",
+                        jpeg_quality=85,
+                    )
+            else:
+                snapshot_store.schedule_input_snapshot(
+                    context=context,
+                    packet_created_at=float(packet.created_at),
+                    pipeline_name=str(getattr(context, "pipeline_name", "") or ""),
+                    node_id=str(getattr(context, "node_id", "") or ""),
+                    source_id=source_id,
+                    image=frame,
+                    interval_seconds=60.0,
+                    fmt="png",
+                    jpeg_quality=85,
+                )
+
+        roi_mask, roi_total = self._resolve_roi(frame, key=str(packet.stream_id or "").strip() or "-")
 
         key = packet.stream_id
         detector = self._detector_by_key.get(key)
@@ -580,9 +819,9 @@ class MotionGateRuntime(TransformOperatorRuntime):
 
         run_blocking = getattr(context, "run_blocking", None)
         if callable(run_blocking):
-            motion = await run_blocking(detector.process, frame)
+            motion = await run_blocking(detector.process, frame, roi_mask=roi_mask, roi_total=roi_total)
         else:
-            motion = await asyncio.to_thread(detector.process, frame)
+            motion = await asyncio.to_thread(detector.process, frame, roi_mask=roi_mask, roi_total=roi_total)
         observe_numeric = getattr(context, "observe_telemetry_numeric", None)
         if callable(observe_numeric):
             try:
@@ -777,6 +1016,54 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
             except Exception:
                 continue
 
+    def _annotate_packet_with_objects(
+        self,
+        packet: Packet,
+        *,
+        operator_id: str,
+        objects: list[dict[str, Any]],
+    ) -> Packet:
+        top_object = objects[0] if objects else None
+        bbox01 = top_object.get("bbox01") if isinstance(top_object, dict) else None
+        bbox01_list: list[float] | None = None
+        if isinstance(bbox01, (list, tuple)) and len(bbox01) >= 4:
+            try:
+                bbox01_list = [float(bbox01[0]), float(bbox01[1]), float(bbox01[2]), float(bbox01[3])]
+            except Exception:
+                bbox01_list = None
+
+        payload = dict(packet.payload)
+        payload.update(
+            {
+                # Keep annotate mode "non-eventful" on purpose: avoid accidentally triggering
+                # split-stream + lifecycle semantics in downstream sinks/operators.
+                "event_id": None,
+                "tracking_id": None,
+                "tracker_track_id": None,
+                "correlation_id": None,
+                "source_stream_id": packet.stream_id,
+                "object_category_label": top_object.get("category") if isinstance(top_object, dict) else None,
+                "object_confidence": float(top_object.get("confidence")) if isinstance(top_object, dict) else 0.0,
+                "object_bbox01": bbox01_list,
+                "detected_object": top_object,
+                "detected_objects": objects,
+            },
+        )
+        metadata = dict(packet.metadata)
+        metadata.update(
+            {
+                "operator_id": operator_id,
+                "source_stream_id": packet.stream_id,
+                "event_id": None,
+                "tracking_id": None,
+                "tracker_track_id": None,
+                "correlation_id": None,
+                "object_category": payload.get("object_category_label"),
+                "object_confidence": payload.get("object_confidence"),
+            },
+        )
+        return replace(packet, payload=payload, metadata=metadata)
+
     def _copy_payload_with_object(self, packet: Packet, *, object_data: dict[str, Any]) -> dict[str, Any]:
         payload = dict(packet.payload)
         payload.update(
@@ -790,6 +1077,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
                 "object_bbox01": list(object_data.get("bbox01") or (0.0, 0.0, 0.0, 0.0)),
                 "source_stream_id": object_data.get("source_stream_id"),
                 "detected_object": object_data,
+                "detected_objects": [object_data],
             },
         )
         return payload
@@ -1003,6 +1291,9 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
         return self._next_synthetic_tracking_key(source_stream_id)
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        if self._parsed.emit_mode == "annotate":
+            return await self._process_packet_annotate(packet, context)
+
         now_monotonic = time.monotonic()
         source_stream_id = packet.stream_id
 
@@ -1088,6 +1379,99 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
 
         return outputs
 
+    async def _process_packet_annotate(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        now_monotonic = time.monotonic()
+        source_stream_id = packet.stream_id
+
+        if bool(self._parsed.pause_when_gate_closed) and not self._motion_gate_open(packet):
+            paused_for = self._mark_paused(source_stream_id, now_monotonic=now_monotonic)
+            max_paused = float(self._parsed.max_paused_seconds)
+            if max_paused > 0.0 and paused_for >= max_paused:
+                self._clear_state_for_stream(source_stream_id)
+            out = self._annotate_packet_with_objects(packet, operator_id="vision.object_tracking_yolo", objects=[])
+            return [out]
+
+        self._mark_resumed(source_stream_id, now_monotonic=now_monotonic)
+        detections = await self._track_objects(packet, context)
+        self._record_confidence_telemetry(packet=packet, context=context, detections=detections)
+
+        active_keys: set[str] = set()
+        used_keys: set[str] = set()
+        pause_total_now = self._pause_total_for_stream(source_stream_id, now_monotonic=now_monotonic)
+        objects: list[dict[str, Any]] = []
+
+        for detection in detections:
+            tracking_key = self._resolve_tracking_key(
+                source_stream_id,
+                detection,
+                now_monotonic=now_monotonic,
+                used_keys=used_keys,
+            )
+            active_keys.add(tracking_key)
+            used_keys.add(tracking_key)
+
+            state = self._state_by_tracking_key.get(tracking_key)
+            if state is None:
+                source_stream = packet.stream_id
+                stream_id = f"obj:{source_stream}:{tracking_key}"
+                state = _TrackingState(
+                    tracking_id=tracking_key,
+                    tracker_track_id=str(detection.tracking_id).strip() if detection.tracking_id else None,
+                    correlation_id=uuid.uuid4().hex,
+                    stream_id=stream_id,
+                    source_stream_id=source_stream_id,
+                    category=detection.category,
+                    confidence=detection.confidence,
+                    bbox01=detection.bbox01,
+                    opened=True,
+                    last_seen_monotonic=now_monotonic,
+                    last_seen_pause_total=pause_total_now,
+                    last_emit_monotonic=now_monotonic,
+                )
+                self._state_by_tracking_key[tracking_key] = state
+
+            if detection.tracking_id:
+                state.tracker_track_id = str(detection.tracking_id).strip() or state.tracker_track_id
+            state.category = detection.category
+            state.confidence = detection.confidence
+            state.bbox01 = detection.bbox01
+            state.last_seen_monotonic = now_monotonic
+            state.last_seen_pause_total = pause_total_now
+
+            objects.append(
+                {
+                    "tracking_id": state.tracking_id,
+                    "tracker_track_id": state.tracker_track_id,
+                    "correlation_id": state.correlation_id,
+                    "source_stream_id": packet.stream_id,
+                    "category": state.category,
+                    "confidence": float(state.confidence),
+                    "bbox01": tuple(state.bbox01),
+                },
+            )
+
+        if self._parsed.emit_close_on_lost:
+            close_after_seconds = float(self._parsed.close_after_seconds)
+            for tracking_key, state in list(self._state_by_tracking_key.items()):
+                if state.source_stream_id != source_stream_id:
+                    continue
+                if tracking_key in active_keys:
+                    continue
+                if self._effective_age_seconds(state, now_monotonic=now_monotonic) < close_after_seconds:
+                    continue
+                self._state_by_tracking_key.pop(tracking_key, None)
+
+        out = self._annotate_packet_with_objects(packet, operator_id="vision.object_tracking_yolo", objects=objects)
+        return [out]
+
+    def _clear_state_for_stream(self, source_stream_id: str) -> None:
+        for tracking_key, state in list(self._state_by_tracking_key.items()):
+            if state.source_stream_id != source_stream_id:
+                continue
+            self._state_by_tracking_key.pop(tracking_key, None)
+        self._pause_started_by_source_stream.pop(source_stream_id, None)
+        self._pause_accumulated_by_source_stream.pop(source_stream_id, None)
+
     def _build_tracking_packet(self, source_packet: Packet, *, state: _TrackingState, lifecycle: Lifecycle) -> Packet:
         object_data = {
             "tracking_id": state.tracking_id,
@@ -1123,6 +1507,22 @@ class ObjectDetectionYOLORuntime(_BaseYoloRuntime):
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         detections = await self._detect_objects(packet, context)
         self._record_confidence_telemetry(packet=packet, context=context, detections=detections)
+        if self._parsed.emit_mode == "annotate":
+            objects = [
+                {
+                    "tracking_id": None,
+                    "tracker_track_id": None,
+                    "correlation_id": None,
+                    "source_stream_id": packet.stream_id,
+                    "category": detection.category,
+                    "confidence": float(detection.confidence),
+                    "bbox01": tuple(detection.bbox01),
+                }
+                for detection in detections
+            ]
+            out = self._annotate_packet_with_objects(packet, operator_id="vision.object_detection_yolo", objects=objects)
+            return [out]
+
         now_monotonic = time.monotonic()
         outputs: list[Packet] = []
 
@@ -1201,11 +1601,14 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
         produces_payload_keys=["motion"],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
-        runtime_factory=lambda config, _deps: MotionGateRuntime(config),
+        runtime_factory=lambda config, deps: MotionGateRuntime(config, deps),
     )
     registry.register_operator(
         operator_id="vision.object_tracking_yolo",
-        description="YOLO object tracking with split stream per object and lifecycle open/update/close.",
+        description=(
+            "YOLO object tracking. By default emits split-stream lifecycle packets per object; "
+            "set emit_mode=annotate to pass through frames and attach detection fields."
+        ),
         config_model=ObjectTrackingYOLOConfig,
         inputs=[{"name": "in", "required": True}],
         outputs=[{"name": "out"}],
@@ -1224,6 +1627,7 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
             "object_confidence",
             "object_bbox01",
             "detected_object",
+            "detected_objects",
         ],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
@@ -1231,7 +1635,10 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
     )
     registry.register_operator(
         operator_id="vision.object_detection_yolo",
-        description="YOLO object detection with open/close lifecycle emitted per detection.",
+        description=(
+            "YOLO object detection. By default emits one open/close lifecycle per detection; "
+            "set emit_mode=annotate to pass through frames and attach detection fields."
+        ),
         config_model=ObjectDetectionYOLOConfig,
         inputs=[{"name": "in", "required": True}],
         outputs=[{"name": "out"}],
@@ -1250,6 +1657,7 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
             "object_confidence",
             "object_bbox01",
             "detected_object",
+            "detected_objects",
         ],
         share_strategy="by_signature",
         owner="com.toposync.cameras",

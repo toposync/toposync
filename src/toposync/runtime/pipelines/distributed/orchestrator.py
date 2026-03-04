@@ -259,6 +259,7 @@ class PipelinesOrchestrator:
             config_store=self._config_store,
             services=base.services,
             files_dir=self._files_dir,
+            pipeline_snapshot_store=getattr(base, "pipeline_snapshot_store", None),
             notifications_upsert=self._notifications.upsert,
             origin_inbox=origin_inbox,
             yolo_backend_factory=base.yolo_backend_factory,

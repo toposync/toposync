@@ -58,6 +58,8 @@ def build_streaming_wizard_graph(
     motion_sensitivity = _coerce_float(options.get("motion_sensitivity"), default=0.010, min_value=0.0001, max_value=1.0)
     motion_hold_seconds = _coerce_float(options.get("motion_hold_seconds"), default=6.0, min_value=0.0, max_value=120.0)
     yolo_confidence = _coerce_float(options.get("yolo_confidence_threshold"), default=0.55, min_value=0.01, max_value=1.0)
+    yolo_filter_enabled = _coerce_bool(options.get("yolo_filter_enabled"), default=True)
+    yolo_emit_mode = "events" if yolo_filter_enabled else "annotate"
 
     detection_categories = _sanitize_categories(options.get("detection_categories"))
     tracking_categories = _sanitize_categories(options.get("tracking_categories"))
@@ -113,6 +115,7 @@ def build_streaming_wizard_graph(
                 "config": {
                     "categories": detection_categories,
                     "confidence_threshold": float(yolo_confidence),
+                    "emit_mode": yolo_emit_mode,
                 },
             }
         )
@@ -128,6 +131,7 @@ def build_streaming_wizard_graph(
                     "categories": tracking_categories,
                     "confidence_threshold": float(yolo_confidence),
                     "close_after_seconds": 5.0,
+                    "emit_mode": yolo_emit_mode,
                 },
             }
         )
@@ -210,6 +214,19 @@ def _coerce_float(
     return float(parsed)
 
 
+def _coerce_bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
 def _sanitize_categories(value: Any) -> list[str]:
     raw = value if isinstance(value, list) else []
     normalized: list[str] = []
@@ -221,4 +238,3 @@ def _sanitize_categories(value: Any) -> list[str]:
         seen.add(category)
         normalized.append(category)
     return normalized
-

@@ -9,6 +9,7 @@ type Props = {
   open: boolean;
   pipelineName: string | null;
   request: TelemetryFieldInspectorRequest | null;
+  refreshNonce?: number;
   onClose: () => void;
   onApplyValue: (value: number) => void;
 };
@@ -44,6 +45,7 @@ export function PipelineTelemetryFieldModal({
   open,
   pipelineName,
   request,
+  refreshNonce,
   onClose,
   onApplyValue,
 }: Props): React.ReactElement | null {
@@ -69,9 +71,9 @@ export function PipelineTelemetryFieldModal({
     setPendingValue(Number.isFinite(request.value) ? request.value : 0);
   }, [open, request]);
 
-  useEffect(() => {
-    if (!open || !pipelineName || !request) {
-      setData(null);
+	  useEffect(() => {
+	    if (!open || !pipelineName || !request) {
+	      setData(null);
       setError(null);
       setLoading(false);
       return;
@@ -95,10 +97,10 @@ export function PipelineTelemetryFieldModal({
         setLoading(false);
       });
 
-    return () => {
-      cancelled = true;
-    };
-  }, [open, pipelineName, request?.nodeId, request?.metricId]);
+	    return () => {
+	      cancelled = true;
+	    };
+	  }, [open, pipelineName, request?.nodeId, request?.metricId, refreshNonce]);
 
   const histogram = data?.histogram_bins ?? [];
   const histogramMaxCount = useMemo(
@@ -212,7 +214,14 @@ export function PipelineTelemetryFieldModal({
                 onChange={(event) => setPendingValue(Number(event.target.value))}
               />
             </label>
-            <button className="pillButton pillButtonPrimary" type="button" onClick={() => onApplyValue(pendingValue)}>
+            <button
+              className="pillButton pillButtonPrimary"
+              type="button"
+              onClick={() => {
+                onApplyValue(pendingValue);
+                onClose();
+              }}
+            >
               <i className="fa-solid fa-check" aria-hidden="true" />
               {t("core.ui.pipelines.telemetry.apply_value", {}, "Apply")}
             </button>

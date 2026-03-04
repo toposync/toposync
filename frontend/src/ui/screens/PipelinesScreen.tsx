@@ -2,6 +2,7 @@ import Editor from "@monaco-editor/react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { i18n } from "../../util/i18n";
+import { replace, usePathname } from "../router";
 import type {
   CamerasIndexResponse,
   PipelineTemplateApplyCamerasRequest,
@@ -27,6 +28,7 @@ import {
   listPipelines,
   listProcessingServers,
   putPipeline,
+  resetPipelineStats,
 } from "../../util/api";
 import { InteractivePipelineEditor } from "./pipelines/InteractivePipelineEditor";
 import { PipelineDuplicateModal } from "./pipelines/PipelineDuplicateModal";
@@ -50,8 +52,31 @@ type Props = {
   onOpenProcessingServers?: () => void;
 };
 
+const PIPELINES_BASE_PATH = "/settings/pipelines";
+
+function pipelineNameFromPipelinesPath(pathname: string): string | null {
+  const raw = String(pathname || "").trim();
+  if (!raw || raw === "/" || raw === PIPELINES_BASE_PATH) return null;
+  if (raw === PIPELINES_BASE_PATH + "/") return null;
+  if (!raw.startsWith(PIPELINES_BASE_PATH + "/")) return null;
+  const rest = raw.slice(PIPELINES_BASE_PATH.length + 1);
+  const segment = rest.split("/")[0] ?? "";
+  if (!segment) return null;
+  try {
+    return decodeURIComponent(segment).trim() || null;
+  } catch {
+    return segment.trim() || null;
+  }
+}
+
+function buildPipelinesPath(pipelineName: string | null): string {
+  if (!pipelineName) return PIPELINES_BASE_PATH;
+  return `${PIPELINES_BASE_PATH}/${encodeURIComponent(String(pipelineName))}`;
+}
+
 export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): React.ReactElement {
   const { t, locale } = i18n.useI18n();
+  const pathname = usePathname();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
@@ -68,7 +93,10 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
   const [templateApplyOpen, setTemplateApplyOpen] = useState(false);
   const [duplicateOpen, setDuplicateOpen] = useState(false);
   const [operators, setOperators] = useState<PipelineOperatorDefinition[]>([]);
-  const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [selectedName, setSelectedName] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return pipelineNameFromPipelinesPath(window.location.pathname) ?? null;
+  });
   const [camerasIndex, setCamerasIndex] = useState<CamerasIndexResponse>({ cameras: [] });
 
   const [createName, setCreateName] = useState("");
@@ -88,6 +116,8 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
 
   const [pipelineStats, setPipelineStats] = useState<PipelineStats | null>(null);
   const [telemetryFieldInspector, setTelemetryFieldInspector] = useState<TelemetryFieldInspectorRequest | null>(null);
+  const [telemetryResetting, setTelemetryResetting] = useState(false);
+  const [telemetryResetNonce, setTelemetryResetNonce] = useState(0);
 
   const operatorsById = useMemo(() => {
     const entries = operators.map((operator) => [operator.id, operator] as const);
@@ -118,17 +148,35 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
       setServers(serverList);
       setOperators(operatorList);
       setCamerasIndex(cameras);
-      if (!selectedName && pipelineList.length > 0) setSelectedName(pipelineList[0].name);
+      setSelectedName((prev) => {
+        if (pipelineList.length === 0) return null;
+        if (!prev) return pipelineList[0]!.name;
+        const found = pipelineList.some((pipeline) => pipeline.name === prev);
+        return found ? prev : pipelineList[0]!.name;
+      });
     } catch (err: any) {
       setError(String(err?.message ?? err));
     } finally {
       setLoading(false);
     }
-  }, [selectedName]);
+  }, []);
 
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    const fromPath = pipelineNameFromPipelinesPath(pathname);
+    if (!fromPath) return;
+    setSelectedName((prev) => (prev === fromPath ? prev : fromPath));
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!selectedName) return;
+    const fromPath = pipelineNameFromPipelinesPath(pathname);
+    if (fromPath === selectedName) return;
+    replace(buildPipelinesPath(selectedName));
+  }, [pathname, selectedName]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -337,6 +385,22 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
   const openTelemetryFieldInspector = useCallback((request: TelemetryFieldInspectorRequest) => {
     setTelemetryFieldInspector(request);
   }, []);
+
+  const resetTelemetryAndStats = useCallback(async () => {
+    const name = draft?.name ?? null;
+    if (!name) return;
+    setTelemetryResetting(true);
+    setError(null);
+    try {
+      const stats = await resetPipelineStats(name);
+      setPipelineStats(stats);
+      setTelemetryResetNonce((prev) => prev + 1);
+    } catch (err: any) {
+      setError(String(err?.message ?? err));
+    } finally {
+      setTelemetryResetting(false);
+    }
+  }, [draft?.name]);
 
   const applyTelemetryFieldValue = useCallback(
     async (value: number) => {
@@ -766,6 +830,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                     <InteractivePipelineEditor
                       operatorsById={operatorsById}
                       camerasIndex={camerasIndex}
+                      pipelineName={draft?.name ?? null}
                       stepOutputsByNodeId={stepOutputsByNodeId}
                       interactiveSteps={interactiveSteps}
                       setInteractiveSteps={setInteractiveSteps}
@@ -803,19 +868,26 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                 </div>
               ) : null}
 
-              <PipelineTelemetryOverviewCard pipelineName={draft?.name ?? null} steps={interactiveSteps} />
-            </div>
-          )}
-        </div>
-      </div>
+	              <PipelineTelemetryOverviewCard
+	                pipelineName={draft?.name ?? null}
+	                steps={interactiveSteps}
+	                externalRefreshNonce={telemetryResetNonce}
+	                resetting={telemetryResetting}
+	                onReset={resetTelemetryAndStats}
+	              />
+	            </div>
+	          )}
+	        </div>
+	      </div>
 
-      <PipelineTelemetryFieldModal
-        open={Boolean(telemetryFieldInspector && draft)}
-        pipelineName={draft?.name ?? null}
-        request={telemetryFieldInspector}
-        onClose={() => setTelemetryFieldInspector(null)}
-        onApplyValue={(value) => void applyTelemetryFieldValue(value)}
-      />
+	      <PipelineTelemetryFieldModal
+	        open={Boolean(telemetryFieldInspector && draft)}
+	        pipelineName={draft?.name ?? null}
+	        request={telemetryFieldInspector}
+	        refreshNonce={telemetryResetNonce}
+	        onClose={() => setTelemetryFieldInspector(null)}
+	        onApplyValue={(value) => void applyTelemetryFieldValue(value)}
+	      />
 
       <PipelineDuplicateModal
         open={duplicateOpen}

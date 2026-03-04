@@ -135,6 +135,7 @@ export function WizardCreatePipelineFromTransmission({
   const [writerPriority, setWriterPriority] = useState("0");
   const [bypassMode, setBypassMode] = useState<"auto" | "force_on" | "force_off">("auto");
   const [yoloConfidenceThreshold, setYoloConfidenceThreshold] = useState("0.55");
+  const [yoloFilterEnabled, setYoloFilterEnabled] = useState(true);
   const [detectionCategories, setDetectionCategories] = useState("");
   const [trackingCategories, setTrackingCategories] = useState("");
 
@@ -162,6 +163,7 @@ export function WizardCreatePipelineFromTransmission({
     setWriterPriority("0");
     setBypassMode("auto");
     setYoloConfidenceThreshold("0.55");
+    setYoloFilterEnabled(true);
     setDetectionCategories("");
     setTrackingCategories("");
     setCreateBusy(false);
@@ -273,6 +275,7 @@ export function WizardCreatePipelineFromTransmission({
           writer_priority: toSafeInt(writerPriority),
           bypass_mode: bypassMode,
           yolo_confidence_threshold: toSafeFloat(yoloConfidenceThreshold),
+          yolo_filter_enabled: yoloFilterEnabled,
           detection_categories: parseCategories(detectionCategories),
           tracking_categories: parseCategories(trackingCategories),
         },
@@ -454,6 +457,26 @@ export function WizardCreatePipelineFromTransmission({
                 <div className="field" style={{ width: 180 }}>
                   <label className="label">{t("ext.streaming.wizard.yolo_conf", {}, "YOLO confidence")}</label>
                   <input className="input" value={yoloConfidenceThreshold} onChange={(event) => setYoloConfidenceThreshold(event.target.value)} />
+                </div>
+              </div>
+
+              <div className="field">
+                <label className="rowWrap" style={{ gap: 10 }}>
+                  <input
+                    type="checkbox"
+                    checked={yoloFilterEnabled}
+                    onChange={(event) => setYoloFilterEnabled(event.target.checked)}
+                  />
+                  <span className="cardMeta">
+                    {t("ext.streaming.wizard.yolo_filter_enabled", {}, "Filter frames with YOLO (recommended)")}
+                  </span>
+                </label>
+                <div className="cardMeta" style={{ marginLeft: 28 }}>
+                  {t(
+                    "ext.streaming.wizard.yolo_filter_enabled.hint",
+                    {},
+                    "When disabled, the pipeline still runs YOLO but keeps all frames.",
+                  )}
                 </div>
               </div>
 

@@ -53,6 +53,7 @@ export type Transmission = {
   host_server_id?: string;
   placeholder?: "gray" | "black";
   arbitration?: "latest" | "priority_latest";
+  camera_controls?: { enabled?: boolean; camera_id?: string | null } | null;
   outputs: TransmissionOutput[];
   created_at?: string;
   updated_at?: string;

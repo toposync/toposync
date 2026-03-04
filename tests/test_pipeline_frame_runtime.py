@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 import pytest
 
 from toposync.runtime.config_store import Pipeline
+from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines import (
     Artifact,
     Lifecycle,
@@ -263,7 +264,8 @@ def test_motion_gate_uses_hold_without_emitting_close(monkeypatch: pytest.Monkey
         def __init__(self, *, threshold: float) -> None:  # noqa: ARG002
             self._calls = 0
 
-        def process(self, frame: object) -> SimpleNamespace:  # noqa: ARG002
+        def process(self, frame: object, *, roi_mask=None, roi_total=None) -> SimpleNamespace:  # noqa: ARG002
+            _ = roi_mask, roi_total
             self._calls += 1
             active = self._calls == 1
             return SimpleNamespace(
@@ -279,6 +281,7 @@ def test_motion_gate_uses_hold_without_emitting_close(monkeypatch: pytest.Monkey
     monkeypatch.setattr(camera_ops_module, "MotionDetector", _FakeMotionDetector)
 
     async def scenario() -> None:
+        deps = PipelineRuntimeDependencies()
         runtime = MotionGateRuntime(
             {
                 "threshold": 0.05,
@@ -286,6 +289,7 @@ def test_motion_gate_uses_hold_without_emitting_close(monkeypatch: pytest.Monkey
                 "activation_frames": 1,
                 "emit_when_idle": False,
             },
+            deps,
         )
         packet = Packet.create(
             stream_id="camera:test",

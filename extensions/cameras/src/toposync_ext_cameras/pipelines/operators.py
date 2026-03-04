@@ -27,6 +27,7 @@ from ..processing.frame_grabber import FrameGrabber
 from ..processing.camera_hub import CameraHub
 from ..processing.motion import MotionDetector
 from ..processing.yolo import YoloTracker
+from ..onvif import OnvifClient, OnvifError, OnvifProfile
 from .postprocess import register_camera_postprocess_operators
 
 
@@ -109,6 +110,156 @@ def _is_hard_capture_open_error(message: str) -> bool:
 
 
 _GLOBAL_CAMERA_HUB = CameraHub(frame_grabber_factory=_frame_grabber_factory)
+
+@dataclass(frozen=True, slots=True)
+class _OnvifStreamCacheEntry:
+    rtsp_url: str
+    signature: str
+    created_ts: float
+
+
+_ONVIF_STREAM_CACHE: dict[str, _OnvifStreamCacheEntry] = {}
+_ONVIF_STREAM_LOCKS: dict[str, asyncio.Lock] = {}
+_ONVIF_STREAM_TTL_S = _read_env_float(
+    "TOPOSYNC_CAMERA_ONVIF_STREAM_TTL_S",
+    600.0,
+    min_value=10.0,
+    max_value=86_400.0,
+)
+
+
+def _get_onvif_lock(key: str) -> asyncio.Lock:
+    lock = _ONVIF_STREAM_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _ONVIF_STREAM_LOCKS[key] = lock
+    return lock
+
+
+def _onvif_stream_signature(
+    *,
+    xaddr: str,
+    media_xaddr: str,
+    profile_token: str,
+    username: str,
+) -> str:
+    # Use placeholders when fields aren't set yet. This allows caching even when the user didn't
+    # pick a profile in the UI and we auto-select one at runtime.
+    parts = [
+        str(xaddr or "").strip(),
+        str(media_xaddr or "").strip() or "<auto-media>",
+        str(profile_token or "").strip() or "<auto-profile>",
+        str(username or "").strip(),
+    ]
+    raw = "\n".join(parts).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _pick_best_onvif_profile(profiles: list[OnvifProfile]) -> OnvifProfile | None:
+    if not profiles:
+        return None
+
+    def score(item: OnvifProfile) -> tuple[int, int, int, int, str]:
+        encoding = str(item.encoding or "").strip().upper()
+        # Prefer broadly compatible codecs.
+        enc_score = 0
+        if encoding in {"H264", "H.264"}:
+            enc_score = 3
+        elif encoding in {"H265", "HEVC", "H.265"}:
+            enc_score = 2
+        elif encoding:
+            enc_score = 1
+        pixels = int(item.width or 0) * int(item.height or 0)
+        fps = int(item.fps or 0)
+        has_name = 1 if str(item.name or "").strip() else 0
+        # Stable last tie-breaker to avoid non-deterministic selection.
+        return (enc_score, pixels, fps, has_name, str(item.token or ""))
+
+    return max(profiles, key=score)
+
+
+async def _resolve_onvif_rtsp_url_cached(*, camera_id: str, camera: dict[str, Any]) -> str:
+    cid = str(camera_id or "").strip()
+    if not cid:
+        raise OnvifError("Missing camera_id")
+
+    onvif_raw = camera.get("onvif")
+    onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
+    xaddr = str(onvif.get("xaddr") or "").strip()
+    if not xaddr:
+        raise OnvifError("Missing ONVIF xaddr")
+
+    username = str(camera.get("username") or "").strip()
+    password = str(camera.get("password") or "").strip()
+    media_xaddr = str(onvif.get("media_xaddr") or "").strip()
+    profile_token = str(onvif.get("profile_token") or "").strip()
+    signature = _onvif_stream_signature(
+        xaddr=xaddr,
+        media_xaddr=media_xaddr,
+        profile_token=profile_token,
+        username=username,
+    )
+
+    now = time.time()
+    cached = _ONVIF_STREAM_CACHE.get(cid)
+    if (
+        cached is not None
+        and cached.signature == signature
+        and cached.rtsp_url
+        and (now - float(cached.created_ts)) <= _ONVIF_STREAM_TTL_S
+    ):
+        return cached.rtsp_url
+
+    async with _get_onvif_lock(cid):
+        now = time.time()
+        cached = _ONVIF_STREAM_CACHE.get(cid)
+        if (
+            cached is not None
+            and cached.signature == signature
+            and cached.rtsp_url
+            and (now - float(cached.created_ts)) <= _ONVIF_STREAM_TTL_S
+        ):
+            return cached.rtsp_url
+
+        timeout_s = _read_env_float(
+            "TOPOSYNC_CAMERA_ONVIF_TIMEOUT_S",
+            3.5,
+            min_value=0.5,
+            max_value=20.0,
+        )
+        client = OnvifClient(
+            xaddr=xaddr,
+            username=username,
+            password=password,
+            timeout_s=timeout_s,
+            auth_mode="auto",
+        )
+
+        if not media_xaddr:
+            media_xaddr, _ptz_xaddr = await client.get_capabilities()
+            media_xaddr = str(media_xaddr or "").strip()
+        if not media_xaddr:
+            raise OnvifError("ONVIF did not return a media service address (media_xaddr)")
+
+        if not profile_token:
+            profiles = await client.get_profiles(media_xaddr)
+            selected = _pick_best_onvif_profile(profiles)
+            if selected is None:
+                raise OnvifError("ONVIF returned no stream profiles")
+            profile_token = str(selected.token or "").strip()
+        if not profile_token:
+            raise OnvifError("Missing ONVIF profile token")
+
+        rtsp_url = str(await client.get_stream_uri(media_xaddr, profile_token=profile_token) or "").strip()
+        if not rtsp_url:
+            raise OnvifError("ONVIF returned an empty RTSP URL")
+
+        _ONVIF_STREAM_CACHE[cid] = _OnvifStreamCacheEntry(
+            rtsp_url=rtsp_url,
+            signature=signature,
+            created_ts=time.time(),
+        )
+        return rtsp_url
 
 
 class CameraSourceConfig(BaseModel):
@@ -1748,6 +1899,17 @@ async def _resolve_camera_source(
         raise _CameraSourcePendingError(f"Camera '{camera_id}' not found in settings yet")
 
     rtsp_url = str(camera.get("rtsp_url", "")).strip()
+    if not rtsp_url:
+        onvif_raw = camera.get("onvif")
+        onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
+        if str(onvif.get("xaddr") or "").strip():
+            try:
+                rtsp_url = await _resolve_onvif_rtsp_url_cached(camera_id=camera_id, camera=camera)
+            except OnvifError as exc:
+                raise _CameraSourcePendingError(f"Camera '{camera_id}' ONVIF stream resolution failed: {exc}") from exc
+            except Exception as exc:  # noqa: BLE001
+                raise _CameraSourcePendingError(f"Camera '{camera_id}' ONVIF stream resolution failed") from exc
+
     if not rtsp_url:
         raise _CameraSourcePendingError(f"Camera '{camera_id}' has empty rtsp_url")
 

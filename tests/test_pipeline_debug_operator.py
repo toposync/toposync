@@ -6,12 +6,14 @@ from pathlib import Path
 
 import numpy as np
 
+from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.operators_core import DebugStdoutRuntime
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 
 
 def test_core_debug_prints_to_stdout_and_dumps_images(tmp_path: Path, capsys) -> None:
     async def scenario() -> None:
+        deps = PipelineRuntimeDependencies()
         runtime = DebugStdoutRuntime(
             {
                 "enabled": True,
@@ -22,6 +24,7 @@ def test_core_debug_prints_to_stdout_and_dumps_images(tmp_path: Path, capsys) ->
                 "print_metadata": True,
                 "print_artifacts": True,
             },
+            deps,
         )
 
         frame = np.zeros((8, 10, 3), dtype=np.uint8)

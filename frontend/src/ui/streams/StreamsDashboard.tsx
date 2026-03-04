@@ -10,6 +10,7 @@ import {
 } from "../../util/api";
 import { i18n } from "../../util/i18n";
 import { Icon } from "../Icon";
+import { StreamsPtzOverlay } from "./StreamsPtzOverlay";
 
 type GridMode = "1x1" | "2x2";
 
@@ -197,6 +198,8 @@ function StreamTilePlayer({
   hlsAuthHeader,
   hlsNativeUrl,
   active,
+  ptzEnabled,
+  onOpenPtz,
 }: {
   transmissionId: string;
   label: string;
@@ -209,6 +212,8 @@ function StreamTilePlayer({
   hlsAuthHeader: string | null;
   hlsNativeUrl: string | null;
   active: boolean;
+  ptzEnabled: boolean;
+  onOpenPtz: () => void;
 }): React.ReactElement {
   const { t } = i18n.useI18n();
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -747,6 +752,17 @@ function StreamTilePlayer({
         </div>
 
 	        <div className="streamsTileOverlayActions">
+	          {ptzEnabled ? (
+	            <button
+	              type="button"
+	              className="iconButton streamsTileOverlayButton"
+	              aria-label={t("core.ui.streams.actions.ptz", {}, "Camera controls")}
+	              title={t("core.ui.streams.actions.ptz", {}, "Camera controls")}
+	              onClick={onOpenPtz}
+	            >
+	              <Icon name="arrows-up-down-left-right" />
+	            </button>
+	          ) : null}
 	          <button
 	            type="button"
 	            className="iconButton streamsTileOverlayButton"
@@ -898,6 +914,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
   const canGoPrev = pageIndex > 0;
   const canGoNext = pageIndex < pageCount - 1;
   const playersActive = isActive && tabVisible;
+  const [ptzOverlay, setPtzOverlay] = useState<{ transmissionId: string; label: string } | null>(null);
 
   if (loading) {
     return (
@@ -956,6 +973,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
             const hlsAuthHeader = buildBasicAuthHeader(hlsOutput?.auth ?? null);
             const hlsNativeUrl = hlsUrl ? withBasicAuthInUrl(hlsUrl, hlsOutput?.auth ?? null) : null;
             const tileActive = playersActive && Boolean(webrtcUrl || hlsUrl);
+            const ptzEnabled = Boolean(transmission.camera_controls?.enabled);
 
             let sourceHint: string | null = null;
             let sourceHintTone: "muted" | "warn" | "error" = "muted";
@@ -984,12 +1002,21 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
                   hlsAuthHeader={hlsAuthHeader}
                   hlsNativeUrl={hlsNativeUrl}
                   active={tileActive}
+                  ptzEnabled={ptzEnabled}
+                  onOpenPtz={() => setPtzOverlay({ transmissionId, label: transmissionName })}
                 />
               </div>
             );
           })}
         </div>
       ) : null}
+
+      <StreamsPtzOverlay
+        open={ptzOverlay !== null}
+        transmissionId={ptzOverlay?.transmissionId ?? ""}
+        label={ptzOverlay?.label ?? ""}
+        onClose={() => setPtzOverlay(null)}
+      />
 
       <div className={["streamsHud", uiVisible ? "isVisible" : "isHidden"].join(" ")}>
         <div className="streamsHudGroup">

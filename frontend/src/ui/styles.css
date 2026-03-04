@@ -1725,6 +1725,116 @@ textarea {
   color: var(--color-text-muted);
 }
 
+.streamsPtzOverlay {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  max-width: calc(100vw - (var(--space-2) * 2));
+  transform: translate(-50%, -50%);
+  z-index: 40;
+  padding: var(--space-2);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--color-surface-solid) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border-subtle) 82%, transparent);
+  box-shadow: var(--shadow-elevation-2), var(--shadow-inner-highlight);
+  backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate));
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.streamsPtzOverlay:focus {
+  outline: none;
+}
+
+.streamsPtzHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  cursor: grab;
+}
+
+.streamsPtzOverlay.isDragging .streamsPtzHeader {
+  cursor: grabbing;
+}
+
+.streamsPtzTitle {
+  flex: 1;
+  min-width: 0;
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-12);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 2px;
+}
+
+.streamsPtzCloseButton.iconButton {
+  width: 30px;
+  height: 30px;
+}
+
+.streamsPtzBody {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.streamsPtzPad {
+  display: grid;
+  grid-template-columns: repeat(3, 44px);
+  grid-template-rows: repeat(3, 44px);
+  gap: var(--space-1);
+}
+
+.streamsPtzPadButton.iconButton,
+.streamsPtzZoomButton.iconButton {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-control);
+}
+
+.streamsPtzPadCenter.iconButton {
+  background: color-mix(in srgb, var(--color-surface-solid) 58%, transparent);
+}
+
+.streamsPtzSide {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 170px;
+}
+
+.streamsPtzFieldLabel {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.streamsPtzSelect {
+  width: 100%;
+  height: 36px;
+}
+
+.streamsPtzZoomRow {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.streamsPtzMeta {
+  margin-top: 2px;
+  font-size: var(--font-size-11);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-muted);
+  min-height: 16px;
+}
+
+.streamsPtzError {
+  color: color-mix(in srgb, var(--color-danger) 82%, var(--color-text-primary));
+}
+
 .streamsTileOverlayHint.is-warn {
   color: color-mix(in srgb, var(--color-warning) 84%, var(--color-text-primary));
 }

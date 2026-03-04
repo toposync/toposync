@@ -1,4 +1,4 @@
-import type { CameraConfig, ControlPoint } from "./types";
+import type { CameraConfig, CameraConnectionType, CameraOnvifConfig, ControlPoint } from "./types";
 
 export function readString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
@@ -75,15 +75,45 @@ export function parseCameras(settings: Record<string, unknown>): CameraConfig[] 
     const record = readRecord(item);
     const id = readString(record.id).trim();
     if (!id) continue;
+    const connectionType = readCameraConnectionType(record.connection_type);
+    const onvif = readOnvifConfig(record.onvif);
     output.push({
       id,
       name: readString(record.name).trim(),
-      connection_type: "rtsp",
+      connection_type: connectionType,
       rtsp_url: readString(record.rtsp_url).trim(),
       username: readString(record.username).trim(),
       password: readString(record.password).trim(),
       fps: Math.max(1, Math.min(60, readFiniteNumber(record.fps, 5))),
+      onvif,
     });
   }
   return output;
+}
+
+export function readCameraConnectionType(value: unknown): CameraConnectionType {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (raw === "onvif") return "onvif";
+  return "rtsp";
+}
+
+export function readOnvifConfig(value: unknown): CameraOnvifConfig | null {
+  const record = readRecord(value);
+  const deviceId = readString(record.device_id).trim();
+  const xaddr = readString(record.xaddr).trim();
+  if (!xaddr) return null;
+  const mediaXaddr = readString(record.media_xaddr).trim();
+  const ptzXaddr = readString(record.ptz_xaddr).trim();
+  const profileToken = readString(record.profile_token).trim();
+  const profileName = readString(record.profile_name).trim();
+  const hardware = readString(record.hardware).trim();
+  return {
+    device_id: deviceId || undefined,
+    xaddr,
+    media_xaddr: mediaXaddr || undefined,
+    ptz_xaddr: ptzXaddr || undefined,
+    profile_token: profileToken || undefined,
+    profile_name: profileName || undefined,
+    hardware: hardware || undefined,
+  };
 }

@@ -1,4 +1,15 @@
-import type { CameraContextsResponse, CameraPipelineWizardRequest, CameraPipelineWizardResponse, CamerasIndex } from "../types";
+import type {
+  CameraContextsResponse,
+  CameraPipelineWizardRequest,
+  CameraPipelineWizardResponse,
+  CamerasIndex,
+  OnvifDiscoverRequest,
+  OnvifDiscoverResponse,
+  OnvifInspectRequest,
+  OnvifInspectResponse,
+  OnvifStreamUriRequest,
+  OnvifStreamUriResponse,
+} from "../types";
 import { readRecord } from "../parsing";
 
 type ControlPointMapPair = { image: { x: number; y: number }; world: { x: number; z: number } };
@@ -86,6 +97,75 @@ export async function createCameraPipelineFromWizard(
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Failed to create pipeline: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function inspectOnvif(
+  body: OnvifInspectRequest,
+  signal?: AbortSignal,
+): Promise<OnvifInspectResponse> {
+  const response = await fetch("/api/cameras/onvif/inspect", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      xaddr: body.xaddr,
+      username: body.username ?? "",
+      password: body.password ?? "",
+      timeout_ms: body.timeout_ms,
+      auth: body.auth ?? "auto",
+    }),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `ONVIF inspect failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function fetchOnvifStreamUri(
+  body: OnvifStreamUriRequest,
+  signal?: AbortSignal,
+): Promise<OnvifStreamUriResponse> {
+  const response = await fetch("/api/cameras/onvif/stream-uri", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      xaddr: body.xaddr,
+      media_xaddr: body.media_xaddr ?? "",
+      profile_token: body.profile_token,
+      username: body.username ?? "",
+      password: body.password ?? "",
+      timeout_ms: body.timeout_ms,
+      auth: body.auth ?? "auto",
+    }),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `ONVIF stream URI failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function discoverOnvifDevices(
+  body: OnvifDiscoverRequest,
+  signal?: AbortSignal,
+): Promise<OnvifDiscoverResponse> {
+  const response = await fetch("/api/cameras/onvif/discover", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      timeout_ms: body.timeout_ms,
+      force: body.force ?? false,
+      exclude_known: body.exclude_known ?? true,
+    }),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `ONVIF discovery failed: ${response.status}`);
   }
   return response.json();
 }

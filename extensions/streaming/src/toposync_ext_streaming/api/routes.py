@@ -24,6 +24,7 @@ from toposync.runtime.config_store import (
 )
 from toposync.runtime.pipelines.compiler import GraphCompileError, PipelineGraphCompiler
 from toposync.runtime.pipelines.templates import safe_pipeline_name
+from toposync.runtime.services import ServiceRegistry
 
 from ..streaming.engine_manager import MediaMtxEngineManager
 from ..streaming.camera_ingest import build_camera_ingest_definitions, build_camera_ingest_path_configs
@@ -35,6 +36,8 @@ from ..wizard import build_streaming_wizard_graph, suggested_streaming_wizard_pi
 from .models import (
     EXTENSION_ID,
     TEST_PATH,
+    CameraPtzPreset,
+    CameraPtzStatus,
     StreamingEngineStatusResponse,
     StreamingExtensionSettings,
     StreamingHealthResponse,
@@ -44,6 +47,12 @@ from .models import (
     StreamingWizardCreatePipelineRequest,
     StreamingWizardCreatePipelineResponse,
     Transmission,
+    TransmissionCameraActionResponse,
+    TransmissionCameraGotoPresetRequest,
+    TransmissionCameraMoveRequest,
+    TransmissionCameraPresetsResponse,
+    TransmissionCameraStatusResponse,
+    TransmissionCameraStopRequest,
     TransmissionCreateRequest,
     TransmissionDemandOutputStatus,
     TransmissionDemandResponse,
@@ -930,6 +939,7 @@ def create_streaming_router() -> APIRouter:
             path=body.path,
             placeholder=body.placeholder,
             arbitration=body.arbitration,
+            camera_controls=body.camera_controls,
             outputs=body.outputs,
         )
 
@@ -1047,6 +1057,139 @@ def create_streaming_router() -> APIRouter:
             raise HTTPException(status_code=500, detail=f"Failed to apply streaming settings: {exc}") from exc
 
         return {"deleted": True}
+
+    def _services(request: Request) -> ServiceRegistry:
+        registry = getattr(request.app.state, "services", None)
+        if not isinstance(registry, ServiceRegistry):
+            raise HTTPException(status_code=500, detail="Toposync services registry is not available")
+        return registry
+
+    async def _require_transmission_camera_controls(
+        request: Request, *, transmission_id: str
+    ) -> tuple[Transmission, str]:
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+
+        transmission = next((t for t in settings.transmissions if t.id == transmission_id), None)
+        if transmission is None:
+            raise HTTPException(status_code=404, detail="Transmission not found")
+
+        controls = getattr(transmission, "camera_controls", None)
+        enabled = bool(getattr(controls, "enabled", False)) if controls is not None else False
+        camera_id = str(getattr(controls, "camera_id", "") or "").strip() if controls is not None else ""
+        if not enabled:
+            raise HTTPException(status_code=409, detail="Camera controls are not enabled for this transmission")
+        if not camera_id:
+            raise HTTPException(status_code=500, detail="Transmission camera controls are misconfigured (missing camera_id)")
+        return transmission, camera_id
+
+    @router.get("/transmissions/{transmission_id}/camera/presets", response_model=TransmissionCameraPresetsResponse)
+    async def transmission_camera_presets(request: Request, transmission_id: str) -> TransmissionCameraPresetsResponse:
+        _require_auth(request, action="core:settings:read")
+        _transmission, camera_id = await _require_transmission_camera_controls(request, transmission_id=transmission_id)
+
+        services = _services(request)
+        try:
+            raw_presets = await services.call("cameras.ptz.list_presets", camera_id=camera_id)
+        except KeyError:
+            raise HTTPException(status_code=503, detail="Camera controls are not available (cameras extension not loaded)") from None
+
+        presets: list[CameraPtzPreset] = []
+        if isinstance(raw_presets, list):
+            for item in raw_presets:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    presets.append(CameraPtzPreset.model_validate(item))
+                except Exception:
+                    continue
+
+        return TransmissionCameraPresetsResponse(
+            transmission_id=transmission_id,
+            camera_id=camera_id,
+            presets=presets,
+        )
+
+    @router.post("/transmissions/{transmission_id}/camera/goto-preset", response_model=TransmissionCameraActionResponse)
+    async def transmission_camera_goto_preset(
+        request: Request,
+        transmission_id: str,
+        body: TransmissionCameraGotoPresetRequest,
+    ) -> TransmissionCameraActionResponse:
+        _require_auth(request, action="core:settings:read")
+        _transmission, camera_id = await _require_transmission_camera_controls(request, transmission_id=transmission_id)
+
+        services = _services(request)
+        try:
+            await services.call("cameras.ptz.goto_preset", camera_id=camera_id, preset_token=body.preset_token)
+        except KeyError:
+            raise HTTPException(status_code=503, detail="Camera controls are not available (cameras extension not loaded)") from None
+
+        return TransmissionCameraActionResponse(ok=True)
+
+    @router.get("/transmissions/{transmission_id}/camera/status", response_model=TransmissionCameraStatusResponse)
+    async def transmission_camera_status(request: Request, transmission_id: str) -> TransmissionCameraStatusResponse:
+        _require_auth(request, action="core:settings:read")
+        _transmission, camera_id = await _require_transmission_camera_controls(request, transmission_id=transmission_id)
+
+        services = _services(request)
+        try:
+            raw_status = await services.call("cameras.ptz.get_status", camera_id=camera_id)
+        except KeyError:
+            raise HTTPException(status_code=503, detail="Camera controls are not available (cameras extension not loaded)") from None
+
+        status = CameraPtzStatus.model_validate(raw_status if isinstance(raw_status, dict) else {})
+        return TransmissionCameraStatusResponse(
+            transmission_id=transmission_id,
+            camera_id=camera_id,
+            status=status,
+        )
+
+    @router.post("/transmissions/{transmission_id}/camera/move", response_model=TransmissionCameraActionResponse)
+    async def transmission_camera_move(
+        request: Request,
+        transmission_id: str,
+        body: TransmissionCameraMoveRequest,
+    ) -> TransmissionCameraActionResponse:
+        _require_auth(request, action="core:settings:read")
+        _transmission, camera_id = await _require_transmission_camera_controls(request, transmission_id=transmission_id)
+
+        services = _services(request)
+        try:
+            await services.call(
+                "cameras.ptz.continuous_move",
+                camera_id=camera_id,
+                pan=float(body.pan),
+                tilt=float(body.tilt),
+                zoom=float(body.zoom),
+                timeout_s=body.timeout_s,
+            )
+        except KeyError:
+            raise HTTPException(status_code=503, detail="Camera controls are not available (cameras extension not loaded)") from None
+
+        return TransmissionCameraActionResponse(ok=True)
+
+    @router.post("/transmissions/{transmission_id}/camera/stop", response_model=TransmissionCameraActionResponse)
+    async def transmission_camera_stop(
+        request: Request,
+        transmission_id: str,
+        body: TransmissionCameraStopRequest,
+    ) -> TransmissionCameraActionResponse:
+        _require_auth(request, action="core:settings:read")
+        _transmission, camera_id = await _require_transmission_camera_controls(request, transmission_id=transmission_id)
+
+        services = _services(request)
+        try:
+            await services.call(
+                "cameras.ptz.stop",
+                camera_id=camera_id,
+                pan_tilt=bool(body.pan_tilt),
+                zoom=bool(body.zoom),
+            )
+        except KeyError:
+            raise HTTPException(status_code=503, detail="Camera controls are not available (cameras extension not loaded)") from None
+
+        return TransmissionCameraActionResponse(ok=True)
 
     @router.post("/wizard/create-pipeline", response_model=StreamingWizardCreatePipelineResponse)
     async def wizard_create_pipeline(

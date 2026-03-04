@@ -21,6 +21,7 @@ type CreateTransmissionRequest = {
   path: string;
   enabled?: boolean;
   host_server_id?: string;
+  camera_controls?: { enabled: boolean; camera_id: string } | null;
   outputs?: Array<{
     id?: string;
     protocol: "hls" | "rtsp" | "webrtc";

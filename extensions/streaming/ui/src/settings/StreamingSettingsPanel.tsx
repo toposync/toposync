@@ -5,6 +5,7 @@ import type { SettingsPanel, TopoSyncHost } from "@toposync/plugin-api";
 import {
   createTransmission,
   deleteTransmission,
+  fetchCamerasIndex,
   fetchEngineStatus,
   fetchProcessingServers,
   fetchStreamsHealth,
@@ -18,6 +19,7 @@ import {
 } from "../api/streamingApi";
 import { STREAMING_EXTENSION_ID } from "../constants";
 import type {
+  CameraIndexItem,
   EngineStatusResponse,
   ProcessingServer,
   StreamingEngineSettings,
@@ -217,6 +219,12 @@ function StreamingSettingsPanelContent({
   const [newOutputHeight, setNewOutputHeight] = useState("720");
   const [newOutputFps, setNewOutputFps] = useState("12");
 
+  const [newCameraControlsEnabled, setNewCameraControlsEnabled] = useState(false);
+  const [newCameraControlsCameraId, setNewCameraControlsCameraId] = useState("");
+  const [availableCamerasLoading, setAvailableCamerasLoading] = useState(false);
+  const [availableCamerasError, setAvailableCamerasError] = useState<string | null>(null);
+  const [availableCameras, setAvailableCameras] = useState<CameraIndexItem[]>([]);
+
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -309,6 +317,23 @@ function StreamingSettingsPanelContent({
     }
   }, []);
 
+  const fetchAvailableCamerasData = useCallback(async (signal?: AbortSignal) => {
+    setAvailableCamerasLoading(true);
+    setAvailableCamerasError(null);
+    try {
+      const data = await fetchCamerasIndex(signal);
+      if (signal?.aborted) return;
+      const next = Array.isArray(data.cameras) ? data.cameras : [];
+      setAvailableCameras(next);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setAvailableCameras([]);
+      setAvailableCamerasError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (!signal?.aborted) setAvailableCamerasLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     void fetchHealthData(controller.signal);
@@ -316,8 +341,9 @@ function StreamingSettingsPanelContent({
     void fetchSettingsData(controller.signal);
     void fetchTransmissionsData(controller.signal);
     void fetchProcessingServersData(controller.signal);
+    void fetchAvailableCamerasData(controller.signal);
     return () => controller.abort();
-  }, [fetchEngineData, fetchHealthData, fetchProcessingServersData, fetchSettingsData, fetchTransmissionsData]);
+  }, [fetchAvailableCamerasData, fetchEngineData, fetchHealthData, fetchProcessingServersData, fetchSettingsData, fetchTransmissionsData]);
 
   useEffect(() => {
     if (activeTransmissionId && transmissions.some((item) => item.id === activeTransmissionId)) return;
@@ -359,6 +385,23 @@ function StreamingSettingsPanelContent({
     }
     return ids;
   }, [processingServers]);
+
+  useEffect(() => {
+    if (!createModalOpen) return;
+    setNewCameraControlsEnabled(false);
+    setNewCameraControlsCameraId("");
+    if (availableCameras.length > 0) return;
+    const controller = new AbortController();
+    void fetchAvailableCamerasData(controller.signal);
+    return () => controller.abort();
+  }, [createModalOpen, fetchAvailableCamerasData]);
+
+  useEffect(() => {
+    if (!createModalOpen) return;
+    if (newCameraControlsCameraId.trim()) return;
+    if (availableCameras.length === 0) return;
+    setNewCameraControlsCameraId(String(availableCameras[0]?.id || "").trim());
+  }, [availableCameras, createModalOpen, newCameraControlsCameraId]);
 
   async function runEngineAction(action: "start" | "stop" | "restart" | "reclaim"): Promise<void> {
     if (action === "reclaim") {
@@ -447,11 +490,22 @@ function StreamingSettingsPanelContent({
         newTransmissionName.trim() || t("ext.streaming.transmissions.default_name", {}, "Transmission");
       const suggestedPath = slugifyPath(newTransmissionPath.trim() || suggestedName) || "stream";
 
+      let cameraControlsPayload: { enabled: boolean; camera_id: string } | null | undefined = undefined;
+      if (newCameraControlsEnabled) {
+        const cid = newCameraControlsCameraId.trim();
+        if (!cid) {
+          setCreateError(t("ext.streaming.transmissions.camera_controls.select_camera_error", {}, "Selecione uma câmera."));
+          return;
+        }
+        cameraControlsPayload = { enabled: true, camera_id: cid };
+      }
+
       const payload = await createTransmission({
         name: suggestedName,
         path: suggestedPath,
         enabled: true,
         host_server_id: hostServerId,
+        camera_controls: cameraControlsPayload ?? undefined,
         outputs: [
           {
             protocol: newOutputProtocol,
@@ -473,6 +527,8 @@ function StreamingSettingsPanelContent({
       setNewTransmissionName("");
       setNewTransmissionPath("");
       setNewTransmissionHostServerId("local");
+      setNewCameraControlsEnabled(false);
+      setNewCameraControlsCameraId("");
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1172,6 +1228,101 @@ function StreamingSettingsPanelContent({
                     </div>
                   </div>
 
+                  <div style={{ marginTop: 14 }}>
+                    <div className="modalSectionTitle" style={{ marginBottom: 6 }}>
+                      {t("ext.streaming.transmissions.camera_controls.title", {}, "Controles de câmera")}
+                    </div>
+
+                    <div className="rowWrap" style={{ gap: 10, alignItems: "center" }}>
+                      <label className="rowWrap" style={{ gap: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(transmissionDraft.camera_controls?.enabled)}
+                          disabled={
+                            !Boolean(transmissionDraft.camera_controls?.enabled) &&
+                            (availableCamerasLoading || availableCameras.length === 0)
+                          }
+                          onChange={(event) => {
+                            const enabled = event.target.checked;
+                            if (!enabled) {
+                              updateDraft({ camera_controls: null });
+                              return;
+                            }
+                            const current = String(transmissionDraft.camera_controls?.camera_id || "").trim();
+                            const fallback = String(availableCameras[0]?.id || "").trim();
+                            const nextCameraId = current || fallback;
+                            updateDraft({
+                              camera_controls: { enabled: true, camera_id: nextCameraId },
+                            });
+                          }}
+                        />
+                        <span className="cardMeta">
+                          {t("ext.streaming.transmissions.camera_controls.enable", {}, "Habilitar controles de câmera")}
+                        </span>
+                      </label>
+
+                      {availableCamerasLoading ? (
+                        <div className="settingsStatusMuted">
+                          {t("ext.streaming.transmissions.camera_controls.loading", {}, "Carregando câmeras…")}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="cardMeta" style={{ marginTop: 6 }}>
+                      {t(
+                        "ext.streaming.transmissions.camera_controls.hint",
+                        {},
+                        "Quando habilitado, esta transmissão poderá controlar uma câmera (presets/PTZ) via API.",
+                      )}
+                    </div>
+
+                    {availableCamerasError ? <div className="errorText" style={{ marginTop: 8 }}>{availableCamerasError}</div> : null}
+
+                    {Boolean(transmissionDraft.camera_controls?.enabled) ? (
+                      <div className="field" style={{ marginTop: 10 }}>
+                        <label className="label">{t("ext.streaming.transmissions.camera_controls.camera", {}, "Câmera")}</label>
+                        <select
+                          className="input"
+                          value={String(transmissionDraft.camera_controls?.camera_id || "").trim()}
+                          onChange={(event) => {
+                            const cid = String(event.target.value || "").trim();
+                            updateDraft({ camera_controls: { enabled: true, camera_id: cid } });
+                          }}
+                          disabled={availableCameras.length === 0}
+                        >
+                          {availableCameras.map((camera) => {
+                            const cid = String(camera.id || "").trim();
+                            const label = String(camera.name || "").trim() || cid;
+                            return (
+                              <option key={cid} value={cid}>
+                                {label}
+                              </option>
+                            );
+                          })}
+                          {(() => {
+                            const current = String(transmissionDraft.camera_controls?.camera_id || "").trim();
+                            const known = availableCameras.some((camera) => String(camera.id || "").trim() === current);
+                            if (!current || known) return null;
+                            return (
+                              <option value={current}>
+                                {current}
+                              </option>
+                            );
+                          })()}
+                        </select>
+                        {availableCameras.length === 0 && !availableCamerasLoading ? (
+                          <div className="cardMeta" style={{ marginTop: 6 }}>
+                            {t(
+                              "ext.streaming.transmissions.camera_controls.empty",
+                              {},
+                              "Nenhuma câmera encontrada. Cadastre uma câmera em Configurações > Câmeras.",
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+
                   {!knownProcessingServerIds.has(normalizeServerId(transmissionDraft.host_server_id)) ? (
                     <div className="errorText" style={{ marginTop: 10 }}>
                       {t(
@@ -1589,6 +1740,75 @@ function StreamingSettingsPanelContent({
             <input className="input" value={newOutputFps} onChange={(event) => setNewOutputFps(event.target.value)} />
           </div>
         </div>
+
+        <div className="sectionDivider" style={{ marginTop: 14 }} />
+
+        <div className="modalSectionTitle" style={{ marginBottom: 6 }}>
+          {t("ext.streaming.transmissions.camera_controls.title", {}, "Controles de câmera")}
+        </div>
+
+        <div className="rowWrap" style={{ gap: 10 }}>
+          <label className="rowWrap" style={{ gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={newCameraControlsEnabled}
+              onChange={(event) => setNewCameraControlsEnabled(event.target.checked)}
+            />
+            <span className="cardMeta">
+              {t("ext.streaming.transmissions.camera_controls.enable", {}, "Habilitar controles de câmera")}
+            </span>
+          </label>
+        </div>
+
+        <div className="cardMeta" style={{ marginTop: 6 }}>
+          {t(
+            "ext.streaming.transmissions.camera_controls.hint",
+            {},
+            "Quando habilitado, esta transmissão poderá controlar uma câmera (presets/PTZ) via API.",
+          )}
+        </div>
+
+        {newCameraControlsEnabled ? (
+          <div style={{ marginTop: 10 }}>
+            {availableCamerasLoading ? (
+              <div className="settingsStatusMuted">
+                {t("ext.streaming.transmissions.camera_controls.loading", {}, "Carregando câmeras…")}
+              </div>
+            ) : null}
+            {availableCamerasError ? <div className="errorText">{availableCamerasError}</div> : null}
+
+            <div className="streamingFormGrid streamingFormGridCreatePrimary" style={{ marginTop: 10 }}>
+              <div className="field">
+                <label className="label">{t("ext.streaming.transmissions.camera_controls.camera", {}, "Câmera")}</label>
+                <select
+                  className="input"
+                  value={newCameraControlsCameraId}
+                  onChange={(event) => setNewCameraControlsCameraId(String(event.target.value || "").trim())}
+                  disabled={availableCameras.length === 0}
+                >
+                  {availableCameras.map((camera) => {
+                    const cid = String(camera.id || "").trim();
+                    const label = String(camera.name || "").trim() || cid;
+                    return (
+                      <option key={cid} value={cid}>
+                        {label}
+                      </option>
+                    );
+                  })}
+                </select>
+                {availableCameras.length === 0 && !availableCamerasLoading ? (
+                  <div className="cardMeta" style={{ marginTop: 6 }}>
+                    {t(
+                      "ext.streaming.transmissions.camera_controls.empty",
+                      {},
+                      "Nenhuma câmera encontrada. Cadastre uma câmera em Configurações > Câmeras.",
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div className="rowWrap" style={{ marginTop: 12, justifyContent: "flex-end" }}>
           <button className="primaryButton" type="button" disabled={createBusy} onClick={() => void createTransmissionAction()}>

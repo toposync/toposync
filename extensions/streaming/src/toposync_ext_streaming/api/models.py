@@ -80,6 +80,25 @@ class TransmissionOutput(BaseModel):
     authentication: StreamAuthentication | None = None
 
 
+class TransmissionCameraControls(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    camera_id: str | None = None
+
+    @field_validator("camera_id", mode="before")
+    @classmethod
+    def _trim_camera_id(cls, value: Any) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def _validate_enabled_camera_id(self) -> "TransmissionCameraControls":
+        if bool(self.enabled) and not str(self.camera_id or "").strip():
+            raise ValueError("camera_id is required when camera_controls.enabled is true")
+        return self
+
+
 class Transmission(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -90,6 +109,7 @@ class Transmission(BaseModel):
     path: str = ""
     placeholder: Literal["gray", "black"] = "gray"
     arbitration: Literal["latest", "priority_latest"] = "priority_latest"
+    camera_controls: TransmissionCameraControls | None = None
     outputs: list[TransmissionOutput] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_now_utc)
     updated_at: datetime = Field(default_factory=_now_utc)
@@ -363,6 +383,7 @@ class TransmissionCreateRequest(BaseModel):
     path: str
     placeholder: Literal["gray", "black"] = "gray"
     arbitration: Literal["latest", "priority_latest"] = "priority_latest"
+    camera_controls: TransmissionCameraControls | None = None
     outputs: list[TransmissionOutput] = Field(default_factory=list)
 
 
@@ -384,6 +405,79 @@ class TransmissionUrlsResponse(BaseModel):
     engine_running: bool
     outputs: list[TransmissionOutputUrl]
     warnings: list[str] = Field(default_factory=list)
+
+
+class CameraPtzPreset(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str
+    name: str = ""
+    pan: float | None = None
+    tilt: float | None = None
+    zoom: float | None = None
+
+
+class CameraPtzStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pan: float | None = None
+    tilt: float | None = None
+    zoom: float | None = None
+    move_status: str = ""
+    error: str = ""
+    utc_time: str = ""
+
+
+class TransmissionCameraPresetsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transmission_id: str
+    camera_id: str
+    presets: list[CameraPtzPreset] = Field(default_factory=list)
+
+
+class TransmissionCameraGotoPresetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preset_token: str
+
+    @field_validator("preset_token", mode="before")
+    @classmethod
+    def _trim_preset_token(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("Field is required")
+        return normalized
+
+
+class TransmissionCameraMoveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pan: float = Field(default=0.0, ge=-1.0, le=1.0)
+    tilt: float = Field(default=0.0, ge=-1.0, le=1.0)
+    zoom: float = Field(default=0.0, ge=-1.0, le=1.0)
+    timeout_s: float | None = Field(default=None, ge=0.0, le=30.0)
+
+
+class TransmissionCameraStopRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pan_tilt: bool = True
+    zoom: bool = True
+
+
+class TransmissionCameraStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transmission_id: str
+    camera_id: str
+    status: CameraPtzStatus
+
+
+class TransmissionCameraActionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool = True
 
 
 class TransmissionDemandOutputStatus(BaseModel):

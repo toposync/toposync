@@ -267,7 +267,37 @@ export type StreamingTransmission = {
   path: string;
   enabled?: boolean;
   host_server_id?: string;
+  camera_controls?: { enabled?: boolean; camera_id?: string | null } | null;
   outputs?: StreamingTransmissionOutput[];
+};
+
+export type StreamingTransmissionCameraPreset = {
+  token: string;
+  name?: string;
+  pan?: number | null;
+  tilt?: number | null;
+  zoom?: number | null;
+};
+
+export type StreamingTransmissionCameraPresetsResponse = {
+  transmission_id: string;
+  camera_id: string;
+  presets: StreamingTransmissionCameraPreset[];
+};
+
+export type StreamingTransmissionCameraStatus = {
+  pan?: number | null;
+  tilt?: number | null;
+  zoom?: number | null;
+  move_status?: string;
+  error?: string;
+  utc_time?: string;
+};
+
+export type StreamingTransmissionCameraStatusResponse = {
+  transmission_id: string;
+  camera_id: string;
+  status: StreamingTransmissionCameraStatus;
 };
 
 export type StreamingTransmissionUrlOutput = {
@@ -313,6 +343,23 @@ export type StreamingOutputsRuntimeResponse = {
   updated_at_unix: number;
   outputs: StreamingOutputRuntimeStatus[];
 };
+
+async function _parseHttpError(res: Response, fallback: string): Promise<string> {
+  try {
+    const json = (await res.json()) as any;
+    const detail = json?.detail;
+    if (typeof detail === "string" && detail.trim()) return detail.trim();
+  } catch {
+    // ignore
+  }
+  try {
+    const text = String(await res.text()).trim();
+    if (text) return text;
+  } catch {
+    // ignore
+  }
+  return fallback;
+}
 
 export async function getAuthStatus(): Promise<AuthStatus> {
   const res = await fetch("/api/auth/status");
@@ -816,6 +863,71 @@ export async function primeStreamingTransmissionDemand(
   });
   if (!res.ok) throw new Error(`Failed to prime streaming demand for ${transmissionId}: ${res.status}`);
   return (await res.json()) as StreamingTransmissionDemandPrimeResponse;
+}
+
+export async function getStreamingTransmissionCameraPresets(
+  transmissionId: string,
+): Promise<StreamingTransmissionCameraPresetsResponse> {
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/presets`);
+  if (!res.ok) {
+    throw new Error(await _parseHttpError(res, `Failed to fetch PTZ presets for ${transmissionId}: ${res.status}`));
+  }
+  return (await res.json()) as StreamingTransmissionCameraPresetsResponse;
+}
+
+export async function gotoStreamingTransmissionCameraPreset(
+  transmissionId: string,
+  presetToken: string,
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/goto-preset`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ preset_token: presetToken }),
+  });
+  if (!res.ok) {
+    throw new Error(await _parseHttpError(res, `Failed to go to PTZ preset for ${transmissionId}: ${res.status}`));
+  }
+  return (await res.json()) as { ok: boolean };
+}
+
+export async function getStreamingTransmissionCameraStatus(
+  transmissionId: string,
+): Promise<StreamingTransmissionCameraStatusResponse> {
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/status`);
+  if (!res.ok) {
+    throw new Error(await _parseHttpError(res, `Failed to fetch PTZ status for ${transmissionId}: ${res.status}`));
+  }
+  return (await res.json()) as StreamingTransmissionCameraStatusResponse;
+}
+
+export async function moveStreamingTransmissionCamera(
+  transmissionId: string,
+  payload: { pan: number; tilt: number; zoom: number; timeout_s?: number | null },
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/move`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await _parseHttpError(res, `Failed to move PTZ camera for ${transmissionId}: ${res.status}`));
+  }
+  return (await res.json()) as { ok: boolean };
+}
+
+export async function stopStreamingTransmissionCamera(
+  transmissionId: string,
+  payload?: { pan_tilt?: boolean; zoom?: boolean },
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/stop`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload ?? {}),
+  });
+  if (!res.ok) {
+    throw new Error(await _parseHttpError(res, `Failed to stop PTZ camera for ${transmissionId}: ${res.status}`));
+  }
+  return (await res.json()) as { ok: boolean };
 }
 
 export async function getStreamingOutputsRuntime(): Promise<StreamingOutputsRuntimeResponse> {

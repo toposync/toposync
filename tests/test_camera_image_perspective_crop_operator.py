@@ -30,6 +30,7 @@ def test_camera_image_perspective_crop_operator_warps_frame_and_maps_yolo_bbox_b
             },
         )
 
+        deps = PipelineRuntimeDependencies()
         warp = ImagePerspectiveCropRuntime(
             {
                 "units": "pixels",
@@ -39,6 +40,7 @@ def test_camera_image_perspective_crop_operator_warps_frame_and_maps_yolo_bbox_b
                 "set_stream_frame": True,
                 "min_output_edge_px": 8,
             },
+            deps,
         )
         out_packets = await warp.process_packet(packet, None)
         assert len(out_packets) == 1
@@ -64,7 +66,6 @@ def test_camera_image_perspective_crop_operator_warps_frame_and_maps_yolo_bbox_b
         assert isinstance(warp_payload.get("homography"), list)
         assert isinstance(warp_payload.get("homography_inv"), list)
 
-        deps = PipelineRuntimeDependencies()
         yolo = ObjectDetectionYOLORuntime({}, deps)
         normalized = yolo._normalize_objects(  # noqa: SLF001
             [YoloObject(tracking_id=None, category="person", confidence=0.9, bbox01=(0.0, 0.0, 1.0, 1.0))],
@@ -76,4 +77,3 @@ def test_camera_image_perspective_crop_operator_warps_frame_and_maps_yolo_bbox_b
         )
 
     asyncio.run(scenario())
-

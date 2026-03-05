@@ -19,6 +19,7 @@ import { Modal } from "../Modal";
 import { CompositionSelectorModal } from "../CompositionSelectorModal";
 import { Icon } from "../Icon";
 import { Viewport2D } from "../Viewport2D";
+import { drawMeasurementLine2D, MEASUREMENT_LINE_ELEMENT_TYPE_ID } from "../editor/measurementLineElementType";
 
 type Props = {
   compositionName: string;
@@ -55,7 +56,7 @@ type LayerControlsState = {
   byElementId: Record<string, LayerControl>;
 };
 
-type LayerGroupId = "background" | "ungrouped" | "walls" | "areas";
+type LayerGroupId = "background" | "ungrouped" | "walls" | "areas" | "measurements";
 type DragInsertPosition = "before" | "after";
 
 function degrees(rad: number): number {
@@ -148,6 +149,7 @@ function polygonArea(vertices: PlanePoint[]): number {
 
 const CORE_TOOL_NAVIGATE_ID = "core.navigate";
 const CORE_TOOL_SELECT_ID = "core.select";
+const CORE_TOOL_MEASURE_LINE_ID = "core.measure_line";
 
 export function CompositionEditorScreen({
   compositionName,
@@ -179,11 +181,12 @@ export function CompositionEditorScreen({
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
   const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
   const [selectedToolId, setSelectedToolId] = useState<string>(CORE_TOOL_NAVIGATE_ID);
-  const [activeToolSession, setActiveToolSession] = useState<EditorToolSession | null>(null);
-  const [isBackgroundOpen, setIsBackgroundOpen] = useState(true);
-  const [isWallsOpen, setIsWallsOpen] = useState(true);
-  const [isAreasOpen, setIsAreasOpen] = useState(true);
-  const [draggingLayer, setDraggingLayer] = useState<{ elementId: string; groupId: LayerGroupId } | null>(null);
+	  const [activeToolSession, setActiveToolSession] = useState<EditorToolSession | null>(null);
+	  const [isBackgroundOpen, setIsBackgroundOpen] = useState(true);
+	  const [isWallsOpen, setIsWallsOpen] = useState(true);
+	  const [isAreasOpen, setIsAreasOpen] = useState(true);
+	  const [isMeasurementsOpen, setIsMeasurementsOpen] = useState(true);
+	  const [draggingLayer, setDraggingLayer] = useState<{ elementId: string; groupId: LayerGroupId } | null>(null);
   const [dragOverLayer, setDragOverLayer] = useState<{
     elementId: string;
     groupId: LayerGroupId;
@@ -302,21 +305,27 @@ export function CompositionEditorScreen({
     [locale],
   );
 
-  function measurementFor(el: CompositionElement): string | null {
-    const group = elementTypesById[el.type]?.layerGroup ?? "";
-    if (group === "walls") {
-      const a = readPlanePoint(el.props.a);
-      const b = readPlanePoint(el.props.b);
-      if (!a || !b) return null;
-      return `${numberFmt.format(distance(a, b))} m`;
-    }
-    if (group === "areas") {
-      const vertices = readVertices(el.props.vertices);
-      if (vertices.length < 3) return null;
-      return `${numberFmt.format(polygonArea(vertices))} m²`;
-    }
-    return null;
-  }
+	  function measurementFor(el: CompositionElement): string | null {
+	    const group = elementTypesById[el.type]?.layerGroup ?? "";
+	    if (group === "walls") {
+	      const a = readPlanePoint(el.props.a);
+	      const b = readPlanePoint(el.props.b);
+	      if (!a || !b) return null;
+	      return `${numberFmt.format(distance(a, b))} m`;
+	    }
+	    if (group === "measurements") {
+	      const a = readPlanePoint(el.props.a);
+	      const b = readPlanePoint(el.props.b);
+	      if (!a || !b) return null;
+	      return `${numberFmt.format(distance(a, b))} m`;
+	    }
+	    if (group === "areas") {
+	      const vertices = readVertices(el.props.vertices);
+	      if (vertices.length < 3) return null;
+	      return `${numberFmt.format(polygonArea(vertices))} m²`;
+	    }
+	    return null;
+	  }
 
   const elementTypes = useMemo(
     () =>
@@ -327,22 +336,91 @@ export function CompositionEditorScreen({
   );
 
   const tools = useMemo(() => {
-    const coreTools: EditorTool[] = [
-      {
-        id: CORE_TOOL_NAVIGATE_ID,
-        name: { key: "core.tools.navigate", fallback: "Navigate" },
-        description: { key: "core.tools.navigate_desc", fallback: "Pan around the canvas." },
-        icon: "hand",
-        createSession: () => ({}),
-      },
-      {
-        id: CORE_TOOL_SELECT_ID,
-        name: { key: "core.tools.select", fallback: "Select" },
-        description: { key: "core.tools.select_desc", fallback: "Select and move elements." },
-        icon: "arrow-pointer",
-        createSession: () => ({}),
-      },
-    ];
+	    const coreTools: EditorTool[] = [
+	      {
+	        id: CORE_TOOL_NAVIGATE_ID,
+	        name: { key: "core.tools.navigate", fallback: "Navigate" },
+	        description: { key: "core.tools.navigate_desc", fallback: "Pan around the canvas." },
+	        icon: "hand",
+	        createSession: () => ({}),
+	      },
+	      {
+	        id: CORE_TOOL_SELECT_ID,
+	        name: { key: "core.tools.select", fallback: "Select" },
+	        description: { key: "core.tools.select_desc", fallback: "Select and move elements." },
+	        icon: "arrow-pointer",
+	        createSession: () => ({}),
+	      },
+	      {
+	        id: CORE_TOOL_MEASURE_LINE_ID,
+	        name: { key: "core.tools.measure_line", fallback: "Measure" },
+	        description: { key: "core.tools.measure_line_desc", fallback: "Measure a straight line." },
+	        icon: "ruler",
+	        createSession: (toolContext) => {
+	          let startPoint: PlanePoint | null = null;
+	          let currentPoint: PlanePoint | null = null;
+
+	          function reset() {
+	            startPoint = null;
+	            currentPoint = null;
+	          }
+
+	          function commit(endPoint: PlanePoint) {
+	            if (!startPoint) return;
+	            if (distance(startPoint, endPoint) < 0.05) {
+	              reset();
+	              return;
+	            }
+	            const center = { x: (startPoint.x + endPoint.x) / 2, z: (startPoint.z + endPoint.z) / 2 };
+	            toolContext.createElement(MEASUREMENT_LINE_ELEMENT_TYPE_ID, {
+	              name: "",
+	              position: { x: center.x, y: 0, z: center.z },
+	              props: { a: startPoint, b: endPoint },
+	            });
+	            reset();
+	          }
+
+	          return {
+	            onPointerEvent: (event) => {
+	              if (event.kind === "cancel") {
+	                reset();
+	                return;
+	              }
+	              if (event.kind === "move") {
+	                if (startPoint) currentPoint = event.world;
+	                return;
+	              }
+	              if (event.kind === "down") {
+	                if (event.button !== 0) return;
+	                startPoint = event.world;
+	                currentPoint = event.world;
+	                return;
+	              }
+	              if (event.kind === "up") {
+	                if (event.button !== 0) return;
+	                if (!startPoint) return;
+	                commit(event.world);
+	              }
+	            },
+	            onKeyDown: (event) => {
+	              if (event.key === "Escape") reset();
+	            },
+	            renderOverlay2D: ({ ctx: canvasContext, viewport }) => {
+	              if (!startPoint || !currentPoint) return;
+	              drawMeasurementLine2D({
+	                ctx: canvasContext,
+	                viewport,
+	                aWorld: startPoint,
+	                bWorld: currentPoint,
+	                dashed: true,
+	                showLabel: true,
+	              });
+	            },
+	            getCursor: () => "crosshair",
+	          };
+	        },
+	      },
+	    ];
 
     const extTools = [...editorTools].sort((a, b) =>
       resolveLocalizedString(a.name).localeCompare(resolveLocalizedString(b.name)),
@@ -436,23 +514,25 @@ export function CompositionEditorScreen({
     for (const id of selectedElementIds) {
       const el = byId.get(id);
       if (!el) continue;
-      const group = elementTypesById[el.type]?.layerGroup ?? "";
-      if (group === "background") setIsBackgroundOpen(true);
-      if (group === "walls") setIsWallsOpen(true);
-      if (group === "areas") setIsAreasOpen(true);
-    }
-  }, [elements, elementTypesById, selectedElementIds]);
+	      const group = elementTypesById[el.type]?.layerGroup ?? "";
+	      if (group === "background") setIsBackgroundOpen(true);
+	      if (group === "walls") setIsWallsOpen(true);
+	      if (group === "areas") setIsAreasOpen(true);
+	      if (group === "measurements") setIsMeasurementsOpen(true);
+	    }
+	  }, [elements, elementTypesById, selectedElementIds]);
 
   const layerGroupForElement = useCallback(
     (el: CompositionElement): LayerGroupId => {
-      const group = elementTypesById[el.type]?.layerGroup ?? "";
-      if (group === "background") return "background";
-      if (group === "walls") return "walls";
-      if (group === "areas") return "areas";
-      return "ungrouped";
-    },
-    [elementTypesById],
-  );
+	      const group = elementTypesById[el.type]?.layerGroup ?? "";
+	      if (group === "background") return "background";
+	      if (group === "walls") return "walls";
+	      if (group === "areas") return "areas";
+	      if (group === "measurements") return "measurements";
+	      return "ungrouped";
+	    },
+	    [elementTypesById],
+	  );
 
   const reorderLayersInGroup = useCallback(
     (args: { groupId: LayerGroupId; draggedId: string; targetId: string; position: DragInsertPosition }) => {
@@ -548,27 +628,30 @@ export function CompositionEditorScreen({
     [dragOverLayer, draggingLayer],
   );
 
-  const layerGroups = useMemo(() => {
-    const ungrouped: Array<{ el: CompositionElement; idx: number }> = [];
-    const background: Array<{ el: CompositionElement; idx: number }> = [];
-    const walls: Array<{ el: CompositionElement; idx: number }> = [];
-    const areas: Array<{ el: CompositionElement; idx: number }> = [];
+	  const layerGroups = useMemo(() => {
+	    const ungrouped: Array<{ el: CompositionElement; idx: number }> = [];
+	    const background: Array<{ el: CompositionElement; idx: number }> = [];
+	    const walls: Array<{ el: CompositionElement; idx: number }> = [];
+	    const areas: Array<{ el: CompositionElement; idx: number }> = [];
+	    const measurements: Array<{ el: CompositionElement; idx: number }> = [];
 
-    elements.forEach((el, idx) => {
-      const group = elementTypesById[el.type]?.layerGroup ?? "";
-      if (group === "background") background.push({ el, idx });
-      else if (group === "walls") walls.push({ el, idx });
-      else if (group === "areas") areas.push({ el, idx });
-      else ungrouped.push({ el, idx });
-    });
+	    elements.forEach((el, idx) => {
+	      const group = elementTypesById[el.type]?.layerGroup ?? "";
+	      if (group === "background") background.push({ el, idx });
+	      else if (group === "walls") walls.push({ el, idx });
+	      else if (group === "areas") areas.push({ el, idx });
+	      else if (group === "measurements") measurements.push({ el, idx });
+	      else ungrouped.push({ el, idx });
+	    });
 
-    ungrouped.sort((a, b) => b.idx - a.idx);
-    background.sort((a, b) => b.idx - a.idx);
-    walls.sort((a, b) => b.idx - a.idx);
-    areas.sort((a, b) => b.idx - a.idx);
+	    ungrouped.sort((a, b) => b.idx - a.idx);
+	    background.sort((a, b) => b.idx - a.idx);
+	    walls.sort((a, b) => b.idx - a.idx);
+	    areas.sort((a, b) => b.idx - a.idx);
+	    measurements.sort((a, b) => b.idx - a.idx);
 
-    return { ungrouped, background, walls, areas };
-  }, [elements, elementTypesById]);
+	    return { ungrouped, background, walls, areas, measurements };
+	  }, [elements, elementTypesById]);
 
   const editingTitle = useMemo(() => {
     if (!editingElement) return t("core.element_editor.title");
@@ -846,8 +929,8 @@ export function CompositionEditorScreen({
               );
             })}
 
-            {layerGroups.walls.length > 0 ? (
-              <div className="layerGroup">
+	            {layerGroups.walls.length > 0 ? (
+	              <div className="layerGroup">
                 <button className="layerGroupHeader" type="button" onClick={() => setIsWallsOpen((v) => !v)}>
                   <span className="layerGroupTitle">
                     <Icon name={isWallsOpen ? "chevron-down" : "chevron-right"} className="layerGroupChevron" />
@@ -929,11 +1012,110 @@ export function CompositionEditorScreen({
                     })}
                   </div>
                 ) : null}
-              </div>
-            ) : null}
+	              </div>
+	            ) : null}
 
-            {layerGroups.areas.length > 0 ? (
-              <div className="layerGroup">
+	            {layerGroups.measurements.length > 0 ? (
+	              <div className="layerGroup">
+	                <button
+	                  className="layerGroupHeader"
+	                  type="button"
+	                  onClick={() => setIsMeasurementsOpen((v) => !v)}
+	                >
+	                  <span className="layerGroupTitle">
+	                    <Icon
+	                      name={isMeasurementsOpen ? "chevron-down" : "chevron-right"}
+	                      className="layerGroupChevron"
+	                    />
+	                    <span>{t("core.ui.layers_group_measurements")}</span>
+	                  </span>
+	                  <span className="layerGroupCount">{layerGroups.measurements.length}</span>
+	                </button>
+	                {isMeasurementsOpen ? (
+	                  <div className="layerGroupItems">
+	                    {layerGroups.measurements.map(({ el }) => {
+	                      const type = elementTypesById[el.type];
+	                      const typeName = type ? resolveLocalizedString(type.name) : el.type;
+	                      const title = el.name || typeName || el.type;
+	                      const selected = selectedElementIds.includes(el.id);
+	                      const control = layerControlsState.byElementId[el.id] ?? {};
+	                      const hidden = control.hidden === true;
+	                      const locked = control.locked === true;
+	                      const measurement = measurementFor(el);
+	                      return (
+	                        <div
+	                          className={layerRowClassName(
+	                            ["layerRow", "layerRowGrouped", hidden ? "isHidden" : ""],
+	                            el.id,
+	                            "measurements",
+	                          )}
+	                          key={el.id}
+	                          onDragOver={(e) => updateDragOverLayer(e, el.id, "measurements")}
+	                          onDrop={(e) => handleLayerDrop(e, el.id, "measurements")}
+	                        >
+	                          <button
+	                            className="layerDragHandle"
+	                            type="button"
+	                            title={t("core.ui.layers.reorder")}
+	                            aria-label={t("core.ui.layers.reorder")}
+	                            draggable
+	                            onDragStart={(e) => beginLayerDrag(e, el.id, "measurements")}
+	                            onDragEnd={endLayerDrag}
+	                          >
+	                            <Icon name="grip-vertical" />
+	                          </button>
+	                          <button
+	                            className={["layerMainButton", selected ? "isSelected" : ""].join(" ")}
+	                            type="button"
+	                            onClick={(e) => {
+	                              if (e.metaKey || e.ctrlKey) {
+	                                setSelectedElementIds((prev) =>
+	                                  prev.includes(el.id) ? prev.filter((id) => id !== el.id) : [...prev, el.id],
+	                                );
+	                                return;
+	                              }
+	                              setSelectedElementIds([el.id]);
+	                            }}
+	                            onDoubleClick={() => {
+	                              setSelectedElementIds([el.id]);
+	                              setEditingElementId(el.id);
+	                            }}
+	                          >
+	                            <div className="layerMainTitle">{title}</div>
+	                            <div className="layerMainMeta">
+	                              {typeName}
+	                              {measurement ? ` • ${measurement}` : ""}
+	                            </div>
+	                          </button>
+	                          <button
+	                            className={["layerToggleButton", locked ? "isActive" : ""].join(" ")}
+	                            type="button"
+	                            title={locked ? t("core.ui.layers.unlock") : t("core.ui.layers.lock")}
+	                            onClick={() => toggleLayerLocked(el.id)}
+	                          >
+	                            <Icon name={locked ? "lock" : "lock-open"} />
+	                          </button>
+	                          <button
+	                            className={["layerToggleButton", hidden ? "isActive" : ""].join(" ")}
+	                            type="button"
+	                            title={hidden ? t("core.ui.layers.show") : t("core.ui.layers.hide")}
+	                            onClick={() => toggleLayerHidden(el.id)}
+	                          >
+	                            <Icon name={hidden ? "eye-slash" : "eye"} />
+	                          </button>
+	                          <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
+	                            {t("core.actions.delete")}
+	                          </button>
+	                        </div>
+	                      );
+	                    })}
+	                  </div>
+	                ) : null}
+	              </div>
+	            ) : null}
+
+	            {layerGroups.areas.length > 0 ? (
+	              <div className="layerGroup">
                 <button className="layerGroupHeader" type="button" onClick={() => setIsAreasOpen((v) => !v)}>
                   <span className="layerGroupTitle">
                     <Icon name={isAreasOpen ? "chevron-down" : "chevron-right"} className="layerGroupChevron" />

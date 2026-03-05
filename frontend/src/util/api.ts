@@ -12,6 +12,7 @@ export type Composition = {
   id: string;
   name: string;
   elements: CompositionElement[];
+  meta?: Record<string, unknown>;
 };
 
 export type CompositionSummary = {

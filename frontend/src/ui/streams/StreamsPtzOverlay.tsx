@@ -27,6 +27,8 @@ const MOVE_TIMEOUT_S = 0.8;
 const DEFAULT_PAN_SPEED = 0.55;
 const DEFAULT_TILT_SPEED = 0.55;
 const DEFAULT_ZOOM_SPEED = 0.65;
+const PRESET_MATCH_PAN_TILT_EPS = 0.02;
+const PRESET_MATCH_ZOOM_EPS = 0.03;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -51,7 +53,7 @@ function asErrorMessage(error: unknown): string {
   return String(error || i18n.t("core.ui.streams.error_unknown", {}, "Unknown error"));
 }
 
-function pickClosestPresetToken(
+function pickMatchingPresetToken(
   presets: StreamingTransmissionCameraPreset[],
   status: StreamingTransmissionCameraStatus | null,
 ): string | null {
@@ -71,7 +73,26 @@ function pickClosestPresetToken(
     const dist = (pan - pPan) ** 2 + (tilt - pTilt) ** 2 + dz;
     if (!best || dist < best.dist) best = { token: String(preset.token || "").trim(), dist };
   }
-  return best?.token || null;
+  const token = best?.token || "";
+  if (!token) return null;
+
+  const matchedPreset = presets.find((p) => String(p.token || "").trim() === token) ?? null;
+  if (!matchedPreset) return null;
+  const pPan = typeof matchedPreset.pan === "number" ? matchedPreset.pan : null;
+  const pTilt = typeof matchedPreset.tilt === "number" ? matchedPreset.tilt : null;
+  if (pPan === null || pTilt === null) return null;
+
+  const dp = Math.abs(pan - pPan);
+  const dt = Math.abs(tilt - pTilt);
+  if (dp > PRESET_MATCH_PAN_TILT_EPS || dt > PRESET_MATCH_PAN_TILT_EPS) return null;
+
+  const pZoom = typeof matchedPreset.zoom === "number" ? matchedPreset.zoom : null;
+  if (zoom !== null && pZoom !== null) {
+    const dz = Math.abs(zoom - pZoom);
+    if (dz > PRESET_MATCH_ZOOM_EPS) return null;
+  }
+
+  return token;
 }
 
 export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Props): React.ReactElement | null {
@@ -247,10 +268,8 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
         setStatus(nextStatus);
         if (statusRes.status === "rejected") setStatusError(asErrorMessage(statusRes.reason));
 
-        const closest = pickClosestPresetToken(nextPresets, nextStatus);
-        const fallback = String(nextPresets[0]?.token || "").trim();
-        const selected = closest || fallback;
-        if (selected) setSelectedPresetToken(selected);
+        const selected = pickMatchingPresetToken(nextPresets, nextStatus);
+        setSelectedPresetToken(selected || "");
       } finally {
         if (!cancelled) {
           setPresetsLoading(false);
@@ -532,6 +551,11 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
             disabled={presetsLoading || commandBusy || presetOptions.length === 0}
             onChange={(event) => void handlePresetChange(event.target.value)}
           >
+            {presetOptions.length > 0 ? (
+              <option value="">
+                {t("core.ui.streams.ptz.custom_position", {}, "Current position (custom)")}
+              </option>
+            ) : null}
             {presetOptions.length === 0 ? (
               <option value="">
                 {presetsLoading

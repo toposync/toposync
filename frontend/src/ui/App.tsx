@@ -61,6 +61,7 @@ import {
 } from "../util/theme";
 import { getPreviousPathname, navigate, replace, usePathname } from "./router";
 import { Viewport2D } from "./Viewport2D";
+import { createMeasurementLineElementType } from "./editor/measurementLineElementType";
 import { builtinNotificationRenderers } from "./notifications/pipelinesNotifications";
 import { CompositionEditorScreen } from "./screens/CompositionEditorScreen";
 import { MainScreen } from "./screens/MainScreen";
@@ -448,8 +449,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     elementTypesStore.notify();
   }, [elementTypesById, elementTypesStore]);
 
-  const host: TopoSyncHost = useMemo(
-    () => ({
+	  const host: TopoSyncHost = useMemo(
+	    () => ({
       registerElementType(elementType) {
         setElementTypesById((prev) => ({ ...prev, [elementType.type]: elementType }));
       },
@@ -507,11 +508,15 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         },
       },
     }),
-    [],
-  );
+	    [],
+	  );
 
-  useEffect(() => {
-    let cancelled = false;
+	  useEffect(() => {
+	    host.registerElementType(createMeasurementLineElementType());
+	  }, [host]);
+
+	  useEffect(() => {
+	    let cancelled = false;
 
     async function hydrate() {
       try {

@@ -49,6 +49,7 @@ class Composition(BaseModel):
     id: str
     name: str
     elements: list[CompositionElement] = Field(default_factory=list)
+    meta: dict[str, Any] = Field(default_factory=dict)
 
 
 class AppSettings(BaseModel):

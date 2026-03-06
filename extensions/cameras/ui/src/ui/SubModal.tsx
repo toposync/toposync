@@ -21,7 +21,7 @@ export function SubModal({
   return createPortal(
     <div
       className="modalBackdrop"
-      style={{ zIndex: 70 }}
+      style={{ zIndex: "calc(var(--z-modal) + 1)" }}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -48,4 +48,3 @@ export function SubModal({
     document.body,
   );
 }
-

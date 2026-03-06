@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type Hls from "hls.js";
 
 import {
@@ -915,6 +915,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
   const canGoNext = pageIndex < pageCount - 1;
   const playersActive = isActive && tabVisible;
   const [ptzOverlay, setPtzOverlay] = useState<{ transmissionId: string; label: string } | null>(null);
+  const closePtzOverlay = useCallback(() => setPtzOverlay(null), []);
 
   if (loading) {
     return (
@@ -1015,7 +1016,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
         open={ptzOverlay !== null}
         transmissionId={ptzOverlay?.transmissionId ?? ""}
         label={ptzOverlay?.label ?? ""}
-        onClose={() => setPtzOverlay(null)}
+        onClose={closePtzOverlay}
       />
 
       <div className={["streamsHud", uiVisible ? "isVisible" : "isHidden"].join(" ")}>

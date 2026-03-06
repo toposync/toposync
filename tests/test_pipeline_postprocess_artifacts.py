@@ -5,6 +5,7 @@ from collections import deque
 from typing import Any
 
 import numpy as np
+import pytest
 from pydantic import BaseModel, ConfigDict
 
 from toposync.runtime.config_store import Pipeline
@@ -20,6 +21,7 @@ from toposync.runtime.pipelines import (
     register_builtin_operators,
 )
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
+from toposync_ext_cameras.processing.mapping import ControlPointMapper, ControlPointPair
 from toposync_ext_cameras.pipelines.postprocess import BestFrameSelectorRuntime, VelocityEstimationRuntime
 
 
@@ -576,13 +578,19 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
                     "id": "mapping",
                     "operator": "camera.camera_mapping",
                     "config": {
-                        "camera_id_field": "camera_id",
                         "bbox_field": "object_bbox01",
-                        "control_points": [
-                            {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
-                            {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
-                            {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
-                            {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
+                        "control_point_sets": [
+                            {
+                                "id": "main",
+                                "label": "Main",
+                                "pose_reference": None,
+                                "control_points": [
+                                    {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
+                                    {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
+                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
+                                    {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
+                                ],
+                            }
                         ],
                     },
                 },
@@ -638,8 +646,166 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
         assert isinstance(world, dict)
         assert round(float(world.get("x")), 1) == 7.2
         assert round(float(world.get("z")), 1) == 5.2
+        mapping = packet.payload.get("mapping")
+        assert isinstance(mapping, dict)
+        assert mapping.get("control_point_set_id") == "main"
+        quality = mapping.get("quality")
+        assert isinstance(quality, dict)
+        assert quality.get("number_of_points") == 4
 
     asyncio.run(scenario())
+
+
+def test_mapping_selects_pose_bound_set_when_ptz_state_matches() -> None:
+    async def scenario() -> None:
+        frame = np.zeros((40, 40, 3), dtype=np.uint8)
+        sequence = [
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {
+                    "camera_id": "camera-main",
+                    "image_uv": {"u": 0.5, "v": 0.5},
+                    "pan_tilt_zoom_state": {"pan": 0.12, "tilt": -0.08, "zoom": 0.33, "move_status": "IDLE"},
+                },
+                "artifacts": _frame_artifacts(frame),
+            }
+        ]
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "mapping",
+                    "operator": "camera.camera_mapping",
+                    "config": {
+                        "control_point_sets": [
+                            {
+                                "id": "default",
+                                "label": "Default",
+                                "pose_reference": None,
+                                "control_points": [
+                                    {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
+                                    {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
+                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
+                                    {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
+                                ],
+                            },
+                            {
+                                "id": "door_zoom",
+                                "label": "Door",
+                                "pose_reference": {"pan": 0.12, "tilt": -0.08, "zoom": 0.33},
+                                "control_points": [
+                                    {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 100.0, "z": 100.0}},
+                                    {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 110.0, "z": 100.0}},
+                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 110.0, "z": 110.0}},
+                                    {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 100.0, "z": 110.0}},
+                                ],
+                            },
+                        ]
+                    },
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "mapping", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+                {"from": {"node": "mapping", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+            ],
+        }
+
+        collector: dict[str, list[Packet]] = {}
+        runtime = _pipeline_runtime(graph=graph, sequence=sequence, collector=collector)
+        await runtime.run_for(0.2)
+
+        packet = collector["sink"][-1]
+        world = packet.payload.get("world")
+        assert isinstance(world, dict)
+        assert round(float(world.get("x")), 1) == 105.0
+        assert round(float(world.get("z")), 1) == 105.0
+        mapping = packet.payload.get("mapping")
+        assert isinstance(mapping, dict)
+        assert mapping.get("control_point_set_id") == "door_zoom"
+        assert round(float(mapping.get("pose_distance")), 3) == 0.0
+        assert mapping.get("move_status") == "idle"
+
+    asyncio.run(scenario())
+
+
+def test_mapping_skips_when_ptz_state_reports_moving() -> None:
+    async def scenario() -> None:
+        frame = np.zeros((40, 40, 3), dtype=np.uint8)
+        sequence = [
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {
+                    "camera_id": "camera-main",
+                    "image_uv": {"u": 0.5, "v": 0.5},
+                    "pan_tilt_zoom_state": {"pan": 0.12, "tilt": -0.08, "zoom": 0.33, "move_status": "MOVING"},
+                },
+                "artifacts": _frame_artifacts(frame),
+            }
+        ]
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "mapping",
+                    "operator": "camera.camera_mapping",
+                    "config": {
+                        "control_point_sets": [
+                            {
+                                "id": "door_zoom",
+                                "label": "Door",
+                                "pose_reference": {"pan": 0.12, "tilt": -0.08, "zoom": 0.33},
+                                "control_points": [
+                                    {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 100.0, "z": 100.0}},
+                                    {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 110.0, "z": 100.0}},
+                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 110.0, "z": 110.0}},
+                                    {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 100.0, "z": 110.0}},
+                                ],
+                            }
+                        ]
+                    },
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "mapping", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+                {"from": {"node": "mapping", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+            ],
+        }
+
+        collector: dict[str, list[Packet]] = {}
+        runtime = _pipeline_runtime(graph=graph, sequence=sequence, collector=collector)
+        await runtime.run_for(0.2)
+
+        packet = collector["sink"][-1]
+        assert "world" not in packet.payload
+        assert "mapping" not in packet.payload
+
+    asyncio.run(scenario())
+
+
+def test_control_point_mapper_rejects_single_outlier_with_robust_homography() -> None:
+    mapper = ControlPointMapper(
+        [
+            ControlPointPair(image_u=0.0, image_v=0.0, world_x=0.0, world_z=0.0),
+            ControlPointPair(image_u=1.0, image_v=0.0, world_x=10.0, world_z=0.0),
+            ControlPointPair(image_u=1.0, image_v=1.0, world_x=10.0, world_z=10.0),
+            ControlPointPair(image_u=0.0, image_v=1.0, world_x=0.0, world_z=10.0),
+            ControlPointPair(image_u=0.5, image_v=0.0, world_x=5.0, world_z=0.0),
+            ControlPointPair(image_u=1.0, image_v=0.5, world_x=10.0, world_z=5.0),
+            ControlPointPair(image_u=0.5, image_v=1.0, world_x=5.0, world_z=10.0),
+            ControlPointPair(image_u=0.0, image_v=0.5, world_x=0.0, world_z=5.0),
+            ControlPointPair(image_u=0.25, image_v=0.75, world_x=2.5, world_z=7.5),
+            ControlPointPair(image_u=0.9, image_v=0.1, world_x=42.0, world_z=17.0),
+        ]
+    )
+    mapped = mapper.map(0.5, 0.5)
+    assert mapped is not None
+    assert mapped[0] == pytest.approx(5.0, abs=0.25)
+    assert mapped[1] == pytest.approx(5.0, abs=0.25)
+    assert mapper.quality.number_of_inliers >= 8
 
 
 def test_best_frame_selector_keeps_bounded_buffer_per_tracking_id() -> None:

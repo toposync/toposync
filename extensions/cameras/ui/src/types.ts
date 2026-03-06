@@ -22,14 +22,55 @@ export type CameraConfig = {
 };
 
 export type CamerasIndex = {
-  cameras: Array<{ id: string; name: string; connection_type: string }>;
+  cameras: Array<{ id: string; name: string; connection_type: CameraConnectionType | string }>;
 };
 
-export type ControlPoint = {
+export type CameraControlPoint = {
   id: string;
   label: string;
   image?: { x: number; y: number } | null;
   world?: { x: number; z: number } | null;
+};
+
+export type CameraPoseReference = {
+  pan?: number | null;
+  tilt?: number | null;
+  zoom?: number | null;
+  preset_token?: string | null;
+  preset_name?: string | null;
+};
+
+export type CameraControlPointSet = {
+  id: string;
+  label: string;
+  pose_reference?: CameraPoseReference | null;
+  control_points: CameraControlPoint[];
+};
+
+export type CameraMappingQuality = {
+  status: "good" | "review" | "incomplete";
+  complete_points: number;
+  convex_hull_area_ratio_uv: number;
+  is_pose_bound: boolean;
+};
+
+export type PanTiltZoomState = {
+  pan?: number | null;
+  tilt?: number | null;
+  zoom?: number | null;
+  move_status?: string | null;
+  utc_time?: string | null;
+  error?: string | null;
+  source?: string | null;
+  confidence?: number | null;
+};
+
+export type CameraPtzPreset = {
+  token: string;
+  name?: string;
+  pan?: number | null;
+  tilt?: number | null;
+  zoom?: number | null;
 };
 
 export type CameraContextArea = {

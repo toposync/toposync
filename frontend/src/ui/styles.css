@@ -1068,9 +1068,16 @@ textarea {
   overflow: visible;
 }
 
-.pipelinesTelemetryTimeline {
+.pipelinesTelemetryTimelineStage {
+  position: relative;
   width: 100%;
   height: 320px;
+  overflow: visible;
+}
+
+.pipelinesTelemetryTimeline {
+  width: 100%;
+  height: 100%;
   display: block;
 }
 
@@ -1086,15 +1093,50 @@ textarea {
 }
 
 .pipelinesTelemetryMarkerDot {
-  fill: color-mix(in srgb, var(--text) 88%, transparent);
-  stroke: var(--panelSolid);
-  stroke-width: 1;
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  border: 1px solid var(--panelSolid);
+  background: color-mix(in srgb, var(--text) 88%, transparent);
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 0;
+  transform: translate(-50%, -50%);
   cursor: pointer;
+  pointer-events: auto;
+  z-index: var(--marker-z, 1);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 40%, transparent);
+  transition: transform 90ms ease, filter 90ms ease, box-shadow 120ms ease;
+}
+
+.pipelinesTelemetryMarkerDot:hover {
+  transform: translate(-50%, -50%) scale(1.35);
+  z-index: 9999;
+  filter: brightness(1.04);
+}
+
+.pipelinesTelemetryMarkerDot:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 80%, transparent);
+  outline-offset: 2px;
+}
+
+.pipelinesTelemetryMarkerDot.isPinned {
+  z-index: 10000;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--borderStrong) 70%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.pipelinesTelemetryMarkerLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
 }
 
 .pipelinesTelemetryHoverTooltip {
   position: absolute;
-  top: 12px;
+  top: 2px;
   z-index: 3;
   min-width: 180px;
   max-width: 320px;
@@ -1124,7 +1166,7 @@ textarea {
 
 .pipelinesTelemetryMarkerOverlay {
   position: absolute;
-  bottom: 10px;
+  bottom: 0;
   z-index: 4;
   width: min(320px, calc(100% - 24px));
   display: grid;

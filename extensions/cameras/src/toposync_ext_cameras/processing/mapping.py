@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import hashlib
+import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 
 try:
     import numpy as np  # type: ignore
 except Exception:  # noqa: BLE001
     np = None  # type: ignore[assignment]
+
+
+HomographyMethod = Literal["usac_magsac", "usac_default", "ransac", "dlt"]
+FallbackMode = Literal["default_set", "nearest_set", "none"]
+MotionPolicyMode = Literal["skip_when_moving", "use_last_idle_pose", "allow_when_confident"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,86 +25,519 @@ class ControlPointPair:
     world_z: float
 
 
+@dataclass(frozen=True, slots=True)
+class PoseReference:
+    pan: float | None = None
+    tilt: float | None = None
+    zoom: float | None = None
+    preset_token: str | None = None
+    preset_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PanTiltZoomState:
+    pan: float | None = None
+    tilt: float | None = None
+    zoom: float | None = None
+    move_status: str | None = None
+    utc_time: str | None = None
+    error: str | None = None
+    source: str | None = None
+    confidence: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ControlPointSet:
+    id: str
+    label: str
+    pose_reference: PoseReference | None
+    control_points: tuple[ControlPointPair, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PoseSelectionConfig:
+    sigma_pan: float = 0.04
+    sigma_tilt: float = 0.04
+    sigma_zoom: float = 0.06
+    max_distance: float = 3.0
+    fallback_mode: FallbackMode = "default_set"
+    min_shared_axes: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class HomographyEstimationConfig:
+    method: HomographyMethod = "usac_magsac"
+    normalized_image_threshold: float = 0.005
+    confidence: float = 0.999
+    max_iterations: int = 10000
+
+
+@dataclass(frozen=True, slots=True)
+class HomographyQuality:
+    number_of_points: int
+    number_of_inliers: int
+    inlier_ratio: float
+    median_reprojection_error_uv: float | None
+    p95_reprojection_error_uv: float | None
+    convex_hull_area_ratio_uv: float
+    is_near_collinear: bool
+    is_numerically_unstable: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "number_of_points": int(self.number_of_points),
+            "number_of_inliers": int(self.number_of_inliers),
+            "inlier_ratio": float(self.inlier_ratio),
+            "median_reprojection_error_uv": (
+                float(self.median_reprojection_error_uv) if self.median_reprojection_error_uv is not None else None
+            ),
+            "p95_reprojection_error_uv": (
+                float(self.p95_reprojection_error_uv) if self.p95_reprojection_error_uv is not None else None
+            ),
+            "convex_hull_area_ratio_uv": float(self.convex_hull_area_ratio_uv),
+            "is_near_collinear": bool(self.is_near_collinear),
+            "is_numerically_unstable": bool(self.is_numerically_unstable),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class HomographyEstimate:
+    H_world_to_image: Any
+    H_image_to_world: Any
+    inlier_mask: tuple[bool, ...]
+    quality: HomographyQuality
+    method_used: str
+
+
+@dataclass(frozen=True, slots=True)
+class ControlPointSetSelection:
+    control_point_set: ControlPointSet
+    pose_distance: float | None
+    pose_axes_used: tuple[str, ...]
+    move_status: str | None
+    reason: str
+
+
+def normalize_move_status(value: Any) -> str | None:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    if raw in {"idle", "stopped", "stop", "stationary"}:
+        return "idle"
+    if raw in {"moving", "move"}:
+        return "moving"
+    if "move" in raw or "pan" in raw or "tilt" in raw or "zoom" in raw:
+        return "moving"
+    if "idle" in raw or "stop" in raw or "stationary" in raw:
+        return "idle"
+    return "unknown"
+
+
+def compute_pose_distance(
+    pose_reference: PoseReference,
+    pan_tilt_zoom_state: PanTiltZoomState,
+    config: PoseSelectionConfig,
+) -> tuple[float, tuple[str, ...]] | None:
+    axes_used: list[str] = []
+    normalized_terms: list[float] = []
+    for axis, sigma in (
+        ("pan", float(config.sigma_pan)),
+        ("tilt", float(config.sigma_tilt)),
+        ("zoom", float(config.sigma_zoom)),
+    ):
+        sigma_value = abs(float(sigma))
+        if sigma_value <= 1e-9:
+            continue
+        pose_value = getattr(pose_reference, axis)
+        state_value = getattr(pan_tilt_zoom_state, axis)
+        if pose_value is None or state_value is None:
+            continue
+        axes_used.append(axis)
+        normalized_terms.append(((float(state_value) - float(pose_value)) / sigma_value) ** 2)
+
+    if len(axes_used) < max(1, int(config.min_shared_axes)):
+        return None
+
+    distance = math.sqrt(sum(normalized_terms) / max(1, len(normalized_terms)))
+    return distance, tuple(axes_used)
+
+
+def select_control_point_set(
+    control_point_sets: list[ControlPointSet],
+    pan_tilt_zoom_state: PanTiltZoomState | None,
+    config: PoseSelectionConfig,
+    motion_policy_mode: MotionPolicyMode,
+) -> ControlPointSetSelection | None:
+    valid_sets = [item for item in control_point_sets if len(item.control_points) >= 4]
+    if not valid_sets:
+        return None
+
+    default_set = next((item for item in valid_sets if item.pose_reference is None), None)
+    if pan_tilt_zoom_state is None:
+        if default_set is not None:
+            return ControlPointSetSelection(
+                control_point_set=default_set,
+                pose_distance=None,
+                pose_axes_used=(),
+                move_status=None,
+                reason="missing_pose_state:default_set",
+            )
+        if len(valid_sets) == 1:
+            return ControlPointSetSelection(
+                control_point_set=valid_sets[0],
+                pose_distance=None,
+                pose_axes_used=(),
+                move_status=None,
+                reason="missing_pose_state:single_set",
+            )
+        return None
+
+    normalized_status = normalize_move_status(pan_tilt_zoom_state.move_status)
+    if motion_policy_mode == "skip_when_moving" and normalized_status == "moving":
+        return None
+
+    nearest_any: tuple[float, tuple[str, ...], ControlPointSet] | None = None
+    nearest_in_range: tuple[float, tuple[str, ...], ControlPointSet] | None = None
+    for item in valid_sets:
+        if item.pose_reference is None:
+            continue
+        distance_info = compute_pose_distance(item.pose_reference, pan_tilt_zoom_state, config)
+        if distance_info is None:
+            continue
+        distance, axes_used = distance_info
+        candidate = (float(distance), axes_used, item)
+        if nearest_any is None or candidate[0] < nearest_any[0]:
+            nearest_any = candidate
+        if distance <= float(config.max_distance) and (
+            nearest_in_range is None or candidate[0] < nearest_in_range[0]
+        ):
+            nearest_in_range = candidate
+
+    if nearest_in_range is not None:
+        distance, axes_used, selected = nearest_in_range
+        return ControlPointSetSelection(
+            control_point_set=selected,
+            pose_distance=distance,
+            pose_axes_used=axes_used,
+            move_status=normalized_status,
+            reason="nearest_pose_match",
+        )
+
+    if str(config.fallback_mode) == "nearest_set" and nearest_any is not None:
+        distance, axes_used, selected = nearest_any
+        return ControlPointSetSelection(
+            control_point_set=selected,
+            pose_distance=distance,
+            pose_axes_used=axes_used,
+            move_status=normalized_status,
+            reason="fallback:nearest_set",
+        )
+
+    if str(config.fallback_mode) == "default_set" and default_set is not None:
+        return ControlPointSetSelection(
+            control_point_set=default_set,
+            pose_distance=None,
+            pose_axes_used=(),
+            move_status=normalized_status,
+            reason="fallback:default_set",
+        )
+
+    if default_set is not None and nearest_any is None:
+        return ControlPointSetSelection(
+            control_point_set=default_set,
+            pose_distance=None,
+            pose_axes_used=(),
+            move_status=normalized_status,
+            reason="fallback:default_set_without_pose_axes",
+        )
+
+    return None
+
+
+def compute_control_points_signature(control_points: list[ControlPointPair] | tuple[ControlPointPair, ...]) -> str:
+    raw = "\n".join(
+        f"{float(point.image_u):.12g}|{float(point.image_v):.12g}|{float(point.world_x):.12g}|{float(point.world_z):.12g}"
+        for point in control_points
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def estimate_homography_world_to_image(
+    pairs: list[ControlPointPair] | tuple[ControlPointPair, ...],
+    config: HomographyEstimationConfig | None = None,
+) -> HomographyEstimate:
+    if np is None:
+        raise RuntimeError("numpy is required for control point mapping")
+    if len(pairs) < 4:
+        raise ValueError("At least 4 control points are required")
+
+    safe_config = config or HomographyEstimationConfig()
+    world = np.array([[p.world_x, p.world_z] for p in pairs], dtype=np.float64)
+    image = np.array([[p.image_u, p.image_v] for p in pairs], dtype=np.float64)
+
+    H_world_to_image = None
+    inlier_mask: tuple[bool, ...] | None = None
+    method_used = "dlt"
+    robust_attempted = False
+    try:
+        import cv2  # type: ignore
+
+        for method_name in _candidate_homography_methods(str(safe_config.method)):
+            if method_name == "dlt":
+                continue
+            method_value = getattr(cv2, method_name, None)
+            if method_value is None:
+                continue
+            robust_attempted = True
+            try:
+                H_candidate, raw_mask = cv2.findHomography(
+                    world,
+                    image,
+                    method=method_value,
+                    ransacReprojThreshold=float(safe_config.normalized_image_threshold),
+                    maxIters=int(safe_config.max_iterations),
+                    confidence=float(safe_config.confidence),
+                )
+            except TypeError:
+                H_candidate, raw_mask = cv2.findHomography(
+                    world,
+                    image,
+                    method_value,
+                    float(safe_config.normalized_image_threshold),
+                    None,
+                    int(safe_config.max_iterations),
+                    float(safe_config.confidence),
+                )
+            except Exception:
+                H_candidate = None
+                raw_mask = None
+            if H_candidate is None:
+                continue
+            candidate_mask = _mask_to_tuple(raw_mask, len(pairs))
+            if sum(1 for flag in candidate_mask if flag) < 4:
+                continue
+            H_world_to_image = H_candidate
+            inlier_mask = candidate_mask
+            method_used = method_name.lower()
+            break
+    except Exception:
+        H_world_to_image = None
+
+    if H_world_to_image is None:
+        H_world_to_image = _solve_homography(world, image)
+        inlier_mask = tuple([True] * len(pairs))
+        method_used = "dlt" if not robust_attempted else f"{safe_config.method}:dlt_fallback"
+
+    H_image_to_world = invert_homography(H_world_to_image)
+    quality = compute_homography_quality_metrics(
+        pairs=pairs,
+        H_world_to_image=H_world_to_image,
+        H_image_to_world=H_image_to_world,
+        inlier_mask=inlier_mask or tuple([True] * len(pairs)),
+    )
+    return HomographyEstimate(
+        H_world_to_image=H_world_to_image,
+        H_image_to_world=H_image_to_world,
+        inlier_mask=inlier_mask or tuple([True] * len(pairs)),
+        quality=quality,
+        method_used=method_used,
+    )
+
+
+def invert_homography(H: Any) -> Any:
+    if np is None:
+        raise RuntimeError("numpy is required for control point mapping")
+    inv = np.linalg.inv(H)
+    if abs(float(inv[2, 2])) > 1e-12:
+        inv = inv / float(inv[2, 2])
+    return inv
+
+
+def apply_homography(H: Any, a: float, b: float) -> tuple[float, float] | None:
+    if np is None:
+        return None
+    p = np.array([float(a), float(b), 1.0], dtype=np.float64)
+    out = H @ p
+    w = float(out[2]) if out.shape[0] >= 3 else 0.0
+    if abs(w) < 1e-9:
+        return None
+    x = float(out[0]) / w
+    y = float(out[1]) / w
+    if not (x == x and y == y):
+        return None
+    return x, y
+
+
+def compute_homography_quality_metrics(
+    *,
+    pairs: list[ControlPointPair] | tuple[ControlPointPair, ...],
+    H_world_to_image: Any,
+    H_image_to_world: Any,
+    inlier_mask: tuple[bool, ...],
+) -> HomographyQuality:
+    image_errors: list[float] = []
+    inlier_image_points: list[tuple[float, float]] = []
+    fallback_image_points: list[tuple[float, float]] = []
+    for index, point in enumerate(pairs):
+        expected_image = (float(point.image_u), float(point.image_v))
+        fallback_image_points.append(expected_image)
+        predicted_image = apply_homography(H_world_to_image, float(point.world_x), float(point.world_z))
+        if predicted_image is None:
+            continue
+        error = math.dist(expected_image, predicted_image)
+        if inlier_mask[index]:
+            image_errors.append(float(error))
+            inlier_image_points.append(expected_image)
+
+    if not image_errors:
+        points_for_quality = fallback_image_points
+        for point in pairs:
+            predicted_image = apply_homography(H_world_to_image, float(point.world_x), float(point.world_z))
+            if predicted_image is None:
+                continue
+            image_errors.append(math.dist((float(point.image_u), float(point.image_v)), predicted_image))
+    else:
+        points_for_quality = inlier_image_points
+
+    hull_area_ratio = _convex_hull_area_ratio(points_for_quality)
+    is_near_collinear = hull_area_ratio <= 1e-4
+    is_numerically_unstable = _is_homography_numerically_unstable(H_world_to_image, H_image_to_world)
+    return HomographyQuality(
+        number_of_points=len(pairs),
+        number_of_inliers=sum(1 for flag in inlier_mask if flag),
+        inlier_ratio=(sum(1 for flag in inlier_mask if flag) / max(1, len(pairs))),
+        median_reprojection_error_uv=_percentile(image_errors, 50.0),
+        p95_reprojection_error_uv=_percentile(image_errors, 95.0),
+        convex_hull_area_ratio_uv=hull_area_ratio,
+        is_near_collinear=is_near_collinear,
+        is_numerically_unstable=is_numerically_unstable,
+    )
+
+
 class ControlPointMapper:
-    def __init__(self, pairs: list[ControlPointPair]) -> None:
-        if np is None:
-            raise RuntimeError("numpy is required for control point mapping")
-        if len(pairs) < 4:
-            raise ValueError("At least 4 control points are required")
-
-        src = np.array([[p.image_u, p.image_v] for p in pairs], dtype=np.float64)
-        dst = np.array([[p.world_x, p.world_z] for p in pairs], dtype=np.float64)
-
-        # Homography from normalized image (u,v) -> world plane (x,z)
-        # Use DLT via OpenCV if available, otherwise fall back to NumPy solve.
-        H = None
-        try:
-            import cv2  # type: ignore
-
-            H, _mask = cv2.findHomography(src, dst, method=0)
-        except Exception:
-            H = None
-
-        if H is None:
-            H = _solve_homography(src, dst)
-
-        self._H = H
-        self._H_inv: Any | None = None
+    def __init__(self, pairs: list[ControlPointPair], config: HomographyEstimationConfig | None = None) -> None:
+        estimate = estimate_homography_world_to_image(pairs, config=config)
+        self._pairs = tuple(pairs)
+        self._estimate = estimate
+        self._H_world_to_image = estimate.H_world_to_image
+        self._H_image_to_world = estimate.H_image_to_world
+        self.quality = estimate.quality
+        self.inlier_mask = estimate.inlier_mask
+        self.method_used = estimate.method_used
 
     def map(self, u: float, v: float) -> tuple[float, float] | None:
-        if np is None:
-            return None
-        p = np.array([float(u), float(v), 1.0], dtype=np.float64)
-        out = self._H @ p
-        w = float(out[2]) if out.shape[0] >= 3 else 0.0
-        if abs(w) < 1e-9:
-            return None
-        x = float(out[0]) / w
-        z = float(out[1]) / w
-        if not (x == x and z == z):
-            return None
-        return x, z
+        return self.map_image_to_world(u, v)
 
     def map_image_to_world(self, u: float, v: float) -> tuple[float, float] | None:
-        return self.map(u, v)
+        return apply_homography(self._H_image_to_world, u, v)
 
     def map_world_to_image(self, x: float, z: float) -> tuple[float, float] | None:
-        if np is None:
-            return None
+        return apply_homography(self._H_world_to_image, x, z)
 
-        inv = self._H_inv
-        if inv is None:
-            try:
-                inv = np.linalg.inv(self._H)
-            except Exception:
-                return None
-            self._H_inv = inv
 
-        p = np.array([float(x), float(z), 1.0], dtype=np.float64)
-        out = inv @ p
-        w = float(out[2]) if out.shape[0] >= 3 else 0.0
-        if abs(w) < 1e-9:
-            return None
-        u = float(out[0]) / w
-        v = float(out[1]) / w
-        if not (u == u and v == v):
-            return None
-        return u, v
+def _candidate_homography_methods(method: str) -> tuple[str, ...]:
+    normalized = str(method or "").strip().lower()
+    if normalized == "dlt":
+        return ("dlt",)
+    if normalized == "ransac":
+        return ("RANSAC", "dlt")
+    if normalized == "usac_default":
+        return ("USAC_DEFAULT", "RANSAC", "dlt")
+    return ("USAC_MAGSAC", "USAC_DEFAULT", "RANSAC", "dlt")
+
+
+def _mask_to_tuple(raw_mask: Any, expected_length: int) -> tuple[bool, ...]:
+    if np is None:
+        return tuple([True] * expected_length)
+    if raw_mask is None:
+        return tuple([True] * expected_length)
+    flat = np.asarray(raw_mask).reshape(-1).tolist()
+    if len(flat) != expected_length:
+        return tuple([True] * expected_length)
+    return tuple(bool(int(item)) for item in flat)
+
+
+def _is_homography_numerically_unstable(H_world_to_image: Any, H_image_to_world: Any) -> bool:
+    if np is None:
+        return False
+    try:
+        if not np.isfinite(H_world_to_image).all() or not np.isfinite(H_image_to_world).all():
+            return True
+        cond_world = float(np.linalg.cond(H_world_to_image))
+        cond_image = float(np.linalg.cond(H_image_to_world))
+        if not math.isfinite(cond_world) or not math.isfinite(cond_image):
+            return True
+        return max(cond_world, cond_image) > 1e12
+    except Exception:
+        return True
+
+
+def _percentile(values: list[float], percentile: float) -> float | None:
+    if np is None or not values:
+        return None
+    return float(np.percentile(np.array(values, dtype=np.float64), percentile))
+
+
+def _convex_hull_area_ratio(points: list[tuple[float, float]]) -> float:
+    if len(points) < 3:
+        return 0.0
+    hull = _convex_hull(points)
+    if len(hull) < 3:
+        return 0.0
+    area = abs(_polygon_area(hull))
+    if not math.isfinite(area):
+        return 0.0
+    return max(0.0, min(1.0, float(area)))
+
+
+def _convex_hull(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    unique = sorted(set((float(x), float(y)) for x, y in points))
+    if len(unique) <= 1:
+        return unique
+
+    def cross(
+        origin: tuple[float, float],
+        a: tuple[float, float],
+        b: tuple[float, float],
+    ) -> float:
+        return (a[0] - origin[0]) * (b[1] - origin[1]) - (a[1] - origin[1]) * (b[0] - origin[0])
+
+    lower: list[tuple[float, float]] = []
+    for point in unique:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0:
+            lower.pop()
+        lower.append(point)
+
+    upper: list[tuple[float, float]] = []
+    for point in reversed(unique):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0:
+            upper.pop()
+        upper.append(point)
+
+    return lower[:-1] + upper[:-1]
+
+
+def _polygon_area(points: list[tuple[float, float]]) -> float:
+    area = 0.0
+    for index, point in enumerate(points):
+        next_point = points[(index + 1) % len(points)]
+        area += point[0] * next_point[1]
+        area -= next_point[0] * point[1]
+    return area / 2.0
 
 
 def _solve_homography(src: Any, dst: Any) -> Any:
     if np is None:
         raise RuntimeError("numpy is required for control point mapping")
 
-    # Direct Linear Transform for homography. Returns H such that dst ~ H * src.
     A = []
-    for (u, v), (x, z) in zip(src, dst, strict=False):
-        A.append([-u, -v, -1, 0, 0, 0, u * x, v * x, x])
-        A.append([0, 0, 0, -u, -v, -1, u * z, v * z, z])
+    for (a, b), (x, y) in zip(src, dst, strict=False):
+        A.append([-a, -b, -1, 0, 0, 0, a * x, b * x, x])
+        A.append([0, 0, 0, -a, -b, -1, a * y, b * y, y])
     A = np.array(A, dtype=np.float64)
     _u, _s, vh = np.linalg.svd(A)
     h = vh[-1, :]
     H = h.reshape((3, 3))
-    if abs(H[2, 2]) > 1e-12:
-        H = H / H[2, 2]
+    if abs(float(H[2, 2])) > 1e-12:
+        H = H / float(H[2, 2])
     return H

@@ -567,7 +567,7 @@ Render 3D:
   "camera_id": "front_gate",
   "camera_name": "Portão",
   "view_mode": "ceiling",
-  "control_points": [ /* opcional; usado para mapping */ ]
+  "control_point_sets": [ /* opcional; usado para mapping */ ]
 }
 ```
 
@@ -576,7 +576,7 @@ APIs úteis para o app:
 - `GET /api/cameras/index` → lista `{ id, name, connection_type }`
 - `GET /api/cameras/cameras/{camera_id}/snapshot` → JPEG
 - `POST /api/cameras/rtsp/snapshot` → JPEG (URL RTSP avulsa)
-- `POST /api/cameras/control_points/map` → mapeia ponto imagem ↔ mundo (para interpolação câmera↔composição)
+- `POST /api/cameras/control_points/map` → mapeia ponto imagem ↔ mundo a partir de um `control_point_set`
 - `GET /api/cameras/cameras/{camera_id}/contexts` → onde essa câmera aparece (composições/áreas) e se tem mapping suficiente
 
 ### 7.5 `extensions/home_assistant` (entidades/dispositivos no 3D + estados)

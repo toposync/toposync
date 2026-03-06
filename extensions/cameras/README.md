@@ -6,7 +6,7 @@ First-party extension focused on camera integration for the global Pipelines run
 
 - RTSP camera settings and indexing (`/api/cameras/index`)
 - RTSP snapshot endpoints used by UI/tools
-- Control-point mapping endpoint for camera/composition interpolation
+- Control-point-set mapping endpoint for camera/composition interpolation
 - Camera/vision pipeline operators registry integration
 - Camera element/editor UI in the composition
 
@@ -18,6 +18,12 @@ The old per-camera detections runtime (`/api/cameras/detections/*`, `cameras.tra
 - `POST /api/cameras/rtsp/snapshot`
 - `GET /api/cameras/cameras/{camera_id}/snapshot`
 - `POST /api/cameras/control_points/map`
+
+`camera.camera_mapping` and the editor now use `control_point_sets` as the canonical mapping model:
+
+- fixed camera: one set with `pose_reference = null`
+- PTZ camera: one or more sets, optionally bound to a `pose_reference`
+- preview API: receives a single `control_point_set` payload and maps `image <-> world`
 
 ## Pipeline operators (registered by this extension)
 

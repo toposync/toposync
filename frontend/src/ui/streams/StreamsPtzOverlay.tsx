@@ -129,8 +129,17 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
   const moveTimerRef = useRef<number | null>(null);
   const moveInFlightRef = useRef(false);
   const stopInFlightRef = useRef(false);
+  const statusRefreshTimerRef = useRef<number | null>(null);
+  const statusRefreshInFlightRef = useRef(false);
+  const presetsRef = useRef<StreamingTransmissionCameraPreset[]>([]);
+  const ptzEnabledRef = useRef(false);
 
   const ptzEnabled = open && Boolean(transmissionId.trim());
+  ptzEnabledRef.current = ptzEnabled;
+
+  useEffect(() => {
+    presetsRef.current = presets;
+  }, [presets]);
 
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -164,9 +173,50 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
     return { left: `${position.x}px`, top: `${position.y}px`, transform: "none" as const };
   }, [position]);
 
-  const stopMove = async (): Promise<void> => {
+  const scheduleStatusRefresh = (delayMs: number) => {
+    if (!ptzEnabledRef.current) return;
+    if (statusRefreshTimerRef.current !== null) {
+      window.clearTimeout(statusRefreshTimerRef.current);
+      statusRefreshTimerRef.current = null;
+    }
+    statusRefreshTimerRef.current = window.setTimeout(() => {
+      statusRefreshTimerRef.current = null;
+      if (!ptzEnabledRef.current) return;
+      if (statusRefreshInFlightRef.current) return;
+      statusRefreshInFlightRef.current = true;
+      void (async () => {
+        try {
+          const tid = lastTransmissionIdRef.current || transmissionId.trim();
+          if (!tid) return;
+          const refreshed = await getStreamingTransmissionCameraStatus(tid);
+          const nextStatus = refreshed.status ?? null;
+          setStatus(nextStatus);
+          const matched = pickMatchingPresetToken(presetsRef.current, nextStatus);
+          setSelectedPresetToken(matched || "");
+        } catch {
+          // ignore
+        } finally {
+          statusRefreshInFlightRef.current = false;
+        }
+      })();
+    }, Math.max(0, delayMs));
+  };
+
+  const stopMove = async (options?: { force?: boolean }): Promise<void> => {
+    const force = options?.force === true;
     const shouldStop =
-      moveHeldRef.current || moveVectorRef.current !== null || moveTimerRef.current !== null || activeMoveId !== null;
+      force ||
+      moveHeldRef.current ||
+      moveVectorRef.current !== null ||
+      moveTimerRef.current !== null ||
+      activeMoveId !== null;
+
+    const vec = moveVectorRef.current;
+    const inferredPanTilt = Boolean(vec && (Math.abs(vec.pan) > 1e-6 || Math.abs(vec.tilt) > 1e-6));
+    const inferredZoom = Boolean(vec && Math.abs(vec.zoom) > 1e-6);
+    const panTiltToStop = force ? true : inferredPanTilt || (vec === null && shouldStop);
+    const zoomToStop = force ? true : inferredZoom;
+
     setActiveMoveId(null);
     moveHeldRef.current = false;
     moveVectorRef.current = null;
@@ -175,18 +225,22 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
       moveTimerRef.current = null;
     }
     if (!shouldStop) return;
+    if (!panTiltToStop && !zoomToStop) return;
     const tid = lastTransmissionIdRef.current || transmissionId.trim();
     if (!tid) return;
     if (stopInFlightRef.current) return;
     stopInFlightRef.current = true;
     try {
-      await stopStreamingTransmissionCamera(tid, { pan_tilt: true, zoom: true });
+      await stopStreamingTransmissionCamera(tid, { pan_tilt: panTiltToStop, zoom: zoomToStop });
     } catch (error) {
       // Avoid spamming errors for a best-effort stop.
-      setCommandError((prev) => prev || asErrorMessage(error));
+      if (force) setCommandError((prev) => prev || asErrorMessage(error));
     } finally {
       stopInFlightRef.current = false;
     }
+
+    // After a stop, refresh status once (debounced) to keep preset selection accurate.
+    scheduleStatusRefresh(350);
   };
 
   const sendMove = async (): Promise<void> => {
@@ -208,6 +262,8 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
       setCommandError(null);
     } catch (error) {
       setCommandError(asErrorMessage(error));
+      // If we can't move, stop repeating to avoid flooding the backend/device.
+      void stopMove();
     } finally {
       moveInFlightRef.current = false;
     }
@@ -215,6 +271,8 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
 
   const startMove = (vec: MoveVector, moveId: string | null): void => {
     if (!ptzEnabled) return;
+    // Manual moves put the camera in a custom position, so do not keep a preset selected.
+    setSelectedPresetToken("");
     setActiveMoveId(moveId);
     moveHeldRef.current = true;
     moveVectorRef.current = vec;
@@ -234,6 +292,10 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
     setCommandError(null);
     setSelectedPresetToken("");
     rootRef.current?.focus?.();
+    if (statusRefreshTimerRef.current !== null) {
+      window.clearTimeout(statusRefreshTimerRef.current);
+      statusRefreshTimerRef.current = null;
+    }
   }, [open, transmissionId]);
 
   useEffect(() => {
@@ -515,7 +577,7 @@ export function StreamsPtzOverlay({ open, transmissionId, label, onClose }: Prop
             className="iconButton streamsPtzPadButton streamsPtzPadCenter"
             aria-label={t("core.ui.streams.ptz.stop", {}, "Stop")}
             title={t("core.ui.streams.ptz.stop", {}, "Stop")}
-            onClick={() => void stopMove()}
+            onClick={() => void stopMove({ force: true })}
           >
             <Icon name="hand" />
           </button>

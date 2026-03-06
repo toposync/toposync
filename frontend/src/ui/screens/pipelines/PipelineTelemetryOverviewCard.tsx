@@ -32,11 +32,6 @@ type AggregatedPoint = {
   avg: number;
 };
 
-type ActiveMarkerSelection = {
-  marker: PipelineTelemetryImageMarker;
-  x: number;
-};
-
 type TimelineSegment = {
   points: AggregatedPoint[];
   startS: number;
@@ -64,9 +59,23 @@ type HoverTimelineState = {
 
 type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: string) => string;
 
+type MarkerPoint = {
+  marker: PipelineTelemetryImageMarker;
+  x: number;
+  y: number;
+  score01: number | null;
+  accentColor: string | null;
+  zIndex: number;
+};
+
 const RANGE_SHORT_SECONDS = 2 * 60 * 60;
 const RANGE_DEFAULT_SECONDS = 24 * 60 * 60;
 const RANGE_LONG_SECONDS = 3 * 24 * 60 * 60;
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
 
 function metricLabel(metricId: string, t: TranslateFn): string {
   if (metricId === "motion.score") return t("core.ui.pipelines.telemetry.metric.motion_score", {}, "Motion score");
@@ -239,8 +248,8 @@ export function PipelineTelemetryOverviewCard({
   const [rangeSeconds, setRangeSeconds] = useState(RANGE_DEFAULT_SECONDS);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
-  const [hoveredMarker, setHoveredMarker] = useState<ActiveMarkerSelection | null>(null);
-  const [pinnedMarker, setPinnedMarker] = useState<ActiveMarkerSelection | null>(null);
+  const [hoveredMarker, setHoveredMarker] = useState<PipelineTelemetryImageMarker | null>(null);
+  const [pinnedMarker, setPinnedMarker] = useState<PipelineTelemetryImageMarker | null>(null);
   const [hoverTimeline, setHoverTimeline] = useState<HoverTimelineState | null>(null);
   const decimalFormatter = useMemo(
     () =>
@@ -361,15 +370,12 @@ export function PipelineTelemetryOverviewCard({
     setHoverTimeline(null);
   }, [pipelineName, markers.length, rangeSeconds]);
 
-  const allPoints = useMemo(() => series.flatMap((item) => item.points), [series]);
-  const xMin = useMemo(
-    () => (allPoints.length ? Math.min(...allPoints.map((point) => Number(point.bucket_start_s || 0))) : 0),
-    [allPoints],
-  );
-  const xMax = useMemo(
-    () => (allPoints.length ? Math.max(...allPoints.map((point) => Number(point.bucket_start_s || 0))) : 0),
-    [allPoints],
-  );
+  const axisEndS = useMemo(() => {
+    const baseMs = lastUpdatedAt ?? Date.now();
+    return Math.floor(baseMs / 1000);
+  }, [lastUpdatedAt]);
+  const xMin = useMemo(() => Math.max(0, axisEndS - rangeSeconds), [axisEndS, rangeSeconds]);
+  const xMax = axisEndS;
 
   const chartWidth = 940;
   const chartHeight = 320;
@@ -404,22 +410,58 @@ export function PipelineTelemetryOverviewCard({
     return out;
   }, [series]);
 
-  const markerPoints = useMemo(() => {
+  const markerPoints: MarkerPoint[] = useMemo(() => {
     if (!markers.length || xMax <= xMin) return [];
+    const y = paddingTop + innerHeight + 6;
     return markers
       .map((marker) => {
         const ts = Number(marker.ts || 0);
         if (!Number.isFinite(ts) || ts < xMin || ts > xMax) return null;
+        let foundMetricValue = false;
+        let bestMetricValue = -1;
+        let bestMetricId: string | null = null;
+        let combined = 0;
+        for (const metric of series) {
+          const nearest = findNearestPoint(metric.points, ts);
+          if (!nearest) continue;
+          if (metric.bucketSeconds > 0) {
+            const distance = Math.abs(Number(nearest.bucket_start_s) - ts);
+            if (distance > metric.bucketSeconds * 0.9) continue;
+          }
+          const value01 = clamp01(Number(nearest.avg));
+          foundMetricValue = true;
+          combined = Math.max(combined, value01);
+          if (value01 > bestMetricValue) {
+            bestMetricValue = value01;
+            bestMetricId = metric.metricId;
+          }
+        }
+
+        const confidenceValue = marker.confidence == null ? null : clamp01(Number(marker.confidence));
+        const score01 = foundMetricValue ? combined : confidenceValue;
+        const accentColor = bestMetricId ? metricAccentColor(bestMetricId) : null;
+        const zIndexScore = Math.round((score01 ?? 0) * 1000);
+        const zIndexAge = Math.round(((ts - xMin) / Math.max(1, xMax - xMin)) * 80);
+
         return {
           marker,
           x: xScale(ts),
-          y: paddingTop + innerHeight + 6,
-        };
+          y,
+          score01,
+          accentColor,
+          zIndex: 10 + zIndexScore + zIndexAge,
+        } satisfies MarkerPoint;
       })
-      .filter(Boolean) as Array<{ marker: PipelineTelemetryImageMarker; x: number; y: number }>;
-  }, [markers, xMin, xMax, chartWidth, chartHeight]);
+      .filter(Boolean) as MarkerPoint[];
+  }, [markers, series, xMin, xMax, rangeSeconds]);
 
   const activeMarker = pinnedMarker ?? hoveredMarker;
+  const activeMarkerX = useMemo(() => {
+    if (!activeMarker || xMax <= xMin) return null;
+    const ts = Number(activeMarker.ts || 0);
+    if (!Number.isFinite(ts)) return null;
+    return xScale(ts);
+  }, [activeMarker, xMin, xMax]);
   const hoverTooltipStyle = useMemo(() => {
     if (!hoverTimeline) return null;
     const leftPercent = (hoverTimeline.chartX / chartWidth) * 100;
@@ -427,11 +469,11 @@ export function PipelineTelemetryOverviewCard({
     return { left: `${leftPercent}%`, transform: "translateX(8px)" };
   }, [hoverTimeline, chartWidth]);
   const markerOverlayStyle = useMemo(() => {
-    if (!activeMarker) return null;
-    const leftPercent = (activeMarker.x / chartWidth) * 100;
-    if (activeMarker.x > chartWidth * 0.55) return { left: `${leftPercent}%`, transform: "translateX(calc(-100% - 10px))" };
+    if (activeMarkerX == null) return null;
+    const leftPercent = (activeMarkerX / chartWidth) * 100;
+    if (activeMarkerX > chartWidth * 0.55) return { left: `${leftPercent}%`, transform: "translateX(calc(-100% - 10px))" };
     return { left: `${leftPercent}%`, transform: "translateX(10px)" };
-  }, [activeMarker, chartWidth]);
+  }, [activeMarkerX, chartWidth]);
 
   return (
     <div className="card">
@@ -483,217 +525,250 @@ export function PipelineTelemetryOverviewCard({
           </div>
         ) : null}
 
-        {loading ? <div className="pipelinesHint">{t("core.ui.pipelines.telemetry.loading", {}, "Loading telemetry…")}</div> : null}
-        {error ? <div className="pipelinesInlineError">{t("core.ui.pipelines.telemetry.error", { error }, "Telemetry unavailable: {{error}}")}</div> : null}
-        {!loading && !error && series.length === 0 ? (
-          <div className="pipelinesHint">
-            {t(
-              "core.ui.pipelines.telemetry.no_data",
-              {},
-              "No telemetry samples yet. Let the pipeline run and reopen this panel.",
-            )}
-          </div>
-        ) : null}
-
-	        {!loading && !error && series.length > 0 ? (
-	          <>
-            <div className="pipelinesTelemetryLegend">
-              {series.map((item) => (
-                <div key={`legend:${item.metricId}`} className="pipelinesTelemetryLegendItem">
-                  <span className="pipelinesTelemetryLegendSwatch" style={{ backgroundColor: item.color }} />
-                  <span>{metricLabel(item.metricId, t)}</span>
-                </div>
-              ))}
-            </div>
-
-	            <div className="pipelinesTelemetryTimelineWrap">
-              <svg
-                className="pipelinesTelemetryTimeline"
-                viewBox={`0 0 ${chartWidth} ${chartHeight}`}
-                preserveAspectRatio="none"
-                aria-hidden="true"
-                onMouseMove={(event) => {
-                  if (xMax <= xMin || series.length <= 0) return;
-                  const rect = event.currentTarget.getBoundingClientRect();
-                  if (rect.width <= 0) return;
-                  const rawX = ((event.clientX - rect.left) / rect.width) * chartWidth;
-                  const chartX = Math.max(paddingLeft, Math.min(chartWidth - paddingRight, rawX));
-                  const ratio = (chartX - paddingLeft) / Math.max(1, innerWidth);
-                  const cursorTs = xMin + Math.max(0, Math.min(1, ratio)) * Math.max(1e-9, xMax - xMin);
-                  const samples: HoverTimelineSample[] = [];
-                  for (const metric of series) {
-                    const nearest = findNearestPoint(metric.points, cursorTs);
-                    if (!nearest) continue;
-                    if (metric.bucketSeconds > 0) {
-                      const distance = Math.abs(Number(nearest.bucket_start_s) - cursorTs);
-                      if (distance > metric.bucketSeconds * 0.9) continue;
-                    }
-                    const segments = timelineSegmentsByMetric.get(metric.metricId) ?? [];
-                    const segment = findSegmentAtTs(segments, nearest.bucket_start_s);
-                    if (!segment) continue;
-                    const span = Math.max(1e-9, segment.max - segment.min);
-                    samples.push({
-                      metricId: metric.metricId,
-                      label: metricLabel(metric.metricId, t),
-                      color: metric.color,
-                      bucketStartS: nearest.bucket_start_s,
-                      avg: nearest.avg,
-                      min: nearest.min,
-                      max: nearest.max,
-                      y: yScale((nearest.avg - segment.min) / span),
-                    });
-                  }
-                  if (!samples.length) {
-                    setHoverTimeline(null);
-                    return;
-                  }
-                  setHoverTimeline({ chartX, cursorTs, samples });
-                }}
-                onMouseLeave={() => {
-                  setHoverTimeline(null);
-                  if (!pinnedMarker) setHoveredMarker(null);
-                }}
-              >
-                <line x1={paddingLeft} x2={chartWidth - paddingRight} y1={paddingTop + innerHeight} y2={paddingTop + innerHeight} className="pipelinesTelemetryAxis" />
-                {series.map((item) => {
-                  const segments = timelineSegmentsByMetric.get(item.metricId) ?? [];
-                  if (!segments.length) return null;
-                  return (
-                    <g key={`series:${item.metricId}`}>
-                      {segments.map((segment, segIndex) => {
-                        const linePath = buildLinePath(segment.points, xScale, yScale, segment.min, segment.max);
-                        const bandPath = buildBandPath(segment.points, xScale, yScale, segment.min, segment.max);
-                        return (
-                          <g key={`seg:${segIndex}`}>
-                            {bandPath ? <path d={bandPath} fill={item.color} fillOpacity={0.16} stroke="none" /> : null}
-                            <path d={linePath} fill="none" stroke={item.color} strokeWidth={2.2} />
-                          </g>
-                        );
-                      })}
-                    </g>
-                  );
-                })}
-                {markerPoints.map((item, index) => (
-                  <circle
-                    key={`marker:${index}:${item.marker.rel_path}`}
-                    cx={item.x}
-                    cy={item.y}
-                    r={3.5}
-                    className="pipelinesTelemetryMarkerDot"
-                    role="button"
-                    tabIndex={0}
-                    aria-label={t("core.ui.pipelines.telemetry.overview.images", {}, "Stored images")}
-                    onMouseEnter={() => {
-                      if (pinnedMarker) return;
-                      setHoveredMarker({ marker: item.marker, x: item.x });
-                    }}
-                    onMouseLeave={() => {
-                      if (pinnedMarker) return;
-                      setHoveredMarker((prev) => {
-                        if (!prev) return prev;
-                        const prevKey = `${prev.marker.rel_path}|${prev.marker.ts}`;
-                        const curKey = `${item.marker.rel_path}|${item.marker.ts}`;
-                        return prevKey === curKey ? null : prev;
-                      });
-                    }}
-                    onFocus={() => {
-                      if (pinnedMarker) return;
-                      setHoveredMarker({ marker: item.marker, x: item.x });
-                    }}
-                    onBlur={() => {
-                      if (pinnedMarker) return;
-                      setHoveredMarker((prev) => {
-                        if (!prev) return prev;
-                        const prevKey = `${prev.marker.rel_path}|${prev.marker.ts}`;
-                        const curKey = `${item.marker.rel_path}|${item.marker.ts}`;
-                        return prevKey === curKey ? null : prev;
-                      });
-                    }}
-                    onClick={() => {
-                      const curKey = `${item.marker.rel_path}|${item.marker.ts}`;
-                      setPinnedMarker((prev) => {
-                        if (!prev) return { marker: item.marker, x: item.x };
-                        const prevKey = `${prev.marker.rel_path}|${prev.marker.ts}`;
-                        return prevKey === curKey ? null : { marker: item.marker, x: item.x };
-                      });
-                      setHoveredMarker(null);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        const curKey = `${item.marker.rel_path}|${item.marker.ts}`;
-                        setPinnedMarker((prev) => {
-                          if (!prev) return { marker: item.marker, x: item.x };
-                          const prevKey = `${prev.marker.rel_path}|${prev.marker.ts}`;
-                          return prevKey === curKey ? null : { marker: item.marker, x: item.x };
-                        });
-                        setHoveredMarker(null);
-                      }
-                    }}
-                  />
-                ))}
-                {hoverTimeline ? (
-                  <>
-                    <line
-                      x1={hoverTimeline.chartX}
-                      x2={hoverTimeline.chartX}
-                      y1={paddingTop}
-                      y2={paddingTop + innerHeight}
-                      className="pipelinesTelemetryCursorLine"
-                    />
-                    {hoverTimeline.samples.map((sample) => (
-                      <circle
-                        key={`hover:${sample.metricId}`}
-                        cx={hoverTimeline.chartX}
-                        cy={sample.y}
-                        r={3.5}
-                        fill={sample.color}
-                        stroke="var(--panelSolid)"
-                        strokeWidth={1}
-                      />
-                    ))}
-                  </>
-                ) : null}
-              </svg>
-              {hoverTimeline && hoverTooltipStyle ? (
-                <div className="pipelinesTelemetryHoverTooltip" style={hoverTooltipStyle}>
-                  <div className="pipelinesHint">{timeFormatter.format(new Date(hoverTimeline.cursorTs * 1000))}</div>
-                  {hoverTimeline.samples.map((sample) => (
-                    <div key={`hover:row:${sample.metricId}`} className="pipelinesTelemetryHoverRow">
-                      <span className="pipelinesTelemetryHoverSwatch" style={{ backgroundColor: sample.color }} />
-                      <span>{sample.label}</span>
-                      <span>
-                        {t("core.ui.pipelines.telemetry.total_avg", {}, "Avg")}: {decimalFormatter.format(sample.avg)} ·{" "}
-                        {t("core.ui.pipelines.telemetry.total_min", {}, "Min")}: {decimalFormatter.format(sample.min)} ·{" "}
-                        {t("core.ui.pipelines.telemetry.total_max", {}, "Max")}: {decimalFormatter.format(sample.max)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              {activeMarker && markerOverlayStyle ? (
-                <div
-                  className={["pipelinesTelemetryMarkerOverlay", pinnedMarker ? "" : "isTransient"].filter(Boolean).join(" ")}
-                  style={markerOverlayStyle}
-                >
-                  <div className="pipelinesStepStatsHeader">
-                    <div className="pipelinesHint">{timeFormatter.format(new Date(Number(activeMarker.marker.ts || 0) * 1000))}</div>
-                    {pinnedMarker ? (
-                      <button className="iconButton" type="button" onClick={() => setPinnedMarker(null)} title={t("core.actions.close")}>
-                        <i className="fa-solid fa-xmark" aria-hidden="true" />
-                      </button>
-                    ) : null}
-                  </div>
-                  <img
-                    src={`/files/${encodeURI(String(activeMarker.marker.rel_path || ""))}`}
-                    alt="marker preview"
-                    className="pipelinesTelemetryMarkerImage"
-                  />
-                </div>
-              ) : null}
-	            </div>
-	          </>
+	        {loading ? <div className="pipelinesHint">{t("core.ui.pipelines.telemetry.loading", {}, "Loading telemetry…")}</div> : null}
+	        {error ? <div className="pipelinesInlineError">{t("core.ui.pipelines.telemetry.error", { error }, "Telemetry unavailable: {{error}}")}</div> : null}
+	        {!loading && !error && series.length === 0 && markerPoints.length === 0 ? (
+	          <div className="pipelinesHint">
+	            {t(
+	              "core.ui.pipelines.telemetry.no_data",
+	              {},
+	              "No telemetry samples yet. Let the pipeline run and reopen this panel.",
+	            )}
+	          </div>
 	        ) : null}
+
+		        {!loading && !error && (series.length > 0 || markerPoints.length > 0) ? (
+		          <>
+	            <div className="pipelinesTelemetryLegend">
+	              {series.map((item) => (
+	                <div key={`legend:${item.metricId}`} className="pipelinesTelemetryLegendItem">
+	                  <span className="pipelinesTelemetryLegendSwatch" style={{ backgroundColor: item.color }} />
+	                  <span>{metricLabel(item.metricId, t)}</span>
+	                </div>
+	              ))}
+	              {markerPoints.length ? (
+	                <div className="pipelinesTelemetryLegendItem">
+	                  <span className="pipelinesTelemetryLegendSwatch isImage" />
+	                  <span>{t("core.ui.pipelines.telemetry.overview.images", {}, "Stored images")}</span>
+	                </div>
+	              ) : null}
+	            </div>
+
+		            <div className="pipelinesTelemetryTimelineWrap">
+	              <div
+	                className="pipelinesTelemetryTimelineStage"
+	                onMouseMove={(event) => {
+	                  if (xMax <= xMin || series.length <= 0) return;
+	                  const rect = event.currentTarget.getBoundingClientRect();
+	                  if (rect.width <= 0) return;
+	                  const rawX = ((event.clientX - rect.left) / rect.width) * chartWidth;
+	                  const chartX = Math.max(paddingLeft, Math.min(chartWidth - paddingRight, rawX));
+	                  const ratio = (chartX - paddingLeft) / Math.max(1, innerWidth);
+	                  const cursorTs = xMin + Math.max(0, Math.min(1, ratio)) * Math.max(1e-9, xMax - xMin);
+	                  const samples: HoverTimelineSample[] = [];
+	                  for (const metric of series) {
+	                    const nearest = findNearestPoint(metric.points, cursorTs);
+	                    if (!nearest) continue;
+	                    if (metric.bucketSeconds > 0) {
+	                      const distance = Math.abs(Number(nearest.bucket_start_s) - cursorTs);
+	                      if (distance > metric.bucketSeconds * 0.9) continue;
+	                    }
+	                    const segments = timelineSegmentsByMetric.get(metric.metricId) ?? [];
+	                    const segment = findSegmentAtTs(segments, nearest.bucket_start_s);
+	                    if (!segment) continue;
+	                    const span = Math.max(1e-9, segment.max - segment.min);
+	                    samples.push({
+	                      metricId: metric.metricId,
+	                      label: metricLabel(metric.metricId, t),
+	                      color: metric.color,
+	                      bucketStartS: nearest.bucket_start_s,
+	                      avg: nearest.avg,
+	                      min: nearest.min,
+	                      max: nearest.max,
+	                      y: yScale((nearest.avg - segment.min) / span),
+	                    });
+	                  }
+	                  if (!samples.length) {
+	                    setHoverTimeline(null);
+	                    return;
+	                  }
+	                  setHoverTimeline({ chartX, cursorTs, samples });
+	                }}
+	                onMouseLeave={() => {
+	                  setHoverTimeline(null);
+	                  if (!pinnedMarker) setHoveredMarker(null);
+	                }}
+	              >
+	                <svg
+	                  className="pipelinesTelemetryTimeline"
+	                  viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+	                  preserveAspectRatio="none"
+	                  aria-hidden="true"
+	                >
+	                  <line
+	                    x1={paddingLeft}
+	                    x2={chartWidth - paddingRight}
+	                    y1={paddingTop + innerHeight}
+	                    y2={paddingTop + innerHeight}
+	                    className="pipelinesTelemetryAxis"
+	                  />
+	                  {series.map((item) => {
+	                    const segments = timelineSegmentsByMetric.get(item.metricId) ?? [];
+	                    if (!segments.length) return null;
+	                    return (
+	                      <g key={`series:${item.metricId}`}>
+	                        {segments.map((segment, segIndex) => {
+	                          const linePath = buildLinePath(segment.points, xScale, yScale, segment.min, segment.max);
+	                          const bandPath = buildBandPath(segment.points, xScale, yScale, segment.min, segment.max);
+	                          return (
+	                            <g key={`seg:${segIndex}`}>
+	                              {bandPath ? <path d={bandPath} fill={item.color} fillOpacity={0.16} stroke="none" /> : null}
+	                              <path d={linePath} fill="none" stroke={item.color} strokeWidth={2.2} />
+	                            </g>
+	                          );
+	                        })}
+	                      </g>
+	                    );
+	                  })}
+	                  {hoverTimeline ? (
+	                    <>
+	                      <line
+	                        x1={hoverTimeline.chartX}
+	                        x2={hoverTimeline.chartX}
+	                        y1={paddingTop}
+	                        y2={paddingTop + innerHeight}
+	                        className="pipelinesTelemetryCursorLine"
+	                      />
+	                      {hoverTimeline.samples.map((sample) => (
+	                        <circle
+	                          key={`hover:${sample.metricId}`}
+	                          cx={hoverTimeline.chartX}
+	                          cy={sample.y}
+	                          r={3.5}
+	                          fill={sample.color}
+	                          stroke="var(--panelSolid)"
+	                          strokeWidth={1}
+	                        />
+	                      ))}
+	                    </>
+	                  ) : null}
+	                </svg>
+
+	                {markerPoints.length ? (
+	                  <div className="pipelinesTelemetryMarkerLayer" aria-hidden={Boolean(pinnedMarker)}>
+	                    {markerPoints.map((item) => {
+	                      const key = `${item.marker.rel_path}|${item.marker.ts}|${item.marker.node_id}`;
+	                      const leftPercent = (item.x / chartWidth) * 100;
+	                      const topPercent = (item.y / chartHeight) * 100;
+	                      const score01 = item.score01;
+	                      const accent = item.accentColor ?? "var(--muted)";
+	                      const intensity = Math.round(18 + (score01 ?? 0.22) * 82);
+	                      const backgroundColor = `color-mix(in srgb, ${accent} ${intensity}%, var(--panelSolid))`;
+	                      const borderColor = `color-mix(in srgb, ${accent} ${Math.round(40 + (score01 ?? 0.15) * 60)}%, var(--panelSolid))`;
+	                      const markerStyle = {
+	                        left: `${leftPercent}%`,
+	                        top: `${topPercent}%`,
+	                        backgroundColor,
+	                        borderColor,
+	                        ["--marker-z" as any]: item.zIndex,
+	                      } as React.CSSProperties;
+
+	                      return (
+	                        <button
+	                          key={key}
+	                          className={[
+	                            "pipelinesTelemetryMarkerDot",
+	                            pinnedMarker && pinnedMarker.rel_path === item.marker.rel_path && pinnedMarker.ts === item.marker.ts
+	                              ? "isPinned"
+	                              : "",
+	                          ]
+	                            .filter(Boolean)
+	                            .join(" ")}
+	                          type="button"
+	                          aria-label={t("core.ui.pipelines.telemetry.overview.images", {}, "Stored images")}
+	                          title={timeFormatter.format(new Date(Number(item.marker.ts || 0) * 1000))}
+	                          style={markerStyle}
+	                          onMouseEnter={() => {
+	                            if (pinnedMarker) return;
+	                            setHoveredMarker(item.marker);
+	                          }}
+	                          onMouseLeave={() => {
+	                            if (pinnedMarker) return;
+	                            setHoveredMarker((prev) => {
+	                              if (!prev) return prev;
+	                              const prevKey = `${prev.rel_path}|${prev.ts}`;
+	                              const curKey = `${item.marker.rel_path}|${item.marker.ts}`;
+	                              return prevKey === curKey ? null : prev;
+	                            });
+	                          }}
+	                          onFocus={() => {
+	                            if (pinnedMarker) return;
+	                            setHoveredMarker(item.marker);
+	                          }}
+	                          onBlur={() => {
+	                            if (pinnedMarker) return;
+	                            setHoveredMarker((prev) => {
+	                              if (!prev) return prev;
+	                              const prevKey = `${prev.rel_path}|${prev.ts}`;
+	                              const curKey = `${item.marker.rel_path}|${item.marker.ts}`;
+	                              return prevKey === curKey ? null : prev;
+	                            });
+	                          }}
+	                          onClick={() => {
+	                            const curKey = `${item.marker.rel_path}|${item.marker.ts}`;
+	                            setPinnedMarker((prev) => {
+	                              if (!prev) return item.marker;
+	                              const prevKey = `${prev.rel_path}|${prev.ts}`;
+	                              return prevKey === curKey ? null : item.marker;
+	                            });
+	                            setHoveredMarker(null);
+	                          }}
+	                        />
+	                      );
+	                    })}
+	                  </div>
+	                ) : null}
+
+	                {hoverTimeline && hoverTooltipStyle ? (
+	                  <div className="pipelinesTelemetryHoverTooltip" style={hoverTooltipStyle}>
+	                    <div className="pipelinesHint">{timeFormatter.format(new Date(hoverTimeline.cursorTs * 1000))}</div>
+	                    {hoverTimeline.samples.map((sample) => (
+	                      <div key={`hover:row:${sample.metricId}`} className="pipelinesTelemetryHoverRow">
+	                        <span className="pipelinesTelemetryHoverSwatch" style={{ backgroundColor: sample.color }} />
+	                        <span>{sample.label}</span>
+	                        <span>
+	                          {t("core.ui.pipelines.telemetry.total_avg", {}, "Avg")}: {decimalFormatter.format(sample.avg)} ·{" "}
+	                          {t("core.ui.pipelines.telemetry.total_min", {}, "Min")}: {decimalFormatter.format(sample.min)} ·{" "}
+	                          {t("core.ui.pipelines.telemetry.total_max", {}, "Max")}: {decimalFormatter.format(sample.max)}
+	                        </span>
+	                      </div>
+	                    ))}
+	                  </div>
+	                ) : null}
+	                {activeMarker && markerOverlayStyle ? (
+	                  <div
+	                    className={["pipelinesTelemetryMarkerOverlay", pinnedMarker ? "" : "isTransient"].filter(Boolean).join(" ")}
+	                    style={markerOverlayStyle}
+	                  >
+	                    <div className="pipelinesStepStatsHeader">
+	                      <div className="pipelinesHint">{timeFormatter.format(new Date(Number(activeMarker.ts || 0) * 1000))}</div>
+	                      {pinnedMarker ? (
+	                        <button className="iconButton" type="button" onClick={() => setPinnedMarker(null)} title={t("core.actions.close")}>
+	                          <i className="fa-solid fa-xmark" aria-hidden="true" />
+	                        </button>
+	                      ) : null}
+	                    </div>
+	                    <img
+	                      src={`/files/${encodeURI(String(activeMarker.rel_path || ""))}`}
+	                      alt="marker preview"
+	                      className="pipelinesTelemetryMarkerImage"
+	                    />
+	                  </div>
+	                ) : null}
+	              </div>
+		            </div>
+		          </>
+		        ) : null}
 
 	        {onReset && pipelineName ? (
 	          <div className="rowWrap" style={{ justifyContent: "flex-end", marginTop: 10 }}>

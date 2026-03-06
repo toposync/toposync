@@ -20,7 +20,17 @@ from toposync.runtime.pipelines.images import (
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 
-from ..processing.mapping import ControlPointMapper, ControlPointPair
+from ..processing.mapping import (
+    ControlPointMapper,
+    ControlPointPair,
+    ControlPointSet,
+    HomographyEstimationConfig,
+    PanTiltZoomState,
+    PoseReference,
+    PoseSelectionConfig,
+    compute_control_points_signature,
+    select_control_point_set,
+)
 
 
 class ObjectSegmentationConfig(BaseModel):
@@ -488,17 +498,80 @@ class CameraMappingControlPoint(BaseModel):
     world: CameraMappingControlPointWorld
 
 
+class CameraMappingPoseReference(BaseModel):
+    pan: float | None = None
+    tilt: float | None = None
+    zoom: float | None = None
+    preset_token: str | None = None
+    preset_name: str | None = None
+
+    @field_validator("preset_token", "preset_name", mode="before")
+    @classmethod
+    def _trim_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+
+class CameraMappingControlPointSet(BaseModel):
+    id: str
+    label: str = ""
+    pose_reference: CameraMappingPoseReference | None = None
+    control_points: list[CameraMappingControlPoint] = Field(default_factory=list)
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _validate_id(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("id is required")
+        return normalized
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def _trim_label(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+
+class CameraMappingPoseSelectionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sigma_pan: float = Field(default=0.04, gt=0.0, le=1000.0)
+    sigma_tilt: float = Field(default=0.04, gt=0.0, le=1000.0)
+    sigma_zoom: float = Field(default=0.06, gt=0.0, le=1000.0)
+    max_distance: float = Field(default=3.0, ge=0.0, le=1000.0)
+    fallback_mode: Literal["default_set", "nearest_set", "none"] = "default_set"
+    min_shared_axes: int = Field(default=1, ge=1, le=3)
+
+
+class CameraMappingMotionPolicyConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["skip_when_moving", "use_last_idle_pose", "allow_when_confident"] = "skip_when_moving"
+
+
+class CameraMappingHomographyConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    method: Literal["usac_magsac", "usac_default", "ransac", "dlt"] = "usac_magsac"
+    normalized_image_threshold: float = Field(default=0.005, gt=0.0, le=1.0)
+    confidence: float = Field(default=0.999, gt=0.0, le=1.0)
+    max_iterations: int = Field(default=10000, ge=1, le=200000)
+
+
 class CameraMappingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    camera_id_field: str = "camera_id"
+    camera_id: str = ""
     composition_id: str = ""
-    control_points: list[CameraMappingControlPoint] = Field(default_factory=list)
+    control_point_sets: list[CameraMappingControlPointSet] = Field(default_factory=list)
     bbox_field: str = "object_bbox01"
     image_uv_field: str = "image_uv"
     world_field: str = "world"
+    pose_state_field: str = "pan_tilt_zoom_state"
+    pose_selection: CameraMappingPoseSelectionConfig = Field(default_factory=CameraMappingPoseSelectionConfig)
+    motion_policy: CameraMappingMotionPolicyConfig = Field(default_factory=CameraMappingMotionPolicyConfig)
+    homography: CameraMappingHomographyConfig = Field(default_factory=CameraMappingHomographyConfig)
     attach_mapping_metadata: bool = True
 
-    @field_validator("camera_id_field", "composition_id", "bbox_field", "image_uv_field", "world_field")
+    @field_validator("camera_id", "composition_id", "bbox_field", "image_uv_field", "world_field", "pose_state_field")
     @classmethod
     def _trim(cls, value: str) -> str:
         return str(value or "").strip()
@@ -2678,27 +2751,57 @@ class CameraMappingRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = CameraMappingConfig.model_validate(config)
         self._dependencies = dependencies
-        self._inline_mapper: ControlPointMapper | None = None
-        if self._config.control_points:
-            pairs = [
-                ControlPointPair(
-                    image_u=float(item.image.x),
-                    image_v=float(item.image.y),
-                    world_x=float(item.world.x),
-                    world_z=float(item.world.z),
-                )
-                for item in self._config.control_points
+        self._inline_control_point_sets = _control_point_sets_from_models(self._config.control_point_sets)
+        self._homography_config = HomographyEstimationConfig(
+            method=self._config.homography.method,
+            normalized_image_threshold=float(self._config.homography.normalized_image_threshold),
+            confidence=float(self._config.homography.confidence),
+            max_iterations=int(self._config.homography.max_iterations),
+        )
+        self._homography_config_signature = "|".join(
+            [
+                self._homography_config.method,
+                f"{self._homography_config.normalized_image_threshold:.12g}",
+                f"{self._homography_config.confidence:.12g}",
+                str(int(self._homography_config.max_iterations)),
             ]
-            self._inline_mapper = ControlPointMapper(pairs)
-        self._mapper_cache: dict[str, tuple[str | None, ControlPointMapper | None]] = {}
+        )
+        self._pose_selection_config = PoseSelectionConfig(
+            sigma_pan=float(self._config.pose_selection.sigma_pan),
+            sigma_tilt=float(self._config.pose_selection.sigma_tilt),
+            sigma_zoom=float(self._config.pose_selection.sigma_zoom),
+            max_distance=float(self._config.pose_selection.max_distance),
+            fallback_mode=self._config.pose_selection.fallback_mode,
+            min_shared_axes=int(self._config.pose_selection.min_shared_axes),
+        )
+        self._resolved_sets_cache: dict[str, tuple[Any, str | None, tuple[ControlPointSet, ...]]] = {}
+        self._mapper_cache: dict[str, ControlPointMapper | None] = {}
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         point = _resolve_image_point(packet, bbox_field=self._config.bbox_field, image_uv_field=self._config.image_uv_field)
         if point is None:
             return [packet]
 
-        camera_id = _resolve_camera_id(packet, camera_id_field=self._config.camera_id_field)
-        composition_id, mapper = await self._resolve_mapper(camera_id=camera_id)
+        camera_id = _resolve_camera_id(packet, camera_id_override=self._config.camera_id)
+        composition_id, control_point_sets = await self._resolve_control_point_sets(camera_id=camera_id)
+        if not control_point_sets:
+            return [packet]
+
+        pose_state = _read_pan_tilt_zoom_state(packet.payload.get(self._config.pose_state_field))
+        selection = select_control_point_set(
+            list(control_point_sets),
+            pose_state,
+            self._pose_selection_config,
+            self._config.motion_policy.mode,
+        )
+        if selection is None:
+            return [packet]
+
+        mapper = self._resolve_mapper(
+            camera_id=camera_id,
+            composition_id=composition_id,
+            control_point_set=selection.control_point_set,
+        )
         if mapper is None:
             return [packet]
 
@@ -2713,26 +2816,33 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             "u": float(point[0]),
             "v": float(point[1]),
             "composition_id": composition_id,
+            "control_point_set_id": selection.control_point_set.id,
+            "control_point_set_label": selection.control_point_set.label,
+            "pose_distance": (float(selection.pose_distance) if selection.pose_distance is not None else None),
+            "pose_axes_used": list(selection.pose_axes_used),
+            "move_status": selection.move_status,
+            "quality": mapper.quality.as_dict(),
         }
         metadata = dict(packet.metadata)
         if self._config.attach_mapping_metadata:
             metadata["composition_id"] = composition_id
+            metadata["control_point_set_id"] = selection.control_point_set.id
         return [replace(packet, payload=payload, metadata=metadata)]
 
-    async def _resolve_mapper(self, *, camera_id: str) -> tuple[str | None, ControlPointMapper | None]:
-        if self._inline_mapper is not None:
-            return (self._config.composition_id or None), self._inline_mapper
+    async def _resolve_control_point_sets(self, *, camera_id: str) -> tuple[str | None, tuple[ControlPointSet, ...]]:
+        if self._inline_control_point_sets:
+            return (self._config.composition_id or None), self._inline_control_point_sets
 
         cache_key = f"{camera_id}|{self._config.composition_id}"
-        if cache_key in self._mapper_cache:
-            return self._mapper_cache[cache_key]
-
         store = self._dependencies.config_store
         if not isinstance(store, ConfigStore):
-            self._mapper_cache[cache_key] = (None, None)
-            return None, None
+            return None, ()
 
         cfg = await store.get_config()
+        cached = self._resolved_sets_cache.get(cache_key)
+        if cached is not None and cached[0] is cfg:
+            return cached[1], cached[2]
+
         target_composition_id = self._config.composition_id or None
         for composition in cfg.compositions:
             if target_composition_id and composition.id != target_composition_id:
@@ -2742,19 +2852,42 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 camera_id_value = str(props.get("camera_id", "")).strip()
                 if not camera_id_value or camera_id_value != camera_id:
                     continue
-                pairs = _parse_control_point_pairs(props.get("control_points"))
-                if len(pairs) < 4:
+                control_point_sets = tuple(_parse_control_point_sets(props.get("control_point_sets")))
+                valid_sets = tuple(item for item in control_point_sets if len(item.control_points) >= 4)
+                if not valid_sets:
                     continue
-                try:
-                    mapper = ControlPointMapper(pairs)
-                except Exception:
-                    continue
-                result = (composition.id, mapper)
-                self._mapper_cache[cache_key] = result
-                return result
+                self._resolved_sets_cache[cache_key] = (cfg, composition.id, valid_sets)
+                return composition.id, valid_sets
 
-        self._mapper_cache[cache_key] = (None, None)
-        return None, None
+        self._resolved_sets_cache[cache_key] = (cfg, None, ())
+        return None, ()
+
+    def _resolve_mapper(
+        self,
+        *,
+        camera_id: str,
+        composition_id: str | None,
+        control_point_set: ControlPointSet,
+    ) -> ControlPointMapper | None:
+        points_signature = compute_control_points_signature(control_point_set.control_points)
+        cache_key = "|".join(
+            [
+                str(camera_id or "<inline>").strip() or "<inline>",
+                str(composition_id or "").strip() or "<none>",
+                control_point_set.id,
+                points_signature,
+                self._homography_config_signature,
+            ]
+        )
+        if cache_key in self._mapper_cache:
+            return self._mapper_cache[cache_key]
+
+        try:
+            mapper = ControlPointMapper(list(control_point_set.control_points), config=self._homography_config)
+        except Exception:
+            mapper = None
+        self._mapper_cache[cache_key] = mapper
+        return mapper
 
 
 class AreaRestrictionRuntime(TransformOperatorRuntime):
@@ -3915,11 +4048,14 @@ def _resolve_image_point(packet: Packet, *, bbox_field: str, image_uv_field: str
     return ((x1 + x2) / 2.0, float(y2))
 
 
-def _resolve_camera_id(packet: Packet, *, camera_id_field: str) -> str:
-    camera_id = str(packet.payload.get(camera_id_field, "")).strip()
+def _resolve_camera_id(packet: Packet, *, camera_id_override: str) -> str:
+    camera_id = str(camera_id_override or "").strip()
     if camera_id:
         return camera_id
-    camera_id = str(packet.metadata.get(camera_id_field, "")).strip()
+    camera_id = str(packet.payload.get("camera_id", "")).strip()
+    if camera_id:
+        return camera_id
+    camera_id = str(packet.metadata.get("camera_id", "")).strip()
     if camera_id:
         return camera_id
     return ""
@@ -3943,6 +4079,118 @@ def _parse_control_point_pairs(value: Any) -> list[ControlPointPair]:
             continue
         out.append(ControlPointPair(image_u=u, image_v=v, world_x=x, world_z=z))
     return out
+
+
+def _parse_pose_reference(value: Any) -> PoseReference | None:
+    rec = value if isinstance(value, dict) else {}
+    pan = _optional_float(rec.get("pan"))
+    tilt = _optional_float(rec.get("tilt"))
+    zoom = _optional_float(rec.get("zoom"))
+    if pan is None and tilt is None and zoom is None:
+        return None
+    preset_token = str(rec.get("preset_token") or "").strip() or None
+    preset_name = str(rec.get("preset_name") or "").strip() or None
+    return PoseReference(pan=pan, tilt=tilt, zoom=zoom, preset_token=preset_token, preset_name=preset_name)
+
+
+def _parse_control_point_sets(value: Any) -> list[ControlPointSet]:
+    raw = value if isinstance(value, list) else []
+    out: list[ControlPointSet] = []
+    for index, item in enumerate(raw):
+        rec = item if isinstance(item, dict) else {}
+        set_id = str(rec.get("id") or "").strip()
+        if not set_id:
+            continue
+        label = str(rec.get("label") or "").strip() or set_id or f"view-{index + 1}"
+        control_points = tuple(_parse_control_point_pairs(rec.get("control_points")))
+        out.append(
+            ControlPointSet(
+                id=set_id,
+                label=label,
+                pose_reference=_parse_pose_reference(rec.get("pose_reference")),
+                control_points=control_points,
+            )
+        )
+    return out
+
+
+def _control_point_sets_from_models(value: list[CameraMappingControlPointSet]) -> tuple[ControlPointSet, ...]:
+    out: list[ControlPointSet] = []
+    for index, item in enumerate(value):
+        control_points = tuple(
+            ControlPointPair(
+                image_u=float(point.image.x),
+                image_v=float(point.image.y),
+                world_x=float(point.world.x),
+                world_z=float(point.world.z),
+            )
+            for point in item.control_points
+        )
+        pose = item.pose_reference
+        out.append(
+            ControlPointSet(
+                id=str(item.id or "").strip(),
+                label=str(item.label or "").strip() or str(item.id or "").strip() or f"view-{index + 1}",
+                pose_reference=(
+                    PoseReference(
+                        pan=pose.pan,
+                        tilt=pose.tilt,
+                        zoom=pose.zoom,
+                        preset_token=pose.preset_token,
+                        preset_name=pose.preset_name,
+                    )
+                    if pose is not None
+                    else None
+                ),
+                control_points=control_points,
+            )
+        )
+    return tuple(item for item in out if item.id and len(item.control_points) >= 4)
+
+
+def _read_pan_tilt_zoom_state(value: Any) -> PanTiltZoomState | None:
+    rec = value if isinstance(value, dict) else {}
+    pan = _optional_float(rec.get("pan"))
+    tilt = _optional_float(rec.get("tilt"))
+    zoom = _optional_float(rec.get("zoom"))
+    move_status = str(rec.get("move_status") or "").strip() or None
+    utc_time = str(rec.get("utc_time") or "").strip() or None
+    error = str(rec.get("error") or "").strip() or None
+    source = str(rec.get("source") or "").strip() or None
+    confidence = _optional_float(rec.get("confidence"))
+    if (
+        pan is None
+        and tilt is None
+        and zoom is None
+        and move_status is None
+        and utc_time is None
+        and error is None
+        and source is None
+        and confidence is None
+    ):
+        return None
+    return PanTiltZoomState(
+        pan=pan,
+        tilt=tilt,
+        zoom=zoom,
+        move_status=move_status,
+        utc_time=utc_time,
+        error=error,
+        source=source,
+        confidence=confidence,
+    )
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
 
 
 def _point_in_polygon(*, x: float, z: float, polygon: list[tuple[float, float]]) -> bool:

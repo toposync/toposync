@@ -25,8 +25,8 @@ from toposync.runtime.pipelines.templates import safe_pipeline_name
 from toposync.runtime.services import ServiceRegistry
 
 from .pipelines import register_camera_pipeline_operators
-from .processing.mapping import ControlPointMapper, ControlPointPair
-from .pipelines.postprocess import _parse_control_point_pairs  # noqa: PLC2701
+from .processing.mapping import ControlPointMapper
+from .pipelines.postprocess import _parse_control_point_sets  # noqa: PLC2701
 from .onvif import (
     OnvifClient,
     OnvifDiscoveredDevice,
@@ -119,9 +119,25 @@ class ControlPointMapWorld(BaseModel):
     z: float
 
 
-class ControlPointMapPair(BaseModel):
+class ControlPointMapPoint(BaseModel):
+    id: str | None = None
     image: ControlPointMapImage
     world: ControlPointMapWorld
+
+
+class ControlPointMapPoseReference(BaseModel):
+    pan: float | None = None
+    tilt: float | None = None
+    zoom: float | None = None
+    preset_token: str | None = None
+    preset_name: str | None = None
+
+
+class ControlPointMapSet(BaseModel):
+    id: str
+    label: str = ""
+    pose_reference: ControlPointMapPoseReference | None = None
+    control_points: list[ControlPointMapPoint] = Field(default_factory=list)
 
 
 class ControlPointMapQuery(BaseModel):
@@ -132,8 +148,55 @@ class ControlPointMapQuery(BaseModel):
 
 
 class ControlPointMapRequest(BaseModel):
-    pairs: list[ControlPointMapPair]
+    control_point_set: ControlPointMapSet
     query: ControlPointMapQuery
+
+
+class CameraPtzPreset(BaseModel):
+    token: str
+    name: str = ""
+    pan: float | None = None
+    tilt: float | None = None
+    zoom: float | None = None
+
+
+class CameraPtzStatus(BaseModel):
+    pan: float | None = None
+    tilt: float | None = None
+    zoom: float | None = None
+    move_status: str = ""
+    error: str = ""
+    utc_time: str = ""
+
+
+class CameraPtzPresetsResponse(BaseModel):
+    camera_id: str
+    presets: list[CameraPtzPreset] = Field(default_factory=list)
+
+
+class CameraPtzStatusResponse(BaseModel):
+    camera_id: str
+    status: CameraPtzStatus = Field(default_factory=CameraPtzStatus)
+
+
+class CameraPtzActionResponse(BaseModel):
+    ok: bool = True
+
+
+class CameraPtzGotoPresetRequest(BaseModel):
+    preset_token: str
+
+
+class CameraPtzMoveRequest(BaseModel):
+    pan: float = Field(default=0.0, ge=-1.0, le=1.0)
+    tilt: float = Field(default=0.0, ge=-1.0, le=1.0)
+    zoom: float = Field(default=0.0, ge=-1.0, le=1.0)
+    timeout_s: float | None = Field(default=None, ge=0.0, le=30.0)
+
+
+class CameraPtzStopRequest(BaseModel):
+    pan_tilt: bool = True
+    zoom: bool = True
 
 
 class CameraPipelineWizardRequest(BaseModel):
@@ -363,6 +426,12 @@ class CamerasExtension(BaseExtension):
             settings = await _config_store(request).get_settings()
             ext = settings.extensions.get(EXTENSION_ID, {})
             return ext if isinstance(ext, dict) else {}
+
+        def _services(request: Request) -> ServiceRegistry:
+            registry = getattr(request.app.state, "services", None)
+            if not isinstance(registry, ServiceRegistry):
+                raise HTTPException(status_code=503, detail="Toposync services are not available")
+            return registry
 
         snapshot_cache: dict[str, SnapshotCacheEntry] = {}
         snapshot_locks: dict[str, asyncio.Lock] = {}
@@ -944,20 +1013,33 @@ class CamerasExtension(BaseExtension):
 
         @app.post("/api/cameras/control_points/map")
         async def map_control_points(body: ControlPointMapRequest) -> dict[str, Any]:
-            pairs = [
-                ControlPointPair(
-                    image_u=float(p.image.x),
-                    image_v=float(p.image.y),
-                    world_x=float(p.world.x),
-                    world_z=float(p.world.z),
-                )
-                for p in body.pairs
-            ]
-            if len(pairs) < 4:
+            control_point_sets = _parse_control_point_sets(
+                [
+                    {
+                        "id": body.control_point_set.id,
+                        "label": body.control_point_set.label,
+                        "pose_reference": (
+                            body.control_point_set.pose_reference.model_dump(mode="json")
+                            if body.control_point_set.pose_reference is not None
+                            else None
+                        ),
+                        "control_points": [
+                            {
+                                "id": point.id,
+                                "image": {"x": float(point.image.x), "y": float(point.image.y)},
+                                "world": {"x": float(point.world.x), "z": float(point.world.z)},
+                            }
+                            for point in body.control_point_set.control_points
+                        ],
+                    }
+                ]
+            )
+            control_point_set = control_point_sets[0] if control_point_sets else None
+            if control_point_set is None or len(control_point_set.control_points) < 4:
                 return {"world": None} if body.query.kind == "image" else {"image": None}
 
             try:
-                mapper = ControlPointMapper(pairs)
+                mapper = ControlPointMapper(list(control_point_set.control_points))
             except RuntimeError as exc:
                 raise HTTPException(status_code=501, detail=str(exc)) from exc
             except Exception:
@@ -969,12 +1051,12 @@ class CamerasExtension(BaseExtension):
                 u = float(body.query.x)
                 v = float(body.query.y)
                 if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
-                    return {"world": None}
+                    return {"world": None, "quality": mapper.quality.as_dict()}
                 mapped = mapper.map(u, v)
                 if mapped is None:
-                    return {"world": None}
+                    return {"world": None, "quality": mapper.quality.as_dict()}
                 x, z = mapped
-                return {"world": {"x": x, "z": z}}
+                return {"world": {"x": x, "z": z}, "quality": mapper.quality.as_dict()}
 
             if body.query.z is None:
                 raise HTTPException(status_code=400, detail="z is required for world mapping")
@@ -982,11 +1064,123 @@ class CamerasExtension(BaseExtension):
             z = float(body.query.z)
             mapped = mapper.map_world_to_image(x, z)
             if mapped is None:
-                return {"image": None}
+                return {"image": None, "quality": mapper.quality.as_dict()}
             u, v = mapped
             if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
-                return {"image": None}
-            return {"image": {"x": u, "y": v}}
+                return {"image": None, "quality": mapper.quality.as_dict()}
+            return {"image": {"x": u, "y": v}, "quality": mapper.quality.as_dict()}
+
+        @app.get("/api/cameras/cameras/{camera_id}/ptz/presets", response_model=CameraPtzPresetsResponse)
+        async def camera_ptz_presets(request: Request, camera_id: str) -> CameraPtzPresetsResponse:
+            _require_auth(request, action="core:settings:read")
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            services = _services(request)
+            try:
+                raw_presets = await services.call("cameras.ptz.list_presets", camera_id=cid)
+            except KeyError:
+                raise HTTPException(status_code=503, detail="Camera PTZ controls are not available") from None
+
+            presets: list[CameraPtzPreset] = []
+            if isinstance(raw_presets, list):
+                for item in raw_presets:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        presets.append(CameraPtzPreset.model_validate(item))
+                    except Exception:
+                        continue
+
+            return CameraPtzPresetsResponse(camera_id=cid, presets=presets)
+
+        @app.post("/api/cameras/cameras/{camera_id}/ptz/goto-preset", response_model=CameraPtzActionResponse)
+        async def camera_ptz_goto_preset(
+            request: Request,
+            camera_id: str,
+            body: CameraPtzGotoPresetRequest,
+        ) -> CameraPtzActionResponse:
+            _require_auth(request, action="core:settings:read")
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            services = _services(request)
+            try:
+                await services.call("cameras.ptz.goto_preset", camera_id=cid, preset_token=body.preset_token)
+            except KeyError:
+                raise HTTPException(status_code=503, detail="Camera PTZ controls are not available") from None
+
+            return CameraPtzActionResponse(ok=True)
+
+        @app.get("/api/cameras/cameras/{camera_id}/ptz/status", response_model=CameraPtzStatusResponse)
+        async def camera_ptz_status(request: Request, camera_id: str) -> CameraPtzStatusResponse:
+            _require_auth(request, action="core:settings:read")
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            services = _services(request)
+            try:
+                raw_status = await services.call("cameras.ptz.get_status", camera_id=cid)
+            except KeyError:
+                raise HTTPException(status_code=503, detail="Camera PTZ controls are not available") from None
+
+            return CameraPtzStatusResponse(
+                camera_id=cid,
+                status=CameraPtzStatus.model_validate(raw_status if isinstance(raw_status, dict) else {}),
+            )
+
+        @app.post("/api/cameras/cameras/{camera_id}/ptz/move", response_model=CameraPtzActionResponse)
+        async def camera_ptz_move(
+            request: Request,
+            camera_id: str,
+            body: CameraPtzMoveRequest,
+        ) -> CameraPtzActionResponse:
+            _require_auth(request, action="core:settings:read")
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            services = _services(request)
+            try:
+                await services.call(
+                    "cameras.ptz.continuous_move",
+                    camera_id=cid,
+                    pan=float(body.pan),
+                    tilt=float(body.tilt),
+                    zoom=float(body.zoom),
+                    timeout_s=body.timeout_s,
+                )
+            except KeyError:
+                raise HTTPException(status_code=503, detail="Camera PTZ controls are not available") from None
+
+            return CameraPtzActionResponse(ok=True)
+
+        @app.post("/api/cameras/cameras/{camera_id}/ptz/stop", response_model=CameraPtzActionResponse)
+        async def camera_ptz_stop(
+            request: Request,
+            camera_id: str,
+            body: CameraPtzStopRequest,
+        ) -> CameraPtzActionResponse:
+            _require_auth(request, action="core:settings:read")
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            services = _services(request)
+            try:
+                await services.call(
+                    "cameras.ptz.stop",
+                    camera_id=cid,
+                    pan_tilt=bool(body.pan_tilt),
+                    zoom=bool(body.zoom),
+                )
+            except KeyError:
+                raise HTTPException(status_code=503, detail="Camera PTZ controls are not available") from None
+
+            return CameraPtzActionResponse(ok=True)
 
         @app.post("/api/cameras/rtsp/snapshot")
         async def rtsp_snapshot(body: RtspSnapshotRequest) -> Response:
@@ -1094,13 +1288,13 @@ class CamerasExtension(BaseExtension):
                     props = element.props if isinstance(element.props, dict) else {}
                     if str(props.get("camera_id", "")).strip() != cid:
                         continue
-                    pairs = _parse_control_point_pairs(props.get("control_points"))
+                    control_point_sets = _parse_control_point_sets(props.get("control_point_sets"))
                     camera_elements.append(
                         {
                             "id": element.id,
                             "name": str(element.name or "").strip() or element.id,
-                            "control_points_pairs": len(pairs),
-                            "has_mapping": len(pairs) >= 4,
+                            "control_points_pairs": sum(len(item.control_points) for item in control_point_sets),
+                            "has_mapping": any(len(item.control_points) >= 4 for item in control_point_sets),
                         }
                     )
 
@@ -1162,8 +1356,8 @@ class CamerasExtension(BaseExtension):
                     props = element.props if isinstance(getattr(element, "props", None), dict) else {}
                     if str(props.get("camera_id", "")).strip() != cid:
                         continue
-                    pairs = _parse_control_point_pairs(props.get("control_points"))
-                    if len(pairs) >= 4:
+                    control_point_sets = _parse_control_point_sets(props.get("control_point_sets"))
+                    if any(len(item.control_points) >= 4 for item in control_point_sets):
                         return str(getattr(composition, "id", "") or "").strip() or None
             return None
 

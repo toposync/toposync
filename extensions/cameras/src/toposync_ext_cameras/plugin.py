@@ -1309,6 +1309,20 @@ class CamerasExtension(BaseExtension):
                     vertices = props.get("vertices")
                     if not isinstance(vertices, list) or len(vertices) < 3:
                         continue
+                    points: list[dict[str, float]] = []
+                    for vertex in vertices:
+                        if not isinstance(vertex, dict):
+                            continue
+                        try:
+                            x = float(vertex.get("x"))
+                            z = float(vertex.get("z"))
+                        except Exception:
+                            continue
+                        if not math.isfinite(x) or not math.isfinite(z):
+                            continue
+                        points.append({"x": x, "z": z})
+                    if len(points) < 3:
+                        continue
                     if not _is_allowed(
                         request,
                         action="core:area:read",
@@ -1321,7 +1335,8 @@ class CamerasExtension(BaseExtension):
                         {
                             "id": element.id,
                             "name": name or element.id,
-                            "vertices_count": len(vertices),
+                            "vertices_count": len(points),
+                            "vertices": points,
                         }
                     )
 

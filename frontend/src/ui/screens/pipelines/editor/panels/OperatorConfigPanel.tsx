@@ -2,7 +2,7 @@ import React from "react";
 
 import type { CameraContextsResponse } from "../../../../../util/api";
 
-import type { InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
+import type { CameraAreaOption, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
 
 import {
   CategoryGateConfigCard,
@@ -44,7 +44,7 @@ type Props = {
   cameraSelectOptionById: Map<string, SelectOption>;
   activeCameraContexts: CameraContextsResponse | null;
   activeCameraContextsError: string | null;
-  cameraAreaOptions: SelectOption[];
+  cameraAreaOptions: CameraAreaOption[];
 
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;

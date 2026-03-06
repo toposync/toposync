@@ -1,12 +1,13 @@
 import React from "react";
 import Select, { type MultiValue, type SingleValue } from "react-select";
 import CreatableSelect from "react-select/creatable";
+import type { StylesConfig } from "react-select";
 
 import type { CameraContextsResponse } from "../../../../../util/api";
 import { i18n } from "../../../../../util/i18n";
 
 import { buildArtifactSuggestions, pipelinesReactSelectStyles } from "../../constants";
-import type { InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
+import type { CameraAreaOption, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
 import { isRecord, prettyOperatorName, safeJsonParse } from "../../utils";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
 import { CropRectangleDrawModal, MotionMaskDrawModal, PerspectiveCropDrawModal, type SnapshotSource } from "./ImageDrawModals";
@@ -188,7 +189,7 @@ type AreaRestrictionProps = {
   interactiveCameraId: string;
   activeCameraContexts: CameraContextsResponse | null;
   activeCameraContextsError: string | null;
-  cameraAreaOptions: SelectOption[];
+  cameraAreaOptions: CameraAreaOption[];
   onUpdateConfig: UpdateConfig;
 };
 
@@ -205,30 +206,64 @@ export function AreaRestrictionConfigCard({
   const selectedAreaKeys = Array.isArray(areaNamesRaw)
     ? areaNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
     : [];
-  const selectedAreaOptions = selectedAreaKeys.map((value) => cameraAreaOptions.find((option) => option.value === value) ?? { value, label: value });
-
-  const invalidAreaSelections = selectedAreaOptions.filter((opt) => !cameraAreaOptions.some((known) => known.value === opt.value));
+  const cameraAreaOptionByName = React.useMemo(() => {
+    const optionByName = new Map<string, CameraAreaOption>();
+    for (const option of cameraAreaOptions) {
+      if (!optionByName.has(option.areaName)) optionByName.set(option.areaName, option);
+    }
+    return optionByName;
+  }, [cameraAreaOptions]);
+  const selectedAreaOptions = selectedAreaKeys.map(
+    (value) =>
+      cameraAreaOptionByName.get(value) ?? {
+        value: `missing:${value}`,
+        label: value,
+        compositionId: "",
+        areaId: "",
+        areaName: value,
+        points: [],
+      },
+  );
+  const invalidAreaSelections = selectedAreaKeys.filter((value) => !cameraAreaOptionByName.has(value));
 
   return (
     <>
       <div className="pipelinesOperatorConfigCard">
         <label className="pipelinesLabel">
           <span>{t("core.ui.pipelines.panels.area_restriction.areas")}</span>
-          <Select<SelectOption, true>
+          <Select<CameraAreaOption, true>
             isMulti
-            styles={pipelinesReactSelectStyles}
+            styles={pipelinesReactSelectStyles as unknown as StylesConfig<CameraAreaOption, true>}
             options={cameraAreaOptions}
             value={selectedAreaOptions}
             isDisabled={!interactiveCameraId || !activeCameraContexts || Boolean(activeCameraContextsError) || cameraAreaOptions.length === 0}
             placeholder={
               !interactiveCameraId ? t("core.ui.pipelines.panels.area_restriction.select_camera_first") : t("core.ui.pipelines.panels.area_restriction.select_areas")
             }
-            onChange={(value: MultiValue<SelectOption>) => {
+            onChange={(value: MultiValue<CameraAreaOption>) => {
+              const selectedOptions = value.map((item) => ({
+                areaName: String(item.areaName || "").trim(),
+                points: Array.isArray(item.points)
+                  ? item.points
+                      .map((point) => {
+                        const x = Number((point as any)?.x);
+                        const z = Number((point as any)?.z);
+                        return Number.isFinite(x) && Number.isFinite(z) ? { x, z } : null;
+                      })
+                      .filter((point): point is { x: number; z: number } => point !== null)
+                  : [],
+              }));
+              const includeAreaNames = Array.from(new Set(selectedOptions.map((item) => item.areaName).filter(Boolean)));
               onUpdateConfig((prev) => ({
                 ...prev,
-                areas: [],
+                areas: selectedOptions
+                  .filter((item) => item.areaName && item.points.length >= 3)
+                  .map((item) => ({
+                    name: item.areaName,
+                    points: item.points.map((point) => ({ x: point.x, z: point.z })),
+                  })),
                 exclude_area_names: [],
-                include_area_names: value.map((item) => item.value),
+                include_area_names: includeAreaNames,
               }));
             }}
           />
@@ -248,7 +283,7 @@ export function AreaRestrictionConfigCard({
 
       {invalidAreaSelections.length > 0 ? (
         <div className="pipelinesInlineError">
-          {t("core.ui.pipelines.panels.area_restriction.invalid_areas", { areas: invalidAreaSelections.map((opt) => opt.label).join(", ") })}
+          {t("core.ui.pipelines.panels.area_restriction.invalid_areas", { areas: invalidAreaSelections.join(", ") })}
         </div>
       ) : null}
     </>

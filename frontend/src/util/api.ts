@@ -208,6 +208,10 @@ export type CameraContextArea = {
   id: string;
   name: string;
   vertices_count: number;
+  vertices: Array<{
+    x: number;
+    z: number;
+  }>;
 };
 
 export type CameraContextCameraElement = {

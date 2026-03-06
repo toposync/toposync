@@ -3,7 +3,7 @@ import React from "react";
 import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../../../util/api";
 import { i18n } from "../../../../util/i18n";
 
-import type { DragInsertPosition, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../types";
+import type { CameraAreaOption, DragInsertPosition, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../types";
 
 import { InteractiveStepCard } from "./InteractiveStepCard";
 
@@ -17,7 +17,7 @@ type Props = {
   cameraSelectOptionById: Map<string, SelectOption>;
   activeCameraContexts: CameraContextsResponse | null;
   activeCameraContextsError: string | null;
-  cameraAreaOptions: SelectOption[];
+  cameraAreaOptions: CameraAreaOption[];
   stepOutputsByNodeId: Record<string, number> | null;
 
   draggingStepUid: string | null;

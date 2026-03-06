@@ -22,6 +22,18 @@ export type InteractiveFromGraphResult = {
 
 export type SelectOption = { value: string; label: string };
 
+export type CameraAreaPoint = {
+  x: number;
+  z: number;
+};
+
+export type CameraAreaOption = SelectOption & {
+  compositionId: string;
+  areaId: string;
+  areaName: string;
+  points: CameraAreaPoint[];
+};
+
 export type TelemetryFieldInspectorRequest = {
   stepUid: string;
   nodeId: string;

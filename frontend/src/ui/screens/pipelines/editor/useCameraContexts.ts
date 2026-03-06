@@ -3,12 +3,12 @@ import { useEffect, useMemo, useState } from "react";
 import type { CameraContextsResponse } from "../../../../util/api";
 import { getCameraContexts } from "../../../../util/api";
 
-import type { SelectOption } from "../types";
+import type { CameraAreaOption } from "../types";
 
 type Result = {
   activeCameraContexts: CameraContextsResponse | null;
   activeCameraContextsError: string | null;
-  cameraAreaOptions: SelectOption[];
+  cameraAreaOptions: CameraAreaOption[];
 };
 
 export function useCameraContexts(interactiveCameraId: string): Result {
@@ -50,15 +50,28 @@ export function useCameraContexts(interactiveCameraId: string): Result {
     return cameraContextsErrorById[cameraId] ?? null;
   }, [interactiveCameraId, cameraContextsErrorById]);
 
-  const cameraAreaOptions = useMemo<SelectOption[]>(() => {
+  const cameraAreaOptions = useMemo<CameraAreaOption[]>(() => {
     const contexts = activeCameraContexts;
     if (!contexts) return [];
-    const options: SelectOption[] = [];
+    const options: CameraAreaOption[] = [];
     for (const composition of contexts.compositions ?? []) {
       for (const area of composition.areas ?? []) {
+        const points = Array.isArray(area.vertices)
+          ? area.vertices
+              .map((point) => {
+                const x = Number((point as any)?.x);
+                const z = Number((point as any)?.z);
+                return Number.isFinite(x) && Number.isFinite(z) ? { x, z } : null;
+              })
+              .filter((point): point is { x: number; z: number } => point !== null)
+          : [];
         options.push({
           value: `${composition.id}:${area.id}`,
           label: `${composition.name} / ${area.name}`,
+          compositionId: composition.id,
+          areaId: area.id,
+          areaName: area.name,
+          points,
         });
       }
     }
@@ -68,4 +81,3 @@ export function useCameraContexts(interactiveCameraId: string): Result {
 
   return { activeCameraContexts, activeCameraContextsError, cameraAreaOptions };
 }
-

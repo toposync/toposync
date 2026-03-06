@@ -148,6 +148,13 @@ def test_camera_contexts_reports_control_point_sets(tmp_path: Path, monkeypatch:
         assert composition["camera_elements"][0]["control_points_pairs"] == 7
         assert composition["camera_elements"][0]["has_mapping"] is True
         assert composition["areas"][0]["id"] == "area-1"
+        assert composition["areas"][0]["name"] == "Gate"
+        assert composition["areas"][0]["vertices_count"] == 3
+        assert composition["areas"][0]["vertices"] == [
+            {"x": 0.0, "z": 0.0},
+            {"x": 2.0, "z": 0.0},
+            {"x": 1.0, "z": 2.0},
+        ]
 
 
 def test_camera_ptz_routes_forward_to_services(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

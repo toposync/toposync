@@ -220,6 +220,46 @@ def test_pipeline_runtime_collects_numeric_and_image_telemetry() -> None:
     asyncio.run(scenario())
 
 
+def test_pipeline_telemetry_store_filters_image_markers_by_window() -> None:
+    store = PipelineTelemetryStore(
+        metric_specs=[],
+        max_numeric_series=8,
+        max_image_markers_per_pipeline=16,
+        max_image_pipelines=4,
+    )
+
+    assert store.record_image_marker(
+        "pipe",
+        node_id="node",
+        rel_path="pipelines/test/frame_0.png",
+        metric_id="test.image",
+        ts_s=100.0,
+    )
+    assert store.record_image_marker(
+        "pipe",
+        node_id="node",
+        rel_path="pipelines/test/frame_1.png",
+        metric_id="test.image",
+        ts_s=150.0,
+    )
+    assert store.record_image_marker(
+        "pipe",
+        node_id="node",
+        rel_path="pipelines/test/frame_2.png",
+        metric_id="test.image",
+        ts_s=195.0,
+    )
+
+    recent = store.list_image_markers("pipe", metric_id="test.image", window_seconds=60, now_s=200.0)
+    assert [str(item.get("rel_path") or "") for item in recent] == [
+        "pipelines/test/frame_1.png",
+        "pipelines/test/frame_2.png",
+    ]
+
+    newest_only = store.list_image_markers("pipe", metric_id="test.image", window_seconds=10, now_s=200.0)
+    assert [str(item.get("rel_path") or "") for item in newest_only] == ["pipelines/test/frame_2.png"]
+
+
 def test_pipeline_telemetry_store_roundtrips_checkpoint_bytes() -> None:
     store = PipelineTelemetryStore(
         metric_specs=[

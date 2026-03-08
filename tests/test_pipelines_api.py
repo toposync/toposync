@@ -271,6 +271,14 @@ def test_pipeline_telemetry_endpoints_return_numeric_and_markers(tmp_path: Path,
             node_id="store",
             metric_id="store.image",
             rel_path="pipelines/telemetry_pipeline/frame_1.png",
+            ts_s=now - 120.0,
+        )
+        telemetry_store.record_image_marker(
+            "telemetry_pipeline",
+            node_id="store",
+            metric_id="store.image",
+            rel_path="pipelines/telemetry_pipeline/frame_2.png",
+            ts_s=now - 5.0,
         )
 
         numeric_res = client.get(
@@ -293,5 +301,15 @@ def test_pipeline_telemetry_endpoints_return_numeric_and_markers(tmp_path: Path,
         markers_body = markers_res.json()
         assert markers_body["pipeline_name"] == "telemetry_pipeline"
         assert isinstance(markers_body.get("markers"), list)
-        assert len(markers_body["markers"]) == 1
+        assert len(markers_body["markers"]) == 2
         assert markers_body["markers"][0]["rel_path"] == "pipelines/telemetry_pipeline/frame_1.png"
+
+        recent_markers_res = client.get(
+            "/api/pipelines/telemetry_pipeline/telemetry/image-markers",
+            params={"metric_id": "store.image", "limit": 10, "window_seconds": 30},
+        )
+        assert recent_markers_res.status_code == 200
+        recent_markers_body = recent_markers_res.json()
+        assert [item["rel_path"] for item in recent_markers_body["markers"]] == [
+            "pipelines/telemetry_pipeline/frame_2.png"
+        ]

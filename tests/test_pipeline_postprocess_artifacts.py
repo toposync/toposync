@@ -20,6 +20,8 @@ from toposync.runtime.pipelines import (
     SourceOperatorRuntime,
     register_builtin_operators,
 )
+from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 from toposync_ext_cameras.processing.mapping import ControlPointMapper, ControlPointPair
 from toposync_ext_cameras.pipelines.postprocess import BestFrameSelectorRuntime, VelocityEstimationRuntime
@@ -96,6 +98,7 @@ def _pipeline_runtime(
     graph: dict[str, Any],
     sequence: list[dict[str, Any]],
     collector: dict[str, list[Packet]],
+    dependencies: PipelineRuntimeDependencies | None = None,
 ) -> PipelineRuntime:
     registry = OperatorRegistry()
     register_builtin_operators(registry)
@@ -104,7 +107,11 @@ def _pipeline_runtime(
     compiled = PipelineGraphCompiler(registry).compile_pipeline(
         Pipeline(name="stage6_postprocess_test", type="final", graph=graph),
     )
-    return PipelineRuntime(compiled=compiled, registry=registry)
+    return PipelineRuntime(
+        compiled=compiled,
+        registry=registry,
+        dependencies=dependencies or PipelineRuntimeDependencies(),
+    )
 
 
 def _frame_artifacts(frame: Any) -> dict[str, Artifact]:
@@ -656,6 +663,62 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
     asyncio.run(scenario())
 
 
+def test_velocity_stopped_now_drops_close_when_first_valid_world_sample_arrives_on_close() -> None:
+    async def scenario() -> None:
+        frame = np.zeros((40, 40, 3), dtype=np.uint8)
+        sequence = [
+            {
+                "lifecycle": Lifecycle.OPEN,
+                "payload": {
+                    "camera_id": "camera-main",
+                    "event_id": "velocity-close-only",
+                    "tracking_id": "velocity-close-only",
+                    "frame_ts": 1.0,
+                },
+                "artifacts": _frame_artifacts(frame),
+            },
+            {
+                "lifecycle": Lifecycle.CLOSE,
+                "payload": {
+                    "camera_id": "camera-main",
+                    "event_id": "velocity-close-only",
+                    "tracking_id": "velocity-close-only",
+                    "frame_ts": 9.0,
+                    "world": {"x": 2.0, "z": 3.0},
+                },
+                "artifacts": _frame_artifacts(frame),
+            },
+        ]
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "velocity",
+                    "operator": "camera.velocity_estimation",
+                    "config": {
+                        "filter_mode": "stopped_now",
+                        "min_elapsed_seconds": 0.05,
+                        "stopped_speed_threshold": 0.07,
+                    },
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "velocity", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                {"from": {"node": "velocity", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+            ],
+        }
+
+        collector: dict[str, list[Packet]] = {}
+        runtime = _pipeline_runtime(graph=graph, sequence=sequence, collector=collector)
+        await runtime.run_for(0.2)
+
+        assert collector.get("sink", []) == []
+
+    asyncio.run(scenario())
+
+
 def test_mapping_selects_pose_bound_set_when_ptz_state_matches() -> None:
     async def scenario() -> None:
         frame = np.zeros((40, 40, 3), dtype=np.uint8)
@@ -726,6 +789,181 @@ def test_mapping_selects_pose_bound_set_when_ptz_state_matches() -> None:
         assert mapping.get("control_point_set_id") == "door_zoom"
         assert round(float(mapping.get("pose_distance")), 3) == 0.0
         assert mapping.get("move_status") == "idle"
+
+    asyncio.run(scenario())
+
+
+def test_mapping_fetches_ptz_state_from_service_when_payload_missing() -> None:
+    async def scenario() -> None:
+        frame = np.zeros((40, 40, 3), dtype=np.uint8)
+        sequence = [
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {
+                    "camera_id": "camera-main",
+                    "image_uv": {"u": 0.5, "v": 0.5},
+                },
+                "artifacts": _frame_artifacts(frame),
+            }
+        ]
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "mapping",
+                    "operator": "camera.camera_mapping",
+                    "config": {
+                        "control_point_sets": [
+                            {
+                                "id": "default",
+                                "label": "Default",
+                                "pose_reference": None,
+                                "control_points": [
+                                    {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
+                                    {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
+                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
+                                    {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
+                                ],
+                            },
+                            {
+                                "id": "door_zoom",
+                                "label": "Door",
+                                "pose_reference": {"pan": 0.12, "tilt": -0.08, "zoom": 0.33},
+                                "control_points": [
+                                    {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 100.0, "z": 100.0}},
+                                    {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 110.0, "z": 100.0}},
+                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 110.0, "z": 110.0}},
+                                    {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 100.0, "z": 110.0}},
+                                ],
+                            }
+                        ]
+                    },
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "mapping", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+                {"from": {"node": "mapping", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+            ],
+        }
+
+        services = ServiceRegistry()
+        call_count = {"value": 0}
+
+        async def _get_status(*, camera_id: str) -> dict[str, Any]:
+            assert camera_id == "camera-main"
+            call_count["value"] += 1
+            return {"pan": 0.12, "tilt": -0.08, "zoom": 0.33, "move_status": "IDLE"}
+
+        services.register("cameras.ptz.get_status", _get_status)
+
+        collector: dict[str, list[Packet]] = {}
+        runtime = _pipeline_runtime(
+            graph=graph,
+            sequence=sequence,
+            collector=collector,
+            dependencies=PipelineRuntimeDependencies(services=services),
+        )
+        await runtime.run_for(0.2)
+
+        assert call_count["value"] == 1
+        packet = collector["sink"][-1]
+        world = packet.payload.get("world")
+        assert isinstance(world, dict)
+        assert round(float(world.get("x")), 1) == 105.0
+        assert round(float(world.get("z")), 1) == 105.0
+        mapping = packet.payload.get("mapping")
+        assert isinstance(mapping, dict)
+        assert mapping.get("control_point_set_id") == "door_zoom"
+        pose_state = packet.payload.get("pan_tilt_zoom_state")
+        assert isinstance(pose_state, dict)
+        assert pose_state.get("source") == "cameras.ptz.get_status"
+
+    asyncio.run(scenario())
+
+
+def test_mapping_caches_fetched_ptz_state_between_packets() -> None:
+    async def scenario() -> None:
+        frame = np.zeros((40, 40, 3), dtype=np.uint8)
+        sequence = [
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {"camera_id": "camera-main", "image_uv": {"u": 0.5, "v": 0.5}},
+                "artifacts": _frame_artifacts(frame),
+            },
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {"camera_id": "camera-main", "image_uv": {"u": 0.5, "v": 0.5}},
+                "artifacts": _frame_artifacts(frame),
+            },
+        ]
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "mapping",
+                    "operator": "camera.camera_mapping",
+                    "config": {
+                        "ptz_state_fetch": {"cache_ttl_seconds": 60.0},
+                        "control_point_sets": [
+                            {
+                                "id": "default",
+                                "label": "Default",
+                                "pose_reference": None,
+                                "control_points": [
+                                    {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
+                                    {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
+                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
+                                    {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
+                                ],
+                            },
+                            {
+                                "id": "door_zoom",
+                                "label": "Door",
+                                "pose_reference": {"pan": 0.12, "tilt": -0.08, "zoom": 0.33},
+                                "control_points": [
+                                    {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 100.0, "z": 100.0}},
+                                    {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 110.0, "z": 100.0}},
+                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 110.0, "z": 110.0}},
+                                    {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 100.0, "z": 110.0}},
+                                ],
+                            }
+                        ],
+                    },
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "mapping", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+                {"from": {"node": "mapping", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+            ],
+        }
+
+        services = ServiceRegistry()
+        call_count = {"value": 0}
+
+        async def _get_status(*, camera_id: str) -> dict[str, Any]:
+            assert camera_id == "camera-main"
+            call_count["value"] += 1
+            return {"pan": 0.12, "tilt": -0.08, "zoom": 0.33, "move_status": "IDLE"}
+
+        services.register("cameras.ptz.get_status", _get_status)
+
+        collector: dict[str, list[Packet]] = {}
+        runtime = _pipeline_runtime(
+            graph=graph,
+            sequence=sequence,
+            collector=collector,
+            dependencies=PipelineRuntimeDependencies(services=services),
+        )
+        await runtime.run_for(0.2)
+
+        assert call_count["value"] == 1
+        packets = collector["sink"]
+        assert len(packets) == 2
+        assert all(isinstance(packet.payload.get("mapping"), dict) for packet in packets)
 
     asyncio.run(scenario())
 

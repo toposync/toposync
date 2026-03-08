@@ -1633,6 +1633,7 @@ def create_app() -> FastAPI:
         limit: int = Query(default=500, ge=1, le=5000),
         node_id: str | None = Query(default=None),
         metric_id: str | None = Query(default=None),
+        window_seconds: int | None = Query(default=None, ge=1, le=7 * 24 * 60 * 60),
     ) -> PipelineTelemetryImageMarkersResponse:
         _require(request, action="core:pipelines:read")
         config_store: ConfigStore = request.app.state.config_store
@@ -1651,6 +1652,7 @@ def create_app() -> FastAPI:
             limit=int(limit),
             node_id=(str(node_id or "").strip() or None),
             metric_id=(str(metric_id or "").strip() or None),
+            window_seconds=(int(window_seconds) if window_seconds is not None else None),
         )
         return PipelineTelemetryImageMarkersResponse(
             pipeline_name=pipeline.name,

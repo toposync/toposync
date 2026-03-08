@@ -26,7 +26,7 @@ logger = logging.getLogger("toposync.pipelines.telemetry")
 DEFAULT_WINDOW_SECONDS = 3 * 24 * 60 * 60
 DEFAULT_BUCKET_SECONDS = 60
 DEFAULT_MAX_NUMERIC_SERIES = 512
-DEFAULT_MAX_IMAGE_MARKERS_PER_PIPELINE = 2_000
+DEFAULT_MAX_IMAGE_MARKERS_PER_PIPELINE = 5_000
 DEFAULT_MAX_IMAGE_PIPELINES = 128
 
 DEFAULT_PERSIST_INTERVAL_S = 90.0
@@ -500,6 +500,8 @@ class PipelineTelemetryStore:
         limit: int = 500,
         metric_id: str | None = None,
         node_id: str | None = None,
+        window_seconds: int | None = None,
+        now_s: float | None = None,
     ) -> list[dict[str, Any]]:
         pipeline = self._sanitize_pipeline_name(pipeline_name)
         if not pipeline:
@@ -510,14 +512,29 @@ class PipelineTelemetryStore:
         cap = max(1, min(5_000, int(limit)))
         metric_filter = self._sanitize_metric_id(metric_id or "")
         node_filter = self._sanitize_node_id(node_id or "")
-        if not metric_filter and not node_filter:
-            return list(markers)[-cap:]
+        min_ts: float | None = None
+        if window_seconds is not None:
+            try:
+                parsed_window_seconds = int(window_seconds)
+            except Exception:
+                parsed_window_seconds = 0
+            if parsed_window_seconds > 0:
+                now_value = time.time() if now_s is None else float(now_s)
+                if math.isfinite(now_value):
+                    min_ts = max(0.0, now_value - float(parsed_window_seconds))
         out: list[dict[str, Any]] = []
         for marker in reversed(markers):
             if metric_filter and str(marker.get("metric_id") or "").strip().lower() != metric_filter:
                 continue
             if node_filter and str(marker.get("node_id") or "").strip() != node_filter:
                 continue
+            if min_ts is not None:
+                try:
+                    marker_ts = float(marker.get("ts") or 0.0)
+                except Exception:
+                    marker_ts = 0.0
+                if not math.isfinite(marker_ts) or marker_ts < min_ts:
+                    continue
             out.append(marker)
             if len(out) >= cap:
                 break

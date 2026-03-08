@@ -742,13 +742,16 @@ export async function getPipelineTelemetryNumeric(
 
 export async function getPipelineTelemetryImageMarkers(
   name: string,
-  options?: { limit?: number; nodeId?: string; metricId?: string },
+  options?: { limit?: number; nodeId?: string; metricId?: string; windowSeconds?: number },
 ): Promise<PipelineTelemetryImageMarkers> {
   const params = new URLSearchParams();
   const limit = Math.max(1, Math.min(5000, Math.floor(options?.limit ?? 500)));
   params.set("limit", String(limit));
   if (options?.nodeId) params.set("node_id", String(options.nodeId));
   if (options?.metricId) params.set("metric_id", String(options.metricId));
+  if (Number.isFinite(options?.windowSeconds) && (options?.windowSeconds ?? 0) > 0) {
+    params.set("window_seconds", String(Math.max(1, Math.floor(options?.windowSeconds ?? 0))));
+  }
   const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/telemetry/image-markers?${params.toString()}`);
   if (!res.ok) throw new Error(`Failed to fetch pipeline telemetry markers ${name}: ${res.status}`);
   return res.json();

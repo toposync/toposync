@@ -19,6 +19,7 @@ from toposync.runtime.pipelines.images import (
 )
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
+from toposync.runtime.services import ServiceRegistry
 
 from ..processing.mapping import (
     ControlPointMapper,
@@ -29,6 +30,7 @@ from ..processing.mapping import (
     PoseReference,
     PoseSelectionConfig,
     compute_control_points_signature,
+    normalize_move_status,
     select_control_point_set,
 )
 
@@ -557,6 +559,15 @@ class CameraMappingHomographyConfig(BaseModel):
     max_iterations: int = Field(default=10000, ge=1, le=200000)
 
 
+class CameraMappingPtzStateFetchConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = True
+    cache_ttl_seconds: float = Field(default=0.75, ge=0.0, le=60.0)
+    moving_cache_ttl_seconds: float = Field(default=0.25, ge=0.0, le=60.0)
+    unavailable_cache_ttl_seconds: float = Field(default=5.0, ge=0.0, le=300.0)
+    attach_to_payload: bool = True
+
+
 class CameraMappingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     camera_id: str = ""
@@ -569,12 +580,19 @@ class CameraMappingConfig(BaseModel):
     pose_selection: CameraMappingPoseSelectionConfig = Field(default_factory=CameraMappingPoseSelectionConfig)
     motion_policy: CameraMappingMotionPolicyConfig = Field(default_factory=CameraMappingMotionPolicyConfig)
     homography: CameraMappingHomographyConfig = Field(default_factory=CameraMappingHomographyConfig)
+    ptz_state_fetch: CameraMappingPtzStateFetchConfig = Field(default_factory=CameraMappingPtzStateFetchConfig)
     attach_mapping_metadata: bool = True
 
     @field_validator("camera_id", "composition_id", "bbox_field", "image_uv_field", "world_field", "pose_state_field")
     @classmethod
     def _trim(cls, value: str) -> str:
         return str(value or "").strip()
+
+
+@dataclass(slots=True)
+class _CameraMappingPtzStateCacheEntry:
+    state: PanTiltZoomState | None
+    expires_monotonic: float
 
 
 class AreaRestrictionPoint(BaseModel):
@@ -2776,6 +2794,8 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         )
         self._resolved_sets_cache: dict[str, tuple[Any, str | None, tuple[ControlPointSet, ...]]] = {}
         self._mapper_cache: dict[str, ControlPointMapper | None] = {}
+        self._ptz_state_cache: dict[str, _CameraMappingPtzStateCacheEntry] = {}
+        self._ptz_state_tasks: dict[str, asyncio.Task[PanTiltZoomState | None]] = {}
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         point = _resolve_image_point(packet, bbox_field=self._config.bbox_field, image_uv_field=self._config.image_uv_field)
@@ -2788,6 +2808,18 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             return [packet]
 
         pose_state = _read_pan_tilt_zoom_state(packet.payload.get(self._config.pose_state_field))
+        pose_state_fetched = False
+        if pose_state is None:
+            pose_state = await self._resolve_ptz_state_when_missing(
+                camera_id=camera_id,
+                control_point_sets=control_point_sets,
+            )
+            pose_state_fetched = pose_state is not None
+
+        payload = dict(packet.payload)
+        if pose_state_fetched and self._config.ptz_state_fetch.attach_to_payload:
+            payload[self._config.pose_state_field] = _pan_tilt_zoom_state_to_payload(pose_state)
+
         selection = select_control_point_set(
             list(control_point_sets),
             pose_state,
@@ -2795,6 +2827,8 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             self._config.motion_policy.mode,
         )
         if selection is None:
+            if pose_state_fetched:
+                return [replace(packet, payload=payload)]
             return [packet]
 
         mapper = self._resolve_mapper(
@@ -2803,14 +2837,17 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             control_point_set=selection.control_point_set,
         )
         if mapper is None:
+            if pose_state_fetched:
+                return [replace(packet, payload=payload)]
             return [packet]
 
         mapped = mapper.map(float(point[0]), float(point[1]))
         if mapped is None:
+            if pose_state_fetched:
+                return [replace(packet, payload=payload)]
             return [packet]
 
         world = {"x": float(mapped[0]), "z": float(mapped[1])}
-        payload = dict(packet.payload)
         payload[self._config.world_field] = world
         payload["mapping"] = {
             "u": float(point[0]),
@@ -2889,6 +2926,96 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         self._mapper_cache[cache_key] = mapper
         return mapper
 
+    async def shutdown(self) -> None:
+        tasks = list(self._ptz_state_tasks.values())
+        self._ptz_state_tasks.clear()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _resolve_ptz_state_when_missing(
+        self,
+        *,
+        camera_id: str,
+        control_point_sets: tuple[ControlPointSet, ...],
+    ) -> PanTiltZoomState | None:
+        if not self._config.ptz_state_fetch.enabled:
+            return None
+        pose_bound_count = sum(1 for item in control_point_sets if item.pose_reference is not None)
+        if pose_bound_count <= 0:
+            return None
+        if len(control_point_sets) <= 1:
+            return None
+
+        services = self._dependencies.services
+        if not isinstance(services, ServiceRegistry):
+            return None
+
+        now = time.monotonic()
+        cached = self._ptz_state_cache.get(camera_id)
+        if cached is not None and cached.expires_monotonic > now:
+            return cached.state
+
+        task = self._ptz_state_tasks.get(camera_id)
+        if task is None or task.done():
+            task = asyncio.create_task(
+                self._fetch_ptz_state_from_service(camera_id=camera_id, services=services),
+                name=f"camera-mapping-ptz-state[{camera_id}]",
+            )
+            self._ptz_state_tasks[camera_id] = task
+
+        try:
+            state = await task
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            state = None
+        finally:
+            current = self._ptz_state_tasks.get(camera_id)
+            if current is task:
+                self._ptz_state_tasks.pop(camera_id, None)
+
+        ttl = float(self._config.ptz_state_fetch.unavailable_cache_ttl_seconds)
+        if state is not None:
+            normalized_status = normalize_move_status(state.move_status)
+            if normalized_status == "moving":
+                ttl = float(self._config.ptz_state_fetch.moving_cache_ttl_seconds)
+            else:
+                ttl = float(self._config.ptz_state_fetch.cache_ttl_seconds)
+        self._ptz_state_cache[camera_id] = _CameraMappingPtzStateCacheEntry(
+            state=state,
+            expires_monotonic=time.monotonic() + max(0.0, ttl),
+        )
+        return state
+
+    async def _fetch_ptz_state_from_service(
+        self,
+        *,
+        camera_id: str,
+        services: ServiceRegistry,
+    ) -> PanTiltZoomState | None:
+        try:
+            raw = await services.call("cameras.ptz.get_status", camera_id=camera_id)
+        except Exception:
+            return None
+        state = _read_pan_tilt_zoom_state(raw if isinstance(raw, dict) else None)
+        if state is None:
+            return None
+        if state.source:
+            return state
+        return PanTiltZoomState(
+            pan=state.pan,
+            tilt=state.tilt,
+            zoom=state.zoom,
+            move_status=state.move_status,
+            utc_time=state.utc_time,
+            error=state.error,
+            source="cameras.ptz.get_status",
+            confidence=state.confidence,
+        )
+
 
 class AreaRestrictionRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any]) -> None:
@@ -2948,6 +3075,18 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
         self._config = VelocityEstimationConfig.model_validate(config)
         self._state_by_key: dict[str, _VelocityState] = {}
 
+    def _finalize_close(
+        self,
+        packet: Packet,
+        *,
+        key: str,
+        valid: bool,
+        moving: bool,
+        ever_stopped: bool,
+    ) -> list[Packet]:
+        self._state_by_key.pop(key, None)
+        return self._apply_filter_mode(packet, valid=valid, moving=moving, ever_stopped=ever_stopped)
+
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         event_id = str(packet.payload.get("event_id") or "").strip()
         if not event_id:
@@ -2994,8 +3133,13 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
                 reason="missing_world",
             )
             if packet.lifecycle == Lifecycle.CLOSE:
-                self._state_by_key.pop(key, None)
-                return [out_packet]
+                return self._finalize_close(
+                    out_packet,
+                    key=key,
+                    valid=False,
+                    moving=False,
+                    ever_stopped=ever_stopped,
+                )
             return self._apply_filter_mode(out_packet, valid=False, moving=False, ever_stopped=ever_stopped)
 
         try:
@@ -3020,8 +3164,13 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
                 reason="invalid_world",
             )
             if packet.lifecycle == Lifecycle.CLOSE:
-                self._state_by_key.pop(key, None)
-                return [out_packet]
+                return self._finalize_close(
+                    out_packet,
+                    key=key,
+                    valid=False,
+                    moving=False,
+                    ever_stopped=ever_stopped,
+                )
             return self._apply_filter_mode(out_packet, valid=False, moving=False, ever_stopped=ever_stopped)
 
         if state is None:
@@ -3047,8 +3196,13 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
                 reason="out_of_order_timestamp",
             )
             if packet.lifecycle == Lifecycle.CLOSE:
-                self._state_by_key.pop(key, None)
-                return [out_packet]
+                return self._finalize_close(
+                    out_packet,
+                    key=key,
+                    valid=False,
+                    moving=False,
+                    ever_stopped=ever_stopped,
+                )
             return self._apply_filter_mode(out_packet, valid=False, moving=False, ever_stopped=ever_stopped)
 
         samples.append(_VelocitySample(x=float(x), z=float(z), ts=float(now_ts)))
@@ -3123,8 +3277,13 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
         )
 
         if packet.lifecycle == Lifecycle.CLOSE:
-            self._state_by_key.pop(key, None)
-            return [out_packet]
+            return self._finalize_close(
+                out_packet,
+                key=key,
+                valid=valid,
+                moving=moving,
+                ever_stopped=ever_stopped,
+            )
 
         return self._apply_filter_mode(out_packet, valid=valid, moving=moving, ever_stopped=ever_stopped)
 
@@ -4179,6 +4338,21 @@ def _read_pan_tilt_zoom_state(value: Any) -> PanTiltZoomState | None:
         source=source,
         confidence=confidence,
     )
+
+
+def _pan_tilt_zoom_state_to_payload(value: PanTiltZoomState | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    return {
+        "pan": value.pan,
+        "tilt": value.tilt,
+        "zoom": value.zoom,
+        "move_status": value.move_status,
+        "utc_time": value.utc_time,
+        "error": value.error,
+        "source": value.source,
+        "confidence": value.confidence,
+    }
 
 
 def _optional_float(value: Any) -> float | None:

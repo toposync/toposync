@@ -62,15 +62,35 @@ type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: st
 type MarkerPoint = {
   marker: PipelineTelemetryImageMarker;
   x: number;
-  y: number;
   score01: number | null;
   accentColor: string | null;
   zIndex: number;
 };
 
+type MarkerCluster = {
+  key: string;
+  markers: PipelineTelemetryImageMarker[];
+  x: number;
+  y: number;
+  count: number;
+  score01: number | null;
+  accentColor: string | null;
+  zIndex: number;
+  earliestTs: number;
+  latestTs: number;
+  visualWidth: number;
+};
+
 const RANGE_SHORT_SECONDS = 2 * 60 * 60;
 const RANGE_DEFAULT_SECONDS = 24 * 60 * 60;
 const RANGE_LONG_SECONDS = 3 * 24 * 60 * 60;
+const MARKER_FETCH_LIMIT = 5_000;
+const MARKER_CLUSTER_DISTANCE = 9;
+const MARKER_CLUSTER_SPAN_LIMIT = 18;
+const MARKER_CLUSTER_LANE_COUNT = 4;
+const MARKER_CLUSTER_LANE_SPACING = 11;
+const MARKER_CLUSTER_GAP = 5;
+const MARKER_CLUSTER_PREVIEW_LIMIT = 12;
 
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -233,6 +253,94 @@ function findSegmentAtTs(segments: TimelineSegment[], ts: number): TimelineSegme
   return null;
 }
 
+function buildMarkerClusterKey(items: MarkerPoint[]): string {
+  const first = items[0]?.marker;
+  const last = items[items.length - 1]?.marker;
+  return [
+    String(first?.rel_path || ""),
+    String(first?.ts || 0),
+    String(last?.rel_path || ""),
+    String(last?.ts || 0),
+    String(items.length),
+  ].join("|");
+}
+
+function estimateClusterVisualWidth(count: number): number {
+  if (count <= 1) return 10;
+  const digits = String(count).length;
+  return Math.max(22, Math.min(44, 16 + digits * 7));
+}
+
+function buildMarkerClusters(points: MarkerPoint[], options: { baseY: number }): MarkerCluster[] {
+  const { baseY } = options;
+  if (points.length <= 0) return [];
+
+  const sorted = points.slice().sort((a, b) => {
+    const dx = a.x - b.x;
+    if (Math.abs(dx) > 0.001) return dx;
+    return Number(a.marker.ts || 0) - Number(b.marker.ts || 0);
+  });
+
+  const grouped: MarkerPoint[][] = [];
+  let current: MarkerPoint[] = [];
+  for (const point of sorted) {
+    const prev = current[current.length - 1];
+    const first = current[0];
+    const withinDistance = !prev || (point.x - prev.x) <= MARKER_CLUSTER_DISTANCE;
+    const withinSpan = !first || (point.x - first.x) <= MARKER_CLUSTER_SPAN_LIMIT;
+    if (!prev || (withinDistance && withinSpan)) {
+      current.push(point);
+      continue;
+    }
+    grouped.push(current);
+    current = [point];
+  }
+  if (current.length) grouped.push(current);
+
+  const laneRightEdges = Array.from({ length: MARKER_CLUSTER_LANE_COUNT }, () => Number.NEGATIVE_INFINITY);
+  return grouped.map((group) => {
+    const markers = group
+      .slice()
+      .sort((a, b) => Number(b.marker.ts || 0) - Number(a.marker.ts || 0))
+      .map((item) => item.marker);
+    const x = group.reduce((sum, item) => sum + item.x, 0) / group.length;
+    const score01 = group.reduce<number | null>((best, item) => {
+      if (item.score01 == null) return best;
+      if (best == null) return item.score01;
+      return Math.max(best, item.score01);
+    }, null);
+    const accentSource = group.reduce<MarkerPoint | null>((best, item) => {
+      if (!item.accentColor) return best;
+      if (!best) return item;
+      return (item.score01 ?? -1) > (best.score01 ?? -1) ? item : best;
+    }, null);
+    const earliestTs = group.reduce((min, item) => Math.min(min, Number(item.marker.ts || 0)), Number.POSITIVE_INFINITY);
+    const latestTs = group.reduce((max, item) => Math.max(max, Number(item.marker.ts || 0)), 0);
+    const visualWidth = estimateClusterVisualWidth(markers.length);
+    const halfWidth = visualWidth / 2;
+
+    let laneIndex = laneRightEdges.findIndex((edge) => (x - halfWidth) >= (edge + MARKER_CLUSTER_GAP));
+    if (laneIndex < 0) {
+      laneIndex = laneRightEdges.reduce((bestIndex, edge, index, all) => (edge < all[bestIndex] ? index : bestIndex), 0);
+    }
+    laneRightEdges[laneIndex] = x + halfWidth;
+
+    return {
+      key: buildMarkerClusterKey(group),
+      markers,
+      x,
+      y: baseY + laneIndex * MARKER_CLUSTER_LANE_SPACING,
+      count: markers.length,
+      score01,
+      accentColor: accentSource?.accentColor ?? null,
+      zIndex: Math.max(...group.map((item) => item.zIndex)) + markers.length,
+      earliestTs: Number.isFinite(earliestTs) ? earliestTs : 0,
+      latestTs,
+      visualWidth,
+    } satisfies MarkerCluster;
+  });
+}
+
 export function PipelineTelemetryOverviewCard({
   pipelineName,
   steps,
@@ -248,8 +356,8 @@ export function PipelineTelemetryOverviewCard({
   const [rangeSeconds, setRangeSeconds] = useState(RANGE_DEFAULT_SECONDS);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
-  const [hoveredMarker, setHoveredMarker] = useState<PipelineTelemetryImageMarker | null>(null);
-  const [pinnedMarker, setPinnedMarker] = useState<PipelineTelemetryImageMarker | null>(null);
+  const [hoveredClusterKey, setHoveredClusterKey] = useState<string | null>(null);
+  const [pinnedClusterKey, setPinnedClusterKey] = useState<string | null>(null);
   const [hoverTimeline, setHoverTimeline] = useState<HoverTimelineState | null>(null);
   const decimalFormatter = useMemo(
     () =>
@@ -318,7 +426,11 @@ export function PipelineTelemetryOverviewCard({
         );
         const [numericResponses, markerResponse] = await Promise.all([
           Promise.all(numericPromises),
-          getPipelineTelemetryImageMarkers(pipelineName, { metricId: "store.image", limit: 400 }),
+          getPipelineTelemetryImageMarkers(pipelineName, {
+            metricId: "store.image",
+            limit: MARKER_FETCH_LIMIT,
+            windowSeconds: rangeSeconds,
+          }),
         ]);
         if (cancelled) return;
 
@@ -365,15 +477,28 @@ export function PipelineTelemetryOverviewCard({
   }, [pipelineName, metricTargetsKey, rangeSeconds, refreshNonce, externalRefreshNonce]);
 
   useEffect(() => {
-    setPinnedMarker(null);
-    setHoveredMarker(null);
+    setPinnedClusterKey(null);
+    setHoveredClusterKey(null);
     setHoverTimeline(null);
   }, [pipelineName, markers.length, rangeSeconds]);
 
+  const latestDataS = useMemo(() => {
+    let latest = 0;
+    for (const item of series) {
+      const lastPoint = item.points[item.points.length - 1];
+      if (!lastPoint) continue;
+      latest = Math.max(latest, Number(lastPoint.bucket_start_s || 0) + Math.max(0, Number(item.bucketSeconds || 0)));
+    }
+    for (const marker of markers) {
+      latest = Math.max(latest, Number(marker.ts || 0));
+    }
+    return latest;
+  }, [series, markers]);
+
   const axisEndS = useMemo(() => {
     const baseMs = lastUpdatedAt ?? Date.now();
-    return Math.floor(baseMs / 1000);
-  }, [lastUpdatedAt]);
+    return Math.max(Math.floor(baseMs / 1000), Math.ceil(latestDataS));
+  }, [lastUpdatedAt, latestDataS]);
   const xMin = useMemo(() => Math.max(0, axisEndS - rangeSeconds), [axisEndS, rangeSeconds]);
   const xMax = axisEndS;
 
@@ -412,11 +537,11 @@ export function PipelineTelemetryOverviewCard({
 
   const markerPoints: MarkerPoint[] = useMemo(() => {
     if (!markers.length || xMax <= xMin) return [];
-    const y = paddingTop + innerHeight + 6;
     return markers
       .map((marker) => {
         const ts = Number(marker.ts || 0);
         if (!Number.isFinite(ts) || ts < xMin || ts > xMax) return null;
+        const x = xScale(ts);
         let foundMetricValue = false;
         let bestMetricValue = -1;
         let bestMetricId: string | null = null;
@@ -445,8 +570,7 @@ export function PipelineTelemetryOverviewCard({
 
         return {
           marker,
-          x: xScale(ts),
-          y,
+          x,
           score01,
           accentColor,
           zIndex: 10 + zIndexScore + zIndexAge,
@@ -455,25 +579,60 @@ export function PipelineTelemetryOverviewCard({
       .filter(Boolean) as MarkerPoint[];
   }, [markers, series, xMin, xMax, rangeSeconds]);
 
-  const activeMarker = pinnedMarker ?? hoveredMarker;
-  const activeMarkerX = useMemo(() => {
-    if (!activeMarker || xMax <= xMin) return null;
-    const ts = Number(activeMarker.ts || 0);
-    if (!Number.isFinite(ts)) return null;
-    return xScale(ts);
-  }, [activeMarker, xMin, xMax]);
+  const markerClusters = useMemo(
+    () => buildMarkerClusters(markerPoints, { baseY: paddingTop + innerHeight + 6 }),
+    [markerPoints, paddingTop, innerHeight],
+  );
+  const markerClustersByKey = useMemo(
+    () => new Map(markerClusters.map((cluster) => [cluster.key, cluster])),
+    [markerClusters],
+  );
+
+  useEffect(() => {
+    if (hoveredClusterKey && !markerClustersByKey.has(hoveredClusterKey)) setHoveredClusterKey(null);
+    if (pinnedClusterKey && !markerClustersByKey.has(pinnedClusterKey)) setPinnedClusterKey(null);
+  }, [markerClustersByKey, hoveredClusterKey, pinnedClusterKey]);
+
+  useEffect(() => {
+    if (!pinnedClusterKey) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPinnedClusterKey(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pinnedClusterKey]);
+
+  const activeCluster = useMemo(() => {
+    if (pinnedClusterKey) return markerClustersByKey.get(pinnedClusterKey) ?? null;
+    if (hoveredClusterKey) return markerClustersByKey.get(hoveredClusterKey) ?? null;
+    return null;
+  }, [markerClustersByKey, pinnedClusterKey, hoveredClusterKey]);
   const hoverTooltipStyle = useMemo(() => {
     if (!hoverTimeline) return null;
     const leftPercent = (hoverTimeline.chartX / chartWidth) * 100;
     if (hoverTimeline.chartX > chartWidth * 0.7) return { left: `${leftPercent}%`, transform: "translateX(-100%)" };
     return { left: `${leftPercent}%`, transform: "translateX(8px)" };
   }, [hoverTimeline, chartWidth]);
-  const markerOverlayStyle = useMemo(() => {
-    if (activeMarkerX == null) return null;
-    const leftPercent = (activeMarkerX / chartWidth) * 100;
-    if (activeMarkerX > chartWidth * 0.55) return { left: `${leftPercent}%`, transform: "translateX(calc(-100% - 10px))" };
-    return { left: `${leftPercent}%`, transform: "translateX(10px)" };
-  }, [activeMarkerX, chartWidth]);
+  const clusterOverlayStyle = useMemo(() => {
+    if (!activeCluster) return null;
+    const leftPercent = (activeCluster.x / chartWidth) * 100;
+    if (activeCluster.x < chartWidth * 0.28) return { left: `${leftPercent}%`, transform: "translateX(0)" };
+    if (activeCluster.x > chartWidth * 0.72) return { left: `${leftPercent}%`, transform: "translateX(-100%)" };
+    return { left: `${leftPercent}%`, transform: "translateX(-50%)" };
+  }, [activeCluster, chartWidth]);
+  const activeClusterMarkers = useMemo(() => {
+    if (!activeCluster) return [];
+    if (pinnedClusterKey) return activeCluster.markers;
+    return activeCluster.markers.slice(0, MARKER_CLUSTER_PREVIEW_LIMIT);
+  }, [activeCluster, pinnedClusterKey]);
+  const activeClusterTimeLabel = useMemo(() => {
+    if (!activeCluster) return "";
+    const earliest = activeCluster.earliestTs;
+    const latest = activeCluster.latestTs;
+    if (!Number.isFinite(earliest) || !Number.isFinite(latest) || earliest <= 0 || latest <= 0) return "";
+    if (Math.abs(latest - earliest) < 0.5) return timeFormatter.format(new Date(latest * 1000));
+    return `${timeFormatter.format(new Date(earliest * 1000))} -> ${timeFormatter.format(new Date(latest * 1000))}`;
+  }, [activeCluster, timeFormatter]);
 
   return (
     <div className="card">
@@ -527,7 +686,7 @@ export function PipelineTelemetryOverviewCard({
 
 	        {loading ? <div className="pipelinesHint">{t("core.ui.pipelines.telemetry.loading", {}, "Loading telemetry…")}</div> : null}
 	        {error ? <div className="pipelinesInlineError">{t("core.ui.pipelines.telemetry.error", { error }, "Telemetry unavailable: {{error}}")}</div> : null}
-	        {!loading && !error && series.length === 0 && markerPoints.length === 0 ? (
+	        {!loading && !error && series.length === 0 && markerClusters.length === 0 ? (
 	          <div className="pipelinesHint">
 	            {t(
 	              "core.ui.pipelines.telemetry.no_data",
@@ -537,7 +696,7 @@ export function PipelineTelemetryOverviewCard({
 	          </div>
 	        ) : null}
 
-		        {!loading && !error && (series.length > 0 || markerPoints.length > 0) ? (
+		        {!loading && !error && (series.length > 0 || markerClusters.length > 0) ? (
 		          <>
 	            <div className="pipelinesTelemetryLegend">
 	              {series.map((item) => (
@@ -546,7 +705,7 @@ export function PipelineTelemetryOverviewCard({
 	                  <span>{metricLabel(item.metricId, t)}</span>
 	                </div>
 	              ))}
-	              {markerPoints.length ? (
+	              {markerClusters.length ? (
 	                <div className="pipelinesTelemetryLegendItem">
 	                  <span className="pipelinesTelemetryLegendSwatch isImage" />
 	                  <span>{t("core.ui.pipelines.telemetry.overview.images", {}, "Stored images")}</span>
@@ -596,7 +755,7 @@ export function PipelineTelemetryOverviewCard({
 	                }}
 	                onMouseLeave={() => {
 	                  setHoverTimeline(null);
-	                  if (!pinnedMarker) setHoveredMarker(null);
+	                  if (!pinnedClusterKey) setHoveredClusterKey(null);
 	                }}
 	              >
 	                <svg
@@ -630,7 +789,7 @@ export function PipelineTelemetryOverviewCard({
 	                      </g>
 	                    );
 	                  })}
-	                  {hoverTimeline ? (
+	                  {hoverTimeline && !activeCluster ? (
 	                    <>
 	                      <line
 	                        x1={hoverTimeline.chartX}
@@ -654,76 +813,70 @@ export function PipelineTelemetryOverviewCard({
 	                  ) : null}
 	                </svg>
 
-	                {markerPoints.length ? (
-	                  <div className="pipelinesTelemetryMarkerLayer" aria-hidden={Boolean(pinnedMarker)}>
-	                    {markerPoints.map((item) => {
-	                      const key = `${item.marker.rel_path}|${item.marker.ts}|${item.marker.node_id}`;
-	                      const leftPercent = (item.x / chartWidth) * 100;
-	                      const topPercent = (item.y / chartHeight) * 100;
-	                      const score01 = item.score01;
-	                      const accent = item.accentColor ?? "var(--muted)";
-	                      const intensity = Math.round(18 + (score01 ?? 0.22) * 82);
+	                {markerClusters.length ? (
+	                  <div className="pipelinesTelemetryMarkerLayer">
+	                    {markerClusters.map((cluster) => {
+	                      const leftPercent = (cluster.x / chartWidth) * 100;
+	                      const topPercent = (cluster.y / chartHeight) * 100;
+	                      const score01 = cluster.score01;
+	                      const accent = cluster.accentColor ?? "var(--muted)";
+	                      const intensity = Math.round(20 + (score01 ?? 0.24) * 80);
 	                      const backgroundColor = `color-mix(in srgb, ${accent} ${intensity}%, var(--panelSolid))`;
-	                      const borderColor = `color-mix(in srgb, ${accent} ${Math.round(40 + (score01 ?? 0.15) * 60)}%, var(--panelSolid))`;
+	                      const borderColor = `color-mix(in srgb, ${accent} ${Math.round(42 + (score01 ?? 0.18) * 58)}%, var(--panelSolid))`;
 	                      const markerStyle = {
 	                        left: `${leftPercent}%`,
 	                        top: `${topPercent}%`,
 	                        backgroundColor,
 	                        borderColor,
-	                        ["--marker-z" as any]: item.zIndex,
+	                        minWidth: `${cluster.visualWidth}px`,
+	                        ["--marker-z" as any]: cluster.zIndex,
 	                      } as React.CSSProperties;
+	                      const title =
+	                        cluster.count <= 1
+	                          ? timeFormatter.format(new Date(cluster.latestTs * 1000))
+	                          : `${cluster.count} · ${timeFormatter.format(new Date(cluster.earliestTs * 1000))} -> ${timeFormatter.format(new Date(cluster.latestTs * 1000))}`;
 
 	                      return (
 	                        <button
-	                          key={key}
+	                          key={cluster.key}
 	                          className={[
-	                            "pipelinesTelemetryMarkerDot",
-	                            pinnedMarker && pinnedMarker.rel_path === item.marker.rel_path && pinnedMarker.ts === item.marker.ts
-	                              ? "isPinned"
-	                              : "",
+	                            "pipelinesTelemetryMarkerCluster",
+	                            cluster.count > 1 ? "isGrouped" : "isSingle",
+	                            pinnedClusterKey === cluster.key ? "isPinned" : "",
 	                          ]
 	                            .filter(Boolean)
 	                            .join(" ")}
 	                          type="button"
 	                          aria-label={t("core.ui.pipelines.telemetry.overview.images", {}, "Stored images")}
-	                          title={timeFormatter.format(new Date(Number(item.marker.ts || 0) * 1000))}
+	                          aria-expanded={pinnedClusterKey === cluster.key}
+	                          title={title}
 	                          style={markerStyle}
 	                          onMouseEnter={() => {
-	                            if (pinnedMarker) return;
-	                            setHoveredMarker(item.marker);
+	                            if (pinnedClusterKey) return;
+	                            setHoverTimeline(null);
+	                            setHoveredClusterKey(cluster.key);
 	                          }}
 	                          onMouseLeave={() => {
-	                            if (pinnedMarker) return;
-	                            setHoveredMarker((prev) => {
-	                              if (!prev) return prev;
-	                              const prevKey = `${prev.rel_path}|${prev.ts}`;
-	                              const curKey = `${item.marker.rel_path}|${item.marker.ts}`;
-	                              return prevKey === curKey ? null : prev;
-	                            });
+	                            if (pinnedClusterKey) return;
+	                            setHoveredClusterKey((prev) => (prev === cluster.key ? null : prev));
 	                          }}
 	                          onFocus={() => {
-	                            if (pinnedMarker) return;
-	                            setHoveredMarker(item.marker);
+	                            if (pinnedClusterKey) return;
+	                            setHoverTimeline(null);
+	                            setHoveredClusterKey(cluster.key);
 	                          }}
 	                          onBlur={() => {
-	                            if (pinnedMarker) return;
-	                            setHoveredMarker((prev) => {
-	                              if (!prev) return prev;
-	                              const prevKey = `${prev.rel_path}|${prev.ts}`;
-	                              const curKey = `${item.marker.rel_path}|${item.marker.ts}`;
-	                              return prevKey === curKey ? null : prev;
-	                            });
+	                            if (pinnedClusterKey) return;
+	                            setHoveredClusterKey((prev) => (prev === cluster.key ? null : prev));
 	                          }}
 	                          onClick={() => {
-	                            const curKey = `${item.marker.rel_path}|${item.marker.ts}`;
-	                            setPinnedMarker((prev) => {
-	                              if (!prev) return item.marker;
-	                              const prevKey = `${prev.rel_path}|${prev.ts}`;
-	                              return prevKey === curKey ? null : item.marker;
-	                            });
-	                            setHoveredMarker(null);
+	                            setPinnedClusterKey((prev) => (prev === cluster.key ? null : cluster.key));
+	                            setHoveredClusterKey(null);
+	                            setHoverTimeline(null);
 	                          }}
-	                        />
+	                        >
+	                          {cluster.count > 1 ? <span className="pipelinesTelemetryMarkerClusterCount">{cluster.count}</span> : null}
+	                        </button>
 	                      );
 	                    })}
 	                  </div>
@@ -745,24 +898,72 @@ export function PipelineTelemetryOverviewCard({
 	                    ))}
 	                  </div>
 	                ) : null}
-	                {activeMarker && markerOverlayStyle ? (
+	                {activeCluster && clusterOverlayStyle ? (
 	                  <div
-	                    className={["pipelinesTelemetryMarkerOverlay", pinnedMarker ? "" : "isTransient"].filter(Boolean).join(" ")}
-	                    style={markerOverlayStyle}
+	                    className={[
+	                      "pipelinesTelemetryClusterOverlay",
+	                      pinnedClusterKey ? "isPinned" : "isTransient",
+	                    ]
+	                      .filter(Boolean)
+	                      .join(" ")}
+	                    style={clusterOverlayStyle}
 	                  >
-	                    <div className="pipelinesStepStatsHeader">
-	                      <div className="pipelinesHint">{timeFormatter.format(new Date(Number(activeMarker.ts || 0) * 1000))}</div>
-	                      {pinnedMarker ? (
-	                        <button className="iconButton" type="button" onClick={() => setPinnedMarker(null)} title={t("core.actions.close")}>
+	                    <div className="pipelinesTelemetryClusterOverlayHeader">
+	                      <div>
+	                        <div className="pipelinesTelemetryClusterOverlayTitle">
+	                          {activeCluster.count <= 1
+	                            ? t("core.ui.pipelines.telemetry.overview.images", {}, "Stored images")
+	                            : t(
+	                                "core.ui.pipelines.telemetry.overview.images_cluster_count",
+	                                { count: activeCluster.count },
+	                                `${activeCluster.count} stored images`,
+	                              )}
+	                        </div>
+	                        <div className="pipelinesHint">{activeClusterTimeLabel}</div>
+	                      </div>
+	                      {pinnedClusterKey ? (
+	                        <button className="iconButton" type="button" onClick={() => setPinnedClusterKey(null)} title={t("core.actions.close")}>
 	                          <i className="fa-solid fa-xmark" aria-hidden="true" />
 	                        </button>
 	                      ) : null}
 	                    </div>
-	                    <img
-	                      src={`/files/${encodeURI(String(activeMarker.rel_path || ""))}`}
-	                      alt="marker preview"
-	                      className="pipelinesTelemetryMarkerImage"
-	                    />
+	                    <div className="pipelinesTelemetryClusterOverlayBody">
+	                      <div className="pipelinesTelemetryClusterMasonry">
+	                        {activeClusterMarkers.map((marker) => {
+	                          const markerKey = `${marker.rel_path}|${marker.ts}|${marker.node_id}`;
+	                          const markerTs = Number(marker.ts || 0);
+	                          return (
+	                            <a
+	                              key={markerKey}
+	                              className="pipelinesTelemetryClusterTile"
+	                              href={`/files/${encodeURI(String(marker.rel_path || ""))}`}
+	                              target={pinnedClusterKey ? "_blank" : undefined}
+	                              rel={pinnedClusterKey ? "noreferrer" : undefined}
+	                            >
+	                              <img
+	                                src={`/files/${encodeURI(String(marker.rel_path || ""))}`}
+	                                alt="marker preview"
+	                                className="pipelinesTelemetryClusterTileImage"
+	                                loading="lazy"
+	                              />
+	                              <div className="pipelinesTelemetryClusterTileMeta">
+	                                <span>{marker.image_key || t("core.ui.pipelines.telemetry.overview.images", {}, "Stored images")}</span>
+	                                <span>{Number.isFinite(markerTs) && markerTs > 0 ? timeOnlyFormatter.format(new Date(markerTs * 1000)) : ""}</span>
+	                              </div>
+	                            </a>
+	                          );
+	                        })}
+	                      </div>
+	                    </div>
+	                    {!pinnedClusterKey && activeCluster.markers.length > activeClusterMarkers.length ? (
+	                      <div className="pipelinesHint">
+	                        {t(
+	                          "core.ui.pipelines.telemetry.overview.images_cluster_more",
+	                          { count: activeCluster.markers.length - activeClusterMarkers.length },
+	                          `+${activeCluster.markers.length - activeClusterMarkers.length} more. Click to pin and browse the full cluster.`,
+	                        )}
+	                      </div>
+	                    ) : null}
 	                  </div>
 	                ) : null}
 	              </div>

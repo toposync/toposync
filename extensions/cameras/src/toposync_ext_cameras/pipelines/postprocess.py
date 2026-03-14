@@ -4022,28 +4022,53 @@ def _points_to_pixels(
 
 
 def _order_quad_points(points_px: list[tuple[float, float]]) -> list[tuple[float, float]] | None:
-    try:
-        import numpy as np  # type: ignore
-    except Exception:
-        return None
     if len(points_px) != 4:
         return None
-    pts = np.asarray(points_px, dtype=np.float32).reshape(4, 2)
-    if not np.isfinite(pts).all():
+    pts: list[tuple[float, float]] = []
+    seen: set[tuple[float, float]] = set()
+    for x_raw, y_raw in points_px:
+        try:
+            x = float(x_raw)
+            y = float(y_raw)
+        except Exception:
+            return None
+        if not math.isfinite(x) or not math.isfinite(y):
+            return None
+        key = (round(x, 6), round(y, 6))
+        if key in seen:
+            return None
+        seen.add(key)
+        pts.append((x, y))
+
+    x_sorted = sorted(pts, key=lambda item: (item[0], item[1]))
+    if len(x_sorted) != 4:
+        return None
+    left_most = sorted(x_sorted[:2], key=lambda item: (item[1], item[0]))
+    right_most = x_sorted[2:]
+    if len(left_most) != 2 or len(right_most) != 2:
         return None
 
-    s = pts.sum(axis=1)
-    diff = np.diff(pts, axis=1).reshape(-1)
-    tl = pts[int(np.argmin(s))]
-    br = pts[int(np.argmax(s))]
-    tr = pts[int(np.argmin(diff))]
-    bl = pts[int(np.argmax(diff))]
-    ordered = np.asarray([tl, tr, br, bl], dtype=np.float32)
-
-    unique = np.unique(ordered, axis=0)
-    if unique.shape[0] != 4:
+    tl, bl = left_most
+    distances = sorted(
+        (
+            ((point[0] - tl[0]) ** 2) + ((point[1] - tl[1]) ** 2),
+            point,
+        )
+        for point in right_most
+    )
+    if len(distances) != 2:
         return None
-    return [(float(p[0]), float(p[1])) for p in ordered]
+    tr = distances[0][1]
+    br = distances[1][1]
+    ordered = [tl, tr, br, bl]
+
+    polygon_area = 0.0
+    for index, (x1, y1) in enumerate(ordered):
+        x2, y2 = ordered[(index + 1) % len(ordered)]
+        polygon_area += (x1 * y2) - (y1 * x2)
+    if not math.isfinite(polygon_area) or abs(polygon_area) <= 1e-6:
+        return None
+    return ordered
 
 
 def _parse_ratio_preset(value: str) -> tuple[float, float] | None:

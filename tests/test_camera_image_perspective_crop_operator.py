@@ -77,3 +77,60 @@ def test_camera_image_perspective_crop_operator_warps_frame_and_maps_yolo_bbox_b
         )
 
     asyncio.run(scenario())
+
+
+def test_camera_image_perspective_crop_operator_handles_skewed_quad_ordering() -> None:
+    async def scenario() -> None:
+        try:
+            import numpy as np  # type: ignore
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("numpy is required for this test") from exc
+
+        from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+        from toposync.runtime.pipelines.runtime import Artifact, Packet
+        from toposync_ext_cameras.pipelines.postprocess import ImagePerspectiveCropRuntime
+
+        frame = np.zeros((1620, 2880, 3), dtype=np.uint8)
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={
+                "frame_width": 2880,
+                "frame_height": 1620,
+            },
+            artifacts={
+                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+            },
+        )
+
+        deps = PipelineRuntimeDependencies()
+        warp = ImagePerspectiveCropRuntime(
+            {
+                "units": "percent",
+                "points": [(70.5, 17.5), (100.0, 24.0), (100.0, 39.0), (64.5, 26.5)],
+                "output_ratio_preset": "auto",
+                "output_artifact_name": "frame",
+                "set_stream_frame": True,
+                "min_output_edge_px": 8,
+            },
+            deps,
+        )
+        out_packets = await warp.process_packet(packet, None)
+        assert len(out_packets) == 1
+        out = out_packets[0]
+
+        warp_payload = out.payload.get("frame_warp")
+        assert isinstance(warp_payload, dict)
+        assert warp_payload.get("source_frame_width") == 2880
+        assert warp_payload.get("source_frame_height") == 1620
+        assert int(warp_payload.get("dest_frame_width") or 0) < 2880
+        assert int(warp_payload.get("dest_frame_height") or 0) < 1620
+
+        warped = out.artifacts["frame"].data
+        assert warped is not None
+        warped_shape = tuple(getattr(warped, "shape", ()))
+        assert warped_shape
+        assert warped_shape[0] < 1620
+        assert warped_shape[1] < 2880
+
+    asyncio.run(scenario())

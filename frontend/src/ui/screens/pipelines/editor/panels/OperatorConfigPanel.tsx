@@ -24,7 +24,9 @@ import {
   ImageCropConfigCard,
   ImagePerspectiveCropConfigCard,
   ImageResizeConfigCard,
+  MotionBgSubAdaptiveConfigCard,
   MotionGateConfigCard,
+  MotionSampleBgConfigCard,
   ObjectSegmentationConfigCard,
   VelocityEstimationConfigCard,
 } from "./CameraPanels";
@@ -135,6 +137,36 @@ export function OperatorConfigPanel({
   if (operatorId === "camera.motion_gate") {
     return (
       <MotionGateConfigCard
+        config={config}
+        stepUid={step.uid}
+        nodeId={step.nodeId}
+        pipelineName={pipelineName}
+        steps={steps}
+        index={index}
+        showAdvanced={showAdvanced}
+        onUpdateConfig={onUpdateConfig}
+        onOpenTelemetryField={onOpenTelemetryField}
+      />
+    );
+  }
+  if (operatorId === "camera.motion_bgsub_adaptive") {
+    return (
+      <MotionBgSubAdaptiveConfigCard
+        config={config}
+        stepUid={step.uid}
+        nodeId={step.nodeId}
+        pipelineName={pipelineName}
+        steps={steps}
+        index={index}
+        showAdvanced={showAdvanced}
+        onUpdateConfig={onUpdateConfig}
+        onOpenTelemetryField={onOpenTelemetryField}
+      />
+    );
+  }
+  if (operatorId === "camera.motion_sample_bg") {
+    return (
+      <MotionSampleBgConfigCard
         config={config}
         stepUid={step.uid}
         nodeId={step.nodeId}

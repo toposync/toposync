@@ -631,6 +631,1072 @@ export function MotionGateConfigCard({
   );
 }
 
+type MotionBgSubAdaptiveProps = MotionGateProps;
+
+export function MotionBgSubAdaptiveConfigCard({
+  config,
+  stepUid,
+  nodeId,
+  pipelineName,
+  steps,
+  index,
+  showAdvanced,
+  onUpdateConfig,
+  onOpenTelemetryField,
+}: MotionBgSubAdaptiveProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+
+  const thresholdRaw = Number((config as any).threshold ?? 0.01);
+  const threshold = Number.isFinite(thresholdRaw) ? Math.max(0, Math.min(1, thresholdRaw)) : 0.01;
+
+  const thresholdLowRaw = Number((config as any).threshold_low ?? 0.0075);
+  const thresholdLow = Number.isFinite(thresholdLowRaw) ? Math.max(0, Math.min(threshold, thresholdLowRaw)) : 0.0075;
+
+  const holdSecondsRaw = Number((config as any).hold_seconds ?? 2.5);
+  const holdSeconds = Number.isFinite(holdSecondsRaw) ? Math.max(0, Math.min(120, holdSecondsRaw)) : 2.5;
+
+  const activationFramesRaw = Number((config as any).activation_frames ?? 1);
+  const activationFrames = Number.isFinite(activationFramesRaw) ? Math.max(1, Math.min(100, Math.round(activationFramesRaw))) : 1;
+
+  const filterWhenInactive = Boolean((config as any).filter_when_inactive ?? true);
+  const backend = String((config as any).backend ?? "mog2").trim().toLowerCase() === "knn" ? "knn" : "mog2";
+  const downscaleHeightRaw = Number((config as any).downscale_height ?? 180);
+  const downscaleHeight = Number.isFinite(downscaleHeightRaw) ? Math.max(0, Math.min(2160, Math.round(downscaleHeightRaw))) : 180;
+  const historyRaw = Number((config as any).history ?? 300);
+  const history = Number.isFinite(historyRaw) ? Math.max(1, Math.min(10000, Math.round(historyRaw))) : 300;
+  const detectShadows = Boolean((config as any).detect_shadows ?? true);
+  const shadowMode = String((config as any).shadow_mode ?? "exclude").trim().toLowerCase() === "count" ? "count" : "exclude";
+  const varThresholdRaw = Number((config as any).var_threshold ?? 16);
+  const varThreshold = Number.isFinite(varThresholdRaw) ? Math.max(0, Math.min(2048, varThresholdRaw)) : 16;
+  const dist2ThresholdRaw = Number((config as any).dist2_threshold ?? 400);
+  const dist2Threshold = Number.isFinite(dist2ThresholdRaw) ? Math.max(0, Math.min(32768, dist2ThresholdRaw)) : 400;
+  const knnSamplesRaw = Number((config as any).knn_samples ?? 2);
+  const knnSamples = Number.isFinite(knnSamplesRaw) ? Math.max(1, Math.min(32, Math.round(knnSamplesRaw))) : 2;
+  const blurKernelSizeRaw = Number((config as any).blur_kernel_size ?? 5);
+  const blurKernelSize = Number.isFinite(blurKernelSizeRaw) ? Math.max(0, Math.min(63, Math.round(blurKernelSizeRaw))) : 5;
+  const morphologyOpenPxRaw = Number((config as any).morphology_open_px ?? 3);
+  const morphologyOpenPx = Number.isFinite(morphologyOpenPxRaw) ? Math.max(0, Math.min(63, Math.round(morphologyOpenPxRaw))) : 3;
+  const morphologyClosePxRaw = Number((config as any).morphology_close_px ?? 5);
+  const morphologyClosePx = Number.isFinite(morphologyClosePxRaw) ? Math.max(0, Math.min(63, Math.round(morphologyClosePxRaw))) : 5;
+  const minBlobAreaRatioRaw = Number((config as any).min_blob_area_ratio ?? 0.0005);
+  const minBlobAreaRatio = Number.isFinite(minBlobAreaRatioRaw) ? Math.max(0, Math.min(1, minBlobAreaRatioRaw)) : 0.0005;
+  const maxBlobsRaw = Number((config as any).max_blobs ?? 8);
+  const maxBlobs = Number.isFinite(maxBlobsRaw) ? Math.max(1, Math.min(64, Math.round(maxBlobsRaw))) : 8;
+
+  const maskEnabled = Boolean((config as any).mask_enabled ?? false);
+  const maskMode = parseMotionMaskMode((config as any).mask_mode);
+  const maskBrushDiameter01Raw = Number((config as any).mask_brush_diameter01 ?? 0.1);
+  const maskBrushDiameter01 = Number.isFinite(maskBrushDiameter01Raw)
+    ? Math.max(0.002, Math.min(0.25, maskBrushDiameter01Raw))
+    : 0.1;
+  const maskStrokes = parseMotionMaskStrokes((config as any).mask_strokes);
+
+  const inputWithFallback = String((config as any).input_with_fallback ?? "segmented,treated,original").trim() || "segmented,treated,original";
+  const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? true;
+
+  const drawEligibility = React.useMemo(
+    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId),
+    [steps, index, pipelineName, nodeId],
+  );
+
+  const [isDrawOpen, setIsDrawOpen] = React.useState(false);
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.motion_bgsub_adaptive.hint")}</div>
+
+      <label className="pipelinesLabel">
+        <div className="pipelinesScalarLabelHeader">
+          <span>{t("core.ui.pipelines.panels.motion_gate.threshold")}</span>
+          {onOpenTelemetryField ? (
+            <button
+              className="iconButton pipelinesTelemetryFieldButton"
+              type="button"
+              title={t("core.ui.pipelines.telemetry.field.open_histogram")}
+              onClick={() =>
+                onOpenTelemetryField({
+                  stepUid,
+                  nodeId,
+                  operatorId: "camera.motion_bgsub_adaptive",
+                  configKey: "threshold",
+                  metricId: "motion.score",
+                  label: t("core.ui.pipelines.panels.motion_gate.threshold"),
+                  value: threshold,
+                })
+              }
+            >
+              <i className="fa-solid fa-chart-column" aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0}
+          max={1}
+          step={0.001}
+          value={threshold}
+          onChange={(nextValue) => {
+            const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(1, nextValue)) : 0.01;
+            onUpdateConfig((prev) => ({
+              ...prev,
+              threshold: normalized,
+              threshold_low:
+                Number((prev as any).threshold_low ?? thresholdLow) > normalized
+                  ? normalized
+                  : (prev as any).threshold_low ?? thresholdLow,
+            }));
+          }}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_bgsub_adaptive.backend")}</span>
+        <select
+          className="pipelinesSelect"
+          value={backend}
+          onChange={(event) => {
+            const next = String(event.target.value || "mog2").trim().toLowerCase() === "knn" ? "knn" : "mog2";
+            onUpdateConfig((prev) => ({ ...prev, backend: next }));
+          }}
+        >
+          <option value="mog2">{t("core.ui.pipelines.panels.motion_bgsub_adaptive.backend.mog2")}</option>
+          <option value="knn">{t("core.ui.pipelines.panels.motion_bgsub_adaptive.backend.knn")}</option>
+        </select>
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_gate.hold_seconds")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0}
+          max={120}
+          step={0.05}
+          value={holdSeconds}
+          onChange={(nextValue) => {
+            const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(120, nextValue)) : 2.5;
+            onUpdateConfig((prev) => ({ ...prev, hold_seconds: normalized }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.motion_gate.hold_seconds_hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_gate.activation_frames")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={1}
+          max={100}
+          step={1}
+          value={activationFrames}
+          onChange={(nextValue) => {
+            const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(100, Math.round(nextValue))) : 1;
+            onUpdateConfig((prev) => ({ ...prev, activation_frames: normalized }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.motion_gate.activation_frames_hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_bgsub_adaptive.filter_when_inactive")}</span>
+        <input
+          type="checkbox"
+          checked={filterWhenInactive}
+          onChange={(event) => onUpdateConfig((prev) => ({ ...prev, filter_when_inactive: event.target.checked }))}
+        />
+      </label>
+
+      <div className="sectionDivider" />
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.motion_gate.mask.hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_gate.mask.enabled")}</span>
+        <input
+          type="checkbox"
+          checked={maskEnabled}
+          onChange={(event) => onUpdateConfig((prev) => ({ ...prev, mask_enabled: event.target.checked }))}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_gate.mask.mode")}</span>
+        <select
+          className="pipelinesSelect"
+          value={maskMode}
+          onChange={(event) => {
+            const next = parseMotionMaskMode(event.target.value);
+            onUpdateConfig((prev) => ({ ...prev, mask_mode: next }));
+          }}
+        >
+          <option value="include">{t("core.ui.pipelines.panels.motion_gate.mask.mode.include")}</option>
+          <option value="exclude">{t("core.ui.pipelines.panels.motion_gate.mask.mode.exclude")}</option>
+        </select>
+      </label>
+
+      <div className="rowWrap" style={{ marginTop: 10, justifyContent: "space-between" }}>
+        <button
+          className="chipButton"
+          type="button"
+          disabled={!drawEligibility.enabled}
+          onClick={() => setIsDrawOpen(true)}
+        >
+          {t("core.ui.pipelines.panels.motion_gate.mask.draw")}
+        </button>
+
+        <button
+          className="chipButton"
+          type="button"
+          disabled={maskStrokes.length === 0}
+          onClick={() => onUpdateConfig((prev) => ({ ...prev, mask_strokes: [] }))}
+        >
+          {t("core.ui.pipelines.panels.motion_gate.mask.clear")}
+        </button>
+      </div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.motion_gate.mask.strokes_count", { count: maskStrokes.length })}</div>
+
+      {!drawEligibility.enabled ? (
+        <div className="pipelinesStepHint" style={{ textAlign: "right" }}>
+          {drawEligibility.reason.code === "no_camera_source"
+            ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
+            : drawEligibility.reason.code === "no_camera_selected"
+              ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
+              : drawEligibility.reason.code === "no_pipeline_name"
+                ? t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline")
+                : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: prettyOperatorName(drawEligibility.reason.operatorId ?? "") })}
+        </div>
+      ) : null}
+
+      {showAdvanced ? (
+        <>
+          <div className="sectionDivider" />
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_gate.input_with_fallback")}</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={inputWithFallback}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, input_with_fallback: event.target.value }))}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_gate.fallback_to_stream_frame")}</span>
+            <input
+              type="checkbox"
+              checked={Boolean(fallbackToStreamFrame)}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, fallback_to_stream_frame: event.target.checked }))}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_gate.mask.brush_diameter")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0.002}
+              max={0.25}
+              step={0.001}
+              value={maskBrushDiameter01}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0.002, Math.min(0.25, nextValue)) : 0.1;
+                onUpdateConfig((prev) => ({ ...prev, mask_brush_diameter01: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_bgsub_adaptive.threshold_low")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={threshold}
+              step={0.001}
+              value={thresholdLow}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(threshold, nextValue)) : thresholdLow;
+                onUpdateConfig((prev) => ({ ...prev, threshold_low: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_bgsub_adaptive.downscale_height")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={2160}
+              step={1}
+              value={downscaleHeight}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(2160, Math.round(nextValue))) : 180;
+                onUpdateConfig((prev) => ({ ...prev, downscale_height: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_bgsub_adaptive.history")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={1}
+              max={10000}
+              step={1}
+              value={history}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(10000, Math.round(nextValue))) : 300;
+                onUpdateConfig((prev) => ({ ...prev, history: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_bgsub_adaptive.detect_shadows")}</span>
+            <input
+              type="checkbox"
+              checked={detectShadows}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, detect_shadows: event.target.checked }))}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_bgsub_adaptive.shadow_mode")}</span>
+            <select
+              className="pipelinesSelect"
+              value={shadowMode}
+              onChange={(event) => {
+                const next = String(event.target.value || "exclude").trim().toLowerCase() === "count" ? "count" : "exclude";
+                onUpdateConfig((prev) => ({ ...prev, shadow_mode: next }));
+              }}
+            >
+              <option value="exclude">{t("core.ui.pipelines.panels.motion_bgsub_adaptive.shadow_mode.exclude")}</option>
+              <option value="count">{t("core.ui.pipelines.panels.motion_bgsub_adaptive.shadow_mode.count")}</option>
+            </select>
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_bgsub_adaptive.var_threshold")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={2048}
+              step={1}
+              value={varThreshold}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(2048, nextValue)) : 16;
+                onUpdateConfig((prev) => ({ ...prev, var_threshold: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_bgsub_adaptive.dist2_threshold")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={32768}
+              step={1}
+              value={dist2Threshold}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(32768, nextValue)) : 400;
+                onUpdateConfig((prev) => ({ ...prev, dist2_threshold: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_bgsub_adaptive.knn_samples")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={1}
+              max={32}
+              step={1}
+              value={knnSamples}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(32, Math.round(nextValue))) : 2;
+                onUpdateConfig((prev) => ({ ...prev, knn_samples: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_bgsub_adaptive.blur_kernel_size")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={63}
+              step={1}
+              value={blurKernelSize}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(63, Math.round(nextValue))) : 5;
+                onUpdateConfig((prev) => ({ ...prev, blur_kernel_size: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_bgsub_adaptive.morphology_open_px")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={63}
+              step={1}
+              value={morphologyOpenPx}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(63, Math.round(nextValue))) : 3;
+                onUpdateConfig((prev) => ({ ...prev, morphology_open_px: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_bgsub_adaptive.morphology_close_px")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={63}
+              step={1}
+              value={morphologyClosePx}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(63, Math.round(nextValue))) : 5;
+                onUpdateConfig((prev) => ({ ...prev, morphology_close_px: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_bgsub_adaptive.min_blob_area_ratio")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={1}
+              step={0.0001}
+              value={minBlobAreaRatio}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(1, nextValue)) : 0.0005;
+                onUpdateConfig((prev) => ({ ...prev, min_blob_area_ratio: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_bgsub_adaptive.max_blobs")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={1}
+              max={64}
+              step={1}
+              value={maxBlobs}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(64, Math.round(nextValue))) : 8;
+                onUpdateConfig((prev) => ({ ...prev, max_blobs: normalized }));
+              }}
+            />
+          </label>
+        </>
+      ) : null}
+
+      <MotionMaskDrawModal
+        open={isDrawOpen}
+        onClose={() => setIsDrawOpen(false)}
+        snapshotSource={drawEligibility.snapshotSource}
+        mode={maskMode}
+        brushDiameter01={maskBrushDiameter01}
+        strokes={maskStrokes}
+        onApply={(next) =>
+          onUpdateConfig((prev) => ({
+            ...prev,
+            mask_enabled: true,
+            mask_mode: next.mode,
+            mask_strokes: next.strokes,
+          }))
+        }
+      />
+    </div>
+  );
+}
+
+type MotionSampleBgProps = MotionGateProps;
+
+export function MotionSampleBgConfigCard({
+  config,
+  stepUid,
+  nodeId,
+  pipelineName,
+  steps,
+  index,
+  showAdvanced,
+  onUpdateConfig,
+  onOpenTelemetryField,
+}: MotionSampleBgProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+
+  const thresholdRaw = Number((config as any).threshold ?? 0.01);
+  const threshold = Number.isFinite(thresholdRaw) ? Math.max(0, Math.min(1, thresholdRaw)) : 0.01;
+
+  const thresholdLowRaw = Number((config as any).threshold_low ?? 0.0075);
+  const thresholdLow = Number.isFinite(thresholdLowRaw) ? Math.max(0, Math.min(threshold, thresholdLowRaw)) : 0.0075;
+
+  const holdSecondsRaw = Number((config as any).hold_seconds ?? 2.5);
+  const holdSeconds = Number.isFinite(holdSecondsRaw) ? Math.max(0, Math.min(120, holdSecondsRaw)) : 2.5;
+
+  const activationFramesRaw = Number((config as any).activation_frames ?? 1);
+  const activationFrames = Number.isFinite(activationFramesRaw) ? Math.max(1, Math.min(100, Math.round(activationFramesRaw))) : 1;
+
+  const filterWhenInactive = Boolean((config as any).filter_when_inactive ?? true);
+  const backendRaw = String((config as any).backend ?? "pbas_lite").trim().toLowerCase();
+  const backend = backendRaw === "vibe_core" ? "vibe_core" : "pbas_lite";
+  const featureModeRaw = String((config as any).feature_mode ?? "gray_gradient").trim().toLowerCase();
+  const featureMode =
+    featureModeRaw === "gray" || featureModeRaw === "ycrcb_gradient" ? featureModeRaw : "gray_gradient";
+  const downscaleHeightRaw = Number((config as any).downscale_height ?? 180);
+  const downscaleHeight = Number.isFinite(downscaleHeightRaw) ? Math.max(0, Math.min(2160, Math.round(downscaleHeightRaw))) : 180;
+  const sampleCountRaw = Number((config as any).sample_count ?? 20);
+  const sampleCount = Number.isFinite(sampleCountRaw) ? Math.max(4, Math.min(128, Math.round(sampleCountRaw))) : 20;
+  const minMatchesRaw = Number((config as any).min_matches ?? 2);
+  const minMatches = Number.isFinite(minMatchesRaw) ? Math.max(1, Math.min(sampleCount, Math.round(minMatchesRaw))) : 2;
+  const rLowerRaw = Number((config as any).r_lower ?? 18);
+  const rLower = Number.isFinite(rLowerRaw) ? Math.max(1, Math.min(255, rLowerRaw)) : 18;
+  const rScaleRaw = Number((config as any).r_scale ?? 5);
+  const rScale = Number.isFinite(rScaleRaw) ? Math.max(0.5, Math.min(64, rScaleRaw)) : 5;
+  const rIncdecRaw = Number((config as any).r_incdec ?? 0.05);
+  const rIncdec = Number.isFinite(rIncdecRaw) ? Math.max(0.001, Math.min(10, rIncdecRaw)) : 0.05;
+  const tLowerRaw = Number((config as any).t_lower ?? 2);
+  const tLower = Number.isFinite(tLowerRaw) ? Math.max(1, Math.min(512, tLowerRaw)) : 2;
+  const tUpperRaw = Number((config as any).t_upper ?? 200);
+  const tUpper = Number.isFinite(tUpperRaw) ? Math.max(tLower, Math.min(4096, tUpperRaw)) : 200;
+  const tIncRaw = Number((config as any).t_inc ?? 1);
+  const tInc = Number.isFinite(tIncRaw) ? Math.max(0.01, Math.min(128, tIncRaw)) : 1;
+  const tDecRaw = Number((config as any).t_dec ?? 0.05);
+  const tDec = Number.isFinite(tDecRaw) ? Math.max(0.001, Math.min(10, tDecRaw)) : 0.05;
+  const enableNeighborPropagation = Boolean((config as any).enable_neighbor_propagation ?? true);
+  const warmupFramesRaw = Number((config as any).warmup_frames ?? 30);
+  const warmupFrames = Number.isFinite(warmupFramesRaw) ? Math.max(1, Math.min(600, Math.round(warmupFramesRaw))) : 30;
+  const sceneResetScoreRaw = Number((config as any).scene_reset_score ?? 0.6);
+  const sceneResetScore = Number.isFinite(sceneResetScoreRaw) ? Math.max(0, Math.min(1, sceneResetScoreRaw)) : 0.6;
+  const randomSeedRaw = Number((config as any).random_seed ?? 0);
+  const randomSeed = Number.isFinite(randomSeedRaw) ? Math.max(0, Math.min(2147483647, Math.round(randomSeedRaw))) : 0;
+  const morphologyOpenPxRaw = Number((config as any).morphology_open_px ?? 2);
+  const morphologyOpenPx = Number.isFinite(morphologyOpenPxRaw) ? Math.max(0, Math.min(63, Math.round(morphologyOpenPxRaw))) : 2;
+  const morphologyClosePxRaw = Number((config as any).morphology_close_px ?? 4);
+  const morphologyClosePx = Number.isFinite(morphologyClosePxRaw) ? Math.max(0, Math.min(63, Math.round(morphologyClosePxRaw))) : 4;
+  const minBlobAreaRatioRaw = Number((config as any).min_blob_area_ratio ?? 0.0005);
+  const minBlobAreaRatio = Number.isFinite(minBlobAreaRatioRaw) ? Math.max(0, Math.min(1, minBlobAreaRatioRaw)) : 0.0005;
+  const maxBlobsRaw = Number((config as any).max_blobs ?? 8);
+  const maxBlobs = Number.isFinite(maxBlobsRaw) ? Math.max(1, Math.min(64, Math.round(maxBlobsRaw))) : 8;
+
+  const maskEnabled = Boolean((config as any).mask_enabled ?? false);
+  const maskMode = parseMotionMaskMode((config as any).mask_mode);
+  const maskBrushDiameter01Raw = Number((config as any).mask_brush_diameter01 ?? 0.1);
+  const maskBrushDiameter01 = Number.isFinite(maskBrushDiameter01Raw)
+    ? Math.max(0.002, Math.min(0.25, maskBrushDiameter01Raw))
+    : 0.1;
+  const maskStrokes = parseMotionMaskStrokes((config as any).mask_strokes);
+
+  const inputWithFallback = String((config as any).input_with_fallback ?? "segmented,treated,original").trim() || "segmented,treated,original";
+  const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? true;
+
+  const drawEligibility = React.useMemo(
+    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId),
+    [steps, index, pipelineName, nodeId],
+  );
+
+  const [isDrawOpen, setIsDrawOpen] = React.useState(false);
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.motion_sample_bg.hint")}</div>
+
+      <label className="pipelinesLabel">
+        <div className="pipelinesScalarLabelHeader">
+          <span>{t("core.ui.pipelines.panels.motion_gate.threshold")}</span>
+          {onOpenTelemetryField ? (
+            <button
+              className="iconButton pipelinesTelemetryFieldButton"
+              type="button"
+              title={t("core.ui.pipelines.telemetry.field.open_histogram")}
+              onClick={() =>
+                onOpenTelemetryField({
+                  stepUid,
+                  nodeId,
+                  operatorId: "camera.motion_sample_bg",
+                  configKey: "threshold",
+                  metricId: "motion.score",
+                  label: t("core.ui.pipelines.panels.motion_gate.threshold"),
+                  value: threshold,
+                })
+              }
+            >
+              <i className="fa-solid fa-chart-column" aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0}
+          max={1}
+          step={0.001}
+          value={threshold}
+          onChange={(nextValue) => {
+            const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(1, nextValue)) : 0.01;
+            onUpdateConfig((prev) => ({
+              ...prev,
+              threshold: normalized,
+              threshold_low:
+                Number((prev as any).threshold_low ?? thresholdLow) > normalized
+                  ? normalized
+                  : (prev as any).threshold_low ?? thresholdLow,
+            }));
+          }}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_sample_bg.backend")}</span>
+        <select
+          className="pipelinesSelect"
+          value={backend}
+          onChange={(event) => {
+            const next = String(event.target.value || "pbas_lite").trim().toLowerCase() === "vibe_core" ? "vibe_core" : "pbas_lite";
+            onUpdateConfig((prev) => ({ ...prev, backend: next }));
+          }}
+        >
+          <option value="pbas_lite">{t("core.ui.pipelines.panels.motion_sample_bg.backend.pbas_lite")}</option>
+          <option value="vibe_core">{t("core.ui.pipelines.panels.motion_sample_bg.backend.vibe_core")}</option>
+        </select>
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_sample_bg.feature_mode")}</span>
+        <select
+          className="pipelinesSelect"
+          value={featureMode}
+          onChange={(event) => {
+            const nextRaw = String(event.target.value || "gray_gradient").trim().toLowerCase();
+            const next = nextRaw === "gray" || nextRaw === "ycrcb_gradient" ? nextRaw : "gray_gradient";
+            onUpdateConfig((prev) => ({ ...prev, feature_mode: next }));
+          }}
+        >
+          <option value="gray_gradient">{t("core.ui.pipelines.panels.motion_sample_bg.feature_mode.gray_gradient")}</option>
+          <option value="gray">{t("core.ui.pipelines.panels.motion_sample_bg.feature_mode.gray")}</option>
+          <option value="ycrcb_gradient">{t("core.ui.pipelines.panels.motion_sample_bg.feature_mode.ycrcb_gradient")}</option>
+        </select>
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_gate.hold_seconds")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={0}
+          max={120}
+          step={0.05}
+          value={holdSeconds}
+          onChange={(nextValue) => {
+            const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(120, nextValue)) : 2.5;
+            onUpdateConfig((prev) => ({ ...prev, hold_seconds: normalized }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.motion_gate.hold_seconds_hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_gate.activation_frames")}</span>
+        <PipelinesNumberInput
+          className="pipelinesInput"
+          min={1}
+          max={100}
+          step={1}
+          value={activationFrames}
+          onChange={(nextValue) => {
+            const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(100, Math.round(nextValue))) : 1;
+            onUpdateConfig((prev) => ({ ...prev, activation_frames: normalized }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.motion_gate.activation_frames_hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_sample_bg.filter_when_inactive")}</span>
+        <input
+          type="checkbox"
+          checked={filterWhenInactive}
+          onChange={(event) => onUpdateConfig((prev) => ({ ...prev, filter_when_inactive: event.target.checked }))}
+        />
+      </label>
+
+      <div className="sectionDivider" />
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.motion_gate.mask.hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_gate.mask.enabled")}</span>
+        <input
+          type="checkbox"
+          checked={maskEnabled}
+          onChange={(event) => onUpdateConfig((prev) => ({ ...prev, mask_enabled: event.target.checked }))}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.motion_gate.mask.mode")}</span>
+        <select
+          className="pipelinesSelect"
+          value={maskMode}
+          onChange={(event) => {
+            const next = parseMotionMaskMode(event.target.value);
+            onUpdateConfig((prev) => ({ ...prev, mask_mode: next }));
+          }}
+        >
+          <option value="include">{t("core.ui.pipelines.panels.motion_gate.mask.mode.include")}</option>
+          <option value="exclude">{t("core.ui.pipelines.panels.motion_gate.mask.mode.exclude")}</option>
+        </select>
+      </label>
+
+      <div className="rowWrap" style={{ marginTop: 10, justifyContent: "space-between" }}>
+        <button
+          className="chipButton"
+          type="button"
+          disabled={!drawEligibility.enabled}
+          onClick={() => setIsDrawOpen(true)}
+        >
+          {t("core.ui.pipelines.panels.motion_gate.mask.draw")}
+        </button>
+
+        <button
+          className="chipButton"
+          type="button"
+          disabled={maskStrokes.length === 0}
+          onClick={() => onUpdateConfig((prev) => ({ ...prev, mask_strokes: [] }))}
+        >
+          {t("core.ui.pipelines.panels.motion_gate.mask.clear")}
+        </button>
+      </div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.motion_gate.mask.strokes_count", { count: maskStrokes.length })}</div>
+
+      {!drawEligibility.enabled ? (
+        <div className="pipelinesStepHint" style={{ textAlign: "right" }}>
+          {drawEligibility.reason.code === "no_camera_source"
+            ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
+            : drawEligibility.reason.code === "no_camera_selected"
+              ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
+              : drawEligibility.reason.code === "no_pipeline_name"
+                ? t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline")
+                : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: prettyOperatorName(drawEligibility.reason.operatorId ?? "") })}
+        </div>
+      ) : null}
+
+      {showAdvanced ? (
+        <>
+          <div className="sectionDivider" />
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_gate.input_with_fallback")}</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={inputWithFallback}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, input_with_fallback: event.target.value }))}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_gate.fallback_to_stream_frame")}</span>
+            <input
+              type="checkbox"
+              checked={Boolean(fallbackToStreamFrame)}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, fallback_to_stream_frame: event.target.checked }))}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_gate.mask.brush_diameter")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0.002}
+              max={0.25}
+              step={0.001}
+              value={maskBrushDiameter01}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0.002, Math.min(0.25, nextValue)) : 0.1;
+                onUpdateConfig((prev) => ({ ...prev, mask_brush_diameter01: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.threshold_low")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={threshold}
+              step={0.001}
+              value={thresholdLow}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(threshold, nextValue)) : thresholdLow;
+                onUpdateConfig((prev) => ({ ...prev, threshold_low: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.downscale_height")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={2160}
+              step={1}
+              value={downscaleHeight}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(2160, Math.round(nextValue))) : 180;
+                onUpdateConfig((prev) => ({ ...prev, downscale_height: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.sample_count")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={4}
+              max={128}
+              step={1}
+              value={sampleCount}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(4, Math.min(128, Math.round(nextValue))) : 20;
+                onUpdateConfig((prev) => ({
+                  ...prev,
+                  sample_count: normalized,
+                  min_matches:
+                    Number((prev as any).min_matches ?? minMatches) > normalized
+                      ? normalized
+                      : (prev as any).min_matches ?? minMatches,
+                }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.min_matches")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={1}
+              max={sampleCount}
+              step={1}
+              value={minMatches}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(sampleCount, Math.round(nextValue))) : minMatches;
+                onUpdateConfig((prev) => ({ ...prev, min_matches: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.r_lower")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={1}
+              max={255}
+              step={0.1}
+              value={rLower}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(255, nextValue)) : 18;
+                onUpdateConfig((prev) => ({ ...prev, r_lower: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.r_scale")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0.5}
+              max={64}
+              step={0.1}
+              value={rScale}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0.5, Math.min(64, nextValue)) : 5;
+                onUpdateConfig((prev) => ({ ...prev, r_scale: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.r_incdec")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0.001}
+              max={10}
+              step={0.001}
+              value={rIncdec}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0.001, Math.min(10, nextValue)) : 0.05;
+                onUpdateConfig((prev) => ({ ...prev, r_incdec: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.t_lower")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={1}
+              max={512}
+              step={0.1}
+              value={tLower}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(512, nextValue)) : 2;
+                onUpdateConfig((prev) => ({
+                  ...prev,
+                  t_lower: normalized,
+                  t_upper:
+                    Number((prev as any).t_upper ?? tUpper) < normalized
+                      ? normalized
+                      : (prev as any).t_upper ?? tUpper,
+                }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.t_upper")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={tLower}
+              max={4096}
+              step={1}
+              value={tUpper}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(tLower, Math.min(4096, nextValue)) : tUpper;
+                onUpdateConfig((prev) => ({ ...prev, t_upper: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.t_inc")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0.01}
+              max={128}
+              step={0.01}
+              value={tInc}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0.01, Math.min(128, nextValue)) : 1;
+                onUpdateConfig((prev) => ({ ...prev, t_inc: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.t_dec")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0.001}
+              max={10}
+              step={0.001}
+              value={tDec}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0.001, Math.min(10, nextValue)) : 0.05;
+                onUpdateConfig((prev) => ({ ...prev, t_dec: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.enable_neighbor_propagation")}</span>
+            <input
+              type="checkbox"
+              checked={enableNeighborPropagation}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, enable_neighbor_propagation: event.target.checked }))}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.warmup_frames")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={1}
+              max={600}
+              step={1}
+              value={warmupFrames}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(600, Math.round(nextValue))) : 30;
+                onUpdateConfig((prev) => ({ ...prev, warmup_frames: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.scene_reset_score")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={1}
+              step={0.01}
+              value={sceneResetScore}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(1, nextValue)) : 0.6;
+                onUpdateConfig((prev) => ({ ...prev, scene_reset_score: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.random_seed")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={2147483647}
+              step={1}
+              value={randomSeed}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(2147483647, Math.round(nextValue))) : 0;
+                onUpdateConfig((prev) => ({ ...prev, random_seed: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.morphology_open_px")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={63}
+              step={1}
+              value={morphologyOpenPx}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(63, Math.round(nextValue))) : 2;
+                onUpdateConfig((prev) => ({ ...prev, morphology_open_px: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.morphology_close_px")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={63}
+              step={1}
+              value={morphologyClosePx}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(63, Math.round(nextValue))) : 4;
+                onUpdateConfig((prev) => ({ ...prev, morphology_close_px: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.min_blob_area_ratio")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={1}
+              step={0.0001}
+              value={minBlobAreaRatio}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(1, nextValue)) : 0.0005;
+                onUpdateConfig((prev) => ({ ...prev, min_blob_area_ratio: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.motion_sample_bg.max_blobs")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={1}
+              max={64}
+              step={1}
+              value={maxBlobs}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(64, Math.round(nextValue))) : 8;
+                onUpdateConfig((prev) => ({ ...prev, max_blobs: normalized }));
+              }}
+            />
+          </label>
+        </>
+      ) : null}
+
+      <MotionMaskDrawModal
+        open={isDrawOpen}
+        onClose={() => setIsDrawOpen(false)}
+        snapshotSource={drawEligibility.snapshotSource}
+        mode={maskMode}
+        brushDiameter01={maskBrushDiameter01}
+        strokes={maskStrokes}
+        onApply={(next) =>
+          onUpdateConfig((prev) => ({
+            ...prev,
+            mask_enabled: true,
+            mask_mode: next.mode,
+            mask_strokes: next.strokes,
+          }))
+        }
+      />
+    </div>
+  );
+}
+
 type ImageCropProps = {
   config: Record<string, unknown>;
   pipelineName: string | null;

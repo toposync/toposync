@@ -5,6 +5,8 @@ import type { SelectOption } from "./types";
 export const PIPELINE_PRESET_OPERATOR_IDS = [
   "camera.source",
   "core.schedule_gate",
+  "camera.motion_bgsub_adaptive",
+  "camera.motion_sample_bg",
   "camera.motion_gate",
   "core.lifecycle_from_boolean",
   "core.fps_reducer",
@@ -40,6 +42,8 @@ export const NODE_ID_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 export const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "core.schedule_gate": "Schedule gate",
   "camera.source": "Camera source",
+  "camera.motion_bgsub_adaptive": "Adaptive motion detector",
+  "camera.motion_sample_bg": "Sample-based motion detector",
   "camera.motion_gate": "Motion detection gate",
   "core.lifecycle_from_boolean": "Lifecycle from boolean",
   "core.fps_reducer": "FPS reducer",

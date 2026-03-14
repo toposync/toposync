@@ -1,6 +1,8 @@
 from .operators import (
     CameraSourceConfig,
+    MotionBgSubAdaptiveConfig,
     MotionGateConfig,
+    MotionSampleBgConfig,
     ObjectDetectionYOLOConfig,
     ObjectTrackingYOLOConfig,
     YoloBackend,
@@ -23,7 +25,9 @@ from .postprocess import (
 
 __all__ = [
     "CameraSourceConfig",
+    "MotionBgSubAdaptiveConfig",
     "MotionGateConfig",
+    "MotionSampleBgConfig",
     "ObjectTrackingYOLOConfig",
     "ObjectDetectionYOLOConfig",
     "YoloObject",

@@ -48,6 +48,8 @@ function shouldHideScalarGrid(operatorId: string): boolean {
     operatorId === "camera.image_adjust" ||
     operatorId === "camera.image_resize" ||
     operatorId === "camera.object_segmentation" ||
+    operatorId === "camera.motion_bgsub_adaptive" ||
+    operatorId === "camera.motion_sample_bg" ||
     operatorId === "camera.motion_gate" ||
     operatorId === "camera.camera_mapping" ||
     operatorId === "camera.area_restriction" ||
@@ -79,6 +81,8 @@ function telemetryMetricForConfigField(operatorId: string, configKey: string): s
   const key = String(configKey || "").trim();
   const operator = String(operatorId || "").trim();
   if (!key || !operator) return null;
+  if (operator === "camera.motion_bgsub_adaptive" && key === "threshold") return "motion.score";
+  if (operator === "camera.motion_sample_bg" && key === "threshold") return "motion.score";
   if (operator === "camera.motion_gate" && key === "threshold") return "motion.score";
   if ((operator === "vision.object_tracking_yolo" || operator === "vision.object_detection_yolo") && key === "confidence_threshold") {
     return "yolo.confidence";

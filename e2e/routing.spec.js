@@ -16,9 +16,11 @@ test("deep-link refresh works on /settings/pipelines", async ({ page }) => {
 
   await page.goto("/settings/pipelines");
   await expect(page.locator(".pipelinesTopbar .pipelinesTitle", { hasText: "Pipelines" })).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\/pipelines$/);
 
   await page.reload();
   await expect(page.locator(".pipelinesTopbar .pipelinesTitle", { hasText: "Pipelines" })).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\/pipelines$/);
 
   expect(badRequests).toEqual([]);
 });

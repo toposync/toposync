@@ -4,6 +4,9 @@ import { createPortal } from "react-dom";
 import {
   getPipelineTelemetryImageMarkers,
   getPipelineTelemetryNumeric,
+  getPipelinesTelemetryImageMarkers,
+  getPipelinesTelemetryNumericOverview,
+  type PipelineTelemetryAggregateNumeric,
   type PipelineTelemetryImageMarker,
   type PipelineTelemetryNumeric,
 } from "../../../util/api";
@@ -18,6 +21,7 @@ type MetricTarget = {
 };
 
 type Props = {
+  aggregate?: boolean;
   pipelineName: string | null;
   steps: InteractiveStep[];
   externalRefreshNonce?: number;
@@ -97,6 +101,7 @@ type MarkerCluster = {
 const RANGE_SHORT_SECONDS = 2 * 60 * 60;
 const RANGE_DEFAULT_SECONDS = 24 * 60 * 60;
 const RANGE_LONG_SECONDS = 3 * 24 * 60 * 60;
+const AGGREGATE_METRIC_IDS = ["motion.score", "yolo.confidence"];
 const MARKER_FETCH_LIMIT = 5_000;
 const MARKER_CLUSTER_DISTANCE = 9;
 const MARKER_CLUSTER_SPAN_LIMIT = 18;
@@ -134,7 +139,7 @@ function buildMetricTargetLabel(target: { metricId: string; nodeId: string }, du
   return `${base} · ${target.nodeId}`;
 }
 
-function aggregateMetricPoints(items: PipelineTelemetryNumeric[]): AggregatedPoint[] {
+function aggregateMetricPoints(items: Array<Pick<PipelineTelemetryNumeric, "points">>): AggregatedPoint[] {
   const byBucket = new Map<number, { count: number; sum: number; min: number; max: number }>();
   for (const item of items) {
     const points = Array.isArray(item.points) ? item.points : [];
@@ -373,6 +378,7 @@ function buildMarkerClusters(points: MarkerPoint[], options: { baseY: number }):
 }
 
 export function PipelineTelemetryOverviewCard({
+  aggregate,
   pipelineName,
   steps,
   externalRefreshNonce,
@@ -380,6 +386,7 @@ export function PipelineTelemetryOverviewCard({
   onReset,
 }: Props): React.ReactElement {
   const { t, locale } = i18n.useI18n();
+  const isAggregate = aggregate === true;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [series, setSeries] = useState<MetricSeries[]>([]);
@@ -414,6 +421,14 @@ export function PipelineTelemetryOverviewCard({
     [locale],
   );
   const metricTargets = useMemo(() => {
+    if (isAggregate) {
+      return AGGREGATE_METRIC_IDS.map((metricId) => ({
+        seriesKey: `aggregate:${metricId}`,
+        nodeId: "__aggregate__",
+        metricId,
+        label: metricLabel(metricId, t),
+      })) satisfies MetricTarget[];
+    }
     if (!pipelineName) return [];
     const unique = new Map<string, { nodeId: string; metricId: string }>();
     for (const step of steps) {
@@ -446,7 +461,7 @@ export function PipelineTelemetryOverviewCard({
       metricId: item.metricId,
       label: buildMetricTargetLabel(item, duplicateMetricIds, t),
     })) satisfies MetricTarget[];
-  }, [pipelineName, steps, t]);
+  }, [isAggregate, pipelineName, steps, t]);
 
   const metricTargetsKey = useMemo(
     () => metricTargets.map((item) => item.seriesKey).join("|"),
@@ -454,7 +469,7 @@ export function PipelineTelemetryOverviewCard({
   );
 
   useEffect(() => {
-    if (!pipelineName) {
+    if (!isAggregate && !pipelineName) {
       setSeries([]);
       setMarkers([]);
       setError(null);
@@ -467,27 +482,43 @@ export function PipelineTelemetryOverviewCard({
     setLoading(true);
     setError(null);
 
-        const run = async () => {
+    const run = async () => {
       try {
         const pointLimit = 5000;
-        const numericPromises = metricTargets.map((target) =>
-          getPipelineTelemetryNumeric(pipelineName, target.nodeId, target.metricId, pointLimit, rangeSeconds),
-        );
-        const [numericResponses, markerResponse] = await Promise.all([
-          Promise.all(numericPromises),
-          getPipelineTelemetryImageMarkers(pipelineName, {
-            metricId: "store.image",
-            limit: MARKER_FETCH_LIMIT,
-            windowSeconds: rangeSeconds,
-          }),
-        ]);
+        const [numericResponses, markerResponse] = isAggregate
+          ? await Promise.all([
+              getPipelinesTelemetryNumericOverview({
+                metricIds: metricTargets.map((target) => target.metricId),
+                pointLimit,
+                windowSeconds: rangeSeconds,
+                aggregation: "max",
+              }).then((response) => response.series),
+              getPipelinesTelemetryImageMarkers({
+                metricId: "store.image",
+                limit: MARKER_FETCH_LIMIT,
+                windowSeconds: rangeSeconds,
+                aggregation: "max",
+              }),
+            ])
+          : await Promise.all([
+              Promise.all(
+                metricTargets.map((target) =>
+                  getPipelineTelemetryNumeric(String(pipelineName || ""), target.nodeId, target.metricId, pointLimit, rangeSeconds),
+                ),
+              ),
+              getPipelineTelemetryImageMarkers(String(pipelineName || ""), {
+                metricId: "store.image",
+                limit: MARKER_FETCH_LIMIT,
+                windowSeconds: rangeSeconds,
+              }),
+            ]);
         if (cancelled) return;
 
         const nextSeries: MetricSeries[] = [];
         for (const [index, item] of numericResponses.entries()) {
           const target = metricTargets[index];
           if (!target) continue;
-          const points = aggregateMetricPoints([item]);
+          const points = isAggregate ? aggregateMetricPoints([item as PipelineTelemetryAggregateNumeric]) : aggregateMetricPoints([item as PipelineTelemetryNumeric]);
           if (points.length === 0) continue;
           const bucketSeconds = Math.max(0, Number(item?.bucket_seconds ?? 0));
           nextSeries.push({
@@ -519,13 +550,13 @@ export function PipelineTelemetryOverviewCard({
     return () => {
       cancelled = true;
     };
-  }, [pipelineName, metricTargetsKey, rangeSeconds, refreshNonce, externalRefreshNonce]);
+  }, [externalRefreshNonce, isAggregate, metricTargets, metricTargetsKey, pipelineName, rangeSeconds, refreshNonce]);
 
   useEffect(() => {
     setPinnedClusterKey(null);
     setHoveredClusterKey(null);
     setHoverTimeline(null);
-  }, [pipelineName, markers.length, rangeSeconds]);
+  }, [isAggregate, pipelineName, markers.length, rangeSeconds]);
 
   const latestDataS = useMemo(() => {
     let latest = 0;
@@ -709,6 +740,10 @@ export function PipelineTelemetryOverviewCard({
                     className="pipelinesTelemetryClusterTileImage"
                     loading="lazy"
                   />
+                  <div className="pipelinesTelemetryClusterTileMeta">
+                    <span>{marker.pipeline_name || marker.node_id}</span>
+                    <span>{timeFormatter.format(new Date(Number(marker.ts || 0) * 1000))}</span>
+                  </div>
                 </a>
               );
             })}
@@ -731,15 +766,21 @@ export function PipelineTelemetryOverviewCard({
     <div className="card">
       <div className="cardTitle">{t("core.ui.pipelines.telemetry.overview.title", {}, "Telemetry timeline")}</div>
       <div className="cardBody">
-	        <div className="pipelinesStepStatsHeader">
-	          <div className="pipelinesHint">
-	            {t(
-	              "core.ui.pipelines.telemetry.overview.subtitle",
-	              {},
-	              "Bands show min/max per time bucket. Solid lines show weighted averages.",
-	            )}
-	          </div>
-	          <div className="pipelinesModes">
+        <div className="pipelinesStepStatsHeader">
+          <div className="pipelinesHint">
+            {isAggregate
+              ? t(
+                  "core.ui.pipelines.telemetry.aggregate.subtitle",
+                  {},
+                  "Merged across all pipelines. Each line keeps the strongest bucket seen for that metric.",
+                )
+              : t(
+                  "core.ui.pipelines.telemetry.overview.subtitle",
+                  {},
+                  "Bands show min/max per time bucket. Solid lines show weighted averages.",
+                )}
+          </div>
+          <div className="pipelinesModes">
             <button
               className={["pillButton", rangeSeconds === RANGE_SHORT_SECONDS ? "isActive" : ""].filter(Boolean).join(" ")}
               type="button"
@@ -761,12 +802,12 @@ export function PipelineTelemetryOverviewCard({
             >
               {t("core.ui.pipelines.telemetry.overview.range.long", {}, "Long")}
             </button>
-	            <button className="pillButton" type="button" onClick={() => setRefreshNonce((value) => value + 1)} disabled={loading}>
-	              <i className="fa-solid fa-rotate" aria-hidden="true" />
-	              {t("core.actions.refresh")}
-	            </button>
-	          </div>
-	        </div>
+            <button className="pillButton" type="button" onClick={() => setRefreshNonce((value) => value + 1)} disabled={loading}>
+              <i className="fa-solid fa-rotate" aria-hidden="true" />
+              {t("core.actions.refresh")}
+            </button>
+          </div>
+        </div>
         {lastUpdatedAt ? (
           <div className="pipelinesHint">
             {t(
@@ -777,36 +818,36 @@ export function PipelineTelemetryOverviewCard({
           </div>
         ) : null}
 
-	        {loading ? <div className="pipelinesHint">{t("core.ui.pipelines.telemetry.loading", {}, "Loading telemetry…")}</div> : null}
-	        {error ? <div className="pipelinesInlineError">{t("core.ui.pipelines.telemetry.error", { error }, "Telemetry unavailable: {{error}}")}</div> : null}
-	        {!loading && !error && series.length === 0 && markerClusters.length === 0 ? (
-	          <div className="pipelinesHint">
-	            {t(
-	              "core.ui.pipelines.telemetry.no_data",
-	              {},
-	              "No telemetry samples yet. Let the pipeline run and reopen this panel.",
-	            )}
-	          </div>
-	        ) : null}
+        {loading ? <div className="pipelinesHint">{t("core.ui.pipelines.telemetry.loading", {}, "Loading telemetry…")}</div> : null}
+        {error ? <div className="pipelinesInlineError">{t("core.ui.pipelines.telemetry.error", { error }, "Telemetry unavailable: {{error}}")}</div> : null}
+        {!loading && !error && series.length === 0 && markerClusters.length === 0 ? (
+          <div className="pipelinesHint">
+            {t(
+              "core.ui.pipelines.telemetry.no_data",
+              {},
+              "No telemetry samples yet. Let the pipeline run and reopen this panel.",
+            )}
+          </div>
+        ) : null}
 
-		        {!loading && !error && (series.length > 0 || markerClusters.length > 0) ? (
-		          <>
-	            <div className="pipelinesTelemetryLegend">
-	              {series.map((item) => (
+        {!loading && !error && (series.length > 0 || markerClusters.length > 0) ? (
+          <>
+            <div className="pipelinesTelemetryLegend">
+              {series.map((item) => (
                     <div key={`legend:${item.seriesKey}`} className="pipelinesTelemetryLegendItem">
                       <span className="pipelinesTelemetryLegendSwatch" style={{ backgroundColor: item.color }} />
                       <span>{item.label}</span>
                     </div>
                   ))}
-	              {markerClusters.length ? (
-	                <div className="pipelinesTelemetryLegendItem">
-	                  <span className="pipelinesTelemetryLegendSwatch isImage" />
-	                  <span>{t("core.ui.pipelines.telemetry.overview.images", {}, "Stored images")}</span>
-	                </div>
-	              ) : null}
-	            </div>
+              {markerClusters.length ? (
+                <div className="pipelinesTelemetryLegendItem">
+                  <span className="pipelinesTelemetryLegendSwatch isImage" />
+                  <span>{t("core.ui.pipelines.telemetry.overview.images", {}, "Stored images")}</span>
+                </div>
+              ) : null}
+            </div>
 
-		            <div className="pipelinesTelemetryTimelineWrap">
+            <div className="pipelinesTelemetryTimelineWrap">
 	              <div
 	                className="pipelinesTelemetryTimelineStage"
 	                onMouseMove={(event) => {
@@ -995,37 +1036,37 @@ export function PipelineTelemetryOverviewCard({
 	                  </div>
 	                ) : null}
 	              </div>
-		            </div>
-		          </>
-		        ) : null}
+            </div>
+          </>
+        ) : null}
 
-	        {onReset && pipelineName ? (
-	          <div className="rowWrap" style={{ justifyContent: "flex-end", marginTop: 10 }}>
-	            <button
-	              className="iconButton"
-	              type="button"
-	              disabled={Boolean(resetting)}
-	              aria-label={
-	                resetting
-	                  ? t("core.ui.pipelines.telemetry.overview.resetting", {}, "Clearing…")
-	                  : t("core.ui.pipelines.telemetry.overview.reset", {}, "Clear stats & telemetry")
-	              }
-	              title={
-	                resetting
-	                  ? t("core.ui.pipelines.telemetry.overview.resetting", {}, "Clearing…")
-	                  : t("core.ui.pipelines.telemetry.overview.reset", {}, "Clear stats & telemetry")
-	              }
-	              onClick={() => {
-	                if (!confirm(t("core.ui.pipelines.telemetry.overview.confirm_reset", { name: pipelineName }, `Clear stats & telemetry for '${pipelineName}'?`))) return;
-	                void onReset();
-	              }}
-	            >
-	              <i className={["fa-solid", resetting ? "fa-rotate fa-spin" : "fa-broom"].join(" ")} aria-hidden="true" />
-	            </button>
-	          </div>
-	        ) : null}
-	      </div>
+        {onReset && pipelineName && !isAggregate ? (
+          <div className="rowWrap" style={{ justifyContent: "flex-end", marginTop: 10 }}>
+            <button
+              className="iconButton"
+              type="button"
+              disabled={Boolean(resetting)}
+              aria-label={
+                resetting
+                  ? t("core.ui.pipelines.telemetry.overview.resetting", {}, "Clearing…")
+                  : t("core.ui.pipelines.telemetry.overview.reset", {}, "Clear stats & telemetry")
+              }
+              title={
+                resetting
+                  ? t("core.ui.pipelines.telemetry.overview.resetting", {}, "Clearing…")
+                  : t("core.ui.pipelines.telemetry.overview.reset", {}, "Clear stats & telemetry")
+              }
+              onClick={() => {
+                if (!confirm(t("core.ui.pipelines.telemetry.overview.confirm_reset", { name: pipelineName }, `Clear stats & telemetry for '${pipelineName}'?`))) return;
+                void onReset();
+              }}
+            >
+              <i className={["fa-solid", resetting ? "fa-rotate fa-spin" : "fa-broom"].join(" ")} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
+      </div>
       {clusterOverlayNode && typeof document !== "undefined" ? createPortal(clusterOverlayNode, document.body) : null}
-	    </div>
-	  );
-	}
+    </div>
+  );
+}

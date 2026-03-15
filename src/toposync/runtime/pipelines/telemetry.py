@@ -493,6 +493,147 @@ class PipelineTelemetryStore:
         snapshot["node_id"] = key[1]
         return snapshot
 
+    def snapshot_numeric_metric_aggregate(
+        self,
+        metric_id: str,
+        *,
+        aggregation: str = "max",
+        now_s: float | None = None,
+        max_points: int | None = None,
+        window_seconds: int | None = None,
+    ) -> dict[str, Any] | None:
+        metric = self._sanitize_metric_id(metric_id)
+        if not metric:
+            return None
+
+        mode = str(aggregation or "").strip().lower() or "max"
+        if mode != "max":
+            raise ValueError(f"unsupported aggregation: {aggregation}")
+
+        snapshots: list[dict[str, Any]] = []
+        pipeline_names: set[str] = set()
+        for (pipeline_name, node_id, metric_name), series in self._numeric_series.items():
+            if metric_name != metric:
+                continue
+            snapshot = series.snapshot(now_s=now_s, max_points=max_points, window_seconds=window_seconds)
+            snapshot["pipeline_name"] = pipeline_name
+            snapshot["node_id"] = node_id
+            snapshots.append(snapshot)
+            pipeline_names.add(pipeline_name)
+
+        if not snapshots:
+            return None
+
+        first = snapshots[0]
+        histogram_min = float(first.get("histogram_min") or 0.0)
+        histogram_max = float(first.get("histogram_max") or 0.0)
+        histogram_bins_source = first.get("histogram_bins")
+        compatible_histograms = isinstance(histogram_bins_source, list)
+        histogram_bins = [0] * (len(histogram_bins_source) if compatible_histograms else 0)
+        if compatible_histograms:
+            for snapshot in snapshots:
+                bins = snapshot.get("histogram_bins")
+                if (
+                    not isinstance(bins, list)
+                    or len(bins) != len(histogram_bins)
+                    or float(snapshot.get("histogram_min") or 0.0) != histogram_min
+                    or float(snapshot.get("histogram_max") or 0.0) != histogram_max
+                ):
+                    compatible_histograms = False
+                    histogram_bins = []
+                    break
+                for index, value in enumerate(bins):
+                    histogram_bins[index] += max(0, int(value or 0))
+
+        points_by_bucket: dict[float, list[dict[str, Any]]] = {}
+        updated_at = 0.0
+        bucket_seconds = 0
+        effective_window_seconds = 0
+
+        for snapshot in snapshots:
+            updated_at = max(updated_at, float(snapshot.get("updated_at") or 0.0))
+            bucket_seconds = max(bucket_seconds, int(snapshot.get("bucket_seconds") or 0))
+            effective_window_seconds = max(effective_window_seconds, int(snapshot.get("window_seconds") or 0))
+            raw_points = snapshot.get("points")
+            if not isinstance(raw_points, list):
+                continue
+            for point in raw_points:
+                if not isinstance(point, dict):
+                    continue
+                bucket_start_s = float(point.get("bucket_start_s") or 0.0)
+                if not math.isfinite(bucket_start_s) or bucket_start_s <= 0.0:
+                    continue
+                item = {
+                    "bucket_start_s": bucket_start_s,
+                    "count": max(0, int(point.get("count") or 0)),
+                    "min": float(point.get("min") or 0.0),
+                    "max": float(point.get("max") or 0.0),
+                    "avg": float(point.get("avg") or 0.0),
+                    "pipeline_name": str(snapshot.get("pipeline_name") or ""),
+                    "node_id": str(snapshot.get("node_id") or ""),
+                }
+                points_by_bucket.setdefault(bucket_start_s, []).append(item)
+
+        aggregated_points: list[dict[str, Any]] = []
+        total_count = 0
+        total_sum = 0.0
+        total_min: float | None = None
+        total_max: float | None = None
+        for bucket_start_s in sorted(points_by_bucket.keys()):
+            candidates = points_by_bucket[bucket_start_s]
+            if not candidates:
+                continue
+            winner = max(
+                candidates,
+                key=lambda item: (float(item["avg"]), float(item["max"]), int(item["count"]), str(item["pipeline_name"]), str(item["node_id"])),
+            )
+            count = max(0, int(winner["count"]))
+            min_value = float(winner["min"])
+            max_value = float(winner["max"])
+            avg_value = float(winner["avg"])
+            aggregated_points.append(
+                {
+                    "bucket_start_s": bucket_start_s,
+                    "count": count,
+                    "min": min_value,
+                    "max": max_value,
+                    "avg": avg_value,
+                }
+            )
+            total_count += count
+            total_sum += avg_value * float(max(1, count))
+            if total_min is None or min_value < total_min:
+                total_min = min_value
+            if total_max is None or max_value > total_max:
+                total_max = max_value
+
+        if max_points is not None:
+            cap = max(1, int(max_points))
+            if len(aggregated_points) > cap:
+                step = max(1, len(aggregated_points) // cap)
+                sampled = aggregated_points[::step]
+                if sampled and sampled[-1] != aggregated_points[-1]:
+                    sampled.append(aggregated_points[-1])
+                aggregated_points = sampled[-cap:]
+
+        return {
+            "metric_id": metric,
+            "aggregation": mode,
+            "pipeline_count": len(pipeline_names),
+            "series_count": len(snapshots),
+            "window_seconds": int(effective_window_seconds),
+            "bucket_seconds": int(bucket_seconds),
+            "histogram_min": histogram_min,
+            "histogram_max": histogram_max,
+            "histogram_bins": histogram_bins,
+            "points": aggregated_points,
+            "total_count": int(total_count),
+            "total_min": float(total_min) if total_min is not None else 0.0,
+            "total_max": float(total_max) if total_max is not None else 0.0,
+            "total_avg": float(total_sum / float(total_count)) if total_count > 0 else 0.0,
+            "updated_at": float(updated_at),
+        }
+
     def list_image_markers(
         self,
         pipeline_name: str,
@@ -539,6 +680,57 @@ class PipelineTelemetryStore:
             if len(out) >= cap:
                 break
         out.reverse()
+        return out
+
+    def list_all_image_markers(
+        self,
+        *,
+        limit: int = 500,
+        metric_id: str | None = None,
+        node_id: str | None = None,
+        window_seconds: int | None = None,
+        now_s: float | None = None,
+    ) -> list[dict[str, Any]]:
+        cap = max(1, min(5_000, int(limit)))
+        metric_filter = self._sanitize_metric_id(metric_id or "")
+        node_filter = self._sanitize_node_id(node_id or "")
+        min_ts: float | None = None
+        if window_seconds is not None:
+            try:
+                parsed_window_seconds = int(window_seconds)
+            except Exception:
+                parsed_window_seconds = 0
+            if parsed_window_seconds > 0:
+                now_value = time.time() if now_s is None else float(now_s)
+                if math.isfinite(now_value):
+                    min_ts = max(0.0, now_value - float(parsed_window_seconds))
+
+        out: list[dict[str, Any]] = []
+        for pipeline_name, markers in self._image_markers_by_pipeline.items():
+            for marker in markers:
+                if metric_filter and str(marker.get("metric_id") or "").strip().lower() != metric_filter:
+                    continue
+                if node_filter and str(marker.get("node_id") or "").strip() != node_filter:
+                    continue
+                try:
+                    marker_ts = float(marker.get("ts") or 0.0)
+                except Exception:
+                    marker_ts = 0.0
+                if min_ts is not None and (not math.isfinite(marker_ts) or marker_ts < min_ts):
+                    continue
+                item = dict(marker)
+                item["pipeline_name"] = pipeline_name
+                out.append(item)
+
+        out.sort(
+            key=lambda item: (
+                float(item.get("ts") or 0.0),
+                str(item.get("pipeline_name") or ""),
+                str(item.get("rel_path") or ""),
+            )
+        )
+        if len(out) > cap:
+            out = out[-cap:]
         return out
 
     def debug_stats(self) -> dict[str, int]:

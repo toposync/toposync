@@ -148,7 +148,31 @@ export type PipelineTelemetryNumeric = {
   updated_at: number;
 };
 
+export type PipelineTelemetryAggregateNumeric = {
+  metric_id: string;
+  aggregation: string;
+  pipeline_count: number;
+  series_count: number;
+  window_seconds: number;
+  bucket_seconds: number;
+  histogram_min: number;
+  histogram_max: number;
+  histogram_bins: number[];
+  points: PipelineTelemetryNumericPoint[];
+  total_count: number;
+  total_min: number;
+  total_max: number;
+  total_avg: number;
+  updated_at: number;
+};
+
+export type PipelinesTelemetryNumericOverview = {
+  aggregation: string;
+  series: PipelineTelemetryAggregateNumeric[];
+};
+
 export type PipelineTelemetryImageMarker = {
+  pipeline_name?: string | null;
   ts: number;
   node_id: string;
   metric_id: string;
@@ -159,6 +183,12 @@ export type PipelineTelemetryImageMarker = {
 
 export type PipelineTelemetryImageMarkers = {
   pipeline_name: string;
+  markers: PipelineTelemetryImageMarker[];
+};
+
+export type PipelinesTelemetryImageMarkers = {
+  aggregation: string;
+  pipeline_count: number;
   markers: PipelineTelemetryImageMarker[];
 };
 
@@ -754,6 +784,45 @@ export async function getPipelineTelemetryImageMarkers(
   }
   const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/telemetry/image-markers?${params.toString()}`);
   if (!res.ok) throw new Error(`Failed to fetch pipeline telemetry markers ${name}: ${res.status}`);
+  return res.json();
+}
+
+export async function getPipelinesTelemetryNumericOverview(
+  options?: { metricIds?: string[]; pointLimit?: number; windowSeconds?: number; aggregation?: string },
+): Promise<PipelinesTelemetryNumericOverview> {
+  const params = new URLSearchParams();
+  const aggregation = String(options?.aggregation || "max").trim() || "max";
+  params.set("aggregation", aggregation);
+  const metricIds = Array.isArray(options?.metricIds) ? options?.metricIds : [];
+  for (const metricId of metricIds) {
+    const value = String(metricId || "").trim();
+    if (value) params.append("metric_id", value);
+  }
+  const pointLimit = Math.max(50, Math.min(5000, Math.floor(options?.pointLimit ?? 720)));
+  params.set("point_limit", String(pointLimit));
+  if (Number.isFinite(options?.windowSeconds) && (options?.windowSeconds ?? 0) > 0) {
+    params.set("window_seconds", String(Math.max(1, Math.floor(options?.windowSeconds ?? 0))));
+  }
+  const res = await fetch(`/api/pipelines/telemetry/all/numeric?${params.toString()}`);
+  if (!res.ok) throw new Error(`Failed to fetch pipelines telemetry overview: ${res.status}`);
+  return res.json();
+}
+
+export async function getPipelinesTelemetryImageMarkers(
+  options?: { limit?: number; nodeId?: string; metricId?: string; windowSeconds?: number; aggregation?: string },
+): Promise<PipelinesTelemetryImageMarkers> {
+  const params = new URLSearchParams();
+  const aggregation = String(options?.aggregation || "max").trim() || "max";
+  params.set("aggregation", aggregation);
+  const limit = Math.max(1, Math.min(5000, Math.floor(options?.limit ?? 500)));
+  params.set("limit", String(limit));
+  if (options?.nodeId) params.set("node_id", String(options.nodeId));
+  if (options?.metricId) params.set("metric_id", String(options.metricId));
+  if (Number.isFinite(options?.windowSeconds) && (options?.windowSeconds ?? 0) > 0) {
+    params.set("window_seconds", String(Math.max(1, Math.floor(options?.windowSeconds ?? 0))));
+  }
+  const res = await fetch(`/api/pipelines/telemetry/all/image-markers?${params.toString()}`);
+  if (!res.ok) throw new Error(`Failed to fetch pipelines telemetry markers: ${res.status}`);
   return res.json();
 }
 

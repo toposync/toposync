@@ -50,6 +50,9 @@ from toposync.runtime.pipelines.python_dsl import PythonDslCompileError, compile
 from toposync.runtime.pipelines.recommendations import PipelineAlert, analyze_compiled_pipeline
 from toposync.runtime.pipelines.stats import PipelineStatsStore
 from toposync.runtime.pipelines.telemetry import (
+    METRIC_MOTION_SCORE,
+    METRIC_STORE_IMAGE,
+    METRIC_YOLO_CONFIDENCE,
     create_default_pipeline_telemetry_disk_checkpoint,
     create_default_pipeline_telemetry_store,
 )
@@ -67,6 +70,7 @@ from toposync.runtime.pipelines.templates import (
 )
 
 logger = logging.getLogger("toposync")
+DEFAULT_PIPELINES_TELEMETRY_METRICS = [METRIC_MOTION_SCORE, METRIC_YOLO_CONFIDENCE]
 
 
 class EmitEventRequest(BaseModel):
@@ -117,6 +121,13 @@ class UploadFileResponse(BaseModel):
 
 class FileExistsResponse(BaseModel):
     exists: bool
+
+
+def _normalize_telemetry_aggregation(value: str | None) -> str:
+    raw = str(value or "").strip().lower() or "max"
+    if raw != "max":
+        raise HTTPException(status_code=400, detail=f"Unsupported telemetry aggregation '{raw}'")
+    return raw
 
 
 class ExtensionSettingsResponse(BaseModel):
@@ -211,6 +222,7 @@ class PipelineTelemetryNumericResponse(BaseModel):
 
 
 class PipelineTelemetryImageMarker(BaseModel):
+    pipeline_name: str | None = None
     ts: float = 0.0
     node_id: str = ""
     metric_id: str = ""
@@ -221,6 +233,35 @@ class PipelineTelemetryImageMarker(BaseModel):
 
 class PipelineTelemetryImageMarkersResponse(BaseModel):
     pipeline_name: str
+    markers: list[PipelineTelemetryImageMarker] = Field(default_factory=list)
+
+
+class PipelineTelemetryAggregateNumericResponse(BaseModel):
+    metric_id: str
+    aggregation: str = "max"
+    pipeline_count: int = 0
+    series_count: int = 0
+    window_seconds: int = 0
+    bucket_seconds: int = 0
+    histogram_min: float = 0.0
+    histogram_max: float = 0.0
+    histogram_bins: list[int] = Field(default_factory=list)
+    points: list[PipelineTelemetryNumericPoint] = Field(default_factory=list)
+    total_count: int = 0
+    total_min: float = 0.0
+    total_max: float = 0.0
+    total_avg: float = 0.0
+    updated_at: float = 0.0
+
+
+class PipelinesTelemetryNumericOverviewResponse(BaseModel):
+    aggregation: str = "max"
+    series: list[PipelineTelemetryAggregateNumericResponse] = Field(default_factory=list)
+
+
+class PipelinesTelemetryImageMarkersResponse(BaseModel):
+    aggregation: str = "max"
+    pipeline_count: int = 0
     markers: list[PipelineTelemetryImageMarker] = Field(default_factory=list)
 
 
@@ -1587,6 +1628,72 @@ def create_app() -> FastAPI:
         snapshot = stats_store.snapshot(pipeline.name, node_ids=node_ids or None)
         return PipelineStatsResponse.model_validate(snapshot)
 
+    @app.get("/api/pipelines/telemetry/all/numeric", response_model=PipelinesTelemetryNumericOverviewResponse)
+    async def get_pipelines_telemetry_numeric_overview(
+        request: Request,
+        metric_id: list[str] | None = Query(default=None),
+        aggregation: str = Query(default="max"),
+        window_seconds: int | None = Query(default=None, ge=1, le=30 * 24 * 60 * 60),
+        point_limit: int = Query(default=720, ge=50, le=5000),
+    ) -> PipelinesTelemetryNumericOverviewResponse:
+        _require(request, action="core:pipelines:read")
+        aggregation_name = _normalize_telemetry_aggregation(aggregation)
+        metric_ids: list[str] = []
+        for item in (metric_id or DEFAULT_PIPELINES_TELEMETRY_METRICS):
+            normalized = str(item or "").strip().lower()
+            if normalized and normalized not in metric_ids:
+                metric_ids.append(normalized)
+        telemetry_store = getattr(request.app.state, "pipeline_telemetry_store", None)
+        if telemetry_store is None or not metric_ids:
+            return PipelinesTelemetryNumericOverviewResponse(aggregation=aggregation_name)
+
+        series: list[PipelineTelemetryAggregateNumericResponse] = []
+        for metric_name in metric_ids:
+            snapshot = telemetry_store.snapshot_numeric_metric_aggregate(
+                metric_name,
+                aggregation=aggregation_name,
+                max_points=int(point_limit),
+                window_seconds=(int(window_seconds) if window_seconds is not None else None),
+            )
+            if snapshot is None:
+                series.append(
+                    PipelineTelemetryAggregateNumericResponse(
+                        metric_id=metric_name,
+                        aggregation=aggregation_name,
+                    )
+                )
+                continue
+            series.append(PipelineTelemetryAggregateNumericResponse.model_validate(snapshot))
+        return PipelinesTelemetryNumericOverviewResponse(aggregation=aggregation_name, series=series)
+
+    @app.get("/api/pipelines/telemetry/all/image-markers", response_model=PipelinesTelemetryImageMarkersResponse)
+    async def get_pipelines_telemetry_image_markers(
+        request: Request,
+        aggregation: str = Query(default="max"),
+        limit: int = Query(default=500, ge=1, le=5000),
+        node_id: str | None = Query(default=None),
+        metric_id: str | None = Query(default=METRIC_STORE_IMAGE),
+        window_seconds: int | None = Query(default=None, ge=1, le=7 * 24 * 60 * 60),
+    ) -> PipelinesTelemetryImageMarkersResponse:
+        _require(request, action="core:pipelines:read")
+        aggregation_name = _normalize_telemetry_aggregation(aggregation)
+        telemetry_store = getattr(request.app.state, "pipeline_telemetry_store", None)
+        if telemetry_store is None:
+            return PipelinesTelemetryImageMarkersResponse(aggregation=aggregation_name)
+
+        markers = telemetry_store.list_all_image_markers(
+            limit=int(limit),
+            node_id=(str(node_id or "").strip() or None),
+            metric_id=(str(metric_id or "").strip() or None),
+            window_seconds=(int(window_seconds) if window_seconds is not None else None),
+        )
+        pipeline_count = len({str(item.get("pipeline_name") or "").strip() for item in markers if str(item.get("pipeline_name") or "").strip()})
+        return PipelinesTelemetryImageMarkersResponse(
+            aggregation=aggregation_name,
+            pipeline_count=int(pipeline_count),
+            markers=[PipelineTelemetryImageMarker.model_validate(item) for item in markers],
+        )
+
     @app.get("/api/pipelines/{pipeline_name}/telemetry/numeric", response_model=PipelineTelemetryNumericResponse)
     async def get_pipeline_telemetry_numeric(
         request: Request,
@@ -1656,7 +1763,7 @@ def create_app() -> FastAPI:
         )
         return PipelineTelemetryImageMarkersResponse(
             pipeline_name=pipeline.name,
-            markers=[PipelineTelemetryImageMarker.model_validate(item) for item in markers],
+            markers=[PipelineTelemetryImageMarker.model_validate({**item, "pipeline_name": pipeline.name}) for item in markers],
         )
 
     @app.put("/api/pipelines/{pipeline_name}", response_model=Pipeline)

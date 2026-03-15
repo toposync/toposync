@@ -404,6 +404,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.telemetry.overview.title": "Telemetry timeline",
     "core.ui.pipelines.telemetry.overview.subtitle":
       "Bands show min/max per time bucket. Solid lines show weighted averages (each metric uses its own vertical scale).",
+    "core.ui.pipelines.telemetry.aggregate.scope": "All pipelines",
+    "core.ui.pipelines.telemetry.aggregate.subtitle":
+      "Merged across all pipelines. Each line keeps the strongest bucket seen for that metric.",
     "core.ui.pipelines.telemetry.overview.range.short": "Short (2h)",
     "core.ui.pipelines.telemetry.overview.range.default": "Default (24h)",
     "core.ui.pipelines.telemetry.overview.range.long": "Long (3 days)",
@@ -1338,6 +1341,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.telemetry.overview.title": "Linha do tempo da telemetria",
     "core.ui.pipelines.telemetry.overview.subtitle":
       "As bandas mostram mínimo/máximo por janela de tempo. As linhas sólidas mostram médias ponderadas (cada métrica usa sua própria escala vertical).",
+    "core.ui.pipelines.telemetry.aggregate.scope": "Todos os pipelines",
+    "core.ui.pipelines.telemetry.aggregate.subtitle":
+      "Mesclada entre todos os pipelines. Cada linha mantém a janela mais forte observada para aquela métrica.",
     "core.ui.pipelines.telemetry.overview.range.short": "Curto (2h)",
     "core.ui.pipelines.telemetry.overview.range.default": "Padrão (24h)",
     "core.ui.pipelines.telemetry.overview.range.long": "Longo (3 dias)",

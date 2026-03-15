@@ -313,3 +313,65 @@ def test_pipeline_telemetry_endpoints_return_numeric_and_markers(tmp_path: Path,
         assert [item["rel_path"] for item in recent_markers_body["markers"]] == [
             "pipelines/telemetry_pipeline/frame_2.png"
         ]
+
+
+def test_pipelines_telemetry_overview_endpoints_aggregate_all_pipelines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        for pipeline_name in ("alpha_pipeline", "beta_pipeline"):
+            payload = Pipeline(
+                name=pipeline_name,
+                type="final",
+                graph={"schema_version": 1, "nodes": [], "edges": []},
+            ).model_dump(mode="json")
+            created = client.post("/api/pipelines", json=payload)
+            assert created.status_code == 201
+
+        telemetry_store = getattr(client.app.state, "pipeline_telemetry_store", None)
+        assert telemetry_store is not None
+        now = time.time()
+
+        telemetry_store.observe_numeric("alpha_pipeline", "motion_a", "motion.score", 0.22, now_s=now - 120.0)
+        telemetry_store.observe_numeric("beta_pipeline", "motion_b", "motion.score", 0.81, now_s=now - 120.0)
+        telemetry_store.observe_numeric("alpha_pipeline", "yolo_a", "yolo.confidence", 0.33, now_s=now - 30.0)
+        telemetry_store.observe_numeric("beta_pipeline", "yolo_b", "yolo.confidence", 0.67, now_s=now - 30.0)
+
+        telemetry_store.record_image_marker(
+            "alpha_pipeline",
+            node_id="store_a",
+            metric_id="store.image",
+            rel_path="pipelines/alpha_pipeline/frame_1.png",
+            ts_s=now - 90.0,
+        )
+        telemetry_store.record_image_marker(
+            "beta_pipeline",
+            node_id="store_b",
+            metric_id="store.image",
+            rel_path="pipelines/beta_pipeline/frame_2.png",
+            ts_s=now - 15.0,
+        )
+
+        numeric_res = client.get(
+            "/api/pipelines/telemetry/all/numeric",
+            params=[("metric_id", "motion.score"), ("metric_id", "yolo.confidence"), ("point_limit", "200")],
+        )
+        assert numeric_res.status_code == 200
+        numeric_body = numeric_res.json()
+        assert numeric_body["aggregation"] == "max"
+        assert [item["metric_id"] for item in numeric_body["series"]] == ["motion.score", "yolo.confidence"]
+        motion_series = next(item for item in numeric_body["series"] if item["metric_id"] == "motion.score")
+        yolo_series = next(item for item in numeric_body["series"] if item["metric_id"] == "yolo.confidence")
+        assert motion_series["pipeline_count"] == 2
+        assert motion_series["series_count"] == 2
+        assert motion_series["points"][-1]["avg"] == pytest.approx(0.81)
+        assert yolo_series["points"][-1]["avg"] == pytest.approx(0.67)
+
+        markers_res = client.get("/api/pipelines/telemetry/all/image-markers", params={"limit": 20})
+        assert markers_res.status_code == 200
+        markers_body = markers_res.json()
+        assert markers_body["aggregation"] == "max"
+        assert markers_body["pipeline_count"] == 2
+        assert [item["pipeline_name"] for item in markers_body["markers"]] == ["alpha_pipeline", "beta_pipeline"]
+        assert [item["rel_path"] for item in markers_body["markers"]] == [
+            "pipelines/alpha_pipeline/frame_1.png",
+            "pipelines/beta_pipeline/frame_2.png",
+        ]

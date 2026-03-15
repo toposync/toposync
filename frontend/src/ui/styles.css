@@ -252,6 +252,10 @@ textarea {
   overflow: hidden;
 }
 
+.pipelinesBodyAggregate {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .pipelinesSidebarBackdrop {
   display: none;
 }
@@ -570,6 +574,12 @@ textarea {
   display: grid;
   gap: var(--space-3);
   align-content: start;
+}
+
+.pipelinesEditorAggregate {
+  width: 100%;
+  max-width: min(1180px, 100%);
+  margin: 0 auto;
 }
 
 .pipelinesEditorInner {

@@ -43,7 +43,6 @@ import {
   emptyGraph,
   isRecord,
   jsonPretty,
-  prettyOperatorName,
   safeJsonParse,
 } from "./pipelines/utils";
 
@@ -75,8 +74,10 @@ function buildPipelinesPath(pipelineName: string | null): string {
 }
 
 export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): React.ReactElement {
-  const { t, locale } = i18n.useI18n();
+  const { t } = i18n.useI18n();
   const pathname = usePathname();
+  const routePipelineName = pipelineNameFromPipelinesPath(pathname);
+  const isAggregateHome = routePipelineName == null;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
@@ -150,9 +151,11 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
       setCamerasIndex(cameras);
       setSelectedName((prev) => {
         if (pipelineList.length === 0) return null;
-        if (!prev) return pipelineList[0]!.name;
-        const found = pipelineList.some((pipeline) => pipeline.name === prev);
-        return found ? prev : pipelineList[0]!.name;
+        const fromPath = typeof window === "undefined" ? null : pipelineNameFromPipelinesPath(window.location.pathname);
+        if (!fromPath) return null;
+        if (pipelineList.some((pipeline) => pipeline.name === fromPath)) return fromPath;
+        if (prev && pipelineList.some((pipeline) => pipeline.name === prev)) return prev;
+        return null;
       });
     } catch (err: any) {
       setError(String(err?.message ?? err));
@@ -167,7 +170,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
 
   useEffect(() => {
     const fromPath = pipelineNameFromPipelinesPath(pathname);
-    if (!fromPath) return;
     setSelectedName((prev) => (prev === fromPath ? prev : fromPath));
   }, [pathname]);
 
@@ -565,7 +567,11 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
         </button>
         <div className="pipelinesTitle">{t("core.ui.pipelines.title")}</div>
         <div className="pipelinesTopbarRight">
-          {draft ? <div className="pipelinesFlag">{draft.name}</div> : null}
+          {isAggregateHome ? (
+            <div className="pipelinesFlag">{t("core.ui.pipelines.telemetry.aggregate.scope", {}, "All pipelines")}</div>
+          ) : draft ? (
+            <div className="pipelinesFlag">{draft.name}</div>
+          ) : null}
           {compactLayout ? (
             <button
               className={["iconButton", sidebarOpen ? "isActive" : ""].filter(Boolean).join(" ")}
@@ -647,20 +653,25 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
           </div>
         </div>
 
-        <div className="pipelinesEditor">
-          {loading ? (
+        <div className={["pipelinesEditor", isAggregateHome ? "pipelinesEditorAggregate" : ""].filter(Boolean).join(" ")}>
+          {isAggregateHome ? (
+            <>
+              {error ? (
+                <div className="card cardDanger">
+                  <div className="cardBody">{error}</div>
+                </div>
+              ) : null}
+              <PipelineTelemetryOverviewCard aggregate pipelineName={null} steps={[]} />
+            </>
+          ) : loading ? (
             <div className="card">
               <div className="cardBody">{t("core.ui.loading")}</div>
             </div>
-          ) : null}
-
-          {error ? (
+          ) : error ? (
             <div className="card cardDanger">
               <div className="cardBody">{error}</div>
             </div>
-          ) : null}
-
-          {!draft ? (
+          ) : !draft ? (
             <div className="card">
               <div className="cardBody">{t("core.ui.pipelines.empty")}</div>
             </div>
@@ -868,17 +879,17 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                 </div>
               ) : null}
 
-	              <PipelineTelemetryOverviewCard
-	                pipelineName={draft?.name ?? null}
-	                steps={interactiveSteps}
-	                externalRefreshNonce={telemetryResetNonce}
-	                resetting={telemetryResetting}
-	                onReset={resetTelemetryAndStats}
-	              />
-	            </div>
-	          )}
-	        </div>
-	      </div>
+                <PipelineTelemetryOverviewCard
+                  pipelineName={draft?.name ?? null}
+                  steps={interactiveSteps}
+                  externalRefreshNonce={telemetryResetNonce}
+                  resetting={telemetryResetting}
+                  onReset={resetTelemetryAndStats}
+                />
+              </div>
+            )}
+        </div>
+      </div>
 
 	      <PipelineTelemetryFieldModal
 	        open={Boolean(telemetryFieldInspector && draft)}

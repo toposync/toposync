@@ -27,6 +27,13 @@ from toposync.runtime.services import ServiceRegistry
 from .pipelines import register_camera_pipeline_operators
 from .processing.mapping import ControlPointMapper
 from .pipelines.postprocess import _parse_control_point_sets  # noqa: PLC2701
+from .settings import (
+    flatten_camera_device_for_ui,
+    get_camera_device,
+    get_primary_video_channel,
+    iter_camera_devices,
+    normalize_cameras_settings,
+)
 from .onvif import (
     OnvifClient,
     OnvifDiscoveredDevice,
@@ -425,7 +432,7 @@ class CamerasExtension(BaseExtension):
         async def _read_ext_settings(request: Request) -> dict[str, Any]:
             settings = await _config_store(request).get_settings()
             ext = settings.extensions.get(EXTENSION_ID, {})
-            return ext if isinstance(ext, dict) else {}
+            return normalize_cameras_settings(ext)
 
         def _services(request: Request) -> ServiceRegistry:
             registry = getattr(request.app.state, "services", None)
@@ -528,30 +535,26 @@ class CamerasExtension(BaseExtension):
 
             app_settings = await store.get_settings()
             ext = app_settings.extensions.get(EXTENSION_ID, {})
-            ext_rec = ext if isinstance(ext, dict) else {}
-            raw_cameras = ext_rec.get("cameras", [])
-            camera: dict[str, Any] | None = None
-            if isinstance(raw_cameras, list):
-                for item in raw_cameras:
-                    if not isinstance(item, dict):
-                        continue
-                    if str(item.get("id") or "").strip() == cid:
-                        camera = item
-                        break
+            ext_rec = normalize_cameras_settings(ext)
+            camera = get_camera_device(ext_rec, camera_id=cid)
             if camera is None:
                 raise HTTPException(status_code=404, detail="Camera not found")
 
-            if str(camera.get("connection_type") or "rtsp").strip().lower() != "onvif":
+            channel = get_primary_video_channel(camera)
+            if not isinstance(channel, dict):
+                raise HTTPException(status_code=409, detail="Camera has no video channel configured")
+
+            if str(channel.get("connection_type") or "rtsp").strip().lower() != "onvif":
                 raise HTTPException(status_code=409, detail="Camera controls are only supported for ONVIF cameras")
 
-            onvif_raw = camera.get("onvif")
+            onvif_raw = channel.get("onvif")
             onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
             xaddr = normalize_onvif_xaddr(str(onvif.get("xaddr") or "").strip())
             if not xaddr:
                 raise HTTPException(status_code=409, detail="Camera is missing ONVIF xaddr")
 
-            username = str(camera.get("username") or "").strip()
-            password = str(camera.get("password") or "").strip()
+            username = str(channel.get("username") or "").strip()
+            password = str(channel.get("password") or "").strip()
             ptz_xaddr = str(onvif.get("ptz_xaddr") or "").strip()
             media_xaddr = str(onvif.get("media_xaddr") or "").strip()
             profile_token = str(onvif.get("profile_token") or "").strip()
@@ -803,23 +806,21 @@ class CamerasExtension(BaseExtension):
         @app.get("/api/cameras/index")
         async def cameras_index(request: Request) -> dict[str, Any]:
             ext = await _read_ext_settings(request)
-            raw_cameras = ext.get("cameras", [])
-
             cameras: list[dict[str, Any]] = []
-            if isinstance(raw_cameras, list):
-                for c in raw_cameras:
-                    if not isinstance(c, dict):
-                        continue
-                    cid = str(c.get("id", "")).strip()
-                    if not cid:
-                        continue
-                    cameras.append(
-                        {
-                            "id": cid,
-                            "name": str(c.get("name", "")).strip(),
-                            "connection_type": str(c.get("connection_type", "rtsp")).strip() or "rtsp",
-                        }
-                    )
+            for device in iter_camera_devices(ext):
+                flattened = flatten_camera_device_for_ui(device)
+                if not isinstance(flattened, dict):
+                    continue
+                cid = str(flattened.get("id") or "").strip()
+                if not cid:
+                    continue
+                cameras.append(
+                    {
+                        "id": cid,
+                        "name": str(flattened.get("name") or "").strip(),
+                        "connection_type": str(flattened.get("connection_type") or "rtsp").strip() or "rtsp",
+                    }
+                )
 
             return {"cameras": cameras}
 
@@ -847,27 +848,28 @@ class CamerasExtension(BaseExtension):
             known_hosts: set[str] = set()
             known_device_ids: set[str] = set()
 
-            raw_cameras = ext.get("cameras", [])
-            if isinstance(raw_cameras, list):
-                for item in raw_cameras:
-                    if not isinstance(item, dict):
-                        continue
-                    rtsp_url = str(item.get("rtsp_url") or "").strip()
-                    if rtsp_url:
-                        host = _normalized_host(rtsp_url)
-                        if host:
-                            known_hosts.add(host)
+            for device in iter_camera_devices(ext):
+                if not isinstance(device, dict):
+                    continue
+                channel = get_primary_video_channel(device)
+                if not isinstance(channel, dict):
+                    continue
+                rtsp_url = str(channel.get("rtsp_url") or "").strip()
+                if rtsp_url:
+                    host = _normalized_host(rtsp_url)
+                    if host:
+                        known_hosts.add(host)
 
-                    onvif = item.get("onvif")
-                    onvif_rec = onvif if isinstance(onvif, dict) else {}
-                    device_id = str(onvif_rec.get("device_id") or "").strip()
-                    if device_id:
-                        known_device_ids.add(device_id)
-                    xaddr = str(onvif_rec.get("xaddr") or "").strip()
-                    if xaddr:
-                        host = _normalized_host(xaddr)
-                        if host:
-                            known_hosts.add(host)
+                onvif = channel.get("onvif")
+                onvif_rec = onvif if isinstance(onvif, dict) else {}
+                device_id = str(onvif_rec.get("device_id") or "").strip()
+                if device_id:
+                    known_device_ids.add(device_id)
+                xaddr = str(onvif_rec.get("xaddr") or "").strip()
+                if xaddr:
+                    host = _normalized_host(xaddr)
+                    if host:
+                        known_hosts.add(host)
 
             async with onvif_discover_lock:
                 now = time.time()
@@ -1220,21 +1222,15 @@ class CamerasExtension(BaseExtension):
                 raise HTTPException(status_code=400, detail="camera_id is required")
 
             ext = await _read_ext_settings(request)
-            raw_cameras = ext.get("cameras", [])
-            if not isinstance(raw_cameras, list):
-                raise HTTPException(status_code=404, detail="Unknown camera")
-
-            camera: dict[str, Any] | None = None
-            for item in raw_cameras:
-                if not isinstance(item, dict):
-                    continue
-                if str(item.get("id", "")).strip() == cid:
-                    camera = item
-                    break
+            camera = get_camera_device(ext, camera_id=cid)
             if camera is None:
                 raise HTTPException(status_code=404, detail="Unknown camera")
 
-            ctype = str(camera.get("connection_type", "rtsp")).strip().lower() or "rtsp"
+            channel = get_primary_video_channel(camera)
+            if not isinstance(channel, dict):
+                raise HTTPException(status_code=404, detail="Unknown camera")
+
+            ctype = str(channel.get("connection_type", "rtsp")).strip().lower() or "rtsp"
             if ctype not in {"rtsp", "onvif"}:
                 raise HTTPException(status_code=400, detail="Unsupported camera connection type")
 
@@ -1246,9 +1242,9 @@ class CamerasExtension(BaseExtension):
                 if cached and (now - cached.created_ts) <= snapshot_cache_ttl_s:
                     return Response(content=cached.blob, media_type="image/jpeg", headers=cached.headers)
 
-                url_raw = str(camera.get("rtsp_url", "")).strip()
-                username = str(camera.get("username", "")).strip()
-                password = str(camera.get("password", "")).strip()
+                url_raw = str(channel.get("rtsp_url", "")).strip()
+                username = str(channel.get("username", "")).strip()
+                password = str(channel.get("password", "")).strip()
                 if not url_raw:
                     raise HTTPException(status_code=400, detail="Camera RTSP URL is not configured")
 
@@ -1614,10 +1610,7 @@ class CamerasExtension(BaseExtension):
             compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
 
             ext = await _read_ext_settings(request)
-            raw_cameras = ext.get("cameras", [])
-            if not isinstance(raw_cameras, list):
-                raise HTTPException(status_code=404, detail="Unknown camera")
-            if not any(isinstance(item, dict) and str(item.get("id", "")).strip() == cid for item in raw_cameras):
+            if get_camera_device(ext, camera_id=cid) is None:
                 raise HTTPException(status_code=404, detail="Unknown camera")
 
             cfg = await store.get_config()

@@ -10,7 +10,7 @@ import {
   inspectOnvif,
 } from "../api/camerasApi";
 import { CAMERAS_EXTENSION_ID } from "../constants";
-import { createUniqueId, parseCameras } from "../parsing";
+import { createUniqueId, parseCameras, serializeCameras } from "../parsing";
 import type {
   CameraConfig,
   CameraOnvifConfig,
@@ -241,7 +241,7 @@ function CamerasSettingsPanelContent({
 
   function commitCameras(next: CameraConfig[]): void {
     camerasRef.current = next;
-    updateSettings({ cameras: next });
+    updateSettings(serializeCameras(next));
   }
 
   function updateCamera(cameraId: string, patch: Partial<CameraConfig>): void {
@@ -261,6 +261,7 @@ function CamerasSettingsPanelContent({
       id,
       name: "",
       connection_type: "onvif",
+      channel_id: "video_main",
       rtsp_url: "",
       username: "",
       password: "",
@@ -280,6 +281,7 @@ function CamerasSettingsPanelContent({
       id,
       name,
       connection_type: "onvif",
+      channel_id: "video_main",
       rtsp_url: "",
       username: "",
       password: "",

@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .execution import PassThroughRuntime, SinkRuntime, SourceOperatorRuntime, TransformOperatorRuntime
 from .operator_registry import OperatorRegistry
+from .packet_contract import build_media_descriptor, build_source_descriptor
 from .runtime import Artifact, Lifecycle, Packet
 from .operators_distributed import register_distributed_operators
 from .operators_gates import register_gate_operators
@@ -597,9 +598,21 @@ class SyntheticSourceRuntime(SourceOperatorRuntime):
         if now < self._next_tick:
             await context.sleep(self._next_tick - now)
         self._next_tick = max(self._next_tick + self._interval_s, time.monotonic())
+        current_ts = time.time()
         packet = Packet.create(
             stream_id=self._stream_id,
-            payload={"sequence": self._sequence},
+            payload={
+                "sequence": self._sequence,
+                "source": build_source_descriptor(
+                    device_id=self._stream_id,
+                    kind="synthetic",
+                    modality="data",
+                    name="Synthetic source",
+                    transport="internal",
+                    clock_domain=f"stream:{self._stream_id}",
+                ),
+                "media": build_media_descriptor(modality="data", ts=current_ts),
+            },
             metadata={"source": "synthetic"},
         )
         self._sequence += 1
@@ -662,8 +675,25 @@ class DemoFrameSequenceSourceRuntime(SourceOperatorRuntime):
 
         value = 180 + (self._index % 3) * 15
         frame = np.full((self._height, self._width, 3), value, dtype=np.uint8)
+        current_ts = time.time()
         payload = {
-            "frame_ts": time.time(),
+            "source": build_source_descriptor(
+                device_id=self._camera_id,
+                channel_id="video_main",
+                kind="camera",
+                modality="video",
+                name=self._camera_name,
+                transport="synthetic",
+                clock_domain=f"device:{self._camera_id}",
+            ),
+            "media": build_media_descriptor(
+                modality="video",
+                ts=current_ts,
+                width=int(self._width),
+                height=int(self._height),
+                frame_rate=(1.0 / self._interval_s) if self._interval_s > 0 else None,
+            ),
+            "frame_ts": current_ts,
             "camera_id": self._camera_id,
             "camera_name": self._camera_name,
             "frame_width": int(self._width),
@@ -883,6 +913,9 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["source", "test"],
         defaults=SyntheticSourceConfig().model_dump(),
+        produces_source_fields=["device_id", "kind", "modality", "name", "transport", "clock_domain"],
+        produces_media_fields=["modality", "ts"],
+        output_modalities=["data"],
         share_strategy="by_signature",
         owner="core",
         runtime_factory=lambda config, _deps: SyntheticSourceRuntime(config),
@@ -907,6 +940,9 @@ def register_core_operators(registry: OperatorRegistry) -> None:
             "area_label",
         ],
         produces_artifacts=["frame_original", "frame"],
+        produces_source_fields=["device_id", "channel_id", "kind", "modality", "name", "transport", "clock_domain"],
+        produces_media_fields=["modality", "ts", "width", "height", "frame_rate"],
+        output_modalities=["video"],
         share_strategy="never",
         owner="core",
         runtime_factory=lambda config, _deps: DemoFrameSequenceSourceRuntime(config),

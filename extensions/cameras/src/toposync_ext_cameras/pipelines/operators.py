@@ -19,6 +19,12 @@ from toposync.runtime.pipelines.execution import (
     TransformOperatorRuntime,
 )
 from toposync.runtime.pipelines.images import resolve_image_artifact_for_data
+from toposync.runtime.pipelines.packet_contract import (
+    build_media_descriptor,
+    build_source_descriptor,
+    resolve_media_ts,
+    resolve_source_device_id,
+)
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync.runtime.pipelines.telemetry import METRIC_MOTION_SCORE, METRIC_YOLO_CONFIDENCE
@@ -30,6 +36,7 @@ from ..processing.motion_bgsub import AdaptiveBackgroundMotionDetector
 from ..processing.motion_sample_bg import SampleBackgroundMotionDetector
 from ..processing.yolo import YoloTracker
 from ..onvif import OnvifClient, OnvifError, OnvifProfile
+from ..settings import get_camera_device, get_primary_video_channel, normalize_cameras_settings
 from .postprocess import register_camera_postprocess_operators
 
 
@@ -82,11 +89,7 @@ def _clamp01(value: float) -> float:
 
 
 def _packet_ts_seconds(packet: Packet, *, fallback: float | None = None) -> float:
-    raw = packet.payload.get("frame_ts")
-    try:
-        parsed = float(raw)
-    except Exception:
-        parsed = 0.0
+    parsed = float(resolve_media_ts(packet))
     if math.isfinite(parsed) and parsed > 0.0:
         return parsed
     if fallback is None:
@@ -270,6 +273,7 @@ async def _resolve_onvif_rtsp_url_cached(*, camera_id: str, camera: dict[str, An
 class CameraSourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     camera_id: str = ""
+    channel_id: str = ""
     rtsp_url: str = ""
     username: str = ""
     password: str = ""
@@ -277,7 +281,7 @@ class CameraSourceConfig(BaseModel):
     fps: float | None = Field(default=None, ge=1.0, le=60.0)
     poll_interval_ms: int = Field(default=20, ge=1, le=250)
 
-    @field_validator("camera_id", "rtsp_url", mode="after")
+    @field_validator("camera_id", "channel_id", "rtsp_url", mode="after")
     @classmethod
     def _trim(cls, value: str) -> str:
         return str(value or "").strip()
@@ -626,6 +630,18 @@ class ObjectDetectionYOLOConfig(_YoloBaseConfig):
     emit_open_and_close: bool = True
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedCameraSource:
+    rtsp_url: str
+    fps: float
+    camera_id: str
+    camera_name: str
+    channel_id: str
+    clock_domain: str
+    transport: str
+    used_ingest: bool
+
+
 class _CameraSourcePendingError(RuntimeError):
     """Transient source-resolution error while camera settings/config are converging."""
 
@@ -640,6 +656,9 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._last_ts = 0.0
         self._camera_name = ""
         self._camera_id = ""
+        self._channel_id = ""
+        self._clock_domain = ""
+        self._transport = "rtsp"
         self._source_uses_ingest = False
         self._gate_open = True
         self._gate_known = False
@@ -685,15 +704,18 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         if self._grabber is not None:
             return
         prefer_ingest = time.monotonic() >= self._force_direct_rtsp_until_monotonic
-        rtsp_url, fps, camera_id, camera_name, used_ingest = await _resolve_camera_source(
+        resolved = await _resolve_camera_source(
             self._config,
             self._dependencies,
             prefer_ingest=prefer_ingest,
         )
         self._waiting_for_source_config = False
-        self._camera_id = camera_id
-        self._camera_name = camera_name
-        self._source_uses_ingest = bool(used_ingest)
+        self._camera_id = resolved.camera_id
+        self._camera_name = resolved.camera_name
+        self._channel_id = resolved.channel_id
+        self._clock_domain = resolved.clock_domain
+        self._transport = resolved.transport
+        self._source_uses_ingest = bool(resolved.used_ingest)
         selected_backend = str(self._config.backend or "").strip().lower() or "auto"
         if self._backend_override:
             now_mono = time.monotonic()
@@ -703,13 +725,11 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 self._backend_override = None
                 self._backend_override_until_monotonic = 0.0
 
-        self._hub_key = _camera_hub_key(
-            camera_id=camera_id, rtsp_url=rtsp_url, backend=selected_backend
-        )
+        self._hub_key = _camera_hub_key(camera_id=resolved.camera_id, rtsp_url=resolved.rtsp_url, backend=selected_backend)
         self._grabber = await _GLOBAL_CAMERA_HUB.acquire(
             key=self._hub_key,
-            rtsp_url=rtsp_url,
-            target_fps=float(fps),
+            rtsp_url=resolved.rtsp_url,
+            target_fps=float(resolved.fps),
             backend=selected_backend,
         )
         self._grabber_started_monotonic = time.monotonic()
@@ -920,6 +940,21 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             stream_id=f"camera:{stream_suffix}",
             lifecycle=Lifecycle.UPDATE,
             payload={
+                "source": build_source_descriptor(
+                    device_id=self._camera_id or "",
+                    channel_id=self._channel_id or "video_main",
+                    kind="camera",
+                    modality="video",
+                    name=self._camera_name or "",
+                    transport=self._transport or "rtsp",
+                    clock_domain=self._clock_domain or "",
+                ),
+                "media": build_media_descriptor(
+                    modality="video",
+                    ts=float(frame_ts),
+                    width=width,
+                    height=height,
+                ),
                 "frame_ts": float(frame_ts),
                 "camera_id": self._camera_id or None,
                 "camera_name": self._camera_name or None,
@@ -1072,9 +1107,7 @@ def _schedule_input_snapshot_for_motion(
     if snapshot_store is None or packet.lifecycle == Lifecycle.CLOSE:
         return
 
-    camera_id = str(
-        packet.payload.get("camera_id") or packet.metadata.get("camera_id") or ""
-    ).strip()
+    camera_id = resolve_source_device_id(packet)
     source_id = camera_id or str(packet.stream_id or "").strip() or "-"
     occurrences = getattr(context, "stats_node_occurrences", None)
     if isinstance(occurrences, (list, tuple)) and occurrences:
@@ -2318,6 +2351,9 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
             "images",
         ],
         produces_artifacts=["frame_original", "frame"],
+        produces_source_fields=["device_id", "channel_id", "kind", "modality", "name", "transport", "clock_domain"],
+        produces_media_fields=["modality", "ts", "width", "height", "frame_rate"],
+        output_modalities=["video"],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, deps: CameraSourceRuntime(config, deps),
@@ -2479,12 +2515,22 @@ async def _resolve_camera_source(
     dependencies: PipelineRuntimeDependencies,
     *,
     prefer_ingest: bool = True,
-) -> tuple[str, float, str, str, bool]:
+) -> ResolvedCameraSource:
     camera_id = config.camera_id.strip()
+    requested_channel_id = config.channel_id.strip()
     if config.rtsp_url:
         url = _apply_rtsp_auth(config.rtsp_url, config.username, config.password)
         fps = float(config.fps if config.fps is not None else 5.0)
-        return url, max(1.0, min(60.0, fps)), camera_id, "", False
+        return ResolvedCameraSource(
+            rtsp_url=url,
+            fps=max(1.0, min(60.0, fps)),
+            camera_id=camera_id,
+            camera_name="",
+            channel_id=requested_channel_id or "video_main",
+            clock_domain=f"device:{camera_id}" if camera_id else "device:adhoc",
+            transport="rtsp",
+            used_ingest=False,
+        )
 
     if not camera_id:
         raise RuntimeError("camera.source requires either camera_id or rtsp_url")
@@ -2495,29 +2541,35 @@ async def _resolve_camera_source(
 
     settings = await store.get_settings()
     ext = settings.extensions.get("com.toposync.cameras", {})
-    ext_rec = ext if isinstance(ext, dict) else {}
-    cameras = ext_rec.get("cameras", [])
-    if not isinstance(cameras, list):
-        raise _CameraSourcePendingError(f"Camera '{camera_id}' not found in settings yet")
-
-    camera: dict[str, Any] | None = None
-    for item in cameras:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("id", "")).strip() == camera_id:
-            camera = item
-            break
-
+    ext_rec = normalize_cameras_settings(ext)
+    camera = get_camera_device(ext_rec, camera_id=camera_id)
     if camera is None:
         raise _CameraSourcePendingError(f"Camera '{camera_id}' not found in settings yet")
 
-    rtsp_url = str(camera.get("rtsp_url", "")).strip()
+    channel: dict[str, Any] | None = None
+    channels_raw = camera.get("channels")
+    if isinstance(channels_raw, list) and requested_channel_id:
+        for item in channels_raw:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("id") or "").strip() == requested_channel_id:
+                channel = item
+                break
+    if channel is None:
+        channel = get_primary_video_channel(camera)
+    if channel is None:
+        raise _CameraSourcePendingError(f"Camera '{camera_id}' has no video channel configured")
+
+    rtsp_url = str(channel.get("rtsp_url", "")).strip()
     if not rtsp_url:
-        onvif_raw = camera.get("onvif")
+        onvif_raw = channel.get("onvif")
         onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
         if str(onvif.get("xaddr") or "").strip():
             try:
-                rtsp_url = await _resolve_onvif_rtsp_url_cached(camera_id=camera_id, camera=camera)
+                rtsp_url = await _resolve_onvif_rtsp_url_cached(
+                    camera_id=camera_id,
+                    camera={**camera, **channel, "onvif": onvif},
+                )
             except OnvifError as exc:
                 raise _CameraSourcePendingError(
                     f"Camera '{camera_id}' ONVIF stream resolution failed: {exc}"
@@ -2530,11 +2582,11 @@ async def _resolve_camera_source(
     if not rtsp_url:
         raise _CameraSourcePendingError(f"Camera '{camera_id}' has empty rtsp_url")
 
-    username = str(camera.get("username", "")).strip()
-    password = str(camera.get("password", "")).strip()
+    username = str(channel.get("username", "")).strip()
+    password = str(channel.get("password", "")).strip()
     url = _apply_rtsp_auth(rtsp_url, username, password)
 
-    camera_fps = float(camera.get("fps", 5.0) or 5.0)
+    camera_fps = float(channel.get("fps", 5.0) or 5.0)
     if not math.isfinite(camera_fps):
         camera_fps = 5.0
     if config.fps is not None:
@@ -2548,7 +2600,16 @@ async def _resolve_camera_source(
         if ingest_url:
             url = ingest_url
             used_ingest = True
-    return url, camera_fps, camera_id, str(camera.get("name", "")).strip(), used_ingest
+    return ResolvedCameraSource(
+        rtsp_url=url,
+        fps=camera_fps,
+        camera_id=camera_id,
+        camera_name=str(camera.get("name", "")).strip(),
+        channel_id=str(channel.get("id") or "").strip() or "video_main",
+        clock_domain=str(camera.get("clock_domain") or "").strip() or f"device:{camera_id}",
+        transport=str(channel.get("transport") or "rtsp").strip() or "rtsp",
+        used_ingest=used_ingest,
+    )
 
 
 async def _maybe_resolve_ingest_rtsp_url(

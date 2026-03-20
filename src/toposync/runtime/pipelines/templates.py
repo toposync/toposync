@@ -42,9 +42,20 @@ def _as_str(value: Any) -> str:
 def camera_names_by_id(extensions_settings: dict[str, Any]) -> dict[str, str]:
     ext = extensions_settings.get(CAMERAS_EXTENSION_ID)
     ext_record = ext if isinstance(ext, dict) else {}
-    cameras_raw = _as_list(ext_record.get("cameras"))
+    devices_raw = _as_list(ext_record.get("devices"))
 
     out: dict[str, str] = {}
+    for item in devices_raw:
+        camera = _as_record(item)
+        camera_id = _as_str(camera.get("id")).strip()
+        if not camera_id:
+            continue
+        name = _as_str(camera.get("name")).strip()
+        out[camera_id] = name
+    if out:
+        return out
+
+    cameras_raw = _as_list(ext_record.get("cameras"))
     for item in cameras_raw:
         camera = _as_record(item)
         camera_id = _as_str(camera.get("id")).strip()

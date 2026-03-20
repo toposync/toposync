@@ -38,19 +38,28 @@ export function InteractivePipelineEditor({
   const [draggingStepUid, setDraggingStepUid] = useState<string | null>(null);
   const [dragOverStep, setDragOverStep] = useState<{ uid: string; position: DragInsertPosition } | null>(null);
 
+  const isCameraSourceOperator = useCallback(
+    (operatorId: string) => {
+      const definition = operatorsById[operatorId];
+      const capabilities = new Set((definition?.capabilities ?? []).map((value) => String(value || "").trim().toLowerCase()));
+      return capabilities.has("source") && capabilities.has("camera");
+    },
+    [operatorsById],
+  );
+
   const presetOperators = useMemo(
     () => PIPELINE_PRESET_OPERATOR_IDS.map((id) => operatorsById[id]).filter(Boolean) as PipelineOperatorDefinition[],
     [operatorsById],
   );
 
   const interactiveCameraId = useMemo(() => {
-    const sourceStep = interactiveSteps.find((step) => step.operatorId === "camera.source");
+    const sourceStep = interactiveSteps.find((step) => isCameraSourceOperator(step.operatorId));
     if (!sourceStep) return "";
     const parsed = safeJsonParse(sourceStep.configText || "{}");
     if (!parsed.ok) return "";
     if (!isRecord(parsed.data)) return "";
     return String((parsed.data as any).camera_id ?? "").trim();
-  }, [interactiveSteps]);
+  }, [interactiveSteps, isCameraSourceOperator]);
 
   const cameraSelectOptions = useMemo<SelectOption[]>(() => {
     const cameras = Array.isArray(camerasIndex.cameras) ? camerasIndex.cameras : [];
@@ -80,7 +89,7 @@ export function InteractivePipelineEditor({
         const used = new Set(prev.map((item) => item.nodeId));
         const next = createInteractiveStep(operatorId, operator.defaults ?? {}, used);
         if (operatorId === "core.schedule_gate") {
-          const cameraIndex = prev.findIndex((item) => item.operatorId === "camera.source");
+          const cameraIndex = prev.findIndex((item) => isCameraSourceOperator(item.operatorId));
           if (cameraIndex >= 0) {
             const copy = prev.slice();
             copy.splice(cameraIndex, 0, next);
@@ -92,7 +101,7 @@ export function InteractivePipelineEditor({
       });
       setInteractiveWarning(null);
     },
-    [operatorsById, setInteractiveSteps, setInteractiveWarning],
+    [isCameraSourceOperator, operatorsById, setInteractiveSteps, setInteractiveWarning],
   );
 
   const updateInteractiveStep = useCallback(

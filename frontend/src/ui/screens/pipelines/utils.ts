@@ -152,6 +152,27 @@ function edgePolicyFor(
   return { maxsize: 32, drop_policy: "drop_oldest" };
 }
 
+function operatorCapabilities(definition: PipelineOperatorDefinition | null): Set<string> {
+  return new Set((definition?.capabilities ?? []).map((value) => String(value || "").trim().toLowerCase()));
+}
+
+function isSourceOperator(definition: PipelineOperatorDefinition | null): boolean {
+  return operatorCapabilities(definition).has("source");
+}
+
+function isGateControlOperator(definition: PipelineOperatorDefinition | null): boolean {
+  return operatorCapabilities(definition).has("gate_control");
+}
+
+function resolveGatePortName(definition: PipelineOperatorDefinition | null): string | null {
+  const inputs = Array.isArray(definition?.inputs) ? definition.inputs : [];
+  for (const input of inputs) {
+    const name = String(input?.name || "").trim();
+    if (name === "gate") return name;
+  }
+  return null;
+}
+
 export function buildGraphFromInteractiveSteps(
   steps: InteractiveStep[],
   operatorsById: Record<string, PipelineOperatorDefinition>,
@@ -206,22 +227,28 @@ export function buildGraphFromInteractiveSteps(
     const targetOperator = operatorsById[targetOperatorId] ?? null;
     const policy = edgePolicyFor(sourceOperator, targetOperator);
 
-    const sourceCaps = new Set((sourceOperator?.capabilities ?? []).map((value) => String(value).trim().toLowerCase()));
-    const isGateControl = sourceCaps.has("gate_control");
+    const isGateControl = isGateControlOperator(sourceOperator);
 
     let targetPort = "in";
-    if (targetOperatorId === "camera.source") {
+    if (isSourceOperator(targetOperator)) {
       if (!isGateControl) {
         return {
           graph: null,
-          error: "Camera source must be the first step or be preceded by a gate control step (Schedule gate).",
+          error: `${prettyOperatorName(targetOperatorId)} must be the first step or be preceded by a gate control step.`,
         };
       }
-      targetPort = "gate";
+      const gatePort = resolveGatePortName(targetOperator);
+      if (!gatePort) {
+        return {
+          graph: null,
+          error: `${prettyOperatorName(targetOperatorId)} does not expose a 'gate' input port for interactive gate control.`,
+        };
+      }
+      targetPort = gatePort;
     } else if (isGateControl) {
       return {
         graph: null,
-        error: "Gate control steps (Schedule gate) must be followed by a Camera source in interactive mode.",
+        error: "Gate control steps must be followed by a source operator in interactive mode.",
       };
     }
 

@@ -18,6 +18,7 @@ from toposync.runtime.pipelines.images import (
     set_image_key,
 )
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
+from toposync.runtime.pipelines.packet_contract import resolve_media_ts, resolve_source_device_id
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync.runtime.services import ServiceRegistry
 
@@ -2593,11 +2594,7 @@ class FrameAttachRuntime(TransformOperatorRuntime):
             self._last_frame_packet = packet
 
     def _resolve_frame_ts(self, packet: Packet) -> float | None:
-        raw = packet.payload.get("frame_ts")
-        try:
-            value = float(raw)
-        except Exception:
-            return None
+        value = float(resolve_media_ts(packet))
         if not math.isfinite(value) or value <= 0:
             return None
         return float(value)
@@ -2647,7 +2644,7 @@ class FrameAttachRuntime(TransformOperatorRuntime):
                 continue
             meta = dict(src_artifact.metadata) if isinstance(src_artifact.metadata, dict) else {}
             meta["attached_from_stream_id"] = str(frame_packet.stream_id)
-            meta["attached_from_camera_id"] = str(frame_packet.payload.get("camera_id") or "").strip() or None
+            meta["attached_from_camera_id"] = resolve_source_device_id(frame_packet) or None
             if frame_ts is not None:
                 meta["attached_frame_ts"] = float(frame_ts)
             artifacts[name] = replace(src_artifact, metadata=meta)
@@ -4236,13 +4233,7 @@ def _resolve_camera_id(packet: Packet, *, camera_id_override: str) -> str:
     camera_id = str(camera_id_override or "").strip()
     if camera_id:
         return camera_id
-    camera_id = str(packet.payload.get("camera_id", "")).strip()
-    if camera_id:
-        return camera_id
-    camera_id = str(packet.metadata.get("camera_id", "")).strip()
-    if camera_id:
-        return camera_id
-    return ""
+    return resolve_source_device_id(packet)
 
 
 def _parse_control_point_pairs(value: Any) -> list[ControlPointPair]:
@@ -4409,6 +4400,8 @@ def _point_in_polygon(*, x: float, z: float, polygon: list[tuple[float, float]])
 
 
 def _resolve_packet_time(packet: Packet, *, time_field: str) -> float:
+    if str(time_field or "").strip() in {"frame_ts", "ts"}:
+        return float(resolve_media_ts(packet))
     raw = packet.payload.get(time_field)
     try:
         value = float(raw)

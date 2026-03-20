@@ -14,6 +14,7 @@ export type CameraConfig = {
   id: string;
   name: string;
   connection_type: CameraConnectionType;
+  channel_id?: string;
   rtsp_url: string;
   username?: string;
   password?: string;

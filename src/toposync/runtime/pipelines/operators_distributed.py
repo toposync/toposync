@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import base64
-import struct
+import io
+import json
 import time
-import zlib
 from typing import Any, Awaitable, Callable
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -107,70 +107,72 @@ def _encode_artifact_inline(artifact: Artifact) -> dict[str, Any] | None:
         return None
 
     blob: bytes | None = None
+    inline_json: Any = None
+    encoding = "bytes"
     mime = artifact.mime_type or "application/octet-stream"
     if isinstance(artifact.data, (bytes, bytearray, memoryview)):
         blob = bytes(artifact.data)
     elif hasattr(artifact.data, "shape") and hasattr(artifact.data, "dtype"):
         try:
-            blob = _encode_png(artifact.data)
-            mime = "image/png"
+            blob = _encode_npy(artifact.data)
+            encoding = "npy"
+            mime = mime or "application/x-toposync-npy"
         except Exception:
             return None
+    elif isinstance(artifact.data, (dict, list, str, int, float, bool)):
+        inline_json = json.loads(json.dumps(artifact.data))
+        encoding = "json"
     else:
         return None
 
-    if not blob:
+    if encoding != "json" and not blob:
         return None
-    return {
-        "inline_b64": base64.b64encode(blob).decode("ascii"),
+    out = {
         "mime_type": mime,
         "metadata": _as_dict(artifact.metadata),
+        "encoding": encoding,
     }
+    if encoding == "json":
+        out["inline_json"] = inline_json
+    else:
+        out["inline_b64"] = base64.b64encode(blob).decode("ascii")
+    return out
 
 
-def _png_chunk(tag: bytes, data: bytes) -> bytes:
-    chunk = tag + data
-    crc = zlib.crc32(chunk) & 0xFFFFFFFF
-    return struct.pack("!I", len(data)) + chunk + struct.pack("!I", crc)
-
-
-def _encode_png(image: Any) -> bytes:
+def _encode_npy(value: Any) -> bytes:
     try:
         import numpy as np  # type: ignore
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError("PNG encoding requires numpy") from exc
+        raise RuntimeError("NPY encoding requires numpy") from exc
 
-    arr = np.asarray(image)
-    if arr.dtype != np.uint8:
-        arr = arr.astype(np.uint8, copy=False)
-    if arr.ndim == 2:
-        height, width = int(arr.shape[0]), int(arr.shape[1])
-        color_type = 0
-    elif arr.ndim == 3 and int(arr.shape[2]) in {3, 4}:
-        height, width = int(arr.shape[0]), int(arr.shape[1])
-        channels = int(arr.shape[2])
-        color_type = 2 if channels == 3 else 6
-    else:
-        raise ValueError("Unsupported image shape for PNG encoding")
+    buffer = io.BytesIO()
+    np.save(buffer, np.asarray(value), allow_pickle=False)
+    return buffer.getvalue()
 
-    if height < 1 or width < 1:
-        raise ValueError("Invalid image dimensions")
 
-    arr = np.ascontiguousarray(arr)
-    raw = bytearray()
-    if arr.ndim == 2:
-        for y in range(height):
-            raw.append(0)
-            raw.extend(arr[y].tobytes())
-    else:
-        for y in range(height):
-            raw.append(0)
-            raw.extend(arr[y].reshape(-1).tobytes())
+def _decode_inline_artifact_data(rec: dict[str, Any]) -> Any:
+    encoding = _as_str(rec.get("encoding")).strip().lower() or "bytes"
+    if encoding == "json":
+        return rec.get("inline_json")
 
-    compressed = zlib.compress(bytes(raw), level=6)
-    header = b"\x89PNG\r\n\x1a\n"
-    ihdr = struct.pack("!IIBBBBB", width, height, 8, color_type, 0, 0, 0)
-    return header + _png_chunk(b"IHDR", ihdr) + _png_chunk(b"IDAT", compressed) + _png_chunk(b"IEND", b"")
+    blob_b64 = _as_str(rec.get("inline_b64")).strip()
+    if not blob_b64:
+        return None
+    try:
+        blob = base64.b64decode(blob_b64)
+    except Exception:
+        return None
+
+    if encoding == "npy":
+        try:
+            import numpy as np  # type: ignore
+        except Exception:
+            return None
+        try:
+            return np.load(io.BytesIO(blob), allow_pickle=False)
+        except Exception:
+            return None
+    return blob
 
 
 def _serialize_packet(packet: Packet) -> dict[str, Any]:
@@ -211,16 +213,9 @@ def _deserialize_packet(data: dict[str, Any]) -> Packet:
         reference = _as_str(rec.get("reference")).strip() or None
         mime = _as_str(rec.get("mime_type")).strip() or None
         meta = _as_dict(rec.get("metadata"))
-        blob_b64 = _as_str(rec.get("inline_b64")).strip()
-        blob = None
-        if blob_b64:
-            try:
-                blob = base64.b64decode(blob_b64)
-            except Exception:
-                blob = None
         artifacts[str(name)] = Artifact(
             name=str(name),
-            data=blob,
+            data=_decode_inline_artifact_data(rec),
             reference=reference,
             mime_type=mime,
             metadata=meta,

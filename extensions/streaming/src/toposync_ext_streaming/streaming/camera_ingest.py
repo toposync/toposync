@@ -15,6 +15,94 @@ class CameraIngestDefinition:
     source_rtsp_url: str
 
 
+def iter_camera_devices_from_app_settings(app_settings: Any) -> list[dict[str, Any]]:
+    extensions = getattr(app_settings, "extensions", None)
+    if not isinstance(extensions, dict):
+        return []
+
+    cameras_ext = extensions.get("com.toposync.cameras", {})
+    cameras_record = cameras_ext if isinstance(cameras_ext, dict) else {}
+
+    devices_raw = cameras_record.get("devices")
+    if isinstance(devices_raw, list):
+        return [item for item in devices_raw if isinstance(item, dict)]
+
+    cameras_raw = cameras_record.get("cameras")
+    cameras = cameras_raw if isinstance(cameras_raw, list) else []
+
+    devices: list[dict[str, Any]] = []
+    for item in cameras:
+        if not isinstance(item, dict):
+            continue
+        camera_id = str(item.get("id") or "").strip()
+        if not camera_id:
+            continue
+        devices.append(
+            {
+                "id": camera_id,
+                "name": str(item.get("name") or "").strip(),
+                "kind": "camera",
+                "channels": [
+                    {
+                        "id": "video_main",
+                        "name": "Main video",
+                        "modality": "video",
+                        "is_default": True,
+                        "connection_type": str(item.get("connection_type") or "rtsp").strip().lower() or "rtsp",
+                        "transport": "rtsp",
+                        "rtsp_url": str(item.get("rtsp_url") or "").strip(),
+                        "username": str(item.get("username") or "").strip(),
+                        "password": str(item.get("password") or "").strip(),
+                        "fps": item.get("fps"),
+                    }
+                ],
+            }
+        )
+    return devices
+
+
+def resolve_camera_video_channel(device: Any, *, channel_id: str = "") -> dict[str, Any] | None:
+    if not isinstance(device, dict):
+        return None
+
+    requested_channel_id = str(channel_id or "").strip()
+    channels = device.get("channels")
+    if isinstance(channels, list):
+        fallback: dict[str, Any] | None = None
+        for item in channels:
+            if not isinstance(item, dict):
+                continue
+            modality = str(item.get("modality") or "video").strip().lower() or "video"
+            if modality != "video":
+                continue
+            current_channel_id = str(item.get("id") or "").strip()
+            if requested_channel_id and current_channel_id == requested_channel_id:
+                return item
+            if fallback is None:
+                fallback = item
+            if bool(item.get("is_default")):
+                fallback = item
+                if not requested_channel_id:
+                    return item
+        return fallback
+
+    rtsp_url = str(device.get("rtsp_url") or "").strip()
+    if not rtsp_url:
+        return None
+    return {
+        "id": requested_channel_id or "video_main",
+        "name": "Main video",
+        "modality": "video",
+        "is_default": True,
+        "connection_type": str(device.get("connection_type") or "rtsp").strip().lower() or "rtsp",
+        "transport": "rtsp",
+        "rtsp_url": rtsp_url,
+        "username": str(device.get("username") or "").strip(),
+        "password": str(device.get("password") or "").strip(),
+        "fps": device.get("fps"),
+    }
+
+
 def build_camera_ingest_definitions(
     *,
     app_settings: Any,
@@ -23,30 +111,23 @@ def build_camera_ingest_definitions(
     if not bool(getattr(ingest_settings, "enabled", True)):
         return {}
 
-    extensions = getattr(app_settings, "extensions", None)
-    if not isinstance(extensions, dict):
-        return {}
-
-    cameras_ext = extensions.get("com.toposync.cameras", {})
-    cameras_record = cameras_ext if isinstance(cameras_ext, dict) else {}
-    cameras_raw = cameras_record.get("cameras")
-    cameras = cameras_raw if isinstance(cameras_raw, list) else []
-
     prefix = normalize_path_slug(str(getattr(ingest_settings, "path_prefix", "") or "ingest"), fallback="ingest")
 
     out: dict[str, CameraIngestDefinition] = {}
-    for item in cameras:
-        if not isinstance(item, dict):
-            continue
-        camera_id = str(item.get("id") or "").strip()
+    for device in iter_camera_devices_from_app_settings(app_settings):
+        camera_id = str(device.get("id") or "").strip()
         if not camera_id or camera_id in out:
             continue
 
-        rtsp_url = str(item.get("rtsp_url") or "").strip()
+        channel = resolve_camera_video_channel(device)
+        if channel is None:
+            continue
+
+        rtsp_url = str(channel.get("rtsp_url") or "").strip()
         if not rtsp_url:
             continue
-        username = str(item.get("username") or "").strip()
-        password = str(item.get("password") or "").strip()
+        username = str(channel.get("username") or "").strip()
+        password = str(channel.get("password") or "").strip()
 
         source = _rtsp_url_with_auth(rtsp_url, username=username, password=password)
         if not source:
@@ -109,4 +190,3 @@ def _rtsp_url_with_auth(url: str, *, username: str, password: str) -> str:
         netloc = f"{user_enc}@{parsed.netloc}"
 
     return urllib.parse.urlunsplit(parsed._replace(netloc=netloc))
-

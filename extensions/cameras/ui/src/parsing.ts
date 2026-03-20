@@ -187,6 +187,41 @@ function convexHullAreaRatio(points: Array<{ x: number; y: number }>): number {
 }
 
 export function parseCameras(settings: Record<string, unknown>): CameraConfig[] {
+  const devicesRaw = Array.isArray(settings.devices) ? settings.devices : null;
+  if (devicesRaw) {
+    const output: CameraConfig[] = [];
+    for (const item of devicesRaw) {
+      const device = readRecord(item);
+      const id = readString(device.id).trim();
+      if (!id) continue;
+      const channels = Array.isArray(device.channels) ? device.channels : [];
+      let selectedChannel: Record<string, unknown> | null = null;
+      for (const rawChannel of channels) {
+        const channel = readRecord(rawChannel);
+        const modality = readString(channel.modality).trim().toLowerCase() || "video";
+        if (modality !== "video") continue;
+        if (!selectedChannel) selectedChannel = channel;
+        if (Boolean(channel.is_default)) {
+          selectedChannel = channel;
+          break;
+        }
+      }
+      if (!selectedChannel) continue;
+      output.push({
+        id,
+        name: readString(device.name).trim(),
+        connection_type: readCameraConnectionType(selectedChannel.connection_type),
+        channel_id: readString(selectedChannel.id).trim() || "video_main",
+        rtsp_url: readString(selectedChannel.rtsp_url).trim(),
+        username: readString(selectedChannel.username).trim(),
+        password: readString(selectedChannel.password).trim(),
+        fps: Math.max(1, Math.min(60, readFiniteNumber(selectedChannel.fps, 5))),
+        onvif: readOnvifConfig(selectedChannel.onvif),
+      });
+    }
+    return output;
+  }
+
   const raw = settings.cameras;
   if (!Array.isArray(raw)) return [];
   const output: CameraConfig[] = [];
@@ -208,6 +243,37 @@ export function parseCameras(settings: Record<string, unknown>): CameraConfig[] 
     });
   }
   return output;
+}
+
+export function serializeCameras(settings: CameraConfig[]): Record<string, unknown> {
+  return {
+    schema_version: 2,
+    devices: settings.map((camera) => ({
+      id: camera.id,
+      name: camera.name,
+      kind: "camera",
+      enabled: true,
+      clock_domain: `device:${camera.id}`,
+      channels: [
+        {
+          id: camera.channel_id?.trim() || "video_main",
+          name: "Main video",
+          modality: "video",
+          enabled: true,
+          is_default: true,
+          connection_type: camera.connection_type,
+          transport: "rtsp",
+          rtsp_url: camera.rtsp_url,
+          username: camera.username ?? "",
+          password: camera.password ?? "",
+          fps: camera.fps,
+          onvif: camera.onvif ?? null,
+          metadata: {},
+        },
+      ],
+      metadata: {},
+    })),
+  };
 }
 
 export function readCameraConnectionType(value: unknown): CameraConnectionType {

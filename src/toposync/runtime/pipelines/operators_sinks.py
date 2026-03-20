@@ -26,6 +26,14 @@ from .images import (
     resolve_image_artifact_name,
 )
 from .operator_registry import OperatorRegistry
+from .packet_contract import (
+    get_media_descriptor,
+    get_source_descriptor,
+    resolve_media_dimensions,
+    resolve_media_ts,
+    resolve_source_device_id,
+    resolve_source_name,
+)
 from .runtime import Artifact, Lifecycle, Packet
 from .telemetry import METRIC_STORE_IMAGE
 
@@ -70,6 +78,8 @@ def _resolve_logical_pipeline_name(context: Any) -> str:
 
 
 def _resolve_ts(packet: Packet, field: str) -> float:
+    if field in {"frame_ts", "ts"}:
+        return float(resolve_media_ts(packet))
     raw = packet.payload.get(field)
     try:
         value = float(raw)
@@ -104,6 +114,10 @@ def _resolve_image_confidence(packet: Packet, artifact: Artifact) -> float | Non
 
 
 def _resolve_string(packet: Packet, field: str) -> str:
+    if field == "camera_id":
+        return resolve_source_device_id(packet)
+    if field == "camera_name":
+        return resolve_source_name(packet)
     value = str(packet.payload.get(field) or "").strip()
     if value:
         return value
@@ -419,14 +433,9 @@ class StoreImagesRuntime(TransformOperatorRuntime):
         min_width = int(self._config.min_frame_width)
         min_height = int(self._config.min_frame_height)
         if min_width > 0 or min_height > 0:
-            try:
-                width = int(float(packet.payload.get("frame_width") or 0))
-            except Exception:
-                width = 0
-            try:
-                height = int(float(packet.payload.get("frame_height") or 0))
-            except Exception:
-                height = 0
+            width_value, height_value = resolve_media_dimensions(packet)
+            width = int(width_value or 0)
+            height = int(height_value or 0)
             if (min_width > 0 and width < min_width) or (min_height > 0 and height < min_height):
                 return [packet]
 
@@ -1015,6 +1024,12 @@ def _select_notification_data(packet: Packet) -> dict[str, Any]:
         "frame_warp",
     }
     selected = {k: v for k, v in payload.items() if k in allow}
+    source = get_source_descriptor(packet)
+    if source:
+        selected["source"] = source
+    media = get_media_descriptor(packet)
+    if media:
+        selected["media"] = media
     return _sanitize_for_json(selected)
 
 

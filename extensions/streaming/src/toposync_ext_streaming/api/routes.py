@@ -27,7 +27,11 @@ from toposync.runtime.pipelines.templates import safe_pipeline_name
 from toposync.runtime.services import ServiceRegistry
 
 from ..streaming.engine_manager import MediaMtxEngineManager
-from ..streaming.camera_ingest import build_camera_ingest_definitions, build_camera_ingest_path_configs
+from ..streaming.camera_ingest import (
+    build_camera_ingest_definitions,
+    build_camera_ingest_path_configs,
+    iter_camera_devices_from_app_settings,
+)
 from ..streaming.mediamtx_binary import extract_mediamtx_binary, find_installed_mediamtx_binary
 from ..streaming.platform import detect_mediamtx_platform
 from ..streaming.publisher_manager import PublisherManager
@@ -591,20 +595,12 @@ def _iter_enabled_outputs(transmission: Transmission) -> list[tuple[str, Literal
 
 
 def _resolve_camera_id_from_settings(settings: Any, *, camera_selector: str) -> str | None:
-    ext_settings = settings.extensions if hasattr(settings, "extensions") else {}
-    cameras_ext = ext_settings.get("com.toposync.cameras") if isinstance(ext_settings, dict) else None
-    cameras_record = cameras_ext if isinstance(cameras_ext, dict) else {}
-    cameras_raw = cameras_record.get("cameras")
-    cameras = cameras_raw if isinstance(cameras_raw, list) else []
-
     selector = str(camera_selector or "").strip()
     selector_slug = _slugify(selector)
     if not selector:
         return None
 
-    for item in cameras:
-        if not isinstance(item, dict):
-            continue
+    for item in iter_camera_devices_from_app_settings(settings):
         camera_id = str(item.get("id") or "").strip()
         camera_name = str(item.get("name") or "").strip()
         camera_slug = str(item.get("slug") or "").strip()

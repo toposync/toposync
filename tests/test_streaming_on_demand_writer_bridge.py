@@ -154,7 +154,7 @@ async def _on_demand_start_stop_scenario() -> None:
 
     await runtime_state.update_writer_frame(
         transmission_id="transmission_ondemand",
-        writer_id="pipeline_main:stream.write",
+        writer_id="pipeline_main:stream.publish_video",
         lifecycle_state=Lifecycle.UPDATE,
         writer_priority=1,
         frame=numpy.full((120, 160, 3), 180, dtype=numpy.uint8),
@@ -220,7 +220,7 @@ async def _on_demand_no_flap_scenario() -> None:
 
     await runtime_state.update_writer_frame(
         transmission_id="transmission_flap",
-        writer_id="pipeline_main:stream.write",
+        writer_id="pipeline_main:stream.publish_video",
         lifecycle_state=Lifecycle.UPDATE,
         writer_priority=1,
         frame=numpy.full((120, 160, 3), 140, dtype=numpy.uint8),
@@ -287,7 +287,7 @@ async def _on_demand_prime_scenario() -> None:
 
     await runtime_state.update_writer_frame(
         transmission_id="transmission_prime",
-        writer_id="pipeline_main:stream.write",
+        writer_id="pipeline_main:stream.publish_video",
         lifecycle_state=Lifecycle.UPDATE,
         writer_priority=1,
         frame=numpy.full((120, 160, 3), 130, dtype=numpy.uint8),

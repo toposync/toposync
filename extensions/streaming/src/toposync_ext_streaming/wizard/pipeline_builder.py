@@ -152,10 +152,10 @@ def build_streaming_wizard_graph(
     nodes.append(
         {
             "id": "stream",
-            "operator": "stream.write",
+            "operator": "stream.publish_video",
             "config": {
                 "transmission_id": transmission_id,
-                "input_with_fallback": ["frame", "best_frame", "segmented", "frame_original"],
+                "frame_with_fallback": ["frame", "best_frame", "segmented", "frame_original"],
                 "resize_mode": resize_mode,
                 "writer_priority": int(writer_priority),
                 "bypass_mode": bypass_mode,

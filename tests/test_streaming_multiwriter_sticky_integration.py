@@ -33,8 +33,8 @@ async def _sticky_multiwriter_scenario() -> None:
     )
 
     transmission_id = "transmission_multiwriter"
-    writer_a = "pipeline_a:stream.write"
-    writer_b = "pipeline_b:stream.write"
+    writer_a = "pipeline_a:stream.publish_video"
+    writer_b = "pipeline_b:stream.publish_video"
 
     selected_sequence: list[str] = []
     for index in range(8):

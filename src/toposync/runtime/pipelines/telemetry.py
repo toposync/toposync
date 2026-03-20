@@ -26,8 +26,9 @@ logger = logging.getLogger("toposync.pipelines.telemetry")
 DEFAULT_WINDOW_SECONDS = 3 * 24 * 60 * 60
 DEFAULT_BUCKET_SECONDS = 60
 DEFAULT_MAX_NUMERIC_SERIES = 512
-DEFAULT_MAX_IMAGE_MARKERS_PER_PIPELINE = 5_000
+DEFAULT_MAX_IMAGE_MARKERS_PER_PIPELINE = 40_000
 DEFAULT_MAX_IMAGE_PIPELINES = 128
+MAX_IMAGE_MARKER_QUERY_LIMIT = 40_000
 
 DEFAULT_PERSIST_INTERVAL_S = 90.0
 DEFAULT_PERSIST_COMPRESSION_LEVEL = 3
@@ -650,7 +651,7 @@ class PipelineTelemetryStore:
         markers = self._image_markers_by_pipeline.get(pipeline)
         if markers is None:
             return []
-        cap = max(1, min(5_000, int(limit)))
+        cap = max(1, min(MAX_IMAGE_MARKER_QUERY_LIMIT, int(limit)))
         metric_filter = self._sanitize_metric_id(metric_id or "")
         node_filter = self._sanitize_node_id(node_id or "")
         min_ts: float | None = None
@@ -691,7 +692,7 @@ class PipelineTelemetryStore:
         window_seconds: int | None = None,
         now_s: float | None = None,
     ) -> list[dict[str, Any]]:
-        cap = max(1, min(5_000, int(limit)))
+        cap = max(1, min(MAX_IMAGE_MARKER_QUERY_LIMIT, int(limit)))
         metric_filter = self._sanitize_metric_id(metric_id or "")
         node_filter = self._sanitize_node_id(node_id or "")
         min_ts: float | None = None

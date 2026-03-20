@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from toposync.runtime.pipelines.execution import SinkRuntime
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
+from toposync.runtime.pipelines.packet_contract import resolve_media_ts
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 
 from ..api.models import EXTENSION_ID
@@ -32,11 +33,11 @@ def get_streaming_runtime_bindings() -> StreamingRuntimeBindings | None:
     return _GLOBAL_RUNTIME_BINDINGS
 
 
-class StreamWriteConfig(BaseModel):
+class PublishVideoConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     transmission_id: str
-    input_with_fallback: list[str] = Field(default_factory=lambda: ["frame", "best_frame", "segmented", "frame_original"])
+    frame_with_fallback: list[str] = Field(default_factory=lambda: ["frame", "best_frame", "segmented", "frame_original"])
     resize_mode: Literal["contain", "none"] = "contain"
     writer_priority: int = 0
     bypass_mode: Literal["auto", "force_on", "force_off"] = "auto"
@@ -49,7 +50,7 @@ class StreamWriteConfig(BaseModel):
             raise ValueError("transmission_id is required")
         return normalized
 
-    @field_validator("input_with_fallback", mode="before")
+    @field_validator("frame_with_fallback", mode="before")
     @classmethod
     def _parse_fallback(cls, value: Any) -> list[str]:
         if isinstance(value, str):
@@ -72,9 +73,9 @@ class StreamWriteConfig(BaseModel):
         return normalized
 
 
-class StreamWriteRuntime(SinkRuntime):
+class PublishVideoRuntime(SinkRuntime):
     def __init__(self, config: dict[str, Any]) -> None:
-        self._config = StreamWriteConfig.model_validate(config)
+        self._config = PublishVideoConfig.model_validate(config)
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         bindings = get_streaming_runtime_bindings()
@@ -91,7 +92,7 @@ class StreamWriteRuntime(SinkRuntime):
             )
             return []
 
-        frame = _extract_frame(packet, candidates=self._config.input_with_fallback)
+        frame = _extract_frame(packet, candidates=self._config.frame_with_fallback)
         frame_ts = _resolve_frame_ts(packet)
 
         await bindings.runtime_state.update_writer_frame(
@@ -106,40 +107,33 @@ class StreamWriteRuntime(SinkRuntime):
 
 
 def register_streaming_pipeline_operators(registry: OperatorRegistry) -> None:
-    if registry.get("stream.write") is not None:
+    if registry.get("stream.publish_video") is not None:
         return
 
     registry.register_operator(
-        operator_id="stream.write",
-        description="Publishes pipeline frames to a configured transmission output.",
-        config_model=StreamWriteConfig,
+        operator_id="stream.publish_video",
+        description="Publishes pipeline video frames to a configured transmission output.",
+        config_model=PublishVideoConfig,
         inputs=[{"name": "in", "required": True}],
         outputs=[],
         capabilities=["streaming", "sink", "realtime"],
-        defaults=StreamWriteConfig(transmission_id="stream_default").model_dump(mode="json"),
+        defaults=PublishVideoConfig(transmission_id="stream_default").model_dump(mode="json"),
         share_strategy="never",
+        requires_media_fields=["ts", "width", "height"],
+        input_modalities=["video"],
         owner=EXTENSION_ID,
-        runtime_factory=lambda config, _deps: StreamWriteRuntime(config),
+        runtime_factory=lambda config, _deps: PublishVideoRuntime(config),
     )
 
 
 def _build_writer_id(context) -> str:  # noqa: ANN001
     pipeline_name = str(getattr(context, "pipeline_name", "pipeline") or "pipeline").strip()
-    node_id = str(getattr(context, "node_id", "stream.write") or "stream.write").strip()
+    node_id = str(getattr(context, "node_id", "stream.publish_video") or "stream.publish_video").strip()
     return f"{pipeline_name}:{node_id}"
 
 
 def _resolve_frame_ts(packet: Packet) -> float:
-    payload = packet.payload if isinstance(packet.payload, dict) else {}
-    for key in ("frame_ts", "ts"):
-        raw_value = payload.get(key)
-        if raw_value is None:
-            continue
-        try:
-            return float(raw_value)
-        except Exception:
-            continue
-    return float(packet.created_at)
+    return float(resolve_media_ts(packet))
 
 
 def _extract_frame(packet: Packet, *, candidates: list[str]) -> numpy.ndarray | None:

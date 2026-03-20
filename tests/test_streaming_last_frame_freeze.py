@@ -33,7 +33,7 @@ async def _scenario() -> None:
     )
 
     transmission_id = "transmission_freeze"
-    writer_id = "pipeline:stream.write"
+    writer_id = "pipeline:stream.publish_video"
 
     empty = await runtime_state.get_selected_writer_frame(transmission_id)
     assert empty.writer_id is None
@@ -65,4 +65,3 @@ async def _scenario() -> None:
     assert stale.writer_id is None
     assert stale.frame is not None
     assert numpy.array_equal(stale.frame, frame)
-

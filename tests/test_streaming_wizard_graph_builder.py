@@ -23,7 +23,7 @@ def _stream_config(graph: dict) -> dict:
     for node in nodes:
         if not isinstance(node, dict):
             continue
-        if str(node.get("operator") or "") == "stream.write":
+        if str(node.get("operator") or "") == "stream.publish_video":
             return node.get("config") if isinstance(node.get("config"), dict) else {}
     return {}
 
@@ -51,7 +51,7 @@ def test_wizard_graph_always_has_source_and_stream(preset_id: str) -> None:
 
     operators = _operator_ids(graph)
     assert "camera.source" in operators
-    assert "stream.write" in operators
+    assert "stream.publish_video" in operators
 
     stream_config = _stream_config(graph)
     assert stream_config.get("transmission_id") == "transmission_main"

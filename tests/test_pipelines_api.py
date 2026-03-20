@@ -143,7 +143,7 @@ def test_pipeline_payload_validation(tmp_path: Path, monkeypatch: pytest.MonkeyP
         assert res.status_code == 422
 
 
-def test_pipeline_stream_write_host_mismatch_returns_400(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pipeline_publish_video_host_mismatch_returns_400(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         patch_res = client.patch(
             "/api/settings/extensions/com.toposync.streaming",
@@ -162,7 +162,7 @@ def test_pipeline_stream_write_host_mismatch_returns_400(tmp_path: Path, monkeyp
         assert patch_res.status_code == 200
 
         payload = {
-            "name": "pipeline_with_stream_write",
+            "name": "pipeline_with_publish_video",
             "type": "final",
             "processing_server_id": "local",
             "graph": {
@@ -170,7 +170,7 @@ def test_pipeline_stream_write_host_mismatch_returns_400(tmp_path: Path, monkeyp
                 "nodes": [
                     {
                         "id": "stream_sink",
-                        "operator": "stream.write",
+                        "operator": "stream.publish_video",
                         "config": {"transmission_id": "tx_edge"},
                     }
                 ],
@@ -179,7 +179,7 @@ def test_pipeline_stream_write_host_mismatch_returns_400(tmp_path: Path, monkeyp
         }
         res = client.post("/api/pipelines", json=payload)
         assert res.status_code == 400
-        assert "stream.write host mismatch" in str(res.json().get("detail") or "")
+        assert "stream.publish_video host mismatch" in str(res.json().get("detail") or "")
 
 
 def test_processing_servers_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

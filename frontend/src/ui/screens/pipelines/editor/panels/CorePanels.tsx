@@ -994,15 +994,15 @@ type NotifyProps = {
   onUpdateConfig: UpdateConfig;
 };
 
-type StreamWriteProps = {
+type PublishVideoProps = {
   config: Record<string, unknown>;
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
 };
 
-const STREAM_WRITE_DEFAULT_INPUTS = ["frame", "best_frame", "segmented", "frame_original"];
+const PUBLISH_VIDEO_DEFAULT_INPUTS = ["frame", "best_frame", "segmented", "frame_original"];
 
-function parseStreamWriteInputs(value: unknown): string[] {
+function parsePublishVideoInputs(value: unknown): string[] {
   if (Array.isArray(value)) {
     const out = value
       .map((item) => String(item || "").trim())
@@ -1019,7 +1019,7 @@ function parseStreamWriteInputs(value: unknown): string[] {
   return [];
 }
 
-export function StreamWriteConfigCard({ config, showAdvanced, onUpdateConfig }: StreamWriteProps): React.ReactElement {
+export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }: PublishVideoProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const [transmissions, setTransmissions] = useState<StreamingTransmission[]>([]);
   const [loadingTransmissions, setLoadingTransmissions] = useState(false);
@@ -1057,12 +1057,12 @@ export function StreamWriteConfigCard({ config, showAdvanced, onUpdateConfig }: 
   const writerPriorityRaw = Number((config as any).writer_priority ?? 0);
   const writerPriority = Number.isFinite(writerPriorityRaw) ? writerPriorityRaw : 0;
   const fallbackValues = (() => {
-    const parsed = parseStreamWriteInputs((config as any).input_with_fallback);
-    return parsed.length > 0 ? parsed : STREAM_WRITE_DEFAULT_INPUTS;
+    const parsed = parsePublishVideoInputs((config as any).frame_with_fallback);
+    return parsed.length > 0 ? parsed : PUBLISH_VIDEO_DEFAULT_INPUTS;
   })();
 
   const transmissionOptions = useMemo<SelectOption[]>(() => {
-    const disabledSuffix = t("core.ui.pipelines.panels.stream_write.transmission_disabled_suffix", {}, "disabled");
+    const disabledSuffix = t("core.ui.pipelines.panels.publish_video.transmission_disabled_suffix", {}, "disabled");
     return transmissions
       .map((item) => {
         const id = String(item?.id || "").trim();
@@ -1107,50 +1107,50 @@ export function StreamWriteConfigCard({ config, showAdvanced, onUpdateConfig }: 
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>{t("core.ui.pipelines.panels.stream_write.transmission")}</span>
+        <span>{t("core.ui.pipelines.panels.publish_video.transmission")}</span>
         <CreatableSelect<SelectOption, false>
           styles={pipelinesReactSelectStyles}
           options={transmissionOptions}
           value={selectedTransmissionOption}
           isClearable
-          placeholder={t("core.ui.pipelines.panels.stream_write.transmission_placeholder")}
+          placeholder={t("core.ui.pipelines.panels.publish_video.transmission_placeholder")}
           onChange={(value) => {
             onUpdateConfig((prev) => ({ ...prev, transmission_id: String(value?.value || "").trim() }));
           }}
         />
       </label>
       {loadingTransmissions ? (
-        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.stream_write.transmission_loading")}</div>
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.publish_video.transmission_loading")}</div>
       ) : transmissionsError ? (
-        <div className="pipelinesInlineError">{t("core.ui.pipelines.panels.stream_write.transmission_load_failed", { error: transmissionsError })}</div>
+        <div className="pipelinesInlineError">{t("core.ui.pipelines.panels.publish_video.transmission_load_failed", { error: transmissionsError })}</div>
       ) : transmissionOptions.length === 0 ? (
-        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.stream_write.transmission_empty")}</div>
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.publish_video.transmission_empty")}</div>
       ) : (
-        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.stream_write.transmission_hint")}</div>
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.publish_video.transmission_hint")}</div>
       )}
 
       <label className="pipelinesLabel">
-        <span>{t("core.ui.pipelines.panels.stream_write.input_fallback")}</span>
+        <span>{t("core.ui.pipelines.panels.publish_video.frame_fallback")}</span>
         <CreatableSelect<SelectOption, true>
           isMulti
           styles={pipelinesReactSelectStyles}
           options={fallbackOptions}
           value={selectedFallbackOptions}
-          placeholder={t("core.ui.pipelines.panels.stream_write.input_fallback_placeholder")}
+          placeholder={t("core.ui.pipelines.panels.publish_video.frame_fallback_placeholder")}
           onChange={(value: MultiValue<SelectOption>) => {
             const nextValues = value
               .map((item) => String(item.value || "").trim())
               .filter((item) => item.length > 0);
             onUpdateConfig((prev) => ({
               ...prev,
-              input_with_fallback: nextValues.length > 0 ? [...new Set(nextValues)] : [...STREAM_WRITE_DEFAULT_INPUTS],
+              frame_with_fallback: nextValues.length > 0 ? [...new Set(nextValues)] : [...PUBLISH_VIDEO_DEFAULT_INPUTS],
             }));
           }}
         />
       </label>
 
       <label className="pipelinesLabel">
-        <span>{t("core.ui.pipelines.panels.stream_write.resize_mode")}</span>
+        <span>{t("core.ui.pipelines.panels.publish_video.resize_mode")}</span>
         <select
           className="pipelinesSelect"
           value={resizeMode}
@@ -1159,14 +1159,14 @@ export function StreamWriteConfigCard({ config, showAdvanced, onUpdateConfig }: 
             onUpdateConfig((prev) => ({ ...prev, resize_mode: nextValue === "none" ? "none" : "contain" }));
           }}
         >
-          <option value="contain">{t("core.ui.pipelines.panels.stream_write.resize_mode.contain")}</option>
-          <option value="none">{t("core.ui.pipelines.panels.stream_write.resize_mode.none")}</option>
+          <option value="contain">{t("core.ui.pipelines.panels.publish_video.resize_mode.contain")}</option>
+          <option value="none">{t("core.ui.pipelines.panels.publish_video.resize_mode.none")}</option>
         </select>
       </label>
-      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.stream_write.resize_mode_hint")}</div>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.publish_video.resize_mode_hint")}</div>
 
       <label className="pipelinesLabel">
-        <span>{t("core.ui.pipelines.panels.stream_write.bypass_mode")}</span>
+        <span>{t("core.ui.pipelines.panels.publish_video.bypass_mode")}</span>
         <select
           className="pipelinesSelect"
           value={bypassMode}
@@ -1178,16 +1178,16 @@ export function StreamWriteConfigCard({ config, showAdvanced, onUpdateConfig }: 
             }));
           }}
         >
-          <option value="auto">{t("core.ui.pipelines.panels.stream_write.bypass_mode.auto")}</option>
-          <option value="force_off">{t("core.ui.pipelines.panels.stream_write.bypass_mode.force_off")}</option>
-          {showAdvanced ? <option value="force_on">{t("core.ui.pipelines.panels.stream_write.bypass_mode.force_on")}</option> : null}
+          <option value="auto">{t("core.ui.pipelines.panels.publish_video.bypass_mode.auto")}</option>
+          <option value="force_off">{t("core.ui.pipelines.panels.publish_video.bypass_mode.force_off")}</option>
+          {showAdvanced ? <option value="force_on">{t("core.ui.pipelines.panels.publish_video.bypass_mode.force_on")}</option> : null}
         </select>
       </label>
 
       {showAdvanced ? (
         <>
           <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.stream_write.writer_priority")}</span>
+            <span>{t("core.ui.pipelines.panels.publish_video.writer_priority")}</span>
             <PipelinesNumberInput
               className="pipelinesInput"
               min={-100}
@@ -1200,7 +1200,7 @@ export function StreamWriteConfigCard({ config, showAdvanced, onUpdateConfig }: 
               }}
             />
           </label>
-          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.stream_write.writer_priority_hint")}</div>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.publish_video.writer_priority_hint")}</div>
         </>
       ) : null}
     </div>

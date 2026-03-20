@@ -103,7 +103,7 @@ async def _run_writer_bridge_scenario(tmp_path) -> None:
             frame = numpy.full((120, 160, 3), (idx * 7) % 255, dtype=numpy.uint8)
             await runtime_state.update_writer_frame(
                 transmission_id="transmission_integration",
-                writer_id="pipeline_integration:stream.write",
+                writer_id="pipeline_integration:stream.publish_video",
                 lifecycle_state=Lifecycle.UPDATE,
                 writer_priority=1,
                 frame=frame,

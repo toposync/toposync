@@ -19,7 +19,13 @@ from ..api.models import (
     normalize_streaming_settings,
 )
 from .engine_manager import MediaMtxEngineManager
-from .camera_ingest import CameraIngestDefinition, build_camera_ingest_definitions, build_camera_ingest_path_configs
+from .camera_ingest import (
+    CameraIngestDefinition,
+    build_camera_ingest_definitions,
+    build_camera_ingest_path_configs,
+    iter_camera_devices_from_app_settings,
+    resolve_camera_video_channel,
+)
 from .mediamtx_api_client import MediaMtxApiClient
 from .mediamtx_config import normalize_path_slug
 from .placeholder import get_placeholder_frame
@@ -631,14 +637,8 @@ class StreamWriterBridge:
             self._logger.exception("Failed to list pipelines for streaming bypass analysis")
             return {}
 
-        cameras_ext = app_settings.extensions.get("com.toposync.cameras", {}) if hasattr(app_settings, "extensions") else {}
-        cameras_record = cameras_ext if isinstance(cameras_ext, dict) else {}
-        cameras_raw = cameras_record.get("cameras")
-        cameras = cameras_raw if isinstance(cameras_raw, list) else []
         camera_by_id: dict[str, dict[str, Any]] = {}
-        for item in cameras:
-            if not isinstance(item, dict):
-                continue
+        for item in iter_camera_devices_from_app_settings(app_settings):
             camera_id = str(item.get("id") or "").strip()
             if camera_id:
                 camera_by_id[camera_id] = item
@@ -664,7 +664,7 @@ class StreamWriterBridge:
 
             for node_id, node in by_node_id.items():
                 operator = str(node.get("operator") or "").strip()
-                if operator != "stream.write":
+                if operator != "stream.publish_video":
                     continue
                 config = node.get("config") if isinstance(node.get("config"), dict) else {}
                 bypass_mode = str(config.get("bypass_mode") or "auto").strip().lower()
@@ -1044,6 +1044,7 @@ def _resolve_chain_rtsp_source(
     direct_rtsp_url = str(config.get("rtsp_url") or "").strip()
     direct_username = str(config.get("username") or "").strip()
     direct_password = str(config.get("password") or "").strip()
+    requested_channel_id = str(config.get("channel_id") or "").strip()
     fps_value = _coerce_float(config.get("fps"))
     if direct_rtsp_url:
         return _apply_rtsp_auth(direct_rtsp_url, direct_username, direct_password), fps_value, source_backend, None
@@ -1052,12 +1053,15 @@ def _resolve_chain_rtsp_source(
     if not camera_id:
         return "", None, source_backend, None
     camera = camera_by_id.get(camera_id) or {}
-    camera_rtsp = str(camera.get("rtsp_url") or "").strip()
+    channel = resolve_camera_video_channel(camera, channel_id=requested_channel_id)
+    camera_rtsp = str((channel or {}).get("rtsp_url") or camera.get("rtsp_url") or "").strip()
     if not camera_rtsp:
         return "", None, source_backend, camera_id
-    username = str(camera.get("username") or "").strip()
-    password = str(camera.get("password") or "").strip()
-    camera_fps = _coerce_float(camera.get("fps"))
+    username = str((channel or {}).get("username") or camera.get("username") or "").strip()
+    password = str((channel or {}).get("password") or camera.get("password") or "").strip()
+    camera_fps = _coerce_float((channel or {}).get("fps"))
+    if camera_fps is None:
+        camera_fps = _coerce_float(camera.get("fps"))
     if fps_value is not None:
         camera_fps = fps_value
     return _apply_rtsp_auth(camera_rtsp, username, password), camera_fps, source_backend, camera_id

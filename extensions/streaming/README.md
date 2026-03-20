@@ -5,7 +5,7 @@ Extension ID: `com.toposync.streaming`
 This extension provides "pipeline-rendered streaming" in Toposync:
 
 - Users define **Transmissions** (domain objects) with one or more **Outputs**.
-- Pipelines publish frames to a Transmission via the sink operator **`stream.write`**.
+- Pipelines publish frames to a Transmission via the sink operator **`stream.publish_video`**.
 - A local **MediaMTX** engine serves RTSP/HLS/WebRTC (WHEP) URLs.
 - FFmpeg publishers (one per output) push encoded video into MediaMTX paths.
 
@@ -20,7 +20,7 @@ The core design goal is reliability in local-first setups with highly dynamic pi
 - MediaMTX engine lifecycle management (start/stop/restart/status) with on-demand binary install (download + SHA256 verification) and dynamic port resolution.
 - Transmission and output CRUD stored in extension settings.
 - Per-output URLs for RTSP, HLS, and WebRTC/WHEP.
-- Pipeline sink operator `stream.write` that publishes frames into a transmission (multi-writer capable).
+- Pipeline sink operator `stream.publish_video` that publishes frames into a transmission (multi-writer capable).
 - Multi-writer arbitration using lifecycle (`open/update/close`), priority, and a sticky window.
 - Output-level placeholder frames when no writer is active.
 - Output-level resolution and FPS enforcement, including contain resizing with black padding.
@@ -54,7 +54,7 @@ The core design goal is reliability in local-first setups with highly dynamic pi
 
 ### Data flow
 
-`pipeline frames` -> `stream.write` -> `TransmissionRuntimeState` -> `StreamWriterBridge` -> `FFmpeg publisher` -> `MediaMTX path` -> viewers (RTSP/HLS/WHEP)
+`pipeline frames` -> `stream.publish_video` -> `TransmissionRuntimeState` -> `StreamWriterBridge` -> `FFmpeg publisher` -> `MediaMTX path` -> viewers (RTSP/HLS/WHEP)
 
 ### Components
 
@@ -300,9 +300,9 @@ Current behavior for `none` is best-effort:
 - It avoids resizing only when the incoming frame already matches the target.
 - Otherwise it falls back to contain to preserve publisher invariants.
 
-## Pipeline operator: `stream.write`
+## Pipeline operator: `stream.publish_video`
 
-Operator id: `stream.write`
+Operator id: `stream.publish_video`
 
 Purpose:
 - Writes "latest frame" state into `TransmissionRuntimeState`.
@@ -313,7 +313,7 @@ Config (as implemented):
 ```json
 {
   "transmission_id": "uuid",
-  "input_with_fallback": ["frame", "best_frame", "segmented", "frame_original"],
+  "frame_with_fallback": ["frame", "best_frame", "segmented", "frame_original"],
   "resize_mode": "contain",
   "writer_priority": 0,
   "bypass_mode": "auto"
@@ -323,7 +323,7 @@ Config (as implemented):
 Notes:
 - `resize_mode` exists in the operator config, but resizing is currently applied by the writer bridge based on output settings.
 - Artifact selection:
-  - Iterates `input_with_fallback` and selects the first artifact that contains an image.
+  - Iterates `frame_with_fallback` and selects the first artifact that contains an image.
   - Supports payload image mapping (`packet.payload.images`) when present.
   - Normalizes frames to `uint8` BGR and contiguous memory.
 - Lifecycle handling:
@@ -345,7 +345,7 @@ Generated topology (high level):
 - Always starts with `camera.source` (with configurable backend).
 - Optionally adds `core.fps_reducer`.
 - Adds one optional "vision" step depending on preset.
-- Ends with `stream.write` configured for the selected transmission.
+- Ends with `stream.publish_video` configured for the selected transmission.
 
 Critical validation:
 - `Transmission.host_server_id` must match the pipeline `processing_server_id` (wizard enforces this).
@@ -355,11 +355,11 @@ Critical validation:
 When a pipeline matches a "simple stream" shape, the writer bridge can switch publishers to `rtsp_pull`.
 
 Eligible graph shapes:
-- `camera.source` -> `stream.write`
-- `camera.source` -> `core.fps_reducer` -> `stream.write`
+- `camera.source` -> `stream.publish_video`
+- `camera.source` -> `core.fps_reducer` -> `stream.publish_video`
 
 Config:
-- `stream.write.config.bypass_mode`:
+- `stream.publish_video.config.bypass_mode`:
   - `auto` (use bypass when eligible)
   - `force_on` (use bypass when eligible; keep trying)
   - `force_off` (never bypass for this writer)

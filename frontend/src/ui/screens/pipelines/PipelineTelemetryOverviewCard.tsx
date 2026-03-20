@@ -102,13 +102,13 @@ const RANGE_SHORT_SECONDS = 2 * 60 * 60;
 const RANGE_DEFAULT_SECONDS = 24 * 60 * 60;
 const RANGE_LONG_SECONDS = 3 * 24 * 60 * 60;
 const AGGREGATE_METRIC_IDS = ["motion.score", "yolo.confidence"];
-const MARKER_FETCH_LIMIT = 5_000;
+const MARKER_FETCH_LIMIT = 40_000;
 const MARKER_CLUSTER_DISTANCE = 9;
 const MARKER_CLUSTER_SPAN_LIMIT = 18;
 const MARKER_CLUSTER_LANE_COUNT = 4;
 const MARKER_CLUSTER_LANE_SPACING = 11;
 const MARKER_CLUSTER_GAP = 5;
-const MARKER_CLUSTER_PREVIEW_LIMIT = 12;
+const MARKER_CLUSTER_PREVIEW_LIMIT = 96;
 const METRIC_SERIES_COLORS = [
   "var(--color-accent-teal)",
   "var(--color-warning)",

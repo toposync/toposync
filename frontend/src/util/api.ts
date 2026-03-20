@@ -278,6 +278,16 @@ export type PipelineOperatorDefinition = {
   defaults: Record<string, unknown>;
   config_schema: Record<string, unknown>;
   share_strategy: "by_signature" | "never";
+  requires_payload_keys?: string[];
+  requires_artifacts?: string[];
+  requires_source_fields?: string[];
+  requires_media_fields?: string[];
+  produces_payload_keys?: string[];
+  produces_artifacts?: string[];
+  produces_source_fields?: string[];
+  produces_media_fields?: string[];
+  input_modalities?: string[];
+  output_modalities?: string[];
 };
 
 export type NotificationsPage = {
@@ -775,7 +785,7 @@ export async function getPipelineTelemetryImageMarkers(
   options?: { limit?: number; nodeId?: string; metricId?: string; windowSeconds?: number },
 ): Promise<PipelineTelemetryImageMarkers> {
   const params = new URLSearchParams();
-  const limit = Math.max(1, Math.min(5000, Math.floor(options?.limit ?? 500)));
+  const limit = Math.max(1, Math.min(40000, Math.floor(options?.limit ?? 500)));
   params.set("limit", String(limit));
   if (options?.nodeId) params.set("node_id", String(options.nodeId));
   if (options?.metricId) params.set("metric_id", String(options.metricId));
@@ -814,7 +824,7 @@ export async function getPipelinesTelemetryImageMarkers(
   const params = new URLSearchParams();
   const aggregation = String(options?.aggregation || "max").trim() || "max";
   params.set("aggregation", aggregation);
-  const limit = Math.max(1, Math.min(5000, Math.floor(options?.limit ?? 500)));
+  const limit = Math.max(1, Math.min(40000, Math.floor(options?.limit ?? 500)));
   params.set("limit", String(limit));
   if (options?.nodeId) params.set("node_id", String(options.nodeId));
   if (options?.metricId) params.set("metric_id", String(options.metricId));

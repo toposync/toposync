@@ -50,6 +50,7 @@ from toposync.runtime.pipelines.python_dsl import PythonDslCompileError, compile
 from toposync.runtime.pipelines.recommendations import PipelineAlert, analyze_compiled_pipeline
 from toposync.runtime.pipelines.stats import PipelineStatsStore
 from toposync.runtime.pipelines.telemetry import (
+    MAX_IMAGE_MARKER_QUERY_LIMIT,
     METRIC_MOTION_SCORE,
     METRIC_STORE_IMAGE,
     METRIC_YOLO_CONFIDENCE,
@@ -1393,7 +1394,7 @@ def create_app() -> FastAPI:
         normalized = str(value or "").strip().lower()
         return normalized or "local"
 
-    def _extract_stream_write_transmission_ids(pipeline: Pipeline) -> set[str]:
+    def _extract_publish_video_transmission_ids(pipeline: Pipeline) -> set[str]:
         graph = pipeline.graph if isinstance(pipeline.graph, dict) else {}
         nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
         transmission_ids: set[str] = set()
@@ -1401,7 +1402,7 @@ def create_app() -> FastAPI:
             if not isinstance(node, dict):
                 continue
             operator_id = str(node.get("operator") or "").strip()
-            if operator_id != "stream.write":
+            if operator_id != "stream.publish_video":
                 continue
             config = node.get("config") if isinstance(node.get("config"), dict) else {}
             transmission_id = str(config.get("transmission_id") or "").strip()
@@ -1409,8 +1410,8 @@ def create_app() -> FastAPI:
                 transmission_ids.add(transmission_id)
         return transmission_ids
 
-    async def _validate_stream_write_host_affinity(config_store: ConfigStore, pipeline: Pipeline) -> None:
-        transmission_ids = _extract_stream_write_transmission_ids(pipeline)
+    async def _validate_publish_video_host_affinity(config_store: ConfigStore, pipeline: Pipeline) -> None:
+        transmission_ids = _extract_publish_video_transmission_ids(pipeline)
         if not transmission_ids:
             return
 
@@ -1446,7 +1447,7 @@ def create_app() -> FastAPI:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "stream.write host mismatch: each referenced transmission must run on the same "
+                    "stream.publish_video host mismatch: each referenced transmission must run on the same "
                     f"processing_server_id as the pipeline. {joined}"
                 ),
             )
@@ -1491,7 +1492,7 @@ def create_app() -> FastAPI:
                 except PythonDslCompileError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
                 body = body.model_copy(update={"graph": graph})
-            await _validate_stream_write_host_affinity(config_store, body)
+            await _validate_publish_video_host_affinity(config_store, body)
             compiler.compile_pipeline(body)
             saved = await config_store.create_pipeline(body)
             orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
@@ -1543,7 +1544,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         try:
-            await _validate_stream_write_host_affinity(config_store, duplicated)
+            await _validate_publish_video_host_affinity(config_store, duplicated)
             compiler.compile_pipeline(duplicated)
             saved = await config_store.create_pipeline(duplicated)
         except GraphCompileError as exc:
@@ -1670,7 +1671,7 @@ def create_app() -> FastAPI:
     async def get_pipelines_telemetry_image_markers(
         request: Request,
         aggregation: str = Query(default="max"),
-        limit: int = Query(default=500, ge=1, le=5000),
+        limit: int = Query(default=500, ge=1, le=MAX_IMAGE_MARKER_QUERY_LIMIT),
         node_id: str | None = Query(default=None),
         metric_id: str | None = Query(default=METRIC_STORE_IMAGE),
         window_seconds: int | None = Query(default=None, ge=1, le=7 * 24 * 60 * 60),
@@ -1737,7 +1738,7 @@ def create_app() -> FastAPI:
     async def get_pipeline_telemetry_image_markers(
         request: Request,
         pipeline_name: str,
-        limit: int = Query(default=500, ge=1, le=5000),
+        limit: int = Query(default=500, ge=1, le=MAX_IMAGE_MARKER_QUERY_LIMIT),
         node_id: str | None = Query(default=None),
         metric_id: str | None = Query(default=None),
         window_seconds: int | None = Query(default=None, ge=1, le=7 * 24 * 60 * 60),
@@ -1787,7 +1788,7 @@ def create_app() -> FastAPI:
                 except PythonDslCompileError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
                 body = body.model_copy(update={"graph": graph})
-            await _validate_stream_write_host_affinity(config_store, body)
+            await _validate_publish_video_host_affinity(config_store, body)
             compiler.compile_pipeline(body)
             saved = await config_store.replace_pipeline(pipeline_name, body)
             orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)

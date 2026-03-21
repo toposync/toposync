@@ -887,12 +887,13 @@ class HomeAssistantExtension(BaseExtension):
                 return
             server = await get_server(route.serverId)
             domain, service = target
-            tag = _notification_tag(notification)
-            if not tag:
-                return
+            use_tag = route.closeAction == "clear" or bool(route.sendUpdates)
+            tag = _notification_tag(notification) if use_tag else None
 
             if _notification_is_closed(notification):
                 if route.closeAction != "clear":
+                    return
+                if not tag:
                     return
                 await _call_service(
                     server,
@@ -911,8 +912,9 @@ class HomeAssistantExtension(BaseExtension):
             title = str(notification.get("title", "")).strip()
             description = str(notification.get("description", "")).strip()
             message = description or title or notification_type or "Toposync notification"
-            data: dict[str, Any] = {"tag": tag}
-            body: dict[str, Any] = {"message": message, "data": data}
+            body: dict[str, Any] = {"message": message}
+            if tag:
+                body["data"] = {"tag": tag}
             if title and description:
                 body["title"] = title
             await _call_service(server, domain, service, body)

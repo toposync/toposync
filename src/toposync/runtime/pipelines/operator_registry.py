@@ -173,8 +173,8 @@ class OperatorRegistry:
 
         cfg_model = _ensure_config_model(config_model)
         parsed_inputs = [i if isinstance(i, OperatorPort) else OperatorPort.model_validate(i) for i in (inputs or [])]
-        parsed_outputs = [o if isinstance(o, OperatorPort) else OperatorPort.model_validate(o) for o in (outputs or [])]
-        if not parsed_outputs:
+        parsed_outputs = [o if isinstance(o, OperatorPort) else OperatorPort.model_validate(o) for o in outputs] if outputs is not None else []
+        if outputs is None and not parsed_outputs:
             parsed_outputs = [OperatorPort(name="out")]
 
         capability_values = list(capabilities or [])

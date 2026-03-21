@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import hashlib
+from collections import OrderedDict
 import re
 from typing import Any, Literal
 
@@ -133,25 +133,13 @@ def _default_message(packet: Packet) -> str:
     return packet.stream_id
 
 
-def _default_tag(packet: Packet, *, node_id: str) -> str:
-    event_token = _first_non_empty(
-        packet.payload.get("event_id"),
-        packet.payload.get("correlation_id"),
-        packet.payload.get("tracking_id"),
-        packet.stream_id,
-    )
-    camera_id = _first_non_empty(packet.payload.get("camera_id"), "-")
-    raw = f"ha_notify:{node_id}:camera:{camera_id}:event:{event_token}"
-    if len(raw) <= 240:
-        return raw
-    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
-    return f"ha_notify:{node_id}:camera:{camera_id}:event:{digest}"
-
-
 class HomeAssistantNotifyRuntime(SinkRuntime):
+    _MAX_EVENT_KEYS = 2048
+
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = HomeAssistantNotifyConfig.model_validate(config)
         self._dependencies = dependencies
+        self._seen_event_keys: OrderedDict[str, None] = OrderedDict()
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         services = self._dependencies.services
@@ -164,12 +152,15 @@ class HomeAssistantNotifyRuntime(SinkRuntime):
             return []
 
         domain, service = parsed_service
-        tag = self._tag(packet, context)
+        tag = self._tag(packet)
         lifecycle = packet.lifecycle
-        should_send = self._should_send(lifecycle)
+        event_key = self._event_key(packet)
+        first_seen = self._mark_event_seen(event_key) if lifecycle != Lifecycle.CLOSE else False
+        should_send = self._should_send(lifecycle, first_seen=first_seen)
 
         if lifecycle == Lifecycle.CLOSE and not should_send:
-            if self._config.close_behavior == "clear":
+            self._forget_event(event_key)
+            if self._config.close_behavior == "clear" and tag:
                 await services.call(
                     "home_assistant.call_service",
                     server_id=self._config.server_id,
@@ -183,16 +174,17 @@ class HomeAssistantNotifyRuntime(SinkRuntime):
             return []
 
         if not should_send:
+            if lifecycle == Lifecycle.CLOSE:
+                self._forget_event(event_key)
             return []
 
         title = _render_template(packet, self._config.title).strip() or _default_title(packet)
         message = _render_template(packet, self._config.message).strip() or _default_message(packet) or title
-        payload: dict[str, Any] = {
-            "message": message,
-            "data": {"tag": tag},
-        }
+        payload: dict[str, Any] = {"message": message}
         if title:
             payload["title"] = title
+        if tag:
+            payload["data"] = {"tag": tag}
 
         await services.call(
             "home_assistant.call_service",
@@ -201,25 +193,54 @@ class HomeAssistantNotifyRuntime(SinkRuntime):
             service_name=service,
             data=payload,
         )
+        if lifecycle == Lifecycle.CLOSE:
+            self._forget_event(event_key)
         return []
 
-    def _should_send(self, lifecycle: Lifecycle) -> bool:
+    def _should_send(self, lifecycle: Lifecycle, *, first_seen: bool) -> bool:
         mode = self._config.notify_when
         if mode == "all":
             return True
         if mode == "open":
-            return lifecycle == Lifecycle.OPEN
+            return lifecycle == Lifecycle.OPEN or (lifecycle == Lifecycle.UPDATE and first_seen)
         if mode == "open_update":
             return lifecycle in {Lifecycle.OPEN, Lifecycle.UPDATE}
         return lifecycle == Lifecycle.CLOSE
 
-    def _tag(self, packet: Packet, context) -> str:
-        if self._config.tag_template:
-            rendered = _render_template(packet, self._config.tag_template).strip()
-            if rendered:
-                return rendered[:512]
-        node_id = str(getattr(context, "node_id", "") or "home_assistant_notify").strip() or "home_assistant_notify"
-        return _default_tag(packet, node_id=node_id)
+    def _tag(self, packet: Packet) -> str | None:
+        rendered = _render_template(packet, self._config.tag_template).strip()
+        if rendered:
+            return rendered[:512]
+        return None
+
+    def _event_key(self, packet: Packet) -> str:
+        return _first_non_empty(
+            packet.payload.get("event_id"),
+            packet.payload.get("correlation_id"),
+            packet.payload.get("tracking_id"),
+            packet.stream_id,
+            packet.packet_id,
+        )
+
+    def _mark_event_seen(self, key: str) -> bool:
+        token = str(key or "").strip()
+        if not token:
+            return False
+        first_seen = token not in self._seen_event_keys
+        if not first_seen:
+            self._seen_event_keys.move_to_end(token)
+            return False
+        self._seen_event_keys[token] = None
+        self._seen_event_keys.move_to_end(token)
+        while len(self._seen_event_keys) > self._MAX_EVENT_KEYS:
+            self._seen_event_keys.popitem(last=False)
+        return True
+
+    def _forget_event(self, key: str) -> None:
+        token = str(key or "").strip()
+        if not token:
+            return
+        self._seen_event_keys.pop(token, None)
 
 
 def register_home_assistant_pipeline_operators(registry: OperatorRegistry) -> None:

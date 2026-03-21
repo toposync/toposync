@@ -179,6 +179,60 @@ def test_notification_routes_forward_pipeline_notifications(tmp_path: Path, monk
         }
 
 
+def test_notification_routes_send_new_mobile_notification_when_not_replacing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client, calls = _create_client(tmp_path, monkeypatch)
+
+    with client:
+        config_store = client.app.state.config_store
+        client.portal.call(
+            config_store.patch_extension_settings,
+            EXTENSION_ID,
+            {
+                "servers": [
+                    {
+                        "id": "ha-main",
+                        "name": "Casa",
+                        "host": "http://ha.local:8123",
+                        "apiKey": "secret-token",
+                    }
+                ],
+                "notificationRoutes": [
+                    {
+                        "id": "route-main",
+                        "name": "Pipeline alerts",
+                        "enabled": True,
+                        "serverId": "ha-main",
+                        "notifyService": "notify.mobile_app_pixel_9",
+                        "notificationTypes": ["pipelines.event"],
+                        "closeAction": "ignore",
+                        "sendUpdates": False,
+                    }
+                ],
+            },
+        )
+
+        notifications = client.app.state.notifications
+        client.portal.call(
+            _upsert_notification,
+            notifications,
+            {
+                "type": "pipelines.event",
+                "title": "Pessoa detectada",
+                "description": "Portao da frente",
+                "payload": {"source": "pipelines", "status": "open", "lifecycle": "open"},
+                "dedupe_key": "camera:event:1",
+            },
+        )
+        time.sleep(0.05)
+
+        assert len(calls) == 1
+        assert calls[0]["url"] == "http://ha.local:8123/api/services/notify/mobile_app_pixel_9"
+        assert calls[0]["json"] == {
+            "title": "Pessoa detectada",
+            "message": "Portao da frente",
+        }
+
+
 def test_home_assistant_notify_operator_is_registered_and_lists_notify_services(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

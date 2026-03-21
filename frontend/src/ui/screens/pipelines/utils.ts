@@ -156,6 +156,10 @@ function operatorCapabilities(definition: PipelineOperatorDefinition | null): Se
   return new Set((definition?.capabilities ?? []).map((value) => String(value || "").trim().toLowerCase()));
 }
 
+function isSinkOperator(definition: PipelineOperatorDefinition | null): boolean {
+  return operatorCapabilities(definition).has("sink");
+}
+
 function isSourceOperator(definition: PipelineOperatorDefinition | null): boolean {
   return operatorCapabilities(definition).has("source");
 }
@@ -218,18 +222,32 @@ export function buildGraphFromInteractiveSteps(
   }
 
   const edges: Array<Record<string, unknown>> = [];
+  let mainTailNodeId: string | null = null;
+  if (nodes.length > 0) {
+    const firstOperatorId = String(nodes[0].operator || "");
+    const firstOperator = operatorsById[firstOperatorId] ?? null;
+    if (!isGateControlOperator(firstOperator) && !isSinkOperator(firstOperator)) {
+      mainTailNodeId = String(nodes[0].id || "").trim() || null;
+    }
+  }
   for (let index = 0; index < nodes.length - 1; index += 1) {
-    const sourceNode = nodes[index];
+    const previousNode = nodes[index];
     const targetNode = nodes[index + 1];
-    const sourceOperatorId = String(sourceNode.operator || "");
+    const previousOperatorId = String(previousNode.operator || "");
     const targetOperatorId = String(targetNode.operator || "");
-    const sourceOperator = operatorsById[sourceOperatorId] ?? null;
+    const previousOperator = operatorsById[previousOperatorId] ?? null;
     const targetOperator = operatorsById[targetOperatorId] ?? null;
-    const policy = edgePolicyFor(sourceOperator, targetOperator);
+    const upstreamNode = mainTailNodeId
+      ? nodes.find((node) => String(node.id || "") === mainTailNodeId) ?? previousNode
+      : previousNode;
+    const upstreamOperatorId = String(upstreamNode.operator || "");
+    const upstreamOperator = operatorsById[upstreamOperatorId] ?? null;
+    const policy = edgePolicyFor(upstreamOperator, targetOperator);
 
-    const isGateControl = isGateControlOperator(sourceOperator);
+    const isGateControl = isGateControlOperator(previousOperator);
 
     let targetPort = "in";
+    let sourceNodeId: string | null = null;
     if (isSourceOperator(targetOperator)) {
       if (!isGateControl) {
         return {
@@ -245,10 +263,22 @@ export function buildGraphFromInteractiveSteps(
         };
       }
       targetPort = gatePort;
+      sourceNodeId = String(previousNode.id || "").trim() || null;
     } else if (isGateControl) {
       return {
         graph: null,
         error: "Gate control steps must be followed by a source operator in interactive mode.",
+      };
+    } else if (mainTailNodeId) {
+      sourceNodeId = mainTailNodeId;
+    } else if (!isSinkOperator(previousOperator)) {
+      sourceNodeId = String(previousNode.id || "").trim() || null;
+    }
+
+    if (!sourceNodeId) {
+      return {
+        graph: null,
+        error: `${prettyOperatorName(targetOperatorId)} must follow a source or processing step in interactive mode.`,
       };
     }
 
@@ -263,11 +293,15 @@ export function buildGraphFromInteractiveSteps(
     }
 
     edges.push({
-      from: { node: sourceNode.id, port: "out" },
+      from: { node: sourceNodeId, port: "out" },
       to: { node: targetNode.id, port: targetPort },
       maxsize: policy.maxsize,
       drop_policy: policy.drop_policy,
     });
+
+    if (isSourceOperator(targetOperator) || !isSinkOperator(targetOperator)) {
+      mainTailNodeId = String(targetNode.id || "").trim() || null;
+    }
   }
 
   return {
@@ -280,7 +314,14 @@ export function buildGraphFromInteractiveSteps(
   };
 }
 
-function readLinearNodeOrder(graphValue: unknown): { order: string[]; warning: string | null } {
+function interactiveWarning(key: string, fallback: string): string {
+  return i18n.t(key, {}, fallback);
+}
+
+function readLinearNodeOrder(
+  graphValue: unknown,
+  operatorsById: Record<string, PipelineOperatorDefinition>,
+): { order: string[]; warning: string | null } {
   if (!isRecord(graphValue)) {
     return { order: [], warning: null };
   }
@@ -294,11 +335,27 @@ function readLinearNodeOrder(graphValue: unknown): { order: string[]; warning: s
     return { order: nodeIds, warning: null };
   }
 
-  const inDegree = new Map<string, number>();
-  const outEdges = new Map<string, string[]>();
+  const nodeOrderIndex = new Map<string, number>();
+  const sinkNodeIds = new Set<string>();
+  for (let index = 0; index < rawNodes.length; index += 1) {
+    const node = rawNodes[index];
+    if (!isRecord(node)) continue;
+    const nodeId = String(node.id || "").trim();
+    if (!nodeId) continue;
+    nodeOrderIndex.set(nodeId, index);
+    const operatorId = String(node.operator || "").trim();
+    if (isSinkOperator(operatorsById[operatorId] ?? null)) sinkNodeIds.add(nodeId);
+  }
+
+  const mainInDegree = new Map<string, number>();
+  const mainOutEdges = new Map<string, string[]>();
+  const sinkTargetsBySource = new Map<string, string[]>();
   for (const id of nodeIds) {
-    inDegree.set(id, 0);
-    outEdges.set(id, []);
+    if (!sinkNodeIds.has(id)) {
+      mainInDegree.set(id, 0);
+      mainOutEdges.set(id, []);
+    }
+    sinkTargetsBySource.set(id, []);
   }
 
   for (const edge of rawEdges) {
@@ -306,46 +363,95 @@ function readLinearNodeOrder(graphValue: unknown): { order: string[]; warning: s
     const from = isRecord(edge.from) ? String(edge.from.node || "").trim() : "";
     const to = isRecord(edge.to) ? String(edge.to.node || "").trim() : "";
     if (!from || !to) continue;
-    if (!inDegree.has(from) || !inDegree.has(to)) continue;
-    outEdges.set(from, [...(outEdges.get(from) ?? []), to]);
-    inDegree.set(to, (inDegree.get(to) ?? 0) + 1);
+    if (!nodeOrderIndex.has(from) || !nodeOrderIndex.has(to)) continue;
+    if (sinkNodeIds.has(from)) {
+      return {
+        order: nodeIds,
+        warning: interactiveWarning(
+          "core.ui.pipelines.editor.warning.non_linear_graph",
+          "Graph is not compatible with interactive step ordering. Interactive mode loaded node list order and will rewrite edges.",
+        ),
+      };
+    }
+    if (sinkNodeIds.has(to)) {
+      sinkTargetsBySource.set(from, [...(sinkTargetsBySource.get(from) ?? []), to]);
+      continue;
+    }
+    mainOutEdges.set(from, [...(mainOutEdges.get(from) ?? []), to]);
+    mainInDegree.set(to, (mainInDegree.get(to) ?? 0) + 1);
   }
 
-  if ([...outEdges.values()].some((targets) => targets.length > 1) || [...inDegree.values()].some((count) => count > 1)) {
+  if ([...mainOutEdges.values()].some((targets) => targets.length > 1) || [...mainInDegree.values()].some((count) => count > 1)) {
     return {
       order: nodeIds,
-      warning: "Graph is not a simple chain. Interactive mode loaded node list order and will rewrite edges sequentially.",
+      warning: interactiveWarning(
+        "core.ui.pipelines.editor.warning.non_linear_graph",
+        "Graph is not compatible with interactive step ordering. Interactive mode loaded node list order and will rewrite edges.",
+      ),
     };
   }
 
-  const starts = nodeIds.filter((id) => (inDegree.get(id) ?? 0) === 0);
+  const mainNodeIds = nodeIds.filter((id) => !sinkNodeIds.has(id));
+  if (mainNodeIds.length === 0) {
+    return { order: nodeIds, warning: null };
+  }
+
+  const starts = mainNodeIds.filter((id) => (mainInDegree.get(id) ?? 0) === 0);
   if (starts.length !== 1) {
     return {
       order: nodeIds,
-      warning: "Graph has multiple starts. Interactive mode loaded node list order and will rewrite edges sequentially.",
+      warning: interactiveWarning(
+        "core.ui.pipelines.editor.warning.multiple_starts",
+        "Graph has multiple starts. Interactive mode loaded node list order and will rewrite edges.",
+      ),
     };
   }
 
-  const order: string[] = [];
+  const mainOrder: string[] = [];
   const visited = new Set<string>();
   let current: string | undefined = starts[0];
   while (current) {
     if (visited.has(current)) {
       return {
         order: nodeIds,
-        warning: "Graph contains a cycle. Interactive mode loaded node list order and will rewrite edges sequentially.",
+        warning: interactiveWarning(
+          "core.ui.pipelines.editor.warning.cycle",
+          "Graph contains a cycle. Interactive mode loaded node list order and will rewrite edges.",
+        ),
       };
     }
     visited.add(current);
-    order.push(current);
-    const nextNodes: string[] = outEdges.get(current) ?? [];
+    mainOrder.push(current);
+    const nextNodes: string[] = mainOutEdges.get(current) ?? [];
     current = nextNodes.length > 0 ? nextNodes[0] : undefined;
+  }
+
+  if (mainOrder.length !== mainNodeIds.length) {
+    return {
+      order: nodeIds,
+      warning: interactiveWarning(
+        "core.ui.pipelines.editor.warning.disconnected",
+        "Graph has disconnected segments. Interactive mode loaded node list order and will rewrite edges.",
+      ),
+    };
+  }
+
+  const order: string[] = [];
+  for (const nodeId of mainOrder) {
+    order.push(nodeId);
+    const sinkTargets = [...(sinkTargetsBySource.get(nodeId) ?? [])].sort(
+      (left, right) => (nodeOrderIndex.get(left) ?? Number.MAX_SAFE_INTEGER) - (nodeOrderIndex.get(right) ?? Number.MAX_SAFE_INTEGER),
+    );
+    order.push(...sinkTargets);
   }
 
   if (order.length !== nodeIds.length) {
     return {
       order: nodeIds,
-      warning: "Graph has disconnected segments. Interactive mode loaded node list order and will rewrite edges sequentially.",
+      warning: interactiveWarning(
+        "core.ui.pipelines.editor.warning.disconnected",
+        "Graph has disconnected segments. Interactive mode loaded node list order and will rewrite edges.",
+      ),
     };
   }
 
@@ -368,7 +474,7 @@ export function buildInteractiveStepsFromGraph(
     nodeById.set(nodeId, node);
   }
 
-  const { order, warning } = readLinearNodeOrder(graphValue);
+  const { order, warning } = readLinearNodeOrder(graphValue, operatorsById);
   const usedNodeIds = new Set<string>();
   const steps: InteractiveStep[] = [];
 

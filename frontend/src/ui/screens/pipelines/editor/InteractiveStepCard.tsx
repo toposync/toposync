@@ -118,6 +118,10 @@ export function InteractiveStepCard({
 }: Props): React.ReactElement {
   const { t, locale } = i18n.useI18n();
   const operator = operatorsById[step.operatorId];
+  const operatorCaps = React.useMemo(
+    () => new Set((operator?.capabilities ?? []).map((value) => String(value || "").trim().toLowerCase())),
+    [operator],
+  );
   const integerFormatter = React.useMemo(() => new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }), [locale]);
 
   const configParsed = safeJsonParse(step.configText || "{}");
@@ -210,6 +214,9 @@ export function InteractiveStepCard({
       {!step.collapsed ? (
         <div className="pipelinesStepBody">
           {operator ? <div className="pipelinesStepDescription">{operator.description || prettyOperatorName(operator.id)}</div> : null}
+          {operatorCaps.has("sink") && index < steps.length - 1 ? (
+            <div className="pipelinesStepHint">{t("core.ui.pipelines.editor.step.parallel_sink_hint")}</div>
+          ) : null}
           {operator && operator.capabilities.length > 0 && step.showAdvanced ? (
             <div className="pipelinesStepCapabilities">
               {t("core.ui.pipelines.editor.step.capabilities_prefix")}{" "}

@@ -144,3 +144,18 @@ def test_operator_registry_adds_purity_capability() -> None:
     assert side_effect is not None
     assert "side_effect" in set(side_effect.definition.capabilities)
     assert "pure" not in set(side_effect.definition.capabilities)
+
+
+def test_operator_registry_preserves_explicit_empty_outputs() -> None:
+    registry = OperatorRegistry()
+    registry.register_operator(
+        operator_id="test.sink",
+        inputs=[{"name": "in", "required": True}],
+        outputs=[],
+        defaults={},
+        share_strategy="never",
+    )
+
+    sink = registry.get("test.sink")
+    assert sink is not None
+    assert sink.definition.outputs == []

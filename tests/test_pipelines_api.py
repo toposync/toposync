@@ -143,6 +143,30 @@ def test_pipeline_payload_validation(tmp_path: Path, monkeypatch: pytest.MonkeyP
         assert res.status_code == 422
 
 
+def test_pipeline_rejects_edges_from_sink_operators(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        payload = {
+            "name": "invalid_notify_chain",
+            "type": "final",
+            "graph": {
+                "schema_version": 1,
+                "nodes": [
+                    {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
+                    {"id": "notify", "operator": "core.notify", "config": {}},
+                    {"id": "debug", "operator": "core.debug", "config": {}},
+                ],
+                "edges": [
+                    {"from": {"node": "source", "port": "out"}, "to": {"node": "notify", "port": "in"}},
+                    {"from": {"node": "notify", "port": "out"}, "to": {"node": "debug", "port": "in"}},
+                ],
+            },
+        }
+
+        res = client.post("/api/pipelines", json=payload)
+        assert res.status_code == 400
+        assert "has no output port 'out'" in str(res.json().get("detail") or "")
+
+
 def test_pipeline_publish_video_host_mismatch_returns_400(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         patch_res = client.patch(

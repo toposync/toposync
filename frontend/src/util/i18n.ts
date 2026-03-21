@@ -510,6 +510,16 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.editor.step.invalid_config_json": "Invalid config JSON: {{error}}",
     "core.ui.pipelines.editor.step.config_must_be_object": "Config must be a JSON object.",
     "core.ui.pipelines.editor.step.capabilities_prefix": "caps:",
+    "core.ui.pipelines.editor.step.parallel_sink_hint":
+      "This step branches off the previous data step and does not feed the next steps.",
+    "core.ui.pipelines.editor.warning.non_linear_graph":
+      "Graph is not compatible with interactive step ordering. Interactive mode loaded node list order and will rewrite edges.",
+    "core.ui.pipelines.editor.warning.multiple_starts":
+      "Graph has multiple starts. Interactive mode loaded node list order and will rewrite edges.",
+    "core.ui.pipelines.editor.warning.cycle":
+      "Graph contains a cycle. Interactive mode loaded node list order and will rewrite edges.",
+    "core.ui.pipelines.editor.warning.disconnected":
+      "Graph has disconnected segments. Interactive mode loaded node list order and will rewrite edges.",
 
     "core.ui.pipelines.template_apply.title": "Apply template",
     "core.ui.pipelines.template_apply.title_with_name": "Apply template: {{name}}",
@@ -688,15 +698,17 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.home_assistant_notify.target_load_failed": "Failed to load notify services: {{error}}",
     "core.ui.pipelines.panels.home_assistant_notify.target_empty":
       "No notify services found. Open the Home Assistant app on the target device first, or type the service manually.",
+    "core.ui.pipelines.panels.home_assistant_notify.target_required":
+      "Choose a notify service to actually send the push notification.",
     "core.ui.pipelines.panels.home_assistant_notify.target_hint":
       "Usually this is a mobile app target such as notify.mobile_app_pixel_9.",
     "core.ui.pipelines.panels.home_assistant_notify.notify_when": "When to notify",
-    "core.ui.pipelines.panels.home_assistant_notify.notify_when.open": "Open only (recommended)",
-    "core.ui.pipelines.panels.home_assistant_notify.notify_when.open_update": "Open and update",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when.open": "First packet only (recommended)",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when.open_update": "First packet and updates",
     "core.ui.pipelines.panels.home_assistant_notify.notify_when.close": "Close only",
     "core.ui.pipelines.panels.home_assistant_notify.notify_when.all": "Open, update, and close",
     "core.ui.pipelines.panels.home_assistant_notify.notify_when_hint":
-      "If your pipeline emits frequent updates, add Throttle before this step to reduce push noise.",
+      "Use “First packet only” for one mobile alert per event. The operator still sends if the first packet arrives as an update after upstream selectors.",
     "core.ui.pipelines.panels.home_assistant_notify.close_behavior": "When the event closes",
     "core.ui.pipelines.panels.home_assistant_notify.close_behavior.fixed_ignore": "Keep the mobile notification",
     "core.ui.pipelines.panels.home_assistant_notify.close_behavior.clear": "Clear the existing mobile notification",
@@ -709,9 +721,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.home_assistant_notify.message_placeholder": "Leave empty for an automatic message",
     "core.ui.pipelines.panels.home_assistant_notify.template_hint_prefix": "Use templates like",
     "core.ui.pipelines.panels.home_assistant_notify.tag_template": "Tag template",
-    "core.ui.pipelines.panels.home_assistant_notify.tag_template_placeholder": "Leave empty for a stable event tag",
+    "core.ui.pipelines.panels.home_assistant_notify.tag_template_placeholder": "Leave empty to create a new mobile notification each time",
     "core.ui.pipelines.panels.home_assistant_notify.tag_template_hint":
-      "Advanced. Keeps open/update/close tied to the same mobile notification. Leave empty unless you need custom grouping.",
+      "Advanced. Set a tag only if Home Assistant should replace or update the same mobile notification over time.",
+    "core.ui.pipelines.panels.home_assistant_notify.tag_template_blank_hint":
+      "Blank is the safest default: each send appears as a new notification and stays in the app.",
 
     "core.ui.pipelines.panels.publish_video.transmission": "Transmission",
     "core.ui.pipelines.panels.publish_video.transmission_placeholder": "Select a transmission…",
@@ -1488,6 +1502,16 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.editor.step.invalid_config_json": "JSON de configuração inválido: {{error}}",
     "core.ui.pipelines.editor.step.config_must_be_object": "A configuração deve ser um objeto JSON.",
     "core.ui.pipelines.editor.step.capabilities_prefix": "caps:",
+    "core.ui.pipelines.editor.step.parallel_sink_hint":
+      "Esta etapa ramifica da etapa anterior de dados e não alimenta as próximas etapas.",
+    "core.ui.pipelines.editor.warning.non_linear_graph":
+      "O grafo não é compatível com a ordenação interativa de etapas. O modo interativo carregou a ordem da lista de nós e vai regravar as ligações.",
+    "core.ui.pipelines.editor.warning.multiple_starts":
+      "O grafo tem múltiplos inícios. O modo interativo carregou a ordem da lista de nós e vai regravar as ligações.",
+    "core.ui.pipelines.editor.warning.cycle":
+      "O grafo contém um ciclo. O modo interativo carregou a ordem da lista de nós e vai regravar as ligações.",
+    "core.ui.pipelines.editor.warning.disconnected":
+      "O grafo tem segmentos desconectados. O modo interativo carregou a ordem da lista de nós e vai regravar as ligações.",
 
     "core.ui.pipelines.template_apply.title": "Aplicar template",
     "core.ui.pipelines.template_apply.title_with_name": "Aplicar template: {{name}}",
@@ -1668,15 +1692,17 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.home_assistant_notify.target_load_failed": "Falha ao carregar serviços notify: {{error}}",
     "core.ui.pipelines.panels.home_assistant_notify.target_empty":
       "Nenhum serviço notify encontrado. Abra o app do Home Assistant no dispositivo alvo primeiro, ou digite o serviço manualmente.",
+    "core.ui.pipelines.panels.home_assistant_notify.target_required":
+      "Escolha um serviço notify para realmente enviar a notificação push.",
     "core.ui.pipelines.panels.home_assistant_notify.target_hint":
       "Normalmente isso é um alvo do app mobile, como notify.mobile_app_pixel_9.",
     "core.ui.pipelines.panels.home_assistant_notify.notify_when": "Quando notificar",
-    "core.ui.pipelines.panels.home_assistant_notify.notify_when.open": "Só na abertura (recomendado)",
-    "core.ui.pipelines.panels.home_assistant_notify.notify_when.open_update": "Na abertura e nas atualizações",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when.open": "Só no primeiro pacote do evento (recomendado)",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when.open_update": "No primeiro pacote e nas atualizações",
     "core.ui.pipelines.panels.home_assistant_notify.notify_when.close": "Só no fechamento",
     "core.ui.pipelines.panels.home_assistant_notify.notify_when.all": "Abertura, atualização e fechamento",
     "core.ui.pipelines.panels.home_assistant_notify.notify_when_hint":
-      "Se o pipeline emite muitas atualizações, coloque um Throttle antes desta etapa para reduzir ruído no celular.",
+      "Use “primeiro pacote” para um push por evento. Mesmo se o primeiro pacote chegar como update depois de seletores do pipeline, o operador ainda envia.",
     "core.ui.pipelines.panels.home_assistant_notify.close_behavior": "Quando o evento fechar",
     "core.ui.pipelines.panels.home_assistant_notify.close_behavior.fixed_ignore": "Manter a notificação no celular",
     "core.ui.pipelines.panels.home_assistant_notify.close_behavior.clear": "Limpar a notificação existente no celular",
@@ -1689,9 +1715,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.home_assistant_notify.message_placeholder": "Deixe vazio para uma mensagem automática",
     "core.ui.pipelines.panels.home_assistant_notify.template_hint_prefix": "Use templates como",
     "core.ui.pipelines.panels.home_assistant_notify.tag_template": "Template da tag",
-    "core.ui.pipelines.panels.home_assistant_notify.tag_template_placeholder": "Deixe vazio para uma tag estável por evento",
+    "core.ui.pipelines.panels.home_assistant_notify.tag_template_placeholder": "Deixe vazio para criar uma nova notificação no celular a cada envio",
     "core.ui.pipelines.panels.home_assistant_notify.tag_template_hint":
-      "Avançado. Mantém abertura/atualização/fechamento ligados à mesma notificação mobile. Deixe vazio salvo se precisar de agrupamento customizado.",
+      "Avançado. Defina uma tag só se o Home Assistant deve substituir ou atualizar a mesma notificação mobile ao longo do tempo.",
+    "core.ui.pipelines.panels.home_assistant_notify.tag_template_blank_hint":
+      "Vazio é o padrão mais seguro: cada envio aparece como uma nova notificação e permanece no app.",
 
     "core.ui.pipelines.panels.publish_video.transmission": "Transmissão",
     "core.ui.pipelines.panels.publish_video.transmission_placeholder": "Selecionar uma transmissão…",

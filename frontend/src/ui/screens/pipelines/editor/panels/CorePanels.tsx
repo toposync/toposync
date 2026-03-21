@@ -1488,6 +1488,29 @@ export function HomeAssistantNotifyConfigCard({ config, showAdvanced, onUpdateCo
     ? notifyServiceOptions.find((option) => option.value === notifyService) ?? { value: notifyService, label: notifyService }
     : null;
 
+  useEffect(() => {
+    if (serverId || serverOptions.length === 0) return;
+    const preferredServer = serverOptions[0] ?? null;
+    if (!preferredServer) return;
+    onUpdateConfig((prev) => {
+      const currentServerId = String((prev as any).server_id ?? "").trim();
+      if (currentServerId) return prev;
+      return { ...prev, server_id: preferredServer.value };
+    });
+  }, [onUpdateConfig, serverId, serverOptions]);
+
+  useEffect(() => {
+    if (!serverId || notifyService || notifyServiceOptions.length === 0) return;
+    const preferredOption =
+      notifyServiceOptions.find((option) => option.value.startsWith("notify.mobile_app_")) ?? notifyServiceOptions[0] ?? null;
+    if (!preferredOption) return;
+    onUpdateConfig((prev) => {
+      const currentValue = String((prev as any).notify_service ?? "").trim();
+      if (currentValue) return prev;
+      return { ...prev, notify_service: preferredOption.value };
+    });
+  }, [notifyService, notifyServiceOptions, onUpdateConfig, serverId]);
+
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
@@ -1548,6 +1571,8 @@ export function HomeAssistantNotifyConfigCard({ config, showAdvanced, onUpdateCo
         </div>
       ) : notifyServiceOptions.length === 0 ? (
         <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_notify.target_empty")}</div>
+      ) : !notifyService ? (
+        <div className="pipelinesInlineError">{t("core.ui.pipelines.panels.home_assistant_notify.target_required")}</div>
       ) : (
         <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_notify.target_hint")}</div>
       )}
@@ -1631,6 +1656,7 @@ export function HomeAssistantNotifyConfigCard({ config, showAdvanced, onUpdateCo
             />
           </label>
           <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_notify.tag_template_hint")}</div>
+          {!tagTemplate ? <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_notify.tag_template_blank_hint")}</div> : null}
         </>
       ) : null}
     </div>

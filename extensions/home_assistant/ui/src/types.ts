@@ -8,6 +8,17 @@ export type HomeAssistantServer = {
   apiKey: string;
 };
 
+export type HomeAssistantNotificationRoute = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  serverId: string;
+  notifyService: string;
+  notificationTypes: string[];
+  closeAction: "ignore" | "clear";
+  sendUpdates: boolean;
+};
+
 export type HomeAssistantServerPublic = {
   id: string;
   name: string;

@@ -9,6 +9,7 @@ import {
   DebounceConfigCard,
   DebugConfigCard,
   FilterConfigCard,
+  HomeAssistantNotifyConfigCard,
   NotifyConfigCard,
   PublishVideoConfigCard,
   VelocityThrottleConfigCard,
@@ -240,6 +241,9 @@ export function OperatorConfigPanel({
   }
   if (operatorId === "core.notify") {
     return <NotifyConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
+  }
+  if (operatorId === "home_assistant.notify") {
+    return <HomeAssistantNotifyConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "stream.publish_video") {
     return <PublishVideoConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;

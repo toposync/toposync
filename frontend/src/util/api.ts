@@ -290,6 +290,19 @@ export type PipelineOperatorDefinition = {
   output_modalities?: string[];
 };
 
+export type HomeAssistantServerInfo = {
+  id: string;
+  name: string;
+  host: string;
+};
+
+export type HomeAssistantServiceInfo = {
+  domain: string;
+  service: string;
+  name?: string;
+  description?: string;
+};
+
 export type NotificationsPage = {
   notifications: Notification[];
   next_cursor: number | null;
@@ -928,6 +941,26 @@ export async function listPipelineOperators(): Promise<PipelineOperatorDefinitio
   if (!res.ok) throw new Error(`Failed to list pipeline operators: ${res.status}`);
   const body = (await res.json()) as { operators?: PipelineOperatorDefinition[] };
   return body.operators ?? [];
+}
+
+export async function listHomeAssistantServers(): Promise<HomeAssistantServerInfo[]> {
+  const res = await fetch("/api/home_assistant/servers");
+  if (!res.ok) throw new Error(`Failed to list Home Assistant servers: ${res.status}`);
+  const body = await res.json();
+  return Array.isArray(body) ? (body as HomeAssistantServerInfo[]) : [];
+}
+
+export async function listHomeAssistantServices(
+  serverId: string,
+  options?: { domain?: string },
+): Promise<HomeAssistantServiceInfo[]> {
+  const query = new URLSearchParams();
+  if (options?.domain) query.set("domain", options.domain);
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  const res = await fetch(`/api/home_assistant/${encodeURIComponent(serverId)}/services${suffix}`);
+  if (!res.ok) throw new Error(`Failed to list Home Assistant services: ${res.status}`);
+  const body = await res.json();
+  return Array.isArray(body) ? (body as HomeAssistantServiceInfo[]) : [];
 }
 
 export async function listStreamingTransmissions(): Promise<StreamingTransmission[]> {

@@ -2,7 +2,14 @@ import React, { useEffect, useMemo, useState } from "react";
 import Select, { type MultiValue } from "react-select";
 import CreatableSelect from "react-select/creatable";
 
-import { listStreamingTransmissions, type StreamingTransmission } from "../../../../../util/api";
+import {
+  listHomeAssistantServers,
+  listHomeAssistantServices,
+  listStreamingTransmissions,
+  type HomeAssistantServerInfo,
+  type HomeAssistantServiceInfo,
+  type StreamingTransmission,
+} from "../../../../../util/api";
 import { buildArtifactSuggestions, buildScheduleWeekdayOptions, pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constants";
 import type { InteractiveStep, SelectOption } from "../../types";
 import { isRecord, safeJsonParse } from "../../utils";
@@ -1351,6 +1358,279 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
             {t("core.ui.pipelines.panels.notify.dedupe_key_hint_prefix")} <code>{"{{tracking_id}}"}</code>, <code>{"{{camera_id}}"}</code>,{" "}
             <code>{"{{object_category_label}}"}</code>.
           </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+export function HomeAssistantNotifyConfigCard({ config, showAdvanced, onUpdateConfig }: NotifyProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const [servers, setServers] = useState<HomeAssistantServerInfo[]>([]);
+  const [loadingServers, setLoadingServers] = useState(false);
+  const [serversError, setServersError] = useState<string | null>(null);
+  const [notifyServices, setNotifyServices] = useState<HomeAssistantServiceInfo[]>([]);
+  const [loadingNotifyServices, setLoadingNotifyServices] = useState(false);
+  const [notifyServicesError, setNotifyServicesError] = useState<string | null>(null);
+
+  const serverId = String((config as any).server_id ?? "").trim();
+  const notifyService = String((config as any).notify_service ?? "").trim();
+  const notifyWhenRaw = String((config as any).notify_when ?? "open").trim().toLowerCase();
+  const notifyWhen = ["open", "open_update", "close", "all"].includes(notifyWhenRaw) ? notifyWhenRaw : "open";
+  const closeBehaviorRaw = String((config as any).close_behavior ?? "ignore").trim().toLowerCase();
+  const title = String((config as any).title ?? "").trim();
+  const message = String((config as any).message ?? "").trim();
+  const tagTemplate = String((config as any).tag_template ?? "").trim();
+
+  useEffect(() => {
+    if (notifyWhen !== "open" && notifyWhen !== "open_update") return;
+    if (closeBehaviorRaw === "ignore") return;
+    onUpdateConfig((prev) => ({ ...prev, close_behavior: "ignore" }));
+  }, [closeBehaviorRaw, notifyWhen, onUpdateConfig]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingServers(true);
+    setServersError(null);
+
+    void listHomeAssistantServers()
+      .then((payload) => {
+        if (cancelled) return;
+        setServers(Array.isArray(payload) ? payload : []);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setServersError(String(error instanceof Error ? error.message : error || "unknown error"));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoadingServers(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!serverId) {
+      setNotifyServices([]);
+      setNotifyServicesError(null);
+      setLoadingNotifyServices(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingNotifyServices(true);
+    setNotifyServicesError(null);
+
+    void listHomeAssistantServices(serverId, { domain: "notify" })
+      .then((payload) => {
+        if (cancelled) return;
+        setNotifyServices(Array.isArray(payload) ? payload : []);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setNotifyServicesError(String(error instanceof Error ? error.message : error || "unknown error"));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoadingNotifyServices(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [serverId]);
+
+  useEffect(() => {
+    if (serverId || servers.length !== 1) return;
+    const onlyServerId = String(servers[0]?.id || "").trim();
+    if (!onlyServerId) return;
+    onUpdateConfig((prev) => ({ ...prev, server_id: onlyServerId }));
+  }, [onUpdateConfig, serverId, servers]);
+
+  const serverOptions = useMemo(
+    () =>
+      servers
+        .map((server) => {
+          const id = String(server.id || "").trim();
+          if (!id) return null;
+          const name = String(server.name || "").trim();
+          const host = String(server.host || "").trim();
+          return { value: id, label: name ? `${name} (${host || id})` : host || id };
+        })
+        .filter((option): option is SelectOption => Boolean(option))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [servers],
+  );
+
+  const notifyServiceOptions = useMemo(
+    () =>
+      notifyServices
+        .map((item) => {
+          const domain = String(item.domain || "").trim();
+          const service = String(item.service || "").trim();
+          if (!domain || !service) return null;
+          const fullService = `${domain}.${service}`;
+          const name = String(item.name || "").trim();
+          return {
+            value: fullService,
+            label: name ? `${name} (${fullService})` : fullService,
+          };
+        })
+        .filter((option): option is SelectOption => Boolean(option))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [notifyServices],
+  );
+
+  const selectedNotifyServiceOption = notifyService
+    ? notifyServiceOptions.find((option) => option.value === notifyService) ?? { value: notifyService, label: notifyService }
+    : null;
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.home_assistant_notify.server")}</span>
+        <select
+          className="pipelinesSelect"
+          value={serverId}
+          onChange={(event) => {
+            const nextServerId = String(event.target.value || "").trim();
+            onUpdateConfig((prev) => ({
+              ...prev,
+              server_id: nextServerId,
+              notify_service: nextServerId === serverId ? String((prev as any).notify_service ?? "") : "",
+            }));
+          }}
+        >
+          <option value="">{t("core.ui.pipelines.panels.home_assistant_notify.server_placeholder")}</option>
+          {serverOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {loadingServers ? (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_notify.server_loading")}</div>
+      ) : serversError ? (
+        <div className="pipelinesInlineError">
+          {t("core.ui.pipelines.panels.home_assistant_notify.server_load_failed", { error: serversError })}
+        </div>
+      ) : servers.length === 0 ? (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_notify.server_empty")}</div>
+      ) : (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_notify.server_hint")}</div>
+      )}
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.home_assistant_notify.target")}</span>
+        <CreatableSelect<SelectOption, false>
+          styles={pipelinesReactSelectStyles}
+          options={notifyServiceOptions}
+          value={selectedNotifyServiceOption}
+          isClearable
+          isDisabled={!serverId}
+          placeholder={t("core.ui.pipelines.panels.home_assistant_notify.target_placeholder")}
+          onChange={(value) => {
+            onUpdateConfig((prev) => ({ ...prev, notify_service: String(value?.value || "").trim() }));
+          }}
+        />
+      </label>
+      {!serverId ? (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_notify.target_select_server_first")}</div>
+      ) : loadingNotifyServices ? (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_notify.target_loading")}</div>
+      ) : notifyServicesError ? (
+        <div className="pipelinesInlineError">
+          {t("core.ui.pipelines.panels.home_assistant_notify.target_load_failed", { error: notifyServicesError })}
+        </div>
+      ) : notifyServiceOptions.length === 0 ? (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_notify.target_empty")}</div>
+      ) : (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_notify.target_hint")}</div>
+      )}
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.home_assistant_notify.notify_when")}</span>
+        <select
+          className="pipelinesSelect"
+          value={notifyWhen}
+          onChange={(event) => {
+            const nextValue = String(event.target.value || "open").trim().toLowerCase();
+            onUpdateConfig((prev) => ({
+              ...prev,
+              notify_when: ["open", "open_update", "close", "all"].includes(nextValue) ? nextValue : "open",
+            }));
+          }}
+        >
+          <option value="open">{t("core.ui.pipelines.panels.home_assistant_notify.notify_when.open")}</option>
+          <option value="open_update">{t("core.ui.pipelines.panels.home_assistant_notify.notify_when.open_update")}</option>
+          <option value="close">{t("core.ui.pipelines.panels.home_assistant_notify.notify_when.close")}</option>
+          <option value="all">{t("core.ui.pipelines.panels.home_assistant_notify.notify_when.all")}</option>
+        </select>
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_notify.notify_when_hint")}</div>
+
+      {notifyWhen === "open" || notifyWhen === "open_update" ? (
+        <>
+          <div className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.home_assistant_notify.close_behavior")}</span>
+          </div>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_notify.close_behavior.fixed_ignore")}</div>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_notify.close_behavior_hint")}</div>
+        </>
+      ) : null}
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.home_assistant_notify.title")}</span>
+        <input
+          className="pipelinesInput"
+          type="text"
+          value={title}
+          placeholder={t("core.ui.pipelines.panels.home_assistant_notify.title_placeholder")}
+          onChange={(event) => {
+            const nextValue = String(event.target.value ?? "");
+            onUpdateConfig((prev) => ({ ...prev, title: nextValue }));
+          }}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.home_assistant_notify.message")}</span>
+        <input
+          className="pipelinesInput"
+          type="text"
+          value={message}
+          placeholder={t("core.ui.pipelines.panels.home_assistant_notify.message_placeholder")}
+          onChange={(event) => {
+            const nextValue = String(event.target.value ?? "");
+            onUpdateConfig((prev) => ({ ...prev, message: nextValue }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">
+        {t("core.ui.pipelines.panels.home_assistant_notify.template_hint_prefix")} <code>{"{{camera_name}}"}</code>,{" "}
+        <code>{"{{object_category_label}}"}</code>, <code>{"{{area_label}}"}</code>, <code>{"{{payload.some_field}}"}</code>.
+      </div>
+
+      {showAdvanced ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.home_assistant_notify.tag_template")}</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={tagTemplate}
+              placeholder={t("core.ui.pipelines.panels.home_assistant_notify.tag_template_placeholder")}
+              onChange={(event) => {
+                const nextValue = String(event.target.value ?? "");
+                onUpdateConfig((prev) => ({ ...prev, tag_template: nextValue }));
+              }}
+            />
+          </label>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_notify.tag_template_hint")}</div>
         </>
       ) : null}
     </div>

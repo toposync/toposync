@@ -473,6 +473,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.debug": "Debug",
     "core.ui.pipelines.operator_name.core.store_images": "Store images",
     "core.ui.pipelines.operator_name.core.notify": "Notification",
+    "core.ui.pipelines.operator_name.home_assistant.notify": "Home Assistant push",
     "core.ui.pipelines.operator_name.stream.publish_video": "Publish video",
 
     "core.ui.pipelines.artifacts.frame": "Frame",
@@ -672,6 +673,45 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.notify.dedupe_key_template": "Dedupe key template",
     "core.ui.pipelines.panels.notify.dedupe_key_placeholder": "Leave empty for default",
     "core.ui.pipelines.panels.notify.dedupe_key_hint_prefix": "Use templates like",
+
+    "core.ui.pipelines.panels.home_assistant_notify.server": "Home Assistant server",
+    "core.ui.pipelines.panels.home_assistant_notify.server_placeholder": "Select a server…",
+    "core.ui.pipelines.panels.home_assistant_notify.server_loading": "Loading Home Assistant servers…",
+    "core.ui.pipelines.panels.home_assistant_notify.server_load_failed": "Failed to load Home Assistant servers: {{error}}",
+    "core.ui.pipelines.panels.home_assistant_notify.server_empty": "No Home Assistant servers configured. Add one in Settings > Home Assistant first.",
+    "core.ui.pipelines.panels.home_assistant_notify.server_hint":
+      "This step runs on the origin and calls the selected Home Assistant server directly.",
+    "core.ui.pipelines.panels.home_assistant_notify.target": "Destination",
+    "core.ui.pipelines.panels.home_assistant_notify.target_placeholder": "Select or type a notify service…",
+    "core.ui.pipelines.panels.home_assistant_notify.target_select_server_first": "Select a server first to load notify services.",
+    "core.ui.pipelines.panels.home_assistant_notify.target_loading": "Loading notify services…",
+    "core.ui.pipelines.panels.home_assistant_notify.target_load_failed": "Failed to load notify services: {{error}}",
+    "core.ui.pipelines.panels.home_assistant_notify.target_empty":
+      "No notify services found. Open the Home Assistant app on the target device first, or type the service manually.",
+    "core.ui.pipelines.panels.home_assistant_notify.target_hint":
+      "Usually this is a mobile app target such as notify.mobile_app_pixel_9.",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when": "When to notify",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when.open": "Open only (recommended)",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when.open_update": "Open and update",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when.close": "Close only",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when.all": "Open, update, and close",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when_hint":
+      "If your pipeline emits frequent updates, add Throttle before this step to reduce push noise.",
+    "core.ui.pipelines.panels.home_assistant_notify.close_behavior": "When the event closes",
+    "core.ui.pipelines.panels.home_assistant_notify.close_behavior.fixed_ignore": "Keep the mobile notification",
+    "core.ui.pipelines.panels.home_assistant_notify.close_behavior.clear": "Clear the existing mobile notification",
+    "core.ui.pipelines.panels.home_assistant_notify.close_behavior.ignore": "Do nothing",
+    "core.ui.pipelines.panels.home_assistant_notify.close_behavior_hint":
+      "For now, the notification stays in the Home Assistant app after the event closes.",
+    "core.ui.pipelines.panels.home_assistant_notify.title": "Title template",
+    "core.ui.pipelines.panels.home_assistant_notify.title_placeholder": "Leave empty for an automatic title",
+    "core.ui.pipelines.panels.home_assistant_notify.message": "Message template",
+    "core.ui.pipelines.panels.home_assistant_notify.message_placeholder": "Leave empty for an automatic message",
+    "core.ui.pipelines.panels.home_assistant_notify.template_hint_prefix": "Use templates like",
+    "core.ui.pipelines.panels.home_assistant_notify.tag_template": "Tag template",
+    "core.ui.pipelines.panels.home_assistant_notify.tag_template_placeholder": "Leave empty for a stable event tag",
+    "core.ui.pipelines.panels.home_assistant_notify.tag_template_hint":
+      "Advanced. Keeps open/update/close tied to the same mobile notification. Leave empty unless you need custom grouping.",
 
     "core.ui.pipelines.panels.publish_video.transmission": "Transmission",
     "core.ui.pipelines.panels.publish_video.transmission_placeholder": "Select a transmission…",
@@ -1410,6 +1450,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.debug": "Debug",
     "core.ui.pipelines.operator_name.core.store_images": "Armazenar imagens",
     "core.ui.pipelines.operator_name.core.notify": "Notificação",
+    "core.ui.pipelines.operator_name.home_assistant.notify": "Push no Home Assistant",
     "core.ui.pipelines.operator_name.stream.publish_video": "Transmitir vídeo",
 
     "core.ui.pipelines.artifacts.frame": "Frame",
@@ -1610,6 +1651,47 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.notify.dedupe_key_template": "Template da chave de dedupe",
     "core.ui.pipelines.panels.notify.dedupe_key_placeholder": "Deixe vazio para o padrão",
     "core.ui.pipelines.panels.notify.dedupe_key_hint_prefix": "Use templates como",
+
+    "core.ui.pipelines.panels.home_assistant_notify.server": "Servidor Home Assistant",
+    "core.ui.pipelines.panels.home_assistant_notify.server_placeholder": "Selecione um servidor…",
+    "core.ui.pipelines.panels.home_assistant_notify.server_loading": "Carregando servidores do Home Assistant…",
+    "core.ui.pipelines.panels.home_assistant_notify.server_load_failed": "Falha ao carregar servidores do Home Assistant: {{error}}",
+    "core.ui.pipelines.panels.home_assistant_notify.server_empty":
+      "Nenhum servidor Home Assistant configurado. Adicione um em Configurações > Home Assistant primeiro.",
+    "core.ui.pipelines.panels.home_assistant_notify.server_hint":
+      "Esta etapa roda na origem e chama diretamente o servidor Home Assistant selecionado.",
+    "core.ui.pipelines.panels.home_assistant_notify.target": "Destino",
+    "core.ui.pipelines.panels.home_assistant_notify.target_placeholder": "Selecione ou digite um serviço notify…",
+    "core.ui.pipelines.panels.home_assistant_notify.target_select_server_first":
+      "Selecione um servidor primeiro para carregar os serviços notify.",
+    "core.ui.pipelines.panels.home_assistant_notify.target_loading": "Carregando serviços notify…",
+    "core.ui.pipelines.panels.home_assistant_notify.target_load_failed": "Falha ao carregar serviços notify: {{error}}",
+    "core.ui.pipelines.panels.home_assistant_notify.target_empty":
+      "Nenhum serviço notify encontrado. Abra o app do Home Assistant no dispositivo alvo primeiro, ou digite o serviço manualmente.",
+    "core.ui.pipelines.panels.home_assistant_notify.target_hint":
+      "Normalmente isso é um alvo do app mobile, como notify.mobile_app_pixel_9.",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when": "Quando notificar",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when.open": "Só na abertura (recomendado)",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when.open_update": "Na abertura e nas atualizações",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when.close": "Só no fechamento",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when.all": "Abertura, atualização e fechamento",
+    "core.ui.pipelines.panels.home_assistant_notify.notify_when_hint":
+      "Se o pipeline emite muitas atualizações, coloque um Throttle antes desta etapa para reduzir ruído no celular.",
+    "core.ui.pipelines.panels.home_assistant_notify.close_behavior": "Quando o evento fechar",
+    "core.ui.pipelines.panels.home_assistant_notify.close_behavior.fixed_ignore": "Manter a notificação no celular",
+    "core.ui.pipelines.panels.home_assistant_notify.close_behavior.clear": "Limpar a notificação existente no celular",
+    "core.ui.pipelines.panels.home_assistant_notify.close_behavior.ignore": "Não fazer nada",
+    "core.ui.pipelines.panels.home_assistant_notify.close_behavior_hint":
+      "Por enquanto, a notificação permanece no app do Home Assistant mesmo depois que o evento fecha.",
+    "core.ui.pipelines.panels.home_assistant_notify.title": "Template do título",
+    "core.ui.pipelines.panels.home_assistant_notify.title_placeholder": "Deixe vazio para um título automático",
+    "core.ui.pipelines.panels.home_assistant_notify.message": "Template da mensagem",
+    "core.ui.pipelines.panels.home_assistant_notify.message_placeholder": "Deixe vazio para uma mensagem automática",
+    "core.ui.pipelines.panels.home_assistant_notify.template_hint_prefix": "Use templates como",
+    "core.ui.pipelines.panels.home_assistant_notify.tag_template": "Template da tag",
+    "core.ui.pipelines.panels.home_assistant_notify.tag_template_placeholder": "Deixe vazio para uma tag estável por evento",
+    "core.ui.pipelines.panels.home_assistant_notify.tag_template_hint":
+      "Avançado. Mantém abertura/atualização/fechamento ligados à mesma notificação mobile. Deixe vazio salvo se precisar de agrupamento customizado.",
 
     "core.ui.pipelines.panels.publish_video.transmission": "Transmissão",
     "core.ui.pipelines.panels.publish_video.transmission_placeholder": "Selecionar uma transmissão…",

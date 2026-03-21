@@ -59,6 +59,7 @@ function shouldHideScalarGrid(operatorId: string): boolean {
     operatorId === "core.debounce" ||
     operatorId === "core.debug" ||
     operatorId === "core.notify" ||
+    operatorId === "home_assistant.notify" ||
     operatorId === "core.store_images" ||
     operatorId === "stream.publish_video" ||
     operatorId === "core.category_gate" ||

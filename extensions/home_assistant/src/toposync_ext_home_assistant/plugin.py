@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import json
 import time
 from dataclasses import dataclass
-from typing import Any
+from fnmatch import fnmatchcase
+from typing import Any, Literal
 
 import httpx
 import websockets
@@ -16,10 +18,13 @@ from urllib.parse import urlparse
 from toposync.extensions import BaseExtension
 from toposync.runtime.event_bus import EventBus
 from toposync.runtime.config_store import ConfigStore
+from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.services import ServiceRegistry
+from .pipelines import register_home_assistant_pipeline_operators
 
 
 EXTENSION_ID = "com.toposync.home_assistant"
+logger = logging.getLogger("toposync.ext.home_assistant")
 
 
 class HomeAssistantServer(BaseModel):
@@ -55,6 +60,24 @@ class ServiceCallRequest(BaseModel):
 class PrimaryActionRequest(BaseModel):
     server_id: str
     entity_id: str
+
+
+class HomeAssistantServicePublic(BaseModel):
+    domain: str
+    service: str
+    name: str = ""
+    description: str = ""
+
+
+class HomeAssistantNotificationRoute(BaseModel):
+    id: str
+    name: str = ""
+    enabled: bool = True
+    serverId: str = ""
+    notifyService: str = ""
+    notificationTypes: list[str] = Field(default_factory=lambda: ["pipelines.event"])
+    closeAction: Literal["ignore", "clear"] = "ignore"
+    sendUpdates: bool = False
 
 
 def _normalize_host(host: str) -> str:
@@ -115,6 +138,68 @@ def _sse(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _normalize_notification_type_patterns(value: Any) -> list[str]:
+    raw_items: list[Any]
+    if isinstance(value, list):
+        raw_items = value
+    elif isinstance(value, str):
+        raw_items = value.split(",")
+    else:
+        raw_items = []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        pattern = str(item or "").strip()
+        if not pattern or pattern in seen:
+            continue
+        seen.add(pattern)
+        out.append(pattern)
+    return out
+
+
+def _notification_type_matches(patterns: list[str], notification_type: str) -> bool:
+    value = str(notification_type or "").strip()
+    if not value:
+        return False
+    for pattern in patterns:
+        if fnmatchcase(value, pattern):
+            return True
+    return False
+
+
+def _parse_notify_service(value: str) -> tuple[str, str] | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if "." in raw:
+        domain, service = raw.split(".", 1)
+    else:
+        domain, service = "notify", raw
+    domain = domain.strip().lower()
+    service = service.strip()
+    if domain != "notify" or not service:
+        return None
+    if any(ch.isspace() for ch in service) or "/" in service:
+        return None
+    return domain, service
+
+
+def _notification_is_closed(notification: dict[str, Any]) -> bool:
+    payload = notification.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    status = str(payload.get("status", "")).strip().lower()
+    lifecycle = str(payload.get("lifecycle", "")).strip().lower()
+    return status == "closed" or lifecycle == "close"
+
+
+def _notification_tag(notification: dict[str, Any]) -> str | None:
+    notification_id = str(notification.get("id", "")).strip()
+    if not notification_id:
+        return None
+    return f"toposync:{notification_id}"
+
+
 class HomeAssistantExtension(BaseExtension):
     def __init__(self) -> None:
         super().__init__(package="toposync_ext_home_assistant")
@@ -128,6 +213,9 @@ class HomeAssistantExtension(BaseExtension):
         self._state_tracked: dict[str, set[str]] = {}
         self._state_stop: dict[str, asyncio.Event] = {}
         self._state_server_sig: dict[str, tuple[str, str]] = {}
+        self._notification_bridge_task: asyncio.Task[None] | None = None
+        self._notification_bridge_queue: asyncio.Queue[dict[str, Any]] | None = None
+        self._notification_broadcaster: Any = None
 
     def capabilities(self) -> dict[str, Any]:
         return {
@@ -141,6 +229,7 @@ class HomeAssistantExtension(BaseExtension):
     async def setup(self, app: FastAPI, *, bus: EventBus, services: ServiceRegistry) -> None:  # noqa: ARG002
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=8.0))
         state_cache_ttl_s = 1.5
+        app.add_event_handler("shutdown", self.shutdown)
 
         def _config_store() -> ConfigStore:
             store = getattr(app.state, "config_store", None)
@@ -177,6 +266,42 @@ class HomeAssistantExtension(BaseExtension):
                     )
                 )
             return servers
+
+        async def list_notification_routes() -> list[HomeAssistantNotificationRoute]:
+            settings = await _config_store().get_settings()
+            ext = settings.extensions.get(EXTENSION_ID, {})
+            raw = ext.get("notificationRoutes", [])
+            if not isinstance(raw, list):
+                return []
+            routes: list[HomeAssistantNotificationRoute] = []
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                route_id = str(item.get("id", "")).strip()
+                if not route_id:
+                    continue
+                notification_types = _normalize_notification_type_patterns(item.get("notificationTypes"))
+                if not notification_types:
+                    notification_types = ["pipelines.event"]
+                close_action = str(item.get("closeAction", "ignore")).strip().lower()
+                if close_action not in {"ignore", "clear"}:
+                    close_action = "ignore"
+                try:
+                    routes.append(
+                        HomeAssistantNotificationRoute(
+                            id=route_id,
+                            name=str(item.get("name", "")).strip(),
+                            enabled=bool(item.get("enabled", True)),
+                            serverId=str(item.get("serverId", "")).strip(),
+                            notifyService=str(item.get("notifyService", "")).strip(),
+                            notificationTypes=notification_types,
+                            closeAction=close_action,
+                            sendUpdates=bool(item.get("sendUpdates", False)),
+                        )
+                    )
+                except ValidationError:
+                    continue
+            return routes
 
         async def get_server(server_id: str) -> HomeAssistantServer:
             for s in await list_servers():
@@ -347,6 +472,60 @@ class HomeAssistantExtension(BaseExtension):
 
             return out
 
+        @app.get("/api/home_assistant/{server_id}/services", response_model=list[HomeAssistantServicePublic])
+        async def ha_services(server_id: str, domain: str = "") -> list[HomeAssistantServicePublic]:
+            server = await get_server(server_id)
+            client = self._http
+            if client is None:
+                raise HTTPException(status_code=500, detail="HA client not ready")
+            try:
+                res = await client.get(
+                    f"{server.host}/api/services",
+                    headers={"Authorization": f"Bearer {server.apiKey}"},
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=502, detail="HA services request failed") from exc
+            if res.status_code == 401:
+                raise HTTPException(status_code=401, detail="HA auth failed")
+            if res.status_code >= 400:
+                raise HTTPException(status_code=502, detail=f"HA services request failed: {res.status_code}")
+            try:
+                payload = res.json()
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=502, detail="HA services response invalid") from exc
+            if not isinstance(payload, list):
+                return []
+
+            domain_filter = str(domain or "").strip().lower()
+            services_out: list[HomeAssistantServicePublic] = []
+            for block in payload:
+                if not isinstance(block, dict):
+                    continue
+                domain_name = str(block.get("domain", "")).strip().lower()
+                if not domain_name:
+                    continue
+                if domain_filter and domain_name != domain_filter:
+                    continue
+                raw_services = block.get("services")
+                if not isinstance(raw_services, dict):
+                    continue
+                for service_name_raw, meta_raw in raw_services.items():
+                    service_name = str(service_name_raw or "").strip()
+                    if not service_name:
+                        continue
+                    meta = meta_raw if isinstance(meta_raw, dict) else {}
+                    services_out.append(
+                        HomeAssistantServicePublic(
+                            domain=domain_name,
+                            service=service_name,
+                            name=str(meta.get("name", "")).strip(),
+                            description=str(meta.get("description", "")).strip(),
+                        )
+                    )
+
+            services_out.sort(key=lambda item: ((item.name or item.service).lower(), item.service.lower()))
+            return services_out
+
         async def _call_service(server: HomeAssistantServer, domain: str, service: str, data: dict[str, Any]) -> Any:
             client = self._http
             if client is None:
@@ -365,6 +544,18 @@ class HomeAssistantExtension(BaseExtension):
                 return res.json()
             except Exception:  # noqa: BLE001
                 return None
+
+        async def _service_call_service(
+            *,
+            server_id: str,
+            domain: str,
+            service_name: str,
+            data: dict[str, Any] | None = None,
+        ) -> Any:
+            server = await get_server(server_id)
+            return await _call_service(server, domain, service_name, dict(data or {}))
+
+        services.register("home_assistant.call_service", _service_call_service)
 
         async def _fetch_state(server: HomeAssistantServer, entity_id: str) -> dict[str, Any] | None:
             client = self._http
@@ -678,8 +869,108 @@ class HomeAssistantExtension(BaseExtension):
                 prevent_default=True,
             )
 
+        async def _bridge_notification_to_route(
+            route: HomeAssistantNotificationRoute,
+            notification: dict[str, Any],
+            *,
+            op: str,
+        ) -> None:
+            if not route.enabled:
+                return
+            notification_type = str(notification.get("type", "")).strip()
+            if not _notification_type_matches(route.notificationTypes, notification_type):
+                return
+            target = _parse_notify_service(route.notifyService)
+            if target is None:
+                return
+            if not route.serverId:
+                return
+            server = await get_server(route.serverId)
+            domain, service = target
+            tag = _notification_tag(notification)
+            if not tag:
+                return
+
+            if _notification_is_closed(notification):
+                if route.closeAction != "clear":
+                    return
+                await _call_service(
+                    server,
+                    domain,
+                    service,
+                    {
+                        "message": "clear_notification",
+                        "data": {"tag": tag},
+                    },
+                )
+                return
+
+            if op == "update" and not route.sendUpdates:
+                return
+
+            title = str(notification.get("title", "")).strip()
+            description = str(notification.get("description", "")).strip()
+            message = description or title or notification_type or "Toposync notification"
+            data: dict[str, Any] = {"tag": tag}
+            body: dict[str, Any] = {"message": message, "data": data}
+            if title and description:
+                body["title"] = title
+            await _call_service(server, domain, service, body)
+
+        async def _handle_notification_bridge_event(event: dict[str, Any]) -> None:
+            if not isinstance(event, dict):
+                return
+            notification = event.get("notification")
+            if not isinstance(notification, dict):
+                return
+            op = str(event.get("op", "")).strip().lower()
+            if op not in {"insert", "update"}:
+                return
+            routes = await list_notification_routes()
+            if not routes:
+                return
+            for route in routes:
+                try:
+                    await _bridge_notification_to_route(route, notification, op=op)
+                except HTTPException as exc:
+                    logger.warning(
+                        "Home Assistant notification route '%s' failed (%s): %s",
+                        route.id,
+                        route.notifyService or "<missing-service>",
+                        exc.detail,
+                    )
+                except Exception:
+                    logger.exception("Home Assistant notification route '%s' failed.", route.id)
+
         bus.on("home_assistant.service_call", _handle_service_call, priority=50)
         bus.on("home_assistant.primary_action_requested", _handle_primary_action, priority=50)
+
+        registry = getattr(app.state, "pipeline_operator_registry", None)
+        if isinstance(registry, OperatorRegistry):
+            register_home_assistant_pipeline_operators(registry)
+
+        notifications = getattr(app.state, "notifications", None)
+        broadcaster = getattr(notifications, "broadcaster", None)
+        if broadcaster is not None:
+            queue = broadcaster.subscribe()
+            self._notification_bridge_queue = queue
+            self._notification_broadcaster = broadcaster
+
+            async def _notification_bridge_loop() -> None:
+                try:
+                    while True:
+                        event = await queue.get()
+                        await _handle_notification_bridge_event(event)
+                except asyncio.CancelledError:
+                    raise
+                finally:
+                    broadcaster.unsubscribe(queue)
+                    if self._notification_bridge_queue is queue:
+                        self._notification_bridge_queue = None
+                    if self._notification_broadcaster is broadcaster:
+                        self._notification_broadcaster = None
+
+            self._notification_bridge_task = asyncio.create_task(_notification_bridge_loop())
 
         @app.get("/api/home_assistant/{server_id}/stream")
         async def ha_stream(request: Request, server_id: str, entity_ids: str = "") -> StreamingResponse:
@@ -721,6 +1012,26 @@ class HomeAssistantExtension(BaseExtension):
         return None
 
     async def shutdown(self) -> None:
+        if self._notification_bridge_task is not None:
+            try:
+                self._notification_bridge_task.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                await self._notification_bridge_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001
+                pass
+            self._notification_bridge_task = None
+        if self._notification_broadcaster is not None and self._notification_bridge_queue is not None:
+            try:
+                self._notification_broadcaster.unsubscribe(self._notification_bridge_queue)
+            except Exception:  # noqa: BLE001
+                pass
+        self._notification_bridge_queue = None
+        self._notification_broadcaster = None
+
         for stop in self._state_stop.values():
             stop.set()
         for task in self._state_tasks.values():

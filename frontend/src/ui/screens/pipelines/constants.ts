@@ -34,6 +34,7 @@ export const PIPELINE_PRESET_OPERATOR_IDS = [
   "core.debug",
   "core.store_images",
   "core.notify",
+  "home_assistant.notify",
   "stream.publish_video",
 ];
 
@@ -71,6 +72,7 @@ export const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "core.debug": "Debug",
   "core.store_images": "Store images",
   "core.notify": "Notification",
+  "home_assistant.notify": "Home Assistant push",
   "stream.publish_video": "Publish video",
 };
 

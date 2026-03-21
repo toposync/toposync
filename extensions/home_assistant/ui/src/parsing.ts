@@ -1,5 +1,5 @@
 import { DEFAULT_AIRFLOW_INTENSITY, DEFAULT_LAMP_INTENSITY } from "./constants";
-import type { HomeAssistantItemRef, HomeAssistantServer } from "./types";
+import type { HomeAssistantItemRef, HomeAssistantNotificationRoute, HomeAssistantServer } from "./types";
 
 export function readString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
@@ -64,6 +64,38 @@ export function readHomeAssistantServers(settings: Record<string, unknown>): Hom
       name,
       host,
       apiKey,
+    });
+  }
+  return out;
+}
+
+export function readHomeAssistantNotificationRoutes(settings: Record<string, unknown>): HomeAssistantNotificationRoute[] {
+  const raw = settings.notificationRoutes;
+  if (!Array.isArray(raw)) return [];
+  const out: HomeAssistantNotificationRoute[] = [];
+  for (const item of raw) {
+    const rec = readRecord(item);
+    const id = readString(rec.id).trim();
+    const name = readString(rec.name).trim();
+    const serverId = readString(rec.serverId).trim();
+    const notifyService = readString(rec.notifyService).trim();
+    const notificationTypesRaw = rec.notificationTypes;
+    const notificationTypes = Array.isArray(notificationTypesRaw)
+      ? notificationTypesRaw
+          .map((entry) => readString(entry).trim())
+          .filter(Boolean)
+      : [];
+    if (!id && !name && !serverId && !notifyService && notificationTypes.length === 0) continue;
+    const closeAction = readString(rec.closeAction).trim() === "clear" ? "clear" : "ignore";
+    out.push({
+      id: id || createUniqueId(),
+      name,
+      enabled: rec.enabled === undefined ? true : Boolean(rec.enabled),
+      serverId,
+      notifyService,
+      notificationTypes: notificationTypes.length > 0 ? notificationTypes : ["pipelines.event"],
+      closeAction,
+      sendUpdates: Boolean(rec.sendUpdates),
     });
   }
   return out;

@@ -7,7 +7,7 @@ First-party extension focused on camera integration for the global Pipelines run
 - RTSP camera settings and indexing (`/api/cameras/index`)
 - RTSP snapshot endpoints used by UI/tools
 - Control-point-set mapping endpoint for camera/composition interpolation
-- Camera/vision pipeline operators registry integration
+- Camera pipeline operators registry integration
 - Camera element/editor UI in the composition
 
 The old per-camera detections runtime (`/api/cameras/detections/*`, `cameras.tracking`, and `toposync_ext_cameras.processor_server`) is no longer part of this extension.
@@ -29,21 +29,23 @@ The old per-camera detections runtime (`/api/cameras/detections/*`, `cameras.tra
 
 - `camera.source`
 - `camera.motion_gate`
-- `vision.object_tracking_yolo`
-- `vision.object_detection_yolo`
-- `camera.object_segmentation`
+- `camera.object_crop`
 - `camera.camera_mapping`
 - `camera.area_restriction`
 - `camera.velocity_estimation`
 - `camera.best_frame_selector`
+
+Public vision operators are registered by the `com.toposync.vision` extension:
+
+- `vision.detect`
+- `vision.track`
 
 ## Dependencies
 
 - `ffmpeg` must be available in `PATH` for snapshot capture.
 - OpenCV is required by frame/motion processing:
   - `uv pip install opencv-python-headless`
-- YOLO is optional (heavy dependency):
-  - `uv pip install -e "extensions/cameras[yolo]"`
+- Vision runtimes are optional and can be installed from `extensions/vision`.
 
 ## Snapshot tuning
 

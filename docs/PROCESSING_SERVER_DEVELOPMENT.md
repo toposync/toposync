@@ -9,7 +9,6 @@ The processing server is used by distributed pipelines. It receives pipeline con
 - Python `3.11+`
 - `uv`
 - Optional for camera pipelines: `ffmpeg` available in `PATH`
-- Optional for YOLO operators: install the `cameras-yolo` dependency group
 
 Node.js is not required to run the processing server itself. It is only needed if you also run the frontend UI.
 
@@ -21,13 +20,21 @@ From the repository root:
 uv sync
 ```
 
-If you need YOLO operators (`vision.object_detection_yolo`, `vision.object_tracking_yolo`):
+The first-party ONNX Runtime backend for `vision.detect` and `vision.segment_instances` is installed with the `com.toposync.vision` extension.
 
-```bash
-uv sync --group cameras-yolo
-```
+Built-in first-party detection manifests currently target RTMDet:
+- `rtmdet_det_tiny`
+- `rtmdet_det_small`
+- `rtmdet_det_medium`
 
-`uv sync` is exact and removes packages that are outside selected groups. If you want to keep YOLO installed, keep using `--group cameras-yolo` on later syncs.
+Built-in first-party segmentation manifests currently target RTMDet-Ins:
+- `rtmdet_ins_tiny`
+- `rtmdet_ins_small`
+- `rtmdet_ins_medium`
+
+Their manifests are discovered automatically from `extensions/vision/manifests/`. Custom manifests can still be added with `TOPOSYNC_VISION_MANIFESTS_DIR` or `TOPOSYNC_VISION_MANIFEST_PATHS`, and manifests imported from the UI are stored under `.toposync-data/vision-manifests/` on that processing server.
+
+`ModelManifest` also accepts optional `capabilities` such as `reid`. This does not enable multi-camera tracking yet; it only reserves the registry/catalog shape so future re-identification models can be added without changing the API.
 
 ## 2) Run the processing server
 
@@ -46,6 +53,27 @@ curl http://127.0.0.1:9001/api/processing/status
 ```
 
 You should get a JSON response. `active: false` is expected until the origin server pushes a pipeline config.
+
+The status payload now includes:
+- ONNX Runtime availability and execution providers
+- registered/installed vision model manifests
+- per-task model catalogs with availability/compatibility for the current machine
+- model capabilities declared by each manifest
+- RTMDet detection shortlist
+- RTMDet-Ins segmentation shortlist
+- a reserved `pose` task catalog/recommendation slot for future first-party pose models
+- simple hardware-based recommendations for the initial detection/segmentation model
+
+For custom models, the UI import flow is:
+1. paste/import the manifest
+2. point the ONNX artifact path on that machine
+3. validate runtime compatibility
+4. persist under `.toposync-data/vision-manifests/`
+5. the model appears automatically in `vision.detect` or `vision.segment_instances`
+
+In the pipeline editor, the basic configuration flow stays task-oriented and machine-aware. Advanced fields are hidden until the user explicitly opens advanced details.
+
+`vision.pose_estimate` is scaffolded in this phase only. The processing server already understands `task=pose` manifests and diagnostics, but no first-party pose model/backend is enabled for end users yet.
 
 ## 4) Optional basic auth
 
@@ -92,4 +120,5 @@ curl http://127.0.0.1:8000/api/processing-servers/dev_remote/status
 - `401 Unauthorized`: `TOPOSYNC_PROCESSING_USERNAME`/`TOPOSYNC_PROCESSING_PASSWORD` do not match the credentials saved in origin.
 - Processing server always idle: pipeline `processing_server_id` is still `"local"`.
 - Connection refused from origin: processing server is bound to `127.0.0.1` instead of a reachable interface (`0.0.0.0`).
-- YOLO operators unavailable: dependencies were installed without `--group cameras-yolo`.
+- `vision.track` unavailable for `norfair`: the processing server environment is missing the `norfair` package or the extension install is stale.
+- `vision.detect` or `vision.segment_instances` unavailable for a given model: the model manifest is missing/invalid, the ONNX artifact path does not exist, or ONNX Runtime cannot load the model/providers.

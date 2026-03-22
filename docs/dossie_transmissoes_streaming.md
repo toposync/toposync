@@ -368,7 +368,7 @@ Regras de arbitragem propostas:
 
 ## 7.4 Impactos em steps criticos existentes
 
-- `vision.object_tracking_yolo` / `vision.object_detection_yolo`:
+- `vision.track` / `vision.detect`:
   - podem gerar muitos streams e chaves; sink precisa limitar writer cardinality.
 - `core.throttle` / `core.fps_reducer` / `core.debounce`:
   - podem reduzir carga; manter no caminho antes de `stream.write` e vital.
@@ -1183,10 +1183,10 @@ Semantica:
 
 - `camera.source`
 - `camera.motion_gate`
-- `vision.object_tracking_yolo`
-- `vision.object_detection_yolo`
+- `vision.track`
+- `vision.detect`
 - `camera.frame_attach`
-- `camera.object_segmentation`
+- `camera.object_crop`
 - `camera.image_crop`
 - `camera.image_adjust`
 - `camera.image_resize`
@@ -1203,7 +1203,7 @@ Semantica:
 - suporte a gate de entrada (`port gate`) para pausar captura
 - usa `CameraHub` (1 conexao por camera + refcount)
 
-2. `vision.object_tracking_yolo`
+2. `vision.track`
 - split por objeto com lifecycle
 - parametros de estabilidade:
   - `close_after_seconds` (default 4.0)

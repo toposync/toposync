@@ -53,7 +53,7 @@ from toposync.runtime.pipelines.telemetry import (
     MAX_IMAGE_MARKER_QUERY_LIMIT,
     METRIC_MOTION_SCORE,
     METRIC_STORE_IMAGE,
-    METRIC_YOLO_CONFIDENCE,
+    METRIC_VISION_CONFIDENCE,
     create_default_pipeline_telemetry_disk_checkpoint,
     create_default_pipeline_telemetry_store,
 )
@@ -71,7 +71,7 @@ from toposync.runtime.pipelines.templates import (
 )
 
 logger = logging.getLogger("toposync")
-DEFAULT_PIPELINES_TELEMETRY_METRICS = [METRIC_MOTION_SCORE, METRIC_YOLO_CONFIDENCE]
+DEFAULT_PIPELINES_TELEMETRY_METRICS = [METRIC_MOTION_SCORE, METRIC_VISION_CONFIDENCE]
 
 
 class EmitEventRequest(BaseModel):
@@ -148,6 +148,24 @@ class ProcessingServerStatusResponse(BaseModel):
     ok: bool
     status: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
+
+
+class ProcessingServerVisionManifestImportRequest(BaseModel):
+    manifest_text: str = ""
+    artifact_path: str = ""
+    replace_existing: bool = False
+
+
+class ProcessingServerVisionManifestImportResponse(BaseModel):
+    model_id: str
+    display_name: str = ""
+    task: str = ""
+    runtime: str = ""
+    artifact_path: str = ""
+    artifact_exists: bool = False
+    manifest_path: str = ""
+    custom: bool = True
+    replaced: bool = False
 
 
 class OperatorsListResponse(BaseModel):
@@ -1109,6 +1127,60 @@ def create_app() -> FastAPI:
             return ProcessingServerStatusResponse(ok=True, status=status)
         except Exception as exc:  # noqa: BLE001
             return ProcessingServerStatusResponse(ok=False, error=str(exc))
+        finally:
+            try:
+                await transport.close()
+            except Exception:
+                pass
+
+    @app.post(
+        "/api/processing-servers/{server_id}/vision/manifests/import",
+        response_model=ProcessingServerVisionManifestImportResponse,
+    )
+    async def import_processing_server_vision_manifest(
+        request: Request,
+        server_id: str,
+        body: ProcessingServerVisionManifestImportRequest,
+    ) -> ProcessingServerVisionManifestImportResponse:
+        _require(request, action="core:processing_servers:write")
+        config_store: ConfigStore = request.app.state.config_store
+        sid = str(server_id or "").strip().lower()
+        servers = await config_store.list_processing_servers()
+        server = next((item for item in servers if item.id == sid), None)
+        if server is None:
+            raise HTTPException(status_code=404, detail="Unknown processing server")
+
+        if server.kind != "http":
+            try:
+                from toposync_ext_vision.registry import ModelRegistryError, import_custom_manifest
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            try:
+                result = import_custom_manifest(
+                    manifest_text=body.manifest_text,
+                    artifact_path_override=body.artifact_path,
+                    data_dir=config_store.paths.data_dir,
+                    replace_existing=bool(body.replace_existing),
+                )
+            except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return ProcessingServerVisionManifestImportResponse.model_validate(result)
+
+        try:
+            transport = HttpProcessingTransport(
+                base_url=server.url,
+                username=getattr(server, "username", ""),
+                password=getattr(server, "password", ""),
+                timeout_s=20.0,
+            )
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            result = await transport.import_vision_manifest(body.model_dump(mode="json"))
+            return ProcessingServerVisionManifestImportResponse.model_validate(result)
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         finally:
             try:
                 await transport.close()

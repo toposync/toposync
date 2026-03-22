@@ -36,6 +36,11 @@ class PipelineRuntimeDependencies:
     services: ServiceRegistry | None = None
     logger: logging.Logger | None = None
     yolo_backend_factory: Callable[[Any], Any] | None = None
+    detector_backend_factory: Callable[[Any], Any] | None = None
+    segmenter_backend_factory: Callable[[Any], Any] | None = None
+    pose_backend_factory: Callable[[Any], Any] | None = None
+    tracker_backend_factory: Callable[[Any], Any] | None = None
+    vision_model_registry: Any | None = None
     files_dir: Path | None = None
     pipeline_snapshot_store: Any | None = None
     notifications_upsert: Callable[..., Any] | None = None

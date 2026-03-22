@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+import pytest
+
+from toposync.app import create_app
+import toposync.extensions.manager as ext_manager_mod
+
+
+def _create_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TOPOSYNC_NO_FRONTEND", "1")
+    monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "bypass")
+    monkeypatch.setattr(ext_manager_mod, "_iter_entry_points", lambda _group: [])
+    return TestClient(create_app())
+
+
+def _write_constant_detection_model(path: Path) -> Path:
+    import onnx
+    from onnx import TensorProto, helper
+
+    input_tensor = helper.make_tensor_value_info("images", TensorProto.FLOAT, [1, 3, 4, 4])
+    output_tensor = helper.make_tensor_value_info("boxes", TensorProto.FLOAT, [1, 1, 6])
+    constant_boxes = helper.make_tensor(
+        "constant_boxes",
+        TensorProto.FLOAT,
+        [1, 1, 6],
+        [0.1, 0.2, 0.4, 0.8, 0.95, 0.0],
+    )
+    graph = helper.make_graph(
+        [helper.make_node("Constant", inputs=[], outputs=["boxes"], value=constant_boxes)],
+        "toposync_custom_detector",
+        [input_tensor],
+        [output_tensor],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid("", 13)])
+    model.ir_version = 10
+    onnx.save(model, path)
+    return path
+
+
+def test_import_custom_vision_manifest_persists_and_appears_in_catalog(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_path = _write_constant_detection_model(tmp_path / "custom_detector.onnx")
+    manifest_payload = {
+        "model_id": "custom.detector",
+        "display_name": "Custom Detector",
+        "task": "detection",
+        "runtime": "onnxruntime",
+        "artifact_format": "onnx",
+        "artifact_path": str(model_path),
+        "input": {
+            "width": 4,
+            "height": 4,
+            "layout": "nchw",
+            "color_order": "rgb",
+            "tensor_name": "images",
+            "normalization": {"mean": [0.0, 0.0, 0.0], "std": [1.0, 1.0, 1.0]},
+        },
+        "postprocess": {
+            "type": "generic_boxes",
+            "output_name": "boxes",
+            "box_format": "xyxy01",
+        },
+        "classes": {"source": "test", "labels": ["person"]},
+    }
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        import_res = client.post(
+            "/api/processing-servers/local/vision/manifests/import",
+            json={
+                "manifest_text": json.dumps(manifest_payload),
+                "replace_existing": False,
+            },
+        )
+        assert import_res.status_code == 200
+        body = import_res.json()
+        assert body["model_id"] == "custom.detector"
+        assert body["task"] == "detection"
+        assert body["artifact_exists"] is True
+        manifest_path = Path(body["manifest_path"])
+        assert manifest_path.is_file()
+
+        status_res = client.get("/api/processing-servers/local/status")
+        assert status_res.status_code == 200
+        status_body = status_res.json()
+        assert status_body["ok"] is True
+        detection_catalog = status_body["status"]["vision"]["task_catalogs"]["detection"]["items"]
+        custom_item = next(item for item in detection_catalog if item["model_id"] == "custom.detector")
+        assert custom_item["source_kind"] == "custom"
+        assert custom_item["availability"] == "available"
+        assert custom_item["artifact_exists"] is True

@@ -1,0 +1,51 @@
+{
+  "model_id": "rtmdet_det_small",
+  "display_name": "RTMDet Small",
+  "task": "detection",
+  "runtime": "onnxruntime",
+  "artifact_format": "onnx",
+  "artifact_path": "../models/rtmdet/rtmdet_det_small.end2end.onnx",
+  "sha256": "",
+  "input": {
+    "width": 640,
+    "height": 640,
+    "color_order": "bgr",
+    "layout": "nchw",
+    "resize_mode": "letterbox",
+    "pad_value": 114.0,
+    "normalization": {
+      "mean": [103.53, 116.28, 123.675],
+      "std": [57.375, 57.12, 58.395]
+    }
+  },
+  "postprocess": {
+    "type": "mmdet_rtmdet",
+    "output_name": "dets",
+    "label_output_name": "labels",
+    "box_format": "xyxy_pixels",
+    "confidence_threshold_default": 0.4,
+    "iou_threshold_default": 0.65
+  },
+  "classes": {
+    "source": "coco80"
+  },
+  "license": {
+    "code_license": "Apache-2.0",
+    "weights_license": "Review required for exported ONNX artifact redistribution.",
+    "dataset_notes": "COCO-based weights require explicit redistribution review before bundling.",
+    "redistribution_allowed": false,
+    "commercial_use_status": "review_required",
+    "official_build_allowed": false
+  },
+  "hardware_profiles": {
+    "cpu": true,
+    "cuda": true,
+    "openvino": true,
+    "mps": false
+  },
+  "recommended_profiles": ["cpu_balanced", "cuda_balanced", "openvino_balanced"],
+  "notes": [
+    "Balanced RTMDet option and default recommendation for general COCO detection.",
+    "Good trade-off between accuracy and CPU/GPU cost."
+  ]
+}

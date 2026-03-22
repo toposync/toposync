@@ -15,6 +15,7 @@ type Props = {
   steps: InteractiveStep[];
   operatorsById: Record<string, PipelineOperatorDefinition>;
   pipelineName: string | null;
+  processingServerId: string;
 
   interactiveCameraId: string;
   cameraSelectOptions: SelectOption[];
@@ -47,7 +48,7 @@ function shouldHideScalarGrid(operatorId: string): boolean {
     operatorId === "camera.image_perspective_crop" ||
     operatorId === "camera.image_adjust" ||
     operatorId === "camera.image_resize" ||
-    operatorId === "camera.object_segmentation" ||
+    operatorId === "camera.object_crop" ||
     operatorId === "camera.motion_bgsub_adaptive" ||
     operatorId === "camera.motion_sample_bg" ||
     operatorId === "camera.motion_gate" ||
@@ -63,8 +64,9 @@ function shouldHideScalarGrid(operatorId: string): boolean {
     operatorId === "stream.publish_video" ||
     operatorId === "core.category_gate" ||
     operatorId === "core.filter" ||
-    operatorId === "vision.object_tracking_yolo" ||
-    operatorId === "vision.object_detection_yolo"
+    operatorId === "vision.track" ||
+    operatorId === "vision.detect" ||
+    operatorId === "vision.segment_instances"
   );
 }
 
@@ -84,8 +86,11 @@ function telemetryMetricForConfigField(operatorId: string, configKey: string): s
   if (operator === "camera.motion_bgsub_adaptive" && key === "threshold") return "motion.score";
   if (operator === "camera.motion_sample_bg" && key === "threshold") return "motion.score";
   if (operator === "camera.motion_gate" && key === "threshold") return "motion.score";
-  if ((operator === "vision.object_tracking_yolo" || operator === "vision.object_detection_yolo") && key === "confidence_threshold") {
-    return "yolo.confidence";
+  if (
+    (operator === "vision.track" || operator === "vision.detect" || operator === "vision.segment_instances") &&
+    key === "confidence_threshold"
+  ) {
+    return "vision.confidence";
   }
   return null;
 }
@@ -96,6 +101,7 @@ export function InteractiveStepCard({
   steps,
   operatorsById,
   pipelineName,
+  processingServerId,
   interactiveCameraId,
   cameraSelectOptions,
   cameraSelectOptionById,
@@ -237,6 +243,7 @@ export function InteractiveStepCard({
             steps={steps}
             config={config}
             pipelineName={pipelineName}
+            processingServerId={processingServerId}
             interactiveCameraId={interactiveCameraId}
             cameraSelectOptions={cameraSelectOptions}
             cameraSelectOptionById={cameraSelectOptionById}

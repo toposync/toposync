@@ -11,6 +11,7 @@ type Props = {
   steps: InteractiveStep[];
   operatorsById: Record<string, PipelineOperatorDefinition>;
   pipelineName: string | null;
+  processingServerId: string;
 
   interactiveCameraId: string;
   cameraSelectOptions: SelectOption[];

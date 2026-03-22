@@ -397,7 +397,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.telemetry.current_value": "Current value",
     "core.ui.pipelines.telemetry.apply_value": "Apply",
     "core.ui.pipelines.telemetry.metric.motion_score": "Motion score",
-    "core.ui.pipelines.telemetry.metric.yolo_confidence": "YOLO confidence",
+    "core.ui.pipelines.telemetry.metric.yolo_confidence": "Vision confidence",
     "core.ui.pipelines.telemetry.field.open_histogram": "Open parameter insights",
     "core.ui.pipelines.telemetry.field.title": "Parameter insights: {{label}}",
     "core.ui.pipelines.telemetry.field.subtitle": "Node {{node}} • Metric {{metric}}",
@@ -456,11 +456,13 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.camera.auto_gamma": "Auto gamma",
     "core.ui.pipelines.operator_name.camera.global_stabilize": "Global stabilize",
     "core.ui.pipelines.operator_name.camera.lens_undistort": "Lens undistort",
-    "core.ui.pipelines.operator_name.vision.object_tracking_yolo": "YOLO tracking",
-    "core.ui.pipelines.operator_name.vision.object_detection_yolo": "YOLO detection",
+    "core.ui.pipelines.operator_name.vision.track": "Object tracking",
+    "core.ui.pipelines.operator_name.vision.detect": "Object detection",
+    "core.ui.pipelines.operator_name.vision.segment_instances": "Instance segmentation",
+    "core.ui.pipelines.operator_name.vision.pose_estimate": "Pose estimation",
     "core.ui.pipelines.operator_name.core.category_gate": "Category gate",
     "core.ui.pipelines.operator_name.core.filter": "Filter",
-    "core.ui.pipelines.operator_name.camera.object_segmentation": "Object segmentation",
+    "core.ui.pipelines.operator_name.camera.object_crop": "Object crop",
     "core.ui.pipelines.operator_name.camera.camera_mapping": "Camera mapping",
     "core.ui.pipelines.operator_name.camera.area_restriction": "Area restriction",
     "core.ui.pipelines.operator_name.camera.velocity_estimation": "Velocity estimation",
@@ -546,15 +548,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.category_gate.categories": "Categories",
     "core.ui.pipelines.panels.category_gate.categories_placeholder": "All categories",
     "core.ui.pipelines.panels.category_gate.hint":
-      "Matches payload.object_category_label (set by YOLO operators). Empty selection means “all categories”.",
+      "Matches payload.object_category_label (set by vision operators). Empty selection means “all categories”.",
 
     "core.ui.pipelines.panels.filter.preset": "Preset",
     "core.ui.pipelines.panels.filter.preset.custom.label": "Custom expression",
     "core.ui.pipelines.panels.filter.preset.custom.hint": "Write a safe expression referencing payload/metadata.",
     "core.ui.pipelines.panels.filter.preset.object_category_in.label": "Object category in list",
-    "core.ui.pipelines.panels.filter.preset.object_category_in.hint": "Matches payload.object_category_label (YOLO).",
+    "core.ui.pipelines.panels.filter.preset.object_category_in.hint": "Matches payload.object_category_label (vision).",
     "core.ui.pipelines.panels.filter.preset.object_category_not_in.label": "Object category not in list",
-    "core.ui.pipelines.panels.filter.preset.object_category_not_in.hint": "Excludes payload.object_category_label (YOLO).",
+    "core.ui.pipelines.panels.filter.preset.object_category_not_in.hint": "Excludes payload.object_category_label (vision).",
     "core.ui.pipelines.panels.filter.preset.lifecycle_is.label": "Lifecycle is",
     "core.ui.pipelines.panels.filter.preset.lifecycle_is.hint": "Filters by packet lifecycle (open/update/close).",
     "core.ui.pipelines.panels.filter.preset.has_artifact.label": "Has artifact",
@@ -576,7 +578,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.object_segmentation.quality.best": "Best (crop from original)",
     "core.ui.pipelines.panels.object_segmentation.quality.fast": "Fast (crop from treated)",
     "core.ui.pipelines.panels.object_segmentation.quality_hint":
-      "Uses the detection bbox (normalized) and crops on the selected image. Best quality uses the full original frame even if YOLO runs on a resized treated frame.",
+      "Uses the detection bbox (normalized) and crops on the selected image. Best quality uses the full original frame even if detection runs on a resized treated frame.",
     "core.ui.pipelines.panels.object_segmentation.input_images": "Input images (fallback order)",
     "core.ui.pipelines.panels.object_segmentation.input_images_placeholder": "Original → Treated",
     "core.ui.pipelines.panels.object_segmentation.input_images_hint":
@@ -814,7 +816,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.motion_sample_bg.max_blobs": "Max blobs",
 
     "core.ui.pipelines.panels.image_crop.hint":
-      "Crops the frame for downstream analysis (YOLO). The original full frame is preserved as original.",
+      "Crops the frame for downstream analysis (vision). The original full frame is preserved as original.",
     "core.ui.pipelines.panels.image_crop.units": "Units",
     "core.ui.pipelines.panels.image_crop.units.percent": "Percent (0–100)",
     "core.ui.pipelines.panels.image_crop.units.pixels": "Pixels",
@@ -908,13 +910,132 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_resize.max_edge_px": "Max edge (px)",
     "core.ui.pipelines.panels.image_resize.allow_upscale": "Allow upscale",
 
-    "core.ui.pipelines.panels.yolo.min_confidence": "Min confidence",
-    "core.ui.pipelines.panels.yolo.min_confidence_hint": "Filters low-confidence detections/tracks (default: 0.40).",
+    "core.ui.pipelines.panels.yolo.min_confidence": "Minimum confidence",
+    "core.ui.pipelines.panels.yolo.min_confidence_hint":
+      "Raise this if you are getting false positives. Lower it if the model is missing real objects.",
     "core.ui.pipelines.panels.yolo.filter_frames": "Filter frames (recommended)",
-    "core.ui.pipelines.panels.yolo.filter_frames_hint": "When disabled, YOLO still runs but keeps all frames downstream.",
-    "core.ui.pipelines.panels.yolo.categories": "Categories",
-    "core.ui.pipelines.panels.yolo.categories_placeholder": "All categories",
-    "core.ui.pipelines.panels.yolo.categories_hint": "Empty selection means “all categories”.",
+    "core.ui.pipelines.panels.yolo.filter_frames_hint": "When disabled, vision inference still runs but keeps all frames downstream.",
+    "core.ui.pipelines.panels.yolo.categories": "Objects of interest",
+    "core.ui.pipelines.panels.yolo.categories_placeholder": "Everything the model supports",
+    "core.ui.pipelines.panels.yolo.categories_hint":
+      "Leave empty to detect everything the selected model knows how to find.",
+    "core.ui.pipelines.panels.yolo.segmentation_categories_hint":
+      "Leave empty to segment everything the selected model knows how to separate.",
+    "core.ui.pipelines.panels.yolo.model_id": "Model",
+    "core.ui.pipelines.panels.yolo.model_id_hint":
+      "Choose the detection model. This quick list favors models that fit the selected machine.",
+    "core.ui.pipelines.panels.yolo.segmentation_model_id_hint":
+      "Choose the segmentation model. This quick list favors models that fit the selected machine.",
+    "core.ui.pipelines.panels.yolo.model_shortlist_hint":
+      "RTMDet Tiny is the lightest option, Small is the default balance, and Medium spends more machine resources for better quality.",
+    "core.ui.pipelines.panels.yolo.segmentation_model_shortlist_hint":
+      "RTMDet-Ins Tiny is the lightest option, Small is the default balance, and Medium spends more machine resources for better masks.",
+    "core.ui.pipelines.panels.yolo.processing_server_hint":
+      "Recommendations below come from processing server '{{serverId}}'.",
+    "core.ui.pipelines.panels.yolo.model_select_placeholder": "Choose a model",
+    "core.ui.pipelines.panels.yolo.model_availability.available": "Available on this machine",
+    "core.ui.pipelines.panels.yolo.model_availability.manifest_only": "Manifest imported, artifact missing",
+    "core.ui.pipelines.panels.yolo.model_availability.incompatible": "Unavailable on this machine",
+    "core.ui.pipelines.panels.yolo.model_availability_reason.fallback": "Using the built-in shortlist fallback.",
+    "core.ui.pipelines.panels.yolo.model_availability_reason.ok": "Ready to run on the selected processing server.",
+    "core.ui.pipelines.panels.yolo.model_availability_reason.artifact_missing":
+      "The manifest exists, but the model artifact is missing on that machine.",
+    "core.ui.pipelines.panels.yolo.model_availability_reason.backend_unavailable":
+      "ONNX Runtime is not available on that machine.",
+    "core.ui.pipelines.panels.yolo.model_availability_reason.hardware_incompatible":
+      "The machine/providers do not match this model's validated hardware profiles.",
+    "core.ui.pipelines.panels.yolo.model_availability_reason.runtime_unsupported":
+      "This runtime is not supported by the current first-party UI.",
+    "core.ui.pipelines.panels.yolo.model_custom_badge": "custom model",
+    "core.ui.pipelines.panels.yolo.hidden_unavailable_count":
+      "{{count}} model(s) are hidden because they are not ready on this machine. Open advanced details to review them.",
+    "core.ui.pipelines.panels.yolo.refresh_models": "Refresh options",
+    "core.ui.pipelines.panels.yolo.import_manifest": "Add custom model (advanced)",
+    "core.ui.pipelines.panels.yolo.import_manifest_text": "Model manifest (JSON / YAML)",
+    "core.ui.pipelines.panels.yolo.import_manifest_text_hint":
+      "Paste the model description file and, if needed, point to the ONNX file path on this processing server.",
+    "core.ui.pipelines.panels.yolo.import_artifact_path": "ONNX file path (optional override)",
+    "core.ui.pipelines.panels.yolo.import_artifact_path_hint":
+      "Use an absolute path only when the model description does not already point to the right ONNX file on that machine.",
+    "core.ui.pipelines.panels.yolo.import_replace_existing": "Replace an existing custom model with the same id",
+    "core.ui.pipelines.panels.yolo.importing_manifest": "Importing…",
+    "core.ui.pipelines.panels.yolo.apply_import_manifest": "Add model",
+    "core.ui.pipelines.panels.yolo.import_success": "Imported {{modelId}} (task: {{task}}).",
+    "core.ui.pipelines.panels.yolo.profile_hint": "Recommended hardware profile for this machine: {{profile}}.",
+    "core.ui.pipelines.panels.yolo.selected_model_details": "Advanced model details",
+    "core.ui.pipelines.panels.yolo.details_runtime": "Runtime: {{runtime}}",
+    "core.ui.pipelines.panels.yolo.details_input": "Input size: {{width}}x{{height}}",
+    "core.ui.pipelines.panels.yolo.details_classes": "Classes: {{count}} (source: {{source}})",
+    "core.ui.pipelines.panels.yolo.details_providers": "Compatible providers: {{providers}}",
+    "core.ui.pipelines.panels.yolo.details_license": "Licenses: code {{code}} • weights {{weights}}",
+    "core.ui.pipelines.panels.yolo.details_commercial": "Commercial status: {{status}}",
+    "core.ui.pipelines.panels.yolo.details_resource": "Estimated resource tier: {{tier}}",
+    "core.ui.pipelines.panels.yolo.details_source_custom": "Source: custom model added by the user.",
+    "core.ui.pipelines.panels.yolo.details_source_official": "Source: built-in first-party model.",
+    "core.ui.pipelines.panels.yolo.resource_tier.low": "low",
+    "core.ui.pipelines.panels.yolo.resource_tier.balanced": "balanced",
+    "core.ui.pipelines.panels.yolo.resource_tier.higher": "higher",
+    "core.ui.pipelines.panels.yolo.resource_tier.unknown": "unknown",
+    "core.ui.pipelines.panels.yolo.model_rtmdet_tiny_hint":
+      "RTMDet Tiny: fastest option for CPU-first deployments and quick smoke tests.",
+    "core.ui.pipelines.panels.yolo.model_rtmdet_small_hint":
+      "RTMDet Small: balanced default recommendation for general COCO detection.",
+    "core.ui.pipelines.panels.yolo.model_rtmdet_medium_hint":
+      "RTMDet Medium: higher-quality option when you can spend more latency per frame.",
+    "core.ui.pipelines.panels.yolo.model_rtmdet_ins_tiny_hint":
+      "RTMDet-Ins Tiny: fastest path to real masks on CPU-first deployments.",
+    "core.ui.pipelines.panels.yolo.model_rtmdet_ins_small_hint":
+      "RTMDet-Ins Small: balanced default for instance segmentation on COCO classes.",
+    "core.ui.pipelines.panels.yolo.model_rtmdet_ins_medium_hint":
+      "RTMDet-Ins Medium: better mask quality when you can spend more latency per frame.",
+    "core.ui.pipelines.panels.yolo.tracker_id": "Tracking method",
+    "core.ui.pipelines.panels.yolo.tracker_id_hint":
+      "Choose how TopoSync keeps the same object linked from one frame to the next.",
+    "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_label": "Default (lightweight)",
+    "core.ui.pipelines.panels.yolo.tracker_norfair_label": "More stable (Norfair)",
+    "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_hint":
+      "Best default for most cameras. It is lighter and works well on CPU-first machines.",
+    "core.ui.pipelines.panels.yolo.tracker_norfair_hint":
+      "Usually steadier, but a little heavier. Use it when the default tracker is losing objects too often.",
+    "core.ui.pipelines.panels.yolo.track_emit_mode": "Tracking result",
+    "core.ui.pipelines.panels.yolo.track_emit_mode.events": "Create events per object",
+    "core.ui.pipelines.panels.yolo.track_emit_mode.annotate": "Keep tracks on the frame",
+    "core.ui.pipelines.panels.yolo.track_emit_mode_hint":
+      "Create events when you need one lifecycle per object. Keep tracks on the frame when downstream steps should continue with the original stream.",
+    "core.ui.pipelines.panels.yolo.iou_threshold": "IoU threshold",
+    "core.ui.pipelines.panels.yolo.iou_threshold_hint": "Backend-level overlap threshold used by model-specific postprocessing when available.",
+    "core.ui.pipelines.panels.yolo.inference_interval_detection": "Analysis interval (seconds)",
+    "core.ui.pipelines.panels.yolo.inference_interval_hint":
+      "Higher values reduce machine load by analyzing fewer frames. Use 0 for every frame.",
+    "core.ui.pipelines.panels.yolo.input_source": "Image to analyze",
+    "core.ui.pipelines.panels.yolo.input_source_hint":
+      "In most pipelines, keep the adjusted frame so detection and segmentation follow the same crop and preprocessing used upstream.",
+    "core.ui.pipelines.panels.yolo.input_preset.treated_first": "Adjusted frame (recommended)",
+    "core.ui.pipelines.panels.yolo.input_preset.treated_first_hint":
+      "Uses the processed image first and falls back to the original frame only when needed.",
+    "core.ui.pipelines.panels.yolo.input_preset.original_first": "Original camera frame",
+    "core.ui.pipelines.panels.yolo.input_preset.original_first_hint":
+      "Prefers the raw camera image. Use this when upstream image adjustments are hurting model quality.",
+    "core.ui.pipelines.panels.yolo.input_preset.best_frame_first": "Best frame when available",
+    "core.ui.pipelines.panels.yolo.input_preset.best_frame_first_hint":
+      "Prefers a previously selected best frame and falls back to the adjusted frame, then the original one.",
+    "core.ui.pipelines.panels.yolo.input_preset.custom_current": "Advanced custom order: {{value}}",
+    "core.ui.pipelines.panels.yolo.input_with_fallback": "Advanced image order",
+    "core.ui.pipelines.panels.yolo.input_with_fallback_hint":
+      "Comma-separated internal image keys or artifact names. Default: treated,original.",
+    "core.ui.pipelines.panels.yolo.detect_annotate_only_hint":
+      "vision.detect keeps results attached to the frame. Add vision.track when you need object lifecycle events.",
+    "core.ui.pipelines.panels.yolo.segmentation_input_with_fallback_hint":
+      "Comma-separated internal image keys or artifact names. Use treated,original in most pipelines so masks follow the same preprocessed frame used upstream.",
+    "core.ui.pipelines.panels.yolo.max_instances_per_frame": "Max instances per frame",
+    "core.ui.pipelines.panels.yolo.max_instances_per_frame_hint":
+      "Hard cap after segmentation and optional upstream reconciliation. Lower values reduce downstream artifact/storage pressure.",
+    "core.ui.pipelines.panels.yolo.attach_mask_artifacts": "Attach mask artifacts",
+    "core.ui.pipelines.panels.yolo.attach_mask_artifacts_hint":
+      "Creates one raw binary mask artifact per selected instance and exposes the top one as the semantic image key 'mask'.",
+    "core.ui.pipelines.panels.yolo.attach_polygons": "Attach polygons",
+    "core.ui.pipelines.panels.yolo.attach_polygons_hint":
+      "Adds a normalized polygon outline per instance when possible. Leave disabled if you only need binary masks.",
     "core.ui.pipelines.panels.yolo.update_interval_tracking": "Update interval (seconds)",
     "core.ui.pipelines.panels.yolo.update_interval_detection": "Event interval (seconds)",
     "core.ui.pipelines.panels.yolo.update_interval_hint":
@@ -922,11 +1043,17 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.close_after_seconds": "Close after (seconds)",
     "core.ui.pipelines.panels.yolo.close_after_hint":
       "Closes a track if the object is not seen for this long (higher = more stable, slower close).",
+    "core.ui.pipelines.panels.yolo.pause_when_gate_closed": "Pause when motion gate is closed",
+    "core.ui.pipelines.panels.yolo.pause_when_gate_closed_hint":
+      "Stops advancing trackers while the upstream motion gate is closed, reducing false closes and unnecessary updates.",
+    "core.ui.pipelines.panels.yolo.use_world_anchor": "Use world anchor when available",
+    "core.ui.pipelines.panels.yolo.use_world_anchor_hint":
+      "Reserved for future multi-camera fusion. Safe to leave disabled in current pipelines.",
 
     "core.ui.processing_servers.title": "Processing servers",
     "core.ui.processing_servers.add_server": "Add server",
     "core.ui.processing_servers.description":
-      "Configure remote processing servers to run heavy operators (YOLO). Storage and notifications still happen on the origin server.",
+      "Configure remote processing servers to run heavy operators (vision). Storage and notifications still happen on the origin server.",
     "core.ui.processing_servers.none": "No processing servers configured.",
     "core.ui.processing_servers.built_in": "(built-in)",
     "core.ui.processing_servers.status.testing": "testing…",
@@ -936,6 +1063,20 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.processing_servers.actions.edit_server": "Edit server",
     "core.ui.processing_servers.actions.delete_server": "Delete server",
     "core.ui.processing_servers.confirm_delete": "Delete processing server '{{id}}'?",
+    "core.ui.processing_servers.vision_recommendations.title": "Detection recommendation:",
+    "core.ui.processing_servers.vision_recommendations.profile": "profile {{profile}}",
+    "core.ui.processing_servers.vision_recommendations.installed": "installed",
+    "core.ui.processing_servers.vision_recommendations.manifest_only": "manifest only",
+    "core.ui.processing_servers.vision_recommendations.badge.recommended": "recommended",
+    "core.ui.processing_servers.vision_recommendations.badge.fastest": "fastest",
+    "core.ui.processing_servers.vision_recommendations.badge.best_quality": "best quality",
+    "core.ui.processing_servers.vision_recommendations.badge.edge": "edge / low power",
+    "core.ui.processing_servers.vision_recommendations.profile_label.cpu_low": "CPU low",
+    "core.ui.processing_servers.vision_recommendations.profile_label.cpu_balanced": "CPU balanced",
+    "core.ui.processing_servers.vision_recommendations.profile_label.cuda_low": "CUDA low",
+    "core.ui.processing_servers.vision_recommendations.profile_label.cuda_balanced": "CUDA balanced",
+    "core.ui.processing_servers.vision_recommendations.profile_label.cuda_quality": "CUDA quality",
+    "core.ui.processing_servers.vision_recommendations.profile_label.openvino_balanced": "OpenVINO balanced",
 
     "core.ui.processing_server_modal.title_add": "Add processing server",
     "core.ui.processing_server_modal.title_edit": "Edit processing server",
@@ -1334,7 +1475,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.telemetry.current_value": "Valor atual",
     "core.ui.pipelines.telemetry.apply_value": "Aplicar",
     "core.ui.pipelines.telemetry.metric.motion_score": "Score de movimento",
-    "core.ui.pipelines.telemetry.metric.yolo_confidence": "Confiança do YOLO",
+    "core.ui.pipelines.telemetry.metric.yolo_confidence": "Confiança da visão",
     "core.ui.pipelines.telemetry.field.open_histogram": "Abrir insights do parâmetro",
     "core.ui.pipelines.telemetry.field.title": "Insights do parâmetro: {{label}}",
     "core.ui.pipelines.telemetry.field.subtitle": "Nó {{node}} • Métrica {{metric}}",
@@ -1393,11 +1534,13 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.camera.auto_gamma": "Gamma automático",
     "core.ui.pipelines.operator_name.camera.global_stabilize": "Estabilização global",
     "core.ui.pipelines.operator_name.camera.lens_undistort": "Correção de distorção da lente",
-    "core.ui.pipelines.operator_name.vision.object_tracking_yolo": "Tracking YOLO",
-    "core.ui.pipelines.operator_name.vision.object_detection_yolo": "Detecção YOLO",
+    "core.ui.pipelines.operator_name.vision.track": "Tracking de objetos",
+    "core.ui.pipelines.operator_name.vision.detect": "Detecção de objetos",
+    "core.ui.pipelines.operator_name.vision.segment_instances": "Segmentação de instâncias",
+    "core.ui.pipelines.operator_name.vision.pose_estimate": "Estimativa de pose",
     "core.ui.pipelines.operator_name.core.category_gate": "Gate de categorias",
     "core.ui.pipelines.operator_name.core.filter": "Filtro",
-    "core.ui.pipelines.operator_name.camera.object_segmentation": "Segmentação de objeto",
+    "core.ui.pipelines.operator_name.camera.object_crop": "Recorte de objeto",
     "core.ui.pipelines.operator_name.camera.camera_mapping": "Mapeamento de câmera",
     "core.ui.pipelines.operator_name.camera.area_restriction": "Restrição de área",
     "core.ui.pipelines.operator_name.camera.velocity_estimation": "Estimativa de velocidade",
@@ -1484,15 +1627,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.category_gate.categories": "Categorias",
     "core.ui.pipelines.panels.category_gate.categories_placeholder": "Todas as categorias",
     "core.ui.pipelines.panels.category_gate.hint":
-      "Compara com payload.object_category_label (definido pelos operadores YOLO). Seleção vazia significa “todas as categorias”.",
+      "Compara com payload.object_category_label (definido pelos operadores de visão). Seleção vazia significa “todas as categorias”.",
 
     "core.ui.pipelines.panels.filter.preset": "Preset",
     "core.ui.pipelines.panels.filter.preset.custom.label": "Expressão customizada",
     "core.ui.pipelines.panels.filter.preset.custom.hint": "Escreva uma expressão segura referenciando payload/metadata.",
     "core.ui.pipelines.panels.filter.preset.object_category_in.label": "Categoria do objeto na lista",
-    "core.ui.pipelines.panels.filter.preset.object_category_in.hint": "Compara com payload.object_category_label (YOLO).",
+    "core.ui.pipelines.panels.filter.preset.object_category_in.hint": "Compara com payload.object_category_label (vision).",
     "core.ui.pipelines.panels.filter.preset.object_category_not_in.label": "Categoria do objeto fora da lista",
-    "core.ui.pipelines.panels.filter.preset.object_category_not_in.hint": "Exclui payload.object_category_label (YOLO).",
+    "core.ui.pipelines.panels.filter.preset.object_category_not_in.hint": "Exclui payload.object_category_label (vision).",
     "core.ui.pipelines.panels.filter.preset.lifecycle_is.label": "Lifecycle é",
     "core.ui.pipelines.panels.filter.preset.lifecycle_is.hint": "Filtra pelo lifecycle do pacote (open/update/close).",
     "core.ui.pipelines.panels.filter.preset.has_artifact.label": "Possui artefato",
@@ -1514,7 +1657,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.object_segmentation.quality.best": "Melhor (recortar no original)",
     "core.ui.pipelines.panels.object_segmentation.quality.fast": "Rápido (recortar no tratado)",
     "core.ui.pipelines.panels.object_segmentation.quality_hint":
-      "Usa a bbox da detecção (normalizada) e recorta na imagem selecionada. Melhor qualidade usa o frame original mesmo se o YOLO rodar em um tratado redimensionado.",
+      "Usa a bbox da detecção (normalizada) e recorta na imagem selecionada. Melhor qualidade usa o frame original mesmo se a detecção rodar em um tratado redimensionado.",
     "core.ui.pipelines.panels.object_segmentation.input_images": "Imagens de entrada (ordem de fallback)",
     "core.ui.pipelines.panels.object_segmentation.input_images_placeholder": "Original → Tratado",
     "core.ui.pipelines.panels.object_segmentation.input_images_hint":
@@ -1750,7 +1893,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.motion_sample_bg.max_blobs": "Máximo de blobs",
 
     "core.ui.pipelines.panels.image_crop.hint":
-      "Recorta o frame para análise downstream (YOLO). O frame cheio original é preservado como original.",
+      "Recorta o frame para análise downstream (vision). O frame cheio original é preservado como original.",
     "core.ui.pipelines.panels.image_crop.units": "Unidades",
     "core.ui.pipelines.panels.image_crop.units.percent": "Porcentagem (0–100)",
     "core.ui.pipelines.panels.image_crop.units.pixels": "Pixels",
@@ -1848,12 +1991,133 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_resize.allow_upscale": "Permitir upscale",
 
     "core.ui.pipelines.panels.yolo.min_confidence": "Confiança mínima",
-    "core.ui.pipelines.panels.yolo.min_confidence_hint": "Filtra detecções/tracks de baixa confiança (padrão: 0.40).",
+    "core.ui.pipelines.panels.yolo.min_confidence_hint":
+      "Aumente se estiver vendo falsos positivos. Reduza se o modelo estiver deixando passar objetos reais.",
     "core.ui.pipelines.panels.yolo.filter_frames": "Filtrar frames (recomendado)",
-    "core.ui.pipelines.panels.yolo.filter_frames_hint": "Quando desligado, o YOLO ainda roda, mas mantém todos os frames no fluxo.",
-    "core.ui.pipelines.panels.yolo.categories": "Categorias",
-    "core.ui.pipelines.panels.yolo.categories_placeholder": "Todas as categorias",
-    "core.ui.pipelines.panels.yolo.categories_hint": "Seleção vazia significa “todas as categorias”.",
+    "core.ui.pipelines.panels.yolo.filter_frames_hint": "Quando desligado, a inferência de visão ainda roda, mas mantém todos os frames no fluxo.",
+    "core.ui.pipelines.panels.yolo.categories": "Objetos de interesse",
+    "core.ui.pipelines.panels.yolo.categories_placeholder": "Tudo o que o modelo suporta",
+    "core.ui.pipelines.panels.yolo.categories_hint":
+      "Deixe em branco para detectar tudo o que o modelo selecionado sabe encontrar.",
+    "core.ui.pipelines.panels.yolo.segmentation_categories_hint":
+      "Deixe em branco para segmentar tudo o que o modelo selecionado sabe separar.",
+    "core.ui.pipelines.panels.yolo.model_id": "Modelo",
+    "core.ui.pipelines.panels.yolo.model_id_hint":
+      "Escolha o modelo de detecção. Esta lista rápida prioriza opções que cabem na máquina selecionada.",
+    "core.ui.pipelines.panels.yolo.segmentation_model_id_hint":
+      "Escolha o modelo de segmentação. Esta lista rápida prioriza opções que cabem na máquina selecionada.",
+    "core.ui.pipelines.panels.yolo.model_shortlist_hint":
+      "RTMDet Tiny é a opção mais leve, Small é o equilíbrio padrão e Medium usa mais máquina para buscar melhor qualidade.",
+    "core.ui.pipelines.panels.yolo.segmentation_model_shortlist_hint":
+      "RTMDet-Ins Tiny é a opção mais leve, Small é o equilíbrio padrão e Medium usa mais máquina para máscaras melhores.",
+    "core.ui.pipelines.panels.yolo.processing_server_hint":
+      "As recomendações abaixo vêm do servidor de processamento '{{serverId}}'.",
+    "core.ui.pipelines.panels.yolo.model_select_placeholder": "Escolha um modelo",
+    "core.ui.pipelines.panels.yolo.model_availability.available": "Disponível nesta máquina",
+    "core.ui.pipelines.panels.yolo.model_availability.manifest_only": "Manifesto importado, artifact ausente",
+    "core.ui.pipelines.panels.yolo.model_availability.incompatible": "Indisponível nesta máquina",
+    "core.ui.pipelines.panels.yolo.model_availability_reason.fallback": "Usando o fallback da shortlist embutida.",
+    "core.ui.pipelines.panels.yolo.model_availability_reason.ok":
+      "Pronto para rodar no servidor de processamento selecionado.",
+    "core.ui.pipelines.panels.yolo.model_availability_reason.artifact_missing":
+      "O manifesto existe, mas o artifact do modelo não está presente nessa máquina.",
+    "core.ui.pipelines.panels.yolo.model_availability_reason.backend_unavailable":
+      "O ONNX Runtime não está disponível nessa máquina.",
+    "core.ui.pipelines.panels.yolo.model_availability_reason.hardware_incompatible":
+      "A máquina/providers não combinam com os perfis de hardware validados deste modelo.",
+    "core.ui.pipelines.panels.yolo.model_availability_reason.runtime_unsupported":
+      "Esse runtime ainda não é suportado pela UI first-party atual.",
+    "core.ui.pipelines.panels.yolo.model_custom_badge": "modelo personalizado",
+    "core.ui.pipelines.panels.yolo.hidden_unavailable_count":
+      "{{count}} modelo(s) foram ocultados porque ainda não estão prontos nesta máquina. Abra os detalhes avançados para revisá-los.",
+    "core.ui.pipelines.panels.yolo.refresh_models": "Atualizar opções",
+    "core.ui.pipelines.panels.yolo.import_manifest": "Adicionar modelo personalizado (avançado)",
+    "core.ui.pipelines.panels.yolo.import_manifest_text": "Descrição do modelo (JSON / YAML)",
+    "core.ui.pipelines.panels.yolo.import_manifest_text_hint":
+      "Cole o arquivo de descrição do modelo e, se necessário, informe abaixo o caminho do arquivo ONNX neste servidor.",
+    "core.ui.pipelines.panels.yolo.import_artifact_path": "Caminho do arquivo ONNX (opcional)",
+    "core.ui.pipelines.panels.yolo.import_artifact_path_hint":
+      "Use um caminho absoluto apenas quando a descrição do modelo não apontar sozinha para o arquivo ONNX correto nessa máquina.",
+    "core.ui.pipelines.panels.yolo.import_replace_existing":
+      "Substituir um modelo personalizado existente com o mesmo identificador",
+    "core.ui.pipelines.panels.yolo.importing_manifest": "Importando…",
+    "core.ui.pipelines.panels.yolo.apply_import_manifest": "Adicionar modelo",
+    "core.ui.pipelines.panels.yolo.import_success": "Importado {{modelId}} (tarefa: {{task}}).",
+    "core.ui.pipelines.panels.yolo.profile_hint": "Perfil de hardware recomendado para esta máquina: {{profile}}.",
+    "core.ui.pipelines.panels.yolo.selected_model_details": "Detalhes avançados do modelo",
+    "core.ui.pipelines.panels.yolo.details_runtime": "Runtime: {{runtime}}",
+    "core.ui.pipelines.panels.yolo.details_input": "Tamanho de entrada: {{width}}x{{height}}",
+    "core.ui.pipelines.panels.yolo.details_classes": "Classes: {{count}} (fonte: {{source}})",
+    "core.ui.pipelines.panels.yolo.details_providers": "Providers compatíveis: {{providers}}",
+    "core.ui.pipelines.panels.yolo.details_license": "Licenças: código {{code}} • pesos {{weights}}",
+    "core.ui.pipelines.panels.yolo.details_commercial": "Status comercial: {{status}}",
+    "core.ui.pipelines.panels.yolo.details_resource": "Faixa estimada de recurso: {{tier}}",
+    "core.ui.pipelines.panels.yolo.details_source_custom": "Origem: modelo personalizado adicionado pelo usuário.",
+    "core.ui.pipelines.panels.yolo.details_source_official": "Origem: modelo first-party embutido.",
+    "core.ui.pipelines.panels.yolo.resource_tier.low": "baixa",
+    "core.ui.pipelines.panels.yolo.resource_tier.balanced": "equilibrada",
+    "core.ui.pipelines.panels.yolo.resource_tier.higher": "mais alta",
+    "core.ui.pipelines.panels.yolo.resource_tier.unknown": "desconhecida",
+    "core.ui.pipelines.panels.yolo.model_rtmdet_tiny_hint":
+      "RTMDet Tiny: opção mais rápida para implantações focadas em CPU e smoke tests rápidos.",
+    "core.ui.pipelines.panels.yolo.model_rtmdet_small_hint":
+      "RTMDet Small: recomendação padrão equilibrada para detecção COCO geral.",
+    "core.ui.pipelines.panels.yolo.model_rtmdet_medium_hint":
+      "RTMDet Medium: opção de melhor qualidade quando você pode gastar mais latência por frame.",
+    "core.ui.pipelines.panels.yolo.model_rtmdet_ins_tiny_hint":
+      "RTMDet-Ins Tiny: caminho mais rápido para máscaras reais em implantações focadas em CPU.",
+    "core.ui.pipelines.panels.yolo.model_rtmdet_ins_small_hint":
+      "RTMDet-Ins Small: padrão equilibrado para segmentação de instâncias nas classes COCO.",
+    "core.ui.pipelines.panels.yolo.model_rtmdet_ins_medium_hint":
+      "RTMDet-Ins Medium: melhor qualidade de máscara quando você pode gastar mais latência por frame.",
+    "core.ui.pipelines.panels.yolo.tracker_id": "Método de rastreamento",
+    "core.ui.pipelines.panels.yolo.tracker_id_hint":
+      "Escolha como o TopoSync mantém o mesmo objeto ligado de um frame para o outro.",
+    "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_label": "Padrão (leve)",
+    "core.ui.pipelines.panels.yolo.tracker_norfair_label": "Mais estável (Norfair)",
+    "core.ui.pipelines.panels.yolo.tracker_simple_iou_kalman_hint":
+      "Melhor padrão para a maioria das câmeras. É mais leve e funciona bem em máquinas focadas em CPU.",
+    "core.ui.pipelines.panels.yolo.tracker_norfair_hint":
+      "Costuma ser mais estável, mas um pouco mais pesado. Use quando o rastreador padrão estiver perdendo objetos com frequência.",
+    "core.ui.pipelines.panels.yolo.track_emit_mode": "Resultado do rastreamento",
+    "core.ui.pipelines.panels.yolo.track_emit_mode.events": "Criar eventos por objeto",
+    "core.ui.pipelines.panels.yolo.track_emit_mode.annotate": "Manter rastros no frame",
+    "core.ui.pipelines.panels.yolo.track_emit_mode_hint":
+      "Crie eventos quando precisar de um lifecycle por objeto. Mantenha rastros no frame quando os passos seguintes devem continuar no stream original.",
+    "core.ui.pipelines.panels.yolo.iou_threshold": "Limiar de IoU",
+    "core.ui.pipelines.panels.yolo.iou_threshold_hint": "Limiar de sobreposição usado pelo pós-processamento específico do backend quando disponível.",
+    "core.ui.pipelines.panels.yolo.inference_interval_detection": "Intervalo de análise (segundos)",
+    "core.ui.pipelines.panels.yolo.inference_interval_hint":
+      "Valores maiores reduzem carga na máquina analisando menos frames. Use 0 para analisar todos.",
+    "core.ui.pipelines.panels.yolo.input_source": "Imagem para analisar",
+    "core.ui.pipelines.panels.yolo.input_source_hint":
+      "Na maioria dos pipelines, mantenha o frame ajustado para que detecção e segmentação sigam o mesmo crop e pré-processamento usados antes.",
+    "core.ui.pipelines.panels.yolo.input_preset.treated_first": "Frame ajustado (recomendado)",
+    "core.ui.pipelines.panels.yolo.input_preset.treated_first_hint":
+      "Usa primeiro a imagem já tratada e só cai para o frame original quando necessário.",
+    "core.ui.pipelines.panels.yolo.input_preset.original_first": "Frame original da câmera",
+    "core.ui.pipelines.panels.yolo.input_preset.original_first_hint":
+      "Prefere a imagem bruta da câmera. Use quando os ajustes a montante estiverem piorando a qualidade para o modelo.",
+    "core.ui.pipelines.panels.yolo.input_preset.best_frame_first": "Melhor frame quando disponível",
+    "core.ui.pipelines.panels.yolo.input_preset.best_frame_first_hint":
+      "Prefere um best frame já selecionado e cai para o frame ajustado, depois para o original.",
+    "core.ui.pipelines.panels.yolo.input_preset.custom_current": "Ordem personalizada avançada: {{value}}",
+    "core.ui.pipelines.panels.yolo.input_with_fallback": "Ordem avançada das imagens",
+    "core.ui.pipelines.panels.yolo.input_with_fallback_hint":
+      "Lista separada por vírgulas de image keys ou artifact names internos. Padrão: treated,original.",
+    "core.ui.pipelines.panels.yolo.detect_annotate_only_hint":
+      "vision.detect mantém os resultados anexados ao frame. Adicione vision.track quando precisar de eventos de ciclo de vida por objeto.",
+    "core.ui.pipelines.panels.yolo.segmentation_input_with_fallback_hint":
+      "Lista separada por vírgulas de image keys ou artifact names internos. Em geral use treated,original para que as máscaras sigam o mesmo frame pré-processado usado a montante.",
+    "core.ui.pipelines.panels.yolo.max_instances_per_frame": "Máximo de instâncias por frame",
+    "core.ui.pipelines.panels.yolo.max_instances_per_frame_hint":
+      "Limite rígido após a segmentação e a conciliação opcional com upstream. Valores menores reduzem pressão de artifacts/armazenamento.",
+    "core.ui.pipelines.panels.yolo.attach_mask_artifacts": "Anexar artifacts de máscara",
+    "core.ui.pipelines.panels.yolo.attach_mask_artifacts_hint":
+      "Cria um artifact binário bruto por instância selecionada e expõe o principal como a image key semântica 'mask'.",
+    "core.ui.pipelines.panels.yolo.attach_polygons": "Anexar polígonos",
+    "core.ui.pipelines.panels.yolo.attach_polygons_hint":
+      "Adiciona um contorno poligonal normalizado por instância quando possível. Deixe desligado se você só precisa da máscara binária.",
     "core.ui.pipelines.panels.yolo.update_interval_tracking": "Intervalo de update (segundos)",
     "core.ui.pipelines.panels.yolo.update_interval_detection": "Intervalo de evento (segundos)",
     "core.ui.pipelines.panels.yolo.update_interval_hint":
@@ -1861,11 +2125,17 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.close_after_seconds": "Fechar após (segundos)",
     "core.ui.pipelines.panels.yolo.close_after_hint":
       "Fecha um track se o objeto não for visto por esse tempo (maior = mais estável, fecha mais devagar).",
+    "core.ui.pipelines.panels.yolo.pause_when_gate_closed": "Pausar quando o motion gate estiver fechado",
+    "core.ui.pipelines.panels.yolo.pause_when_gate_closed_hint":
+      "Para de avançar os trackers enquanto o motion gate a montante estiver fechado, reduzindo closes falsos e updates desnecessários.",
+    "core.ui.pipelines.panels.yolo.use_world_anchor": "Usar âncora world quando disponível",
+    "core.ui.pipelines.panels.yolo.use_world_anchor_hint":
+      "Reservado para futura fusão multi-câmera. Pode ficar desabilitado nos pipelines atuais.",
 
     "core.ui.processing_servers.title": "Servidores de processamento",
     "core.ui.processing_servers.add_server": "Adicionar servidor",
     "core.ui.processing_servers.description":
-      "Configure servidores de processamento remotos para executar operadores pesados (YOLO). Armazenamento e notificações continuam na origem.",
+      "Configure servidores de processamento remotos para executar operadores pesados (vision). Armazenamento e notificações continuam na origem.",
     "core.ui.processing_servers.none": "Nenhum servidor de processamento configurado.",
     "core.ui.processing_servers.built_in": "(integrado)",
     "core.ui.processing_servers.status.testing": "testando…",
@@ -1875,6 +2145,20 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.processing_servers.actions.edit_server": "Editar servidor",
     "core.ui.processing_servers.actions.delete_server": "Excluir servidor",
     "core.ui.processing_servers.confirm_delete": "Excluir servidor de processamento '{{id}}'?",
+    "core.ui.processing_servers.vision_recommendations.title": "Recomendação de detecção:",
+    "core.ui.processing_servers.vision_recommendations.profile": "perfil {{profile}}",
+    "core.ui.processing_servers.vision_recommendations.installed": "instalado",
+    "core.ui.processing_servers.vision_recommendations.manifest_only": "somente manifesto",
+    "core.ui.processing_servers.vision_recommendations.badge.recommended": "recomendado",
+    "core.ui.processing_servers.vision_recommendations.badge.fastest": "mais rápido",
+    "core.ui.processing_servers.vision_recommendations.badge.best_quality": "melhor qualidade",
+    "core.ui.processing_servers.vision_recommendations.badge.edge": "edge / baixo consumo",
+    "core.ui.processing_servers.vision_recommendations.profile_label.cpu_low": "CPU leve",
+    "core.ui.processing_servers.vision_recommendations.profile_label.cpu_balanced": "CPU equilibrado",
+    "core.ui.processing_servers.vision_recommendations.profile_label.cuda_low": "CUDA leve",
+    "core.ui.processing_servers.vision_recommendations.profile_label.cuda_balanced": "CUDA equilibrado",
+    "core.ui.processing_servers.vision_recommendations.profile_label.cuda_quality": "CUDA qualidade",
+    "core.ui.processing_servers.vision_recommendations.profile_label.openvino_balanced": "OpenVINO equilibrado",
 
     "core.ui.processing_server_modal.title_add": "Adicionar servidor de processamento",
     "core.ui.processing_server_modal.title_edit": "Editar servidor de processamento",

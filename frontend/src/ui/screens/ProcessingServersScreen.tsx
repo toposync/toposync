@@ -52,7 +52,7 @@ function buildDiagnosticsSummary(status: Record<string, unknown> | undefined): s
   const torchVersion = String(torch?.torch_version || "").trim();
   if (torchVersion) parts.push(`torch ${torchVersion}`);
 
-  const trackers = vision && Array.isArray(vision.yolo_trackers) ? vision.yolo_trackers : [];
+  const trackers = vision && Array.isArray(vision.trackers_available) ? vision.trackers_available : [];
   const trackerDevices = new Set<string>();
   for (const raw of trackers) {
     if (!isRecord(raw)) continue;
@@ -63,7 +63,7 @@ function buildDiagnosticsSummary(status: Record<string, unknown> | undefined): s
   }
   const recommendedDevice = String(yoloRecommended?.device || "").trim();
   const deviceLabel = trackerDevices.size ? Array.from(trackerDevices).join(", ") : recommendedDevice;
-  if (deviceLabel) parts.push(`YOLO ${deviceLabel}`);
+  if (deviceLabel) parts.push(`Vision ${deviceLabel}`);
 
   const cudaDevices = torch && Array.isArray(torch.cuda_devices) ? (torch.cuda_devices as any[]) : [];
   if (cudaDevices.length) {
@@ -86,6 +86,33 @@ function buildDiagnosticsSummary(status: Record<string, unknown> | undefined): s
   return parts.length ? parts.join(" • ") : null;
 }
 
+function readVisionDetectionRecommendation(status: Record<string, unknown> | undefined): {
+  profile: string;
+  items: Array<{ modelId: string; displayName: string; badgeIds: string[]; artifactExists: boolean }>;
+} | null {
+  if (!status || !isRecord(status)) return null;
+  const vision = isRecord(status.vision) ? status.vision : null;
+  const recommendations = vision && isRecord(vision.recommendations) ? vision.recommendations : null;
+  const detection = recommendations && isRecord(recommendations.detection) ? recommendations.detection : null;
+  const itemsRaw = detection && Array.isArray(detection.items) ? detection.items : [];
+  const items = itemsRaw
+    .map((raw) => {
+      if (!isRecord(raw)) return null;
+      return {
+        modelId: String(raw.model_id || "").trim(),
+        displayName: String(raw.display_name || raw.model_id || "").trim(),
+        badgeIds: Array.isArray(raw.badge_ids) ? raw.badge_ids.map((value) => String(value || "").trim()).filter(Boolean) : [],
+        artifactExists: !!raw.artifact_exists,
+      };
+    })
+    .filter((item): item is { modelId: string; displayName: string; badgeIds: string[]; artifactExists: boolean } => !!item && !!item.modelId);
+  if (!items.length) return null;
+  return {
+    profile: String(detection?.profile || "").trim(),
+    items,
+  };
+}
+
 function sortServers(list: ProcessingServer[]): ProcessingServer[] {
   const local = list.find((s) => s.id === "local") ?? null;
   const rest = list.filter((s) => s.id !== "local").sort((a, b) => a.id.localeCompare(b.id));
@@ -101,6 +128,16 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
   const [serverModalTarget, setServerModalTarget] = useState<ProcessingServer | null>(null);
   const [serverStatusById, setServerStatusById] = useState<Record<string, ProcessingServerStatus>>({});
   const [serverTestingById, setServerTestingById] = useState<Record<string, boolean>>({});
+
+  const renderRecommendationBadge = useCallback(
+    (badgeId: string): string => {
+      const clean = String(badgeId || "").trim();
+      if (!clean) return "";
+      const key = `core.ui.processing_servers.vision_recommendations.badge.${clean}`;
+      return t(key, {}, clean);
+    },
+    [t],
+  );
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -204,6 +241,7 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
               const statusTitle =
                 testing ? t("core.ui.processing_servers.status.testing") : probe && !probe.ok ? String(probe.error || "") : "";
               const diagnosticsLine = probe && probe.ok ? buildDiagnosticsSummary(probe.status) : null;
+              const visionRecommendation = probe && probe.ok ? readVisionDetectionRecommendation(probe.status) : null;
               return (
                 <div key={server.id} className={["pipelinesServerRow", server.id === "local" ? "isBuiltIn" : ""].filter(Boolean).join(" ")}>
                   <button
@@ -230,6 +268,34 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
                         {diagnosticsLine}
                       </div>
                     ) : null}
+                    {visionRecommendation ? (
+                      <div className="pipelinesServerMeta pipelinesServerMetaDiag">
+                        {t("core.ui.processing_servers.vision_recommendations.title")}{" "}
+                        {t("core.ui.processing_servers.vision_recommendations.profile", {
+                          profile: t(
+                            `core.ui.processing_servers.vision_recommendations.profile_label.${visionRecommendation.profile}`,
+                            {},
+                            visionRecommendation.profile,
+                          ),
+                        })}
+                      </div>
+                    ) : null}
+                    {visionRecommendation
+                      ? visionRecommendation.items.slice(0, 3).map((item) => {
+                          const badges = item.badgeIds.map(renderRecommendationBadge).filter(Boolean);
+                          const suffix = badges.length ? ` • ${badges.join(" • ")}` : "";
+                          const installedSuffix = item.artifactExists
+                            ? ` • ${t("core.ui.processing_servers.vision_recommendations.installed")}`
+                            : ` • ${t("core.ui.processing_servers.vision_recommendations.manifest_only")}`;
+                          return (
+                            <div key={item.modelId} className="pipelinesServerMeta pipelinesServerMetaDiag">
+                              {item.displayName}
+                              {suffix}
+                              {installedSuffix}
+                            </div>
+                          );
+                        })
+                      : null}
                   </button>
 
                   <button

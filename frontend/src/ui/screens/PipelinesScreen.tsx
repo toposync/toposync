@@ -842,6 +842,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                       operatorsById={operatorsById}
                       camerasIndex={camerasIndex}
                       pipelineName={draft?.name ?? null}
+                      processingServerId={draft?.processing_server_id ?? "local"}
                       stepOutputsByNodeId={stepOutputsByNodeId}
                       interactiveSteps={interactiveSteps}
                       setInteractiveSteps={setInteractiveSteps}

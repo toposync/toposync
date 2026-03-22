@@ -206,9 +206,18 @@ def build_pipeline_from_legacy_camera_rule(rule: LegacyCameraRule, *, existing_n
                 "config": {},
             },
             {
+                "id": "detect",
+                "operator": "vision.detect",
+                "config": {
+                    "model_id": "rtmdet_det_small",
+                    "categories": categories,
+                    "emit_mode": "annotate",
+                },
+            },
+            {
                 "id": "track",
-                "operator": "vision.object_tracking_yolo",
-                "config": {"categories": categories},
+                "operator": "vision.track",
+                "config": {"tracker_id": "simple_iou_kalman"},
             },
             {
                 "id": "best",
@@ -247,6 +256,12 @@ def build_pipeline_from_legacy_camera_rule(rule: LegacyCameraRule, *, existing_n
             },
             {
                 "from": {"node": "motion", "port": "out"},
+                "to": {"node": "detect", "port": "in"},
+                "maxsize": 2,
+                "drop_policy": "drop_oldest",
+            },
+            {
+                "from": {"node": "detect", "port": "out"},
                 "to": {"node": "track", "port": "in"},
                 "maxsize": 2,
                 "drop_policy": "drop_oldest",

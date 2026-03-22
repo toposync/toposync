@@ -138,7 +138,7 @@ def test_camera_extension_operators_are_registered_with_runtime_factories() -> N
         "camera.motion_bgsub_adaptive",
         "camera.motion_gate",
         "camera.motion_sample_bg",
-        "camera.object_segmentation",
+        "camera.object_crop",
         "camera.image_crop",
         "camera.image_adjust",
         "camera.image_resize",
@@ -146,8 +146,8 @@ def test_camera_extension_operators_are_registered_with_runtime_factories() -> N
         "camera.area_restriction",
         "camera.velocity_estimation",
         "camera.best_frame_selector",
-        "vision.object_tracking_yolo",
-        "vision.object_detection_yolo",
+        "vision.track",
+        "vision.detect",
     }
     registered_ids = {definition.id for definition in registry.list_operators()}
     assert required_ids.issubset(registered_ids)

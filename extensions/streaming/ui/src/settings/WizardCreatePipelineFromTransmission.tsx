@@ -455,7 +455,7 @@ export function WizardCreatePipelineFromTransmission({
                   <input className="input" value={motionHoldSeconds} onChange={(event) => setMotionHoldSeconds(event.target.value)} />
                 </div>
                 <div className="field" style={{ width: 180 }}>
-                  <label className="label">{t("ext.streaming.wizard.yolo_conf", {}, "YOLO confidence")}</label>
+                  <label className="label">{t("ext.streaming.wizard.yolo_conf", {}, "Vision confidence")}</label>
                   <input className="input" value={yoloConfidenceThreshold} onChange={(event) => setYoloConfidenceThreshold(event.target.value)} />
                 </div>
               </div>
@@ -468,14 +468,14 @@ export function WizardCreatePipelineFromTransmission({
                     onChange={(event) => setYoloFilterEnabled(event.target.checked)}
                   />
                   <span className="cardMeta">
-                    {t("ext.streaming.wizard.yolo_filter_enabled", {}, "Filter frames with YOLO (recommended)")}
+                    {t("ext.streaming.wizard.yolo_filter_enabled", {}, "Filter frames after vision (recommended)")}
                   </span>
                 </label>
                 <div className="cardMeta" style={{ marginLeft: 28 }}>
                   {t(
                     "ext.streaming.wizard.yolo_filter_enabled.hint",
                     {},
-                    "When disabled, the pipeline still runs YOLO but keeps all frames.",
+                    "When disabled, the pipeline still runs vision inference but keeps all frames.",
                   )}
                 </div>
               </div>

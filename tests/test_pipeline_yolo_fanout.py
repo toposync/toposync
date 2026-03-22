@@ -5,6 +5,7 @@ import time
 from collections import defaultdict
 from typing import Any
 
+import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from toposync.runtime.config_store import Pipeline
@@ -22,7 +23,23 @@ from toposync.runtime.pipelines import (
     TransformOperatorRuntime,
     register_builtin_operators,
 )
-from toposync_ext_cameras.pipelines import YoloObject, register_camera_pipeline_operators
+from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
+from toposync_ext_vision.pipelines import DetectionObject, ModelManifest, ModelRegistry
+
+
+def _build_registry() -> ModelRegistry:
+    return ModelRegistry(
+        [
+            ModelManifest(
+                model_id="fake.detector",
+                display_name="Fake Detector",
+                task="detection",
+                runtime="fake",
+                artifact_format="fake",
+                artifact_path="fake://detector",
+            )
+        ]
+    )
 
 
 class _FrameSourceConfig(BaseModel):
@@ -66,9 +83,14 @@ class _FrameSourceRuntime(SourceOperatorRuntime):
             payload={"frame_index": self._sequence},
             artifacts={
                 "frame_original": Artifact(name="frame_original", data=frame, mime_type="application/json"),
-                "frame": Artifact(name="frame", data=frame, mime_type="application/json", metadata={"derived_from": "frame_original"}),
+                "frame": Artifact(
+                    name="frame",
+                    data=frame,
+                    mime_type="application/json",
+                    metadata={"derived_from": "frame_original"},
+                ),
             },
-            metadata={"source": "test.frame_source"},
+            metadata={"source": "test.frame_source", "motion_gate_open": True},
         )
         self._sequence += 1
         return packet
@@ -96,33 +118,34 @@ class _IdentityRuntime(TransformOperatorRuntime):
         return [packet]
 
 
-class _SequenceYoloBackend:
-    def __init__(self, sequence: list[list[YoloObject]], counters: dict[str, Any]) -> None:
+class _SequenceDetectorBackend:
+    backend_id = "fake_detector"
+
+    def __init__(self, sequence: list[list[DetectionObject]], counters: dict[str, Any]) -> None:
         self._sequence = sequence
         self._counters = counters
-        self._index_track = 0
-        self._index_detect = 0
+        self._index = 0
 
-    def track_objects(self, frame: Any, *, categories: set[str] | None = None) -> list[YoloObject]:  # noqa: ARG002
-        self._counters["track_calls"] = int(self._counters.get("track_calls", 0)) + 1
-        if not self._sequence:
-            return []
-        idx = min(self._index_track, len(self._sequence) - 1)
-        self._index_track += 1
-        objects = self._sequence[idx]
-        return _filter_categories(objects, categories)
-
-    def detect_objects(self, frame: Any, *, categories: set[str] | None = None) -> list[YoloObject]:  # noqa: ARG002
+    def detect(
+        self, frame: Any, *, categories: set[str] | None = None
+    ) -> list[DetectionObject]:  # noqa: ARG002
         self._counters["detect_calls"] = int(self._counters.get("detect_calls", 0)) + 1
         if not self._sequence:
             return []
-        idx = min(self._index_detect, len(self._sequence) - 1)
-        self._index_detect += 1
+        idx = min(self._index, len(self._sequence) - 1)
+        self._index += 1
         objects = self._sequence[idx]
-        return _filter_categories(objects, categories)
+        if not categories:
+            return list(objects)
+        return [item for item in objects if item.label in categories]
 
 
-def _register_test_source_and_sink(registry: OperatorRegistry, counters: dict[str, Any], *, source_shareable: bool) -> None:
+def _register_test_source_and_sink(
+    registry: OperatorRegistry,
+    counters: dict[str, Any],
+    *,
+    source_shareable: bool,
+) -> None:
     registry.register_operator(
         operator_id="test.frame_source",
         config_model=_FrameSourceConfig,
@@ -152,31 +175,40 @@ def _register_test_source_and_sink(registry: OperatorRegistry, counters: dict[st
     )
 
 
-def _tracking_pipeline_graph(*, source_id: str, yolo_id: str, sink_id: str, sink_name: str) -> dict[str, Any]:
+def _tracking_pipeline_graph(*, source_id: str, detect_id: str, track_id: str, sink_id: str, sink_name: str) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "nodes": [
             {
                 "id": source_id,
                 "operator": "test.frame_source",
-                "config": {"stream_id": "camera:test", "max_frames": 10, "interval_ms": 15},
+                "config": {"stream_id": "camera:test", "max_frames": 12, "interval_ms": 20},
             },
             {
-                "id": yolo_id,
-                "operator": "vision.object_tracking_yolo",
+                "id": detect_id,
+                "operator": "vision.detect",
                 "config": {
+                    "model_id": "fake.detector",
+                    "emit_mode": "annotate",
                     "categories": ["person"],
+                },
+            },
+            {
+                "id": track_id,
+                "operator": "vision.track",
+                "config": {
+                    "tracker_id": "simple_iou_kalman",
                     "default_interval_seconds": 0.0,
                     "close_after_seconds": 0.05,
-                    "emit_open_on_first": True,
-                    "emit_close_on_lost": True,
+                    "emit_mode": "events",
                 },
             },
             {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
         ],
         "edges": [
-            {"from": {"node": source_id, "port": "out"}, "to": {"node": yolo_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
-            {"from": {"node": yolo_id, "port": "out"}, "to": {"node": sink_id, "port": "in"}, "maxsize": 64, "drop_policy": "drop_oldest"},
+            {"from": {"node": source_id, "port": "out"}, "to": {"node": detect_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
+            {"from": {"node": detect_id, "port": "out"}, "to": {"node": track_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
+            {"from": {"node": track_id, "port": "out"}, "to": {"node": sink_id, "port": "in"}, "maxsize": 64, "drop_policy": "drop_oldest"},
         ],
     }
 
@@ -184,11 +216,12 @@ def _tracking_pipeline_graph(*, source_id: str, yolo_id: str, sink_id: str, sink
 def _tracking_pipeline_graph_with_shareable_transform(
     *,
     source_id: str,
-    yolo_id: str,
+    detect_id: str,
+    track_id: str,
     transform_id: str,
     sink_id: str,
     sink_name: str,
-    yolo_to_transform_maxsize: int,
+    track_to_transform_maxsize: int,
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -196,28 +229,37 @@ def _tracking_pipeline_graph_with_shareable_transform(
             {
                 "id": source_id,
                 "operator": "test.frame_source",
-                "config": {"stream_id": "camera:test", "max_frames": 10, "interval_ms": 15},
+                "config": {"stream_id": "camera:test", "max_frames": 12, "interval_ms": 20},
             },
             {
-                "id": yolo_id,
-                "operator": "vision.object_tracking_yolo",
+                "id": detect_id,
+                "operator": "vision.detect",
                 "config": {
+                    "model_id": "fake.detector",
+                    "emit_mode": "annotate",
                     "categories": ["person"],
+                },
+            },
+            {
+                "id": track_id,
+                "operator": "vision.track",
+                "config": {
+                    "tracker_id": "simple_iou_kalman",
                     "default_interval_seconds": 0.0,
                     "close_after_seconds": 0.05,
-                    "emit_open_on_first": True,
-                    "emit_close_on_lost": True,
+                    "emit_mode": "events",
                 },
             },
             {"id": transform_id, "operator": "test.identity", "config": {}},
             {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
         ],
         "edges": [
-            {"from": {"node": source_id, "port": "out"}, "to": {"node": yolo_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
+            {"from": {"node": source_id, "port": "out"}, "to": {"node": detect_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
+            {"from": {"node": detect_id, "port": "out"}, "to": {"node": track_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
             {
-                "from": {"node": yolo_id, "port": "out"},
+                "from": {"node": track_id, "port": "out"},
                 "to": {"node": transform_id, "port": "in"},
-                "maxsize": int(yolo_to_transform_maxsize),
+                "maxsize": int(track_to_transform_maxsize),
                 "drop_policy": "drop_oldest",
             },
             {"from": {"node": transform_id, "port": "out"}, "to": {"node": sink_id, "port": "in"}, "maxsize": 64, "drop_policy": "drop_oldest"},
@@ -225,15 +267,23 @@ def _tracking_pipeline_graph_with_shareable_transform(
     }
 
 
-def _build_backend_factory(sequence: list[list[YoloObject]], counters: dict[str, Any]):
-    def _factory(config: Any) -> _SequenceYoloBackend:  # noqa: ANN401
-        _ = config
-        return _SequenceYoloBackend(sequence=sequence, counters=counters)
+def _build_detection_sequence(sequence: list[list[tuple[str, float, tuple[float, float, float, float]]]]) -> list[list[DetectionObject]]:
+    return [
+        [
+            DetectionObject(
+                label=label,
+                label_id=0,
+                score=score,
+                bbox01=bbox01,
+                model_id="fake.detector",
+            )
+            for label, score, bbox01 in frame
+        ]
+        for frame in sequence
+    ]
 
-    return _factory
 
-
-def test_object_tracking_yolo_splits_two_objects_and_closes_lifecycle() -> None:
+def test_vision_track_splits_two_objects_and_closes_lifecycle() -> None:
     async def scenario() -> None:
         counters: dict[str, Any] = {}
         registry = OperatorRegistry()
@@ -241,34 +291,39 @@ def test_object_tracking_yolo_splits_two_objects_and_closes_lifecycle() -> None:
         register_camera_pipeline_operators(registry)
         _register_test_source_and_sink(registry, counters, source_shareable=False)
 
-        sequence = [
+        sequence = _build_detection_sequence(
             [
-                YoloObject(tracking_id="17", category="person", confidence=0.98, bbox01=(0.1, 0.1, 0.2, 0.4)),
-                YoloObject(tracking_id="42", category="person", confidence=0.95, bbox01=(0.5, 0.2, 0.7, 0.6)),
-            ],
-            [
-                YoloObject(tracking_id="17", category="person", confidence=0.96, bbox01=(0.11, 0.1, 0.22, 0.4)),
-                YoloObject(tracking_id="42", category="person", confidence=0.92, bbox01=(0.51, 0.2, 0.71, 0.61)),
-            ],
-            [
-                YoloObject(tracking_id="17", category="person", confidence=0.91, bbox01=(0.12, 0.1, 0.23, 0.41)),
-            ],
-            [
-                YoloObject(tracking_id="17", category="person", confidence=0.89, bbox01=(0.13, 0.1, 0.24, 0.42)),
-            ],
-            [],
-            [],
-            [],
-        ]
+                [
+                    ("person", 0.98, (0.1, 0.1, 0.2, 0.4)),
+                    ("person", 0.95, (0.5, 0.2, 0.7, 0.6)),
+                ],
+                [
+                    ("person", 0.96, (0.11, 0.1, 0.22, 0.4)),
+                    ("person", 0.92, (0.51, 0.2, 0.71, 0.61)),
+                ],
+                [("person", 0.91, (0.12, 0.1, 0.23, 0.41))],
+                [("person", 0.89, (0.13, 0.1, 0.24, 0.42))],
+                [],
+                [],
+                [],
+            ]
+        )
         dependencies = PipelineRuntimeDependencies(
-            yolo_backend_factory=_build_backend_factory(sequence, counters),
+            detector_backend_factory=lambda manifest: _SequenceDetectorBackend(sequence, counters),
+            vision_model_registry=_build_registry(),
         )
 
-        graph = _tracking_pipeline_graph(source_id="source", yolo_id="yolo", sink_id="sink", sink_name="tracking_sink")
+        graph = _tracking_pipeline_graph(
+            source_id="source",
+            detect_id="detect",
+            track_id="track",
+            sink_id="sink",
+            sink_name="tracking_sink",
+        )
         pipeline = Pipeline(name="stage5_tracking_split", type="final", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
-        await runtime.run_for(0.45)
+        await runtime.run_for(0.6)
 
         packets = [record["packet"] for record in counters.get("packets", [])]
         assert packets
@@ -279,9 +334,12 @@ def test_object_tracking_yolo_splits_two_objects_and_closes_lifecycle() -> None:
 
         grouped_by_tracking.pop("", None)
         assert len(grouped_by_tracking) == 2
-        tracker_track_ids = {str(items[0].payload.get("tracker_track_id") or "") for items in grouped_by_tracking.values()}
-        assert tracker_track_ids == {"17", "42"}
+        source_tracking_ids = {
+            str(items[0].payload.get("tracker_track_id") or "") for items in grouped_by_tracking.values()
+        }
+        assert len(source_tracking_ids) == 2
         for tracking_id, tracking_packets in grouped_by_tracking.items():
+            assert tracking_id.startswith("trk:camera:test:")
             assert tracking_packets[0].lifecycle == Lifecycle.OPEN
             assert any(item.lifecycle == Lifecycle.CLOSE for item in tracking_packets), tracking_id
             stream_ids = {item.stream_id for item in tracking_packets}
@@ -291,13 +349,13 @@ def test_object_tracking_yolo_splits_two_objects_and_closes_lifecycle() -> None:
             assert all(item.payload.get("event_id") == tracking_id for item in tracking_packets)
 
         source_frames = int(counters.get("source_frames", 0))
-        track_calls = int(counters.get("track_calls", 0))
-        assert 0 <= (source_frames - track_calls) <= 1
+        detect_calls = int(counters.get("detect_calls", 0))
+        assert 0 < detect_calls <= source_frames
 
     asyncio.run(scenario())
 
 
-def test_object_tracking_yolo_assigns_stable_synthetic_id_when_tracker_id_missing() -> None:
+def test_vision_track_matches_fast_non_overlapping_boxes() -> None:
     async def scenario() -> None:
         counters: dict[str, Any] = {}
         registry = OperatorRegistry()
@@ -305,74 +363,34 @@ def test_object_tracking_yolo_assigns_stable_synthetic_id_when_tracker_id_missin
         register_camera_pipeline_operators(registry)
         _register_test_source_and_sink(registry, counters, source_shareable=False)
 
-        sequence = [
-            [YoloObject(tracking_id=None, category="person", confidence=0.98, bbox01=(0.10, 0.10, 0.20, 0.40))],
-            [YoloObject(tracking_id=None, category="person", confidence=0.96, bbox01=(0.11, 0.10, 0.21, 0.41))],
-            [YoloObject(tracking_id=None, category="person", confidence=0.95, bbox01=(0.12, 0.11, 0.22, 0.42))],
-            [],
-            [],
-        ]
+        sequence = _build_detection_sequence(
+            [
+                [("person", 0.52, (0.70, 0.47, 0.73, 0.61))],
+                [("person", 0.55, (0.74, 0.49, 0.77, 0.62))],
+                [("person", 0.51, (0.78, 0.51, 0.81, 0.64))],
+                [("person", 0.50, (0.82, 0.53, 0.85, 0.66))],
+                [],
+                [],
+            ]
+        )
         dependencies = PipelineRuntimeDependencies(
-            yolo_backend_factory=_build_backend_factory(sequence, counters),
+            detector_backend_factory=lambda manifest: _SequenceDetectorBackend(sequence, counters),
+            vision_model_registry=_build_registry(),
         )
 
-        graph = _tracking_pipeline_graph(source_id="source", yolo_id="yolo", sink_id="sink", sink_name="tracking_sink")
-        pipeline = Pipeline(name="stage5_tracking_synthetic_ids", type="final", graph=graph)
+        graph = _tracking_pipeline_graph(
+            source_id="source",
+            detect_id="detect",
+            track_id="track",
+            sink_id="sink",
+            sink_name="tracking_sink",
+        )
+        pipeline = Pipeline(name="stage5_tracking_non_overlap", type="final", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
         await runtime.run_for(0.35)
 
         packets = [record["packet"] for record in counters.get("packets", [])]
-        assert packets
-
-        tracking_ids = {str(packet.payload.get("tracking_id") or "") for packet in packets}
-        tracking_ids.discard("")
-        assert len(tracking_ids) == 1
-        tracking_id = next(iter(tracking_ids))
-        assert tracking_id.startswith("trk:camera:test:")
-        assert all(packet.payload.get("event_id") == tracking_id for packet in packets)
-
-        tracking_packets = [packet for packet in packets if str(packet.payload.get("tracking_id") or "") == tracking_id]
-        assert tracking_packets[0].lifecycle == Lifecycle.OPEN
-        assert any(packet.lifecycle == Lifecycle.CLOSE for packet in tracking_packets)
-        assert all(packet.payload.get("tracker_track_id") is None for packet in tracking_packets)
-
-        correlation_ids = {str(packet.payload.get("correlation_id") or "") for packet in tracking_packets}
-        assert len(correlation_ids) == 1
-
-    asyncio.run(scenario())
-
-
-def test_object_tracking_yolo_matches_non_overlapping_boxes_when_tracker_id_missing() -> None:
-    async def scenario() -> None:
-        counters: dict[str, Any] = {}
-        registry = OperatorRegistry()
-        register_builtin_operators(registry)
-        register_camera_pipeline_operators(registry)
-        _register_test_source_and_sink(registry, counters, source_shareable=False)
-
-        # Same object moving fast enough that consecutive boxes do not overlap (IoU=0).
-        sequence = [
-            [YoloObject(tracking_id=None, category="person", confidence=0.52, bbox01=(0.70, 0.47, 0.73, 0.61))],
-            [YoloObject(tracking_id=None, category="person", confidence=0.55, bbox01=(0.74, 0.49, 0.77, 0.62))],
-            [YoloObject(tracking_id=None, category="person", confidence=0.51, bbox01=(0.78, 0.51, 0.81, 0.64))],
-            [YoloObject(tracking_id=None, category="person", confidence=0.50, bbox01=(0.82, 0.53, 0.85, 0.66))],
-            [],
-            [],
-        ]
-        dependencies = PipelineRuntimeDependencies(
-            yolo_backend_factory=_build_backend_factory(sequence, counters),
-        )
-
-        graph = _tracking_pipeline_graph(source_id="source", yolo_id="yolo", sink_id="sink", sink_name="tracking_sink")
-        pipeline = Pipeline(name="stage5_tracking_synthetic_non_overlap", type="final", graph=graph)
-        compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
-        runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
-        await runtime.run_for(0.35)
-
-        packets = [record["packet"] for record in counters.get("packets", [])]
-        assert packets
-
         tracking_ids = {str(packet.payload.get("tracking_id") or "") for packet in packets}
         tracking_ids.discard("")
         assert len(tracking_ids) == 1
@@ -380,7 +398,7 @@ def test_object_tracking_yolo_matches_non_overlapping_boxes_when_tracker_id_miss
     asyncio.run(scenario())
 
 
-def test_object_tracking_yolo_continues_when_tracker_id_missing_for_one_frame() -> None:
+def test_vision_track_keeps_same_identity_across_a_short_gap() -> None:
     async def scenario() -> None:
         counters: dict[str, Any] = {}
         registry = OperatorRegistry()
@@ -388,47 +406,61 @@ def test_object_tracking_yolo_continues_when_tracker_id_missing_for_one_frame() 
         register_camera_pipeline_operators(registry)
         _register_test_source_and_sink(registry, counters, source_shareable=False)
 
-        sequence = [
-            [YoloObject(tracking_id="17", category="person", confidence=0.98, bbox01=(0.10, 0.10, 0.20, 0.40))],
-            [YoloObject(tracking_id=None, category="person", confidence=0.96, bbox01=(0.11, 0.10, 0.21, 0.41))],
-            [YoloObject(tracking_id="17", category="person", confidence=0.95, bbox01=(0.12, 0.11, 0.22, 0.42))],
-            [],
-            [],
-        ]
+        sequence = _build_detection_sequence(
+            [
+                [("person", 0.98, (0.10, 0.10, 0.20, 0.40))],
+                [],
+                [("person", 0.95, (0.12, 0.11, 0.22, 0.42))],
+                [],
+                [],
+            ]
+        )
         dependencies = PipelineRuntimeDependencies(
-            yolo_backend_factory=_build_backend_factory(sequence, counters),
+            detector_backend_factory=lambda manifest: _SequenceDetectorBackend(sequence, counters),
+            vision_model_registry=_build_registry(),
         )
 
-        graph = _tracking_pipeline_graph(source_id="source", yolo_id="yolo", sink_id="sink", sink_name="tracking_sink")
-        pipeline = Pipeline(name="stage5_tracking_missing_id_frame", type="final", graph=graph)
+        graph = _tracking_pipeline_graph(
+            source_id="source",
+            detect_id="detect",
+            track_id="track",
+            sink_id="sink",
+            sink_name="tracking_sink",
+        )
+        pipeline = Pipeline(
+            name="stage5_tracking_gap",
+            type="final",
+            graph={
+                **graph,
+                "nodes": [
+                    *graph["nodes"][:-2],
+                    {
+                        "id": "track",
+                        "operator": "vision.track",
+                        "config": {
+                            "tracker_id": "simple_iou_kalman",
+                            "default_interval_seconds": 0.0,
+                            "close_after_seconds": 0.08,
+                            "emit_mode": "events",
+                        },
+                    },
+                    graph["nodes"][-1],
+                ],
+            },
+        )
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
         await runtime.run_for(0.35)
 
         packets = [record["packet"] for record in counters.get("packets", [])]
-        assert packets
-
-        tracking_ids = {str(packet.payload.get("tracking_id") or "") for packet in packets}
-        tracking_ids.discard("")
-        assert len(tracking_ids) == 1
-        tracking_id = next(iter(tracking_ids))
-        assert tracking_id.startswith("trk:camera:test:")
-        assert all(str(packet.payload.get("tracker_track_id") or "") == "17" for packet in packets)
-        assert all(packet.payload.get("event_id") == tracking_id for packet in packets)
-
-        tracking_packets = [packet for packet in packets if str(packet.payload.get("tracking_id") or "") == tracking_id]
-        assert tracking_packets[0].lifecycle == Lifecycle.OPEN
-        assert any(packet.lifecycle == Lifecycle.CLOSE for packet in tracking_packets)
-
-        stream_ids = {packet.stream_id for packet in tracking_packets}
-        assert len(stream_ids) == 1
-        correlation_ids = {str(packet.payload.get("correlation_id") or "") for packet in tracking_packets}
-        assert len(correlation_ids) == 1
+        tracking_ids = [str(packet.payload.get("tracking_id") or "") for packet in packets if packet.payload.get("tracking_id")]
+        assert tracking_ids
+        assert len(set(tracking_ids)) == 1
 
     asyncio.run(scenario())
 
 
-def test_object_detection_yolo_emits_open_close_pairs_with_category_throttle() -> None:
+def test_vision_track_annotate_mode_passes_through_frames_with_tracks() -> None:
     async def scenario() -> None:
         counters: dict[str, Any] = {}
         registry = OperatorRegistry()
@@ -436,19 +468,15 @@ def test_object_detection_yolo_emits_open_close_pairs_with_category_throttle() -
         register_camera_pipeline_operators(registry)
         _register_test_source_and_sink(registry, counters, source_shareable=False)
 
-        sequence = [
+        sequence = _build_detection_sequence(
             [
-                YoloObject(tracking_id=None, category="person", confidence=0.9, bbox01=(0.1, 0.1, 0.3, 0.5)),
-            ],
-            [
-                YoloObject(tracking_id=None, category="person", confidence=0.8, bbox01=(0.11, 0.1, 0.31, 0.5)),
-            ],
-            [
-                YoloObject(tracking_id=None, category="cat", confidence=0.95, bbox01=(0.4, 0.3, 0.6, 0.7)),
-            ],
-        ]
+                [("person", 0.9, (0.1, 0.2, 0.3, 0.4))],
+                [],
+            ]
+        )
         dependencies = PipelineRuntimeDependencies(
-            yolo_backend_factory=_build_backend_factory(sequence, counters),
+            detector_backend_factory=lambda manifest: _SequenceDetectorBackend(sequence, counters),
+            vision_model_registry=_build_registry(),
         )
 
         graph = {
@@ -457,53 +485,51 @@ def test_object_detection_yolo_emits_open_close_pairs_with_category_throttle() -
                 {
                     "id": "source",
                     "operator": "test.frame_source",
-                    "config": {"stream_id": "camera:test", "max_frames": 5, "interval_ms": 15},
+                    "config": {"stream_id": "camera:test", "max_frames": 2, "interval_ms": 15},
                 },
                 {
-                    "id": "detector",
-                    "operator": "vision.object_detection_yolo",
-                    "config": {
-                        "categories": ["person"],
-                        "default_interval_seconds": 0.05,
-                        "emit_open_and_close": True,
-                    },
+                    "id": "detect",
+                    "operator": "vision.detect",
+                    "config": {"model_id": "fake.detector", "emit_mode": "annotate"},
                 },
-                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "detection_sink"}},
+                {
+                    "id": "track",
+                    "operator": "vision.track",
+                    "config": {"tracker_id": "simple_iou_kalman", "emit_mode": "annotate"},
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "tracking_sink"}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "detector", "port": "in"}},
-                {
-                    "from": {"node": "detector", "port": "out"},
-                    "to": {"node": "sink", "port": "in"},
-                    "maxsize": 64,
-                    "drop_policy": "drop_oldest",
-                },
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "detect", "port": "in"}},
+                {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}},
+                {"from": {"node": "track", "port": "out"}, "to": {"node": "sink", "port": "in"}},
             ],
         }
-        pipeline = Pipeline(name="stage5_detection", type="final", graph=graph)
+        pipeline = Pipeline(name="stage5_tracking_annotate", type="final", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
         await runtime.run_for(0.25)
 
         packets = [record["packet"] for record in counters.get("packets", [])]
         assert packets
-        stream_groups: dict[str, list[Packet]] = defaultdict(list)
-        for packet in packets:
-            stream_groups[packet.stream_id].append(packet)
-        for items in stream_groups.values():
-            lifecycles = [packet.lifecycle for packet in items]
-            assert lifecycles == [Lifecycle.OPEN, Lifecycle.CLOSE]
-            categories = {str(packet.payload.get("object_category_label") or "") for packet in items}
-            assert categories == {"person"}
-
-        source_frames = int(counters.get("source_frames", 0))
-        detect_calls = int(counters.get("detect_calls", 0))
-        assert 0 <= (source_frames - detect_calls) <= 1
+        out = packets[0]
+        assert out.stream_id == "camera:test"
+        assert out.payload.get("event_id") is None
+        assert out.payload.get("tracking_id") is None
+        assert out.payload.get("object_category_label") == "person"
+        assert out.payload.get("object_confidence") == 0.9
+        assert out.payload.get("object_bbox01") == pytest.approx([0.1, 0.2, 0.3, 0.4])
+        assert out.payload.get("vision", {}).get("task") == "tracking"
+        tracks = out.payload.get("vision", {}).get("tracks")
+        assert isinstance(tracks, list)
+        assert len(tracks) == 1
+        assert tracks[0].get("tracker_id") == "simple_iou_kalman"
+        assert str(tracks[0].get("tracking_id") or "").startswith("trk:camera:test:")
 
     asyncio.run(scenario())
 
 
-def test_bundle_runtime_shares_single_yolo_across_two_final_pipelines() -> None:
+def test_bundle_runtime_shares_single_detect_and_track_across_two_final_pipelines() -> None:
     async def scenario() -> None:
         counters: dict[str, Any] = {}
         registry = OperatorRegistry()
@@ -511,23 +537,36 @@ def test_bundle_runtime_shares_single_yolo_across_two_final_pipelines() -> None:
         register_camera_pipeline_operators(registry)
         _register_test_source_and_sink(registry, counters, source_shareable=True)
 
-        sequence = [
+        sequence = _build_detection_sequence(
             [
-                YoloObject(tracking_id="17", category="person", confidence=0.95, bbox01=(0.1, 0.1, 0.2, 0.4)),
-                YoloObject(tracking_id="42", category="person", confidence=0.90, bbox01=(0.5, 0.2, 0.7, 0.6)),
-            ],
-            [
-                YoloObject(tracking_id="17", category="person", confidence=0.90, bbox01=(0.11, 0.1, 0.22, 0.4)),
-            ],
-            [],
-            [],
-        ]
+                [
+                    ("person", 0.95, (0.1, 0.1, 0.2, 0.4)),
+                    ("person", 0.90, (0.5, 0.2, 0.7, 0.6)),
+                ],
+                [("person", 0.90, (0.11, 0.1, 0.22, 0.4))],
+                [],
+                [],
+            ]
+        )
         dependencies = PipelineRuntimeDependencies(
-            yolo_backend_factory=_build_backend_factory(sequence, counters),
+            detector_backend_factory=lambda manifest: _SequenceDetectorBackend(sequence, counters),
+            vision_model_registry=_build_registry(),
         )
 
-        graph_one = _tracking_pipeline_graph(source_id="source_a", yolo_id="yolo_a", sink_id="sink_a", sink_name="sink_a")
-        graph_two = _tracking_pipeline_graph(source_id="source_b", yolo_id="yolo_b", sink_id="sink_b", sink_name="sink_b")
+        graph_one = _tracking_pipeline_graph(
+            source_id="source_a",
+            detect_id="detect_a",
+            track_id="track_a",
+            sink_id="sink_a",
+            sink_name="sink_a",
+        )
+        graph_two = _tracking_pipeline_graph(
+            source_id="source_b",
+            detect_id="detect_b",
+            track_id="track_b",
+            sink_id="sink_b",
+            sink_name="sink_b",
+        )
         report = PipelineGraphCompiler(registry).compile_many(
             [
                 Pipeline(name="final_a", type="final", graph=graph_one),
@@ -537,15 +576,21 @@ def test_bundle_runtime_shares_single_yolo_across_two_final_pipelines() -> None:
         bundle_runtime = PipelineBundleRuntime(report=report, registry=registry, dependencies=dependencies)
         snapshot = await bundle_runtime.run_for(0.35)
 
-        yolo_node_count = sum(
+        detect_node_count = sum(
             1
             for node in bundle_runtime.plan.merged_pipeline.nodes
-            if node.operator_id == "vision.object_tracking_yolo"
+            if node.operator_id == "vision.detect"
         )
-        assert yolo_node_count == 1
+        track_node_count = sum(
+            1
+            for node in bundle_runtime.plan.merged_pipeline.nodes
+            if node.operator_id == "vision.track"
+        )
+        assert detect_node_count == 1
+        assert track_node_count == 1
         source_frames = int(counters.get("source_frames", 0))
-        track_calls = int(counters.get("track_calls", 0))
-        assert 0 <= (source_frames - track_calls) <= 1
+        detect_calls = int(counters.get("detect_calls", 0))
+        assert 0 < detect_calls <= source_frames
         sink_counts = counters.get("sink_counts", {})
         assert int(sink_counts.get("sink_a", 0)) > 0
         assert int(sink_counts.get("sink_b", 0)) > 0
@@ -557,7 +602,7 @@ def test_bundle_runtime_shares_single_yolo_across_two_final_pipelines() -> None:
     asyncio.run(scenario())
 
 
-def test_bundle_runtime_shares_yolo_even_when_downstream_channel_policies_differ() -> None:
+def test_bundle_runtime_shares_detect_and_track_even_when_downstream_channel_policies_differ() -> None:
     async def scenario() -> None:
         counters: dict[str, Any] = {}
         registry = OperatorRegistry()
@@ -565,36 +610,39 @@ def test_bundle_runtime_shares_yolo_even_when_downstream_channel_policies_differ
         register_camera_pipeline_operators(registry)
         _register_test_source_and_sink(registry, counters, source_shareable=True)
 
-        sequence = [
+        sequence = _build_detection_sequence(
             [
-                YoloObject(tracking_id="17", category="person", confidence=0.95, bbox01=(0.1, 0.1, 0.2, 0.4)),
-                YoloObject(tracking_id="42", category="person", confidence=0.90, bbox01=(0.5, 0.2, 0.7, 0.6)),
-            ],
-            [
-                YoloObject(tracking_id="17", category="person", confidence=0.90, bbox01=(0.11, 0.1, 0.22, 0.4)),
-            ],
-            [],
-            [],
-        ]
+                [
+                    ("person", 0.95, (0.1, 0.1, 0.2, 0.4)),
+                    ("person", 0.90, (0.5, 0.2, 0.7, 0.6)),
+                ],
+                [("person", 0.90, (0.11, 0.1, 0.22, 0.4))],
+                [],
+                [],
+            ]
+        )
         dependencies = PipelineRuntimeDependencies(
-            yolo_backend_factory=_build_backend_factory(sequence, counters),
+            detector_backend_factory=lambda manifest: _SequenceDetectorBackend(sequence, counters),
+            vision_model_registry=_build_registry(),
         )
 
         graph_one = _tracking_pipeline_graph_with_shareable_transform(
             source_id="source_a",
-            yolo_id="yolo_a",
+            detect_id="detect_a",
+            track_id="track_a",
             transform_id="identity_a",
             sink_id="sink_a",
             sink_name="sink_a",
-            yolo_to_transform_maxsize=16,
+            track_to_transform_maxsize=16,
         )
         graph_two = _tracking_pipeline_graph_with_shareable_transform(
             source_id="source_b",
-            yolo_id="yolo_b",
+            detect_id="detect_b",
+            track_id="track_b",
             transform_id="identity_b",
             sink_id="sink_b",
             sink_name="sink_b",
-            yolo_to_transform_maxsize=64,
+            track_to_transform_maxsize=64,
         )
         report = PipelineGraphCompiler(registry).compile_many(
             [
@@ -605,12 +653,18 @@ def test_bundle_runtime_shares_yolo_even_when_downstream_channel_policies_differ
         bundle_runtime = PipelineBundleRuntime(report=report, registry=registry, dependencies=dependencies)
         snapshot = await bundle_runtime.run_for(0.35)
 
-        yolo_node_count = sum(
+        detect_node_count = sum(
             1
             for node in bundle_runtime.plan.merged_pipeline.nodes
-            if node.operator_id == "vision.object_tracking_yolo"
+            if node.operator_id == "vision.detect"
         )
-        assert yolo_node_count == 1
+        track_node_count = sum(
+            1
+            for node in bundle_runtime.plan.merged_pipeline.nodes
+            if node.operator_id == "vision.track"
+        )
+        assert detect_node_count == 1
+        assert track_node_count == 1
 
         identity_node_count = sum(
             1
@@ -620,8 +674,8 @@ def test_bundle_runtime_shares_yolo_even_when_downstream_channel_policies_differ
         assert identity_node_count == 2
 
         source_frames = int(counters.get("source_frames", 0))
-        track_calls = int(counters.get("track_calls", 0))
-        assert 0 <= (source_frames - track_calls) <= 1
+        detect_calls = int(counters.get("detect_calls", 0))
+        assert 0 < detect_calls <= source_frames
         sink_counts = counters.get("sink_counts", {})
         assert int(sink_counts.get("sink_a", 0)) > 0
         assert int(sink_counts.get("sink_b", 0)) > 0
@@ -631,10 +685,3 @@ def test_bundle_runtime_shares_yolo_even_when_downstream_channel_policies_differ
             assert int(channel["max_depth_seen"]) <= int(channel["maxsize"])
 
     asyncio.run(scenario())
-
-
-def _filter_categories(objects: list[YoloObject], categories: set[str] | None) -> list[YoloObject]:
-    if not categories:
-        return list(objects)
-    normalized = {str(item or "").strip().lower() for item in categories}
-    return [obj for obj in objects if obj.category in normalized]

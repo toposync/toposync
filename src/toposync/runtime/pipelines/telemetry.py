@@ -16,7 +16,7 @@ from typing import Any
 
 
 METRIC_MOTION_SCORE = "motion.score"
-METRIC_YOLO_CONFIDENCE = "yolo.confidence"
+METRIC_VISION_CONFIDENCE = "vision.confidence"
 METRIC_STORE_IMAGE = "store.image"
 
 logger = logging.getLogger("toposync.pipelines.telemetry")
@@ -1423,8 +1423,8 @@ def create_default_pipeline_telemetry_store() -> PipelineTelemetryStore | None:
         min_value=0.0,
         max_value=5.0,
     )
-    yolo_sample_interval = _env_float(
-        "TOPOSYNC_TELEMETRY_YOLO_SAMPLE_INTERVAL_S",
+    vision_sample_interval = _env_float(
+        "TOPOSYNC_TELEMETRY_VISION_SAMPLE_INTERVAL_S",
         0.0,
         min_value=0.0,
         max_value=5.0,
@@ -1442,13 +1442,13 @@ def create_default_pipeline_telemetry_store() -> PipelineTelemetryStore | None:
                 min_sample_interval_s=motion_sample_interval,
             ),
             NumericMetricSpec(
-                metric_id=METRIC_YOLO_CONFIDENCE,
+                metric_id=METRIC_VISION_CONFIDENCE,
                 window_seconds=window_seconds,
                 bucket_seconds=bucket_seconds,
                 histogram_min=0.0,
                 histogram_max=1.0,
                 histogram_bins=100,
-                min_sample_interval_s=yolo_sample_interval,
+                min_sample_interval_s=vision_sample_interval,
             ),
         ],
         max_numeric_series=max_numeric_series,

@@ -170,7 +170,7 @@ def test_segmentation_and_best_frame_selection_are_deterministic() -> None:
                 {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
                 {
                     "id": "segment",
-                    "operator": "camera.object_segmentation",
+                    "operator": "camera.object_crop",
                     "config": {
                         "input_artifact_names": ["face", "frame_original"],
                         "output_artifact_name": "segmented",
@@ -263,7 +263,7 @@ def test_segmentation_reprojects_bbox_for_cropped_stream_frame() -> None:
                 {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
                 {
                     "id": "segment",
-                    "operator": "camera.object_segmentation",
+                    "operator": "camera.object_crop",
                     "config": {
                         "input_artifact_names": ["treated"],
                         "fallback_to_stream_frame": False,
@@ -346,7 +346,7 @@ def test_segmentation_reprojects_bbox_for_perspective_warped_stream_frame() -> N
                 {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
                 {
                     "id": "segment",
-                    "operator": "camera.object_segmentation",
+                    "operator": "camera.object_crop",
                     "config": {
                         "input_artifact_names": ["treated"],
                         "fallback_to_stream_frame": False,
@@ -445,7 +445,7 @@ def test_segmentation_uses_bbox_from_best_frame_metadata() -> None:
                 },
                 {
                     "id": "segment",
-                    "operator": "camera.object_segmentation",
+                    "operator": "camera.object_crop",
                     "config": {
                         "input_artifact_names": ["best_frame"],
                         "fallback_to_stream_frame": False,

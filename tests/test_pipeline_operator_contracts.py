@@ -22,7 +22,7 @@ def test_contract_alerts_when_required_payload_keys_are_missing() -> None:
             "schema_version": 1,
             "nodes": [
                 {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
-                {"id": "seg", "operator": "camera.object_segmentation", "config": {}},
+                {"id": "seg", "operator": "camera.object_crop", "config": {}},
                 {"id": "sink", "operator": "core.sink", "config": {}},
             ],
             "edges": [

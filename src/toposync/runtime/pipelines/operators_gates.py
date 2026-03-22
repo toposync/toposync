@@ -85,7 +85,7 @@ def evaluate_schedule_gate(
     start_time: dt_time,
     end_time: dt_time,
 ) -> ScheduleDecision:
-    # Avaliação determinística: para um "now" fixo, a decisão é estável.
+    # Deterministic evaluation: for a fixed "now", the decision is stable.
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     if not weekdays:

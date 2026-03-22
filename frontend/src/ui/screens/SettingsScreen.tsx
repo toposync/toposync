@@ -2,8 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import type { GraphicsQuality, HostApi, SettingsPanel, ThemeDefinition, WallHeightPreset } from "@toposync/plugin-api";
 
-import type { AppSettings } from "../../util/api";
+import type { AppSettings, AuthUser } from "../../util/api";
 import { i18n, resolveLocalizedString } from "../../util/i18n";
+import type { AccentIntensity, TransparencyLevel, Viewport3DBackground } from "../../util/theme";
 
 import { Icon } from "../Icon";
 
@@ -20,10 +21,20 @@ type Props = {
   themes: ThemeDefinition[];
   themeId: string;
   onSetThemeId: (themeId: string) => void;
+  transparencyLevel: TransparencyLevel;
+  onSetTransparencyLevel: (value: TransparencyLevel) => void;
+  accentIntensity: AccentIntensity;
+  onSetAccentIntensity: (value: AccentIntensity) => void;
+  viewport3dBackground: Viewport3DBackground;
+  onSetViewport3dBackground: (value: Viewport3DBackground) => void;
   settings: AppSettings;
   onPatchExtensionSettings: (extensionId: string, patch: Record<string, unknown>) => Promise<Record<string, unknown>>;
   onOpenPipelines: () => void;
   onOpenProcessingServers: () => void;
+  onOpenAccess: () => void;
+  canManageAccess: boolean;
+  authUser: AuthUser | null;
+  onLogout: () => Promise<void>;
   onClose: () => void;
 };
 
@@ -72,10 +83,20 @@ export function SettingsScreen({
   themes,
   themeId,
   onSetThemeId,
+  transparencyLevel,
+  onSetTransparencyLevel,
+  accentIntensity,
+  onSetAccentIntensity,
+  viewport3dBackground,
+  onSetViewport3dBackground,
   settings,
   onPatchExtensionSettings,
   onOpenPipelines,
   onOpenProcessingServers,
+  onOpenAccess,
+  canManageAccess,
+  authUser,
+  onLogout,
   onClose,
 }: Props): React.ReactElement {
   const { t, locale, setLocale } = i18n.useI18n();
@@ -86,7 +107,9 @@ export function SettingsScreen({
   const [saving, setSaving] = useState(false);
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
   const [confirmExitOpen, setConfirmExitOpen] = useState(false);
-  const [pendingExitAction, setPendingExitAction] = useState<null | "close" | "pipelines" | "processing_servers">(null);
+  const [pendingExitAction, setPendingExitAction] = useState<
+    null | "close" | "pipelines" | "processing_servers" | "access" | "logout"
+  >(null);
   const lastSettingsRef = useRef<AppSettings>(settings);
 
   const orderedPanels = useMemo(() => {
@@ -183,6 +206,108 @@ export function SettingsScreen({
               );
             })}
           </div>
+
+          <div className="sectionDivider" />
+
+          <div className="modalSectionTitle">{t("core.ui.settings.transparency")}</div>
+          <div className="choiceList">
+            {(
+              [
+                { id: "normal", title: t("core.ui.settings.transparency.normal"), desc: t("core.ui.settings.transparency.normal_desc") },
+                { id: "high", title: t("core.ui.settings.transparency.high"), desc: t("core.ui.settings.transparency.high_desc") },
+                { id: "reduced", title: t("core.ui.settings.transparency.reduced"), desc: t("core.ui.settings.transparency.reduced_desc") },
+              ] as const
+            ).map((opt) => {
+              const selected = transparencyLevel === opt.id;
+              return (
+                <div
+                  key={opt.id}
+                  className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSetTransparencyLevel(opt.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") onSetTransparencyLevel(opt.id);
+                  }}
+                >
+                  <div className="choiceTitle">{opt.title}</div>
+                  <div className="choiceDesc">{opt.desc}</div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="sectionDivider" />
+
+          <div className="modalSectionTitle">{t("core.ui.settings.accent")}</div>
+          <div className="choiceList">
+            {(
+              [
+                { id: "subtle", title: t("core.ui.settings.accent.subtle"), desc: t("core.ui.settings.accent.subtle_desc") },
+                { id: "normal", title: t("core.ui.settings.accent.normal"), desc: t("core.ui.settings.accent.normal_desc") },
+                { id: "vivid", title: t("core.ui.settings.accent.vivid"), desc: t("core.ui.settings.accent.vivid_desc") },
+              ] as const
+            ).map((opt) => {
+              const selected = accentIntensity === opt.id;
+              return (
+                <div
+                  key={opt.id}
+                  className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSetAccentIntensity(opt.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") onSetAccentIntensity(opt.id);
+                  }}
+                >
+                  <div className="choiceTitle">{opt.title}</div>
+                  <div className="choiceDesc">{opt.desc}</div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="sectionDivider" />
+
+          <div className="modalSectionTitle">{t("core.ui.settings.viewport3d_background")}</div>
+          <div className="choiceList">
+            {(
+              [
+                {
+                  id: "paper",
+                  title: t("core.ui.settings.viewport3d_background.paper"),
+                  desc: t("core.ui.settings.viewport3d_background.paper_desc"),
+                },
+                {
+                  id: "pure",
+                  title: t("core.ui.settings.viewport3d_background.pure"),
+                  desc: t("core.ui.settings.viewport3d_background.pure_desc"),
+                },
+                {
+                  id: "night",
+                  title: t("core.ui.settings.viewport3d_background.night"),
+                  desc: t("core.ui.settings.viewport3d_background.night_desc"),
+                },
+              ] as const
+            ).map((opt) => {
+              const selected = viewport3dBackground === opt.id;
+              return (
+                <div
+                  key={opt.id}
+                  className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSetViewport3dBackground(opt.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") onSetViewport3dBackground(opt.id);
+                  }}
+                >
+                  <div className="choiceTitle">{opt.title}</div>
+                  <div className="choiceDesc">{opt.desc}</div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       ),
     };
@@ -256,6 +381,21 @@ export function SettingsScreen({
               );
             })}
           </div>
+
+          <div className="sectionDivider" />
+
+          <div className="modalSectionTitle">{t("core.ui.auth.session.title")}</div>
+            <div className="card">
+              <div className="cardTitle">
+                {authUser?.display_name || authUser?.username || t("core.ui.auth.session.current_user_fallback")}
+              </div>
+              {authUser ? <div className="cardBody">{authUser.username} · {authUser.role}</div> : null}
+              <div className="cardFooter">
+                <button className="chipButton" type="button" onClick={() => requestExit("logout")}>
+                  {t("core.actions.sign_out")}
+                </button>
+              </div>
+            </div>
         </div>
       ),
     };
@@ -271,17 +411,25 @@ export function SettingsScreen({
     return [viewEntry, coreEntry, ...extEntries];
   }, [
     backendAvailable,
+    accentIntensity,
     ghostWalls,
     graphicsQuality,
     locale,
+    onSetAccentIntensity,
     onSetGhostWalls,
     onSetGraphicsQuality,
     onSetThemeId,
+    onSetTransparencyLevel,
+    onSetViewport3dBackground,
     onSetWallHeightPreset,
+    onLogout,
+    authUser,
     orderedPanels,
     t,
     themeId,
+    transparencyLevel,
     themes,
+    viewport3dBackground,
     wallHeightPreset,
     setLocale,
   ]);
@@ -375,7 +523,7 @@ export function SettingsScreen({
     setSaveError(null);
   }
 
-  function requestExit(action: "close" | "pipelines" | "processing_servers"): void {
+  function requestExit(action: "close" | "pipelines" | "processing_servers" | "access" | "logout"): void {
     if (saving) return;
     if (hasUnsavedChanges) {
       setPendingExitAction(action);
@@ -384,17 +532,26 @@ export function SettingsScreen({
     }
     if (action === "pipelines") onOpenPipelines();
     else if (action === "processing_servers") onOpenProcessingServers();
+    else if (action === "access") onOpenAccess();
+    else if (action === "logout") void onLogout();
     else onClose();
   }
 
   const exitTitle = useMemo(() => {
     if (pendingExitAction === "pipelines") return t("core.ui.settings.confirm_open_pipelines_title");
     if (pendingExitAction === "processing_servers") return t("core.ui.settings.confirm_open_processing_servers_title");
+    if (pendingExitAction === "access") return t("core.ui.settings.confirm_open_access_title");
+    if (pendingExitAction === "logout") return t("core.ui.auth.confirm_sign_out_title");
     return t("core.ui.settings.confirm_close_title");
   }, [pendingExitAction, t]);
 
   const exitDesc = useMemo(() => {
-    if (pendingExitAction === "pipelines" || pendingExitAction === "processing_servers") {
+    if (
+      pendingExitAction === "pipelines" ||
+      pendingExitAction === "processing_servers" ||
+      pendingExitAction === "access" ||
+      pendingExitAction === "logout"
+    ) {
       const suffix = unsavedSectionsLabel ? ` (${unsavedSectionsLabel})` : "";
       return t("core.ui.settings.confirm_discard_continue_desc", { suffix });
     }
@@ -402,7 +559,14 @@ export function SettingsScreen({
   }, [pendingExitAction, t, unsavedSectionsLabel]);
 
   const exitConfirmLabel = useMemo(() => {
-    if (pendingExitAction === "pipelines" || pendingExitAction === "processing_servers") return t("core.ui.settings.confirm_discard_continue");
+    if (
+      pendingExitAction === "pipelines" ||
+      pendingExitAction === "processing_servers" ||
+      pendingExitAction === "access" ||
+      pendingExitAction === "logout"
+    ) {
+      return t("core.ui.settings.confirm_discard_continue");
+    }
     return t("core.ui.settings.discard_and_close");
   }, [pendingExitAction, t]);
 
@@ -413,6 +577,14 @@ export function SettingsScreen({
           <i className="fa-solid fa-arrow-left" aria-hidden="true" />
         </button>
         <div className="settingsTopbarTitle">{t("core.ui.settings.title")}</div>
+        {authUser ? (
+          <div className="row" style={{ marginLeft: "auto", gap: 8 }}>
+            <span className="settingsStatusMuted">{authUser.display_name || authUser.username}</span>
+            <button className="chipButton" type="button" onClick={() => requestExit("logout")}>
+              {t("core.actions.sign_out")}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className="settingsLayout">
@@ -441,6 +613,20 @@ export function SettingsScreen({
                 <span className="settingsNavDesc">{t("core.ui.settings.nav.processing_servers.desc")}</span>
               </span>
             </button>
+
+            {canManageAccess ? (
+              <button type="button" className="settingsNavItem" onClick={() => requestExit("access")}>
+                <span className="settingsNavIcon">
+                  <Icon name="users" />
+                </span>
+                <span className="settingsNavText">
+                  <span className="settingsNavTitleRow">
+                    <span className="settingsNavTitle">{t("core.ui.settings.nav.access.title")}</span>
+                  </span>
+                  <span className="settingsNavDesc">{t("core.ui.settings.nav.access.desc")}</span>
+                </span>
+              </button>
+            ) : null}
 
             <div className="sectionDivider" style={{ margin: "12px 6px" }} />
 
@@ -571,6 +757,8 @@ export function SettingsScreen({
                     setPendingExitAction(null);
                     if (action === "pipelines") onOpenPipelines();
                     else if (action === "processing_servers") onOpenProcessingServers();
+                    else if (action === "access") onOpenAccess();
+                    else if (action === "logout") void onLogout();
                     else onClose();
                   }}
                 >

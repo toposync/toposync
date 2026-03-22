@@ -2,7 +2,7 @@ import React from "react";
 
 import type { CameraContextsResponse } from "../../../../../util/api";
 
-import type { InteractiveStep, SelectOption } from "../../types";
+import type { CameraAreaOption, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
 
 import {
   CategoryGateConfigCard,
@@ -10,6 +10,7 @@ import {
   DebugConfigCard,
   FilterConfigCard,
   NotifyConfigCard,
+  PublishVideoConfigCard,
   VelocityThrottleConfigCard,
   ScheduleGateConfigCard,
   StoreImagesConfigCard,
@@ -21,7 +22,11 @@ import {
   CameraSourceConfigCard,
   ImageAdjustConfigCard,
   ImageCropConfigCard,
+  ImagePerspectiveCropConfigCard,
   ImageResizeConfigCard,
+  MotionBgSubAdaptiveConfigCard,
+  MotionGateConfigCard,
+  MotionSampleBgConfigCard,
   ObjectSegmentationConfigCard,
   VelocityEstimationConfigCard,
 } from "./CameraPanels";
@@ -34,16 +39,18 @@ type Props = {
   index: number;
   steps: InteractiveStep[];
   config: Record<string, unknown>;
+  pipelineName: string | null;
 
   interactiveCameraId: string;
   cameraSelectOptions: SelectOption[];
   cameraSelectOptionById: Map<string, SelectOption>;
   activeCameraContexts: CameraContextsResponse | null;
   activeCameraContextsError: string | null;
-  cameraAreaOptions: SelectOption[];
+  cameraAreaOptions: CameraAreaOption[];
 
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
+  onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
 };
 
 export function OperatorConfigPanel({
@@ -51,6 +58,7 @@ export function OperatorConfigPanel({
   index,
   steps,
   config,
+  pipelineName,
   interactiveCameraId,
   cameraSelectOptions,
   cameraSelectOptionById,
@@ -59,6 +67,7 @@ export function OperatorConfigPanel({
   cameraAreaOptions,
   showAdvanced,
   onUpdateConfig,
+  onOpenTelemetryField,
 }: Props): React.ReactElement | null {
   const operatorId = step.operatorId;
 
@@ -76,7 +85,16 @@ export function OperatorConfigPanel({
     );
   }
   if (operatorId === "vision.object_tracking_yolo" || operatorId === "vision.object_detection_yolo") {
-    return <YoloVisionConfigCard operatorId={operatorId} config={config} onUpdateConfig={onUpdateConfig} />;
+    return (
+      <YoloVisionConfigCard
+        operatorId={operatorId}
+        stepUid={step.uid}
+        nodeId={step.nodeId}
+        config={config}
+        onUpdateConfig={onUpdateConfig}
+        onOpenTelemetryField={onOpenTelemetryField}
+      />
+    );
   }
   if (operatorId === "core.category_gate") {
     return <CategoryGateConfigCard config={config} onUpdateConfig={onUpdateConfig} />;
@@ -116,8 +134,74 @@ export function OperatorConfigPanel({
       />
     );
   }
+  if (operatorId === "camera.motion_gate") {
+    return (
+      <MotionGateConfigCard
+        config={config}
+        stepUid={step.uid}
+        nodeId={step.nodeId}
+        pipelineName={pipelineName}
+        steps={steps}
+        index={index}
+        showAdvanced={showAdvanced}
+        onUpdateConfig={onUpdateConfig}
+        onOpenTelemetryField={onOpenTelemetryField}
+      />
+    );
+  }
+  if (operatorId === "camera.motion_bgsub_adaptive") {
+    return (
+      <MotionBgSubAdaptiveConfigCard
+        config={config}
+        stepUid={step.uid}
+        nodeId={step.nodeId}
+        pipelineName={pipelineName}
+        steps={steps}
+        index={index}
+        showAdvanced={showAdvanced}
+        onUpdateConfig={onUpdateConfig}
+        onOpenTelemetryField={onOpenTelemetryField}
+      />
+    );
+  }
+  if (operatorId === "camera.motion_sample_bg") {
+    return (
+      <MotionSampleBgConfigCard
+        config={config}
+        stepUid={step.uid}
+        nodeId={step.nodeId}
+        pipelineName={pipelineName}
+        steps={steps}
+        index={index}
+        showAdvanced={showAdvanced}
+        onUpdateConfig={onUpdateConfig}
+        onOpenTelemetryField={onOpenTelemetryField}
+      />
+    );
+  }
   if (operatorId === "camera.image_crop") {
-    return <ImageCropConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
+    return (
+      <ImageCropConfigCard
+        config={config}
+        pipelineName={pipelineName}
+        steps={steps}
+        index={index}
+        showAdvanced={showAdvanced}
+        onUpdateConfig={onUpdateConfig}
+      />
+    );
+  }
+  if (operatorId === "camera.image_perspective_crop") {
+    return (
+      <ImagePerspectiveCropConfigCard
+        config={config}
+        pipelineName={pipelineName}
+        steps={steps}
+        index={index}
+        showAdvanced={showAdvanced}
+        onUpdateConfig={onUpdateConfig}
+      />
+    );
   }
   if (operatorId === "camera.image_adjust") {
     return <ImageAdjustConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
@@ -140,13 +224,25 @@ export function OperatorConfigPanel({
     return <ObjectSegmentationConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "core.debug") {
-    return <DebugConfigCard config={config} onUpdateConfig={onUpdateConfig} />;
+    return (
+      <DebugConfigCard
+        config={config}
+        pipelineName={pipelineName}
+        steps={steps}
+        index={index}
+        showAdvanced={showAdvanced}
+        onUpdateConfig={onUpdateConfig}
+      />
+    );
   }
   if (operatorId === "core.store_images") {
     return <StoreImagesConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "core.notify") {
     return <NotifyConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
+  }
+  if (operatorId === "stream.publish_video") {
+    return <PublishVideoConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
 
   return null;

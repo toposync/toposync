@@ -141,9 +141,9 @@ class PipelineBundleRuntime:
 
     def __post_init__(self) -> None:
         self.plan = build_merged_pipeline_plan(self.report, bundle_name=self.bundle_name)
-        # Mesmo se stats estiver desativado, esse mapa é útil para operadores "sinks"
-        # (ex.: store_images) conseguirem resolver o nome lógico do pipeline quando
-        # a execução estiver rodando dentro de um bundle (compiled.name=bundle_name).
+        # Even if stats are disabled, this map is useful for sink operators
+        # (e.g. store_images) to resolve the logical pipeline name when
+        # execution is running inside a bundle (compiled.name=bundle_name).
         self.dependencies.pipeline_stats_node_occurrences = _build_bundle_stats_node_occurrences(plan=self.plan)
         self._runtime = PipelineRuntime(
             compiled=self.plan.merged_pipeline,

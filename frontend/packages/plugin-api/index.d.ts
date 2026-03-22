@@ -201,6 +201,7 @@ export type EditorToolPointerEvent = {
 
 export type EditorToolContext = {
   i18n: HostI18n;
+  getElements: () => CompositionElement[];
   createElement: (
     typeId: string,
     init?: Partial<Omit<CompositionElement, "id" | "type">>,

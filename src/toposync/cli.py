@@ -6,13 +6,24 @@ import os
 import uvicorn
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="toposync")
     sub = parser.add_subparsers(dest="command", required=True)
 
     serve = sub.add_parser("serve", help="Run the Toposync backend server.")
     serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--port", type=int, default=_env_int("TOPOSYNC_BACKEND_PORT", 8000))
     serve.add_argument("--log-level", default="info")
     serve.add_argument(
         "--data-dir",
@@ -32,7 +43,7 @@ def main(argv: list[str] | None = None) -> None:
 
     processing = sub.add_parser("processing-serve", help="Run the Toposync processing server (distributed pipelines).")
     processing.add_argument("--host", default="127.0.0.1")
-    processing.add_argument("--port", type=int, default=9001)
+    processing.add_argument("--port", type=int, default=_env_int("TOPOSYNC_PROCESSING_PORT", 9001))
     processing.add_argument("--log-level", default="info")
     processing.add_argument(
         "--data-dir",

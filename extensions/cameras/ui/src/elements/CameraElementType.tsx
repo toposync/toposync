@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
 
 import cameraSvg from "@fortawesome/fontawesome-free/svgs/solid/camera.svg";
@@ -14,10 +14,36 @@ import type {
   Viewport2DContext,
 } from "@toposync/plugin-api";
 
-import { fetchCameraSnapshot, fetchCamerasIndex, mapControlPoint } from "../api/camerasApi";
+import {
+  fetchCameraPtzPresets,
+  fetchCameraPtzStatus,
+  fetchCameraSnapshot,
+  fetchCamerasIndex,
+  gotoCameraPtzPreset,
+  mapControlPoint,
+  moveCameraPtz,
+  stopCameraPtz,
+} from "../api/camerasApi";
 import { CAMERA_ELEMENT_TYPE_ID, CONTROL_POINT_COLORS } from "../constants";
-import { createDefaultControlPoints, createUniqueId, labelForIndex, readControlPoints, readRecord, readString } from "../parsing";
-import type { CamerasIndex, ControlPoint } from "../types";
+import {
+  createDefaultControlPointSet,
+  createUniqueId,
+  duplicateControlPointSetForNewView,
+  labelForIndex,
+  readControlPointSets,
+  readRecord,
+  readString,
+  summarizeControlPointSetQuality,
+} from "../parsing";
+import type {
+  CameraConnectionType,
+  CameraControlPoint,
+  CameraControlPointSet,
+  CameraPoseReference,
+  CameraPtzPreset,
+  CamerasIndex,
+  PanTiltZoomState,
+} from "../types";
 import { SubModal } from "../ui/SubModal";
 
 function roundRectPath(
@@ -46,6 +72,36 @@ function roundRectPath(
   canvasContext.quadraticCurveTo(x, y + height, x, y + height - clampedRadius);
   canvasContext.lineTo(x, y + clampedRadius);
   canvasContext.quadraticCurveTo(x, y, x + clampedRadius, y);
+}
+
+const PTZ_MOVE_REPEAT_MS = 260;
+const PTZ_MOVE_TIMEOUT_S = 0.8;
+const PTZ_PAN_SPEED = 0.55;
+const PTZ_TILT_SPEED = 0.55;
+const PTZ_ZOOM_SPEED = 0.65;
+const PTZ_STATUS_REFRESH_MS = 2200;
+const SNAPSHOT_REFRESH_MS = 8000;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function normalizePtzMoveStatus(value: string | null | undefined): "moving" | "idle" | "unknown" {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return "unknown";
+  if (normalized.includes("move")) return "moving";
+  if (normalized.includes("idle") || normalized.includes("stop")) return "idle";
+  return "unknown";
+}
+
+function formatPtzTelemetryValue(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : "—";
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 export function createCameraElementType(host: TopoSyncHost): ElementType {
@@ -268,9 +324,12 @@ function CameraEditor({
   const { t } = i18n.useI18n();
   const props = readRecord(element.props);
   const selectedCameraId = readString(props.camera_id).trim();
-  const existingControlPoints = useMemo(() => readControlPoints(props.control_points), [props.control_points]);
-  const completePairs = existingControlPoints.filter((point) => Boolean(point.image) && Boolean(point.world)).length;
-  const totalPoints = existingControlPoints.length;
+  const existingControlPointSets = useMemo(() => readControlPointSets(props.control_point_sets), [props.control_point_sets]);
+  const readySets = useMemo(
+    () => existingControlPointSets.filter((item) => summarizeControlPointSetQuality(item).status !== "incomplete").length,
+    [existingControlPointSets],
+  );
+  const totalSets = existingControlPointSets.length;
   const [isControlPointsOpen, setIsControlPointsOpen] = useState(false);
 
   const [camerasIndex, setCamerasIndex] = useState<CamerasIndex | null>(null);
@@ -294,9 +353,17 @@ function CameraEditor({
   const cameraOptions = useMemo(() => {
     const cameras = camerasIndex?.cameras ?? [];
     return cameras
-      .map((camera) => ({ id: readString((camera as any).id), name: readString((camera as any).name) }))
+      .map((camera) => ({
+        id: readString((camera as any).id),
+        name: readString((camera as any).name),
+        connectionType: readString((camera as any).connection_type).trim().toLowerCase() as CameraConnectionType | "",
+      }))
       .filter((camera) => Boolean(camera.id));
   }, [camerasIndex]);
+  const selectedCamera = useMemo(
+    () => cameraOptions.find((camera) => camera.id === selectedCameraId) ?? null,
+    [cameraOptions, selectedCameraId],
+  );
 
   return (
     <div>
@@ -339,8 +406,8 @@ function CameraEditor({
         <label className="label">{t("ext.cameras.editor.control_points")}</label>
         <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
           <div className="cardMeta">
-            {totalPoints > 0
-              ? t("ext.cameras.editor.control_points_some", { complete: completePairs, total: totalPoints })
+            {totalSets > 0
+              ? t("ext.cameras.editor.control_sets_some", { ready: readySets, total: totalSets })
               : t("ext.cameras.editor.control_points_none")}
           </div>
 
@@ -350,12 +417,12 @@ function CameraEditor({
             disabled={!selectedCameraId}
             onClick={() => setIsControlPointsOpen(true)}
           >
-            {t("ext.cameras.editor.control_points_open")}
+            {t("ext.cameras.editor.control_sets_open")}
           </button>
         </div>
-        {totalPoints > 0 && completePairs < 4 ? (
+        {totalSets > 0 && readySets === 0 ? (
           <div className="cardMeta" style={{ marginTop: 6 }}>
-            {t("ext.cameras.control.min_points")}
+            {t("ext.cameras.editor.control_sets_hint")}
           </div>
         ) : null}
       </div>
@@ -385,8 +452,9 @@ function CameraEditor({
         host={host}
         i18n={i18n}
         cameraId={selectedCameraId}
-        initialPoints={existingControlPoints}
-        onSave={(points) => update({ props: { control_points: points } })}
+        cameraConnectionType={selectedCamera?.connectionType || null}
+        initialSets={existingControlPointSets}
+        onSave={(controlPointSets) => update({ props: { control_point_sets: controlPointSets } })}
       />
     </div>
   );
@@ -398,7 +466,8 @@ function ControlPointsModal({
   host,
   i18n,
   cameraId,
-  initialPoints,
+  cameraConnectionType,
+  initialSets,
   onSave,
 }: {
   open: boolean;
@@ -406,12 +475,14 @@ function ControlPointsModal({
   host: TopoSyncHost;
   i18n: HostI18n;
   cameraId: string;
-  initialPoints: ControlPoint[];
-  onSave: (points: ControlPoint[]) => void;
+  cameraConnectionType: CameraConnectionType | null;
+  initialSets: CameraControlPointSet[];
+  onSave: (controlPointSets: CameraControlPointSet[]) => void;
 }): React.ReactElement | null {
   const { t } = i18n.useI18n();
 
-  const [points, setPoints] = useState<ControlPoint[]>([]);
+  const [sets, setSets] = useState<CameraControlPointSet[]>([]);
+  const [selectedSetId, setSelectedSetId] = useState<string | null>(null);
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
   const [hoverImagePoint, setHoverImagePoint] = useState<{ x: number; y: number } | null>(null);
   const [hoverWorldPoint, setHoverWorldPoint] = useState<{ x: number; z: number } | null>(null);
@@ -421,29 +492,91 @@ function ControlPointsModal({
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
   const [snapshotErrorMessage, setSnapshotErrorMessage] = useState<string | null>(null);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const [ptzPresets, setPtzPresets] = useState<CameraPtzPreset[]>([]);
+  const [ptzStatus, setPtzStatus] = useState<PanTiltZoomState | null>(null);
+  const [ptzLoading, setPtzLoading] = useState(false);
+  const [ptzErrorMessage, setPtzErrorMessage] = useState<string | null>(null);
+  const [ptzCommandBusy, setPtzCommandBusy] = useState(false);
+  const [selectedPresetToken, setSelectedPresetToken] = useState("");
+  const [activeMoveId, setActiveMoveId] = useState<string | null>(null);
 
-  const mappingPairs = useMemo(() => {
-    return points
-      .filter((point) => Boolean(point.image) && Boolean(point.world))
-      .map((point) => ({ image: point.image as { x: number; y: number }, world: point.world as { x: number; z: number } }));
-  }, [points]);
+  const selectedSet = useMemo(
+    () => sets.find((item) => item.id === selectedSetId) ?? sets[0] ?? null,
+    [selectedSetId, sets],
+  );
+  const selectedPoints = selectedSet?.control_points ?? [];
+  const completePairs = useMemo(
+    () => selectedPoints.filter((point) => Boolean(point.image) && Boolean(point.world)).length,
+    [selectedPoints],
+  );
+  const selectedSetQuality = useMemo(
+    () => (selectedSet ? summarizeControlPointSetQuality(selectedSet) : null),
+    [selectedSet],
+  );
+  const mappingControlPointSet = useMemo<CameraControlPointSet | null>(() => {
+    if (!selectedSet) return null;
+    return {
+      ...selectedSet,
+      pose_reference: selectedSet.pose_reference ? { ...selectedSet.pose_reference } : null,
+      control_points: selectedSet.control_points.map((point) => ({
+        ...point,
+        image: point.image ? { ...point.image } : null,
+        world: point.world ? { ...point.world } : null,
+      })),
+    };
+  }, [selectedSet]);
+  const isPtzCamera = cameraConnectionType === "onvif";
+  const selectedPreset = useMemo(
+    () => ptzPresets.find((preset) => String(preset.token || "").trim() === selectedPresetToken) ?? null,
+    [ptzPresets, selectedPresetToken],
+  );
+  const normalizedMoveStatus = normalizePtzMoveStatus(ptzStatus?.move_status);
+  const selectedSetIdRef = useRef<string | null>(null);
+  const ptzStatusRef = useRef<PanTiltZoomState | null>(null);
+  const moveVectorRef = useRef<{ pan: number; tilt: number; zoom: number } | null>(null);
+  const moveHeldRef = useRef(false);
+  const moveTimerRef = useRef<number | null>(null);
+  const moveRequestInFlightRef = useRef(false);
+  const stopRequestInFlightRef = useRef(false);
+  const snapshotAbortRef = useRef<AbortController | null>(null);
+  const snapshotTimerRef = useRef<number | null>(null);
+  const snapshotIntervalRef = useRef<number | null>(null);
+  const snapshotUrlRef = useRef<string | null>(null);
+  const ptzPresetsAbortRef = useRef<AbortController | null>(null);
+  const ptzStatusAbortRef = useRef<AbortController | null>(null);
+  const ptzStatusIntervalRef = useRef<number | null>(null);
 
   useEffect(() => {
-    return () => {
-      if (snapshotUrl) URL.revokeObjectURL(snapshotUrl);
-    };
+    selectedSetIdRef.current = selectedSetId;
+  }, [selectedSetId]);
+
+  useEffect(() => {
+    ptzStatusRef.current = ptzStatus;
+  }, [ptzStatus]);
+
+  useEffect(() => {
+    snapshotUrlRef.current = snapshotUrl;
   }, [snapshotUrl]);
 
   useEffect(() => {
     if (!open) return;
-    const base = initialPoints.length ? initialPoints : createDefaultControlPoints(4);
-    const padded: ControlPoint[] = base.map((point) => ({ ...point, image: point.image ?? null, world: point.world ?? null }));
-    while (padded.length < 4) {
-      padded.push({ id: createUniqueId(), label: labelForIndex(padded.length), image: null, world: null });
-    }
-    setPoints(padded);
-    setSelectedPointId(padded[0]?.id ?? null);
-  }, [open, initialPoints]);
+    const baseSets = initialSets.length
+      ? initialSets.map((item) => ({
+          ...item,
+          pose_reference: item.pose_reference ? { ...item.pose_reference } : null,
+          control_points: padControlPoints(
+            item.control_points.map((point) => ({
+              ...point,
+              image: point.image ?? null,
+              world: point.world ?? null,
+            })),
+          ),
+        }))
+      : [createDefaultControlPointSet(0, { label: t("ext.cameras.control.set_default") })];
+    setSets(baseSets);
+    setSelectedSetId(baseSets[0]?.id ?? null);
+    setSelectedPointId(baseSets[0]?.control_points[0]?.id ?? null);
+  }, [initialSets, open, t]);
 
   useEffect(() => {
     if (open) return;
@@ -454,41 +587,260 @@ function ControlPointsModal({
   }, [open]);
 
   useEffect(() => {
+    if (!selectedSet) {
+      setSelectedPointId(null);
+      return;
+    }
+    if (!selectedSet.control_points.some((point) => point.id === selectedPointId)) {
+      setSelectedPointId(selectedSet.control_points[0]?.id ?? null);
+    }
+  }, [selectedPointId, selectedSet]);
+
+  useEffect(() => {
+    setSelectedPresetToken(String(selectedSet?.pose_reference?.preset_token ?? "").trim());
+  }, [selectedSet?.id, selectedSet?.pose_reference?.preset_token]);
+
+  const captureCurrentPoseIntoSelectedSet = useCallback(
+    (
+      nextStatus: PanTiltZoomState | null,
+      options?: {
+        presetToken?: string | null;
+        presetName?: string | null;
+        renameFromPreset?: boolean;
+      },
+    ) => {
+      if (!nextStatus) return;
+      const setId = selectedSetIdRef.current;
+      if (!setId) return;
+      const pan = typeof nextStatus.pan === "number" && Number.isFinite(nextStatus.pan) ? nextStatus.pan : null;
+      const tilt = typeof nextStatus.tilt === "number" && Number.isFinite(nextStatus.tilt) ? nextStatus.tilt : null;
+      const zoom = typeof nextStatus.zoom === "number" && Number.isFinite(nextStatus.zoom) ? nextStatus.zoom : null;
+      const presetToken = options?.presetToken ?? null;
+      const presetName = options?.presetName ?? null;
+      if (pan === null && tilt === null && zoom === null && !presetToken && !presetName) return;
+      setSets((previous) =>
+        previous.map((item) =>
+          item.id !== setId
+            ? item
+            : {
+                ...item,
+                label: options?.renameFromPreset && presetName ? presetName : item.label,
+                pose_reference: {
+                  pan,
+                  tilt,
+                  zoom,
+                  preset_token: presetToken,
+                  preset_name: presetName,
+                },
+              },
+        ),
+      );
+    },
+    [],
+  );
+
+  const loadSnapshot = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (!cameraId) return;
+      snapshotAbortRef.current?.abort();
+      const controller = new AbortController();
+      snapshotAbortRef.current = controller;
+      if (!options?.silent) {
+        setSnapshotLoading(true);
+        setSnapshotErrorMessage(null);
+      }
+      try {
+        const blob = await fetchCameraSnapshot(cameraId, controller.signal);
+        const nextUrl = URL.createObjectURL(blob);
+        setSnapshotUrl((previous) => {
+          if (previous) URL.revokeObjectURL(previous);
+          return nextUrl;
+        });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setSnapshotErrorMessage(error instanceof Error ? error.message : String(error));
+        setSnapshotUrl((previous) => {
+          if (previous) URL.revokeObjectURL(previous);
+          return null;
+        });
+      } finally {
+        if (!options?.silent) setSnapshotLoading(false);
+      }
+    },
+    [cameraId],
+  );
+
+  const scheduleSnapshotRefresh = useCallback(
+    (delayMs: number) => {
+      if (snapshotTimerRef.current !== null) {
+        window.clearTimeout(snapshotTimerRef.current);
+        snapshotTimerRef.current = null;
+      }
+      snapshotTimerRef.current = window.setTimeout(() => {
+        snapshotTimerRef.current = null;
+        void loadSnapshot({ silent: false });
+      }, Math.max(0, delayMs));
+    },
+    [loadSnapshot],
+  );
+
+  const refreshPtzStatus = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (!cameraId || !isPtzCamera) return null;
+      ptzStatusAbortRef.current?.abort();
+      const controller = new AbortController();
+      ptzStatusAbortRef.current = controller;
+      if (!options?.silent) {
+        setPtzLoading(true);
+        setPtzErrorMessage(null);
+      }
+      try {
+        const response = await fetchCameraPtzStatus(cameraId, controller.signal);
+        const nextStatus = response.status ?? null;
+        setPtzStatus(nextStatus);
+        return nextStatus;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return null;
+        setPtzErrorMessage(error instanceof Error ? error.message : String(error));
+        setPtzStatus(null);
+        return null;
+      } finally {
+        if (!options?.silent) setPtzLoading(false);
+      }
+    },
+    [cameraId, isPtzCamera],
+  );
+
+  const loadPtzPresets = useCallback(async () => {
+    if (!cameraId || !isPtzCamera) return;
+    ptzPresetsAbortRef.current?.abort();
+    const controller = new AbortController();
+    ptzPresetsAbortRef.current = controller;
+    try {
+      const response = await fetchCameraPtzPresets(cameraId, controller.signal);
+      setPtzPresets(Array.isArray(response.presets) ? response.presets : []);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setPtzErrorMessage(error instanceof Error ? error.message : String(error));
+      setPtzPresets([]);
+    }
+  }, [cameraId, isPtzCamera]);
+
+  const settlePtzAndRefresh = useCallback(
+    async (options?: { presetToken?: string | null; presetName?: string | null; renameFromPreset?: boolean }) => {
+      if (!cameraId || !isPtzCamera) {
+        scheduleSnapshotRefresh(400);
+        return;
+      }
+      let finalStatus = ptzStatusRef.current;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const nextStatus = await refreshPtzStatus({ silent: attempt > 0 });
+        if (nextStatus) finalStatus = nextStatus;
+        if (normalizePtzMoveStatus(nextStatus?.move_status) !== "moving") break;
+        await sleep(420);
+      }
+      captureCurrentPoseIntoSelectedSet(finalStatus, options);
+      scheduleSnapshotRefresh(550);
+    },
+    [cameraId, captureCurrentPoseIntoSelectedSet, isPtzCamera, refreshPtzStatus, scheduleSnapshotRefresh],
+  );
+
+  useEffect(() => {
+    return () => {
+      snapshotAbortRef.current?.abort();
+      ptzPresetsAbortRef.current?.abort();
+      ptzStatusAbortRef.current?.abort();
+      if (snapshotTimerRef.current !== null) window.clearTimeout(snapshotTimerRef.current);
+      if (snapshotIntervalRef.current !== null) window.clearInterval(snapshotIntervalRef.current);
+      if (ptzStatusIntervalRef.current !== null) window.clearInterval(ptzStatusIntervalRef.current);
+      if (snapshotUrlRef.current) URL.revokeObjectURL(snapshotUrlRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!open) {
       setSnapshotErrorMessage(null);
       setSnapshotLoading(false);
-      setSnapshotUrl(null);
+      setSnapshotUrl((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return null;
+      });
+      setPtzErrorMessage(null);
+      setPtzLoading(false);
+      setPtzPresets([]);
+      setPtzStatus(null);
+      setSelectedPresetToken("");
+      setActiveMoveId(null);
+      moveHeldRef.current = false;
+      moveVectorRef.current = null;
+      if (moveTimerRef.current !== null) {
+        window.clearInterval(moveTimerRef.current);
+        moveTimerRef.current = null;
+      }
+      if (snapshotTimerRef.current !== null) {
+        window.clearTimeout(snapshotTimerRef.current);
+        snapshotTimerRef.current = null;
+      }
+      if (snapshotIntervalRef.current !== null) {
+        window.clearInterval(snapshotIntervalRef.current);
+        snapshotIntervalRef.current = null;
+      }
+      if (ptzStatusIntervalRef.current !== null) {
+        window.clearInterval(ptzStatusIntervalRef.current);
+        ptzStatusIntervalRef.current = null;
+      }
+      snapshotAbortRef.current?.abort();
+      ptzPresetsAbortRef.current?.abort();
+      ptzStatusAbortRef.current?.abort();
       return;
     }
-    if (!cameraId) return;
 
-    let cancelled = false;
-    const controller = new AbortController();
-    setSnapshotLoading(true);
-    setSnapshotErrorMessage(null);
-    fetchCameraSnapshot(cameraId, controller.signal)
-      .then((blob) => {
-        if (cancelled) return;
-        const url = URL.createObjectURL(blob);
-        setSnapshotUrl(url);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setSnapshotErrorMessage(error instanceof Error ? error.message : String(error));
-        setSnapshotUrl(null);
-      })
-      .finally(() => {
-        if (!cancelled) setSnapshotLoading(false);
-      });
+    if (cameraId) {
+      void loadSnapshot();
+      if (snapshotIntervalRef.current !== null) window.clearInterval(snapshotIntervalRef.current);
+      snapshotIntervalRef.current = window.setInterval(() => {
+        void loadSnapshot({ silent: true });
+      }, SNAPSHOT_REFRESH_MS);
+    }
+
+    if (cameraId && isPtzCamera) {
+      void loadPtzPresets();
+      void refreshPtzStatus();
+      if (ptzStatusIntervalRef.current !== null) window.clearInterval(ptzStatusIntervalRef.current);
+      ptzStatusIntervalRef.current = window.setInterval(() => {
+        void refreshPtzStatus({ silent: true });
+      }, PTZ_STATUS_REFRESH_MS);
+    } else {
+      setPtzPresets([]);
+      setPtzStatus(null);
+      setPtzErrorMessage(null);
+    }
 
     return () => {
-      cancelled = true;
-      controller.abort();
+      snapshotAbortRef.current?.abort();
+      ptzPresetsAbortRef.current?.abort();
+      ptzStatusAbortRef.current?.abort();
+      if (snapshotTimerRef.current !== null) {
+        window.clearTimeout(snapshotTimerRef.current);
+        snapshotTimerRef.current = null;
+      }
+      if (snapshotIntervalRef.current !== null) {
+        window.clearInterval(snapshotIntervalRef.current);
+        snapshotIntervalRef.current = null;
+      }
+      if (ptzStatusIntervalRef.current !== null) {
+        window.clearInterval(ptzStatusIntervalRef.current);
+        ptzStatusIntervalRef.current = null;
+      }
+      if (moveTimerRef.current !== null) {
+        window.clearInterval(moveTimerRef.current);
+        moveTimerRef.current = null;
+      }
+      moveHeldRef.current = false;
+      moveVectorRef.current = null;
+      setActiveMoveId(null);
     };
-  }, [open, cameraId]);
-
-  const completePairs = useMemo(() => points.filter((point) => Boolean(point.image) && Boolean(point.world)).length, [points]);
+  }, [cameraId, isPtzCamera, loadPtzPresets, loadSnapshot, open, refreshPtzStatus]);
 
   const imageToWorldAbortRef = React.useRef<AbortController | null>(null);
   const worldToImageAbortRef = React.useRef<AbortController | null>(null);
@@ -498,7 +850,7 @@ function ControlPointsModal({
 
   useEffect(() => {
     if (!open) return;
-    if (!hoverImagePoint || completePairs < 4) {
+    if (!hoverImagePoint || completePairs < 4 || !mappingControlPointSet) {
       if (imageToWorldTimerRef.current) {
         window.clearTimeout(imageToWorldTimerRef.current);
         imageToWorldTimerRef.current = null;
@@ -514,7 +866,7 @@ function ControlPointsModal({
       imageToWorldTimerRef.current = null;
       const controller = new AbortController();
       imageToWorldAbortRef.current = controller;
-      void mapControlPoint(mappingPairs, { kind: "image", x: hoverImagePoint.x, y: hoverImagePoint.y }, controller.signal)
+      void mapControlPoint(mappingControlPointSet, { kind: "image", x: hoverImagePoint.x, y: hoverImagePoint.y }, controller.signal)
         .then((result) => {
           setGhostWorldPoint(result.world ?? null);
         })
@@ -532,11 +884,11 @@ function ControlPointsModal({
       }
       imageToWorldAbortRef.current?.abort();
     };
-  }, [open, hoverImagePoint, completePairs, mappingPairs]);
+  }, [completePairs, hoverImagePoint, mappingControlPointSet, open]);
 
   useEffect(() => {
     if (!open) return;
-    if (!hoverWorldPoint || completePairs < 4) {
+    if (!hoverWorldPoint || completePairs < 4 || !mappingControlPointSet) {
       if (worldToImageTimerRef.current) {
         window.clearTimeout(worldToImageTimerRef.current);
         worldToImageTimerRef.current = null;
@@ -552,7 +904,7 @@ function ControlPointsModal({
       worldToImageTimerRef.current = null;
       const controller = new AbortController();
       worldToImageAbortRef.current = controller;
-      void mapControlPoint(mappingPairs, { kind: "world", x: hoverWorldPoint.x, z: hoverWorldPoint.z }, controller.signal)
+      void mapControlPoint(mappingControlPointSet, { kind: "world", x: hoverWorldPoint.x, z: hoverWorldPoint.z }, controller.signal)
         .then((result) => {
           setGhostImagePoint(result.image ?? null);
         })
@@ -570,7 +922,7 @@ function ControlPointsModal({
       }
       worldToImageAbortRef.current?.abort();
     };
-  }, [open, hoverWorldPoint, completePairs, mappingPairs]);
+  }, [completePairs, hoverWorldPoint, mappingControlPointSet, open]);
 
   const toolSession = useMemo<EditorToolSession>(() => {
     return {
@@ -588,11 +940,17 @@ function ControlPointsModal({
           }
           return;
         }
-        if (event.kind !== "down") return;
-        if (!selectedPointId) return;
-        setPoints((previous) =>
-          previous.map((point) =>
-            point.id === selectedPointId ? { ...point, world: { x: event.world.x, z: event.world.z } } : point,
+        if (event.kind !== "down" || !selectedSetId || !selectedPointId) return;
+        setSets((previous) =>
+          previous.map((controlPointSet) =>
+            controlPointSet.id !== selectedSetId
+              ? controlPointSet
+              : {
+                  ...controlPointSet,
+                  control_points: controlPointSet.control_points.map((point) =>
+                    point.id === selectedPointId ? { ...point, world: { x: event.world.x, z: event.world.z } } : point,
+                  ),
+                },
           ),
         );
       },
@@ -608,16 +966,15 @@ function ControlPointsModal({
         canvasContext.textAlign = "center";
         canvasContext.textBaseline = "middle";
 
-        for (let index = 0; index < points.length; index += 1) {
-          const point = points[index];
+        for (let index = 0; index < selectedPoints.length; index += 1) {
+          const point = selectedPoints[index];
           if (!point.world) continue;
           const color = CONTROL_POINT_COLORS[index % CONTROL_POINT_COLORS.length];
           const screen = viewport.worldToScreen(point.world);
           const isSelected = selectedPointId === point.id;
-          const radius = isSelected ? 10 : 8;
 
           canvasContext.beginPath();
-          canvasContext.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
+          canvasContext.arc(screen.x, screen.y, isSelected ? 10 : 8, 0, Math.PI * 2);
           canvasContext.fillStyle = color;
           canvasContext.fill();
           canvasContext.lineWidth = 2;
@@ -650,12 +1007,68 @@ function ControlPointsModal({
       },
       getCursor: () => "crosshair",
     };
-  }, [points, selectedPointId, ghostWorldPoint, completePairs]);
+  }, [completePairs, ghostWorldPoint, selectedPointId, selectedPoints, selectedSetId]);
+
+  function updateSelectedSet(patch: Partial<CameraControlPointSet>) {
+    if (!selectedSetId) return;
+    setSets((previous) =>
+      previous.map((item) =>
+        item.id === selectedSetId
+          ? {
+              ...item,
+              ...patch,
+              control_points: patch.control_points ?? item.control_points,
+              pose_reference: patch.pose_reference === undefined ? item.pose_reference ?? null : patch.pose_reference,
+            }
+          : item,
+      ),
+    );
+  }
 
   function addPoint() {
+    if (!selectedSetId) return;
     const id = createUniqueId();
-    setPoints((previous) => [...previous, { id, label: labelForIndex(previous.length), image: null, world: null }]);
+    setSets((previous) =>
+      previous.map((controlPointSet) =>
+        controlPointSet.id !== selectedSetId
+          ? controlPointSet
+          : {
+              ...controlPointSet,
+              control_points: [
+                ...controlPointSet.control_points,
+                { id, label: labelForIndex(controlPointSet.control_points.length), image: null, world: null },
+              ],
+            },
+      ),
+    );
     setSelectedPointId(id);
+  }
+
+  function addPosition() {
+    setSets((previous) => {
+      const nextIndex = previous.length;
+      const nextSet = selectedSet
+        ? {
+            ...duplicateControlPointSetForNewView(selectedSet, nextIndex),
+            label: t("ext.cameras.control.set_label", { index: nextIndex + 1 }),
+          }
+        : createDefaultControlPointSet(nextIndex, { label: t("ext.cameras.control.set_label", { index: nextIndex + 1 }) });
+      const paddedSet = { ...nextSet, control_points: padControlPoints(nextSet.control_points) };
+      setSelectedSetId(paddedSet.id);
+      setSelectedPointId(paddedSet.control_points[0]?.id ?? null);
+      return [...previous, paddedSet];
+    });
+  }
+
+  function removeSelectedPosition() {
+    if (!selectedSetId || sets.length <= 1) return;
+    setSets((previous) => {
+      const filtered = previous.filter((item) => item.id !== selectedSetId);
+      const fallback = filtered[0] ?? null;
+      setSelectedSetId(fallback?.id ?? null);
+      setSelectedPointId(fallback?.control_points[0]?.id ?? null);
+      return filtered;
+    });
   }
 
   function getImagePointFromEvent(event: React.MouseEvent<HTMLImageElement>) {
@@ -667,16 +1080,123 @@ function ControlPointsModal({
 
   function setImagePointFromEvent(event: React.MouseEvent<HTMLImageElement>) {
     const imgPoint = getImagePointFromEvent(event);
-    if (!imgPoint || !selectedPointId) return;
-    setPoints((previous) =>
-      previous.map((point) => (point.id === selectedPointId ? { ...point, image: imgPoint } : point)),
+    if (!imgPoint || !selectedSetId || !selectedPointId) return;
+    setSets((previous) =>
+      previous.map((controlPointSet) =>
+        controlPointSet.id !== selectedSetId
+          ? controlPointSet
+          : {
+              ...controlPointSet,
+              control_points: controlPointSet.control_points.map((point) =>
+                point.id === selectedPointId ? { ...point, image: imgPoint } : point,
+              ),
+            },
+      ),
     );
+  }
+
+  async function handlePresetSelection(nextPresetToken: string) {
+    const token = String(nextPresetToken || "").trim();
+    setSelectedPresetToken(token);
+    if (!token) {
+      captureCurrentPoseIntoSelectedSet(ptzStatusRef.current, { presetToken: null, presetName: null });
+      return;
+    }
+    if (!cameraId) return;
+    const preset = ptzPresets.find((item) => String(item.token || "").trim() === token) ?? null;
+    const presetName = String(preset?.name || "").trim() || token;
+    const presetPose = {
+      pan: typeof preset?.pan === "number" && Number.isFinite(preset.pan) ? preset.pan : null,
+      tilt: typeof preset?.tilt === "number" && Number.isFinite(preset.tilt) ? preset.tilt : null,
+      zoom: typeof preset?.zoom === "number" && Number.isFinite(preset.zoom) ? preset.zoom : null,
+      preset_token: token,
+      preset_name: presetName,
+    };
+    updateSelectedSet({ label: presetName, pose_reference: presetPose });
+    setPtzCommandBusy(true);
+    setPtzErrorMessage(null);
+    try {
+      await gotoCameraPtzPreset(cameraId, token);
+      await settlePtzAndRefresh({ presetToken: token, presetName, renameFromPreset: true });
+    } catch (error) {
+      setPtzErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPtzCommandBusy(false);
+    }
+  }
+
+  async function stopActivePtzMove(options?: { force?: boolean }) {
+    const force = options?.force === true;
+    const currentMove = moveVectorRef.current;
+    const shouldStop = force || moveHeldRef.current || currentMove !== null || activeMoveId !== null;
+
+    moveHeldRef.current = false;
+    moveVectorRef.current = null;
+    setActiveMoveId(null);
+    if (moveTimerRef.current !== null) {
+      window.clearInterval(moveTimerRef.current);
+      moveTimerRef.current = null;
+    }
+
+    if (!cameraId || !shouldStop || stopRequestInFlightRef.current) return;
+    stopRequestInFlightRef.current = true;
+    setPtzCommandBusy(true);
+    try {
+      await stopCameraPtz(cameraId, {
+        pan_tilt: force || Boolean(currentMove && (Math.abs(currentMove.pan) > 1e-6 || Math.abs(currentMove.tilt) > 1e-6)),
+        zoom: force || Boolean(currentMove && Math.abs(currentMove.zoom) > 1e-6),
+      });
+      setSelectedPresetToken("");
+      setPtzErrorMessage(null);
+      await settlePtzAndRefresh({ presetToken: null, presetName: null });
+    } catch (error) {
+      if (force) setPtzErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      stopRequestInFlightRef.current = false;
+      setPtzCommandBusy(false);
+    }
+  }
+
+  function beginPtzMove(moveId: string, vector: { pan: number; tilt: number; zoom: number }) {
+    if (!cameraId || !isPtzCamera || ptzCommandBusy) return;
+    const clampedVector = {
+      pan: clamp(vector.pan, -1, 1),
+      tilt: clamp(vector.tilt, -1, 1),
+      zoom: clamp(vector.zoom, -1, 1),
+    };
+    moveVectorRef.current = clampedVector;
+    moveHeldRef.current = true;
+    setSelectedPresetToken("");
+    setActiveMoveId(moveId);
+
+    const sendMove = async () => {
+      if (!cameraId || !moveHeldRef.current || !moveVectorRef.current || moveRequestInFlightRef.current) return;
+      moveRequestInFlightRef.current = true;
+      try {
+        await moveCameraPtz(cameraId, { ...moveVectorRef.current, timeout_s: PTZ_MOVE_TIMEOUT_S });
+        setPtzErrorMessage(null);
+      } catch (error) {
+        setPtzErrorMessage(error instanceof Error ? error.message : String(error));
+        await stopActivePtzMove({ force: true });
+      } finally {
+        moveRequestInFlightRef.current = false;
+      }
+    };
+
+    void sendMove();
+    if (moveTimerRef.current !== null) window.clearInterval(moveTimerRef.current);
+    moveTimerRef.current = window.setInterval(() => {
+      void sendMove();
+    }, PTZ_MOVE_REPEAT_MS);
   }
 
   return (
     <SubModal
       open={open}
-      onClose={onClose}
+      onClose={() => {
+        void stopActivePtzMove({ force: true });
+        onClose();
+      }}
       title={t("ext.cameras.control.title")}
       panelStyle={{
         width: "min(1440px, calc(100vw - 28px))",
@@ -693,53 +1213,365 @@ function ControlPointsModal({
       }}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 12, flex: 1, minHeight: 0 }}>
-        <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
-          <div className="rowWrap" style={{ gap: 8 }}>
-            {points.map((point, index) => {
-              const isSelected = selectedPointId === point.id;
-              const color = CONTROL_POINT_COLORS[index % CONTROL_POINT_COLORS.length];
-              const hasImage = Boolean(point.image);
-              const hasWorld = Boolean(point.world);
+        <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <div className="rowWrap" style={{ gap: 8, flexWrap: "wrap" }}>
+            {sets.map((controlPointSet, index) => {
+              const quality = summarizeControlPointSetQuality(controlPointSet);
+              const isSelected = selectedSet?.id === controlPointSet.id;
+              const statusColor =
+                quality.status === "good"
+                  ? "rgba(34,197,94,0.92)"
+                  : quality.status === "review"
+                    ? "rgba(251,191,36,0.92)"
+                    : "rgba(148,163,184,0.88)";
               return (
                 <button
-                  key={point.id}
+                  key={controlPointSet.id}
                   type="button"
                   className="chipButton"
-                  onClick={() => setSelectedPointId(point.id)}
+                  onClick={() => {
+                    setSelectedSetId(controlPointSet.id);
+                    setSelectedPointId(controlPointSet.control_points[0]?.id ?? null);
+                  }}
                   style={{
-                    minWidth: 46,
-                    justifyContent: "center",
+                    minWidth: 190,
+                    justifyContent: "space-between",
                     borderColor: isSelected ? "rgba(56,189,248,0.55)" : "rgba(255,255,255,0.14)",
                     background: isSelected ? "rgba(56,189,248,0.10)" : undefined,
                   }}
-                  aria-label={`Point ${point.label || labelForIndex(index)}`}
                 >
+                  <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
+                    <span>{controlPointSet.label || t("ext.cameras.control.set_label", { index: index + 1 })}</span>
+                    <span className="cardMeta">
+                      {quality.status === "good"
+                        ? t("ext.cameras.control.quality_good")
+                        : quality.status === "review"
+                          ? t("ext.cameras.control.quality_review")
+                          : t("ext.cameras.control.quality_incomplete")}
+                    </span>
+                  </span>
                   <span
                     aria-hidden="true"
                     style={{
                       width: 10,
                       height: 10,
                       borderRadius: 999,
-                      background: color,
+                      background: statusColor,
                       boxShadow: "0 0 0 2px rgba(0,0,0,0.25)",
-                      opacity: hasImage && hasWorld ? 1 : 0.4,
                     }}
                   />
-                  <span>{point.label || labelForIndex(index)}</span>
                 </button>
               );
             })}
 
-            <button className="iconButton" type="button" onClick={addPoint} aria-label={t("core.actions.add")}>
+            <button className="chipButton" type="button" onClick={addPosition}>
               <i className="fa-solid fa-plus" aria-hidden="true" />
+              <span>{t("ext.cameras.control.add_position")}</span>
+            </button>
+
+            <button
+              className="iconButton"
+              type="button"
+              onClick={removeSelectedPosition}
+              aria-label={t("core.actions.delete")}
+              disabled={sets.length <= 1}
+            >
+              <i className="fa-solid fa-trash" aria-hidden="true" />
             </button>
           </div>
 
           <div className="cardMeta" style={{ textAlign: "right" }}>
-            {t("ext.cameras.control.help")}
+            {t("ext.cameras.control.help_sets")}
             {completePairs > 0 && completePairs < 4 ? ` ${t("ext.cameras.control.min_points")}` : ""}
           </div>
         </div>
+
+        {selectedSet ? (
+          <>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isPtzCamera
+                  ? "minmax(220px, 1.2fr) minmax(220px, 1.6fr) minmax(180px, 1fr)"
+                  : "minmax(220px, 1fr) minmax(320px, 1.8fr)",
+                gap: 10,
+                alignItems: "end",
+              }}
+            >
+              {isPtzCamera ? (
+                <div className="field" style={{ marginBottom: 0 }}>
+                  <label className="label">{t("ext.cameras.control.preset_label")}</label>
+                  <select
+                    className="input"
+                    value={selectedPresetToken}
+                    disabled={ptzLoading || ptzCommandBusy}
+                    onChange={(event) => {
+                      void handlePresetSelection(event.target.value);
+                    }}
+                  >
+                    <option value="">{t("ext.cameras.control.preset_optional")}</option>
+                    {ptzPresets.map((preset) => {
+                      const token = String(preset.token || "").trim();
+                      if (!token) return null;
+                      const name = String(preset.name || "").trim() || token;
+                      return (
+                        <option key={token} value={token}>
+                          {name}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              ) : null}
+
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label className="label">{t("ext.cameras.control.position_name")}</label>
+                <input
+                  className="input"
+                  value={selectedSet.label}
+                  onChange={(event) => updateSelectedSet({ label: event.target.value })}
+                />
+              </div>
+
+              <div
+                className="card"
+                style={{ marginBottom: 0, minHeight: 44, display: "flex", alignItems: "center" }}
+              >
+                <div className="cardBody" style={{ padding: "10px 12px" }}>
+                  <div className="cardMeta">
+                    {isPtzCamera ? t("ext.cameras.control.ptz_help_auto") : t("ext.cameras.control.pose_unbound")}
+                  </div>
+                  <div style={{ fontWeight: 600 }}>
+                    {selectedPreset ? String(selectedPreset.name || "").trim() || selectedPreset.token : t("ext.cameras.control.preset_current")}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {isPtzCamera ? (
+              <div className="card" style={{ marginBottom: 0 }}>
+                <div
+                  className="cardBody"
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "minmax(240px, 260px) minmax(220px, 1fr)",
+                    gap: 16,
+                    alignItems: "center",
+                  }}
+                >
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, alignItems: "stretch" }}>
+                    <button
+                      type="button"
+                      className="iconButton"
+                      onMouseDown={() => beginPtzMove("up-left", { pan: -PTZ_PAN_SPEED, tilt: PTZ_TILT_SPEED, zoom: 0 })}
+                      onMouseUp={() => void stopActivePtzMove()}
+                      onMouseLeave={() => void stopActivePtzMove()}
+                      disabled={ptzCommandBusy}
+                      style={{ background: activeMoveId === "up-left" ? "rgba(56,189,248,0.14)" : undefined }}
+                    >
+                      <i className="fa-solid fa-arrow-up-left" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="iconButton"
+                      onMouseDown={() => beginPtzMove("up", { pan: 0, tilt: PTZ_TILT_SPEED, zoom: 0 })}
+                      onMouseUp={() => void stopActivePtzMove()}
+                      onMouseLeave={() => void stopActivePtzMove()}
+                      disabled={ptzCommandBusy}
+                      style={{ background: activeMoveId === "up" ? "rgba(56,189,248,0.14)" : undefined }}
+                    >
+                      <i className="fa-solid fa-arrow-up" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="iconButton"
+                      onMouseDown={() => beginPtzMove("up-right", { pan: PTZ_PAN_SPEED, tilt: PTZ_TILT_SPEED, zoom: 0 })}
+                      onMouseUp={() => void stopActivePtzMove()}
+                      onMouseLeave={() => void stopActivePtzMove()}
+                      disabled={ptzCommandBusy}
+                      style={{ background: activeMoveId === "up-right" ? "rgba(56,189,248,0.14)" : undefined }}
+                    >
+                      <i className="fa-solid fa-arrow-up-right" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="iconButton"
+                      onMouseDown={() => beginPtzMove("left", { pan: -PTZ_PAN_SPEED, tilt: 0, zoom: 0 })}
+                      onMouseUp={() => void stopActivePtzMove()}
+                      onMouseLeave={() => void stopActivePtzMove()}
+                      disabled={ptzCommandBusy}
+                      style={{ background: activeMoveId === "left" ? "rgba(56,189,248,0.14)" : undefined }}
+                    >
+                      <i className="fa-solid fa-arrow-left" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="iconButton"
+                      onClick={() => void stopActivePtzMove({ force: true })}
+                      disabled={ptzCommandBusy && !activeMoveId}
+                    >
+                      <i className="fa-solid fa-stop" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="iconButton"
+                      onMouseDown={() => beginPtzMove("right", { pan: PTZ_PAN_SPEED, tilt: 0, zoom: 0 })}
+                      onMouseUp={() => void stopActivePtzMove()}
+                      onMouseLeave={() => void stopActivePtzMove()}
+                      disabled={ptzCommandBusy}
+                      style={{ background: activeMoveId === "right" ? "rgba(56,189,248,0.14)" : undefined }}
+                    >
+                      <i className="fa-solid fa-arrow-right" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="iconButton"
+                      onMouseDown={() => beginPtzMove("down-left", { pan: -PTZ_PAN_SPEED, tilt: -PTZ_TILT_SPEED, zoom: 0 })}
+                      onMouseUp={() => void stopActivePtzMove()}
+                      onMouseLeave={() => void stopActivePtzMove()}
+                      disabled={ptzCommandBusy}
+                      style={{ background: activeMoveId === "down-left" ? "rgba(56,189,248,0.14)" : undefined }}
+                    >
+                      <i className="fa-solid fa-arrow-down-left" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="iconButton"
+                      onMouseDown={() => beginPtzMove("down", { pan: 0, tilt: -PTZ_TILT_SPEED, zoom: 0 })}
+                      onMouseUp={() => void stopActivePtzMove()}
+                      onMouseLeave={() => void stopActivePtzMove()}
+                      disabled={ptzCommandBusy}
+                      style={{ background: activeMoveId === "down" ? "rgba(56,189,248,0.14)" : undefined }}
+                    >
+                      <i className="fa-solid fa-arrow-down" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="iconButton"
+                      onMouseDown={() => beginPtzMove("down-right", { pan: PTZ_PAN_SPEED, tilt: -PTZ_TILT_SPEED, zoom: 0 })}
+                      onMouseUp={() => void stopActivePtzMove()}
+                      onMouseLeave={() => void stopActivePtzMove()}
+                      disabled={ptzCommandBusy}
+                      style={{ background: activeMoveId === "down-right" ? "rgba(56,189,248,0.14)" : undefined }}
+                    >
+                      <i className="fa-solid fa-arrow-down-right" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="chipButton"
+                      onMouseDown={() => beginPtzMove("zoom-in", { pan: 0, tilt: 0, zoom: PTZ_ZOOM_SPEED })}
+                      onMouseUp={() => void stopActivePtzMove()}
+                      onMouseLeave={() => void stopActivePtzMove()}
+                      disabled={ptzCommandBusy}
+                      style={{ justifyContent: "center", background: activeMoveId === "zoom-in" ? "rgba(56,189,248,0.14)" : undefined }}
+                    >
+                      {t("ext.cameras.control.zoom_in")}
+                    </button>
+                    <button
+                      type="button"
+                      className="chipButton"
+                      onMouseDown={() => beginPtzMove("zoom-out", { pan: 0, tilt: 0, zoom: -PTZ_ZOOM_SPEED })}
+                      onMouseUp={() => void stopActivePtzMove()}
+                      onMouseLeave={() => void stopActivePtzMove()}
+                      disabled={ptzCommandBusy}
+                      style={{ justifyContent: "center", background: activeMoveId === "zoom-out" ? "rgba(56,189,248,0.14)" : undefined }}
+                    >
+                      {t("ext.cameras.control.zoom_out")}
+                    </button>
+                    <button type="button" className="chipButton" onClick={() => void loadSnapshot()} disabled={snapshotLoading}>
+                      {t("ext.cameras.control.refresh_snapshot")}
+                    </button>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
+                    {[
+                      { label: t("ext.cameras.control.pose_pan"), value: formatPtzTelemetryValue(ptzStatus?.pan) },
+                      { label: t("ext.cameras.control.pose_tilt"), value: formatPtzTelemetryValue(ptzStatus?.tilt) },
+                      { label: t("ext.cameras.control.pose_zoom"), value: formatPtzTelemetryValue(ptzStatus?.zoom) },
+                      {
+                        label: t("ext.cameras.control.ptz_status_label"),
+                        value:
+                          normalizedMoveStatus === "moving"
+                            ? t("ext.cameras.control.ptz_status_moving")
+                            : normalizedMoveStatus === "idle"
+                              ? t("ext.cameras.control.ptz_status_idle")
+                              : t("ext.cameras.control.ptz_status_unknown"),
+                      },
+                    ].map((item) => (
+                      <div
+                        key={item.label}
+                        className="card"
+                        style={{ marginBottom: 0, minHeight: 64, display: "flex", alignItems: "center" }}
+                      >
+                        <div className="cardBody" style={{ padding: "10px 12px" }}>
+                          <div className="cardMeta">{item.label}</div>
+                          <div style={{ fontWeight: 700 }}>{item.value}</div>
+                        </div>
+                      </div>
+                    ))}
+                    {(ptzErrorMessage || ptzLoading) && (
+                      <div className="card" style={{ gridColumn: "1 / -1", marginBottom: 0 }}>
+                        <div className="cardBody" style={{ padding: "10px 12px" }}>
+                          {ptzLoading ? t("ext.cameras.control.loading") : ptzErrorMessage}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <div className="cardMeta">{isPtzCamera ? t("ext.cameras.control.ptz_help_auto") : t("ext.cameras.control.pose_help")}</div>
+              <div className="cardMeta">
+                {selectedSetQuality?.status === "good"
+                  ? t("ext.cameras.control.quality_good")
+                  : selectedSetQuality?.status === "review"
+                    ? t("ext.cameras.control.quality_review")
+                    : t("ext.cameras.control.quality_incomplete")}
+              </div>
+            </div>
+
+            <div className="rowWrap" style={{ gap: 8, flexWrap: "wrap" }}>
+              {selectedPoints.map((point, index) => {
+                const isSelected = selectedPointId === point.id;
+                const color = CONTROL_POINT_COLORS[index % CONTROL_POINT_COLORS.length];
+                const ready = Boolean(point.image && point.world);
+                return (
+                  <button
+                    key={point.id}
+                    type="button"
+                    className="chipButton"
+                    onClick={() => setSelectedPointId(point.id)}
+                    style={{
+                      minWidth: 52,
+                      justifyContent: "center",
+                      borderColor: isSelected ? "rgba(56,189,248,0.55)" : "rgba(255,255,255,0.14)",
+                      background: isSelected ? "rgba(56,189,248,0.10)" : undefined,
+                    }}
+                  >
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: 999,
+                        background: color,
+                        boxShadow: "0 0 0 2px rgba(0,0,0,0.25)",
+                        opacity: ready ? 1 : 0.4,
+                      }}
+                    />
+                    <span>{point.label || labelForIndex(index)}</span>
+                  </button>
+                );
+              })}
+
+              <button className="iconButton" type="button" onClick={addPoint} aria-label={t("core.actions.add")}>
+                <i className="fa-solid fa-plus" aria-hidden="true" />
+              </button>
+            </div>
+          </>
+        ) : null}
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, flex: 1, minHeight: 0 }}>
           <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
@@ -791,7 +1623,7 @@ function ControlPointsModal({
                     }}
                   />
 
-                  {points.map((point, index) => {
+                  {selectedPoints.map((point, index) => {
                     if (!point.image) return null;
                     const isSelected = selectedPointId === point.id;
                     const color = CONTROL_POINT_COLORS[index % CONTROL_POINT_COLORS.length];
@@ -870,14 +1702,35 @@ function ControlPointsModal({
         </div>
 
         <div className="rowWrap" style={{ justifyContent: "space-between" }}>
-          <button className="chipButton" type="button" onClick={onClose}>
+          <button
+            className="chipButton"
+            type="button"
+            onClick={() => {
+              void stopActivePtzMove({ force: true });
+              onClose();
+            }}
+          >
             {t("core.actions.cancel")}
           </button>
           <button
             className="primaryButton"
             type="button"
             onClick={() => {
-              onSave(points);
+              onSave(
+                sets.map((controlPointSet, index) => ({
+                  ...controlPointSet,
+                  label:
+                    controlPointSet.label.trim() ||
+                    (index === 0 ? t("ext.cameras.control.set_default") : t("ext.cameras.control.set_label", { index: index + 1 })),
+                  pose_reference: normalizePoseReference(controlPointSet.pose_reference),
+                  control_points: controlPointSet.control_points.map((point, pointIndex) => ({
+                    ...point,
+                    label: point.label || labelForIndex(pointIndex),
+                    image: point.image ?? null,
+                    world: point.world ?? null,
+                  })),
+                })),
+              );
               onClose();
             }}
           >
@@ -887,6 +1740,36 @@ function ControlPointsModal({
       </div>
     </SubModal>
   );
+}
+
+function padControlPoints(controlPoints: CameraControlPoint[]): CameraControlPoint[] {
+  const padded = controlPoints.map((point, index) => ({
+    ...point,
+    label: point.label || labelForIndex(index),
+    image: point.image ?? null,
+    world: point.world ?? null,
+  }));
+  while (padded.length < 4) {
+    padded.push({ id: createUniqueId(), label: labelForIndex(padded.length), image: null, world: null });
+  }
+  return padded;
+}
+
+function normalizePoseReference(poseReference: CameraPoseReference | null | undefined): CameraPoseReference | null {
+  if (!poseReference) return null;
+  const pan = poseReference.pan ?? null;
+  const tilt = poseReference.tilt ?? null;
+  const zoom = poseReference.zoom ?? null;
+  const presetToken = (poseReference.preset_token ?? "").trim();
+  const presetName = (poseReference.preset_name ?? "").trim();
+  if (pan === null && tilt === null && zoom === null && !presetToken && !presetName) return null;
+  return {
+    pan,
+    tilt,
+    zoom,
+    preset_token: presetToken || null,
+    preset_name: presetName || null,
+  };
 }
 
 function CameraAction({ element, i18n }: { element: CompositionElement; i18n: HostI18n }): React.ReactElement {

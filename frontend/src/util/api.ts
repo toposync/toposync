@@ -12,6 +12,7 @@ export type Composition = {
   id: string;
   name: string;
   elements: CompositionElement[];
+  meta?: Record<string, unknown>;
 };
 
 export type CompositionSummary = {
@@ -33,6 +34,55 @@ export type DeleteCompositionResponse = {
 export type AppSettings = {
   core: Record<string, unknown>;
   extensions: Record<string, Record<string, unknown>>;
+};
+
+export type AuthRole = "owner" | "admin" | "member" | "guest" | "service";
+
+export type AuthUser = {
+  id: string;
+  username: string;
+  display_name: string;
+  role: AuthRole;
+  is_disabled: boolean;
+  sessions: number;
+  grants: Array<{
+    id: string;
+    action: string;
+    resource_type: string;
+    include: string[];
+    exclude: string[];
+    created_at: number;
+    updated_at: number;
+  }>;
+  created_at: number;
+  updated_at: number;
+};
+
+export type AuthStatus = {
+  mode: "enforced" | "bypass" | string;
+  requires_setup: boolean;
+  authenticated: boolean;
+  user: AuthUser | null;
+};
+
+export type AccessUsersPayload = {
+  users: AuthUser[];
+  grants_catalog: Record<string, string[]>;
+};
+
+export type AccessOptionItem = {
+  id: string;
+  name: string;
+};
+
+export type AccessOptionsPayload = {
+  extensions: AccessOptionItem[];
+  compositions: Array<{
+    id: string;
+    name: string;
+    areas: AccessOptionItem[];
+  }>;
+  event_patterns: string[];
 };
 
 export type Pipeline = {
@@ -71,6 +121,75 @@ export type PipelineStats = {
   bucket_seconds: number;
   node_outputs: Record<string, number>;
   updated_at: number;
+};
+
+export type PipelineTelemetryNumericPoint = {
+  bucket_start_s: number;
+  count: number;
+  min: number;
+  max: number;
+  avg: number;
+};
+
+export type PipelineTelemetryNumeric = {
+  pipeline_name: string;
+  node_id: string;
+  metric_id: string;
+  window_seconds: number;
+  bucket_seconds: number;
+  histogram_min: number;
+  histogram_max: number;
+  histogram_bins: number[];
+  points: PipelineTelemetryNumericPoint[];
+  total_count: number;
+  total_min: number;
+  total_max: number;
+  total_avg: number;
+  updated_at: number;
+};
+
+export type PipelineTelemetryAggregateNumeric = {
+  metric_id: string;
+  aggregation: string;
+  pipeline_count: number;
+  series_count: number;
+  window_seconds: number;
+  bucket_seconds: number;
+  histogram_min: number;
+  histogram_max: number;
+  histogram_bins: number[];
+  points: PipelineTelemetryNumericPoint[];
+  total_count: number;
+  total_min: number;
+  total_max: number;
+  total_avg: number;
+  updated_at: number;
+};
+
+export type PipelinesTelemetryNumericOverview = {
+  aggregation: string;
+  series: PipelineTelemetryAggregateNumeric[];
+};
+
+export type PipelineTelemetryImageMarker = {
+  pipeline_name?: string | null;
+  ts: number;
+  node_id: string;
+  metric_id: string;
+  rel_path: string;
+  image_key?: string | null;
+  confidence?: number | null;
+};
+
+export type PipelineTelemetryImageMarkers = {
+  pipeline_name: string;
+  markers: PipelineTelemetryImageMarker[];
+};
+
+export type PipelinesTelemetryImageMarkers = {
+  aggregation: string;
+  pipeline_count: number;
+  markers: PipelineTelemetryImageMarker[];
 };
 
 export type PipelineTemplateApplyCamerasRequest = {
@@ -119,6 +238,10 @@ export type CameraContextArea = {
   id: string;
   name: string;
   vertices_count: number;
+  vertices: Array<{
+    x: number;
+    z: number;
+  }>;
 };
 
 export type CameraContextCameraElement = {
@@ -155,12 +278,287 @@ export type PipelineOperatorDefinition = {
   defaults: Record<string, unknown>;
   config_schema: Record<string, unknown>;
   share_strategy: "by_signature" | "never";
+  requires_payload_keys?: string[];
+  requires_artifacts?: string[];
+  requires_source_fields?: string[];
+  requires_media_fields?: string[];
+  produces_payload_keys?: string[];
+  produces_artifacts?: string[];
+  produces_source_fields?: string[];
+  produces_media_fields?: string[];
+  input_modalities?: string[];
+  output_modalities?: string[];
 };
 
 export type NotificationsPage = {
   notifications: Notification[];
   next_cursor: number | null;
 };
+
+export type StreamingTransmissionOutput = {
+  id: string;
+  protocol: "hls" | "rtsp" | "webrtc";
+  enabled?: boolean;
+  authentication?: {
+    enabled?: boolean;
+    username?: string | null;
+    password?: string | null;
+  };
+};
+
+export type StreamingTransmission = {
+  id: string;
+  name: string;
+  path: string;
+  enabled?: boolean;
+  host_server_id?: string;
+  camera_controls?: { enabled?: boolean; camera_id?: string | null } | null;
+  outputs?: StreamingTransmissionOutput[];
+};
+
+export type StreamingTransmissionCameraPreset = {
+  token: string;
+  name?: string;
+  pan?: number | null;
+  tilt?: number | null;
+  zoom?: number | null;
+};
+
+export type StreamingTransmissionCameraPresetsResponse = {
+  transmission_id: string;
+  camera_id: string;
+  presets: StreamingTransmissionCameraPreset[];
+};
+
+export type StreamingTransmissionCameraStatus = {
+  pan?: number | null;
+  tilt?: number | null;
+  zoom?: number | null;
+  move_status?: string;
+  error?: string;
+  utc_time?: string;
+};
+
+export type StreamingTransmissionCameraStatusResponse = {
+  transmission_id: string;
+  camera_id: string;
+  status: StreamingTransmissionCameraStatus;
+};
+
+export type StreamingTransmissionUrlOutput = {
+  output_id: string;
+  protocol: "hls" | "rtsp" | "webrtc";
+  resolved_engine_path: string;
+  url: string;
+  requires_auth?: boolean;
+  auth_username?: string | null;
+};
+
+export type StreamingTransmissionUrlsResponse = {
+  transmission_id: string;
+  engine_running: boolean;
+  outputs: StreamingTransmissionUrlOutput[];
+  warnings?: string[];
+};
+
+export type StreamingTransmissionDemandPrimeResponse = {
+  transmission_id: string;
+  primed: boolean;
+  primed_outputs: number;
+};
+
+export type StreamingOutputRuntimeStatus = {
+  output_key: string;
+  output_id: string;
+  transmission_id: string;
+  protocol: "hls" | "rtsp" | "webrtc";
+  resolved_engine_path: string;
+  viewer_count: number;
+  demand_signal: boolean;
+  publisher_running: boolean;
+  publisher_pid?: number | null;
+  publisher_frames_sent: number;
+  publisher_last_error?: string | null;
+  publisher_active_codec?: string | null;
+  publisher_hardware_accelerated?: boolean;
+  publisher_restart_count?: number;
+};
+
+export type StreamingOutputsRuntimeResponse = {
+  updated_at_unix: number;
+  outputs: StreamingOutputRuntimeStatus[];
+};
+
+async function _parseHttpError(res: Response, fallback: string): Promise<string> {
+  try {
+    const json = (await res.json()) as any;
+    const detail = json?.detail;
+    if (typeof detail === "string" && detail.trim()) return detail.trim();
+  } catch {
+    // ignore
+  }
+  try {
+    const text = String(await res.text()).trim();
+    if (text) return text;
+  } catch {
+    // ignore
+  }
+  return fallback;
+}
+
+export async function getAuthStatus(): Promise<AuthStatus> {
+  const res = await fetch("/api/auth/status");
+  if (!res.ok) throw new Error(`Failed to load auth status: ${res.status}`);
+  return res.json();
+}
+
+export async function setupOwner(params: {
+  username: string;
+  password: string;
+  display_name?: string;
+  device_label?: string;
+}): Promise<AuthUser> {
+  const res = await fetch("/api/auth/setup", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      username: params.username,
+      password: params.password,
+      display_name: params.display_name ?? "",
+      device_label: params.device_label ?? "browser",
+    }),
+  });
+  if (!res.ok) throw new Error(`Failed to setup owner: ${res.status}`);
+  const body = await res.json();
+  return body.user;
+}
+
+export async function login(params: {
+  username: string;
+  password: string;
+  device_label?: string;
+}): Promise<AuthUser> {
+  const res = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      username: params.username,
+      password: params.password,
+      device_label: params.device_label ?? "browser",
+    }),
+  });
+  if (!res.ok) throw new Error(`Failed to login: ${res.status}`);
+  const body = await res.json();
+  return body.user;
+}
+
+export async function logout(): Promise<void> {
+  const res = await fetch("/api/auth/logout", { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to logout: ${res.status}`);
+}
+
+export async function startPairing(params?: { device_label?: string }): Promise<{ code: string; expires_at: number }> {
+  const res = await fetch("/api/auth/pair/start", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      device_label: params?.device_label ?? "mobile",
+    }),
+  });
+  if (!res.ok) throw new Error(`Failed to start pairing: ${res.status}`);
+  return res.json();
+}
+
+export async function completePairing(params: { code: string; device_label?: string }): Promise<AuthUser> {
+  const res = await fetch("/api/auth/pair/complete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      code: params.code,
+      device_label: params.device_label ?? "mobile",
+    }),
+  });
+  if (!res.ok) throw new Error(`Failed to complete pairing: ${res.status}`);
+  const body = await res.json();
+  return body.user;
+}
+
+export async function listAccessUsers(): Promise<AccessUsersPayload> {
+  const res = await fetch("/api/access/users");
+  if (!res.ok) throw new Error(`Failed to list access users: ${res.status}`);
+  return res.json();
+}
+
+export async function getAccessOptions(): Promise<AccessOptionsPayload> {
+  const res = await fetch("/api/access/options");
+  if (!res.ok) throw new Error(`Failed to fetch access options: ${res.status}`);
+  return res.json();
+}
+
+export async function createAccessUser(payload: {
+  username: string;
+  password: string;
+  role: AuthRole;
+  display_name?: string;
+}): Promise<AuthUser> {
+  const res = await fetch("/api/access/users", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Failed to create access user: ${res.status}`);
+  return res.json();
+}
+
+export async function patchAccessUser(
+  userId: string,
+  payload: {
+    display_name?: string;
+    role?: AuthRole;
+    password?: string;
+    is_disabled?: boolean;
+  },
+): Promise<AuthUser> {
+  const res = await fetch(`/api/access/users/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Failed to patch access user ${userId}: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteAccessUser(userId: string): Promise<void> {
+  const res = await fetch(`/api/access/users/${encodeURIComponent(userId)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Failed to delete access user ${userId}: ${res.status}`);
+}
+
+export async function upsertAccessGrant(
+  userId: string,
+  payload: {
+    action: string;
+    resource_type: string;
+    include: string[];
+    exclude: string[];
+  },
+): Promise<AuthUser> {
+  const res = await fetch(`/api/access/users/${encodeURIComponent(userId)}/grants`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Failed to upsert grant for ${userId}: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteAccessGrant(userId: string, action: string, resourceType: string): Promise<AuthUser> {
+  const query = new URLSearchParams({ action, resource_type: resourceType });
+  const res = await fetch(`/api/access/users/${encodeURIComponent(userId)}/grants?${query.toString()}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`Failed to delete grant for ${userId}: ${res.status}`);
+  return res.json();
+}
 
 export async function fetchExtensions(): Promise<any[]> {
   const res = await fetch("/api/extensions");
@@ -330,6 +728,20 @@ export async function putPipeline(name: string, pipeline: Pipeline): Promise<Pip
   return res.json();
 }
 
+export async function duplicatePipeline(name: string, newName: string): Promise<Pipeline> {
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/duplicate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ new_name: String(newName || "") }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const detail = (body as any)?.detail ? String((body as any).detail) : String(res.status);
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 export async function deletePipeline(name: string): Promise<Pipeline> {
   const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`Failed to delete pipeline ${name}: ${res.status}`);
@@ -345,6 +757,82 @@ export async function getPipelineStats(name: string): Promise<PipelineStats> {
 export async function resetPipelineStats(name: string): Promise<PipelineStats> {
   const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/stats/reset`, { method: "POST" });
   if (!res.ok) throw new Error(`Failed to reset pipeline stats ${name}: ${res.status}`);
+  return res.json();
+}
+
+export async function getPipelineTelemetryNumeric(
+  name: string,
+  nodeId: string,
+  metricId: string,
+  pointLimit: number = 720,
+  windowSeconds?: number,
+): Promise<PipelineTelemetryNumeric> {
+  const params = new URLSearchParams({
+    node_id: String(nodeId || ""),
+    metric_id: String(metricId || ""),
+    point_limit: String(Math.max(50, Math.min(5000, Math.floor(pointLimit || 720)))),
+  });
+  if (Number.isFinite(windowSeconds) && (windowSeconds ?? 0) > 0) {
+    params.set("window_seconds", String(Math.max(1, Math.floor(windowSeconds ?? 0))));
+  }
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/telemetry/numeric?${params.toString()}`);
+  if (!res.ok) throw new Error(`Failed to fetch pipeline telemetry numeric ${name}/${nodeId}/${metricId}: ${res.status}`);
+  return res.json();
+}
+
+export async function getPipelineTelemetryImageMarkers(
+  name: string,
+  options?: { limit?: number; nodeId?: string; metricId?: string; windowSeconds?: number },
+): Promise<PipelineTelemetryImageMarkers> {
+  const params = new URLSearchParams();
+  const limit = Math.max(1, Math.min(40000, Math.floor(options?.limit ?? 500)));
+  params.set("limit", String(limit));
+  if (options?.nodeId) params.set("node_id", String(options.nodeId));
+  if (options?.metricId) params.set("metric_id", String(options.metricId));
+  if (Number.isFinite(options?.windowSeconds) && (options?.windowSeconds ?? 0) > 0) {
+    params.set("window_seconds", String(Math.max(1, Math.floor(options?.windowSeconds ?? 0))));
+  }
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/telemetry/image-markers?${params.toString()}`);
+  if (!res.ok) throw new Error(`Failed to fetch pipeline telemetry markers ${name}: ${res.status}`);
+  return res.json();
+}
+
+export async function getPipelinesTelemetryNumericOverview(
+  options?: { metricIds?: string[]; pointLimit?: number; windowSeconds?: number; aggregation?: string },
+): Promise<PipelinesTelemetryNumericOverview> {
+  const params = new URLSearchParams();
+  const aggregation = String(options?.aggregation || "max").trim() || "max";
+  params.set("aggregation", aggregation);
+  const metricIds = Array.isArray(options?.metricIds) ? options?.metricIds : [];
+  for (const metricId of metricIds) {
+    const value = String(metricId || "").trim();
+    if (value) params.append("metric_id", value);
+  }
+  const pointLimit = Math.max(50, Math.min(5000, Math.floor(options?.pointLimit ?? 720)));
+  params.set("point_limit", String(pointLimit));
+  if (Number.isFinite(options?.windowSeconds) && (options?.windowSeconds ?? 0) > 0) {
+    params.set("window_seconds", String(Math.max(1, Math.floor(options?.windowSeconds ?? 0))));
+  }
+  const res = await fetch(`/api/pipelines/telemetry/all/numeric?${params.toString()}`);
+  if (!res.ok) throw new Error(`Failed to fetch pipelines telemetry overview: ${res.status}`);
+  return res.json();
+}
+
+export async function getPipelinesTelemetryImageMarkers(
+  options?: { limit?: number; nodeId?: string; metricId?: string; windowSeconds?: number; aggregation?: string },
+): Promise<PipelinesTelemetryImageMarkers> {
+  const params = new URLSearchParams();
+  const aggregation = String(options?.aggregation || "max").trim() || "max";
+  params.set("aggregation", aggregation);
+  const limit = Math.max(1, Math.min(40000, Math.floor(options?.limit ?? 500)));
+  params.set("limit", String(limit));
+  if (options?.nodeId) params.set("node_id", String(options.nodeId));
+  if (options?.metricId) params.set("metric_id", String(options.metricId));
+  if (Number.isFinite(options?.windowSeconds) && (options?.windowSeconds ?? 0) > 0) {
+    params.set("window_seconds", String(Math.max(1, Math.floor(options?.windowSeconds ?? 0))));
+  }
+  const res = await fetch(`/api/pipelines/telemetry/all/image-markers?${params.toString()}`);
+  if (!res.ok) throw new Error(`Failed to fetch pipelines telemetry markers: ${res.status}`);
   return res.json();
 }
 
@@ -405,9 +893,132 @@ export async function getCameraContexts(cameraId: string): Promise<CameraContext
   return res.json();
 }
 
+export async function fetchCameraSnapshot(cameraId: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/snapshot`, { signal });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Snapshot failed: ${response.status}`);
+  }
+  return response.blob();
+}
+
+export async function fetchRtspSnapshot(
+  options: { url: string; username?: string; password?: string },
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const response = await fetch("/api/cameras/rtsp/snapshot", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: options.url,
+      username: options.username ?? "",
+      password: options.password ?? "",
+    }),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Snapshot failed: ${response.status}`);
+  }
+  return response.blob();
+}
+
 export async function listPipelineOperators(): Promise<PipelineOperatorDefinition[]> {
   const res = await fetch("/api/pipelines/operators");
   if (!res.ok) throw new Error(`Failed to list pipeline operators: ${res.status}`);
   const body = (await res.json()) as { operators?: PipelineOperatorDefinition[] };
   return body.operators ?? [];
+}
+
+export async function listStreamingTransmissions(): Promise<StreamingTransmission[]> {
+  const res = await fetch("/api/streams/transmissions");
+  if (!res.ok) throw new Error(`Failed to list streaming transmissions: ${res.status}`);
+  return (await res.json()) as StreamingTransmission[];
+}
+
+export async function getStreamingTransmissionUrls(transmissionId: string): Promise<StreamingTransmissionUrlsResponse> {
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/urls`);
+  if (!res.ok) throw new Error(`Failed to fetch streaming URLs for ${transmissionId}: ${res.status}`);
+  return (await res.json()) as StreamingTransmissionUrlsResponse;
+}
+
+export async function primeStreamingTransmissionDemand(
+  transmissionId: string,
+): Promise<StreamingTransmissionDemandPrimeResponse> {
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/demand/prime`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`Failed to prime streaming demand for ${transmissionId}: ${res.status}`);
+  return (await res.json()) as StreamingTransmissionDemandPrimeResponse;
+}
+
+export async function getStreamingTransmissionCameraPresets(
+  transmissionId: string,
+): Promise<StreamingTransmissionCameraPresetsResponse> {
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/presets`);
+  if (!res.ok) {
+    throw new Error(await _parseHttpError(res, `Failed to fetch PTZ presets for ${transmissionId}: ${res.status}`));
+  }
+  return (await res.json()) as StreamingTransmissionCameraPresetsResponse;
+}
+
+export async function gotoStreamingTransmissionCameraPreset(
+  transmissionId: string,
+  presetToken: string,
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/goto-preset`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ preset_token: presetToken }),
+  });
+  if (!res.ok) {
+    throw new Error(await _parseHttpError(res, `Failed to go to PTZ preset for ${transmissionId}: ${res.status}`));
+  }
+  return (await res.json()) as { ok: boolean };
+}
+
+export async function getStreamingTransmissionCameraStatus(
+  transmissionId: string,
+): Promise<StreamingTransmissionCameraStatusResponse> {
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/status`);
+  if (!res.ok) {
+    throw new Error(await _parseHttpError(res, `Failed to fetch PTZ status for ${transmissionId}: ${res.status}`));
+  }
+  return (await res.json()) as StreamingTransmissionCameraStatusResponse;
+}
+
+export async function moveStreamingTransmissionCamera(
+  transmissionId: string,
+  payload: { pan: number; tilt: number; zoom: number; timeout_s?: number | null },
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/move`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await _parseHttpError(res, `Failed to move PTZ camera for ${transmissionId}: ${res.status}`));
+  }
+  return (await res.json()) as { ok: boolean };
+}
+
+export async function stopStreamingTransmissionCamera(
+  transmissionId: string,
+  payload?: { pan_tilt?: boolean; zoom?: boolean },
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/camera/stop`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload ?? {}),
+  });
+  if (!res.ok) {
+    throw new Error(await _parseHttpError(res, `Failed to stop PTZ camera for ${transmissionId}: ${res.status}`));
+  }
+  return (await res.json()) as { ok: boolean };
+}
+
+export async function getStreamingOutputsRuntime(): Promise<StreamingOutputsRuntimeResponse> {
+  const res = await fetch("/api/streams/runtime/outputs");
+  if (!res.ok) throw new Error(`Failed to fetch streaming runtime outputs: ${res.status}`);
+  return (await res.json()) as StreamingOutputsRuntimeResponse;
 }

@@ -29,7 +29,7 @@ async function openCompositions(page) {
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem("toposync.locale", "en");
-    localStorage.setItem("toposync.theme", "default");
+    localStorage.setItem("toposync.theme", "topo-day");
   });
 });
 
@@ -81,18 +81,22 @@ test("theme can be selected from settings", async ({ page }) => {
   const dialog = await openSettings(page);
   await dialog.getByRole("button", { name: /^Core\b/ }).click();
 
-  const accentBefore = await page.evaluate(() =>
-    getComputedStyle(document.documentElement).getPropertyValue("--accent").trim(),
-  );
-  expect(accentBefore.toLowerCase()).toBe("#fbbf24");
+  await page.waitForFunction(() => document.documentElement.dataset.toposyncBaseTheme === "topo-day");
 
-  await expect(dialog.getByText("Neon (blue)")).toBeVisible();
-  await dialog.getByText("Neon (blue)").click();
-
-  const accentAfter = await page.evaluate(() =>
-    getComputedStyle(document.documentElement).getPropertyValue("--accent").trim(),
+  const bgBefore = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue("--color-application-background").trim(),
   );
-  expect(accentAfter.toLowerCase()).toBe("#38bdf8");
+  expect(bgBefore.toLowerCase()).toBe("#f6f2ea");
+
+  await expect(dialog.getByText("Topo Night")).toBeVisible();
+  await dialog.getByText("Topo Night").click();
+
+  await page.waitForFunction(() => document.documentElement.dataset.toposyncBaseTheme === "topo-night");
+
+  const bgAfter = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue("--color-application-background").trim(),
+  );
+  expect(bgAfter.toLowerCase()).toBe("#060914");
 });
 
 test("compositions can be created, renamed, and deleted", async ({ page, request }) => {

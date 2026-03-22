@@ -179,8 +179,15 @@ function buildCamera(viewBounds: BoundsXZ, viewWidth: number, viewHeight: number
   return camera;
 }
 
+function ghostWallOpacityForTheme(): number {
+  if (typeof document === "undefined") return 0.08;
+  const { dataset } = document.documentElement;
+  const themeId = dataset.toposyncBaseTheme || dataset.toposyncTheme || "topo-day";
+  return themeId === "topo-day" ? 0.1 : 0.08;
+}
+
 function applyGhostWalls(object: THREE.Object3D, enabled: boolean): void {
-  const ghostOpacity = 0.22;
+  const ghostOpacity = ghostWallOpacityForTheme();
   const stateKey = "__toposyncGhostWallsOriginal";
   object.traverse((node) => {
     const matRaw = (node as any).material as unknown;
@@ -630,7 +637,7 @@ async function captureBaseAndOverlays(args: {
   const baseDataUrl = renderer.domElement.toDataURL("image/png");
 
   for (const light of defaultLights) scene.remove(light);
-  renderer.setClearColor(0x000000, 1);
+  renderer.setClearColor(0x000000, 0);
 
   // Overlay captures.
   const overlays: Array<Main2DOverlayManifest & { dataUrl: string }> = [];

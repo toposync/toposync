@@ -3,7 +3,7 @@ import React, { useCallback, useMemo, useState } from "react";
 import type { CamerasIndexResponse, PipelineOperatorDefinition } from "../../../util/api";
 
 import { PIPELINE_PRESET_OPERATOR_IDS } from "./constants";
-import type { DragInsertPosition, InteractiveBuildResult, InteractiveStep, SelectOption } from "./types";
+import type { DragInsertPosition, InteractiveBuildResult, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "./types";
 import { createInteractiveStep, isRecord, jsonPretty, moveStep, safeJsonParse } from "./utils";
 
 import { InteractiveStepsList } from "./editor/InteractiveStepsList";
@@ -13,26 +13,39 @@ import { useCameraContexts } from "./editor/useCameraContexts";
 type Props = {
   operatorsById: Record<string, PipelineOperatorDefinition>;
   camerasIndex: CamerasIndexResponse;
+  pipelineName: string | null;
   stepOutputsByNodeId: Record<string, number> | null;
   interactiveSteps: InteractiveStep[];
   setInteractiveSteps: React.Dispatch<React.SetStateAction<InteractiveStep[]>>;
   interactiveWarning: string | null;
   setInteractiveWarning: React.Dispatch<React.SetStateAction<string | null>>;
   interactiveGraph: InteractiveBuildResult;
+  onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
 };
 
 export function InteractivePipelineEditor({
   operatorsById,
   camerasIndex,
+  pipelineName,
   stepOutputsByNodeId,
   interactiveSteps,
   setInteractiveSteps,
   interactiveWarning,
   setInteractiveWarning,
   interactiveGraph,
+  onOpenTelemetryField,
 }: Props): React.ReactElement {
   const [draggingStepUid, setDraggingStepUid] = useState<string | null>(null);
   const [dragOverStep, setDragOverStep] = useState<{ uid: string; position: DragInsertPosition } | null>(null);
+
+  const isCameraSourceOperator = useCallback(
+    (operatorId: string) => {
+      const definition = operatorsById[operatorId];
+      const capabilities = new Set((definition?.capabilities ?? []).map((value) => String(value || "").trim().toLowerCase()));
+      return capabilities.has("source") && capabilities.has("camera");
+    },
+    [operatorsById],
+  );
 
   const presetOperators = useMemo(
     () => PIPELINE_PRESET_OPERATOR_IDS.map((id) => operatorsById[id]).filter(Boolean) as PipelineOperatorDefinition[],
@@ -40,13 +53,13 @@ export function InteractivePipelineEditor({
   );
 
   const interactiveCameraId = useMemo(() => {
-    const sourceStep = interactiveSteps.find((step) => step.operatorId === "camera.source");
+    const sourceStep = interactiveSteps.find((step) => isCameraSourceOperator(step.operatorId));
     if (!sourceStep) return "";
     const parsed = safeJsonParse(sourceStep.configText || "{}");
     if (!parsed.ok) return "";
     if (!isRecord(parsed.data)) return "";
     return String((parsed.data as any).camera_id ?? "").trim();
-  }, [interactiveSteps]);
+  }, [interactiveSteps, isCameraSourceOperator]);
 
   const cameraSelectOptions = useMemo<SelectOption[]>(() => {
     const cameras = Array.isArray(camerasIndex.cameras) ? camerasIndex.cameras : [];
@@ -76,7 +89,7 @@ export function InteractivePipelineEditor({
         const used = new Set(prev.map((item) => item.nodeId));
         const next = createInteractiveStep(operatorId, operator.defaults ?? {}, used);
         if (operatorId === "core.schedule_gate") {
-          const cameraIndex = prev.findIndex((item) => item.operatorId === "camera.source");
+          const cameraIndex = prev.findIndex((item) => isCameraSourceOperator(item.operatorId));
           if (cameraIndex >= 0) {
             const copy = prev.slice();
             copy.splice(cameraIndex, 0, next);
@@ -88,7 +101,7 @@ export function InteractivePipelineEditor({
       });
       setInteractiveWarning(null);
     },
-    [operatorsById, setInteractiveSteps, setInteractiveWarning],
+    [isCameraSourceOperator, operatorsById, setInteractiveSteps, setInteractiveWarning],
   );
 
   const updateInteractiveStep = useCallback(
@@ -195,6 +208,7 @@ export function InteractivePipelineEditor({
       <InteractiveStepsList
         steps={interactiveSteps}
         operatorsById={operatorsById}
+        pipelineName={pipelineName}
         interactiveCameraId={interactiveCameraId}
         cameraSelectOptions={cameraSelectOptions}
         cameraSelectOptionById={cameraSelectOptionById}
@@ -212,6 +226,7 @@ export function InteractivePipelineEditor({
         onRemoveStep={removeInteractiveStep}
         onUpdateStepScalar={updateInteractiveStepScalar}
         onUpdateStepConfig={updateInteractiveStepConfig}
+        onOpenTelemetryField={onOpenTelemetryField}
       />
     </div>
   );

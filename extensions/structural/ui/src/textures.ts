@@ -3,6 +3,7 @@ type Texture = import("three").Texture;
 
 export type WallTextureId = "none" | "brick" | "concrete";
 export type FloorTextureId = "none" | "grass" | "concrete";
+export type OpeningTextureId = "none" | "wood" | "concrete" | "glass";
 export type TextureQuality = "simplified" | "detailed";
 
 function createCanvas(size: number): HTMLCanvasElement {
@@ -84,6 +85,44 @@ function createBrickTextureCanvas(size: number): HTMLCanvasElement {
   }
 
   drawNoise(ctx, size, Math.floor((size * size) / 10), 0.06);
+  return canvas;
+}
+
+function createWoodTextureCanvas(size: number): HTMLCanvasElement {
+  const canvas = createCanvas(size);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+
+  ctx.fillStyle = "#7c5d3a";
+  ctx.fillRect(0, 0, size, size);
+
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  for (let y = 0; y < size; y += 1) {
+    const t = y / size;
+    const wave = Math.sin(t * Math.PI * 8 + Math.sin(t * Math.PI * 2) * 1.2);
+    const shade = Math.round(88 + wave * 20 + Math.random() * 12);
+    ctx.fillStyle = `rgb(${shade},${Math.round(shade * 0.72)},${Math.round(shade * 0.45)})`;
+    ctx.fillRect(0, y, size, 1);
+  }
+  ctx.restore();
+
+  ctx.save();
+  ctx.globalAlpha = 0.18;
+  ctx.strokeStyle = "#3f2f1f";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 48; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const rx = 2 + Math.random() * 6;
+    const ry = 1 + Math.random() * 3;
+    ctx.beginPath();
+    ctx.ellipse(x, y, rx, ry, Math.random() * Math.PI, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  drawNoise(ctx, size, Math.floor((size * size) / 4), 0.06);
   return canvas;
 }
 
@@ -210,10 +249,24 @@ export function readFloorTextureId(value: unknown, fallback: FloorTextureId): Fl
   return value === "none" || value === "grass" || value === "concrete" ? value : fallback;
 }
 
+export function readOpeningTextureId(value: unknown, fallback: OpeningTextureId): OpeningTextureId {
+  return value === "none" || value === "wood" || value === "concrete" || value === "glass" ? value : fallback;
+}
+
 export function getWallTexture(THREE: Three, id: WallTextureId): Texture | null {
   if (id === "none") return null;
-  if (id === "brick") return getCachedTexture(THREE, "wall:brick", createBrickTextureCanvas, { size: 256, anisotropy: 4 });
-  if (id === "concrete") return getCachedTexture(THREE, "wall:concrete", createConcreteTextureCanvas, { size: 256, anisotropy: 4 });
+  if (id === "brick") {
+    const tex = getCachedTexture(THREE, "wall:brick", createBrickTextureCanvas, { size: 256, anisotropy: 4 });
+    // World UVs are in meters; repeat controls cycles-per-meter.
+    tex.repeat.set(1, 1);
+    return tex;
+  }
+  if (id === "concrete") {
+    const tex = getCachedTexture(THREE, "wall:concrete", createConcreteTextureCanvas, { size: 256, anisotropy: 4 });
+    // Keep concrete less "tiled" than brick.
+    tex.repeat.set(0.5, 0.5);
+    return tex;
+  }
   return null;
 }
 
@@ -224,5 +277,12 @@ export function getFloorTexture(THREE: Three, id: FloorTextureId, quality: Textu
     return getCachedTexture(THREE, "floor:grass:simplified", createGrassTextureCanvas, { size: 256, anisotropy: 4 });
   }
   if (id === "concrete") return getCachedTexture(THREE, "floor:concrete", createConcreteTextureCanvas, { size: 256, anisotropy: 4 });
+  return null;
+}
+
+export function getOpeningTexture(THREE: Three, id: OpeningTextureId): Texture | null {
+  if (id === "none" || id === "glass") return null;
+  if (id === "wood") return getCachedTexture(THREE, "opening:wood", createWoodTextureCanvas, { size: 256, anisotropy: 4 });
+  if (id === "concrete") return getCachedTexture(THREE, "opening:concrete", createConcreteTextureCanvas, { size: 256, anisotropy: 4 });
   return null;
 }

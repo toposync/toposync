@@ -21,6 +21,7 @@ class CameraHub:
         self._frame_grabber_factory = frame_grabber_factory
         self._lock = asyncio.Lock()
         self._entries: dict[str, _HubEntry] = {}
+        self._starting: dict[str, asyncio.Event] = {}
 
     async def acquire(
         self,
@@ -34,23 +35,58 @@ class CameraHub:
         if not hub_key:
             raise ValueError("CameraHub.acquire requires a non-empty key")
 
-        async with self._lock:
-            entry = self._entries.get(hub_key)
-            if entry is None:
-                # Um hub por câmera evita múltiplas conexões RTSP quando há vários pipelines (ex.: schedules diferentes).
+        while True:
+            start_event: asyncio.Event | None = None
+            should_start = False
+
+            async with self._lock:
+                entry = self._entries.get(hub_key)
+                if entry is not None:
+                    entry.refcount += 1
+                    return entry.grabber
+
+                start_event = self._starting.get(hub_key)
+                if start_event is None:
+                    start_event = asyncio.Event()
+                    self._starting[hub_key] = start_event
+                    should_start = True
+
+            if not should_start:
+                await start_event.wait()
+                continue
+
+            try:
+                # One hub per camera avoids multiple RTSP connections when multiple pipelines are running.
                 grabber = self._frame_grabber_factory(rtsp_url, target_fps=float(target_fps), backend=str(backend))
-                started = grabber.start()
-                entry = _HubEntry(
-                    grabber=started,
-                    refcount=0,
-                    rtsp_url=str(rtsp_url),
-                    backend=str(backend),
-                    target_fps=float(target_fps),
-                    created_at=time.time(),
-                )
-                self._entries[hub_key] = entry
-            entry.refcount += 1
-            return entry.grabber
+                # Starting a grabber may block on network/camera open. Keep the event loop responsive and avoid
+                # holding the hub lock while this runs.
+                started = await asyncio.to_thread(grabber.start)
+            except Exception:
+                async with self._lock:
+                    event = self._starting.pop(hub_key, None)
+                    if event is not None:
+                        event.set()
+                raise
+
+            async with self._lock:
+                event = self._starting.pop(hub_key, None)
+                if event is not None:
+                    event.set()
+                entry = self._entries.get(hub_key)
+                if entry is None:
+                    entry = _HubEntry(
+                        grabber=started,
+                        refcount=1,
+                        rtsp_url=str(rtsp_url),
+                        backend=str(backend),
+                        target_fps=float(target_fps),
+                        created_at=time.time(),
+                    )
+                    self._entries[hub_key] = entry
+                    return entry.grabber
+
+                entry.refcount += 1
+                return entry.grabber
 
     async def release(self, *, key: str) -> None:
         hub_key = str(key or "").strip()
@@ -71,7 +107,8 @@ class CameraHub:
         if grabber is None:
             return
         try:
-            grabber.stop()
+            # Stopping may block while draining/releasing native capture resources.
+            await asyncio.to_thread(grabber.stop)
         except Exception:
             return
 

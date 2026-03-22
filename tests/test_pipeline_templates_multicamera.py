@@ -14,6 +14,7 @@ import toposync.extensions.manager as ext_manager_mod
 def _create_client_with_cameras(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("TOPOSYNC_NO_FRONTEND", "1")
+    monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "bypass")
 
     def _eps(_group: str):
         return [
@@ -123,4 +124,3 @@ def test_apply_template_conflict_skip(tmp_path: Path, monkeypatch: pytest.Monkey
         skipped = body.get("skipped", [])
         assert skipped
         assert skipped[0]["pipeline_name"] == "alerts_template__cam_a"
-

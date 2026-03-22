@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .execution import PassThroughRuntime, SinkRuntime, SourceOperatorRuntime, TransformOperatorRuntime
 from .operator_registry import OperatorRegistry
+from .packet_contract import build_media_descriptor, build_source_descriptor
 from .runtime import Artifact, Lifecycle, Packet
 from .operators_distributed import register_distributed_operators
 from .operators_gates import register_gate_operators
@@ -222,6 +223,8 @@ class DebugStdoutConfig(BaseModel):
     save_images: bool = True
     max_images_per_packet: int = Field(default=12, ge=0, le=256)
     output_dir: str = ""
+    snapshot_enabled: bool = True
+    snapshot_interval_seconds: float = Field(default=10.0, ge=0.0, le=3600.0)
 
     print_payload: bool = True
     print_metadata: bool = True
@@ -238,8 +241,9 @@ class DebugStdoutConfig(BaseModel):
 
 
 class DebugStdoutRuntime(TransformOperatorRuntime):
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any], dependencies: Any) -> None:
         self._config = DebugStdoutConfig.model_validate(config)
+        self._dependencies = dependencies
         self._root_dir: Path | None = None
         self._root_dir_ready = False
 
@@ -249,6 +253,44 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
 
         pipeline_name = getattr(context, "pipeline_name", "") or "pipeline"
         node_id = getattr(context, "node_id", "") or "node"
+
+        snapshot_store = getattr(self._dependencies, "pipeline_snapshot_store", None)
+        if (
+            snapshot_store is not None
+            and self._config.snapshot_enabled
+            and packet.lifecycle != Lifecycle.CLOSE
+            and float(self._config.snapshot_interval_seconds) >= 0.0
+        ):
+            image = self._resolve_snapshot_image(packet)
+            if image is not None:
+                camera_id = str(packet.payload.get("camera_id") or packet.metadata.get("camera_id") or "").strip()
+                source_id = camera_id or str(packet.stream_id or "").strip() or "-"
+                occurrences = getattr(context, "stats_node_occurrences", None)
+                if isinstance(occurrences, (list, tuple)) and occurrences:
+                    for logical_pipeline_name, logical_node_id in occurrences:
+                        snapshot_store.schedule_input_snapshot(
+                            context=context,
+                            packet_created_at=float(packet.created_at),
+                            pipeline_name=str(logical_pipeline_name or ""),
+                            node_id=str(logical_node_id or ""),
+                            source_id=source_id,
+                            image=image,
+                            interval_seconds=float(self._config.snapshot_interval_seconds),
+                            fmt="png",
+                            jpeg_quality=85,
+                        )
+                else:
+                    snapshot_store.schedule_input_snapshot(
+                        context=context,
+                        packet_created_at=float(packet.created_at),
+                        pipeline_name=str(pipeline_name),
+                        node_id=str(node_id),
+                        source_id=source_id,
+                        image=image,
+                        interval_seconds=float(self._config.snapshot_interval_seconds),
+                        fmt="png",
+                        jpeg_quality=85,
+                    )
 
         saved: list[dict[str, str]] = []
         if self._config.save_images and self._config.max_images_per_packet > 0:
@@ -306,6 +348,36 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
 
         print(json.dumps(out, ensure_ascii=False, sort_keys=True, indent=2), flush=True)
         return [packet]
+
+    def _resolve_snapshot_image(self, packet: Packet) -> Any | None:
+        preferred = (
+            "frame",
+            "frame_original",
+            "best_frame",
+            "treated",
+            "original",
+            "segmented",
+        )
+        for name in preferred:
+            artifact = packet.artifacts.get(name)
+            if artifact is None:
+                continue
+            if artifact.reference:
+                continue
+            if artifact.data is None:
+                continue
+            if _debug_is_image_like(artifact.data):
+                return artifact.data
+
+        for artifact in packet.artifacts.values():
+            if artifact.reference:
+                continue
+            if artifact.data is None:
+                continue
+            if _debug_is_image_like(artifact.data):
+                return artifact.data
+
+        return None
 
     async def _save_images(self, packet: Packet, *, context, pipeline_name: str, node_id: str) -> list[dict[str, str]]:  # noqa: ANN001
         root = await self._ensure_root_dir()
@@ -493,7 +565,7 @@ class StreamStateSnapshotRuntime(TransformOperatorRuntime):
         for name, artifact in packet.artifacts.items():
             if self._artifact_allowlist and name not in self._artifact_allowlist:
                 continue
-            # Nunca inclui blobs em memória: snapshots são para UI/debug e devem ser leves.
+            # Never include in-memory blobs: snapshots are for UI/debug and should be lightweight.
             artifacts[name] = Artifact(
                 name=str(artifact.name),
                 data=None,
@@ -526,9 +598,21 @@ class SyntheticSourceRuntime(SourceOperatorRuntime):
         if now < self._next_tick:
             await context.sleep(self._next_tick - now)
         self._next_tick = max(self._next_tick + self._interval_s, time.monotonic())
+        current_ts = time.time()
         packet = Packet.create(
             stream_id=self._stream_id,
-            payload={"sequence": self._sequence},
+            payload={
+                "sequence": self._sequence,
+                "source": build_source_descriptor(
+                    device_id=self._stream_id,
+                    kind="synthetic",
+                    modality="data",
+                    name="Synthetic source",
+                    transport="internal",
+                    clock_domain=f"stream:{self._stream_id}",
+                ),
+                "media": build_media_descriptor(modality="data", ts=current_ts),
+            },
             metadata={"source": "synthetic"},
         )
         self._sequence += 1
@@ -591,8 +675,25 @@ class DemoFrameSequenceSourceRuntime(SourceOperatorRuntime):
 
         value = 180 + (self._index % 3) * 15
         frame = np.full((self._height, self._width, 3), value, dtype=np.uint8)
+        current_ts = time.time()
         payload = {
-            "frame_ts": time.time(),
+            "source": build_source_descriptor(
+                device_id=self._camera_id,
+                channel_id="video_main",
+                kind="camera",
+                modality="video",
+                name=self._camera_name,
+                transport="synthetic",
+                clock_domain=f"device:{self._camera_id}",
+            ),
+            "media": build_media_descriptor(
+                modality="video",
+                ts=current_ts,
+                width=int(self._width),
+                height=int(self._height),
+                frame_rate=(1.0 / self._interval_s) if self._interval_s > 0 else None,
+            ),
+            "frame_ts": current_ts,
             "camera_id": self._camera_id,
             "camera_name": self._camera_name,
             "frame_width": int(self._width),
@@ -812,6 +913,9 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["source", "test"],
         defaults=SyntheticSourceConfig().model_dump(),
+        produces_source_fields=["device_id", "kind", "modality", "name", "transport", "clock_domain"],
+        produces_media_fields=["modality", "ts"],
+        output_modalities=["data"],
         share_strategy="by_signature",
         owner="core",
         runtime_factory=lambda config, _deps: SyntheticSourceRuntime(config),
@@ -836,6 +940,9 @@ def register_core_operators(registry: OperatorRegistry) -> None:
             "area_label",
         ],
         produces_artifacts=["frame_original", "frame"],
+        produces_source_fields=["device_id", "channel_id", "kind", "modality", "name", "transport", "clock_domain"],
+        produces_media_fields=["modality", "ts", "width", "height", "frame_rate"],
+        output_modalities=["video"],
         share_strategy="never",
         owner="core",
         runtime_factory=lambda config, _deps: DemoFrameSequenceSourceRuntime(config),
@@ -924,7 +1031,7 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         max_concurrency=2,
         share_strategy="never",
         owner="core",
-        runtime_factory=lambda config, _deps: DebugStdoutRuntime(config),
+        runtime_factory=lambda config, deps: DebugStdoutRuntime(config, deps),
     )
     registry.register_operator(
         operator_id="core.passthrough",

@@ -1,11 +1,15 @@
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Select, { type MultiValue } from "react-select";
 import CreatableSelect from "react-select/creatable";
 
+import { listStreamingTransmissions, type StreamingTransmission } from "../../../../../util/api";
 import { buildArtifactSuggestions, buildScheduleWeekdayOptions, pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constants";
-import type { SelectOption } from "../../types";
+import type { InteractiveStep, SelectOption } from "../../types";
+import { isRecord, safeJsonParse } from "../../utils";
 import { i18n } from "../../../../../util/i18n";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
+import type { PipelineStepSnapshotKey } from "./pipelineStepSnapshots";
+import { buildPipelineStepSnapshotUrl } from "./pipelineStepSnapshots";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
 
@@ -582,10 +586,64 @@ export function DebounceConfigCard({ config, showAdvanced, onUpdateConfig }: Deb
 
 type DebugProps = {
   config: Record<string, unknown>;
+  pipelineName: string | null;
+  steps: InteractiveStep[];
+  index: number;
+  showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
 };
 
-export function DebugConfigCard({ config, onUpdateConfig }: DebugProps): React.ReactElement {
+function parseInteractiveStepConfig(step: InteractiveStep): Record<string, unknown> {
+  const parsed = safeJsonParse(step.configText || "{}");
+  if (!parsed.ok) return {};
+  if (!isRecord(parsed.data)) return {};
+  return parsed.data as Record<string, unknown>;
+}
+
+function resolvePipelineStepSourceIdFromCameraSourceConfig(config: Record<string, unknown>): string | null {
+  const cameraId = String((config as any).camera_id ?? "").trim();
+  if (cameraId) return cameraId;
+  const rtspUrl = String((config as any).rtsp_url ?? "").trim();
+  if (!rtspUrl) return null;
+  return "camera:adhoc";
+}
+
+type DebugPreviewEligibility =
+  | { enabled: true; key: PipelineStepSnapshotKey }
+  | { enabled: false; reason: { code: "no_camera_source" | "no_camera_selected" | "no_pipeline_name" } };
+
+function resolveDebugPreviewEligibility(
+  steps: InteractiveStep[],
+  currentIndex: number,
+  pipelineName: string | null,
+  nodeId: string,
+): DebugPreviewEligibility {
+  let sourceIndex = -1;
+  for (let idx = currentIndex - 1; idx >= 0; idx -= 1) {
+    if (steps[idx]?.operatorId === "camera.source") {
+      sourceIndex = idx;
+      break;
+    }
+  }
+  if (sourceIndex < 0) return { enabled: false, reason: { code: "no_camera_source" } };
+  const sourceConfig = parseInteractiveStepConfig(steps[sourceIndex]!);
+  const sourceId = resolvePipelineStepSourceIdFromCameraSourceConfig(sourceConfig);
+  if (!sourceId) return { enabled: false, reason: { code: "no_camera_selected" } };
+  const safePipeline = String(pipelineName ?? "").trim();
+  if (!safePipeline) return { enabled: false, reason: { code: "no_pipeline_name" } };
+
+  return {
+    enabled: true,
+    key: {
+      pipelineName: safePipeline,
+      nodeId: String(nodeId || "").trim() || "node",
+      sourceId,
+      filename: "input.png",
+    },
+  };
+}
+
+export function DebugConfigCard({ config, pipelineName, steps, index, showAdvanced, onUpdateConfig }: DebugProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const enabled = Boolean((config as any).enabled ?? true);
   const saveImages = Boolean((config as any).save_images ?? true);
@@ -594,6 +652,19 @@ export function DebugConfigCard({ config, onUpdateConfig }: DebugProps): React.R
   const printArtifacts = Boolean((config as any).print_artifacts ?? true);
   const maxImagesPerPacket = Number((config as any).max_images_per_packet ?? 4);
   const outputDir = String((config as any).output_dir ?? "").trim();
+  const snapshotEnabled = (config as any).snapshot_enabled !== false;
+  const snapshotIntervalRaw = Number((config as any).snapshot_interval_seconds ?? 10);
+  const snapshotIntervalSeconds = Number.isFinite(snapshotIntervalRaw) ? Math.max(0, Math.min(3600, snapshotIntervalRaw)) : 10;
+
+  const nodeId = String(steps[index]?.nodeId ?? "").trim();
+  const previewEligibility = React.useMemo(
+    () => resolveDebugPreviewEligibility(steps, index, pipelineName, nodeId),
+    [steps, index, pipelineName, nodeId],
+  );
+  const [previewNonce, setPreviewNonce] = useState(0);
+  const [previewDims, setPreviewDims] = useState<{ width: number; height: number } | null>(null);
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const previewUrl = previewEligibility.enabled ? buildPipelineStepSnapshotUrl(previewEligibility.key, previewNonce) : null;
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -653,6 +724,110 @@ export function DebugConfigCard({ config, onUpdateConfig }: DebugProps): React.R
         <span>{t("core.ui.pipelines.panels.debug.print_artifacts")}</span>
         <input type="checkbox" checked={printArtifacts} onChange={(event) => onUpdateConfig((prev) => ({ ...prev, print_artifacts: event.target.checked }))} />
       </label>
+
+      <div className="sectionDivider" />
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.debug.preview_hint")}</div>
+
+      {showAdvanced ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.debug.snapshot_enabled")}</span>
+            <input
+              type="checkbox"
+              checked={Boolean(snapshotEnabled)}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, snapshot_enabled: event.target.checked }))}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.debug.snapshot_interval_seconds")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={3600}
+              step={0.5}
+              value={snapshotIntervalSeconds}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(3600, nextValue)) : 10;
+                onUpdateConfig((prev) => ({ ...prev, snapshot_interval_seconds: normalized }));
+              }}
+            />
+          </label>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.debug.snapshot_interval_hint")}</div>
+        </>
+      ) : null}
+
+      <div className="rowWrap" style={{ marginTop: 10, justifyContent: "space-between", alignItems: "center" }}>
+        <button
+          className="chipButton"
+          type="button"
+          disabled={!previewUrl}
+          onClick={() => {
+            setPreviewFailed(false);
+            setPreviewDims(null);
+            setPreviewNonce((prev) => prev + 1);
+          }}
+        >
+          {t("core.ui.pipelines.panels.image_draw.refresh")}
+        </button>
+
+        {!previewEligibility.enabled ? (
+          <div className="pipelinesStepHint" style={{ textAlign: "right" }}>
+            {previewEligibility.reason.code === "no_camera_source"
+              ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
+              : previewEligibility.reason.code === "no_camera_selected"
+                ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
+                : t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline")}
+          </div>
+        ) : null}
+      </div>
+
+      <div
+        style={{
+          marginTop: 10,
+          borderRadius: 16,
+          border: "1px solid var(--color-border-subtle)",
+          background: "rgba(0,0,0,0.22)",
+          overflow: "hidden",
+          padding: 10,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          minHeight: 120,
+        }}
+      >
+        {previewUrl && !previewFailed ? (
+          <img
+            src={previewUrl}
+            alt={t("core.ui.pipelines.panels.image_draw.snapshot_alt")}
+            style={{
+              display: "block",
+              maxWidth: "100%",
+              maxHeight: 320,
+              borderRadius: 14,
+              border: "1px solid rgba(255,255,255,0.12)",
+              userSelect: "none",
+              WebkitUserSelect: "none",
+            }}
+            onLoad={(event) => {
+              const img = event.currentTarget;
+              const width = Number(img.naturalWidth || 0);
+              const height = Number(img.naturalHeight || 0);
+              if (width > 1 && height > 1) setPreviewDims({ width, height });
+            }}
+            onError={() => setPreviewFailed(true)}
+            draggable={false}
+          />
+        ) : (
+          <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.no_snapshot")}</div>
+        )}
+      </div>
+
+      {previewDims ? (
+        <div className="pipelinesHint">
+          {t("core.ui.pipelines.panels.image_draw.snapshot_meta", { w: previewDims.width, h: previewDims.height, units: "px" })}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -818,6 +993,219 @@ type NotifyProps = {
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
 };
+
+type PublishVideoProps = {
+  config: Record<string, unknown>;
+  showAdvanced: boolean;
+  onUpdateConfig: UpdateConfig;
+};
+
+const PUBLISH_VIDEO_DEFAULT_INPUTS = ["frame", "best_frame", "segmented", "frame_original"];
+
+function parsePublishVideoInputs(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    const out = value
+      .map((item) => String(item || "").trim())
+      .filter((item) => item.length > 0);
+    return [...new Set(out)];
+  }
+  if (typeof value === "string") {
+    const out = value
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    return [...new Set(out)];
+  }
+  return [];
+}
+
+export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }: PublishVideoProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const [transmissions, setTransmissions] = useState<StreamingTransmission[]>([]);
+  const [loadingTransmissions, setLoadingTransmissions] = useState(false);
+  const [transmissionsError, setTransmissionsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingTransmissions(true);
+    setTransmissionsError(null);
+
+    void listStreamingTransmissions()
+      .then((payload) => {
+        if (cancelled) return;
+        setTransmissions(Array.isArray(payload) ? payload : []);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setTransmissionsError(String(error instanceof Error ? error.message : error || "unknown error"));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoadingTransmissions(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const transmissionId = String((config as any).transmission_id ?? "").trim();
+  const resizeModeRaw = String((config as any).resize_mode ?? "contain").trim().toLowerCase();
+  const resizeMode = resizeModeRaw === "none" ? "none" : "contain";
+  const bypassModeRaw = String((config as any).bypass_mode ?? "auto").trim().toLowerCase();
+  const bypassMode = bypassModeRaw === "force_on" || bypassModeRaw === "force_off" ? bypassModeRaw : "auto";
+  const writerPriorityRaw = Number((config as any).writer_priority ?? 0);
+  const writerPriority = Number.isFinite(writerPriorityRaw) ? writerPriorityRaw : 0;
+  const fallbackValues = (() => {
+    const parsed = parsePublishVideoInputs((config as any).frame_with_fallback);
+    return parsed.length > 0 ? parsed : PUBLISH_VIDEO_DEFAULT_INPUTS;
+  })();
+
+  const transmissionOptions = useMemo<SelectOption[]>(() => {
+    const disabledSuffix = t("core.ui.pipelines.panels.publish_video.transmission_disabled_suffix", {}, "disabled");
+    return transmissions
+      .map((item) => {
+        const id = String(item?.id || "").trim();
+        if (!id) return null;
+        const name = String(item?.name || "").trim();
+        const path = String(item?.path || "").trim();
+        const enabled = item?.enabled !== false;
+        const title = name || path || id;
+        const details = [path ? `/${path}` : "", enabled ? "" : disabledSuffix].filter(Boolean).join(" • ");
+        return {
+          value: id,
+          label: details ? `${title} (${details})` : title,
+        };
+      })
+      .filter((option): option is SelectOption => Boolean(option))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [t, transmissions]);
+
+  const selectedTransmissionOption = transmissionId
+    ? transmissionOptions.find((option) => option.value === transmissionId) ?? { value: transmissionId, label: transmissionId }
+    : null;
+
+  const fallbackOptions = useMemo<SelectOption[]>(() => {
+    const options: SelectOption[] = [
+      { value: "frame", label: t("core.ui.pipelines.artifacts.frame", {}, "Frame") },
+      { value: "frame_original", label: t("core.ui.pipelines.artifacts.frame_original", {}, "Full frame") },
+      ...buildArtifactSuggestions(t),
+    ];
+    const deduped = new Map<string, SelectOption>();
+    for (const option of options) {
+      const key = String(option.value || "").trim();
+      if (!key || deduped.has(key)) continue;
+      deduped.set(key, option);
+    }
+    return [...deduped.values()];
+  }, [t]);
+
+  const selectedFallbackOptions = fallbackValues.map(
+    (value) => fallbackOptions.find((option) => option.value === value) ?? { value, label: value },
+  );
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.publish_video.transmission")}</span>
+        <CreatableSelect<SelectOption, false>
+          styles={pipelinesReactSelectStyles}
+          options={transmissionOptions}
+          value={selectedTransmissionOption}
+          isClearable
+          placeholder={t("core.ui.pipelines.panels.publish_video.transmission_placeholder")}
+          onChange={(value) => {
+            onUpdateConfig((prev) => ({ ...prev, transmission_id: String(value?.value || "").trim() }));
+          }}
+        />
+      </label>
+      {loadingTransmissions ? (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.publish_video.transmission_loading")}</div>
+      ) : transmissionsError ? (
+        <div className="pipelinesInlineError">{t("core.ui.pipelines.panels.publish_video.transmission_load_failed", { error: transmissionsError })}</div>
+      ) : transmissionOptions.length === 0 ? (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.publish_video.transmission_empty")}</div>
+      ) : (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.publish_video.transmission_hint")}</div>
+      )}
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.publish_video.frame_fallback")}</span>
+        <CreatableSelect<SelectOption, true>
+          isMulti
+          styles={pipelinesReactSelectStyles}
+          options={fallbackOptions}
+          value={selectedFallbackOptions}
+          placeholder={t("core.ui.pipelines.panels.publish_video.frame_fallback_placeholder")}
+          onChange={(value: MultiValue<SelectOption>) => {
+            const nextValues = value
+              .map((item) => String(item.value || "").trim())
+              .filter((item) => item.length > 0);
+            onUpdateConfig((prev) => ({
+              ...prev,
+              frame_with_fallback: nextValues.length > 0 ? [...new Set(nextValues)] : [...PUBLISH_VIDEO_DEFAULT_INPUTS],
+            }));
+          }}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.publish_video.resize_mode")}</span>
+        <select
+          className="pipelinesSelect"
+          value={resizeMode}
+          onChange={(event) => {
+            const nextValue = String(event.target.value || "contain").trim().toLowerCase();
+            onUpdateConfig((prev) => ({ ...prev, resize_mode: nextValue === "none" ? "none" : "contain" }));
+          }}
+        >
+          <option value="contain">{t("core.ui.pipelines.panels.publish_video.resize_mode.contain")}</option>
+          <option value="none">{t("core.ui.pipelines.panels.publish_video.resize_mode.none")}</option>
+        </select>
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.publish_video.resize_mode_hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.publish_video.bypass_mode")}</span>
+        <select
+          className="pipelinesSelect"
+          value={bypassMode}
+          onChange={(event) => {
+            const nextValue = String(event.target.value || "auto").trim().toLowerCase();
+            onUpdateConfig((prev) => ({
+              ...prev,
+              bypass_mode: nextValue === "force_on" || nextValue === "force_off" ? nextValue : "auto",
+            }));
+          }}
+        >
+          <option value="auto">{t("core.ui.pipelines.panels.publish_video.bypass_mode.auto")}</option>
+          <option value="force_off">{t("core.ui.pipelines.panels.publish_video.bypass_mode.force_off")}</option>
+          {showAdvanced ? <option value="force_on">{t("core.ui.pipelines.panels.publish_video.bypass_mode.force_on")}</option> : null}
+        </select>
+      </label>
+
+      {showAdvanced ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.publish_video.writer_priority")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={-100}
+              max={100}
+              step={1}
+              value={writerPriority}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(-100, Math.min(100, Math.round(nextValue))) : 0;
+                onUpdateConfig((prev) => ({ ...prev, writer_priority: normalized }));
+              }}
+            />
+          </label>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.publish_video.writer_priority_hint")}</div>
+        </>
+      ) : null}
+    </div>
+  );
+}
 
 export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: NotifyProps): React.ReactElement {
   const { t } = i18n.useI18n();

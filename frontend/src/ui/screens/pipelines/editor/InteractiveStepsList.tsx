@@ -3,20 +3,21 @@ import React from "react";
 import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../../../util/api";
 import { i18n } from "../../../../util/i18n";
 
-import type { DragInsertPosition, InteractiveStep, SelectOption } from "../types";
+import type { CameraAreaOption, DragInsertPosition, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../types";
 
 import { InteractiveStepCard } from "./InteractiveStepCard";
 
 type Props = {
   steps: InteractiveStep[];
   operatorsById: Record<string, PipelineOperatorDefinition>;
+  pipelineName: string | null;
 
   interactiveCameraId: string;
   cameraSelectOptions: SelectOption[];
   cameraSelectOptionById: Map<string, SelectOption>;
   activeCameraContexts: CameraContextsResponse | null;
   activeCameraContextsError: string | null;
-  cameraAreaOptions: SelectOption[];
+  cameraAreaOptions: CameraAreaOption[];
   stepOutputsByNodeId: Record<string, number> | null;
 
   draggingStepUid: string | null;
@@ -31,6 +32,7 @@ type Props = {
   onRemoveStep: (uid: string) => void;
   onUpdateStepScalar: (uid: string, key: string, value: string | number | boolean) => void;
   onUpdateStepConfig: (uid: string, updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
+  onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
 };
 
 export function InteractiveStepsList(props: Props): React.ReactElement {

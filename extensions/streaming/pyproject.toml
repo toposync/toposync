@@ -1,0 +1,17 @@
+[project]
+name = "toposync-ext-streaming"
+version = "0.1.0"
+description = "Toposync first-party extension: streaming settings, API surface, and pipeline sink bootstrap."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["toposync>=0.1.0", "numpy>=1.26", "opencv-python-headless>=4.10"]
+
+[project.entry-points."toposync.extensions"]
+streaming = "toposync_ext_streaming.plugin:StreamingExtension"
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/toposync_ext_streaming"]

@@ -7,10 +7,10 @@ let popstateAttached = false;
 let currentPathname = typeof window === "undefined" ? "/" : window.location.pathname || "/";
 let previousPathname: string | null = null;
 
-function emit(): void {
+function emit(options?: { updatePrevious?: boolean }): void {
   const next = snapshotPathname();
   if (next !== currentPathname) {
-    previousPathname = currentPathname;
+    if (options?.updatePrevious !== false) previousPathname = currentPathname;
     currentPathname = next;
   }
   for (const listener of listeners) listener();
@@ -20,7 +20,7 @@ function subscribe(listener: Listener): () => void {
   listeners.add(listener);
   if (!popstateAttached && typeof window !== "undefined") {
     popstateAttached = true;
-    window.addEventListener("popstate", emit);
+    window.addEventListener("popstate", () => emit({ updatePrevious: true }));
   }
   return () => {
     listeners.delete(listener);
@@ -45,7 +45,7 @@ export function navigate(pathname: string): void {
   if (typeof window === "undefined") return;
   if (window.location.pathname === next) return;
   window.history.pushState(null, "", next);
-  emit();
+  emit({ updatePrevious: true });
 }
 
 export function replace(pathname: string): void {
@@ -53,5 +53,5 @@ export function replace(pathname: string): void {
   if (typeof window === "undefined") return;
   if (window.location.pathname === next) return;
   window.history.replaceState(null, "", next);
-  emit();
+  emit({ updatePrevious: false });
 }

@@ -20,7 +20,10 @@ import type {
 import {
   activateComposition,
   createComposition,
+  deleteAccessGrant,
+  deleteAccessUser,
   deleteComposition,
+  listAccessUsers,
   fetchExtensions,
   getComposition,
   getDevice,
@@ -30,21 +33,42 @@ import {
   listNotifications,
   emitEvent,
   patchExtensionSettings,
+  patchAccessUser,
   putComposition,
   renameComposition,
+  createAccessUser,
+  upsertAccessGrant,
 } from "../util/api";
-import type { AppSettings } from "../util/api";
+import type { AppSettings, AuthUser } from "../util/api";
 import { i18n, resolveLocalizedString } from "../util/i18n";
 import { loadRemoteActivate } from "../util/moduleFederation";
-import { applyTheme, loadThemeId, saveThemeId } from "../util/theme";
+import {
+  applyTheme,
+  applyUserVisualPreferences,
+  isBuiltinThemeId,
+  loadAccentIntensity,
+  loadThemeId,
+  loadTransparencyLevel,
+  loadViewport3DBackground,
+  saveAccentIntensity,
+  saveThemeId,
+  saveTransparencyLevel,
+  saveViewport3DBackground,
+  type AccentIntensity,
+  type BuiltinThemeId,
+  type TransparencyLevel,
+  type Viewport3DBackground,
+} from "../util/theme";
 import { getPreviousPathname, navigate, replace, usePathname } from "./router";
 import { Viewport2D } from "./Viewport2D";
+import { createMeasurementLineElementType } from "./editor/measurementLineElementType";
 import { builtinNotificationRenderers } from "./notifications/pipelinesNotifications";
 import { CompositionEditorScreen } from "./screens/CompositionEditorScreen";
 import { MainScreen } from "./screens/MainScreen";
 import { PipelinesScreen } from "./screens/PipelinesScreen";
 import { ProcessingServersScreen } from "./screens/ProcessingServersScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
+import { AccessScreen } from "./screens/AccessScreen";
 
 type ExtensionRecord = {
   id: string;
@@ -228,7 +252,13 @@ function mergeElement(el: CompositionElement, patch: CompositionElementPatch): C
   };
 }
 
-export function App(): React.ReactElement {
+type AppProps = {
+  authUser: AuthUser | null;
+  authMode: string;
+  onLogout: () => Promise<void>;
+};
+
+export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElement {
   const pathname = usePathname();
   const [screen, setScreen] = useState<Screen>("main");
   const [elementTypesById, setElementTypesById] = useState<Record<string, ElementType>>({});
@@ -254,6 +284,9 @@ export function App(): React.ReactElement {
   const [ghostWalls, setGhostWalls] = useState<boolean>(() => loadGhostWalls());
   const [graphicsQuality, setGraphicsQuality] = useState<GraphicsQuality>(() => loadGraphicsQuality());
   const [themeId, setThemeId] = useState<string>(() => loadThemeId());
+  const [transparencyLevel, setTransparencyLevel] = useState<TransparencyLevel>(() => loadTransparencyLevel());
+  const [accentIntensity, setAccentIntensity] = useState<AccentIntensity>(() => loadAccentIntensity());
+  const [viewport3dBackground, setViewport3dBackground] = useState<Viewport3DBackground>(() => loadViewport3DBackground());
   const [settings, setSettings] = useState<AppSettings>({ core: {}, extensions: {} });
 
   const [compositionRevision, setCompositionRevision] = useState(0);
@@ -321,18 +354,57 @@ export function App(): React.ReactElement {
   }, [themeId]);
 
   useEffect(() => {
-    const theme = themeId === "default" ? null : themesById[themeId] ?? null;
-    applyTheme(theme);
+    saveTransparencyLevel(transparencyLevel);
+  }, [transparencyLevel]);
+
+  useEffect(() => {
+    saveAccentIntensity(accentIntensity);
+  }, [accentIntensity]);
+
+  useEffect(() => {
+    saveViewport3DBackground(viewport3dBackground);
+  }, [viewport3dBackground]);
+
+  useEffect(() => {
+    applyUserVisualPreferences({
+      transparency: transparencyLevel,
+      accentIntensity,
+      viewport3dBackground,
+    });
+  }, [accentIntensity, transparencyLevel, viewport3dBackground]);
+
+  const resolvedTheme = useMemo((): { baseThemeId: BuiltinThemeId; overridesTheme: ThemeDefinition | null } => {
+    if (isBuiltinThemeId(themeId)) {
+      return { baseThemeId: themeId, overridesTheme: null };
+    }
+    const overridesTheme = themesById[themeId] ?? null;
+    if (overridesTheme && isBuiltinThemeId(overridesTheme.id)) {
+      return { baseThemeId: overridesTheme.id, overridesTheme };
+    }
+    return { baseThemeId: "topo-day", overridesTheme };
   }, [themeId, themesById]);
 
+  useEffect(() => {
+    applyTheme(resolvedTheme.baseThemeId, resolvedTheme.overridesTheme);
+  }, [resolvedTheme.baseThemeId, resolvedTheme.overridesTheme]);
+
   const themeOptions = useMemo<ThemeDefinition[]>(() => {
-    return [
+    const builtinThemes: ThemeDefinition[] = [
       {
-        id: "default",
-        name: { key: "core.ui.settings.theme.default", fallback: "Default" },
-        description: { key: "core.ui.settings.theme.default_desc", fallback: "Toposync default theme." },
+        id: "topo-day",
+        name: { key: "core.ui.settings.theme.topo_day", fallback: "Topo Day" },
+        description: { key: "core.ui.settings.theme.topo_day_desc", fallback: "Paper background with crisp frost surfaces." },
       },
-      ...Object.values(themesById),
+      {
+        id: "topo-night",
+        name: { key: "core.ui.settings.theme.topo_night", fallback: "Topo Night" },
+        description: { key: "core.ui.settings.theme.topo_night_desc", fallback: "Deep contrast with controlled glass depth." },
+      },
+    ];
+    const customThemes = Object.values(themesById).filter((theme) => !isBuiltinThemeId(theme.id) && theme.id !== "default");
+    return [
+      ...builtinThemes,
+      ...customThemes,
     ];
   }, [themesById]);
 
@@ -377,8 +449,8 @@ export function App(): React.ReactElement {
     elementTypesStore.notify();
   }, [elementTypesById, elementTypesStore]);
 
-  const host: TopoSyncHost = useMemo(
-    () => ({
+	  const host: TopoSyncHost = useMemo(
+	    () => ({
       registerElementType(elementType) {
         setElementTypesById((prev) => ({ ...prev, [elementType.type]: elementType }));
       },
@@ -436,11 +508,15 @@ export function App(): React.ReactElement {
         },
       },
     }),
-    [],
-  );
+	    [],
+	  );
 
-  useEffect(() => {
-    let cancelled = false;
+	  useEffect(() => {
+	    host.registerElementType(createMeasurementLineElementType());
+	  }, [host]);
+
+	  useEffect(() => {
+	    let cancelled = false;
 
     async function hydrate() {
       try {
@@ -982,6 +1058,7 @@ export function App(): React.ReactElement {
   const openSettings = useCallback(() => navigate("/settings"), []);
   const openPipelinesSettings = useCallback(() => navigate("/settings/pipelines"), []);
   const openProcessingServersSettings = useCallback(() => navigate("/settings/processing-servers"), []);
+  const openAccessSettings = useCallback(() => navigate("/settings/access"), []);
 
   const closeSettings = useCallback(() => replace(lastNonSettingsPathRef.current || "/"), []);
 
@@ -1000,6 +1077,19 @@ export function App(): React.ReactElement {
         <PipelinesScreen onClose={closeSettingsChild} onOpenProcessingServers={openProcessingServersSettings} />
       ) : normalizedPathname.startsWith("/settings/processing-servers") ? (
         <ProcessingServersScreen onClose={closeSettingsChild} />
+      ) : normalizedPathname.startsWith("/settings/access") ? (
+        <AccessScreen
+          authUser={authUser}
+          authMode={authMode}
+          onClose={closeSettingsChild}
+          onLogout={onLogout}
+          listAccessUsers={listAccessUsers}
+          createAccessUser={createAccessUser}
+          patchAccessUser={patchAccessUser}
+          deleteAccessUser={deleteAccessUser}
+          upsertAccessGrant={upsertAccessGrant}
+          deleteAccessGrant={deleteAccessGrant}
+        />
       ) : normalizedPathname.startsWith("/settings") ? (
         <SettingsScreen
           backendAvailable={backendAvailable}
@@ -1014,10 +1104,20 @@ export function App(): React.ReactElement {
           themes={themeOptions}
           themeId={themeId}
           onSetThemeId={setThemeId}
+          transparencyLevel={transparencyLevel}
+          onSetTransparencyLevel={setTransparencyLevel}
+          accentIntensity={accentIntensity}
+          onSetAccentIntensity={setAccentIntensity}
+          viewport3dBackground={viewport3dBackground}
+          onSetViewport3dBackground={setViewport3dBackground}
           settings={settings}
           onPatchExtensionSettings={updateExtensionSettings}
           onOpenPipelines={openPipelinesSettings}
           onOpenProcessingServers={openProcessingServersSettings}
+          onOpenAccess={openAccessSettings}
+          canManageAccess={Boolean(authMode === "bypass" || (authUser && (authUser.role === "owner" || authUser.role === "admin")))}
+          authUser={authUser}
+          onLogout={onLogout}
           onClose={closeSettings}
         />
       ) : screen === "main" ? (

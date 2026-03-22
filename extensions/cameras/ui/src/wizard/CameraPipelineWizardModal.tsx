@@ -289,7 +289,7 @@ export function CameraPipelineWizardModal({
 
       {step === "configure" && preset ? (
         <div>
-          {!camera.rtsp_url.trim() ? (
+          {!camera.rtsp_url.trim() && !(camera.connection_type === "onvif" && camera.onvif?.xaddr?.trim()) ? (
             <div className="card" style={{ marginBottom: 10 }}>
               <div className="cardBody">
                 {t(

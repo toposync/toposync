@@ -368,7 +368,7 @@ Implementação: `extensions/cameras/src/toposync_ext_cameras/pipelines/postproc
 Pipeline “feliz” para velocidade/área:
 `... -> camera.camera_mapping -> camera.velocity_estimation -> camera.area_restriction -> ...`
 
-- `camera.camera_mapping`: projeta `image_uv`/bbox para `world` (x,z) via control points.
+- `camera.camera_mapping`: projeta `image_uv`/bbox para `world` (x,z) via `control_point_sets`, com seleção opcional por pose PTZ.
 - `camera.area_restriction`: filtra ou anota labels de áreas do mundo.
 - `camera.velocity_estimation`: calcula velocidade em m/s e km/h; pode filtrar (ex.: `stopped_now`).
 

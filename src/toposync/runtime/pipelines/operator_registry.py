@@ -51,8 +51,14 @@ class OperatorDefinition(BaseModel):
     max_concurrency: int | None = Field(default=None, ge=1, le=1024)
     requires_payload_keys: list[str] = Field(default_factory=list)
     requires_artifacts: list[str] = Field(default_factory=list)
+    requires_source_fields: list[str] = Field(default_factory=list)
+    requires_media_fields: list[str] = Field(default_factory=list)
     produces_payload_keys: list[str] = Field(default_factory=list)
     produces_artifacts: list[str] = Field(default_factory=list)
+    produces_source_fields: list[str] = Field(default_factory=list)
+    produces_media_fields: list[str] = Field(default_factory=list)
+    input_modalities: list[str] = Field(default_factory=list)
+    output_modalities: list[str] = Field(default_factory=list)
 
     @field_validator("id")
     @classmethod
@@ -89,7 +95,18 @@ class OperatorDefinition(BaseModel):
             names.add(port.name)
         return ports
 
-    @field_validator("requires_payload_keys", "requires_artifacts", "produces_payload_keys", "produces_artifacts")
+    @field_validator(
+        "requires_payload_keys",
+        "requires_artifacts",
+        "requires_source_fields",
+        "requires_media_fields",
+        "produces_payload_keys",
+        "produces_artifacts",
+        "produces_source_fields",
+        "produces_media_fields",
+        "input_modalities",
+        "output_modalities",
+    )
     @classmethod
     def _validate_contract_items(cls, values: list[str]) -> list[str]:
         out: list[str] = []
@@ -139,8 +156,14 @@ class OperatorRegistry:
         max_concurrency: int | None = None,
         requires_payload_keys: list[str] | None = None,
         requires_artifacts: list[str] | None = None,
+        requires_source_fields: list[str] | None = None,
+        requires_media_fields: list[str] | None = None,
         produces_payload_keys: list[str] | None = None,
         produces_artifacts: list[str] | None = None,
+        produces_source_fields: list[str] | None = None,
+        produces_media_fields: list[str] | None = None,
+        input_modalities: list[str] | None = None,
+        output_modalities: list[str] | None = None,
         owner: str | None = None,
         runtime_factory: Callable[[dict[str, Any], Any], Any] | None = None,
     ) -> OperatorDefinition:
@@ -180,8 +203,14 @@ class OperatorRegistry:
             max_concurrency=max_concurrency,
             requires_payload_keys=list(requires_payload_keys or []),
             requires_artifacts=list(requires_artifacts or []),
+            requires_source_fields=list(requires_source_fields or []),
+            requires_media_fields=list(requires_media_fields or []),
             produces_payload_keys=list(produces_payload_keys or []),
             produces_artifacts=list(produces_artifacts or []),
+            produces_source_fields=list(produces_source_fields or []),
+            produces_media_fields=list(produces_media_fields or []),
+            input_modalities=list(input_modalities or []),
+            output_modalities=list(output_modalities or []),
         )
 
         self._items[definition.id] = RegisteredOperator(

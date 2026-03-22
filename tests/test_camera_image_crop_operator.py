@@ -30,6 +30,7 @@ def test_camera_image_crop_operator_crops_frame_and_keeps_original() -> None:
             },
         )
 
+        deps = PipelineRuntimeDependencies()
         crop = ImageCropRuntime(
             {
                 "units": "percent",
@@ -41,6 +42,7 @@ def test_camera_image_crop_operator_crops_frame_and_keeps_original() -> None:
                 "set_stream_frame": True,
                 "min_crop_size_px": 8,
             },
+            deps,
         )
         out_packets = await crop.process_packet(packet, None)
         assert len(out_packets) == 1
@@ -65,7 +67,6 @@ def test_camera_image_crop_operator_crops_frame_and_keeps_original() -> None:
         assert isinstance(meta, dict)
         assert meta.get("bbox_px_total") == [50, 10, 150, 60]
 
-        deps = PipelineRuntimeDependencies()
         yolo = ObjectDetectionYOLORuntime({}, deps)
         normalized = yolo._normalize_objects(  # noqa: SLF001
             [YoloObject(tracking_id=None, category="person", confidence=0.9, bbox01=(0.0, 0.0, 1.0, 1.0))],

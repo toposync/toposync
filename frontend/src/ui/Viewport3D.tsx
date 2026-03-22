@@ -32,9 +32,9 @@ type Tracked = {
 };
 
 const ELEMENT_ID = "__toposyncElementId";
+const ALLOW_PICK_WHEN_GHOST_WALLS = "__toposyncAllowPickWhenGhostWalls";
 const FULL_WALL_HEIGHT = 2.7;
-const FOCUS_HIGHLIGHT_COLOR = 0xfbbf24;
-const GHOST_WALLS_OPACITY = 0.22;
+const FOCUS_HIGHLIGHT_COLOR = 0x3b82f6;
 const GHOST_WALLS_MATERIAL_STATE_KEY = "__toposyncGhostWallsOriginal";
 const AUTO_FIT_GRACE_MS = 3500;
 const AUTO_FIT_THROTTLE_MS = 220;
@@ -210,7 +210,14 @@ function fitCameraAngledOverview(camera: THREE.PerspectiveCamera, controls: Orbi
   controls.update();
 }
 
-function applyGhostWalls(object: THREE.Object3D, enabled: boolean): void {
+function ghostWallOpacityForTheme(): number {
+  if (typeof document === "undefined") return 0.08;
+  const { dataset } = document.documentElement;
+  const themeId = dataset.toposyncBaseTheme || dataset.toposyncTheme || "topo-day";
+  return themeId === "topo-day" ? 0.1 : 0.08;
+}
+
+function applyGhostWalls(object: THREE.Object3D, enabled: boolean, opacity: number): void {
   object.traverse((node) => {
     const matRaw = (node as any).material as unknown;
     if (!matRaw) return;
@@ -230,7 +237,7 @@ function applyGhostWalls(object: THREE.Object3D, enabled: boolean): void {
           };
         }
 
-        if (typeof (mat as any).opacity === "number") (mat as any).opacity = GHOST_WALLS_OPACITY;
+        if (typeof (mat as any).opacity === "number") (mat as any).opacity = opacity;
         mat.transparent = true;
         if (typeof (mat as any).depthWrite === "boolean") (mat as any).depthWrite = false;
         mat.needsUpdate = true;
@@ -482,9 +489,9 @@ export function Viewport3D({
     if (!container) return;
     const containerEl: HTMLDivElement = container;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
-    renderer.setClearColor(0x070a14, 1);
+    renderer.setClearColor(0x000000, 0);
     renderer.shadowMap.enabled = false;
     renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.domElement.style.display = "block";
@@ -614,7 +621,10 @@ export function Viewport3D({
         if (viewRef.current.ghostWalls) {
           const tracked = trackedRef.current.get(id);
           const def = tracked ? elementTypesByIdRef.current[tracked.type] : null;
-          if (def?.layerGroup === "walls") continue;
+          if (def?.layerGroup === "walls") {
+            const allowPick = (hit.object.userData as any)?.[ALLOW_PICK_WHEN_GHOST_WALLS] === true;
+            if (!allowPick) continue;
+          }
         }
         return id;
       }
@@ -870,7 +880,7 @@ export function Viewport3D({
         const instance = def.create3D({ THREE, scene, camera, renderer, view, compositionId: compositionIdRef.current }, element);
         (instance.object.userData as any)[ELEMENT_ID] = element.id;
         scene.add(instance.object);
-        if (def.layerGroup === "walls") applyGhostWalls(instance.object, ghostWallsEnabled);
+        if (def.layerGroup === "walls") applyGhostWalls(instance.object, ghostWallsEnabled, ghostWallOpacityForTheme());
         tracked.set(element.id, { type: element.type, instance, last: element });
       }
 
@@ -885,7 +895,9 @@ export function Viewport3D({
 	        entry.last = element;
 	      }
 
-	      if (viewChanged && def.layerGroup === "walls") applyGhostWalls(entry.instance.object, ghostWallsEnabled);
+      if (viewChanged && def.layerGroup === "walls") {
+        applyGhostWalls(entry.instance.object, ghostWallsEnabled, ghostWallOpacityForTheme());
+      }
 	      if (def.layerGroup === "areas") {
 	        const order = areaOrderById.get(element.id);
 	        if (typeof order === "number") {

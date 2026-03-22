@@ -5,10 +5,18 @@ import type { SelectOption } from "./types";
 export const PIPELINE_PRESET_OPERATOR_IDS = [
   "camera.source",
   "core.schedule_gate",
+  "camera.motion_bgsub_adaptive",
+  "camera.motion_sample_bg",
   "camera.motion_gate",
   "core.lifecycle_from_boolean",
   "core.fps_reducer",
   "camera.image_crop",
+  "camera.image_perspective_crop",
+  "camera.local_contrast_clahe",
+  "camera.unsharp_mask",
+  "camera.denoise_luma",
+  "camera.auto_gamma",
+  "camera.global_stabilize",
   "vision.object_tracking_yolo",
   "vision.object_detection_yolo",
   "core.category_gate",
@@ -26,6 +34,7 @@ export const PIPELINE_PRESET_OPERATOR_IDS = [
   "core.debug",
   "core.store_images",
   "core.notify",
+  "stream.publish_video",
 ];
 
 export const NODE_ID_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
@@ -33,11 +42,19 @@ export const NODE_ID_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 export const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "core.schedule_gate": "Schedule gate",
   "camera.source": "Camera source",
+  "camera.motion_bgsub_adaptive": "Adaptive motion detector",
+  "camera.motion_sample_bg": "Sample-based motion detector",
   "camera.motion_gate": "Motion detection gate",
   "core.lifecycle_from_boolean": "Lifecycle from boolean",
   "core.fps_reducer": "FPS reducer",
   "camera.image_crop": "Crop frame",
+  "camera.image_perspective_crop": "Perspective crop",
   "camera.image_adjust": "Image adjust",
+  "camera.local_contrast_clahe": "Local contrast (CLAHE)",
+  "camera.unsharp_mask": "Unsharp mask",
+  "camera.denoise_luma": "Denoise (luma)",
+  "camera.auto_gamma": "Auto gamma",
+  "camera.global_stabilize": "Global stabilize",
   "vision.object_tracking_yolo": "YOLO tracking",
   "vision.object_detection_yolo": "YOLO detection",
   "core.category_gate": "Category gate",
@@ -54,52 +71,73 @@ export const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "core.debug": "Debug",
   "core.store_images": "Store images",
   "core.notify": "Notification",
+  "stream.publish_video": "Publish video",
 };
 
 export const pipelinesReactSelectStyles: StylesConfig<SelectOption, boolean> = {
   container: (base) => ({ ...base }),
   control: (base, state) => ({
     ...base,
-    minHeight: 34,
-    borderRadius: 10,
-    border: `1px solid ${state.isFocused ? "rgba(251,191,36,0.38)" : "rgba(255,255,255,0.12)"}`,
-    backgroundColor: "rgba(15, 23, 48, 0.85)",
-    boxShadow: state.isFocused ? "0 0 0 1px rgba(251,191,36,0.22)" : "none",
+    minHeight: 40,
+    borderRadius: "var(--radius-control)",
+    border: `1px solid ${state.isFocused ? "var(--color-accent-border)" : "var(--color-border-subtle)"}`,
+    backgroundColor: "var(--color-surface-frost)",
+    boxShadow: state.isFocused
+      ? "0 0 0 2px var(--color-focus-ring-inner), 0 0 0 4px var(--color-focus-ring-outer)"
+      : "inset 0 1px 0 color-mix(in srgb, var(--color-surface-solid) 28%, transparent)",
     cursor: "text",
+    backdropFilter: "blur(var(--frost-blur-small)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness))",
+    WebkitBackdropFilter: "blur(var(--frost-blur-small)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness))",
+    transition: "border-color var(--motion-medium) var(--ease-standard), box-shadow var(--motion-medium) var(--ease-standard)",
   }),
   menu: (base) => ({
     ...base,
-    backgroundColor: "rgba(12, 18, 37, 0.98)",
-    border: "1px solid rgba(255,255,255,0.12)",
-    borderRadius: 12,
+    backgroundColor: "var(--color-surface-frost-strong)",
+    border: "1px solid var(--color-border-subtle)",
+    borderRadius: "var(--radius-panel)",
     overflow: "hidden",
-    boxShadow: "0 22px 70px rgba(0, 0, 0, 0.60)",
+    boxShadow: "var(--shadow-elevation-3)",
+    backdropFilter: "blur(var(--frost-blur-large)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness))",
+    WebkitBackdropFilter: "blur(var(--frost-blur-large)) saturate(var(--frost-saturate)) brightness(var(--frost-brightness))",
     zIndex: 50,
+  }),
+  menuList: (base) => ({
+    ...base,
+    paddingTop: 4,
+    paddingBottom: 4,
   }),
   option: (base, state) => ({
     ...base,
-    backgroundColor: state.isSelected
-      ? "rgba(251, 191, 36, 0.16)"
+    padding: "10px 12px",
+    backgroundColor: "transparent",
+    background: state.isSelected
+      ? "linear-gradient(135deg, var(--color-accent-background-strong), var(--color-accent-background-strong-2))"
       : state.isFocused
-        ? "rgba(255, 255, 255, 0.06)"
+        ? "linear-gradient(135deg, var(--color-accent-background-soft), var(--color-accent-background-soft-2))"
         : "transparent",
-    color: "rgba(230,232,242,0.96)",
+    color: "var(--color-text-primary)",
     cursor: "pointer",
+    borderBottom: "1px solid color-mix(in srgb, var(--color-border-subtle) 35%, transparent)",
   }),
   multiValue: (base) => ({
     ...base,
-    backgroundColor: "rgba(251, 191, 36, 0.14)",
-    border: "1px solid rgba(251, 191, 36, 0.22)",
-    borderRadius: 999,
+    backgroundColor: "transparent",
+    background: "linear-gradient(135deg, var(--color-accent-background-soft), var(--color-accent-background-soft-2))",
+    border: "1px solid var(--color-accent-border)",
+    borderRadius: "var(--radius-pill)",
   }),
-  multiValueLabel: (base) => ({ ...base, color: "rgba(255, 244, 210, 0.95)", fontWeight: 650 }),
-  multiValueRemove: (base) => ({ ...base, color: "rgba(255, 244, 210, 0.85)" }),
-  input: (base) => ({ ...base, color: "rgba(230,232,242,0.96)" }),
-  placeholder: (base) => ({ ...base, color: "rgba(160,167,189,0.85)" }),
-  singleValue: (base) => ({ ...base, color: "rgba(230,232,242,0.96)" }),
-  indicatorSeparator: (base) => ({ ...base, backgroundColor: "rgba(255,255,255,0.10)" }),
-  dropdownIndicator: (base) => ({ ...base, color: "rgba(160,167,189,0.9)" }),
-  clearIndicator: (base) => ({ ...base, color: "rgba(160,167,189,0.9)" }),
+  multiValueLabel: (base) => ({ ...base, color: "var(--color-text-primary)", fontWeight: 650 }),
+  multiValueRemove: (base, state) => ({
+    ...base,
+    color: "var(--color-text-muted)",
+    backgroundColor: state.isFocused ? "var(--color-accent-background-soft)" : "transparent",
+  }),
+  input: (base) => ({ ...base, color: "var(--color-text-primary)" }),
+  placeholder: (base) => ({ ...base, color: "var(--color-text-subtle)" }),
+  singleValue: (base) => ({ ...base, color: "var(--color-text-primary)" }),
+  indicatorSeparator: (base) => ({ ...base, backgroundColor: "var(--color-border-subtle)" }),
+  dropdownIndicator: (base) => ({ ...base, color: "var(--color-text-muted)" }),
+  clearIndicator: (base) => ({ ...base, color: "var(--color-text-muted)" }),
 };
 
 const YOLO_CATEGORY_VALUES = [

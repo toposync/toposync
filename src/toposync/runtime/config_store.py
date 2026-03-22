@@ -49,6 +49,7 @@ class Composition(BaseModel):
     id: str
     name: str
     elements: list[CompositionElement] = Field(default_factory=list)
+    meta: dict[str, Any] = Field(default_factory=dict)
 
 
 class AppSettings(BaseModel):
@@ -291,7 +292,7 @@ def _normalize_config(config: AppConfig) -> AppConfig:
             cfg = dict(cfg_raw)
             node_changed = False
 
-            # Migração: defaults antigos eram agressivos demais e causavam tracking "flickery" e updates excessivos.
+            # Migration: old defaults were too aggressive and caused flickery tracking and excessive updates.
             close_after = _as_float(cfg.get("close_after_seconds"))
             if close_after is not None and abs(close_after - 1.2) < 1e-9:
                 cfg["close_after_seconds"] = 4.0
@@ -333,7 +334,28 @@ def _normalize_config(config: AppConfig) -> AppConfig:
     )
 
 
-def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
+@dataclass(frozen=True, slots=True)
+class _FileStamp:
+    mtime_ns: int
+    size: int
+
+
+def _stamp_from_stat(st: os.stat_result) -> _FileStamp:
+    mtime_ns = getattr(st, "st_mtime_ns", None)
+    if mtime_ns is None:
+        mtime_ns = int(st.st_mtime * 1_000_000_000)
+    return _FileStamp(mtime_ns=int(mtime_ns), size=int(st.st_size))
+
+
+def _path_stamp(path: Path) -> _FileStamp | None:
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return None
+    return _stamp_from_stat(st)
+
+
+def _atomic_write_json(path: Path, data: dict[str, Any]) -> _FileStamp:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         mode="w",
@@ -349,6 +371,7 @@ def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
         os.fsync(f.fileno())
         tmp_name = f.name
     os.replace(tmp_name, path)
+    return _stamp_from_stat(path.stat())
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -384,39 +407,61 @@ class ConfigStore:
         self._paths = paths
         self._lock = asyncio.Lock()
         self._config: AppConfig | None = None
+        self._config_stamp: _FileStamp | None = None
 
     @property
     def paths(self) -> UserDataPaths:
         return self._paths
 
+    async def _persist_locked(self, cfg: AppConfig) -> AppConfig:
+        stamp = await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg.model_dump())
+        self._config = cfg
+        self._config_stamp = stamp
+        return cfg
+
     async def load(self) -> AppConfig:
         async with self._lock:
-            if self._config is not None:
-                return self._config
-
             await asyncio.to_thread(self._paths.data_dir.mkdir, parents=True, exist_ok=True)
             await asyncio.to_thread(self._paths.files_dir.mkdir, parents=True, exist_ok=True)
 
-            if self._paths.config_path.exists():
-                try:
-                    raw = await asyncio.to_thread(_read_json, self._paths.config_path)
-                    cfg = AppConfig.model_validate(raw)
-                    cfg = _normalize_config(cfg)
-                except Exception:  # noqa: BLE001
-                    corrupted = self._paths.config_path.with_name(
-                        f"{self._paths.config_path.stem}.corrupt-{int(time.time())}{self._paths.config_path.suffix}"
-                    )
-                    try:
-                        await asyncio.to_thread(self._paths.config_path.rename, corrupted)
-                    except Exception:  # noqa: BLE001
-                        pass
-                    cfg = _default_config()
-                    await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg.model_dump())
-            else:
+            current_stamp = await asyncio.to_thread(_path_stamp, self._paths.config_path)
+            if (
+                self._config is not None
+                and self._config_stamp is not None
+                and current_stamp is not None
+                and current_stamp == self._config_stamp
+            ):
+                return self._config
+
+            if current_stamp is None:
+                # If the config file disappears while the runtime is active (e.g. during a manual edit),
+                # keep the in-memory config and reload once the file comes back.
+                if self._config is not None:
+                    self._config_stamp = None
+                    return self._config
+
                 cfg = _default_config()
-                await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg.model_dump())
+                await self._persist_locked(cfg)
+                return cfg
+
+            try:
+                raw = await asyncio.to_thread(_read_json, self._paths.config_path)
+                cfg = AppConfig.model_validate(raw)
+                cfg = _normalize_config(cfg)
+            except Exception:  # noqa: BLE001
+                corrupted = self._paths.config_path.with_name(
+                    f"{self._paths.config_path.stem}.corrupt-{int(time.time())}{self._paths.config_path.suffix}"
+                )
+                try:
+                    await asyncio.to_thread(self._paths.config_path.rename, corrupted)
+                except Exception:  # noqa: BLE001
+                    pass
+                cfg = _default_config()
+                await self._persist_locked(cfg)
+                return cfg
 
             self._config = cfg
+            self._config_stamp = current_stamp
             return cfg
 
     async def get_config(self) -> AppConfig:
@@ -426,8 +471,7 @@ class ConfigStore:
         await self.load()
         async with self._lock:
             cfg = _normalize_config(config)
-            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg.model_dump())
-            self._config = cfg
+            await self._persist_locked(cfg)
             return cfg
 
     async def get_active_composition(self) -> Composition:
@@ -447,8 +491,7 @@ class ConfigStore:
             cfg = self._config or _default_config()
             cfg2 = _build_config(cfg, settings=settings)
             cfg2 = _normalize_config(cfg2)
-            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
-            self._config = cfg2
+            await self._persist_locked(cfg2)
             return cfg2.settings
 
     async def patch_extension_settings(self, extension_id: str, patch: dict[str, Any]) -> dict[str, Any]:
@@ -462,8 +505,7 @@ class ConfigStore:
             settings = AppSettings(core=dict(cfg.settings.core), extensions=extensions)
             cfg2 = _build_config(cfg, settings=settings)
             cfg2 = _normalize_config(cfg2)
-            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
-            self._config = cfg2
+            await self._persist_locked(cfg2)
             return current
 
     async def set_active_composition(self, composition: Composition) -> Composition:
@@ -482,8 +524,7 @@ class ConfigStore:
                 compositions.append(composition)
             cfg2 = _build_config(cfg, compositions=compositions, active_composition_id=composition.id)
             cfg2 = _normalize_config(cfg2)
-            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
-            self._config = cfg2
+            await self._persist_locked(cfg2)
             return composition
 
     async def list_compositions(self) -> tuple[str, list[Composition]]:
@@ -500,8 +541,7 @@ class ConfigStore:
 
             cfg2 = _build_config(cfg, active_composition_id=composition_id)
             cfg2 = _normalize_config(cfg2)
-            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
-            self._config = cfg2
+            await self._persist_locked(cfg2)
             return composition
 
     async def create_composition(self, *, name: str, composition_id: str | None = None) -> Composition:
@@ -516,8 +556,7 @@ class ConfigStore:
             composition = Composition(id=cid, name=name, elements=[])
             cfg2 = _build_config(cfg, compositions=[*cfg.compositions, composition], active_composition_id=cid)
             cfg2 = _normalize_config(cfg2)
-            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
-            self._config = cfg2
+            await self._persist_locked(cfg2)
             return composition
 
     async def rename_composition(self, composition_id: str, *, name: str) -> Composition:
@@ -538,8 +577,7 @@ class ConfigStore:
 
             cfg2 = _build_config(cfg, compositions=compositions)
             cfg2 = _normalize_config(cfg2)
-            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
-            self._config = cfg2
+            await self._persist_locked(cfg2)
             return updated
 
     async def delete_composition(self, composition_id: str) -> AppConfig:
@@ -559,8 +597,7 @@ class ConfigStore:
 
             cfg2 = _build_config(cfg, compositions=compositions, active_composition_id=active_id)
             cfg2 = _normalize_config(cfg2)
-            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
-            self._config = cfg2
+            await self._persist_locked(cfg2)
             return cfg2
 
     async def list_pipelines(self) -> list[Pipeline]:
@@ -580,8 +617,7 @@ class ConfigStore:
                 raise PipelineAlreadyExistsError(f"Pipeline already exists: {pipeline.name}")
             cfg2 = _build_config(cfg, pipelines=[*cfg.pipelines, pipeline])
             cfg2 = _normalize_config(cfg2)
-            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
-            self._config = cfg2
+            await self._persist_locked(cfg2)
             return pipeline
 
     async def replace_pipeline(self, pipeline_name: str, pipeline: Pipeline) -> Pipeline:
@@ -613,8 +649,7 @@ class ConfigStore:
             pipelines[idx] = pipeline
             cfg2 = _build_config(cfg, pipelines=pipelines)
             cfg2 = _normalize_config(cfg2)
-            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
-            self._config = cfg2
+            await self._persist_locked(cfg2)
             return pipeline
 
     async def delete_pipeline(self, pipeline_name: str) -> Pipeline:
@@ -634,8 +669,7 @@ class ConfigStore:
 
             cfg2 = _build_config(cfg, pipelines=pipelines)
             cfg2 = _normalize_config(cfg2)
-            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
-            self._config = cfg2
+            await self._persist_locked(cfg2)
             return removed
 
     async def list_processing_servers(self) -> list[ProcessingServer]:
@@ -671,8 +705,7 @@ class ConfigStore:
             settings = AppSettings(core=core, extensions=dict(cfg.settings.extensions))
             cfg2 = _build_config(cfg, settings=settings)
             cfg2 = _normalize_config(cfg2)
-            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
-            self._config = cfg2
+            await self._persist_locked(cfg2)
             return server
 
     async def delete_processing_server(self, server_id: str) -> ProcessingServer:
@@ -705,6 +738,5 @@ class ConfigStore:
             settings = AppSettings(core=core, extensions=dict(cfg.settings.extensions))
             cfg2 = _build_config(cfg, settings=settings)
             cfg2 = _normalize_config(cfg2)
-            await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg2.model_dump())
-            self._config = cfg2
+            await self._persist_locked(cfg2)
             return removed

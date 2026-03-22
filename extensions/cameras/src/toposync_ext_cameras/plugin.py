@@ -16,6 +16,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from toposync.extensions import BaseExtension
+from toposync.runtime.auth import AuthContext, AuthRuntime
 from toposync.runtime.config_store import ConfigStore, Pipeline, PipelineAlreadyExistsError, PipelineValidationError
 from toposync.runtime.event_bus import EventBus
 from toposync.runtime.pipelines.compiler import GraphCompileError, PipelineGraphCompiler
@@ -24,8 +25,23 @@ from toposync.runtime.pipelines.templates import safe_pipeline_name
 from toposync.runtime.services import ServiceRegistry
 
 from .pipelines import register_camera_pipeline_operators
-from .processing.mapping import ControlPointMapper, ControlPointPair
-from .pipelines.postprocess import _parse_control_point_pairs  # noqa: PLC2701
+from .processing.mapping import ControlPointMapper
+from .pipelines.postprocess import _parse_control_point_sets  # noqa: PLC2701
+from .settings import (
+    flatten_camera_device_for_ui,
+    get_camera_device,
+    get_primary_video_channel,
+    iter_camera_devices,
+    normalize_cameras_settings,
+)
+from .onvif import (
+    OnvifClient,
+    OnvifDiscoveredDevice,
+    OnvifError,
+    OnvifProfile,
+    discover_onvif_devices,
+    normalize_onvif_xaddr,
+)
 
 
 EXTENSION_ID = "com.toposync.cameras"
@@ -38,6 +54,68 @@ class RtspSnapshotRequest(BaseModel):
     timeout_ms: int = Field(default=9000, ge=1500, le=30000)
 
 
+class OnvifInspectRequest(BaseModel):
+    xaddr: str
+    username: str = ""
+    password: str = ""
+    timeout_ms: int = Field(default=2500, ge=500, le=20000)
+    auth: Literal["auto", "digest", "text", "none"] = "auto"
+
+
+class OnvifProfileInfo(BaseModel):
+    token: str
+    name: str = ""
+    encoding: str = ""
+    width: int | None = None
+    height: int | None = None
+    fps: int | None = None
+    has_ptz: bool = False
+
+
+class OnvifInspectResponse(BaseModel):
+    xaddr: str
+    media_xaddr: str | None = None
+    ptz_xaddr: str | None = None
+    profiles: list[OnvifProfileInfo] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class OnvifStreamUriRequest(BaseModel):
+    xaddr: str
+    media_xaddr: str = ""
+    profile_token: str
+    username: str = ""
+    password: str = ""
+    timeout_ms: int = Field(default=2500, ge=500, le=20000)
+    auth: Literal["auto", "digest", "text", "none"] = "auto"
+
+
+class OnvifStreamUriResponse(BaseModel):
+    rtsp_url: str
+
+
+class OnvifDiscoverRequest(BaseModel):
+    timeout_ms: int = Field(default=1200, ge=200, le=20000)
+    force: bool = False
+    exclude_known: bool = True
+
+
+class OnvifDiscoveredDeviceInfo(BaseModel):
+    device_id: str
+    xaddr: str = ""
+    xaddrs: list[str] = Field(default_factory=list)
+    source_ip: str = ""
+    name: str = ""
+    hardware: str = ""
+
+
+class OnvifDiscoverResponse(BaseModel):
+    scanned_at_unix: float = 0.0
+    duration_ms: int = 0
+    cached: bool = False
+    devices: list[OnvifDiscoveredDeviceInfo] = Field(default_factory=list)
+
+
 class ControlPointMapImage(BaseModel):
     x: float = Field(ge=0.0, le=1.0)
     y: float = Field(ge=0.0, le=1.0)
@@ -48,9 +126,25 @@ class ControlPointMapWorld(BaseModel):
     z: float
 
 
-class ControlPointMapPair(BaseModel):
+class ControlPointMapPoint(BaseModel):
+    id: str | None = None
     image: ControlPointMapImage
     world: ControlPointMapWorld
+
+
+class ControlPointMapPoseReference(BaseModel):
+    pan: float | None = None
+    tilt: float | None = None
+    zoom: float | None = None
+    preset_token: str | None = None
+    preset_name: str | None = None
+
+
+class ControlPointMapSet(BaseModel):
+    id: str
+    label: str = ""
+    pose_reference: ControlPointMapPoseReference | None = None
+    control_points: list[ControlPointMapPoint] = Field(default_factory=list)
 
 
 class ControlPointMapQuery(BaseModel):
@@ -61,8 +155,55 @@ class ControlPointMapQuery(BaseModel):
 
 
 class ControlPointMapRequest(BaseModel):
-    pairs: list[ControlPointMapPair]
+    control_point_set: ControlPointMapSet
     query: ControlPointMapQuery
+
+
+class CameraPtzPreset(BaseModel):
+    token: str
+    name: str = ""
+    pan: float | None = None
+    tilt: float | None = None
+    zoom: float | None = None
+
+
+class CameraPtzStatus(BaseModel):
+    pan: float | None = None
+    tilt: float | None = None
+    zoom: float | None = None
+    move_status: str = ""
+    error: str = ""
+    utc_time: str = ""
+
+
+class CameraPtzPresetsResponse(BaseModel):
+    camera_id: str
+    presets: list[CameraPtzPreset] = Field(default_factory=list)
+
+
+class CameraPtzStatusResponse(BaseModel):
+    camera_id: str
+    status: CameraPtzStatus = Field(default_factory=CameraPtzStatus)
+
+
+class CameraPtzActionResponse(BaseModel):
+    ok: bool = True
+
+
+class CameraPtzGotoPresetRequest(BaseModel):
+    preset_token: str
+
+
+class CameraPtzMoveRequest(BaseModel):
+    pan: float = Field(default=0.0, ge=-1.0, le=1.0)
+    tilt: float = Field(default=0.0, ge=-1.0, le=1.0)
+    zoom: float = Field(default=0.0, ge=-1.0, le=1.0)
+    timeout_s: float | None = Field(default=None, ge=0.0, le=30.0)
+
+
+class CameraPtzStopRequest(BaseModel):
+    pan_tilt: bool = True
+    zoom: bool = True
 
 
 class CameraPipelineWizardRequest(BaseModel):
@@ -223,6 +364,15 @@ class CamerasExtension(BaseExtension):
     def __init__(self) -> None:
         super().__init__(package="toposync_ext_cameras")
 
+    def capabilities(self) -> dict[str, Any]:
+        return {
+            "auth": {
+                "action": "core:extension:use",
+                "resource_type": "core:extension",
+                "api_prefixes": ["/api/cameras"],
+            }
+        }
+
     async def setup(self, app: FastAPI, *, bus: EventBus, services: ServiceRegistry) -> None:  # noqa: ARG002
         registry = getattr(app.state, "pipeline_operator_registry", None)
         if isinstance(registry, OperatorRegistry):
@@ -234,16 +384,417 @@ class CamerasExtension(BaseExtension):
                 raise RuntimeError("Toposync config_store not available")
             return store
 
+        def _maybe_auth(request: Request) -> tuple[AuthRuntime, AuthContext] | None:
+            auth = getattr(request.app.state, "auth", None)
+            context = getattr(request.state, "auth_context", None)
+            if not isinstance(auth, AuthRuntime):
+                return None
+            if not isinstance(context, AuthContext):
+                return None
+            return auth, context
+
+        def _require_auth(
+            request: Request,
+            *,
+            action: str,
+            resource_type: str | None = None,
+            resource_selector: str = "*",
+        ) -> None:
+            maybe = _maybe_auth(request)
+            if maybe is None:
+                return
+            auth, context = maybe
+            auth.authorize(
+                context=context,
+                action=action,
+                resource_type=resource_type,
+                resource_selector=resource_selector,
+            )
+
+        def _is_allowed(
+            request: Request,
+            *,
+            action: str,
+            resource_type: str | None = None,
+            resource_selector: str = "*",
+        ) -> bool:
+            try:
+                _require_auth(
+                    request,
+                    action=action,
+                    resource_type=resource_type,
+                    resource_selector=resource_selector,
+                )
+                return True
+            except HTTPException:
+                return False
+
         async def _read_ext_settings(request: Request) -> dict[str, Any]:
             settings = await _config_store(request).get_settings()
             ext = settings.extensions.get(EXTENSION_ID, {})
-            return ext if isinstance(ext, dict) else {}
+            return normalize_cameras_settings(ext)
+
+        def _services(request: Request) -> ServiceRegistry:
+            registry = getattr(request.app.state, "services", None)
+            if not isinstance(registry, ServiceRegistry):
+                raise HTTPException(status_code=503, detail="Toposync services are not available")
+            return registry
 
         snapshot_cache: dict[str, SnapshotCacheEntry] = {}
         snapshot_locks: dict[str, asyncio.Lock] = {}
         snapshot_cache_ttl_s = float(os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_TTL_S", "0.8") or "0.8")
         snapshot_ffmpeg_concurrency = int(os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_FFMPEG_CONCURRENCY", "2") or "2")
         snapshot_ffmpeg_sema = asyncio.Semaphore(max(1, snapshot_ffmpeg_concurrency))
+
+        onvif_discover_lock = asyncio.Lock()
+        onvif_discover_cache_at = 0.0
+        onvif_discover_cache: list[OnvifDiscoveredDevice] = []
+        onvif_discover_cache_ttl_s = float(os.getenv("TOPOSYNC_ONVIF_DISCOVERY_TTL_S", "60") or "60")
+
+        @dataclass(slots=True)
+        class _OnvifPtzContextCacheEntry:
+            signature: str
+            ptz_xaddr: str
+            media_xaddr: str
+            profile_token: str
+            created_ts: float
+            move_mode: str = "continuous"
+
+        onvif_ptz_cache: dict[str, _OnvifPtzContextCacheEntry] = {}
+        onvif_ptz_locks: dict[str, asyncio.Lock] = {}
+        try:
+            onvif_ptz_cache_ttl_s = float(os.getenv("TOPOSYNC_CAMERA_ONVIF_PTZ_CONTEXT_TTL_S", "600") or "600")
+        except Exception:
+            onvif_ptz_cache_ttl_s = 600.0
+        onvif_ptz_cache_ttl_s = max(1.0, min(3600.0, onvif_ptz_cache_ttl_s))
+
+        def _env_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
+            raw = str(os.getenv(name) or "").strip()
+            if not raw:
+                return max(min_value, min(max_value, float(default)))
+            try:
+                value = float(raw)
+            except Exception:
+                return max(min_value, min(max_value, float(default)))
+            return max(min_value, min(max_value, value))
+
+        def _get_onvif_ptz_lock(key: str) -> asyncio.Lock:
+            lock = onvif_ptz_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                onvif_ptz_locks[key] = lock
+            return lock
+
+        def _onvif_ptz_signature(
+            *,
+            xaddr: str,
+            ptz_xaddr: str,
+            media_xaddr: str,
+            profile_token: str,
+            username: str,
+        ) -> str:
+            parts = [
+                str(xaddr or "").strip(),
+                str(ptz_xaddr or "").strip() or "<auto-ptz>",
+                str(media_xaddr or "").strip() or "<auto-media>",
+                str(profile_token or "").strip() or "<auto-profile>",
+                str(username or "").strip(),
+            ]
+            raw = "\n".join(parts).encode("utf-8")
+            return hashlib.sha256(raw).hexdigest()
+
+        def _pick_best_ptz_profile(profiles: list[OnvifProfile]) -> OnvifProfile | None:
+            if not profiles:
+                return None
+
+            def score(item: OnvifProfile) -> tuple[int, int, int, int, int, str]:
+                ptz_score = 1 if bool(item.has_ptz) else 0
+                encoding = str(item.encoding or "").strip().upper()
+                enc_score = 0
+                if encoding in {"H264", "H.264"}:
+                    enc_score = 3
+                elif encoding in {"H265", "HEVC", "H.265"}:
+                    enc_score = 2
+                elif encoding:
+                    enc_score = 1
+                pixels = int(item.width or 0) * int(item.height or 0)
+                fps = int(item.fps or 0)
+                has_name = 1 if str(item.name or "").strip() else 0
+                return (ptz_score, enc_score, pixels, fps, has_name, str(item.token or ""))
+
+            return max(profiles, key=score)
+
+        async def _resolve_onvif_ptz_context(*, camera_id: str) -> tuple[OnvifClient, str, str]:
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            store = getattr(app.state, "config_store", None)
+            if store is None:
+                raise HTTPException(status_code=500, detail="Toposync config_store not available")
+
+            app_settings = await store.get_settings()
+            ext = app_settings.extensions.get(EXTENSION_ID, {})
+            ext_rec = normalize_cameras_settings(ext)
+            camera = get_camera_device(ext_rec, camera_id=cid)
+            if camera is None:
+                raise HTTPException(status_code=404, detail="Camera not found")
+
+            channel = get_primary_video_channel(camera)
+            if not isinstance(channel, dict):
+                raise HTTPException(status_code=409, detail="Camera has no video channel configured")
+
+            if str(channel.get("connection_type") or "rtsp").strip().lower() != "onvif":
+                raise HTTPException(status_code=409, detail="Camera controls are only supported for ONVIF cameras")
+
+            onvif_raw = channel.get("onvif")
+            onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
+            xaddr = normalize_onvif_xaddr(str(onvif.get("xaddr") or "").strip())
+            if not xaddr:
+                raise HTTPException(status_code=409, detail="Camera is missing ONVIF xaddr")
+
+            username = str(channel.get("username") or "").strip()
+            password = str(channel.get("password") or "").strip()
+            ptz_xaddr = str(onvif.get("ptz_xaddr") or "").strip()
+            media_xaddr = str(onvif.get("media_xaddr") or "").strip()
+            profile_token = str(onvif.get("profile_token") or "").strip()
+            signature = _onvif_ptz_signature(
+                xaddr=xaddr,
+                ptz_xaddr=ptz_xaddr,
+                media_xaddr=media_xaddr,
+                profile_token=profile_token,
+                username=username,
+            )
+
+            now = time.time()
+            cached = onvif_ptz_cache.get(cid)
+            if (
+                cached is not None
+                and cached.signature == signature
+                and cached.ptz_xaddr
+                and cached.profile_token
+                and (now - float(cached.created_ts)) <= onvif_ptz_cache_ttl_s
+            ):
+                client = OnvifClient(
+                    xaddr=xaddr,
+                    username=username,
+                    password=password,
+                    timeout_s=_env_float("TOPOSYNC_CAMERA_ONVIF_TIMEOUT_S", 3.5, min_value=0.5, max_value=20.0),
+                    auth_mode="auto",
+                )
+                return client, cached.ptz_xaddr, cached.profile_token
+
+            async with _get_onvif_ptz_lock(cid):
+                now = time.time()
+                cached = onvif_ptz_cache.get(cid)
+                if (
+                    cached is not None
+                    and cached.signature == signature
+                    and cached.ptz_xaddr
+                    and cached.profile_token
+                    and (now - float(cached.created_ts)) <= onvif_ptz_cache_ttl_s
+                ):
+                    client = OnvifClient(
+                        xaddr=xaddr,
+                        username=username,
+                        password=password,
+                        timeout_s=_env_float(
+                            "TOPOSYNC_CAMERA_ONVIF_TIMEOUT_S",
+                            3.5,
+                            min_value=0.5,
+                            max_value=20.0,
+                        ),
+                        auth_mode="auto",
+                    )
+                    return client, cached.ptz_xaddr, cached.profile_token
+
+                timeout_s = _env_float(
+                    "TOPOSYNC_CAMERA_ONVIF_TIMEOUT_S",
+                    3.5,
+                    min_value=0.5,
+                    max_value=20.0,
+                )
+                client = OnvifClient(
+                    xaddr=xaddr,
+                    username=username,
+                    password=password,
+                    timeout_s=timeout_s,
+                    auth_mode="auto",
+                )
+
+                if not ptz_xaddr or not media_xaddr:
+                    try:
+                        cap_media, cap_ptz = await client.get_capabilities()
+                    except OnvifError as exc:
+                        raise HTTPException(status_code=502, detail=str(exc)) from exc
+                    if not media_xaddr:
+                        media_xaddr = str(cap_media or "").strip()
+                    if not ptz_xaddr:
+                        ptz_xaddr = str(cap_ptz or "").strip()
+
+                if not ptz_xaddr:
+                    raise HTTPException(status_code=502, detail="ONVIF did not report a PTZ service address (ptz_xaddr)")
+
+                if not profile_token:
+                    if not media_xaddr:
+                        raise HTTPException(status_code=502, detail="ONVIF did not report a Media service address (media_xaddr)")
+                    try:
+                        profiles = await client.get_profiles(media_xaddr)
+                    except OnvifError as exc:
+                        raise HTTPException(status_code=502, detail=str(exc)) from exc
+                    selected = _pick_best_ptz_profile(profiles) or (profiles[0] if profiles else None)
+                    if selected is None or not str(selected.token or "").strip():
+                        raise HTTPException(status_code=502, detail="ONVIF returned no usable profiles for PTZ")
+                    profile_token = str(selected.token or "").strip()
+
+                prev = onvif_ptz_cache.get(cid)
+                prev_mode = "continuous"
+                if prev is not None and str(getattr(prev, "signature", "") or "") == signature:
+                    prev_mode = str(getattr(prev, "move_mode", "") or "").strip() or "continuous"
+
+                onvif_ptz_cache[cid] = _OnvifPtzContextCacheEntry(
+                    signature=signature,
+                    ptz_xaddr=ptz_xaddr,
+                    media_xaddr=media_xaddr,
+                    profile_token=profile_token,
+                    created_ts=time.time(),
+                    move_mode=prev_mode,
+                )
+
+                return client, ptz_xaddr, profile_token
+
+        def _clamp(value: float, minimum: float, maximum: float) -> float:
+            return max(minimum, min(maximum, float(value)))
+
+        async def _svc_ptz_list_presets(*, camera_id: str) -> list[dict[str, Any]]:
+            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(camera_id=str(camera_id or "").strip())
+            try:
+                presets = await client.get_ptz_presets(ptz_xaddr, profile_token=profile_token)
+            except OnvifError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            return [
+                {
+                    "token": str(p.token or "").strip(),
+                    "name": str(p.name or "").strip(),
+                    "pan": p.pan,
+                    "tilt": p.tilt,
+                    "zoom": p.zoom,
+                }
+                for p in presets
+                if str(p.token or "").strip()
+            ]
+
+        async def _svc_ptz_goto_preset(*, camera_id: str, preset_token: str) -> dict[str, Any]:
+            token = str(preset_token or "").strip()
+            if not token:
+                raise HTTPException(status_code=400, detail="preset_token is required")
+            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(camera_id=str(camera_id or "").strip())
+            try:
+                await client.goto_preset(ptz_xaddr, profile_token=profile_token, preset_token=token)
+            except OnvifError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            return {"ok": True}
+
+        async def _svc_ptz_get_status(*, camera_id: str) -> dict[str, Any]:
+            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(camera_id=str(camera_id or "").strip())
+            try:
+                status = await client.get_ptz_status(ptz_xaddr, profile_token=profile_token)
+            except OnvifError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            return {
+                "pan": status.pan,
+                "tilt": status.tilt,
+                "zoom": status.zoom,
+                "move_status": str(status.move_status or "").strip(),
+                "error": str(status.error or "").strip(),
+                "utc_time": str(status.utc_time or "").strip(),
+            }
+
+        async def _svc_ptz_continuous_move(
+            *,
+            camera_id: str,
+            pan: float = 0.0,
+            tilt: float = 0.0,
+            zoom: float = 0.0,
+            timeout_s: float | None = None,
+        ) -> dict[str, Any]:
+            cid = str(camera_id or "").strip()
+            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(camera_id=cid)
+            safe_timeout = None
+            if timeout_s is not None:
+                try:
+                    safe_timeout = float(timeout_s)
+                except Exception:
+                    safe_timeout = None
+                if safe_timeout is not None:
+                    safe_timeout = _clamp(safe_timeout, 0.0, 30.0)
+
+            # Most devices expect normalized velocity (-1..1). Clamp for safety.
+            safe_pan = _clamp(float(pan), -1.0, 1.0)
+            safe_tilt = _clamp(float(tilt), -1.0, 1.0)
+            safe_zoom = _clamp(float(zoom), -1.0, 1.0)
+
+            entry = onvif_ptz_cache.get(cid)
+            move_mode = str(getattr(entry, "move_mode", "") or "").strip() or "continuous"
+
+            async def _do_relative_move() -> None:
+                step = 0.08
+                await client.relative_move(
+                    ptz_xaddr,
+                    profile_token=profile_token,
+                    pan=safe_pan * step,
+                    tilt=safe_tilt * step,
+                    zoom=safe_zoom * step,
+                )
+
+            if move_mode == "relative":
+                try:
+                    await _do_relative_move()
+                except OnvifError as exc:
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+                return {"ok": True}
+
+            try:
+                await client.continuous_move(
+                    ptz_xaddr,
+                    profile_token=profile_token,
+                    pan=safe_pan,
+                    tilt=safe_tilt,
+                    zoom=safe_zoom,
+                    timeout_s=safe_timeout,
+                )
+            except OnvifError as exc:
+                # Some devices reject ContinuousMove (HTTP 400) but support RelativeMove.
+                message = str(exc)
+                if "HTTP error (400)" in message:
+                    if entry is not None:
+                        entry.move_mode = "relative"
+                    try:
+                        await _do_relative_move()
+                    except OnvifError as exc2:
+                        raise HTTPException(status_code=502, detail=str(exc2)) from exc2
+                else:
+                    raise HTTPException(status_code=502, detail=message) from exc
+            return {"ok": True}
+
+        async def _svc_ptz_stop(
+            *,
+            camera_id: str,
+            pan_tilt: bool = True,
+            zoom: bool = True,
+        ) -> dict[str, Any]:
+            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(camera_id=str(camera_id or "").strip())
+            try:
+                await client.stop(ptz_xaddr, profile_token=profile_token, pan_tilt=bool(pan_tilt), zoom=bool(zoom))
+            except OnvifError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            return {"ok": True}
+
+        services.register("cameras.ptz.list_presets", _svc_ptz_list_presets)
+        services.register("cameras.ptz.goto_preset", _svc_ptz_goto_preset)
+        services.register("cameras.ptz.get_status", _svc_ptz_get_status)
+        services.register("cameras.ptz.continuous_move", _svc_ptz_continuous_move)
+        services.register("cameras.ptz.stop", _svc_ptz_stop)
 
         def _get_lock(key: str) -> asyncio.Lock:
             lock = snapshot_locks.get(key)
@@ -255,42 +806,242 @@ class CamerasExtension(BaseExtension):
         @app.get("/api/cameras/index")
         async def cameras_index(request: Request) -> dict[str, Any]:
             ext = await _read_ext_settings(request)
-            raw_cameras = ext.get("cameras", [])
-
             cameras: list[dict[str, Any]] = []
-            if isinstance(raw_cameras, list):
-                for c in raw_cameras:
-                    if not isinstance(c, dict):
-                        continue
-                    cid = str(c.get("id", "")).strip()
-                    if not cid:
-                        continue
-                    cameras.append(
-                        {
-                            "id": cid,
-                            "name": str(c.get("name", "")).strip(),
-                            "connection_type": str(c.get("connection_type", "rtsp")).strip() or "rtsp",
-                        }
-                    )
+            for device in iter_camera_devices(ext):
+                flattened = flatten_camera_device_for_ui(device)
+                if not isinstance(flattened, dict):
+                    continue
+                cid = str(flattened.get("id") or "").strip()
+                if not cid:
+                    continue
+                cameras.append(
+                    {
+                        "id": cid,
+                        "name": str(flattened.get("name") or "").strip(),
+                        "connection_type": str(flattened.get("connection_type") or "rtsp").strip() or "rtsp",
+                    }
+                )
 
             return {"cameras": cameras}
 
+        def _normalized_host(url: str) -> str:
+            raw = str(url or "").strip()
+            if not raw:
+                return ""
+            try:
+                parsed = urllib.parse.urlsplit(raw)
+            except Exception:
+                return ""
+            netloc = str(parsed.netloc or "").strip()
+            if "@" in netloc:
+                netloc = netloc.split("@", 1)[1]
+            host = netloc.split(":", 1)[0].strip().lower()
+            return host
+
+        @app.post("/api/cameras/onvif/discover", response_model=OnvifDiscoverResponse)
+        async def onvif_discover(request: Request, body: OnvifDiscoverRequest) -> OnvifDiscoverResponse:
+            nonlocal onvif_discover_cache_at, onvif_discover_cache
+
+            timeout_s = max(0.2, float(body.timeout_ms) / 1000.0)
+
+            ext = await _read_ext_settings(request)
+            known_hosts: set[str] = set()
+            known_device_ids: set[str] = set()
+
+            for device in iter_camera_devices(ext):
+                if not isinstance(device, dict):
+                    continue
+                channel = get_primary_video_channel(device)
+                if not isinstance(channel, dict):
+                    continue
+                rtsp_url = str(channel.get("rtsp_url") or "").strip()
+                if rtsp_url:
+                    host = _normalized_host(rtsp_url)
+                    if host:
+                        known_hosts.add(host)
+
+                onvif = channel.get("onvif")
+                onvif_rec = onvif if isinstance(onvif, dict) else {}
+                device_id = str(onvif_rec.get("device_id") or "").strip()
+                if device_id:
+                    known_device_ids.add(device_id)
+                xaddr = str(onvif_rec.get("xaddr") or "").strip()
+                if xaddr:
+                    host = _normalized_host(xaddr)
+                    if host:
+                        known_hosts.add(host)
+
+            async with onvif_discover_lock:
+                now = time.time()
+                cached = False
+                duration_ms = 0
+                devices: list[OnvifDiscoveredDevice] = []
+
+                if (
+                    not bool(body.force)
+                    and onvif_discover_cache
+                    and onvif_discover_cache_at > 0.0
+                    and (now - onvif_discover_cache_at) <= onvif_discover_cache_ttl_s
+                ):
+                    cached = True
+                    devices = list(onvif_discover_cache)
+                else:
+                    started = time.time()
+                    devices = await asyncio.to_thread(
+                        discover_onvif_devices,
+                        timeout_s=timeout_s,
+                        attempts=2,
+                        max_results=128,
+                    )
+                    duration_ms = int(max(0.0, (time.time() - started) * 1000.0))
+                    onvif_discover_cache_at = time.time()
+                    onvif_discover_cache = list(devices)
+
+            out: list[OnvifDiscoveredDeviceInfo] = []
+            for item in devices:
+                xaddr = str(item.xaddr or "").strip()
+                host = _normalized_host(xaddr) if xaddr else str(item.source_ip or "").strip().lower()
+                if bool(body.exclude_known):
+                    if item.device_id and item.device_id in known_device_ids:
+                        continue
+                    if host and host in known_hosts:
+                        continue
+                out.append(
+                    OnvifDiscoveredDeviceInfo(
+                        device_id=str(item.device_id or "").strip(),
+                        xaddr=xaddr,
+                        xaddrs=list(item.xaddrs or []),
+                        source_ip=str(item.source_ip or "").strip(),
+                        name=str(item.name or "").strip(),
+                        hardware=str(item.hardware or "").strip(),
+                    )
+                )
+
+            return OnvifDiscoverResponse(
+                scanned_at_unix=float(time.time()),
+                duration_ms=int(duration_ms),
+                cached=bool(cached),
+                devices=out,
+            )
+
+        @app.post("/api/cameras/onvif/inspect", response_model=OnvifInspectResponse)
+        async def onvif_inspect(body: OnvifInspectRequest) -> OnvifInspectResponse:
+            xaddr = normalize_onvif_xaddr(body.xaddr)
+            if not xaddr:
+                raise HTTPException(status_code=400, detail="xaddr is required")
+
+            timeout_s = max(0.5, float(body.timeout_ms) / 1000.0)
+            client = OnvifClient(
+                xaddr=xaddr,
+                username=str(body.username or ""),
+                password=str(body.password or ""),
+                timeout_s=timeout_s,
+                auth_mode=body.auth,
+            )
+
+            warnings: list[str] = []
+            try:
+                media_xaddr, ptz_xaddr = await client.get_capabilities()
+            except OnvifError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+            profiles: list[OnvifProfileInfo] = []
+            if media_xaddr:
+                try:
+                    raw_profiles = await client.get_profiles(media_xaddr)
+                    profiles = [
+                        OnvifProfileInfo(
+                            token=p.token,
+                            name=p.name,
+                            encoding=p.encoding,
+                            width=p.width,
+                            height=p.height,
+                            fps=p.fps,
+                            has_ptz=p.has_ptz,
+                        )
+                        for p in raw_profiles
+                    ]
+                except OnvifError as exc:
+                    warnings.append(str(exc))
+            else:
+                warnings.append("ONVIF device did not report a Media service URL")
+
+            return OnvifInspectResponse(
+                xaddr=xaddr,
+                media_xaddr=media_xaddr,
+                ptz_xaddr=ptz_xaddr,
+                profiles=profiles,
+                warnings=warnings,
+            )
+
+        @app.post("/api/cameras/onvif/stream-uri", response_model=OnvifStreamUriResponse)
+        async def onvif_stream_uri(body: OnvifStreamUriRequest) -> OnvifStreamUriResponse:
+            xaddr = normalize_onvif_xaddr(body.xaddr)
+            if not xaddr:
+                raise HTTPException(status_code=400, detail="xaddr is required")
+
+            token = str(body.profile_token or "").strip()
+            if not token:
+                raise HTTPException(status_code=400, detail="profile_token is required")
+
+            timeout_s = max(0.5, float(body.timeout_ms) / 1000.0)
+            client = OnvifClient(
+                xaddr=xaddr,
+                username=str(body.username or ""),
+                password=str(body.password or ""),
+                timeout_s=timeout_s,
+                auth_mode=body.auth,
+            )
+
+            media_xaddr = str(body.media_xaddr or "").strip()
+            if not media_xaddr:
+                try:
+                    media_xaddr, _ptz_xaddr = await client.get_capabilities()
+                except OnvifError as exc:
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+            if not media_xaddr:
+                raise HTTPException(status_code=502, detail="ONVIF device did not report a Media service URL")
+
+            try:
+                uri = await client.get_stream_uri(media_xaddr, profile_token=token)
+            except OnvifError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+            if not uri:
+                raise HTTPException(status_code=502, detail="ONVIF returned an empty RTSP URL")
+
+            return OnvifStreamUriResponse(rtsp_url=uri)
+
         @app.post("/api/cameras/control_points/map")
         async def map_control_points(body: ControlPointMapRequest) -> dict[str, Any]:
-            pairs = [
-                ControlPointPair(
-                    image_u=float(p.image.x),
-                    image_v=float(p.image.y),
-                    world_x=float(p.world.x),
-                    world_z=float(p.world.z),
-                )
-                for p in body.pairs
-            ]
-            if len(pairs) < 4:
+            control_point_sets = _parse_control_point_sets(
+                [
+                    {
+                        "id": body.control_point_set.id,
+                        "label": body.control_point_set.label,
+                        "pose_reference": (
+                            body.control_point_set.pose_reference.model_dump(mode="json")
+                            if body.control_point_set.pose_reference is not None
+                            else None
+                        ),
+                        "control_points": [
+                            {
+                                "id": point.id,
+                                "image": {"x": float(point.image.x), "y": float(point.image.y)},
+                                "world": {"x": float(point.world.x), "z": float(point.world.z)},
+                            }
+                            for point in body.control_point_set.control_points
+                        ],
+                    }
+                ]
+            )
+            control_point_set = control_point_sets[0] if control_point_sets else None
+            if control_point_set is None or len(control_point_set.control_points) < 4:
                 return {"world": None} if body.query.kind == "image" else {"image": None}
 
             try:
-                mapper = ControlPointMapper(pairs)
+                mapper = ControlPointMapper(list(control_point_set.control_points))
             except RuntimeError as exc:
                 raise HTTPException(status_code=501, detail=str(exc)) from exc
             except Exception:
@@ -302,12 +1053,12 @@ class CamerasExtension(BaseExtension):
                 u = float(body.query.x)
                 v = float(body.query.y)
                 if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
-                    return {"world": None}
+                    return {"world": None, "quality": mapper.quality.as_dict()}
                 mapped = mapper.map(u, v)
                 if mapped is None:
-                    return {"world": None}
+                    return {"world": None, "quality": mapper.quality.as_dict()}
                 x, z = mapped
-                return {"world": {"x": x, "z": z}}
+                return {"world": {"x": x, "z": z}, "quality": mapper.quality.as_dict()}
 
             if body.query.z is None:
                 raise HTTPException(status_code=400, detail="z is required for world mapping")
@@ -315,11 +1066,123 @@ class CamerasExtension(BaseExtension):
             z = float(body.query.z)
             mapped = mapper.map_world_to_image(x, z)
             if mapped is None:
-                return {"image": None}
+                return {"image": None, "quality": mapper.quality.as_dict()}
             u, v = mapped
             if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
-                return {"image": None}
-            return {"image": {"x": u, "y": v}}
+                return {"image": None, "quality": mapper.quality.as_dict()}
+            return {"image": {"x": u, "y": v}, "quality": mapper.quality.as_dict()}
+
+        @app.get("/api/cameras/cameras/{camera_id}/ptz/presets", response_model=CameraPtzPresetsResponse)
+        async def camera_ptz_presets(request: Request, camera_id: str) -> CameraPtzPresetsResponse:
+            _require_auth(request, action="core:settings:read")
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            services = _services(request)
+            try:
+                raw_presets = await services.call("cameras.ptz.list_presets", camera_id=cid)
+            except KeyError:
+                raise HTTPException(status_code=503, detail="Camera PTZ controls are not available") from None
+
+            presets: list[CameraPtzPreset] = []
+            if isinstance(raw_presets, list):
+                for item in raw_presets:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        presets.append(CameraPtzPreset.model_validate(item))
+                    except Exception:
+                        continue
+
+            return CameraPtzPresetsResponse(camera_id=cid, presets=presets)
+
+        @app.post("/api/cameras/cameras/{camera_id}/ptz/goto-preset", response_model=CameraPtzActionResponse)
+        async def camera_ptz_goto_preset(
+            request: Request,
+            camera_id: str,
+            body: CameraPtzGotoPresetRequest,
+        ) -> CameraPtzActionResponse:
+            _require_auth(request, action="core:settings:read")
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            services = _services(request)
+            try:
+                await services.call("cameras.ptz.goto_preset", camera_id=cid, preset_token=body.preset_token)
+            except KeyError:
+                raise HTTPException(status_code=503, detail="Camera PTZ controls are not available") from None
+
+            return CameraPtzActionResponse(ok=True)
+
+        @app.get("/api/cameras/cameras/{camera_id}/ptz/status", response_model=CameraPtzStatusResponse)
+        async def camera_ptz_status(request: Request, camera_id: str) -> CameraPtzStatusResponse:
+            _require_auth(request, action="core:settings:read")
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            services = _services(request)
+            try:
+                raw_status = await services.call("cameras.ptz.get_status", camera_id=cid)
+            except KeyError:
+                raise HTTPException(status_code=503, detail="Camera PTZ controls are not available") from None
+
+            return CameraPtzStatusResponse(
+                camera_id=cid,
+                status=CameraPtzStatus.model_validate(raw_status if isinstance(raw_status, dict) else {}),
+            )
+
+        @app.post("/api/cameras/cameras/{camera_id}/ptz/move", response_model=CameraPtzActionResponse)
+        async def camera_ptz_move(
+            request: Request,
+            camera_id: str,
+            body: CameraPtzMoveRequest,
+        ) -> CameraPtzActionResponse:
+            _require_auth(request, action="core:settings:read")
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            services = _services(request)
+            try:
+                await services.call(
+                    "cameras.ptz.continuous_move",
+                    camera_id=cid,
+                    pan=float(body.pan),
+                    tilt=float(body.tilt),
+                    zoom=float(body.zoom),
+                    timeout_s=body.timeout_s,
+                )
+            except KeyError:
+                raise HTTPException(status_code=503, detail="Camera PTZ controls are not available") from None
+
+            return CameraPtzActionResponse(ok=True)
+
+        @app.post("/api/cameras/cameras/{camera_id}/ptz/stop", response_model=CameraPtzActionResponse)
+        async def camera_ptz_stop(
+            request: Request,
+            camera_id: str,
+            body: CameraPtzStopRequest,
+        ) -> CameraPtzActionResponse:
+            _require_auth(request, action="core:settings:read")
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            services = _services(request)
+            try:
+                await services.call(
+                    "cameras.ptz.stop",
+                    camera_id=cid,
+                    pan_tilt=bool(body.pan_tilt),
+                    zoom=bool(body.zoom),
+                )
+            except KeyError:
+                raise HTTPException(status_code=503, detail="Camera PTZ controls are not available") from None
+
+            return CameraPtzActionResponse(ok=True)
 
         @app.post("/api/cameras/rtsp/snapshot")
         async def rtsp_snapshot(body: RtspSnapshotRequest) -> Response:
@@ -359,23 +1222,17 @@ class CamerasExtension(BaseExtension):
                 raise HTTPException(status_code=400, detail="camera_id is required")
 
             ext = await _read_ext_settings(request)
-            raw_cameras = ext.get("cameras", [])
-            if not isinstance(raw_cameras, list):
-                raise HTTPException(status_code=404, detail="Unknown camera")
-
-            camera: dict[str, Any] | None = None
-            for item in raw_cameras:
-                if not isinstance(item, dict):
-                    continue
-                if str(item.get("id", "")).strip() == cid:
-                    camera = item
-                    break
+            camera = get_camera_device(ext, camera_id=cid)
             if camera is None:
                 raise HTTPException(status_code=404, detail="Unknown camera")
 
-            ctype = str(camera.get("connection_type", "rtsp")).strip().lower() or "rtsp"
-            if ctype != "rtsp":
-                raise HTTPException(status_code=400, detail="Only RTSP cameras are supported for now")
+            channel = get_primary_video_channel(camera)
+            if not isinstance(channel, dict):
+                raise HTTPException(status_code=404, detail="Unknown camera")
+
+            ctype = str(channel.get("connection_type", "rtsp")).strip().lower() or "rtsp"
+            if ctype not in {"rtsp", "onvif"}:
+                raise HTTPException(status_code=400, detail="Unsupported camera connection type")
 
             cache_key = f"cam:{cid}"
             lock = _get_lock(cache_key)
@@ -385,9 +1242,9 @@ class CamerasExtension(BaseExtension):
                 if cached and (now - cached.created_ts) <= snapshot_cache_ttl_s:
                     return Response(content=cached.blob, media_type="image/jpeg", headers=cached.headers)
 
-                url_raw = str(camera.get("rtsp_url", "")).strip()
-                username = str(camera.get("username", "")).strip()
-                password = str(camera.get("password", "")).strip()
+                url_raw = str(channel.get("rtsp_url", "")).strip()
+                username = str(channel.get("username", "")).strip()
+                password = str(channel.get("password", "")).strip()
                 if not url_raw:
                     raise HTTPException(status_code=400, detail="Camera RTSP URL is not configured")
 
@@ -427,13 +1284,13 @@ class CamerasExtension(BaseExtension):
                     props = element.props if isinstance(element.props, dict) else {}
                     if str(props.get("camera_id", "")).strip() != cid:
                         continue
-                    pairs = _parse_control_point_pairs(props.get("control_points"))
+                    control_point_sets = _parse_control_point_sets(props.get("control_point_sets"))
                     camera_elements.append(
                         {
                             "id": element.id,
                             "name": str(element.name or "").strip() or element.id,
-                            "control_points_pairs": len(pairs),
-                            "has_mapping": len(pairs) >= 4,
+                            "control_points_pairs": sum(len(item.control_points) for item in control_point_sets),
+                            "has_mapping": any(len(item.control_points) >= 4 for item in control_point_sets),
                         }
                     )
 
@@ -448,12 +1305,34 @@ class CamerasExtension(BaseExtension):
                     vertices = props.get("vertices")
                     if not isinstance(vertices, list) or len(vertices) < 3:
                         continue
+                    points: list[dict[str, float]] = []
+                    for vertex in vertices:
+                        if not isinstance(vertex, dict):
+                            continue
+                        try:
+                            x = float(vertex.get("x"))
+                            z = float(vertex.get("z"))
+                        except Exception:
+                            continue
+                        if not math.isfinite(x) or not math.isfinite(z):
+                            continue
+                        points.append({"x": x, "z": z})
+                    if len(points) < 3:
+                        continue
+                    if not _is_allowed(
+                        request,
+                        action="core:area:read",
+                        resource_type="core:area",
+                        resource_selector=f"{composition.id}.{element.id}",
+                    ):
+                        continue
                     name = str(element.name or "").strip()
                     areas.append(
                         {
                             "id": element.id,
                             "name": name or element.id,
-                            "vertices_count": len(vertices),
+                            "vertices_count": len(points),
+                            "vertices": points,
                         }
                     )
 
@@ -488,8 +1367,8 @@ class CamerasExtension(BaseExtension):
                     props = element.props if isinstance(getattr(element, "props", None), dict) else {}
                     if str(props.get("camera_id", "")).strip() != cid:
                         continue
-                    pairs = _parse_control_point_pairs(props.get("control_points"))
-                    if len(pairs) >= 4:
+                    control_point_sets = _parse_control_point_sets(props.get("control_point_sets"))
+                    if any(len(item.control_points) >= 4 for item in control_point_sets):
                         return str(getattr(composition, "id", "") or "").strip() or None
             return None
 
@@ -718,6 +1597,7 @@ class CamerasExtension(BaseExtension):
             camera_id: str,
             body: CameraPipelineWizardRequest,
         ) -> CameraPipelineWizardResponse:
+            _require_auth(request, action="core:pipelines:write")
             cid = str(camera_id or "").strip()
             if not cid:
                 raise HTTPException(status_code=400, detail="camera_id is required")
@@ -730,10 +1610,7 @@ class CamerasExtension(BaseExtension):
             compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
 
             ext = await _read_ext_settings(request)
-            raw_cameras = ext.get("cameras", [])
-            if not isinstance(raw_cameras, list):
-                raise HTTPException(status_code=404, detail="Unknown camera")
-            if not any(isinstance(item, dict) and str(item.get("id", "")).strip() == cid for item in raw_cameras):
+            if get_camera_device(ext, camera_id=cid) is None:
                 raise HTTPException(status_code=404, detail="Unknown camera")
 
             cfg = await store.get_config()
@@ -751,6 +1628,12 @@ class CamerasExtension(BaseExtension):
                         status_code=409,
                         detail="Vehicle preset requires camera mapping. Add control points (>=4) in a composition first.",
                     )
+                _require_auth(
+                    request,
+                    action="core:area:edit",
+                    resource_type="core:area",
+                    resource_selector=f"{composition_id}.{area_id}" if area_id else f"{composition_id}.*",
+                )
                 if area_id:
                     try:
                         area_name, area_points = _resolve_area_polygon(cfg, composition_id=composition_id, area_id=area_id)

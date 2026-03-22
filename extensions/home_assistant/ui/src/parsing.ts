@@ -54,12 +54,14 @@ export function readHomeAssistantServers(settings: Record<string, unknown>): Hom
   const out: HomeAssistantServer[] = [];
   for (const item of raw) {
     const rec = readRecord(item);
+    const id = readString(rec.id).trim();
+    const name = readString(rec.name).trim();
     const host = readString(rec.host).trim();
     const apiKey = readString(rec.apiKey).trim();
-    if (!host && !apiKey) continue;
+    if (!id && !name && !host && !apiKey) continue;
     out.push({
-      id: readString(rec.id) || createUniqueId(),
-      name: readString(rec.name).trim(),
+      id: id || createUniqueId(),
+      name,
       host,
       apiKey,
     });

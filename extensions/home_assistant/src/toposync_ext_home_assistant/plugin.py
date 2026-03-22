@@ -129,6 +129,15 @@ class HomeAssistantExtension(BaseExtension):
         self._state_stop: dict[str, asyncio.Event] = {}
         self._state_server_sig: dict[str, tuple[str, str]] = {}
 
+    def capabilities(self) -> dict[str, Any]:
+        return {
+            "auth": {
+                "action": "core:extension:use",
+                "resource_type": "core:extension",
+                "api_prefixes": ["/api/home_assistant"],
+            }
+        }
+
     async def setup(self, app: FastAPI, *, bus: EventBus, services: ServiceRegistry) -> None:  # noqa: ARG002
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=8.0))
         state_cache_ttl_s = 1.5

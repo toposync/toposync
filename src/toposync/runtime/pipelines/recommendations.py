@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from .compiler import CompiledPipeline
 from .operator_registry import OperatorRegistry
@@ -311,7 +311,6 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
         if not bool(drop_data_after_store):
             continue
         # If Store Images is fed directly by split/track streams without downstream rate control, it can be very heavy.
-        upstream_ops = [nodes_by_id[nid].operator_id for nid in _upstream_nodes(store_node_id) if nid in nodes_by_id]
         tracking_ids = [nid for nid in _upstream_nodes(store_node_id) if nid in nodes_by_id and nodes_by_id[nid].operator_id == "vision.object_tracking_yolo"]
         if tracking_ids:
             tracking_idx = min(order_index.get(nid, 0) for nid in tracking_ids)
@@ -433,27 +432,77 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
         input_names_raw = cfg.get("input_artifact_names")
         input_names = [str(item).strip() for item in input_names_raw] if isinstance(input_names_raw, list) else []
         if input_names:
-            produced: set[str] = {"frame_original"}
+            produced_inputs: set[str] = set()
+            for edge in incoming.get(bf_node_id, []):
+                produced_inputs.update(available_artifacts_out.get(str(edge.source_node_id), set()))
+
+            # Some operators have configurable output artifact names; include those too.
+            upstream_segmentation_outputs: set[str] = set()
+            upstream_best_frame_outputs: set[str] = set()
             for nid in _upstream_nodes(bf_node_id):
                 n = nodes_by_id.get(nid)
                 if n is None:
                     continue
                 if n.operator_id == "camera.object_segmentation":
                     seg_cfg = _resolve_config(nid)
-                    produced.add(str(seg_cfg.get("output_artifact_name") or "segmented").strip() or "segmented")
+                    out_name = str(seg_cfg.get("output_artifact_name") or "segmented").strip() or "segmented"
+                    upstream_segmentation_outputs.add(out_name)
+                    produced_inputs.add(out_name)
                 if n.operator_id == "camera.best_frame_selector":
                     bf_cfg = _resolve_config(nid)
-                    produced.add(str(bf_cfg.get("output_artifact_name") or "best_frame").strip() or "best_frame")
-            missing_inputs = [name for name in input_names if name and name not in produced]
-            if missing_inputs:
+                    out_name = str(bf_cfg.get("output_artifact_name") or "best_frame").strip() or "best_frame"
+                    upstream_best_frame_outputs.add(out_name)
+                    produced_inputs.add(out_name)
+
+            fallback_to_stream_frame = bool(cfg.get("fallback_to_stream_frame", True))
+
+            def _input_is_available(name: str) -> bool:
+                key = str(name or "").strip()
+                if not key:
+                    return False
+                # These are semantic image keys used across the UX.
+                if key == "original":
+                    return "frame_original" in produced_inputs
+                if key == "treated":
+                    return "frame" in produced_inputs
+                if key == "segmented":
+                    return bool(upstream_segmentation_outputs) or "segmented" in produced_inputs
+                if key == "best_frame":
+                    return bool(upstream_best_frame_outputs) or "best_frame" in produced_inputs
+                # Otherwise treat it as an artifact name.
+                return key in produced_inputs
+
+            has_any_input = any(_input_is_available(name) for name in input_names)
+            if not has_any_input and fallback_to_stream_frame and ("frame" in produced_inputs or "frame_original" in produced_inputs):
+                has_any_input = True
+
+            missing_inputs = [name for name in input_names if name and not _input_is_available(name)]
+            # Avoid noisy alerts for common semantic keys when a fallback is available.
+            semantic_keys = {"segmented", "treated", "original", "best_frame"}
+            missing_custom_inputs = [name for name in missing_inputs if str(name).strip() not in semantic_keys]
+            if missing_custom_inputs:
                 alerts.append(
                     PipelineAlert(
                         severity="info",
                         code="best_frame_missing_inputs",
                         node_id=bf_node_id,
                         operator_id="camera.best_frame_selector",
-                        message=f"Best Frame Selector prefers artifacts that are not produced upstream: {', '.join(missing_inputs)}.",
-                        suggestion="Add the step that produces these artifacts (e.g. Object Segmentation), or adjust input_artifact_names to existing artifacts.",
+                        message=(
+                            "Best Frame Selector prefers inputs that are not produced upstream: "
+                            f"{', '.join(missing_custom_inputs)}."
+                        ),
+                        suggestion="Adjust input_artifact_names to existing artifacts, or add steps that produce them upstream.",
+                    )
+                )
+            elif not has_any_input and not fallback_to_stream_frame:
+                alerts.append(
+                    PipelineAlert(
+                        severity="warning",
+                        code="best_frame_missing_inputs",
+                        node_id=bf_node_id,
+                        operator_id="camera.best_frame_selector",
+                        message="Best Frame Selector has no usable input images upstream.",
+                        suggestion="Enable fallback_to_stream_frame or add steps that produce the preferred inputs upstream.",
                     )
                 )
 
@@ -465,9 +514,17 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
             if node.operator_id == "core.store_images":
                 store_cfg = _resolve_config(nid)
                 names = store_cfg.get("artifact_names")
-                if isinstance(names, list) and any(str(item).strip() == output_name for item in names):
+                if isinstance(names, list) and any(str(item).strip() == output_name for item in names if str(item).strip()):
                     used = True
                     break
+                if isinstance(names, list) and any(str(item).strip() for item in names):
+                    continue
+                fallback_raw = str(store_cfg.get("image_with_fallback") or "").strip()
+                if fallback_raw:
+                    candidates = [p.strip() for p in fallback_raw.split(",") if p.strip()]
+                    if any(candidate == output_name for candidate in candidates):
+                        used = True
+                        break
             if node.operator_id == "core.notify":
                 notify_cfg = _resolve_config(nid)
                 fallback = notify_cfg.get("thumbnail_with_fallback")

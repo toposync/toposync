@@ -1,9 +1,26 @@
-import type { CameraContextsResponse, CameraPipelineWizardRequest, CameraPipelineWizardResponse, CamerasIndex } from "../types";
+import type {
+  CameraControlPointSet,
+  CameraContextsResponse,
+  CameraPipelineWizardRequest,
+  CameraPipelineWizardResponse,
+  CameraPtzPreset,
+  CamerasIndex,
+  OnvifDiscoverRequest,
+  OnvifDiscoverResponse,
+  OnvifInspectRequest,
+  OnvifInspectResponse,
+  OnvifStreamUriRequest,
+  OnvifStreamUriResponse,
+  PanTiltZoomState,
+} from "../types";
 import { readRecord } from "../parsing";
 
-type ControlPointMapPair = { image: { x: number; y: number }; world: { x: number; z: number } };
 type ControlPointMapQuery = { kind: "image"; x: number; y: number } | { kind: "world"; x: number; z: number };
-type ControlPointMapResponse = { world?: { x: number; z: number } | null; image?: { x: number; y: number } | null };
+type ControlPointMapResponse = {
+  world?: { x: number; z: number } | null;
+  image?: { x: number; y: number } | null;
+  quality?: Record<string, unknown> | null;
+};
 
 export async function fetchCamerasIndex(): Promise<CamerasIndex> {
   const response = await fetch("/api/cameras/index");
@@ -45,15 +62,93 @@ export async function fetchCameraSnapshot(cameraId: string, signal?: AbortSignal
   return response.blob();
 }
 
+export async function fetchCameraPtzPresets(
+  cameraId: string,
+  signal?: AbortSignal,
+): Promise<{ camera_id: string; presets: CameraPtzPreset[] }> {
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/presets`, { signal });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Failed to load PTZ presets: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function fetchCameraPtzStatus(
+  cameraId: string,
+  signal?: AbortSignal,
+): Promise<{ camera_id: string; status: PanTiltZoomState | null }> {
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/status`, { signal });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Failed to load PTZ status: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function gotoCameraPtzPreset(
+  cameraId: string,
+  presetToken: string,
+  signal?: AbortSignal,
+): Promise<{ ok: boolean }> {
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/goto-preset`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ preset_token: presetToken }),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Failed to move camera to preset: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function moveCameraPtz(
+  cameraId: string,
+  body: { pan: number; tilt: number; zoom: number; timeout_s?: number | null },
+  signal?: AbortSignal,
+): Promise<{ ok: boolean }> {
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/move`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Failed to move PTZ camera: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function stopCameraPtz(
+  cameraId: string,
+  body: { pan_tilt?: boolean; zoom?: boolean },
+  signal?: AbortSignal,
+): Promise<{ ok: boolean }> {
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/stop`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Failed to stop PTZ camera: ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function mapControlPoint(
-  pairs: ControlPointMapPair[],
+  controlPointSet: CameraControlPointSet,
   query: ControlPointMapQuery,
   signal?: AbortSignal,
 ): Promise<ControlPointMapResponse> {
   const response = await fetch("/api/cameras/control_points/map", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ pairs, query }),
+    body: JSON.stringify({ control_point_set: controlPointSet, query }),
     signal,
   });
   if (!response.ok) {
@@ -86,6 +181,75 @@ export async function createCameraPipelineFromWizard(
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Failed to create pipeline: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function inspectOnvif(
+  body: OnvifInspectRequest,
+  signal?: AbortSignal,
+): Promise<OnvifInspectResponse> {
+  const response = await fetch("/api/cameras/onvif/inspect", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      xaddr: body.xaddr,
+      username: body.username ?? "",
+      password: body.password ?? "",
+      timeout_ms: body.timeout_ms,
+      auth: body.auth ?? "auto",
+    }),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `ONVIF inspect failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function fetchOnvifStreamUri(
+  body: OnvifStreamUriRequest,
+  signal?: AbortSignal,
+): Promise<OnvifStreamUriResponse> {
+  const response = await fetch("/api/cameras/onvif/stream-uri", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      xaddr: body.xaddr,
+      media_xaddr: body.media_xaddr ?? "",
+      profile_token: body.profile_token,
+      username: body.username ?? "",
+      password: body.password ?? "",
+      timeout_ms: body.timeout_ms,
+      auth: body.auth ?? "auto",
+    }),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `ONVIF stream URI failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function discoverOnvifDevices(
+  body: OnvifDiscoverRequest,
+  signal?: AbortSignal,
+): Promise<OnvifDiscoverResponse> {
+  const response = await fetch("/api/cameras/onvif/discover", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      timeout_ms: body.timeout_ms,
+      force: body.force ?? false,
+      exclude_known: body.exclude_known ?? true,
+    }),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `ONVIF discovery failed: ${response.status}`);
   }
   return response.json();
 }

@@ -1,22 +1,22 @@
 # Toposync
 
-Plataforma local‑first (Python + React + ThreeJS) para “gêmeo digital” de automação residencial — com **runtime de extensões** como alicerce.
+A local-first platform (Python + React + ThreeJS) for a home automation “digital twin” — built on an **extensions runtime**.
 
-O objetivo dessa base é resolver o “maior nó”: **extensões com backend Python + frontend TypeScript instaláveis via wheel** (sem exigir toolchain de build no usuário).
+This repo’s main goal is to solve the “biggest knot”: **extensions with a Python backend + TypeScript frontend installable via wheel** (without requiring a build toolchain on the user’s machine).
 
-## Documentação
+## Documentation
 
-- Índice: `docs/README.md`
-- Self‑hosting (produção): `docs/SELF_HOSTING.md`
-- Rodar em dev: `docs/DEVELOPMENT.md`
+- Index: `docs/README.md`
+- Self-hosting (production): `docs/SELF_HOSTING.md`
+- Running in dev: `docs/DEVELOPMENT.md`
 - Pipelines (DAG): `docs/PIPELINES.md`
-- Extensões (runtime): `docs/EXTENSIONS_RUNTIME.md`
-- Contrato TS / plugin API: `docs/PLUGIN_API.md`
-- Criar uma extensão: `docs/EXTENSION_AUTHORING.md`
+- Extensions (runtime): `docs/EXTENSIONS_RUNTIME.md`
+- TS contract / plugin API: `docs/PLUGIN_API.md`
+- Creating an extension: `docs/EXTENSION_AUTHORING.md`
 
 ## Quickstart (dev)
 
-Pré‑requisitos: `uv`, Python 3.11+ e Node 20+.
+Prerequisites: `uv`, Python 3.11+, and Node 20+.
 
 ```bash
 uv sync
@@ -25,4 +25,4 @@ npm run build:extensions
 npm run dev
 ```
 
-Abra `http://localhost:5173`.
+Open `http://localhost:5173`.

@@ -1,6 +1,8 @@
 from .operators import (
     CameraSourceConfig,
+    MotionBgSubAdaptiveConfig,
     MotionGateConfig,
+    MotionSampleBgConfig,
     ObjectDetectionYOLOConfig,
     ObjectTrackingYOLOConfig,
     YoloBackend,
@@ -13,6 +15,7 @@ from .postprocess import (
     BestFrameSelectorConfig,
     CameraMappingConfig,
     ImageCropConfig,
+    ImagePerspectiveCropConfig,
     ImageAdjustConfig,
     ImageResizeConfig,
     ObjectSegmentationConfig,
@@ -22,7 +25,9 @@ from .postprocess import (
 
 __all__ = [
     "CameraSourceConfig",
+    "MotionBgSubAdaptiveConfig",
     "MotionGateConfig",
+    "MotionSampleBgConfig",
     "ObjectTrackingYOLOConfig",
     "ObjectDetectionYOLOConfig",
     "YoloObject",
@@ -30,6 +35,7 @@ __all__ = [
     "YoloBackendConfig",
     "ObjectSegmentationConfig",
     "ImageCropConfig",
+    "ImagePerspectiveCropConfig",
     "ImageAdjustConfig",
     "ImageResizeConfig",
     "CameraMappingConfig",

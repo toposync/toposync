@@ -22,12 +22,20 @@ from .images import (
     add_stored_image_entry,
     ensure_packet_image_keys,
     parse_fallback_keys,
-    resolve_image_artifact_for_data,
     resolve_image_artifact_for_reference,
     resolve_image_artifact_name,
 )
 from .operator_registry import OperatorRegistry
+from .packet_contract import (
+    get_media_descriptor,
+    get_source_descriptor,
+    resolve_media_dimensions,
+    resolve_media_ts,
+    resolve_source_device_id,
+    resolve_source_name,
+)
 from .runtime import Artifact, Lifecycle, Packet
+from .telemetry import METRIC_STORE_IMAGE
 
 
 _SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -70,6 +78,8 @@ def _resolve_logical_pipeline_name(context: Any) -> str:
 
 
 def _resolve_ts(packet: Packet, field: str) -> float:
+    if field in {"frame_ts", "ts"}:
+        return float(resolve_media_ts(packet))
     raw = packet.payload.get(field)
     try:
         value = float(raw)
@@ -104,6 +114,10 @@ def _resolve_image_confidence(packet: Packet, artifact: Artifact) -> float | Non
 
 
 def _resolve_string(packet: Packet, field: str) -> str:
+    if field == "camera_id":
+        return resolve_source_device_id(packet)
+    if field == "camera_name":
+        return resolve_source_name(packet)
     value = str(packet.payload.get(field) or "").strip()
     if value:
         return value
@@ -419,14 +433,9 @@ class StoreImagesRuntime(TransformOperatorRuntime):
         min_width = int(self._config.min_frame_width)
         min_height = int(self._config.min_frame_height)
         if min_width > 0 or min_height > 0:
-            try:
-                width = int(float(packet.payload.get("frame_width") or 0))
-            except Exception:
-                width = 0
-            try:
-                height = int(float(packet.payload.get("frame_height") or 0))
-            except Exception:
-                height = 0
+            width_value, height_value = resolve_media_dimensions(packet)
+            width = int(width_value or 0)
+            height = int(height_value or 0)
             if (min_width > 0 and width < min_width) or (min_height > 0 and height < min_height):
                 return [packet]
 
@@ -448,6 +457,7 @@ class StoreImagesRuntime(TransformOperatorRuntime):
 
         ts = _resolve_ts(packet, "frame_ts")
         ts_ms = int(max(0.0, float(ts)) * 1000)
+        record_marker = getattr(context, "record_telemetry_image_marker", None)
 
         targets: list[tuple[str, str]] = []
 
@@ -541,14 +551,26 @@ class StoreImagesRuntime(TransformOperatorRuntime):
 
             if rel:
                 stored_artifact = packet.artifacts.get(artifact_name) or artifact
+                confidence = _resolve_image_confidence(packet, stored_artifact)
                 packet = add_stored_image_entry(
                     packet,
                     key=image_key or artifact_name,
                     artifact=stored_artifact,
                     rel_path=rel,
                     stored_ts_ms=ts_ms,
-                    confidence=_resolve_image_confidence(packet, stored_artifact),
+                    confidence=confidence,
                 )
+                if callable(record_marker):
+                    try:
+                        record_marker(
+                            METRIC_STORE_IMAGE,
+                            rel_path=rel,
+                            ts_s=ts,
+                            image_key=image_key or artifact_name,
+                            confidence=confidence,
+                        )
+                    except Exception:
+                        pass
 
         return [packet]
 
@@ -788,7 +810,7 @@ class NotifyRuntime(SinkRuntime):
         return []
 
     async def shutdown(self) -> None:
-        # Garante invariant "close must happen" para notificações abertas quando o runtime for encerrado.
+        # Ensure the "close must happen" invariant for open notifications when the runtime shuts down.
         self._shutting_down = True
         upsert = getattr(self._dependencies, "notifications_upsert", None)
         if not callable(upsert):
@@ -956,8 +978,8 @@ def _select_best_confidence_stored_image(stored_images: dict[str, Any], *, prefe
         if not should_take and conf == best_conf:
             if key_rank != best_key_rank:
                 should_take = key_rank < best_key_rank
-            # Em empate de confiança e prioridade, preferimos o frame mais cedo para evitar
-            # que o CLOSE substitua a miniatura por um frame tardio sem objeto.
+            # When confidence and priority tie, prefer the earlier frame to avoid
+            # CLOSE replacing the thumbnail with a late frame that has no object.
             elif ts != best_ts:
                 should_take = ts < best_ts
             else:
@@ -999,8 +1021,15 @@ def _select_notification_data(packet: Packet) -> dict[str, Any]:
         "images",
         "stored_images",
         "frame_crop",
+        "frame_warp",
     }
     selected = {k: v for k, v in payload.items() if k in allow}
+    source = get_source_descriptor(packet)
+    if source:
+        selected["source"] = source
+    media = get_media_descriptor(packet)
+    if media:
+        selected["media"] = media
     return _sanitize_for_json(selected)
 
 

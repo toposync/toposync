@@ -257,12 +257,15 @@ class PipelinesOrchestrator:
         base = self._runtime_deps_base
         return PipelineRuntimeDependencies(
             config_store=self._config_store,
+            services=base.services,
             files_dir=self._files_dir,
+            pipeline_snapshot_store=getattr(base, "pipeline_snapshot_store", None),
             notifications_upsert=self._notifications.upsert,
             origin_inbox=origin_inbox,
             yolo_backend_factory=base.yolo_backend_factory,
             processing_emit_projected_event=base.processing_emit_projected_event,
             pipeline_stats_store=base.pipeline_stats_store,
+            pipeline_telemetry_store=base.pipeline_telemetry_store,
             execution_scheduler=base.execution_scheduler,
             artifact_max_bytes_per_packet=base.artifact_max_bytes_per_packet,
             artifact_max_total_bytes_per_pipeline=base.artifact_max_total_bytes_per_pipeline,

@@ -196,7 +196,78 @@ function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: n
   ctx.quadraticCurveTo(x, y, x + radius, y);
 }
 
+type RGB = { r: number; g: number; b: number };
+
+function cssVar(styles: CSSStyleDeclaration, name: string, fallback: string): string {
+  const value = styles.getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+function parseRgb(value: string): RGB | null {
+  const hex = value.trim();
+  const shortMatch = /^#([0-9a-fA-F]{3})$/.exec(hex);
+  if (shortMatch) {
+    const [r, g, b] = shortMatch[1].split("");
+    return {
+      r: Number.parseInt(r + r, 16),
+      g: Number.parseInt(g + g, 16),
+      b: Number.parseInt(b + b, 16),
+    };
+  }
+  const longMatch = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (longMatch) {
+    const n = longMatch[1];
+    return {
+      r: Number.parseInt(n.slice(0, 2), 16),
+      g: Number.parseInt(n.slice(2, 4), 16),
+      b: Number.parseInt(n.slice(4, 6), 16),
+    };
+  }
+  const rgbMatch = /^rgba?\(([^)]+)\)$/.exec(hex);
+  if (rgbMatch) {
+    const parts = rgbMatch[1]
+      .split(",")
+      .map((part) => Number.parseFloat(part.trim()))
+      .filter((part) => Number.isFinite(part));
+    if (parts.length >= 3) {
+      return {
+        r: Math.max(0, Math.min(255, parts[0])),
+        g: Math.max(0, Math.min(255, parts[1])),
+        b: Math.max(0, Math.min(255, parts[2])),
+      };
+    }
+  }
+  return null;
+}
+
+function rgba(rgb: RGB | null, alpha: number, fallback: string): string {
+  if (!rgb) return fallback;
+  return `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+}
+
 type Camera2D = { cx: number; cz: number; scale: number };
+
+type ResolvedViewport2DStyles = {
+  themeId: string;
+  fontFamilySans: string;
+  textPrimary: string;
+  textMuted: string;
+  borderStrong: string;
+  surfaceSolid: string;
+  canvasBg: string;
+  gridMinor: string;
+  gridMajor: string;
+  accentAxis: string;
+  accentLabelBg: string;
+  accentLabelText: string;
+  markerFill: string;
+  selectionPrimary: string;
+  selectionSecondary: string;
+  selectionShadow: string;
+  selectionSoftFill: string;
+  handleBase: string;
+  handleGhost: string;
+};
 
 type VertexHandleHit =
   | { kind: "wall-endpoint"; endpoint: "a" | "b" }
@@ -238,13 +309,14 @@ type Interaction =
   | {
       kind: "rotate";
       pointerId: number;
-      elementId: string;
       pivot: PlanePoint;
       startAngle: number;
-      startElement: CompositionElement;
+      startElements: CompositionElement[];
+      targetIds: string[];
       currentScreen: Vector2;
       snappedDelta: number;
       stepDeg: number;
+      radiusPx: number;
     }
   | {
       kind: "wall-endpoint-drag";
@@ -444,13 +516,84 @@ export function Viewport2D({
     const canvasEl: HTMLCanvasElement = canvas;
     const ctx2d: CanvasRenderingContext2D = ctx;
 
-    let raf = 0;
-    let dragRaf = 0;
-    let pendingDragPatch: Array<{ id: string; patch: CompositionElementPatch }> | null = null;
-    let rotateRaf = 0;
-    let pendingRotatePatch: { id: string; patch: CompositionElementPatch } | null = null;
-    let vertexRaf = 0;
-    let pendingVertexPatch: { id: string; patch: CompositionElementPatch } | null = null;
+	    let raf = 0;
+	    let dragRaf = 0;
+	    let pendingDragPatch: Array<{ id: string; patch: CompositionElementPatch }> | null = null;
+	    let rotateRaf = 0;
+	    let pendingRotatePatch: Array<{ id: string; patch: CompositionElementPatch }> | null = null;
+	    let vertexRaf = 0;
+	    let pendingVertexPatch: { id: string; patch: CompositionElementPatch } | null = null;
+
+    function themeIdForStyles(): string {
+      const el = document.documentElement;
+      return el.dataset.toposyncBaseTheme || el.dataset.toposyncTheme || "topo-day";
+    }
+
+    function stylesSignature(): string {
+      const d = document.documentElement.dataset;
+      return [
+        d.toposyncBaseTheme ?? "",
+        d.toposyncTheme ?? "",
+        d.toposyncTransparency ?? "",
+        d.toposyncAccent ?? "",
+        d.toposyncViewport3d ?? "",
+      ].join("|");
+    }
+
+    function resolveViewportStyles(): ResolvedViewport2DStyles {
+      const styles = getComputedStyle(document.documentElement);
+      const themeId = themeIdForStyles();
+      const isDay = themeId !== "topo-night";
+
+      const accentBlue = parseRgb(cssVar(styles, "--color-accent-blue", "#3b82f6"));
+      const accentTeal = parseRgb(cssVar(styles, "--color-accent-teal", "#0ea5a4"));
+
+      const fontFamilySans = cssVar(styles, "--font-family-sans", "ui-sans-serif, system-ui");
+      const textPrimary = cssVar(styles, "--color-text-primary", isDay ? "#101418" : "rgba(230,232,242,0.96)");
+      const textMuted = cssVar(styles, "--color-text-muted", isDay ? "rgba(16,20,24,0.72)" : "rgba(230,232,242,0.72)");
+      const borderStrong = cssVar(styles, "--color-border-strong", isDay ? "rgba(16,20,24,0.2)" : "rgba(255,255,255,0.18)");
+      const surfaceSolid = cssVar(styles, "--color-surface-solid", isDay ? "#ffffff" : "rgba(16,20,28,1)");
+      const canvasBg = cssVar(styles, "--color-canvas2d-background", isDay ? "#f4f1ea" : "#070a16");
+      const gridMinor = cssVar(styles, "--color-canvas2d-grid-minor", isDay ? "rgba(16,20,24,0.06)" : "rgba(255,255,255,0.06)");
+      const gridMajor = cssVar(styles, "--color-canvas2d-grid-major", isDay ? "rgba(16,20,24,0.1)" : "rgba(255,255,255,0.1)");
+
+      const accentAxis = rgba(accentBlue, 0.2, "rgba(59,130,246,0.2)");
+      const accentLabelBg = rgba(
+        parseRgb(surfaceSolid),
+        isDay ? 0.9 : 0.82,
+        isDay ? "rgba(255,255,255,0.9)" : "rgba(8,12,26,0.82)",
+      );
+      const markerFill = rgba(accentTeal, 0.95, "rgba(14,165,164,0.95)");
+      const selectionPrimary = rgba(accentBlue, 0.92, "rgba(59,130,246,0.92)");
+      const selectionSecondary = rgba(accentBlue, 0.55, "rgba(59,130,246,0.55)");
+      const selectionShadow = rgba(accentBlue, 0.35, "rgba(59,130,246,0.35)");
+      const selectionSoftFill = rgba(accentBlue, 0.08, "rgba(59,130,246,0.08)");
+
+      return {
+        themeId,
+        fontFamilySans,
+        textPrimary,
+        textMuted,
+        borderStrong,
+        surfaceSolid,
+        canvasBg,
+        gridMinor,
+        gridMajor,
+        accentAxis,
+        accentLabelBg,
+        accentLabelText: textPrimary,
+        markerFill,
+        selectionPrimary,
+        selectionSecondary,
+        selectionShadow,
+        selectionSoftFill,
+        handleBase: isDay ? "rgba(255,255,255,0.96)" : "rgba(8,12,26,0.92)",
+        handleGhost: isDay ? "rgba(255,255,255,0.85)" : "rgba(8,12,26,0.72)",
+      };
+    }
+
+    let resolvedViewportStylesSignature = stylesSignature();
+    let resolvedViewportStyles = resolveViewportStyles();
 
     function requestDraw() {
       if (raf) return;
@@ -472,17 +615,17 @@ export function Viewport2D({
       requestDraw();
     }
 
-    function flushRotatePatch() {
-      if (!pendingRotatePatch) return;
-      const { id } = pendingRotatePatch;
-      const hidden = hiddenElementIdsRef.current;
-      const locked = lockedElementIdsRef.current;
-      if (!hidden.has(id) && !locked.has(id)) {
-        updateElementRef.current?.(id, pendingRotatePatch.patch);
-      }
-      pendingRotatePatch = null;
-      requestDraw();
-    }
+	    function flushRotatePatch() {
+	      if (!pendingRotatePatch) return;
+	      const hidden = hiddenElementIdsRef.current;
+	      const locked = lockedElementIdsRef.current;
+	      for (const item of pendingRotatePatch) {
+	        if (hidden.has(item.id) || locked.has(item.id)) continue;
+	        updateElementRef.current?.(item.id, item.patch);
+	      }
+	      pendingRotatePatch = null;
+	      requestDraw();
+	    }
 
     function flushVertexPatch() {
       if (!pendingVertexPatch) return;
@@ -513,11 +656,32 @@ export function Viewport2D({
       const h = canvasEl.clientHeight;
 
       ctx2d.clearRect(0, 0, w, h);
+      const signature = stylesSignature();
+      if (signature !== resolvedViewportStylesSignature) {
+        resolvedViewportStylesSignature = signature;
+        resolvedViewportStyles = resolveViewportStyles();
+      }
 
-      const g = ctx2d.createLinearGradient(0, 0, 0, h);
-      g.addColorStop(0, "#070a14");
-      g.addColorStop(1, "#050713");
-      ctx2d.fillStyle = g;
+      const {
+        fontFamilySans,
+        textMuted,
+        borderStrong,
+        canvasBg,
+        gridMinor,
+        gridMajor,
+        accentAxis,
+        accentLabelBg,
+        accentLabelText,
+        markerFill,
+        selectionPrimary,
+        selectionSecondary,
+        selectionShadow,
+        selectionSoftFill,
+        handleBase,
+        handleGhost,
+      } = resolvedViewportStyles;
+
+      ctx2d.fillStyle = canvasBg;
       ctx2d.fillRect(0, 0, w, h);
 
       const originX = w / 2;
@@ -591,11 +755,11 @@ export function Viewport2D({
 
       const minorPx = SNAP_STEP * scale;
       if (minorPx >= 8) {
-        drawGrid(SNAP_STEP, { stroke: "rgba(255,255,255,0.028)", width: 1 });
+        drawGrid(SNAP_STEP, { stroke: gridMinor, width: 1 });
       }
-      drawGrid(majorStep, { stroke: "rgba(255,255,255,0.055)", width: 1 });
+      drawGrid(majorStep, { stroke: gridMajor, width: 1 });
 
-      ctx2d.strokeStyle = "rgba(251,191,36,0.20)";
+      ctx2d.strokeStyle = accentAxis;
       ctx2d.lineWidth = 1.25;
       const axisX = Math.round(worldToScreen(toPlanePoint(0, 0)).x) + 0.5;
       const axisY = Math.round(worldToScreen(toPlanePoint(0, 0)).y) + 0.5;
@@ -608,21 +772,22 @@ export function Viewport2D({
       ctx2d.lineTo(w, axisY);
       ctx2d.stroke();
 
-      ctx2d.fillStyle = "rgba(251,191,36,0.95)";
-      ctx2d.strokeStyle = "rgba(0,0,0,0.35)";
-      ctx2d.font = "12px ui-sans-serif, system-ui";
+      ctx2d.fillStyle = markerFill;
+      ctx2d.strokeStyle = borderStrong;
+      ctx2d.font = `12px ${fontFamilySans}`;
 
-      const elementRank = (el: CompositionElement): number => {
-        const group = elementTypesRef.current[el.type]?.layerGroup ?? "";
-        if (group === "background") {
-          const mode = el.props?.mode;
-          if (mode === "tracing") return 0.5;
-          return -1;
-        }
-        if (group === "areas") return 0;
-        if (group === "walls") return 1;
-        return 2;
-      };
+	      const elementRank = (el: CompositionElement): number => {
+	        const group = elementTypesRef.current[el.type]?.layerGroup ?? "";
+	        if (group === "background") {
+	          const mode = el.props?.mode;
+	          if (mode === "tracing") return 0.5;
+	          return -1;
+	        }
+	        if (group === "areas") return 0;
+	        if (group === "walls") return 1;
+	        if (group === "measurements") return 3;
+	        return 2;
+	      };
 
       const ordered = elementsRef.current
         .map((el, idx) => ({ el, idx }))
@@ -649,9 +814,9 @@ export function Viewport2D({
         ctx2d.fill();
         ctx2d.stroke();
 
-        ctx2d.fillStyle = "rgba(230,232,242,0.85)";
+        ctx2d.fillStyle = textMuted;
         ctx2d.fillText(el.name || el.type, p.x + 10, p.y + 4);
-        ctx2d.fillStyle = "rgba(251,191,36,0.95)";
+        ctx2d.fillStyle = markerFill;
       }
 
       const selectedIds = selectedRef.current;
@@ -672,9 +837,9 @@ export function Viewport2D({
           const b = readPlanePoint(el.props.b);
 
           ctx2d.save();
-          ctx2d.strokeStyle = isPrimary ? "rgba(251,191,36,0.92)" : "rgba(251,191,36,0.55)";
+          ctx2d.strokeStyle = isPrimary ? selectionPrimary : selectionSecondary;
           ctx2d.lineWidth = isPrimary ? 3 : 2;
-          ctx2d.shadowColor = isPrimary ? "rgba(251,191,36,0.35)" : "rgba(0,0,0,0)";
+          ctx2d.shadowColor = isPrimary ? selectionShadow : "rgba(0,0,0,0)";
           ctx2d.shadowBlur = isPrimary ? 10 : 0;
 
           if (verts.length >= 3) {
@@ -700,9 +865,9 @@ export function Viewport2D({
           ctx2d.restore();
         }
 
-        if (primaryId) {
-          const selectedEl = selectedById.get(primaryId) ?? null;
-          if (selectedEl) {
+	        if (primaryId) {
+	          const selectedEl = selectedById.get(primaryId) ?? null;
+	          if (selectedEl) {
             const group = elementTypesRef.current[selectedEl.type]?.layerGroup ?? "";
             const verts = readVertices(selectedEl.props.vertices);
             const a = readPlanePoint(selectedEl.props.a);
@@ -724,7 +889,7 @@ export function Viewport2D({
               const anchorY = anchor.y - 18;
 
               ctx2d.save();
-              ctx2d.font = "12px ui-sans-serif, system-ui";
+              ctx2d.font = `12px ${fontFamilySans}`;
               ctx2d.textAlign = "center";
               ctx2d.textBaseline = "middle";
 
@@ -735,10 +900,10 @@ export function Viewport2D({
               const x0 = anchorX - boxW / 2;
               const y0 = anchorY - boxH / 2;
 
-              ctx2d.shadowColor = "rgba(0,0,0,0.38)";
+              ctx2d.shadowColor = "rgba(0,0,0,0.30)";
               ctx2d.shadowBlur = 14;
-              ctx2d.fillStyle = "rgba(8,12,26,0.78)";
-              ctx2d.strokeStyle = "rgba(255,255,255,0.14)";
+              ctx2d.fillStyle = accentLabelBg;
+              ctx2d.strokeStyle = borderStrong;
               ctx2d.lineWidth = 1;
               ctx2d.beginPath();
               roundRectPath(ctx2d, x0, y0, boxW, boxH, 999);
@@ -746,7 +911,7 @@ export function Viewport2D({
               ctx2d.shadowBlur = 0;
               ctx2d.stroke();
 
-              ctx2d.fillStyle = "rgba(230,232,242,0.92)";
+              ctx2d.fillStyle = accentLabelText;
               ctx2d.fillText(label, anchorX, anchorY);
               ctx2d.restore();
             }
@@ -787,16 +952,16 @@ export function Viewport2D({
                 const p = worldToScreen(pt);
                 const hot = isHandleHot(handle);
                 ctx2d.save();
-                ctx2d.shadowColor = hot && !opts.ghost ? "rgba(251,191,36,0.35)" : "rgba(0,0,0,0)";
+                ctx2d.shadowColor = hot && !opts.ghost ? selectionShadow : "rgba(0,0,0,0)";
                 ctx2d.shadowBlur = hot && !opts.ghost ? 12 : 0;
-                ctx2d.fillStyle = opts.ghost ? "rgba(8,12,26,0.72)" : "rgba(8,12,26,0.92)";
+                ctx2d.fillStyle = opts.ghost ? handleGhost : handleBase;
                 ctx2d.strokeStyle = opts.ghost
                   ? hot
-                    ? "rgba(251,191,36,0.85)"
-                    : "rgba(251,191,36,0.55)"
+                    ? selectionPrimary
+                    : selectionSecondary
                   : hot
-                    ? "rgba(251,191,36,0.98)"
-                    : "rgba(251,191,36,0.92)";
+                    ? selectionPrimary
+                    : selectionSecondary;
                 ctx2d.lineWidth = hot ? 2.5 : 2;
                 if (opts.ghost) ctx2d.setLineDash([3, 3]);
                 ctx2d.beginPath();
@@ -822,15 +987,17 @@ export function Viewport2D({
             }
 
             if (canEditVertices) {
-              const info = getRotateHandleInfo(selectedEl, viewport);
-              const pivot = info.pivotScreen;
+	              const info = getRotateHandleInfo(selectedEl, viewport);
+	              const pivot = info.pivotScreen;
+	              const baseHandle = info.handleScreen;
 
-              const baseHandle = info.handleScreen;
-              const baseRadius = Math.hypot(baseHandle.x - pivot.x, baseHandle.y - pivot.y);
-
-              const interaction = interactionRef.current;
-              const isRotating = interaction.kind === "rotate" && interaction.elementId === selectedEl.id;
-              const isHot = isRotating || rotateHoverRef.current;
+	              const interaction = interactionRef.current;
+	              const isRotating =
+	                interaction.kind === "rotate" &&
+	                interaction.targetIds.length === 1 &&
+	                interaction.targetIds[0] === selectedEl.id;
+	              const baseRadius = isRotating ? interaction.radiusPx : info.radiusPx;
+	              const isHot = isRotating || rotateHoverRef.current;
 
               let handle = baseHandle;
               let deltaDeg: number | null = null;
@@ -839,28 +1006,29 @@ export function Viewport2D({
                 const dx = interaction.currentScreen.x - pivot.x;
                 const dy = interaction.currentScreen.y - pivot.y;
                 const len = Math.hypot(dx, dy);
-                if (len > 1e-6) {
-                  handle = toVector2(pivot.x + (dx / len) * baseRadius, pivot.y + (dy / len) * baseRadius);
-                }
-                deltaDeg = Math.round((interaction.snappedDelta * 180) / Math.PI);
-                if (group !== "walls" && group !== "areas") {
-                  const currentRotY = normalizeAngleRad(interaction.startElement.rotation.y - interaction.snappedDelta);
-                  absoluteDeg = Math.round(normalizeDeg360((-currentRotY * 180) / Math.PI));
-                }
-              }
+	                if (len > 1e-6) {
+	                  handle = toVector2(pivot.x + (dx / len) * baseRadius, pivot.y + (dy / len) * baseRadius);
+	                }
+	                deltaDeg = Math.round((interaction.snappedDelta * 180) / Math.PI);
+	                if (group !== "walls" && group !== "areas") {
+	                  const startElement = interaction.startElements[0];
+	                  const currentRotY = normalizeAngleRad(startElement.rotation.y - interaction.snappedDelta);
+	                  absoluteDeg = Math.round(normalizeDeg360((-currentRotY * 180) / Math.PI));
+	                }
+	              }
 
               ctx2d.save();
               ctx2d.lineWidth = 2;
-              ctx2d.strokeStyle = isHot ? "rgba(251,191,36,0.78)" : "rgba(255,255,255,0.10)";
+              ctx2d.strokeStyle = isHot ? selectionSecondary : borderStrong;
               ctx2d.beginPath();
               ctx2d.moveTo(pivot.x, pivot.y);
               ctx2d.lineTo(handle.x, handle.y);
               ctx2d.stroke();
 
-              ctx2d.shadowColor = isHot ? "rgba(251,191,36,0.35)" : "rgba(0,0,0,0)";
+              ctx2d.shadowColor = isHot ? selectionShadow : "rgba(0,0,0,0)";
               ctx2d.shadowBlur = isHot ? 12 : 0;
-              ctx2d.fillStyle = "rgba(8,12,26,0.92)";
-              ctx2d.strokeStyle = isHot ? "rgba(251,191,36,0.92)" : "rgba(255,255,255,0.18)";
+              ctx2d.fillStyle = handleBase;
+              ctx2d.strokeStyle = isHot ? selectionPrimary : borderStrong;
               ctx2d.lineWidth = 2;
               ctx2d.beginPath();
               ctx2d.arc(handle.x, handle.y, 8, 0, Math.PI * 2);
@@ -872,7 +1040,7 @@ export function Viewport2D({
                 const label = `${deltaDeg}°`;
                 const hint = absoluteDeg !== null ? ` (${absoluteDeg}°)` : "";
                 const text = `${label}${hint}`;
-                ctx2d.font = "12px ui-sans-serif, system-ui";
+                ctx2d.font = `12px ${fontFamilySans}`;
                 ctx2d.textAlign = "center";
                 ctx2d.textBaseline = "middle";
                 const metrics = ctx2d.measureText(text);
@@ -880,22 +1048,100 @@ export function Viewport2D({
                 const boxH = 24;
                 const x0 = handle.x - boxW / 2;
                 const y0 = handle.y - 24;
-                ctx2d.fillStyle = "rgba(8,12,26,0.82)";
-                ctx2d.strokeStyle = "rgba(255,255,255,0.14)";
+                ctx2d.fillStyle = accentLabelBg;
+                ctx2d.strokeStyle = borderStrong;
                 ctx2d.lineWidth = 1;
                 ctx2d.beginPath();
                 roundRectPath(ctx2d, x0, y0, boxW, boxH, 999);
                 ctx2d.fill();
                 ctx2d.stroke();
-                ctx2d.fillStyle = "rgba(230,232,242,0.92)";
+                ctx2d.fillStyle = accentLabelText;
                 ctx2d.fillText(text, handle.x, y0 + boxH / 2);
               }
 
-              ctx2d.restore();
-            }
-          }
-        }
-      }
+	              ctx2d.restore();
+	            }
+	          }
+	        } else {
+	          const canRotateSelection =
+	            Boolean(updateElementRef.current) &&
+	            !toolSessionRef.current &&
+	            interactionModeRef.current === "select";
+	          if (canRotateSelection) {
+	            const locked = lockedElementIdsRef.current;
+	            const rotatable: CompositionElement[] = [];
+	            for (const id of selectedIds) {
+	              if (hidden.has(id) || locked.has(id)) continue;
+	              const el = selectedById.get(id) ?? null;
+	              if (el) rotatable.push(el);
+	            }
+
+		            const info = rotatable.length ? getSelectionRotateHandleInfo(rotatable, viewport) : null;
+		            if (info) {
+		              const interaction = interactionRef.current;
+		              const isRotating = interaction.kind === "rotate" && selectedIds.length > 1;
+		              const isHot = isRotating || rotateHoverRef.current;
+
+		              const pivot = isRotating ? viewport.worldToScreen(interaction.pivot) : info.pivotScreen;
+		              const baseRadius = isRotating ? interaction.radiusPx : info.radiusPx;
+
+		              let handle = isRotating ? toVector2(pivot.x, pivot.y - baseRadius) : info.handleScreen;
+		              let deltaDeg: number | null = null;
+		              if (isRotating) {
+		                const dx = interaction.currentScreen.x - pivot.x;
+		                const dy = interaction.currentScreen.y - pivot.y;
+	                const len = Math.hypot(dx, dy);
+	                if (len > 1e-6) {
+	                  handle = toVector2(pivot.x + (dx / len) * baseRadius, pivot.y + (dy / len) * baseRadius);
+	                }
+	                deltaDeg = Math.round((interaction.snappedDelta * 180) / Math.PI);
+	              }
+
+	              ctx2d.save();
+	              ctx2d.lineWidth = 2;
+	              ctx2d.strokeStyle = isHot ? selectionSecondary : borderStrong;
+	              ctx2d.beginPath();
+	              ctx2d.moveTo(pivot.x, pivot.y);
+	              ctx2d.lineTo(handle.x, handle.y);
+	              ctx2d.stroke();
+
+	              ctx2d.shadowColor = isHot ? selectionShadow : "rgba(0,0,0,0)";
+	              ctx2d.shadowBlur = isHot ? 12 : 0;
+	              ctx2d.fillStyle = handleBase;
+	              ctx2d.strokeStyle = isHot ? selectionPrimary : borderStrong;
+	              ctx2d.lineWidth = 2;
+	              ctx2d.beginPath();
+	              ctx2d.arc(handle.x, handle.y, 8, 0, Math.PI * 2);
+	              ctx2d.fill();
+	              ctx2d.shadowBlur = 0;
+	              ctx2d.stroke();
+
+	              if (deltaDeg !== null) {
+	                const text = `${deltaDeg}°`;
+	                ctx2d.font = `12px ${fontFamilySans}`;
+	                ctx2d.textAlign = "center";
+	                ctx2d.textBaseline = "middle";
+	                const metrics = ctx2d.measureText(text);
+	                const boxW = metrics.width + 18;
+	                const boxH = 24;
+	                const x0 = handle.x - boxW / 2;
+	                const y0 = handle.y - 24;
+	                ctx2d.fillStyle = accentLabelBg;
+	                ctx2d.strokeStyle = borderStrong;
+	                ctx2d.lineWidth = 1;
+	                ctx2d.beginPath();
+	                roundRectPath(ctx2d, x0, y0, boxW, boxH, 999);
+	                ctx2d.fill();
+	                ctx2d.stroke();
+	                ctx2d.fillStyle = accentLabelText;
+	                ctx2d.fillText(text, handle.x, y0 + boxH / 2);
+	              }
+
+	              ctx2d.restore();
+	            }
+	          }
+	        }
+	      }
 
       const session = toolSessionRef.current;
       if (session?.renderOverlay2D) {
@@ -922,8 +1168,8 @@ export function Viewport2D({
         const rectH = bottom - top;
         if (rectW >= 3 || rectH >= 3) {
           ctx2d.save();
-          ctx2d.fillStyle = "rgba(251,191,36,0.08)";
-          ctx2d.strokeStyle = "rgba(251,191,36,0.55)";
+          ctx2d.fillStyle = selectionSoftFill;
+          ctx2d.strokeStyle = selectionSecondary;
           ctx2d.lineWidth = 1;
           ctx2d.setLineDash([6, 5]);
           ctx2d.fillRect(left, top, rectW, rectH);
@@ -1057,29 +1303,29 @@ export function Viewport2D({
       return Math.hypot(world.x - p.x, world.z - p.z) <= radius;
     }
 
-	    function findHitElement(world: PlanePoint): string | null {
-	      const viewport = makeViewportContext();
-	      const hidden = hiddenElementIdsRef.current;
+    function findHitElement(world: PlanePoint): string | null {
+      const viewport = makeViewportContext();
+      const hidden = hiddenElementIdsRef.current;
 
-	      const elementRank = (el: CompositionElement): number => {
-	        const group = elementTypesRef.current[el.type]?.layerGroup ?? "";
-	        if (group === "background") {
-	          const mode = el.props?.mode;
-	          if (mode === "tracing") return 0.5;
-	          return -1;
-	        }
-	        if (group === "areas") return 0;
-	        if (group === "walls") return 1;
-	        return 2;
-	      };
+      const elementRank = (el: CompositionElement): number => {
+        const group = elementTypesRef.current[el.type]?.layerGroup ?? "";
+        if (group === "background") {
+          const mode = el.props?.mode;
+          if (mode === "tracing") return 0.5;
+          return -1;
+        }
+        if (group === "areas") return 0;
+        if (group === "walls") return 1;
+        return 2;
+      };
 
-	      const ordered = elementsRef.current
-	        .map((el, idx) => ({ el, idx }))
-	        .sort((a, b) => elementRank(a.el) - elementRank(b.el) || a.idx - b.idx)
-	        .map((v) => v.el);
+      const ordered = elementsRef.current
+        .map((el, idx) => ({ el, idx }))
+        .sort((a, b) => elementRank(a.el) - elementRank(b.el) || a.idx - b.idx)
+        .map((v) => v.el);
 
-	      for (let i = ordered.length - 1; i >= 0; i--) {
-	        const el = ordered[i];
+      for (let i = ordered.length - 1; i >= 0; i--) {
+        const el = ordered[i];
         if (hidden.has(el.id)) continue;
         if (hitTestElement(el, world, viewport)) return el.id;
       }
@@ -1152,14 +1398,10 @@ export function Viewport2D({
 
       const a = readPlanePoint(el.props.a);
       const b = readPlanePoint(el.props.b);
-      const aPrev = readPlanePoint((el.props as any).a_prev);
-      const bNext = readPlanePoint((el.props as any).b_next);
       const vertices = readVertices(el.props.vertices);
 
       if (a) propsPatch.a = add(a, delta);
       if (b) propsPatch.b = add(b, delta);
-      if (aPrev) propsPatch.a_prev = add(aPrev, delta);
-      if (bNext) propsPatch.b_next = add(bNext, delta);
       if (vertices.length >= 3) propsPatch.vertices = vertices.map((p) => add(p, delta));
 
       const patch: CompositionElementPatch = {
@@ -1169,13 +1411,13 @@ export function Viewport2D({
       return patch;
     }
 
-    function getRotateHandleInfo(el: CompositionElement, viewport: Viewport2DContext): {
-      pivotWorld: PlanePoint;
-      pivotScreen: Vector2;
-      handleScreen: Vector2;
-      hitRadiusPx: number;
-      radiusPx: number;
-    } {
+	    function getRotateHandleInfo(el: CompositionElement, viewport: Viewport2DContext): {
+	      pivotWorld: PlanePoint;
+	      pivotScreen: Vector2;
+	      handleScreen: Vector2;
+	      hitRadiusPx: number;
+	      radiusPx: number;
+	    } {
       const pivotWorld = toPlanePoint(el.position.x, el.position.z);
       const pivotScreen = viewport.worldToScreen(pivotWorld);
 
@@ -1206,14 +1448,94 @@ export function Viewport2D({
       const baseAngle = -Math.PI / 2;
       const angle = baseAngle - el.rotation.y;
       const handleScreen = toVector2(pivotScreen.x + Math.cos(angle) * radiusPx, pivotScreen.y + Math.sin(angle) * radiusPx);
-      const hitRadiusPx = 12;
-      return { pivotWorld, pivotScreen, handleScreen, hitRadiusPx, radiusPx };
-    }
+	      const hitRadiusPx = 12;
+	      return { pivotWorld, pivotScreen, handleScreen, hitRadiusPx, radiusPx };
+	    }
 
-    function dist2(a: Vector2, b: Vector2): number {
-      const dx = a.x - b.x;
-      const dy = a.y - b.y;
-      return dx * dx + dy * dy;
+	    function elementWorldPointsForBounds(el: CompositionElement): PlanePoint[] {
+	      const verts = readVertices(el.props.vertices);
+	      if (verts.length >= 3) return verts;
+	      const a = readPlanePoint(el.props.a);
+	      const b = readPlanePoint(el.props.b);
+	      if (a && b) return [a, b];
+	      return [toPlanePoint(el.position.x, el.position.z)];
+	    }
+
+	    function getSelectionPivotWorld(selection: CompositionElement[]): PlanePoint | null {
+	      if (selection.length === 0) return null;
+	      const points = selection.flatMap((el) => elementWorldPointsForBounds(el));
+	      if (points.length === 0) return null;
+
+	      let minX = points[0].x;
+	      let maxX = points[0].x;
+	      let minZ = points[0].z;
+	      let maxZ = points[0].z;
+	      for (let i = 1; i < points.length; i++) {
+	        const p = points[i];
+	        if (p.x < minX) minX = p.x;
+	        if (p.x > maxX) maxX = p.x;
+	        if (p.z < minZ) minZ = p.z;
+	        if (p.z > maxZ) maxZ = p.z;
+	      }
+	      return { x: (minX + maxX) / 2, z: (minZ + maxZ) / 2 };
+	    }
+
+	    function getSelectionRotateHandleInfo(
+	      selection: CompositionElement[],
+	      viewport: Viewport2DContext,
+	    ): {
+	      pivotWorld: PlanePoint;
+	      pivotScreen: Vector2;
+	      handleScreen: Vector2;
+	      hitRadiusPx: number;
+	      radiusPx: number;
+	    } | null {
+	      const points = selection.flatMap((el) => elementWorldPointsForBounds(el));
+	      if (points.length === 0) return null;
+
+	      let minXw = points[0].x;
+	      let maxXw = points[0].x;
+	      let minZw = points[0].z;
+	      let maxZw = points[0].z;
+	      for (let i = 1; i < points.length; i++) {
+	        const p = points[i];
+	        if (p.x < minXw) minXw = p.x;
+	        if (p.x > maxXw) maxXw = p.x;
+	        if (p.z < minZw) minZw = p.z;
+	        if (p.z > maxZw) maxZw = p.z;
+	      }
+
+	      const pivotWorld = { x: (minXw + maxXw) / 2, z: (minZw + maxZw) / 2 };
+	      const pivotScreen = viewport.worldToScreen(pivotWorld);
+
+	      const pts = points.map((p) => viewport.worldToScreen(p));
+	      let minX = Math.min(...pts.map((p) => p.x));
+	      let maxX = Math.max(...pts.map((p) => p.x));
+	      let minY = Math.min(...pts.map((p) => p.y));
+	      let maxY = Math.max(...pts.map((p) => p.y));
+
+	      if (pts.length === 1) {
+	        minX = pivotScreen.x - 18;
+	        maxX = pivotScreen.x + 18;
+	        minY = pivotScreen.y - 18;
+	        maxY = pivotScreen.y + 18;
+	      }
+
+	      const extent = Math.max(maxX - minX, maxY - minY, 36);
+	      const radiusPx = Math.max(34, Math.min(92, extent / 2 + 34));
+	      const baseAngle = -Math.PI / 2;
+	      const handleScreen = toVector2(
+	        pivotScreen.x + Math.cos(baseAngle) * radiusPx,
+	        pivotScreen.y + Math.sin(baseAngle) * radiusPx,
+	      );
+	      const hitRadiusPx = 12;
+	      return { pivotWorld, pivotScreen, handleScreen, hitRadiusPx, radiusPx };
+	    }
+
+	    function dist2(a: Vector2, b: Vector2): number {
+	      const dx = a.x - b.x;
+	      const dy = a.y - b.y;
+	      return dx * dx + dy * dy;
     }
 
     function getVertexHandleHit(el: CompositionElement, viewport: Viewport2DContext, screen: Vector2): VertexHandleHit | null {
@@ -1256,35 +1578,35 @@ export function Viewport2D({
       return Math.atan2(Math.sin(angle), Math.cos(angle));
     }
 
-    function normalizeDeg360(deg: number): number {
-      const d = deg % 360;
-      return d < 0 ? d + 360 : d;
-    }
+	    function normalizeDeg360(deg: number): number {
+	      const d = deg % 360;
+	      return d < 0 ? d + 360 : d;
+	    }
 
-    function buildRotationPatch(startElement: CompositionElement, pivot: PlanePoint, deltaRad: number): CompositionElementPatch {
-      const group = elementTypesRef.current[startElement.type]?.layerGroup ?? "";
+	    function buildRotationPatch(startElement: CompositionElement, pivot: PlanePoint, deltaRad: number): CompositionElementPatch {
+	      const startPos = toPlanePoint(startElement.position.x, startElement.position.z);
+	      const nextPos = rotateAround(startPos, pivot, deltaRad);
+	      const patch: CompositionElementPatch = { position: { x: nextPos.x, z: nextPos.z } };
 
-      if (group === "walls") {
-        const propsPatch: Record<string, unknown> = {};
-        const a = readPlanePoint(startElement.props.a);
-        const b = readPlanePoint(startElement.props.b);
-        const aPrev = readPlanePoint((startElement.props as any).a_prev);
-        const bNext = readPlanePoint((startElement.props as any).b_next);
-        if (a) propsPatch.a = rotateAround(a, pivot, deltaRad);
-        if (b) propsPatch.b = rotateAround(b, pivot, deltaRad);
-        if (aPrev) propsPatch.a_prev = rotateAround(aPrev, pivot, deltaRad);
-        if (bNext) propsPatch.b_next = rotateAround(bNext, pivot, deltaRad);
-        return Object.keys(propsPatch).length ? { props: propsPatch } : {};
-      }
+	      const vertices = readVertices(startElement.props.vertices);
+	      if (vertices.length >= 3) {
+	        patch.props = { vertices: vertices.map((p) => rotateAround(p, pivot, deltaRad)) };
+	        return patch;
+	      }
 
-      if (group === "areas") {
-        const vertices = readVertices(startElement.props.vertices);
-        if (vertices.length >= 3) return { props: { vertices: vertices.map((p) => rotateAround(p, pivot, deltaRad)) } };
-        return {};
-      }
+	      const a = readPlanePoint(startElement.props.a);
+	      const b = readPlanePoint(startElement.props.b);
+	      if (a || b) {
+	        const propsPatch: Record<string, unknown> = {};
+	        if (a) propsPatch.a = rotateAround(a, pivot, deltaRad);
+	        if (b) propsPatch.b = rotateAround(b, pivot, deltaRad);
+	        patch.props = propsPatch;
+	        return patch;
+	      }
 
-      return { rotation: { y: startElement.rotation.y - deltaRad } };
-    }
+	      patch.rotation = { y: startElement.rotation.y - deltaRad };
+	      return patch;
+	    }
 
     function handlePointerDown(e: PointerEvent) {
       e.preventDefault();
@@ -1392,29 +1714,77 @@ export function Viewport2D({
           if (dist2(screen, info.handleScreen) <= info.hitRadiusPx * info.hitRadiusPx) {
             const pivot = info.pivotWorld;
             const startAngle = Math.atan2(world.z - pivot.z, world.x - pivot.x);
-            onBeginUndoGroupRef.current?.();
-            interactionRef.current = {
-              kind: "rotate",
-              pointerId: e.pointerId,
-              elementId: primaryId,
-              pivot,
-              startAngle,
-              startElement: selectedEl,
-              currentScreen: screen,
-              snappedDelta: 0,
-              stepDeg: 15,
-            };
+	            onBeginUndoGroupRef.current?.();
+	            interactionRef.current = {
+	              kind: "rotate",
+	              pointerId: e.pointerId,
+	              pivot,
+	              startAngle,
+	              startElements: [selectedEl],
+	              targetIds: [primaryId],
+	              currentScreen: screen,
+	              snappedDelta: 0,
+	              stepDeg: 15,
+	              radiusPx: info.radiusPx,
+	            };
             rotateHoverRef.current = false;
             requestDraw();
             return;
-          }
-        }
-      }
+	          }
+	        }
+	      }
 
-      if (session) {
-        onBeginUndoGroupRef.current?.();
-        interactionRef.current = { kind: "tool", pointerId: e.pointerId };
-        toToolEvent("down", e);
+	      if (
+	        selectedIds.length > 1 &&
+	        updateElementRef.current &&
+	        !session &&
+	        !spacePressed &&
+	        mode === "select" &&
+	        e.button === 0
+	      ) {
+	        const locked = lockedElementIdsRef.current;
+	        const hidden = hiddenElementIdsRef.current;
+	        const startElements: CompositionElement[] = [];
+	        const targetIds: string[] = [];
+	        for (const id of selectedIds) {
+	          if (hidden.has(id) || locked.has(id)) continue;
+	          const el = elementsRef.current.find((it) => it.id === id) ?? null;
+	          if (!el) continue;
+	          startElements.push(el);
+	          targetIds.push(id);
+	        }
+
+	        if (startElements.length > 0) {
+	          const viewport = makeViewportContext();
+	          const info = getSelectionRotateHandleInfo(startElements, viewport);
+	          if (info && dist2(screen, info.handleScreen) <= info.hitRadiusPx * info.hitRadiusPx) {
+	            const pivot = info.pivotWorld;
+	            const startAngle = Math.atan2(world.z - pivot.z, world.x - pivot.x);
+	            onBeginUndoGroupRef.current?.();
+		            interactionRef.current = {
+		              kind: "rotate",
+		              pointerId: e.pointerId,
+		              pivot,
+		              startAngle,
+		              startElements,
+		              targetIds,
+		              currentScreen: screen,
+		              snappedDelta: 0,
+		              stepDeg: 15,
+		              radiusPx: info.radiusPx,
+		            };
+	            rotateHoverRef.current = false;
+	            vertexHoverRef.current = null;
+	            requestDraw();
+	            return;
+	          }
+	        }
+	      }
+
+	      if (session) {
+	        onBeginUndoGroupRef.current?.();
+	        interactionRef.current = { kind: "tool", pointerId: e.pointerId };
+	        toToolEvent("down", e);
         return;
       }
 
@@ -1517,16 +1887,18 @@ export function Viewport2D({
         const stepRad = (stepDeg * Math.PI) / 180;
         const snappedDelta = e.altKey ? rawDelta : Math.round(rawDelta / stepRad) * stepRad;
 
-        interaction.currentScreen = screen;
-        interaction.snappedDelta = snappedDelta;
-        interaction.stepDeg = stepDeg;
+	        interaction.currentScreen = screen;
+	        interaction.snappedDelta = snappedDelta;
+	        interaction.stepDeg = stepDeg;
 
-        const patch = buildRotationPatch(interaction.startElement, interaction.pivot, snappedDelta);
-        pendingRotatePatch = { id: interaction.elementId, patch };
-        if (!rotateRaf) {
-          rotateRaf = requestAnimationFrame(() => {
-            rotateRaf = 0;
-            flushRotatePatch();
+	        pendingRotatePatch = interaction.startElements.map((el, idx) => {
+	          const id = interaction.targetIds[idx] ?? el.id;
+	          return { id, patch: buildRotationPatch(el, interaction.pivot, snappedDelta) };
+	        });
+	        if (!rotateRaf) {
+	          rotateRaf = requestAnimationFrame(() => {
+	            rotateRaf = 0;
+	            flushRotatePatch();
           });
         }
         requestDraw();
@@ -1686,13 +2058,14 @@ export function Viewport2D({
           requestDraw();
         }
 
-        const primaryId = selectedRef.current.length === 1 ? selectedRef.current[0] : null;
-        if (primaryId && interactionModeRef.current === "select") {
-          if (hiddenElementIdsRef.current.has(primaryId) || lockedElementIdsRef.current.has(primaryId)) {
-            if (rotateHoverRef.current) {
-              rotateHoverRef.current = false;
-              requestDraw();
-            }
+	        const selectedIds = selectedRef.current;
+	        const primaryId = selectedIds.length === 1 ? selectedIds[0] : null;
+	        if (primaryId && interactionModeRef.current === "select") {
+	          if (hiddenElementIdsRef.current.has(primaryId) || lockedElementIdsRef.current.has(primaryId)) {
+	            if (rotateHoverRef.current) {
+	              rotateHoverRef.current = false;
+	              requestDraw();
+	            }
             if (vertexHoverRef.current) {
               vertexHoverRef.current = null;
               requestDraw();
@@ -1720,15 +2093,36 @@ export function Viewport2D({
                   : vertexHoverRef.current?.kind === "poly-ghost"
                     ? vertexHoverRef.current.edgeIndex === (overVertex as Extract<VertexHandleHit, { kind: "poly-ghost" }> | null)?.edgeIndex
                     : overVertex === null);
-            if (!same) {
-              vertexHoverRef.current = overVertex;
-              requestDraw();
-            }
-          }
-        } else {
-          if (rotateHoverRef.current) {
-            rotateHoverRef.current = false;
-            requestDraw();
+	            if (!same) {
+	              vertexHoverRef.current = overVertex;
+	              requestDraw();
+	            }
+	          }
+	        } else if (selectedIds.length > 1 && interactionModeRef.current === "select") {
+	          const locked = lockedElementIdsRef.current;
+	          const hidden = hiddenElementIdsRef.current;
+	          const rotatable: CompositionElement[] = [];
+	          for (const id of selectedIds) {
+	            if (hidden.has(id) || locked.has(id)) continue;
+	            const el = elementsRef.current.find((it) => it.id === id) ?? null;
+	            if (el) rotatable.push(el);
+	          }
+
+	          const viewport = makeViewportContext();
+	          const info = rotatable.length ? getSelectionRotateHandleInfo(rotatable, viewport) : null;
+	          const overRotate = info ? dist2(screen, info.handleScreen) <= info.hitRadiusPx * info.hitRadiusPx : false;
+	          if (overRotate !== rotateHoverRef.current) {
+	            rotateHoverRef.current = overRotate;
+	            requestDraw();
+	          }
+	          if (vertexHoverRef.current) {
+	            vertexHoverRef.current = null;
+	            requestDraw();
+	          }
+	        } else {
+	          if (rotateHoverRef.current) {
+	            rotateHoverRef.current = false;
+	            requestDraw();
           }
           if (vertexHoverRef.current) {
             vertexHoverRef.current = null;
@@ -2043,53 +2437,39 @@ export function Viewport2D({
           return;
         }
 
-        if (selectedIds.length === 1 && updateElementRef.current) {
-          const selectedId = selectedIds[0];
-          const lower = e.key.toLowerCase();
-          if (lower === "q" || lower === "e") {
-            e.preventDefault();
-            if (hiddenElementIdsRef.current.has(selectedId) || lockedElementIdsRef.current.has(selectedId)) return;
-            const el = elementsRef.current.find((it) => it.id === selectedId) ?? null;
-            if (!el) return;
+	        if (updateElementRef.current) {
+	          const lower = e.key.toLowerCase();
+	          if (lower === "q" || lower === "e") {
+	            e.preventDefault();
 
-            const sign = lower === "q" ? -1 : 1;
-            const stepDeg = e.shiftKey ? 5 : 15;
-            const deltaRad = (sign * stepDeg * Math.PI) / 180;
+	            const sign = lower === "q" ? -1 : 1;
+	            const stepDeg = e.shiftKey ? 5 : 15;
+	            const deltaRad = (sign * stepDeg * Math.PI) / 180;
 
-            const group = elementTypesRef.current[el.type]?.layerGroup ?? "";
-            const pivot = toPlanePoint(el.position.x, el.position.z);
+	            const rotatable: Array<{ id: string; el: CompositionElement }> = [];
+	            for (const id of selectedIds) {
+	              if (hiddenElementIdsRef.current.has(id) || lockedElementIdsRef.current.has(id)) continue;
+	              const el = elementsRef.current.find((it) => it.id === id) ?? null;
+	              if (!el) continue;
+	              rotatable.push({ id, el });
+	            }
+	            if (rotatable.length === 0) return;
 
-            if (group === "walls") {
-              const propsPatch: Record<string, unknown> = {};
-              const a = readPlanePoint(el.props.a);
-              const b = readPlanePoint(el.props.b);
-              const aPrev = readPlanePoint((el.props as any).a_prev);
-              const bNext = readPlanePoint((el.props as any).b_next);
-              if (a) propsPatch.a = rotateAround(a, pivot, deltaRad);
-              if (b) propsPatch.b = rotateAround(b, pivot, deltaRad);
-              if (aPrev) propsPatch.a_prev = rotateAround(aPrev, pivot, deltaRad);
-              if (bNext) propsPatch.b_next = rotateAround(bNext, pivot, deltaRad);
-              if (Object.keys(propsPatch).length > 0) updateElementRef.current(selectedId, { props: propsPatch });
-              requestDraw();
-              return;
-            }
+	            const pivot =
+	              rotatable.length === 1
+	                ? toPlanePoint(rotatable[0].el.position.x, rotatable[0].el.position.z)
+	                : getSelectionPivotWorld(rotatable.map((it) => it.el)) ??
+	                  toPlanePoint(rotatable[0].el.position.x, rotatable[0].el.position.z);
 
-            if (group === "areas") {
-              const vertices = readVertices(el.props.vertices);
-              if (vertices.length >= 3) {
-                updateElementRef.current(selectedId, {
-                  props: { vertices: vertices.map((p) => rotateAround(p, pivot, deltaRad)) },
-                });
-              }
-              requestDraw();
-              return;
-            }
-
-            updateElementRef.current(selectedId, { rotation: { y: el.rotation.y - deltaRad } });
-            requestDraw();
-            return;
-          }
-        }
+	            onBeginUndoGroupRef.current?.();
+	            for (const { id, el } of rotatable) {
+	              updateElementRef.current(id, buildRotationPatch(el, pivot, deltaRad));
+	            }
+	            onEndUndoGroupRef.current?.();
+	            requestDraw();
+	            return;
+	          }
+	        }
       }
 
       const handler = toolSessionRef.current?.onKeyDown;

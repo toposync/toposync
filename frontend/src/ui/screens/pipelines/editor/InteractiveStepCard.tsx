@@ -3,7 +3,7 @@ import React from "react";
 import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../../../util/api";
 import { i18n } from "../../../../util/i18n";
 
-import type { DragInsertPosition, InteractiveStep, SelectOption } from "../types";
+import type { CameraAreaOption, DragInsertPosition, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../types";
 import { humanizeIdentifier, isRecord, prettyConfigKeyLabel, prettyOperatorName, safeJsonParse } from "../utils";
 
 import { PipelinesNumberInput } from "./PipelinesNumberInput";
@@ -14,13 +14,14 @@ type Props = {
   index: number;
   steps: InteractiveStep[];
   operatorsById: Record<string, PipelineOperatorDefinition>;
+  pipelineName: string | null;
 
   interactiveCameraId: string;
   cameraSelectOptions: SelectOption[];
   cameraSelectOptionById: Map<string, SelectOption>;
   activeCameraContexts: CameraContextsResponse | null;
   activeCameraContextsError: string | null;
-  cameraAreaOptions: SelectOption[];
+  cameraAreaOptions: CameraAreaOption[];
   stepOutputsByNodeId: Record<string, number> | null;
 
   draggingStepUid: string | null;
@@ -35,6 +36,7 @@ type Props = {
   onRemoveStep: (uid: string) => void;
   onUpdateStepScalar: (uid: string, key: string, value: string | number | boolean) => void;
   onUpdateStepConfig: (uid: string, updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
+  onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
 };
 
 function shouldHideScalarGrid(operatorId: string): boolean {
@@ -42,9 +44,13 @@ function shouldHideScalarGrid(operatorId: string): boolean {
     operatorId === "core.schedule_gate" ||
     operatorId === "camera.source" ||
     operatorId === "camera.image_crop" ||
+    operatorId === "camera.image_perspective_crop" ||
     operatorId === "camera.image_adjust" ||
     operatorId === "camera.image_resize" ||
     operatorId === "camera.object_segmentation" ||
+    operatorId === "camera.motion_bgsub_adaptive" ||
+    operatorId === "camera.motion_sample_bg" ||
+    operatorId === "camera.motion_gate" ||
     operatorId === "camera.camera_mapping" ||
     operatorId === "camera.area_restriction" ||
     operatorId === "camera.velocity_estimation" ||
@@ -54,6 +60,7 @@ function shouldHideScalarGrid(operatorId: string): boolean {
     operatorId === "core.debug" ||
     operatorId === "core.notify" ||
     operatorId === "core.store_images" ||
+    operatorId === "stream.publish_video" ||
     operatorId === "core.category_gate" ||
     operatorId === "core.filter" ||
     operatorId === "vision.object_tracking_yolo" ||
@@ -70,11 +77,25 @@ function guessScalarNumberStep(configKey: string, value: number): number | "any"
   return "any";
 }
 
+function telemetryMetricForConfigField(operatorId: string, configKey: string): string | null {
+  const key = String(configKey || "").trim();
+  const operator = String(operatorId || "").trim();
+  if (!key || !operator) return null;
+  if (operator === "camera.motion_bgsub_adaptive" && key === "threshold") return "motion.score";
+  if (operator === "camera.motion_sample_bg" && key === "threshold") return "motion.score";
+  if (operator === "camera.motion_gate" && key === "threshold") return "motion.score";
+  if ((operator === "vision.object_tracking_yolo" || operator === "vision.object_detection_yolo") && key === "confidence_threshold") {
+    return "yolo.confidence";
+  }
+  return null;
+}
+
 export function InteractiveStepCard({
   step,
   index,
   steps,
   operatorsById,
+  pipelineName,
   interactiveCameraId,
   cameraSelectOptions,
   cameraSelectOptionById,
@@ -92,9 +113,11 @@ export function InteractiveStepCard({
   onRemoveStep,
   onUpdateStepScalar,
   onUpdateStepConfig,
+  onOpenTelemetryField,
 }: Props): React.ReactElement {
-  const { t } = i18n.useI18n();
+  const { t, locale } = i18n.useI18n();
   const operator = operatorsById[step.operatorId];
+  const integerFormatter = React.useMemo(() => new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }), [locale]);
 
   const configParsed = safeJsonParse(step.configText || "{}");
   const configRecordOk = configParsed.ok && isRecord(configParsed.data);
@@ -146,7 +169,7 @@ export function InteractiveStepCard({
           {stepOutputCount !== null ? (
             <div className="pipelinesStepStatBadge" title={t("core.ui.pipelines.stats.step.outputs_tooltip")}>
               <i className="fa-solid fa-arrow-right" aria-hidden="true" />
-              {stepOutputCount.toLocaleString()}
+              {integerFormatter.format(stepOutputCount)}
             </div>
           ) : null}
         </div>
@@ -213,6 +236,7 @@ export function InteractiveStepCard({
             index={index}
             steps={steps}
             config={config}
+            pipelineName={pipelineName}
             interactiveCameraId={interactiveCameraId}
             cameraSelectOptions={cameraSelectOptions}
             cameraSelectOptionById={cameraSelectOptionById}
@@ -221,24 +245,59 @@ export function InteractiveStepCard({
             cameraAreaOptions={cameraAreaOptions}
             showAdvanced={step.showAdvanced}
             onUpdateConfig={(updater) => onUpdateStepConfig(step.uid, updater)}
+            onOpenTelemetryField={onOpenTelemetryField}
           />
 
           {shouldShowScalarGrid ? (
             <div className="pipelinesScalarGrid">
               {scalarEntries.map(([key, value]) => (
                 <label key={`${step.uid}:${key}`} className="pipelinesLabel pipelinesScalarLabel">
-                  <span>{prettyConfigKeyLabel(key)}</span>
                   {typeof value === "boolean" ? (
-                    <input type="checkbox" checked={value} onChange={(event) => onUpdateStepScalar(step.uid, key, event.target.checked)} />
+                    <>
+                      <span>{prettyConfigKeyLabel(key)}</span>
+                      <input type="checkbox" checked={value} onChange={(event) => onUpdateStepScalar(step.uid, key, event.target.checked)} />
+                    </>
                   ) : typeof value === "number" ? (
-                    <PipelinesNumberInput
-                      className="pipelinesInput"
-                      value={Number.isFinite(value) ? value : 0}
-                      step={guessScalarNumberStep(key, value)}
-                      onChange={(nextValue) => onUpdateStepScalar(step.uid, key, nextValue)}
-                    />
+                    <>
+                      <div className="pipelinesScalarLabelHeader">
+                        <span>{prettyConfigKeyLabel(key)}</span>
+                        {(() => {
+                          const metricId = telemetryMetricForConfigField(step.operatorId, key);
+                          if (!metricId || !onOpenTelemetryField) return null;
+                          return (
+                            <button
+                              className="iconButton pipelinesTelemetryFieldButton"
+                              type="button"
+                              title={t("core.ui.pipelines.telemetry.field.open_histogram")}
+                              onClick={() =>
+                                onOpenTelemetryField({
+                                  stepUid: step.uid,
+                                  nodeId: step.nodeId,
+                                  operatorId: step.operatorId,
+                                  configKey: key,
+                                  metricId,
+                                  label: prettyConfigKeyLabel(key),
+                                  value: Number.isFinite(value) ? Number(value) : 0,
+                                })
+                              }
+                            >
+                              <i className="fa-solid fa-chart-column" aria-hidden="true" />
+                            </button>
+                          );
+                        })()}
+                      </div>
+                      <PipelinesNumberInput
+                        className="pipelinesInput"
+                        value={Number.isFinite(value) ? value : 0}
+                        step={guessScalarNumberStep(key, value)}
+                        onChange={(nextValue) => onUpdateStepScalar(step.uid, key, nextValue)}
+                      />
+                    </>
                   ) : (
-                    <input className="pipelinesInput" type="text" value={String(value)} onChange={(event) => onUpdateStepScalar(step.uid, key, event.target.value)} />
+                    <>
+                      <span>{prettyConfigKeyLabel(key)}</span>
+                      <input className="pipelinesInput" type="text" value={String(value)} onChange={(event) => onUpdateStepScalar(step.uid, key, event.target.value)} />
+                    </>
                   )}
                 </label>
               ))}

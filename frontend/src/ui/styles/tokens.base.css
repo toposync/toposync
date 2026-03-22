@@ -1,0 +1,128 @@
+:root {
+  --space-0: 0px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-9: 40px;
+  --space-10: 48px;
+  --space-11: 56px;
+  --space-12: 64px;
+  --content-max-width: 1200px;
+
+  --radius-control: 14px;
+  --radius-panel: 18px;
+  --radius-modal: 22px;
+  --radius-tooltip: 12px;
+  --radius-pill: 9999px;
+
+  --font-family-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Arial, "Noto Sans";
+  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+
+  --font-size-11: 11px;
+  --font-size-12: 12px;
+  --font-size-13: 13px;
+  --font-size-14: 14px;
+  --font-size-16: 16px;
+  --font-size-18: 18px;
+  --font-size-20: 20px;
+
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.4;
+  --line-height-relaxed: 1.55;
+
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --letter-spacing-tight: -0.01em;
+  --letter-spacing-normal: 0em;
+
+  --motion-fast: 120ms;
+  --motion-medium: 180ms;
+  --motion-slow: 260ms;
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-springy: cubic-bezier(0.18, 0.9, 0.2, 1);
+  --press-translate-y: 1px;
+  --hover-translate-y: -0.5px;
+
+  --z-base: 0;
+  --z-viewport-overlay: 10;
+  --z-sidebar: 20;
+  --z-dropdown: 50;
+  --z-tooltip: 80;
+  --z-modal: 100;
+  --z-toast: 200;
+
+  --frost-blur-small: 10px;
+  --frost-blur-medium: 16px;
+  --frost-blur-large: 24px;
+  --frost-saturate: 140%;
+  --frost-brightness: 108%;
+
+  --color-accent-teal: #0ea5a4;
+  --color-accent-blue: #3b82f6;
+  --gradient-accent: linear-gradient(135deg, var(--color-accent-teal), var(--color-accent-blue));
+
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --color-info: #3b82f6;
+
+  --color-focus-ring-outer: rgba(59, 130, 246, 0.35);
+  --color-focus-ring-inner: rgba(14, 165, 164, 0.25);
+
+  --color-accent-background-soft: rgba(14, 165, 164, 0.1);
+  --color-accent-background-soft-2: rgba(59, 130, 246, 0.08);
+  --color-accent-background-strong: rgba(14, 165, 164, 0.16);
+  --color-accent-background-strong-2: rgba(59, 130, 246, 0.12);
+  --color-accent-border: rgba(14, 165, 164, 0.45);
+  --color-accent-border-2: rgba(59, 130, 246, 0.35);
+
+  --color-application-background: #f6f2ea;
+  --color-application-background-secondary: #eee7dc;
+  --color-text-primary: #101418;
+  --color-text-muted: rgba(16, 20, 24, 0.7);
+  --color-text-subtle: rgba(16, 20, 24, 0.55);
+  --color-text-inverted: rgba(255, 255, 255, 0.92);
+  --color-border-subtle: rgba(16, 20, 24, 0.1);
+  --color-border-strong: rgba(16, 20, 24, 0.18);
+  --color-surface-solid: #ffffff;
+  --color-surface-frost: rgba(255, 255, 255, 0.7);
+  --color-surface-frost-strong: rgba(255, 255, 255, 0.84);
+  --color-surface-frost-ultra: rgba(255, 255, 255, 0.92);
+  --color-scrim: rgba(16, 20, 24, 0.22);
+  --shadow-elevation-1: 0 1px 1px rgba(0, 0, 0, 0.04), 0 6px 18px rgba(0, 0, 0, 0.08);
+  --shadow-elevation-2: 0 2px 2px rgba(0, 0, 0, 0.06), 0 10px 28px rgba(0, 0, 0, 0.12);
+  --shadow-elevation-3: 0 3px 3px rgba(0, 0, 0, 0.08), 0 14px 38px rgba(0, 0, 0, 0.16);
+  --shadow-inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  --color-viewport3d-background-start: #f7f4ee;
+  --color-viewport3d-background-end: #e9e2d8;
+  --color-viewport3d-vignette: rgba(16, 20, 24, 0.08);
+  --color-canvas2d-background: #f4f1ea;
+  --color-canvas2d-grid-minor: rgba(16, 20, 24, 0.06);
+  --color-canvas2d-grid-major: rgba(16, 20, 24, 0.1);
+
+  --noise-opacity: 0.04;
+  --control-height-s: 36px;
+  --control-height-m: 40px;
+  --control-height-l: 44px;
+
+  --scrollbar-thumb: color-mix(in srgb, var(--color-text-primary) 22%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--color-text-primary) 36%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-medium: 0ms;
+    --motion-slow: 0ms;
+    --press-translate-y: 0px;
+    --hover-translate-y: 0px;
+  }
+}

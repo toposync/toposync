@@ -8,7 +8,7 @@ from .operators import (
     YoloBackend,
     YoloBackendConfig,
     YoloObject,
-    register_camera_pipeline_operators,
+    register_camera_pipeline_operators as register_camera_core_pipeline_operators,
 )
 from .postprocess import (
     AreaRestrictionConfig,
@@ -18,10 +18,19 @@ from .postprocess import (
     ImagePerspectiveCropConfig,
     ImageAdjustConfig,
     ImageResizeConfig,
-    ObjectSegmentationConfig,
+    ObjectCropConfig,
     VelocityEstimationConfig,
     register_camera_postprocess_operators,
 )
+
+
+def register_camera_pipeline_operators(registry):  # noqa: ANN001
+    register_camera_core_pipeline_operators(registry)
+    try:
+        from toposync_ext_vision.pipelines import register_vision_pipeline_operators
+    except Exception:
+        return
+    register_vision_pipeline_operators(registry)
 
 __all__ = [
     "CameraSourceConfig",
@@ -33,7 +42,7 @@ __all__ = [
     "YoloObject",
     "YoloBackend",
     "YoloBackendConfig",
-    "ObjectSegmentationConfig",
+    "ObjectCropConfig",
     "ImageCropConfig",
     "ImagePerspectiveCropConfig",
     "ImageAdjustConfig",
@@ -42,6 +51,7 @@ __all__ = [
     "AreaRestrictionConfig",
     "VelocityEstimationConfig",
     "BestFrameSelectorConfig",
+    "register_camera_core_pipeline_operators",
     "register_camera_pipeline_operators",
     "register_camera_postprocess_operators",
 ]

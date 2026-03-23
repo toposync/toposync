@@ -196,7 +196,7 @@ def test_bypass_rejects_non_simple_graph() -> None:
         "schema_version": 1,
         "nodes": [
             {"id": "source", "operator": "camera.source", "config": {"camera_id": "cam1"}},
-            {"id": "detect", "operator": "vision.object_detection_yolo", "config": {}},
+            {"id": "detect", "operator": "vision.detect", "config": {}},
             {"id": "stream", "operator": "stream.publish_video", "config": {"transmission_id": "tx1", "bypass_mode": "auto"}},
         ],
         "edges": [

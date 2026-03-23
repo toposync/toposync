@@ -8,14 +8,6 @@ Pré‑requisitos: `uv`, Python 3.11+ e Node 20+.
 uv sync
 ```
 
-Opcional (deps pesadas para detecção/tracking YOLO na extensão de câmeras):
-
-```bash
-uv sync --group cameras-yolo
-```
-
-Obs: `uv sync` é exato e remove pacotes fora dos grupos padrão; para manter o YOLO instalado, inclua `--group cameras-yolo` nas próximas sincronizações.
-
 ## 2) Node (workspaces)
 
 ```bash

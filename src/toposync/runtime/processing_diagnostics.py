@@ -198,6 +198,38 @@ def collect_yolo_trackers_diagnostics(limit: int = 8) -> list[dict[str, Any]]:
     return list(items or [])
 
 
+def collect_vision_extension_diagnostics(*, system_info: dict[str, Any] | None = None) -> dict[str, Any]:
+    try:
+        from toposync_ext_vision.processing import collect_vision_diagnostics  # type: ignore
+    except Exception:
+        return {
+            "backends": [],
+            "trackers_available": [],
+            "execution_providers": [],
+            "models_installed": [],
+            "model_registry_errors": [],
+            "official_shortlists": {},
+            "task_catalogs": {},
+            "recommendations": {},
+            "last_benchmark": None,
+        }
+    try:
+        diagnostics = collect_vision_diagnostics(system_info=system_info)
+    except Exception:
+        return {
+            "backends": [],
+            "trackers_available": [],
+            "execution_providers": [],
+            "models_installed": [],
+            "model_registry_errors": [],
+            "official_shortlists": {},
+            "task_catalogs": {},
+            "recommendations": {},
+            "last_benchmark": None,
+        }
+    return dict(diagnostics or {})
+
+
 async def collect_camera_hub_snapshot() -> dict[str, Any] | None:
     try:
         from toposync_ext_cameras.pipelines import operators as camera_ops  # type: ignore
@@ -220,23 +252,33 @@ async def collect_camera_hub_snapshot() -> dict[str, Any] | None:
 
 
 async def collect_processing_server_diagnostics() -> dict[str, Any]:
+    system_info = collect_system_info()
     torch_info = collect_torch_info()
     device_env = str(os.getenv("TOPOSYNC_YOLO_DEVICE") or "")
     recommended = recommend_yolo_device(torch_info, device_env=device_env)
     trackers = collect_yolo_trackers_diagnostics(limit=8)
+    vision_runtime = collect_vision_extension_diagnostics(system_info=system_info)
     cameras = collect_camera_dependency_info()
     hub = await collect_camera_hub_snapshot()
     if hub is not None:
         cameras["hub"] = hub
 
     return {
-        "system": collect_system_info(),
+        "system": system_info,
         "vision": {
             "torch": torch_info,
             "yolo_device_env": device_env,
             "yolo_device_recommended": recommended,
             "yolo_trackers": trackers,
+            "trackers_available": vision_runtime.get("trackers_available", []),
+            "backends": vision_runtime.get("backends", []),
+            "execution_providers": vision_runtime.get("execution_providers", []),
+            "models_installed": vision_runtime.get("models_installed", []),
+            "model_registry_errors": vision_runtime.get("model_registry_errors", []),
+            "official_shortlists": vision_runtime.get("official_shortlists", {}),
+            "task_catalogs": vision_runtime.get("task_catalogs", {}),
+            "recommendations": vision_runtime.get("recommendations", {}),
+            "last_benchmark": vision_runtime.get("last_benchmark"),
         },
         "cameras": cameras,
     }
-

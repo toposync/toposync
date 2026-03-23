@@ -282,7 +282,7 @@ def _normalize_config(config: AppConfig) -> AppConfig:
                 migrated_nodes.append(item)
                 continue
             operator_id = str(item.get("operator") or "").strip()
-            if operator_id != "vision.object_tracking_yolo":
+            if operator_id != "vision.track":
                 migrated_nodes.append(item)
                 continue
             cfg_raw = item.get("config")

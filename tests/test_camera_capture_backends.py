@@ -207,7 +207,12 @@ def test_resolve_camera_source_can_bypass_ingest_service(tmp_path: Path) -> None
         deps = PipelineRuntimeDependencies(config_store=store, services=services)
         via_ingest = await camera_ops._resolve_camera_source(config, deps, prefer_ingest=True)
         direct = await camera_ops._resolve_camera_source(config, deps, prefer_ingest=False)
-        return str(via_ingest[0]), bool(via_ingest[4]), str(direct[0]), bool(direct[4])
+        return (
+            str(via_ingest.rtsp_url),
+            bool(via_ingest.used_ingest),
+            str(direct.rtsp_url),
+            bool(direct.used_ingest),
+        )
 
     ingest_url, ingest_flag, direct_url, direct_flag = asyncio.run(scenario())
     assert ingest_url == "rtsp://127.0.0.1:8555/ingest-cam1"

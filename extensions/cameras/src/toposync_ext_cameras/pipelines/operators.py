@@ -27,7 +27,7 @@ from toposync.runtime.pipelines.packet_contract import (
 )
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
-from toposync.runtime.pipelines.telemetry import METRIC_MOTION_SCORE, METRIC_YOLO_CONFIDENCE
+from toposync.runtime.pipelines.telemetry import METRIC_MOTION_SCORE, METRIC_VISION_CONFIDENCE
 
 from ..processing.frame_grabber import FrameGrabber
 from ..processing.camera_hub import CameraHub
@@ -1573,9 +1573,16 @@ class _TrackingState:
 
 
 class _BaseYoloRuntime(TransformOperatorRuntime):
-    def __init__(self, config: _YoloBaseConfig, dependencies: PipelineRuntimeDependencies) -> None:
+    def __init__(
+        self,
+        config: _YoloBaseConfig,
+        dependencies: PipelineRuntimeDependencies,
+        *,
+        operator_id: str,
+    ) -> None:
         self._config = config
         self._dependencies = dependencies
+        self._operator_id = str(operator_id or "").strip() or "vision.track"
         self._backend: YoloBackend | None = None
         self._categories_set = set(config.categories)
         self._last_inference_by_stream: dict[str, float] = {}
@@ -1714,7 +1721,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         for index in range(sample_count):
             try:
                 observe_numeric(
-                    METRIC_YOLO_CONFIDENCE, float(detections[index].confidence), now_s=ts_s
+                    METRIC_VISION_CONFIDENCE, float(detections[index].confidence), now_s=ts_s
                 )
             except Exception:
                 continue
@@ -1764,7 +1771,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         metadata = dict(packet.metadata)
         metadata.update(
             {
-                "operator_id": operator_id,
+                "operator_id": str(operator_id or "").strip() or self._operator_id,
                 "source_stream_id": packet.stream_id,
                 "event_id": None,
                 "tracking_id": None,
@@ -1816,9 +1823,15 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
 
 
 class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
-    def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        dependencies: PipelineRuntimeDependencies,
+        *,
+        operator_id: str = "vision.track",
+    ) -> None:
         parsed = ObjectTrackingYOLOConfig.model_validate(config)
-        super().__init__(parsed, dependencies)
+        super().__init__(parsed, dependencies, operator_id=operator_id)
         self._parsed = parsed
         self._state_by_tracking_key: dict[str, _TrackingState] = {}
         self._synthetic_tracking_counter: int = 0
@@ -2129,7 +2142,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
             if max_paused > 0.0 and paused_for >= max_paused:
                 self._clear_state_for_stream(source_stream_id)
             out = self._annotate_packet_with_objects(
-                packet, operator_id="vision.object_tracking_yolo", objects=[]
+                packet, operator_id=self._operator_id, objects=[]
             )
             return [out]
 
@@ -2213,7 +2226,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
                 self._state_by_tracking_key.pop(tracking_key, None)
 
         out = self._annotate_packet_with_objects(
-            packet, operator_id="vision.object_tracking_yolo", objects=objects
+            packet, operator_id=self._operator_id, objects=objects
         )
         return [out]
 
@@ -2241,7 +2254,7 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
         metadata = self._copy_metadata_with_object(
             source_packet,
             object_data=object_data,
-            operator_id="vision.object_tracking_yolo",
+            operator_id=self._operator_id,
         )
         return Packet.create(
             stream_id=state.stream_id,
@@ -2254,9 +2267,15 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
 
 
 class ObjectDetectionYOLORuntime(_BaseYoloRuntime):
-    def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        dependencies: PipelineRuntimeDependencies,
+        *,
+        operator_id: str = "vision.detect",
+    ) -> None:
         parsed = ObjectDetectionYOLOConfig.model_validate(config)
-        super().__init__(parsed, dependencies)
+        super().__init__(parsed, dependencies, operator_id=operator_id)
         self._parsed = parsed
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
@@ -2276,7 +2295,7 @@ class ObjectDetectionYOLORuntime(_BaseYoloRuntime):
                 for detection in detections
             ]
             out = self._annotate_packet_with_objects(
-                packet, operator_id="vision.object_detection_yolo", objects=objects
+                packet, operator_id=self._operator_id, objects=objects
             )
             return [out]
 
@@ -2307,7 +2326,7 @@ class ObjectDetectionYOLORuntime(_BaseYoloRuntime):
             metadata = self._copy_metadata_with_object(
                 packet,
                 object_data=object_data,
-                operator_id="vision.object_detection_yolo",
+                operator_id=self._operator_id,
             )
             open_packet = Packet.create(
                 stream_id=event_stream_id,
@@ -2402,66 +2421,6 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
         share_strategy="never",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, deps: MotionSampleBgRuntime(config, deps),
-    )
-    registry.register_operator(
-        operator_id="vision.object_tracking_yolo",
-        description=(
-            "YOLO object tracking. By default emits split-stream lifecycle packets per object; "
-            "set emit_mode=annotate to pass through frames and attach detection fields."
-        ),
-        config_model=ObjectTrackingYOLOConfig,
-        inputs=[{"name": "in", "required": True}],
-        outputs=[{"name": "out"}],
-        capabilities=["vision", "yolo", "tracking", "heavy_compute", "split_stream"],
-        defaults=ObjectTrackingYOLOConfig().model_dump(),
-        execution_mode="thread_pool",
-        max_concurrency=1,
-        requires_artifacts=["frame_original"],
-        produces_payload_keys=[
-            "event_id",
-            "tracking_id",
-            "tracker_track_id",
-            "correlation_id",
-            "source_stream_id",
-            "object_category_label",
-            "object_confidence",
-            "object_bbox01",
-            "detected_object",
-            "detected_objects",
-        ],
-        share_strategy="by_signature",
-        owner="com.toposync.cameras",
-        runtime_factory=lambda config, deps: ObjectTrackingYOLORuntime(config, deps),
-    )
-    registry.register_operator(
-        operator_id="vision.object_detection_yolo",
-        description=(
-            "YOLO object detection. By default emits one open/close lifecycle per detection; "
-            "set emit_mode=annotate to pass through frames and attach detection fields."
-        ),
-        config_model=ObjectDetectionYOLOConfig,
-        inputs=[{"name": "in", "required": True}],
-        outputs=[{"name": "out"}],
-        capabilities=["vision", "yolo", "detection", "heavy_compute", "split_stream"],
-        defaults=ObjectDetectionYOLOConfig().model_dump(),
-        execution_mode="thread_pool",
-        max_concurrency=1,
-        requires_artifacts=["frame_original"],
-        produces_payload_keys=[
-            "event_id",
-            "tracking_id",
-            "tracker_track_id",
-            "correlation_id",
-            "source_stream_id",
-            "object_category_label",
-            "object_confidence",
-            "object_bbox01",
-            "detected_object",
-            "detected_objects",
-        ],
-        share_strategy="by_signature",
-        owner="com.toposync.cameras",
-        runtime_factory=lambda config, deps: ObjectDetectionYOLORuntime(config, deps),
     )
     register_camera_postprocess_operators(registry)
 

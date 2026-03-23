@@ -390,8 +390,8 @@ def test_pipelines_telemetry_overview_endpoints_aggregate_all_pipelines(tmp_path
 
         telemetry_store.observe_numeric("alpha_pipeline", "motion_a", "motion.score", 0.22, now_s=now - 120.0)
         telemetry_store.observe_numeric("beta_pipeline", "motion_b", "motion.score", 0.81, now_s=now - 120.0)
-        telemetry_store.observe_numeric("alpha_pipeline", "yolo_a", "yolo.confidence", 0.33, now_s=now - 30.0)
-        telemetry_store.observe_numeric("beta_pipeline", "yolo_b", "yolo.confidence", 0.67, now_s=now - 30.0)
+        telemetry_store.observe_numeric("alpha_pipeline", "yolo_a", "vision.confidence", 0.33, now_s=now - 30.0)
+        telemetry_store.observe_numeric("beta_pipeline", "yolo_b", "vision.confidence", 0.67, now_s=now - 30.0)
 
         telemetry_store.record_image_marker(
             "alpha_pipeline",
@@ -410,14 +410,14 @@ def test_pipelines_telemetry_overview_endpoints_aggregate_all_pipelines(tmp_path
 
         numeric_res = client.get(
             "/api/pipelines/telemetry/all/numeric",
-            params=[("metric_id", "motion.score"), ("metric_id", "yolo.confidence"), ("point_limit", "200")],
+            params=[("metric_id", "motion.score"), ("metric_id", "vision.confidence"), ("point_limit", "200")],
         )
         assert numeric_res.status_code == 200
         numeric_body = numeric_res.json()
         assert numeric_body["aggregation"] == "max"
-        assert [item["metric_id"] for item in numeric_body["series"]] == ["motion.score", "yolo.confidence"]
+        assert [item["metric_id"] for item in numeric_body["series"]] == ["motion.score", "vision.confidence"]
         motion_series = next(item for item in numeric_body["series"] if item["metric_id"] == "motion.score")
-        yolo_series = next(item for item in numeric_body["series"] if item["metric_id"] == "yolo.confidence")
+        yolo_series = next(item for item in numeric_body["series"] if item["metric_id"] == "vision.confidence")
         assert motion_series["pipeline_count"] == 2
         assert motion_series["series_count"] == 2
         assert motion_series["points"][-1]["avg"] == pytest.approx(0.81)

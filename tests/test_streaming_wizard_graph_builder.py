@@ -63,9 +63,9 @@ def test_wizard_graph_has_expected_operator_by_preset() -> None:
     expected = {
         "simple_stream": [],
         "motion_gate_stream": ["camera.motion_gate"],
-        "detection_stream": ["vision.object_detection_yolo"],
-        "tracking_stream": ["vision.object_tracking_yolo"],
-        "segmentation_stream": ["camera.object_segmentation"],
+        "detection_stream": ["vision.detect"],
+        "tracking_stream": ["vision.detect", "vision.track"],
+        "segmentation_stream": ["vision.segment_instances"],
     }
     for preset_id, required_operators in expected.items():
         graph = build_streaming_wizard_graph(
@@ -109,31 +109,58 @@ def test_motion_preset_has_fps_reducer_even_without_optional_parameters() -> Non
     assert "core.fps_reducer" in operators
 
 
-def test_wizard_graph_defaults_to_yolo_filter_enabled() -> None:
-    for preset_id, operator_id in (
-        ("detection_stream", "vision.object_detection_yolo"),
-        ("tracking_stream", "vision.object_tracking_yolo"),
-    ):
-        graph = build_streaming_wizard_graph(
-            transmission_id="transmission_main",
-            camera_id="camera_a",
-            preset_id=preset_id,  # type: ignore[arg-type]
-            optional_parameters=None,
-        )
-        config = _operator_config(graph, operator_id=operator_id)
-        assert config.get("emit_mode") == "events"
+def test_wizard_graph_defaults_detection_to_annotate_and_tracking_to_events() -> None:
+    detection_graph = build_streaming_wizard_graph(
+        transmission_id="transmission_main",
+        camera_id="camera_a",
+        preset_id="detection_stream",
+        optional_parameters=None,
+    )
+    assert _operator_config(detection_graph, operator_id="vision.detect").get("emit_mode") == "annotate"
+
+    tracking_graph = build_streaming_wizard_graph(
+        transmission_id="transmission_main",
+        camera_id="camera_a",
+        preset_id="tracking_stream",
+        optional_parameters=None,
+    )
+    assert _operator_config(tracking_graph, operator_id="vision.detect").get("emit_mode") == "annotate"
+    assert _operator_config(tracking_graph, operator_id="vision.track").get("emit_mode") == "events"
 
 
 def test_wizard_graph_disables_yolo_filter_when_requested() -> None:
-    for preset_id, operator_id in (
-        ("detection_stream", "vision.object_detection_yolo"),
-        ("tracking_stream", "vision.object_tracking_yolo"),
-    ):
-        graph = build_streaming_wizard_graph(
-            transmission_id="transmission_main",
-            camera_id="camera_a",
-            preset_id=preset_id,  # type: ignore[arg-type]
-            optional_parameters={"yolo_filter_enabled": False},
-        )
-        config = _operator_config(graph, operator_id=operator_id)
-        assert config.get("emit_mode") == "annotate"
+    detection_graph = build_streaming_wizard_graph(
+        transmission_id="transmission_main",
+        camera_id="camera_a",
+        preset_id="detection_stream",
+        optional_parameters={"yolo_filter_enabled": False},
+    )
+    assert _operator_config(detection_graph, operator_id="vision.detect").get("emit_mode") == "annotate"
+
+    tracking_graph = build_streaming_wizard_graph(
+        transmission_id="transmission_main",
+        camera_id="camera_a",
+        preset_id="tracking_stream",
+        optional_parameters={"yolo_filter_enabled": False},
+    )
+    assert _operator_config(tracking_graph, operator_id="vision.detect").get("emit_mode") == "annotate"
+    assert _operator_config(tracking_graph, operator_id="vision.track").get("emit_mode") == "annotate"
+
+
+def test_wizard_graph_defaults_segmentation_to_rtmdet_ins_and_mask_publish() -> None:
+    segmentation_graph = build_streaming_wizard_graph(
+        transmission_id="transmission_main",
+        camera_id="camera_a",
+        preset_id="segmentation_stream",
+        optional_parameters=None,
+    )
+
+    assert _operator_config(segmentation_graph, operator_id="vision.segment_instances").get("model_id") == "rtmdet_ins_small"
+    assert _operator_config(segmentation_graph, operator_id="vision.segment_instances").get("attach_mask_artifacts") is True
+    assert _stream_config(segmentation_graph).get("frame_with_fallback") == [
+        "mask",
+        "frame",
+        "best_frame",
+        "segmented",
+        "frame_original",
+    ]

@@ -52,7 +52,7 @@ def test_legacy_camera_migration_supports_motion_and_object_triggers(tmp_path: P
         for p in pipelines
         if p
         and any(
-            isinstance(node, dict) and node.get("operator") == "vision.object_tracking_yolo"
+            isinstance(node, dict) and node.get("operator") == "vision.track"
             for node in (p.graph.get("nodes") or [])
         )
     )
@@ -63,7 +63,8 @@ def test_legacy_camera_migration_supports_motion_and_object_triggers(tmp_path: P
     assert motion_nodes.get("lifecycle", {}).get("operator") == "core.lifecycle_from_boolean"
 
     object_nodes = {n.get("id"): n for n in object_pipeline.graph.get("nodes", []) if isinstance(n, dict)}
-    assert object_nodes.get("track", {}).get("operator") == "vision.object_tracking_yolo"
+    assert object_nodes.get("detect", {}).get("operator") == "vision.detect"
+    assert object_nodes.get("track", {}).get("operator") == "vision.track"
 
     registry = OperatorRegistry()
     register_builtin_operators(registry)

@@ -43,6 +43,8 @@ class ProcessingTransport(Protocol):
 
     async def status(self) -> dict[str, Any]: ...
 
+    async def import_vision_manifest(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
     async def close(self) -> None: ...
 
 
@@ -74,6 +76,9 @@ class InProcessProcessingTransport:
 
     async def status(self) -> dict[str, Any]:
         return self._runtime.status()
+
+    async def import_vision_manifest(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raise ProcessingTransportError("Vision manifest import is not supported for in-process transport")
 
     async def close(self) -> None:
         if self._queue is not None:
@@ -158,6 +163,17 @@ class HttpProcessingTransport:
         res = await client.get(url, timeout=self._timeout_s)
         if res.status_code >= 300:
             raise ProcessingTransportError(f"Processing status failed: {res.status_code} {res.text}")
+        body = res.json()
+        return body if isinstance(body, dict) else {}
+
+    async def import_vision_manifest(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client = await self._ensure_client()
+        url = f"{self._base}/api/processing/vision/manifests/import"
+        res = await client.post(url, json=payload, timeout=self._timeout_s)
+        if res.status_code >= 300:
+            raise ProcessingTransportError(
+                f"Processing vision manifest import failed: {res.status_code} {res.text}"
+            )
         body = res.json()
         return body if isinstance(body, dict) else {}
 

@@ -224,6 +224,24 @@ export type ProcessingServerStatus = {
   error?: string | null;
 };
 
+export type ProcessingServerVisionManifestImportRequest = {
+  manifest_text: string;
+  artifact_path?: string;
+  replace_existing?: boolean;
+};
+
+export type ProcessingServerVisionManifestImportResponse = {
+  model_id: string;
+  display_name: string;
+  task: string;
+  runtime: string;
+  artifact_path: string;
+  artifact_exists: boolean;
+  manifest_path: string;
+  custom: boolean;
+  replaced: boolean;
+};
+
 export type CameraSummary = {
   id: string;
   name: string;
@@ -711,6 +729,23 @@ export async function deleteProcessingServer(serverId: string): Promise<Processi
 export async function getProcessingServerStatus(serverId: string): Promise<ProcessingServerStatus> {
   const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/status`);
   if (!res.ok) throw new Error(`Failed to fetch processing server status ${serverId}: ${res.status}`);
+  return res.json();
+}
+
+export async function importProcessingServerVisionManifest(
+  serverId: string,
+  payload: ProcessingServerVisionManifestImportRequest,
+): Promise<ProcessingServerVisionManifestImportResponse> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/vision/manifests/import`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(
+      await _parseHttpError(res, `Failed to import vision manifest on processing server ${serverId}: ${res.status}`),
+    );
+  }
   return res.json();
 }
 

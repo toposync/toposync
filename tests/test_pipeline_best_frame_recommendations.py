@@ -18,7 +18,7 @@ def test_best_frame_selector_is_not_marked_unused_when_store_images_uses_fallbac
             "schema_version": 1,
             "nodes": [
                 {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
-                {"id": "detect", "operator": "vision.object_detection_yolo", "config": {"emit_mode": "annotate"}},
+                {"id": "detect", "operator": "vision.detect", "config": {"emit_mode": "annotate"}},
                 {"id": "bf", "operator": "camera.best_frame_selector", "config": {}},
                 {"id": "store", "operator": "core.store_images", "config": {"image_with_fallback": "best_frame,treated,original"}},
                 {"id": "sink", "operator": "core.sink", "config": {}},

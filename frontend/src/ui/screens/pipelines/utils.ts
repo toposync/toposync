@@ -75,6 +75,17 @@ export function prettyOperatorName(operatorId: string): string {
   return humanizeIdentifier(tail) || raw;
 }
 
+export function prettyOperatorDescription(
+  operator: Pick<PipelineOperatorDefinition, "id" | "description"> | string,
+): string {
+  const operatorId = typeof operator === "string" ? operator : String(operator.id || "").trim();
+  const fallbackDescription = typeof operator === "string" ? "" : String(operator.description || "").trim();
+  if (!operatorId) return fallbackDescription;
+  const localized = i18n.t(`core.ui.pipelines.operator_description.${operatorId}`, {}, "");
+  if (localized) return localized;
+  return fallbackDescription || prettyOperatorName(operatorId);
+}
+
 export function emptyGraph(): Record<string, unknown> {
   return { schema_version: 1, nodes: [], edges: [] };
 }

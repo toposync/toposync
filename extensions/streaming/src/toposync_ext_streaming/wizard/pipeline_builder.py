@@ -63,6 +63,7 @@ def build_streaming_wizard_graph(
 
     detection_categories = _sanitize_categories(options.get("detection_categories"))
     tracking_categories = _sanitize_categories(options.get("tracking_categories"))
+    segmentation_categories = _sanitize_categories(options.get("segmentation_categories"))
 
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
@@ -111,11 +112,12 @@ def build_streaming_wizard_graph(
         nodes.append(
             {
                 "id": "detect",
-                "operator": "vision.object_detection_yolo",
+                "operator": "vision.detect",
                 "config": {
+                    "model_id": "rtmdet_det_small",
                     "categories": detection_categories,
                     "confidence_threshold": float(yolo_confidence),
-                    "emit_mode": yolo_emit_mode,
+                    "emit_mode": "annotate",
                 },
             }
         )
@@ -125,11 +127,24 @@ def build_streaming_wizard_graph(
     if preset_id == "tracking_stream":
         nodes.append(
             {
-                "id": "track",
-                "operator": "vision.object_tracking_yolo",
+                "id": "detect",
+                "operator": "vision.detect",
                 "config": {
+                    "model_id": "rtmdet_det_small",
                     "categories": tracking_categories,
                     "confidence_threshold": float(yolo_confidence),
+                    "emit_mode": "annotate",
+                },
+            }
+        )
+        _append_edge(edges, source_node_id=current_node_id, target_node_id="detect", maxsize=2)
+        current_node_id = "detect"
+        nodes.append(
+            {
+                "id": "track",
+                "operator": "vision.track",
+                "config": {
+                    "tracker_id": "simple_iou_kalman",
                     "close_after_seconds": 5.0,
                     "emit_mode": yolo_emit_mode,
                 },
@@ -142,8 +157,12 @@ def build_streaming_wizard_graph(
         nodes.append(
             {
                 "id": "segment",
-                "operator": "camera.object_segmentation",
-                "config": {},
+                "operator": "vision.segment_instances",
+                "config": {
+                    "model_id": "rtmdet_ins_small",
+                    "categories": segmentation_categories,
+                    "attach_mask_artifacts": True,
+                },
             }
         )
         _append_edge(edges, source_node_id=current_node_id, target_node_id="segment", maxsize=4)
@@ -155,7 +174,7 @@ def build_streaming_wizard_graph(
             "operator": "stream.publish_video",
             "config": {
                 "transmission_id": transmission_id,
-                "frame_with_fallback": ["frame", "best_frame", "segmented", "frame_original"],
+                "frame_with_fallback": ["mask", "frame", "best_frame", "segmented", "frame_original"],
                 "resize_mode": resize_mode,
                 "writer_priority": int(writer_priority),
                 "bypass_mode": bypass_mode,

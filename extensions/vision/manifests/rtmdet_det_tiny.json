@@ -1,0 +1,51 @@
+{
+  "model_id": "rtmdet_det_tiny",
+  "display_name": "RTMDet Tiny",
+  "task": "detection",
+  "runtime": "onnxruntime",
+  "artifact_format": "onnx",
+  "artifact_path": "../models/rtmdet/rtmdet_det_tiny.end2end.onnx",
+  "sha256": "7581382585401922c870b3e25080dd1215c7048c632c72499dd5d8e7f9e8fddf",
+  "input": {
+    "width": 640,
+    "height": 640,
+    "color_order": "bgr",
+    "layout": "nchw",
+    "resize_mode": "letterbox",
+    "pad_value": 114.0,
+    "normalization": {
+      "mean": [103.53, 116.28, 123.675],
+      "std": [57.375, 57.12, 58.395]
+    }
+  },
+  "postprocess": {
+    "type": "mmdet_rtmdet",
+    "output_name": "dets",
+    "label_output_name": "labels",
+    "box_format": "xyxy_pixels",
+    "confidence_threshold_default": 0.4,
+    "iou_threshold_default": 0.65
+  },
+  "classes": {
+    "source": "coco80"
+  },
+  "license": {
+    "code_license": "Apache-2.0",
+    "weights_license": "Review required for exported ONNX artifact redistribution.",
+    "dataset_notes": "COCO-based weights require explicit redistribution review before bundling.",
+    "redistribution_allowed": false,
+    "commercial_use_status": "review_required",
+    "official_build_allowed": false
+  },
+  "hardware_profiles": {
+    "cpu": true,
+    "cuda": true,
+    "openvino": true,
+    "mps": false
+  },
+  "recommended_profiles": ["cpu_low", "cuda_low", "openvino_balanced"],
+  "notes": [
+    "Fastest RTMDet option for CPU-first deployments.",
+    "Recommended first smoke-test model for general COCO detection."
+  ]
+}

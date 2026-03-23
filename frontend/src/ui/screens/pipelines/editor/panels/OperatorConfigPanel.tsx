@@ -31,7 +31,7 @@ import {
   ObjectSegmentationConfigCard,
   VelocityEstimationConfigCard,
 } from "./CameraPanels";
-import { YoloVisionConfigCard } from "./VisionPanels";
+import { VisionConfigCard } from "./VisionPanels";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
 
@@ -41,6 +41,7 @@ type Props = {
   steps: InteractiveStep[];
   config: Record<string, unknown>;
   pipelineName: string | null;
+  processingServerId: string;
 
   interactiveCameraId: string;
   cameraSelectOptions: SelectOption[];
@@ -60,6 +61,7 @@ export function OperatorConfigPanel({
   steps,
   config,
   pipelineName,
+  processingServerId,
   interactiveCameraId,
   cameraSelectOptions,
   cameraSelectOptionById,
@@ -85,13 +87,19 @@ export function OperatorConfigPanel({
       />
     );
   }
-  if (operatorId === "vision.object_tracking_yolo" || operatorId === "vision.object_detection_yolo") {
+  if (
+    operatorId === "vision.track" ||
+    operatorId === "vision.detect" ||
+    operatorId === "vision.segment_instances"
+  ) {
     return (
-      <YoloVisionConfigCard
+      <VisionConfigCard
         operatorId={operatorId}
         stepUid={step.uid}
         nodeId={step.nodeId}
         config={config}
+        processingServerId={processingServerId}
+        showAdvanced={showAdvanced}
         onUpdateConfig={onUpdateConfig}
         onOpenTelemetryField={onOpenTelemetryField}
       />
@@ -221,7 +229,7 @@ export function OperatorConfigPanel({
   if (operatorId === "camera.image_resize") {
     return <ImageResizeConfigCard config={config} onUpdateConfig={onUpdateConfig} />;
   }
-  if (operatorId === "camera.object_segmentation") {
+  if (operatorId === "camera.object_crop") {
     return <ObjectSegmentationConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "core.debug") {

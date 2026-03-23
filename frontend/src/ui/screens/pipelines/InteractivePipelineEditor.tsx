@@ -14,6 +14,7 @@ type Props = {
   operatorsById: Record<string, PipelineOperatorDefinition>;
   camerasIndex: CamerasIndexResponse;
   pipelineName: string | null;
+  processingServerId: string;
   stepOutputsByNodeId: Record<string, number> | null;
   interactiveSteps: InteractiveStep[];
   setInteractiveSteps: React.Dispatch<React.SetStateAction<InteractiveStep[]>>;
@@ -27,6 +28,7 @@ export function InteractivePipelineEditor({
   operatorsById,
   camerasIndex,
   pipelineName,
+  processingServerId,
   stepOutputsByNodeId,
   interactiveSteps,
   setInteractiveSteps,
@@ -209,6 +211,7 @@ export function InteractivePipelineEditor({
         steps={interactiveSteps}
         operatorsById={operatorsById}
         pipelineName={pipelineName}
+        processingServerId={processingServerId}
         interactiveCameraId={interactiveCameraId}
         cameraSelectOptions={cameraSelectOptions}
         cameraSelectOptionById={cameraSelectOptionById}

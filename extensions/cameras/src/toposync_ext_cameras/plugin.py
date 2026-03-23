@@ -24,7 +24,7 @@ from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.pipelines.templates import safe_pipeline_name
 from toposync.runtime.services import ServiceRegistry
 
-from .pipelines import register_camera_pipeline_operators
+from .pipelines.operators import register_camera_pipeline_operators
 from .processing.mapping import ControlPointMapper
 from .pipelines.postprocess import _parse_control_point_sets  # noqa: PLC2701
 from .settings import (
@@ -1441,17 +1441,26 @@ class CamerasExtension(BaseExtension):
                 nodes = [
                     *base_nodes,
                     {
-                        "id": "track",
-                        "operator": "vision.object_tracking_yolo",
+                        "id": "detect",
+                        "operator": "vision.detect",
                         "config": {
+                            "model_id": "rtmdet_det_small",
                             "categories": ["person"],
-                            "close_after_seconds": 5.0,
                             "confidence_threshold": 0.55,
+                            "emit_mode": "annotate",
+                        },
+                    },
+                    {
+                        "id": "track",
+                        "operator": "vision.track",
+                        "config": {
+                            "close_after_seconds": 5.0,
+                            "tracker_id": "simple_iou_kalman",
                         },
                     },
                     {"id": "map", "operator": "camera.camera_mapping", "config": {}},
                     {"id": "throttle", "operator": "core.throttle", "config": {"interval_seconds": 5.0}},
-                    {"id": "segment", "operator": "camera.object_segmentation", "config": {}},
+                    {"id": "segment", "operator": "camera.object_crop", "config": {}},
                     {
                         "id": "store",
                         "operator": "core.store_images",
@@ -1471,7 +1480,8 @@ class CamerasExtension(BaseExtension):
                 ]
                 edges = [
                     {"from": {"node": "source", "port": "out"}, "to": {"node": "motion", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "motion", "port": "out"}, "to": {"node": "track", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "motion", "port": "out"}, "to": {"node": "detect", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
                     {"from": {"node": "track", "port": "out"}, "to": {"node": "map", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
                     {"from": {"node": "map", "port": "out"}, "to": {"node": "throttle", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
                     {"from": {"node": "throttle", "port": "out"}, "to": {"node": "segment", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
@@ -1483,10 +1493,26 @@ class CamerasExtension(BaseExtension):
             if preset == "pets":
                 nodes = [
                     *base_nodes,
-                    {"id": "track", "operator": "vision.object_tracking_yolo", "config": {"categories": ["cat", "dog"], "close_after_seconds": 5.0}},
+                    {
+                        "id": "detect",
+                        "operator": "vision.detect",
+                        "config": {
+                            "model_id": "rtmdet_det_small",
+                            "categories": ["cat", "dog"],
+                            "emit_mode": "annotate",
+                        },
+                    },
+                    {
+                        "id": "track",
+                        "operator": "vision.track",
+                        "config": {
+                            "tracker_id": "simple_iou_kalman",
+                            "close_after_seconds": 5.0,
+                        },
+                    },
                     {"id": "map", "operator": "camera.camera_mapping", "config": {}},
                     {"id": "throttle", "operator": "core.throttle", "config": {"interval_seconds": 8.0}},
-                    {"id": "segment", "operator": "camera.object_segmentation", "config": {"padding_ratio": 0.12}},
+                    {"id": "segment", "operator": "camera.object_crop", "config": {"padding_ratio": 0.12}},
                     {
                         "id": "store",
                         "operator": "core.store_images",
@@ -1506,7 +1532,8 @@ class CamerasExtension(BaseExtension):
                 ]
                 edges = [
                     {"from": {"node": "source", "port": "out"}, "to": {"node": "motion", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "motion", "port": "out"}, "to": {"node": "track", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "motion", "port": "out"}, "to": {"node": "detect", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
                     {"from": {"node": "track", "port": "out"}, "to": {"node": "map", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
                     {"from": {"node": "map", "port": "out"}, "to": {"node": "throttle", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
                     {"from": {"node": "throttle", "port": "out"}, "to": {"node": "segment", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
@@ -1522,14 +1549,23 @@ class CamerasExtension(BaseExtension):
                 nodes = [
                     *base_nodes,
                     {
-                        "id": "track",
-                        "operator": "vision.object_tracking_yolo",
+                        "id": "detect",
+                        "operator": "vision.detect",
                         "config": {
+                            "model_id": "rtmdet_det_small",
                             "categories": ["car", "motorcycle", "bicycle"],
-                            "close_after_seconds": 8.0,
                             "confidence_threshold": 0.55,
-                            "default_interval_seconds": 0.25,
                             "inference_interval_seconds": 0.7,
+                            "emit_mode": "annotate",
+                        },
+                    },
+                    {
+                        "id": "track",
+                        "operator": "vision.track",
+                        "config": {
+                            "close_after_seconds": 8.0,
+                            "default_interval_seconds": 0.25,
+                            "tracker_id": "simple_iou_kalman",
                             "pause_when_gate_closed": True,
                             "max_paused_seconds": 900.0,
                         },
@@ -1558,7 +1594,7 @@ class CamerasExtension(BaseExtension):
                         },
                     },
                     {"id": "throttle", "operator": "core.velocity_throttle", "config": {"moving_interval_seconds": 2.5, "stopped_interval_seconds": 120.0}},
-                    {"id": "segment", "operator": "camera.object_segmentation", "config": {"padding_ratio": 0.16}},
+                    {"id": "segment", "operator": "camera.object_crop", "config": {"padding_ratio": 0.16}},
                     {
                         "id": "store",
                         "operator": "core.store_images",
@@ -1578,7 +1614,8 @@ class CamerasExtension(BaseExtension):
                 ]
                 edges = [
                     {"from": {"node": "source", "port": "out"}, "to": {"node": "motion", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "motion", "port": "out"}, "to": {"node": "track", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "motion", "port": "out"}, "to": {"node": "detect", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
+                    {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
                     {"from": {"node": "track", "port": "out"}, "to": {"node": "map", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
                     {"from": {"node": "map", "port": "out"}, "to": {"node": "area", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
                     {"from": {"node": "area", "port": "out"}, "to": {"node": "velocity", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},

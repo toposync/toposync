@@ -29,8 +29,8 @@ O runtime trafega **Packets** (eventos) entre operadores. Um Packet carrega:
 
 - **`stream_id`**: identifica um fluxo lógico (ex.: uma câmera, ou um objeto trackeado).
 - **`payload["event_id"]`**: identifica um **evento lógico** dentro do fluxo (opcional).
-  - Em tracking (`vision.object_tracking_yolo`), é preenchido e fica estável durante `open→update→close` (um por objeto).
-  - Em detecção pontual (`vision.object_detection_yolo`), fica **nulo** por design (cada detecção vira um evento “fechado” e não deve “virar tracking”).
+  - Em tracking (`vision.track`), é preenchido e fica estável durante `open→update→close` (um por objeto).
+  - Em detecção anotada (`vision.detect`), fica **nulo** por design. Lifecycle e identidade temporal pertencem a `vision.track`.
   - Operadores stateful que fazem sentido “por objeto” (ex.: `camera.velocity_estimation`, `camera.best_frame_selector`, `core.throttle`, `core.debounce`, `core.fps_reducer`) usam `event_id` quando existe e fazem fallback para `stream_id` quando não existe.
 - **`lifecycle`**: `open | update | close`
   - `open`: início de um stream/evento (ex.: “pessoa detectada”)
@@ -79,7 +79,7 @@ Para manter previsibilidade sob carga (e evitar “update sem open” ou “stre
 
 ### Split (2 pessoas simultâneas)
 
-Operadores como `vision.object_tracking_yolo` **dividem o stream**: de um `stream_id` da câmera surgem múltiplos `stream_id` (um por objeto). Isso permite:
+Operadores como `vision.track` **dividem o stream**: de um `stream_id` da câmera surgem múltiplos `stream_id` (um por objeto). Isso permite:
 - manter estado por objeto (debounce/throttle/best-frame) sem “misturar pessoas”
 - backpressure/drop com previsibilidade (por stream) em etapas posteriores
 
@@ -115,7 +115,7 @@ O runtime usa dois modos de fila, dependendo do ponto do grafo:
 
 ### Regras práticas (realtime)
 
-- **Frames brutos / entrada do YOLO**: `maxsize=1` + `latest_only`
+- **Frames brutos / entrada de visão**: `maxsize=1` + `latest_only`
   - mantém baixa latência e evita backlog infinito.
 - **Depois de split por objeto** (`split_stream`): evite `maxsize=1 latest_only`
   - senão você perde updates de alguns objetos sob carga.
@@ -165,11 +165,11 @@ Implementação: `src/toposync/runtime/pipelines/compiler.py`.
 
 ---
 
-## 5) Sharing de computação (YOLO 1x) na prática
+## 5) Sharing de computação (visão 1x) na prática
 
 ### Por que funciona
 
-Nós “pesados” (ex.: YOLO) têm `share_strategy="by_signature"`. Se dois pipelines finais têm o **mesmo subgrafo** (mesmo operador+config+upstream), o compilador gera a mesma assinatura e o runtime pode executar **uma única instância** alimentando múltiplos consumidores.
+Nós “pesados” (ex.: `vision.detect` / `vision.track` / `vision.segment_instances`) têm `share_strategy="by_signature"`. Se dois pipelines finais têm o **mesmo subgrafo** (mesmo operador+config+upstream), o compilador gera a mesma assinatura e o runtime pode executar **uma única instância** alimentando múltiplos consumidores.
 
 ### Como é executado localmente
 
@@ -185,9 +185,9 @@ Implementação:
 
 Observação importante: o sharing é **node-level**.
 
-- Um nó `shareable` (ex.: YOLO) é executado **1x** e sua saída é tratada como um **broadcast interno**: cada consumidor downstream recebe **seu próprio canal bounded** com seu `maxsize/drop_policy`.
+- Um nó `shareable` (ex.: `vision.track`) é executado **1x** e sua saída é tratada como um **broadcast interno**: cada consumidor downstream recebe **seu próprio canal bounded** com seu `maxsize/drop_policy`.
 - Diferenças de canal downstream **não impedem** que um nó pesado seja compartilhado.
-- O que não pode ser compartilhado é um nó `shareable` cuja **entrada** teria políticas de canal diferentes (porque um nó tem um único input buffer). Nesse caso, o bundle **isola o nó downstream** (uma instância por pipeline) e mantém o upstream (ex.: YOLO) compartilhado.
+- O que não pode ser compartilhado é um nó `shareable` cuja **entrada** teria políticas de canal diferentes (porque um nó tem um único input buffer). Nesse caso, o bundle **isola o nó downstream** (uma instância por pipeline) e mantém o upstream compartilhado.
 - “Edge-level unify” é uma otimização interna apenas para conexões **entre nós já compartilhados** (onde as políticas de canal necessariamente coincidem).
 
 ---
@@ -280,8 +280,8 @@ Distribuído:
 
 Extensão `com.toposync.cameras`:
 - `camera.source`, `camera.motion_gate`
-- `vision.object_tracking_yolo`, `vision.object_detection_yolo`
-- `camera.object_segmentation`, `camera.image_resize`
+- `vision.track`, `vision.detect`, `vision.segment_instances`
+- `camera.object_crop`, `camera.image_resize`
 - `camera.camera_mapping`, `camera.area_restriction`, `camera.velocity_estimation`
 - `camera.best_frame_selector`
 
@@ -326,38 +326,83 @@ Implementação: `src/toposync/runtime/pipelines/operators_gates.py` + `extensio
 
 Implementação: `extensions/cameras/src/toposync_ext_cameras/pipelines/operators.py` (`MotionGateRuntime`).
 
-### `vision.object_tracking_yolo` (split por objeto)
+### `vision.track` (split por objeto)
 
-Emite um stream por objeto (`obj:...`) com lifecycle.
+Consome `payload["vision"]["detections"]` anotado por `vision.detect` e emite um stream por objeto (`obj:...`) com lifecycle.
 
 Payload adicionado/normalizado (campos principais):
 - `tracking_id` (sempre preenchido; pode ser sintético)
 - `tracker_track_id` (id nativo do tracker; pode ser `None`)
+- `camera_id` (sempre presente no track; futuro multi-câmera)
 - `correlation_id` (uuid por track)
 - `object_category_label`, `object_confidence`, `object_bbox01`
 - `source_stream_id` (stream original)
 - `detected_object` (objeto completo)
+- `payload["vision"]["tracks"]` em `emit_mode="annotate"`
+- opcionalmente: `world_anchor`, `appearance_embedding_artifact_name`, `keypoints`
 
 Config defaults importantes:
-- `confidence_threshold=0.4`, `iou_threshold=0.6`
+- `tracker_id="simple_iou_kalman"`
 - `default_interval_seconds=0.2` (evita updates sem limite)
 - `close_after_seconds=4.0` (evita “flicker” sob oclusões/drops)
 
-Observação: se o tracker não fornecer `tracking_id`, o runtime usa matching por IoU + ids sintéticos para manter continuidade.
+Trackers first-party iniciais:
+- `simple_iou_kalman`
+- `norfair`
 
-Implementação: `extensions/cameras/src/toposync_ext_cameras/pipelines/operators.py`.
+Hooks estruturais já reservados para futuro multi-câmera:
+- todo track sai com `camera_id`
+- `use_world_anchor=true` permite carregar `world_anchor` quando houver `camera.world` upstream
+- `appearance_embedding_artifact_name` pode ser propagado no contrato sem mudar o shape do packet depois
 
-### `vision.object_detection_yolo` (evento pontual)
+Implementação: `extensions/vision/src/toposync_ext_vision/processing/tasks/tracking.py`.
 
-Detecção “sem tracking”:
-- emite `open` e `close` por detecção (stream `det:<source>:<correlation_id>`)
-- suporta throttling por categoria (intervalos)
+### `vision.detect` (annotate-first)
 
-Implementação: `extensions/cameras/src/toposync_ext_cameras/pipelines/operators.py`.
+Detecção task-oriented sem vendor público:
+- anota o packet com `payload["vision"] = {"task": "detection", "model_id", "runtime", "detections": [...]}`.
+- mantém os campos compatíveis já usados no ecossistema downstream:
+  - `object_category_label`, `object_confidence`, `object_bbox01`
+  - `detected_object`, `detected_objects`
+- backend first-party atual: ONNX Runtime, resolvido a partir do `ModelManifest`
+- família first-party inicial: RTMDet (`rtmdet_det_tiny`, `rtmdet_det_small`, `rtmdet_det_medium`)
+- parser RTMDet dedicado: espera saídas `dets + labels` no estilo MMDeploy e reverte o letterbox para bbox em coordenadas do frame de entrada antes de reaplicar crop/warp do pipeline
+- o editor escolhe modelos por tarefa usando o catálogo do processing server selecionado, com badges de recomendação e ocultação de modelos indisponíveis no seletor rápido
+- no fluxo básico, o usuário escolhe só o que faz sentido para a tarefa; detalhes técnicos de runtime/artifacts ficam no modo avançado
+- o usuário pode importar um manifesto customizado no modo avançado; o modelo entra no mesmo catálogo da tarefa, sem criar operador separado
+- não cria lifecycle por objeto; isso continua em `vision.track`.
+
+Implementação: `extensions/vision/src/toposync_ext_vision/processing/tasks/detection.py`.
+
+### `vision.segment_instances` (máscara real)
+
+Segmentação de instâncias task-oriented:
+- anota o packet com `payload["vision"] = {"task": "segmentation", "model_id", "runtime", "segmentations": [...]}`.
+- cada instância inclui `bbox01` + `mask_artifact_name`; `polygon01` é opcional.
+- backend first-party atual: ONNX Runtime.
+- família first-party inicial: RTMDet-Ins (`rtmdet_ins_tiny`, `rtmdet_ins_small`, `rtmdet_ins_medium`).
+- parser RTMDet-Ins dedicado: espera saídas `dets + labels + masks` e reverte o letterbox para bbox/máscara no frame de entrada antes de reaplicar crop/warp do pipeline.
+- quando `attach_mask_artifacts=true`, anexa uma máscara binária por instância e publica a principal como image key semântica `mask`.
+- pode reconciliar as máscaras com detections/tracks já presentes no packet, sem mexer no lifecycle do objeto.
+- o editor usa o mesmo fluxo task-based do `vision.detect`: shortlist recomendada, badges, detalhes avançados e importação de manifesto customizado.
+
+Implementação: `extensions/vision/src/toposync_ext_vision/processing/tasks/segmentation.py`.
+
+### `vision.pose_estimate` (skeleton, ainda não lançado)
+
+Reserva a interface pública task-based para pose sem expor vendor/framework:
+- registra `payload["vision"] = {"task": "pose", "model_id", "runtime", "poses": [...]}`.
+- define o contrato `PoseObject` com `bbox01`, `keypoints`, `tracking_id` e `metadata`.
+- consome hints opcionais de `payload["vision"]["detections"]` e `payload["vision"]["tracks"]`, para que o backend futuro consiga ligar keypoints ao tracking sem quebrar a arquitetura.
+- o backend first-party ainda não está habilitado; nesta fase o operador existe como scaffold de contrato/runtime/registry.
+
+Implementação: `extensions/vision/src/toposync_ext_vision/processing/tasks/pose.py`.
 
 ### Pós-processamento e artefatos
 
-- `camera.object_segmentation`: recorte por bbox (gera artifact, default `segmented`)
+- `camera.object_crop`: recorte por bbox (gera artifact, default `segmented`); não é segmentação
+- downstream pode continuar escolhendo entre bbox crop, máscara de instância e, no futuro, pose/keypoints, sem conflitar semanticamente com `camera.object_crop`
+- manifests de visão também podem declarar `capabilities` opcionais, por exemplo `reid`, para preparar catálogos futuros sem trocar o schema do registry
 - `camera.image_resize`: redimensiona artifacts em memória (reduce payload/storage)
 - `camera.best_frame_selector`: buffer bounded por track para escolher melhor frame (default `best_frame`)
 

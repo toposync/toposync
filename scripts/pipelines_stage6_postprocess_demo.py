@@ -102,7 +102,7 @@ def build_graph(args: argparse.Namespace) -> dict[str, Any]:
             {"id": "source", "operator": "demo.sequence_source", "config": {"stream_id": "camera:stage6"}},
             {
                 "id": "segment",
-                "operator": "camera.object_segmentation",
+                "operator": "camera.object_crop",
                 "config": {
                     "input_artifact_names": ["face", "frame_original"],
                     "output_artifact_name": "segmented",

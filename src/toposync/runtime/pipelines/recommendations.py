@@ -156,7 +156,7 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
         available_artifacts_out[node_id] = upstream_artifacts
 
     # Tracking defaults: too-aggressive closing and unthrottled update emission cause flicker under drops.
-    for tracking_node_id in _node_ids_by_operator("vision.object_tracking_yolo"):
+    for tracking_node_id in _node_ids_by_operator("vision.track"):
         cfg = _resolve_config(tracking_node_id)
         try:
             close_after = float(cfg.get("close_after_seconds") or 0.0)
@@ -168,7 +168,7 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
                     severity="info",
                     code="tracking_close_after_aggressive",
                     node_id=tracking_node_id,
-                    operator_id="vision.object_tracking_yolo",
+                    operator_id="vision.track",
                     message=(
                         "Object tracking closes streams quickly when a detection is briefly lost "
                         f"(close_after_seconds={close_after:g}). This can look 'flickery' under frame drops/occlusions."
@@ -189,7 +189,7 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
                         severity="info",
                         code="tracking_unbounded_update_rate",
                         node_id=tracking_node_id,
-                        operator_id="vision.object_tracking_yolo",
+                        operator_id="vision.track",
                         message=(
                             "Object tracking is configured to emit updates at input frame-rate "
                             "(default_interval_seconds=0), which can overload debug/storage/notify and reduce effective FPS."
@@ -299,7 +299,7 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
 
     # Store Images should generally be near the end; downstream operators might need artifact pixel data.
     data_consumers = {
-        "camera.object_segmentation",
+        "camera.object_crop",
         "camera.image_resize",
         "camera.best_frame_selector",
     }
@@ -311,7 +311,7 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
         if not bool(drop_data_after_store):
             continue
         # If Store Images is fed directly by split/track streams without downstream rate control, it can be very heavy.
-        tracking_ids = [nid for nid in _upstream_nodes(store_node_id) if nid in nodes_by_id and nodes_by_id[nid].operator_id == "vision.object_tracking_yolo"]
+        tracking_ids = [nid for nid in _upstream_nodes(store_node_id) if nid in nodes_by_id and nodes_by_id[nid].operator_id == "vision.track"]
         if tracking_ids:
             tracking_idx = min(order_index.get(nid, 0) for nid in tracking_ids)
             store_idx = order_index.get(store_node_id, tracking_idx + 1)
@@ -342,7 +342,7 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
             upstream_node = nodes_by_id.get(upstream_id)
             if upstream_node is None:
                 continue
-            if upstream_node.operator_id == "camera.object_segmentation":
+            if upstream_node.operator_id == "camera.object_crop":
                 seg_cfg = _resolve_config(upstream_id)
                 out_name = str(seg_cfg.get("output_artifact_name") or "segmented").strip() or "segmented"
                 store_mapping["segmented"] = out_name
@@ -373,7 +373,7 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
                 continue
             consumer_cfg = _resolve_config(node_id)
             consumer_inputs: list[str] = []
-            if node.operator_id == "camera.object_segmentation":
+            if node.operator_id == "camera.object_crop":
                 raw = consumer_cfg.get("input_artifact_names")
                 consumer_inputs = [str(item).strip() for item in raw] if isinstance(raw, list) else []
             elif node.operator_id == "camera.image_resize":
@@ -404,7 +404,7 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
                 n = nodes_by_id.get(nid)
                 if n is None:
                     continue
-                if n.operator_id == "camera.object_segmentation":
+                if n.operator_id == "camera.object_crop":
                     seg_cfg = _resolve_config(nid)
                     produced.add(str(seg_cfg.get("output_artifact_name") or "segmented").strip() or "segmented")
                 if n.operator_id == "camera.best_frame_selector":
@@ -443,7 +443,7 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
                 n = nodes_by_id.get(nid)
                 if n is None:
                     continue
-                if n.operator_id == "camera.object_segmentation":
+                if n.operator_id == "camera.object_crop":
                     seg_cfg = _resolve_config(nid)
                     out_name = str(seg_cfg.get("output_artifact_name") or "segmented").strip() or "segmented"
                     upstream_segmentation_outputs.add(out_name)

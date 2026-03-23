@@ -4,7 +4,7 @@ import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../.
 import { i18n } from "../../../../util/i18n";
 
 import type { CameraAreaOption, DragInsertPosition, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../types";
-import { humanizeIdentifier, isRecord, prettyConfigKeyLabel, prettyOperatorName, safeJsonParse } from "../utils";
+import { humanizeIdentifier, isRecord, prettyConfigKeyLabel, prettyOperatorDescription, prettyOperatorName, safeJsonParse } from "../utils";
 
 import { PipelinesNumberInput } from "./PipelinesNumberInput";
 import { OperatorConfigPanel } from "./panels/OperatorConfigPanel";
@@ -15,6 +15,7 @@ type Props = {
   steps: InteractiveStep[];
   operatorsById: Record<string, PipelineOperatorDefinition>;
   pipelineName: string | null;
+  processingServerId: string;
 
   interactiveCameraId: string;
   cameraSelectOptions: SelectOption[];
@@ -47,7 +48,7 @@ function shouldHideScalarGrid(operatorId: string): boolean {
     operatorId === "camera.image_perspective_crop" ||
     operatorId === "camera.image_adjust" ||
     operatorId === "camera.image_resize" ||
-    operatorId === "camera.object_segmentation" ||
+    operatorId === "camera.object_crop" ||
     operatorId === "camera.motion_bgsub_adaptive" ||
     operatorId === "camera.motion_sample_bg" ||
     operatorId === "camera.motion_gate" ||
@@ -64,8 +65,9 @@ function shouldHideScalarGrid(operatorId: string): boolean {
     operatorId === "stream.publish_video" ||
     operatorId === "core.category_gate" ||
     operatorId === "core.filter" ||
-    operatorId === "vision.object_tracking_yolo" ||
-    operatorId === "vision.object_detection_yolo"
+    operatorId === "vision.track" ||
+    operatorId === "vision.detect" ||
+    operatorId === "vision.segment_instances"
   );
 }
 
@@ -85,8 +87,11 @@ function telemetryMetricForConfigField(operatorId: string, configKey: string): s
   if (operator === "camera.motion_bgsub_adaptive" && key === "threshold") return "motion.score";
   if (operator === "camera.motion_sample_bg" && key === "threshold") return "motion.score";
   if (operator === "camera.motion_gate" && key === "threshold") return "motion.score";
-  if ((operator === "vision.object_tracking_yolo" || operator === "vision.object_detection_yolo") && key === "confidence_threshold") {
-    return "yolo.confidence";
+  if (
+    (operator === "vision.track" || operator === "vision.detect" || operator === "vision.segment_instances") &&
+    key === "confidence_threshold"
+  ) {
+    return "vision.confidence";
   }
   return null;
 }
@@ -97,6 +102,7 @@ export function InteractiveStepCard({
   steps,
   operatorsById,
   pipelineName,
+  processingServerId,
   interactiveCameraId,
   cameraSelectOptions,
   cameraSelectOptionById,
@@ -155,6 +161,7 @@ export function InteractiveStepCard({
   }
 
   const operatorName = operator ? prettyOperatorName(operator.id) : prettyOperatorName(step.operatorId);
+  const operatorDescription = operator ? prettyOperatorDescription(operator) : prettyOperatorDescription(step.operatorId);
   const stepIndexLabel = `${index + 1}.`;
   const stepOutputCount = stepOutputsByNodeId ? Number(stepOutputsByNodeId[step.nodeId] ?? 0) : null;
 
@@ -213,7 +220,7 @@ export function InteractiveStepCard({
 
       {!step.collapsed ? (
         <div className="pipelinesStepBody">
-          {operator ? <div className="pipelinesStepDescription">{operator.description || prettyOperatorName(operator.id)}</div> : null}
+          {operator ? <div className="pipelinesStepDescription">{operatorDescription}</div> : null}
           {operatorCaps.has("sink") && index < steps.length - 1 ? (
             <div className="pipelinesStepHint">{t("core.ui.pipelines.editor.step.parallel_sink_hint")}</div>
           ) : null}
@@ -245,6 +252,7 @@ export function InteractiveStepCard({
             steps={steps}
             config={config}
             pipelineName={pipelineName}
+            processingServerId={processingServerId}
             interactiveCameraId={interactiveCameraId}
             cameraSelectOptions={cameraSelectOptions}
             cameraSelectOptionById={cameraSelectOptionById}

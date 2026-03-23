@@ -36,7 +36,7 @@ from ..processing.mapping import (
 )
 
 
-class ObjectSegmentationConfig(BaseModel):
+class ObjectCropConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input_artifact_names: list[str] = Field(default_factory=lambda: ["original", "treated"])
     fallback_to_stream_frame: bool = True
@@ -712,9 +712,9 @@ class BestFrameSelectorConfig(BaseModel):
         return name
 
 
-class ObjectSegmentationRuntime(TransformOperatorRuntime):
+class ObjectCropRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any]) -> None:
-        self._config = ObjectSegmentationConfig.model_validate(config)
+        self._config = ObjectCropConfig.model_validate(config)
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         packet = _ensure_original_artifact(packet)
@@ -3428,20 +3428,20 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         runtime_factory=lambda config, _deps: FrameAttachRuntime(config),
     )
     registry.register_operator(
-        operator_id="camera.object_segmentation",
+        operator_id="camera.object_crop",
         description="Crops object image by bbox and writes artifact.",
-        config_model=ObjectSegmentationConfig,
+        config_model=ObjectCropConfig,
         inputs=[{"name": "in", "required": True}],
         outputs=[{"name": "out"}],
         capabilities=["camera", "vision", "artifact"],
-        defaults=ObjectSegmentationConfig().model_dump(),
+        defaults=ObjectCropConfig().model_dump(),
         requires_payload_keys=["object_bbox01"],
         requires_artifacts=["frame_original"],
         produces_payload_keys=["artifact_contract", "artifact_names"],
         produces_artifacts=["segmented"],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
-        runtime_factory=lambda config, _deps: ObjectSegmentationRuntime(config),
+        runtime_factory=lambda config, _deps: ObjectCropRuntime(config),
     )
     registry.register_operator(
         operator_id="camera.image_crop",

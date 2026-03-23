@@ -138,7 +138,7 @@ def build_graph(*, source_id: str, yolo_id: str, sink_id: str, sink_name: str, a
             },
             {
                 "id": yolo_id,
-                "operator": "vision.object_tracking_yolo",
+                "operator": "vision.track",
                 "config": {
                     "categories": ["person"],
                     "default_interval_seconds": float(args.object_interval_s),
@@ -235,7 +235,7 @@ async def run_demo(args: argparse.Namespace) -> int:
     yolo_nodes = [
         node.node_id
         for node in bundle_runtime.plan.merged_pipeline.nodes
-        if node.operator_id == "vision.object_tracking_yolo"
+        if node.operator_id == "vision.track"
     ]
     runtime_snapshot = snapshot["runtime"]
     bounded_ok = all(

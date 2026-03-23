@@ -3,7 +3,7 @@ import React from "react";
 import type { PipelineOperatorDefinition } from "../../../../util/api";
 import { i18n } from "../../../../util/i18n";
 
-import { prettyOperatorLabel } from "../utils";
+import { prettyOperatorDescription, prettyOperatorLabel } from "../utils";
 
 type Props = {
   presetOperators: PipelineOperatorDefinition[];
@@ -25,7 +25,7 @@ export function InteractiveStepsToolbar({
             className="pillButton"
             type="button"
             onClick={() => onAddStep(operator.id)}
-            title={operator.description || operator.id}
+            title={prettyOperatorDescription(operator)}
           >
             + {prettyOperatorLabel(operator)}
           </button>

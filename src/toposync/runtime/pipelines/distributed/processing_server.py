@@ -10,7 +10,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 from starlette.responses import Response, StreamingResponse
 
@@ -46,6 +46,12 @@ class ProcessingConfig(BaseModel):
 
 class ProcessingAck(BaseModel):
     last_event_id: int = Field(default=0, ge=0)
+
+
+class ProcessingVisionManifestImportRequest(BaseModel):
+    manifest_text: str = ""
+    artifact_path: str = ""
+    replace_existing: bool = False
 
 
 @dataclass(slots=True)
@@ -344,6 +350,23 @@ def create_processing_app() -> FastAPI:
         except Exception:
             pass
         return status
+
+    @app.post("/api/processing/vision/manifests/import")
+    async def import_processing_vision_manifest(body: ProcessingVisionManifestImportRequest) -> dict[str, Any]:
+        try:
+            from toposync_ext_vision.registry import ModelRegistryError, import_custom_manifest
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+
+        try:
+            return import_custom_manifest(
+                manifest_text=body.manifest_text,
+                artifact_path_override=body.artifact_path,
+                data_dir=config_store.paths.data_dir,
+                replace_existing=bool(body.replace_existing),
+            )
+        except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/processing/events/ack")
     async def ack_processing_events(body: ProcessingAck) -> dict[str, Any]:

@@ -234,11 +234,11 @@ E em `metadata`:
 Observacao importante: o contrato formal registrado hoje declara `produces_payload_keys=["motion"]`, mas o runtime tambem depende de `metadata.motion_gate_open` como saida de fato. Isso ja e usado por:
 
 - `core.lifecycle_from_boolean`
-- `vision.object_tracking_yolo` quando `pause_when_gate_closed=true`
+- `vision.track` quando `pause_when_gate_closed=true`
 
 ### 4.3 Payload de YOLO
 
-`vision.object_tracking_yolo` e `vision.object_detection_yolo` produzem:
+`vision.track` e `vision.detect` produzem:
 
 - `event_id`
 - `tracking_id`
@@ -456,13 +456,13 @@ Catalogo real obtido do registry com builtins + cameras + streaming.
 ### 6.3 Movimento e visao
 
 - `camera.motion_gate`: gate de movimento baseado em frame differencing.
-- `vision.object_tracking_yolo`: tracking por objeto, split-stream, lifecycle por objeto em `events`, annotate em `annotate`.
-- `vision.object_detection_yolo`: deteccao por frame, eventos curtos por objeto ou annotate.
+- `vision.track`: tracking por objeto, split-stream, lifecycle por objeto em `events`, annotate em `annotate`.
+- `vision.detect`: deteccao por frame, eventos curtos por objeto ou annotate.
 
 ### 6.4 Pos-processamento e contratos de imagem
 
 - `camera.frame_attach`: anexa frame de outro stream.
-- `camera.object_segmentation`: crop por bbox, gera `segmented`.
+- `camera.object_crop`: crop por bbox, gera `segmented`.
 - `camera.image_crop`: crop retangular, pode atualizar stream frame e anota `frame_crop`.
 - `camera.image_perspective_crop`: warp perspectivo, pode atualizar stream frame e anota `frame_warp`.
 - `camera.image_adjust`: brilho/contraste/gamma/saturacao.
@@ -569,8 +569,8 @@ Essa capability muda a topologia semantica do runtime.
 
 Hoje ela aparece em:
 
-- `vision.object_tracking_yolo`
-- `vision.object_detection_yolo`
+- `vision.track`
+- `vision.detect`
 
 Se um futuro operador de movimento gerar N subeventos simultaneos por frame ou por blob, essa capability pode ser relevante.
 
@@ -581,7 +581,7 @@ O compilador/recommender usa `requires_*` e `produces_*` para alertar a UI.
 Exemplos ja cobertos por testes:
 
 - `camera.motion_gate` alerta se upstream nao garante `frame_original`;
-- `camera.object_segmentation` alerta se upstream nao garante `object_bbox01`.
+- `camera.object_crop` alerta se upstream nao garante `object_bbox01`.
 
 Isso e importante para novos operadores de movimento porque melhora UX e reduz pipelines invalidos.
 
@@ -703,7 +703,7 @@ Esse fluxo mostra claramente a separacao atual entre:
 Metricas principais ja existentes:
 
 - `motion.score`
-- `yolo.confidence`
+- `vision.confidence`
 - `store.image`
 
 Arquivo:
@@ -713,7 +713,7 @@ Arquivo:
 O frontend ja abre histogramas para:
 
 - `camera.motion_gate.threshold` -> `motion.score`
-- `vision.*.confidence_threshold` -> `yolo.confidence`
+- `vision.*.confidence_threshold` -> `vision.confidence`
 
 Snapshots de step:
 

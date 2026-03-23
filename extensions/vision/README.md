@@ -27,6 +27,8 @@ The public surface is task-based, not vendor-based. The first-party detection an
   - `rtmdet_det_tiny`
   - `rtmdet_det_small`
   - `rtmdet_det_medium`
+- Their local ONNX artifacts live under `extensions/vision/models/rtmdet/` and are intentionally not versioned in git.
+- The validated manual provisioning flow is documented in `docs/VISION_MODEL_PROVISIONING.md`.
 - The extension now also ships a built-in RTMDet-Ins segmentation shortlist:
   - `rtmdet_ins_tiny`
   - `rtmdet_ins_small`

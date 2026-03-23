@@ -445,37 +445,105 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.schedule_gate": "Schedule gate",
     "core.ui.pipelines.operator_name.camera.motion_bgsub_adaptive": "Adaptive motion detector",
     "core.ui.pipelines.operator_name.camera.motion_sample_bg": "Sample-based motion detector",
-    "core.ui.pipelines.operator_name.camera.motion_gate": "Motion detection gate",
-    "core.ui.pipelines.operator_name.core.lifecycle_from_boolean": "Lifecycle from boolean",
-    "core.ui.pipelines.operator_name.core.fps_reducer": "FPS reducer",
-    "core.ui.pipelines.operator_name.camera.image_crop": "Crop frame",
+    "core.ui.pipelines.operator_name.camera.motion_gate": "Motion gate",
+    "core.ui.pipelines.operator_name.core.lifecycle_from_boolean": "Lifecycle from state",
+    "core.ui.pipelines.operator_name.core.fps_reducer": "Frame rate reducer",
+    "core.ui.pipelines.operator_name.camera.image_crop": "Frame crop",
     "core.ui.pipelines.operator_name.camera.image_perspective_crop": "Perspective crop",
-    "core.ui.pipelines.operator_name.camera.local_contrast_clahe": "Local contrast (CLAHE)",
-    "core.ui.pipelines.operator_name.camera.unsharp_mask": "Unsharp mask",
-    "core.ui.pipelines.operator_name.camera.denoise_luma": "Denoise (luma)",
+    "core.ui.pipelines.operator_name.camera.local_contrast_clahe": "Local contrast",
+    "core.ui.pipelines.operator_name.camera.unsharp_mask": "Sharpen image",
+    "core.ui.pipelines.operator_name.camera.denoise_luma": "Reduce luma noise",
     "core.ui.pipelines.operator_name.camera.auto_gamma": "Auto gamma",
-    "core.ui.pipelines.operator_name.camera.global_stabilize": "Global stabilize",
+    "core.ui.pipelines.operator_name.camera.global_stabilize": "Frame stabilization",
     "core.ui.pipelines.operator_name.camera.lens_undistort": "Lens undistort",
     "core.ui.pipelines.operator_name.vision.track": "Object tracking",
     "core.ui.pipelines.operator_name.vision.detect": "Object detection",
     "core.ui.pipelines.operator_name.vision.segment_instances": "Instance segmentation",
     "core.ui.pipelines.operator_name.vision.pose_estimate": "Pose estimation",
-    "core.ui.pipelines.operator_name.core.category_gate": "Category gate",
-    "core.ui.pipelines.operator_name.core.filter": "Filter",
+    "core.ui.pipelines.operator_name.core.category_gate": "Category filter",
+    "core.ui.pipelines.operator_name.core.filter": "Rule filter",
     "core.ui.pipelines.operator_name.camera.object_crop": "Object crop",
-    "core.ui.pipelines.operator_name.camera.camera_mapping": "Camera mapping",
+    "core.ui.pipelines.operator_name.camera.camera_mapping": "World mapping",
     "core.ui.pipelines.operator_name.camera.area_restriction": "Area restriction",
-    "core.ui.pipelines.operator_name.camera.velocity_estimation": "Velocity estimation",
-    "core.ui.pipelines.operator_name.camera.best_frame_selector": "Best frame selector",
-    "core.ui.pipelines.operator_name.camera.image_adjust": "Image adjust",
+    "core.ui.pipelines.operator_name.camera.velocity_estimation": "Speed estimation",
+    "core.ui.pipelines.operator_name.camera.best_frame_selector": "Best frame",
+    "core.ui.pipelines.operator_name.camera.image_adjust": "Image adjustment",
     "core.ui.pipelines.operator_name.camera.image_resize": "Resize images",
-    "core.ui.pipelines.operator_name.core.throttle": "Throttle",
-    "core.ui.pipelines.operator_name.core.velocity_throttle": "Velocity-aware throttle",
+    "core.ui.pipelines.operator_name.core.throttle": "Rate limit",
+    "core.ui.pipelines.operator_name.core.velocity_throttle": "Speed-aware rate limit",
     "core.ui.pipelines.operator_name.core.debounce": "Debounce",
-    "core.ui.pipelines.operator_name.core.debug": "Debug",
+    "core.ui.pipelines.operator_name.core.debug": "Debug tap",
     "core.ui.pipelines.operator_name.core.store_images": "Store images",
-    "core.ui.pipelines.operator_name.core.notify": "Notification",
+    "core.ui.pipelines.operator_name.core.notify": "Send notification",
     "core.ui.pipelines.operator_name.stream.publish_video": "Publish video",
+    "core.ui.pipelines.operator_description.camera.source": "Reads frames from the selected camera or RTSP source.",
+    "core.ui.pipelines.operator_description.core.schedule_gate": "Opens the pipeline only during the selected days and times.",
+    "core.ui.pipelines.operator_description.camera.motion_bgsub_adaptive":
+      "Detects movement with adaptive background subtraction and adds a motion score/state to the packet.",
+    "core.ui.pipelines.operator_description.camera.motion_sample_bg":
+      "Detects movement with a sample-based background model and adds a motion score/state to the packet.",
+    "core.ui.pipelines.operator_description.camera.motion_gate":
+      "Lets frames pass while motion is active and for a short hold period after movement stops.",
+    "core.ui.pipelines.operator_description.core.lifecycle_from_boolean":
+      "Converts a true/false field into open, update, and close lifecycle packets.",
+    "core.ui.pipelines.operator_description.core.fps_reducer":
+      "Lowers the frame rate before heavier steps to reduce compute cost.",
+    "core.ui.pipelines.operator_description.camera.image_crop":
+      "Cuts a fixed rectangular region from the frame and can replace the working image for downstream steps.",
+    "core.ui.pipelines.operator_description.camera.image_perspective_crop":
+      "Straightens a four-point region into a frontal crop, useful for doors, parking spots, and panels.",
+    "core.ui.pipelines.operator_description.camera.local_contrast_clahe":
+      "Improves local contrast to reveal details in dark or low-contrast scenes.",
+    "core.ui.pipelines.operator_description.camera.unsharp_mask":
+      "Adds light sharpening to improve edges and readability.",
+    "core.ui.pipelines.operator_description.camera.denoise_luma":
+      "Reduces brightness noise while preserving most edges and color information.",
+    "core.ui.pipelines.operator_description.camera.auto_gamma":
+      "Adjusts scene brightness automatically from measured luminance.",
+    "core.ui.pipelines.operator_description.camera.global_stabilize":
+      "Reduces small frame-to-frame camera shake before downstream analysis.",
+    "core.ui.pipelines.operator_description.camera.lens_undistort":
+      "Corrects lens distortion using the camera calibration matrix and coefficients.",
+    "core.ui.pipelines.operator_description.vision.detect":
+      "Finds supported objects in the frame and annotates the packet for later steps.",
+    "core.ui.pipelines.operator_description.vision.track":
+      "Links detections over time and can either emit per-object events or keep active tracks on the frame.",
+    "core.ui.pipelines.operator_description.vision.segment_instances":
+      "Generates one mask per detected instance and keeps masks and bounding boxes together.",
+    "core.ui.pipelines.operator_description.vision.pose_estimate":
+      "Reserved operator for future pose models. It keeps the contract ready but is not a launch feature yet.",
+    "core.ui.pipelines.operator_description.core.category_gate":
+      "Keeps or blocks packets according to the detected object categories.",
+    "core.ui.pipelines.operator_description.core.filter":
+      "Applies a safe rule to payload and metadata, keeping only packets that match.",
+    "core.ui.pipelines.operator_description.camera.object_crop":
+      "Crops the detected object's bounding box into a separate image artifact.",
+    "core.ui.pipelines.operator_description.camera.camera_mapping":
+      "Converts image position into world coordinates using configured camera control points.",
+    "core.ui.pipelines.operator_description.camera.area_restriction":
+      "Labels or filters packets according to named world areas.",
+    "core.ui.pipelines.operator_description.camera.velocity_estimation":
+      "Estimates object speed from mapped world coordinates over time.",
+    "core.ui.pipelines.operator_description.camera.best_frame_selector":
+      "Keeps the most useful frame for each tracked object, typically the sharpest or most centered one.",
+    "core.ui.pipelines.operator_description.camera.image_adjust":
+      "Adjusts brightness, contrast, saturation, and gamma of the selected image artifact.",
+    "core.ui.pipelines.operator_description.camera.image_resize":
+      "Resizes image artifacts in memory before later steps or storage.",
+    "core.ui.pipelines.operator_description.core.throttle":
+      "Limits how often packets are emitted while preserving lifecycle safety.",
+    "core.ui.pipelines.operator_description.core.velocity_throttle":
+      "Emits more often while the object is moving and less often when it is stopped.",
+    "core.ui.pipelines.operator_description.core.debounce":
+      "Waits for a quiet period before forwarding repeated packets for the same key.",
+    "core.ui.pipelines.operator_description.core.debug":
+      "Shows packet contents for troubleshooting and can save preview images.",
+    "core.ui.pipelines.operator_description.core.store_images":
+      "Stores selected images or artifacts to local file storage.",
+    "core.ui.pipelines.operator_description.core.notify":
+      "Creates lifecycle-aware notifications with templates and optional thumbnails.",
+    "core.ui.pipelines.operator_description.stream.publish_video":
+      "Sends frames from this pipeline to a configured video transmission.",
 
     "core.ui.pipelines.artifacts.frame": "Frame",
     "core.ui.pipelines.artifacts.frame_original": "Full frame",
@@ -1520,40 +1588,108 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.duplicate.duplicating": "Duplicando…",
 
     "core.ui.pipelines.operator_name.camera.source": "Fonte da câmera",
-    "core.ui.pipelines.operator_name.core.schedule_gate": "Gate de horário",
+    "core.ui.pipelines.operator_name.core.schedule_gate": "Janela de horário",
     "core.ui.pipelines.operator_name.camera.motion_bgsub_adaptive": "Detector adaptativo de movimento",
     "core.ui.pipelines.operator_name.camera.motion_sample_bg": "Detector amostral de movimento",
     "core.ui.pipelines.operator_name.camera.motion_gate": "Gate de movimento",
-    "core.ui.pipelines.operator_name.core.lifecycle_from_boolean": "Lifecycle a partir de boolean",
+    "core.ui.pipelines.operator_name.core.lifecycle_from_boolean": "Lifecycle por estado",
     "core.ui.pipelines.operator_name.core.fps_reducer": "Redutor de FPS",
-    "core.ui.pipelines.operator_name.camera.image_crop": "Recortar frame",
+    "core.ui.pipelines.operator_name.camera.image_crop": "Recorte do frame",
     "core.ui.pipelines.operator_name.camera.image_perspective_crop": "Recorte por perspectiva",
-    "core.ui.pipelines.operator_name.camera.local_contrast_clahe": "Contraste local (CLAHE)",
-    "core.ui.pipelines.operator_name.camera.unsharp_mask": "Máscara de nitidez",
+    "core.ui.pipelines.operator_name.camera.local_contrast_clahe": "Contraste local",
+    "core.ui.pipelines.operator_name.camera.unsharp_mask": "Nitidez leve",
     "core.ui.pipelines.operator_name.camera.denoise_luma": "Redução de ruído (luma)",
     "core.ui.pipelines.operator_name.camera.auto_gamma": "Gamma automático",
-    "core.ui.pipelines.operator_name.camera.global_stabilize": "Estabilização global",
+    "core.ui.pipelines.operator_name.camera.global_stabilize": "Estabilização do frame",
     "core.ui.pipelines.operator_name.camera.lens_undistort": "Correção de distorção da lente",
-    "core.ui.pipelines.operator_name.vision.track": "Tracking de objetos",
+    "core.ui.pipelines.operator_name.vision.track": "Rastreamento de objetos",
     "core.ui.pipelines.operator_name.vision.detect": "Detecção de objetos",
     "core.ui.pipelines.operator_name.vision.segment_instances": "Segmentação de instâncias",
     "core.ui.pipelines.operator_name.vision.pose_estimate": "Estimativa de pose",
-    "core.ui.pipelines.operator_name.core.category_gate": "Gate de categorias",
-    "core.ui.pipelines.operator_name.core.filter": "Filtro",
+    "core.ui.pipelines.operator_name.core.category_gate": "Filtro por categoria",
+    "core.ui.pipelines.operator_name.core.filter": "Filtro por regra",
     "core.ui.pipelines.operator_name.camera.object_crop": "Recorte de objeto",
-    "core.ui.pipelines.operator_name.camera.camera_mapping": "Mapeamento de câmera",
+    "core.ui.pipelines.operator_name.camera.camera_mapping": "Mapeamento para o mundo",
     "core.ui.pipelines.operator_name.camera.area_restriction": "Restrição de área",
     "core.ui.pipelines.operator_name.camera.velocity_estimation": "Estimativa de velocidade",
-    "core.ui.pipelines.operator_name.camera.best_frame_selector": "Melhor frame",
+    "core.ui.pipelines.operator_name.camera.best_frame_selector": "Seleção do melhor frame",
     "core.ui.pipelines.operator_name.camera.image_adjust": "Ajuste de imagem",
     "core.ui.pipelines.operator_name.camera.image_resize": "Redimensionar imagens",
-    "core.ui.pipelines.operator_name.core.throttle": "Throttle",
-    "core.ui.pipelines.operator_name.core.velocity_throttle": "Throttle por velocidade",
+    "core.ui.pipelines.operator_name.core.throttle": "Limite de frequência",
+    "core.ui.pipelines.operator_name.core.velocity_throttle": "Limite por velocidade",
     "core.ui.pipelines.operator_name.core.debounce": "Debounce",
-    "core.ui.pipelines.operator_name.core.debug": "Debug",
+    "core.ui.pipelines.operator_name.core.debug": "Inspeção",
     "core.ui.pipelines.operator_name.core.store_images": "Armazenar imagens",
-    "core.ui.pipelines.operator_name.core.notify": "Notificação",
+    "core.ui.pipelines.operator_name.core.notify": "Enviar notificação",
     "core.ui.pipelines.operator_name.stream.publish_video": "Transmitir vídeo",
+    "core.ui.pipelines.operator_description.camera.source": "Lê frames da câmera selecionada ou de uma fonte RTSP.",
+    "core.ui.pipelines.operator_description.core.schedule_gate": "Abre o pipeline apenas nos dias e horários escolhidos.",
+    "core.ui.pipelines.operator_description.camera.motion_bgsub_adaptive":
+      "Detecta movimento com subtração adaptativa de fundo e adiciona score/estado de movimento ao pacote.",
+    "core.ui.pipelines.operator_description.camera.motion_sample_bg":
+      "Detecta movimento com um modelo amostral de fundo e adiciona score/estado de movimento ao pacote.",
+    "core.ui.pipelines.operator_description.camera.motion_gate":
+      "Mantém os frames fluindo enquanto há movimento e por um curto período depois que ele termina.",
+    "core.ui.pipelines.operator_description.core.lifecycle_from_boolean":
+      "Converte um campo verdadeiro/falso em pacotes de lifecycle open, update e close.",
+    "core.ui.pipelines.operator_description.core.fps_reducer":
+      "Reduz o FPS antes de etapas mais pesadas para economizar processamento.",
+    "core.ui.pipelines.operator_description.camera.image_crop":
+      "Recorta uma região retangular fixa do frame e pode substituir a imagem usada pelas próximas etapas.",
+    "core.ui.pipelines.operator_description.camera.image_perspective_crop":
+      "Endireita uma região de quatro pontos em um recorte frontal, útil para portas, vagas e painéis.",
+    "core.ui.pipelines.operator_description.camera.local_contrast_clahe":
+      "Melhora o contraste local para revelar detalhes em cenas escuras ou muito chapadas.",
+    "core.ui.pipelines.operator_description.camera.unsharp_mask":
+      "Aplica uma nitidez leve para melhorar bordas e legibilidade.",
+    "core.ui.pipelines.operator_description.camera.denoise_luma":
+      "Reduz ruído de luminância preservando a maior parte das bordas e das cores.",
+    "core.ui.pipelines.operator_description.camera.auto_gamma":
+      "Ajusta o brilho da cena automaticamente a partir da luminância medida.",
+    "core.ui.pipelines.operator_description.camera.global_stabilize":
+      "Reduz pequenas tremidas entre frames antes da análise das próximas etapas.",
+    "core.ui.pipelines.operator_description.camera.lens_undistort":
+      "Corrige a distorção da lente usando a calibração da câmera.",
+    "core.ui.pipelines.operator_description.vision.detect":
+      "Encontra objetos suportados no frame e anota o pacote para as etapas seguintes.",
+    "core.ui.pipelines.operator_description.vision.track":
+      "Liga detecções ao longo do tempo e pode gerar eventos por objeto ou manter os rastros no frame.",
+    "core.ui.pipelines.operator_description.vision.segment_instances":
+      "Gera uma máscara por instância detectada e mantém máscara e bounding box juntas.",
+    "core.ui.pipelines.operator_description.vision.pose_estimate":
+      "Operador reservado para pose no futuro. O contrato já existe, mas isso ainda não é um recurso lançado.",
+    "core.ui.pipelines.operator_description.core.category_gate":
+      "Mantém ou bloqueia pacotes conforme as categorias de objeto detectadas.",
+    "core.ui.pipelines.operator_description.core.filter":
+      "Aplica uma regra segura sobre payload e metadata, mantendo só os pacotes que combinam.",
+    "core.ui.pipelines.operator_description.camera.object_crop":
+      "Recorta a bounding box do objeto detectado em um artifact de imagem separado.",
+    "core.ui.pipelines.operator_description.camera.camera_mapping":
+      "Converte a posição da imagem em coordenadas do mundo usando pontos de controle da câmera.",
+    "core.ui.pipelines.operator_description.camera.area_restriction":
+      "Rotula ou filtra pacotes de acordo com áreas nomeadas no mundo.",
+    "core.ui.pipelines.operator_description.camera.velocity_estimation":
+      "Estima a velocidade do objeto ao longo do tempo a partir das coordenadas no mundo.",
+    "core.ui.pipelines.operator_description.camera.best_frame_selector":
+      "Guarda o frame mais útil de cada objeto rastreado, normalmente o mais nítido ou melhor enquadrado.",
+    "core.ui.pipelines.operator_description.camera.image_adjust":
+      "Ajusta brilho, contraste, saturação e gamma do artifact de imagem selecionado.",
+    "core.ui.pipelines.operator_description.camera.image_resize":
+      "Redimensiona artifacts de imagem em memória antes das próximas etapas ou do armazenamento.",
+    "core.ui.pipelines.operator_description.core.throttle":
+      "Limita a frequência de emissão dos pacotes preservando o lifecycle com segurança.",
+    "core.ui.pipelines.operator_description.core.velocity_throttle":
+      "Emite com mais frequência enquanto o objeto está se movendo e menos quando está parado.",
+    "core.ui.pipelines.operator_description.core.debounce":
+      "Espera um período de silêncio antes de encaminhar pacotes repetidos da mesma chave.",
+    "core.ui.pipelines.operator_description.core.debug":
+      "Mostra o conteúdo dos pacotes para diagnóstico e pode salvar imagens de prévia.",
+    "core.ui.pipelines.operator_description.core.store_images":
+      "Armazena imagens ou artifacts selecionados no armazenamento local de arquivos.",
+    "core.ui.pipelines.operator_description.core.notify":
+      "Cria notificações com lifecycle, templates e miniatura opcional.",
+    "core.ui.pipelines.operator_description.stream.publish_video":
+      "Envia os frames deste pipeline para uma transmissão de vídeo configurada.",
 
     "core.ui.pipelines.artifacts.frame": "Frame",
     "core.ui.pipelines.artifacts.frame_original": "Frame completo",

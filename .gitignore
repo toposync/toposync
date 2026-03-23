@@ -32,3 +32,6 @@ yolo*.pt
 # Streaming extension engines are downloaded at runtime.
 extensions/streaming/src/toposync_ext_streaming/bin/mediamtx/**/mediamtx*
 extensions/streaming/src/toposync_ext_streaming/bin/ffmpeg/**/ffmpeg*
+
+# Vision model artifacts are provisioned locally and must not be committed.
+extensions/vision/models/

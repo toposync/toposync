@@ -5,7 +5,7 @@
   "runtime": "onnxruntime",
   "artifact_format": "onnx",
   "artifact_path": "../models/rtmdet/rtmdet_det_small.end2end.onnx",
-  "sha256": "",
+  "sha256": "e23a7b1ec6b7d7a2bd82b825e6702b7686af95c711ac1aa59655a3dfddf36c7c",
   "input": {
     "width": 640,
     "height": 640,

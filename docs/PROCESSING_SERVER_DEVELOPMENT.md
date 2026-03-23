@@ -34,6 +34,8 @@ Built-in first-party segmentation manifests currently target RTMDet-Ins:
 
 Their manifests are discovered automatically from `extensions/vision/manifests/`. Custom manifests can still be added with `TOPOSYNC_VISION_MANIFESTS_DIR` or `TOPOSYNC_VISION_MANIFEST_PATHS`, and manifests imported from the UI are stored under `.toposync-data/vision-manifests/` on that processing server.
 
+Official RTMDet detection artifacts are local files under `extensions/vision/models/rtmdet/`. A validated manual provisioning flow for `rtmdet_det_tiny`, `rtmdet_det_small`, and `rtmdet_det_medium` is documented in [VISION_MODEL_PROVISIONING.md](VISION_MODEL_PROVISIONING.md).
+
 `ModelManifest` also accepts optional `capabilities` such as `reid`. This does not enable multi-camera tracking yet; it only reserves the registry/catalog shape so future re-identification models can be added without changing the API.
 
 ## 2) Run the processing server

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import Select, { type MultiValue } from "react-select";
 
 import {
   getPipelineTelemetryImageMarkers,
@@ -11,7 +12,8 @@ import {
   type PipelineTelemetryNumeric,
 } from "../../../util/api";
 import { i18n } from "../../../util/i18n";
-import type { InteractiveStep } from "./types";
+import { pipelinesReactSelectStyles } from "./constants";
+import type { InteractiveStep, SelectOption } from "./types";
 
 type MetricTarget = {
   seriesKey: string;
@@ -24,6 +26,7 @@ type Props = {
   aggregate?: boolean;
   pipelineName: string | null;
   steps: InteractiveStep[];
+  availablePipelines?: SelectOption[];
   externalRefreshNonce?: number;
   resetting?: boolean;
   onReset?: () => void | Promise<void>;
@@ -381,6 +384,7 @@ export function PipelineTelemetryOverviewCard({
   aggregate,
   pipelineName,
   steps,
+  availablePipelines,
   externalRefreshNonce,
   resetting,
   onReset,
@@ -397,6 +401,20 @@ export function PipelineTelemetryOverviewCard({
   const [hoveredClusterKey, setHoveredClusterKey] = useState<string | null>(null);
   const [pinnedClusterKey, setPinnedClusterKey] = useState<string | null>(null);
   const [hoverTimeline, setHoverTimeline] = useState<HoverTimelineState | null>(null);
+  const pipelineOptions = useMemo(() => {
+    const items = Array.isArray(availablePipelines) ? availablePipelines : [];
+    const next = items
+      .map((item) => {
+        const value = String(item?.value || "").trim();
+        const label = String(item?.label || "").trim();
+        if (!value) return null;
+        return { value, label: label || value };
+      })
+      .filter(Boolean) as SelectOption[];
+    next.sort((a, b) => a.label.localeCompare(b.label));
+    return next;
+  }, [availablePipelines]);
+  const [selectedPipelineOptions, setSelectedPipelineOptions] = useState<SelectOption[]>([]);
   const decimalFormatter = useMemo(
     () =>
       new Intl.NumberFormat(locale, {
@@ -467,8 +485,44 @@ export function PipelineTelemetryOverviewCard({
     () => metricTargets.map((item) => item.seriesKey).join("|"),
     [metricTargets],
   );
+  const selectedPipelineNames = useMemo(
+    () => selectedPipelineOptions.map((item) => item.value),
+    [selectedPipelineOptions],
+  );
+  const selectedPipelineNamesKey = useMemo(
+    () => selectedPipelineNames.join("|"),
+    [selectedPipelineNames],
+  );
 
   useEffect(() => {
+    if (!isAggregate) {
+      setSelectedPipelineOptions([]);
+      return;
+    }
+    if (!pipelineOptions.length) {
+      setSelectedPipelineOptions([]);
+      return;
+    }
+    setSelectedPipelineOptions((prev) => {
+      if (prev.length === 0) return pipelineOptions;
+      const optionByValue = new Map(pipelineOptions.map((item) => [item.value, item]));
+      const preserved = prev
+        .map((item) => optionByValue.get(item.value))
+        .filter(Boolean) as SelectOption[];
+      const hadAllSelected = preserved.length === pipelineOptions.length && prev.length === pipelineOptions.length;
+      return hadAllSelected ? pipelineOptions : preserved;
+    });
+  }, [isAggregate, pipelineOptions]);
+
+  useEffect(() => {
+    if (isAggregate && pipelineOptions.length > 0 && selectedPipelineNames.length === 0) {
+      setSeries([]);
+      setMarkers([]);
+      setError(null);
+      setLastUpdatedAt(null);
+      setLoading(false);
+      return;
+    }
     if (!isAggregate && !pipelineName) {
       setSeries([]);
       setMarkers([]);
@@ -489,6 +543,7 @@ export function PipelineTelemetryOverviewCard({
           ? await Promise.all([
               getPipelinesTelemetryNumericOverview({
                 metricIds: metricTargets.map((target) => target.metricId),
+                pipelineNames: selectedPipelineNames,
                 pointLimit,
                 windowSeconds: rangeSeconds,
                 aggregation: "max",
@@ -496,6 +551,7 @@ export function PipelineTelemetryOverviewCard({
               getPipelinesTelemetryImageMarkers({
                 metricId: "store.image",
                 limit: MARKER_FETCH_LIMIT,
+                pipelineNames: selectedPipelineNames,
                 windowSeconds: rangeSeconds,
                 aggregation: "max",
               }),
@@ -550,7 +606,18 @@ export function PipelineTelemetryOverviewCard({
     return () => {
       cancelled = true;
     };
-  }, [externalRefreshNonce, isAggregate, metricTargets, metricTargetsKey, pipelineName, rangeSeconds, refreshNonce]);
+  }, [
+    externalRefreshNonce,
+    isAggregate,
+    metricTargets,
+    metricTargetsKey,
+    pipelineName,
+    pipelineOptions.length,
+    rangeSeconds,
+    refreshNonce,
+    selectedPipelineNames,
+    selectedPipelineNamesKey,
+  ]);
 
   useEffect(() => {
     setPinnedClusterKey(null);
@@ -780,32 +847,50 @@ export function PipelineTelemetryOverviewCard({
                   "Bands show min/max per time bucket. Solid lines show weighted averages.",
                 )}
           </div>
-          <div className="pipelinesModes">
-            <button
-              className={["pillButton", rangeSeconds === RANGE_SHORT_SECONDS ? "isActive" : ""].filter(Boolean).join(" ")}
-              type="button"
-              onClick={() => setRangeSeconds(RANGE_SHORT_SECONDS)}
-            >
-              {t("core.ui.pipelines.telemetry.overview.range.short", {}, "Short")}
-            </button>
-            <button
-              className={["pillButton", rangeSeconds === RANGE_DEFAULT_SECONDS ? "isActive" : ""].filter(Boolean).join(" ")}
-              type="button"
-              onClick={() => setRangeSeconds(RANGE_DEFAULT_SECONDS)}
-            >
-              {t("core.ui.pipelines.telemetry.overview.range.default", {}, "Default")}
-            </button>
-            <button
-              className={["pillButton", rangeSeconds === RANGE_LONG_SECONDS ? "isActive" : ""].filter(Boolean).join(" ")}
-              type="button"
-              onClick={() => setRangeSeconds(RANGE_LONG_SECONDS)}
-            >
-              {t("core.ui.pipelines.telemetry.overview.range.long", {}, "Long")}
-            </button>
-            <button className="pillButton" type="button" onClick={() => setRefreshNonce((value) => value + 1)} disabled={loading}>
-              <i className="fa-solid fa-rotate" aria-hidden="true" />
-              {t("core.actions.refresh")}
-            </button>
+          <div className="pipelinesStepStatsControls">
+            {isAggregate ? (
+              <label className="pipelinesLabel pipelinesTelemetryFilterLabel">
+                <span>{t("core.ui.pipelines.telemetry.aggregate.filter.label", {}, "Pipelines")}</span>
+                <Select<SelectOption, true>
+                  isMulti
+                  closeMenuOnSelect={false}
+                  hideSelectedOptions={false}
+                  styles={pipelinesReactSelectStyles}
+                  options={pipelineOptions}
+                  value={selectedPipelineOptions}
+                  placeholder={t("core.ui.pipelines.telemetry.aggregate.filter.placeholder", {}, "Select pipelines")}
+                  noOptionsMessage={() => t("core.ui.pipelines.telemetry.aggregate.filter.empty", {}, "No pipelines available")}
+                  onChange={(value: MultiValue<SelectOption>) => setSelectedPipelineOptions(value as SelectOption[])}
+                />
+              </label>
+            ) : null}
+            <div className="pipelinesModes">
+              <button
+                className={["pillButton", rangeSeconds === RANGE_SHORT_SECONDS ? "isActive" : ""].filter(Boolean).join(" ")}
+                type="button"
+                onClick={() => setRangeSeconds(RANGE_SHORT_SECONDS)}
+              >
+                {t("core.ui.pipelines.telemetry.overview.range.short", {}, "Short")}
+              </button>
+              <button
+                className={["pillButton", rangeSeconds === RANGE_DEFAULT_SECONDS ? "isActive" : ""].filter(Boolean).join(" ")}
+                type="button"
+                onClick={() => setRangeSeconds(RANGE_DEFAULT_SECONDS)}
+              >
+                {t("core.ui.pipelines.telemetry.overview.range.default", {}, "Default")}
+              </button>
+              <button
+                className={["pillButton", rangeSeconds === RANGE_LONG_SECONDS ? "isActive" : ""].filter(Boolean).join(" ")}
+                type="button"
+                onClick={() => setRangeSeconds(RANGE_LONG_SECONDS)}
+              >
+                {t("core.ui.pipelines.telemetry.overview.range.long", {}, "Long")}
+              </button>
+              <button className="pillButton" type="button" onClick={() => setRefreshNonce((value) => value + 1)} disabled={loading}>
+                <i className="fa-solid fa-rotate" aria-hidden="true" />
+                {t("core.actions.refresh")}
+              </button>
+            </div>
           </div>
         </div>
         {lastUpdatedAt ? (
@@ -822,11 +907,17 @@ export function PipelineTelemetryOverviewCard({
         {error ? <div className="pipelinesInlineError">{t("core.ui.pipelines.telemetry.error", { error }, "Telemetry unavailable: {{error}}")}</div> : null}
         {!loading && !error && series.length === 0 && markerClusters.length === 0 ? (
           <div className="pipelinesHint">
-            {t(
-              "core.ui.pipelines.telemetry.no_data",
-              {},
-              "No telemetry samples yet. Let the pipeline run and reopen this panel.",
-            )}
+            {isAggregate && pipelineOptions.length > 0 && selectedPipelineOptions.length === 0
+              ? t(
+                  "core.ui.pipelines.telemetry.aggregate.filter.none_selected",
+                  {},
+                  "Select at least one pipeline to view aggregate telemetry.",
+                )
+              : t(
+                  "core.ui.pipelines.telemetry.no_data",
+                  {},
+                  "No telemetry samples yet. Let the pipeline run and reopen this panel.",
+                )}
           </div>
         ) : null}
 

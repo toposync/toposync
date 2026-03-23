@@ -499,6 +499,7 @@ class PipelineTelemetryStore:
         metric_id: str,
         *,
         aggregation: str = "max",
+        pipeline_names: list[str] | tuple[str, ...] | set[str] | None = None,
         now_s: float | None = None,
         max_points: int | None = None,
         window_seconds: int | None = None,
@@ -506,6 +507,15 @@ class PipelineTelemetryStore:
         metric = self._sanitize_metric_id(metric_id)
         if not metric:
             return None
+        allowed_pipelines: set[str] | None = None
+        if pipeline_names is not None:
+            allowed_pipelines = set()
+            for item in pipeline_names:
+                normalized = self._sanitize_pipeline_name(item)
+                if normalized:
+                    allowed_pipelines.add(normalized)
+            if not allowed_pipelines:
+                return None
 
         mode = str(aggregation or "").strip().lower() or "max"
         if mode != "max":
@@ -515,6 +525,8 @@ class PipelineTelemetryStore:
         pipeline_names: set[str] = set()
         for (pipeline_name, node_id, metric_name), series in self._numeric_series.items():
             if metric_name != metric:
+                continue
+            if allowed_pipelines is not None and pipeline_name not in allowed_pipelines:
                 continue
             snapshot = series.snapshot(now_s=now_s, max_points=max_points, window_seconds=window_seconds)
             snapshot["pipeline_name"] = pipeline_name
@@ -689,12 +701,22 @@ class PipelineTelemetryStore:
         limit: int = 500,
         metric_id: str | None = None,
         node_id: str | None = None,
+        pipeline_names: list[str] | tuple[str, ...] | set[str] | None = None,
         window_seconds: int | None = None,
         now_s: float | None = None,
     ) -> list[dict[str, Any]]:
         cap = max(1, min(MAX_IMAGE_MARKER_QUERY_LIMIT, int(limit)))
         metric_filter = self._sanitize_metric_id(metric_id or "")
         node_filter = self._sanitize_node_id(node_id or "")
+        allowed_pipelines: set[str] | None = None
+        if pipeline_names is not None:
+            allowed_pipelines = set()
+            for item in pipeline_names:
+                normalized = self._sanitize_pipeline_name(item)
+                if normalized:
+                    allowed_pipelines.add(normalized)
+            if not allowed_pipelines:
+                return []
         min_ts: float | None = None
         if window_seconds is not None:
             try:
@@ -708,6 +730,8 @@ class PipelineTelemetryStore:
 
         out: list[dict[str, Any]] = []
         for pipeline_name, markers in self._image_markers_by_pipeline.items():
+            if allowed_pipelines is not None and pipeline_name not in allowed_pipelines:
+                continue
             for marker in markers:
                 if metric_filter and str(marker.get("metric_id") or "").strip().lower() != metric_filter:
                     continue

@@ -35,7 +35,7 @@ import { PipelineDuplicateModal } from "./pipelines/PipelineDuplicateModal";
 import { PipelineTelemetryFieldModal } from "./pipelines/PipelineTelemetryFieldModal";
 import { PipelineTelemetryOverviewCard } from "./pipelines/PipelineTelemetryOverviewCard";
 import { PipelineTemplateApplyModal } from "./pipelines/PipelineTemplateApplyModal";
-import type { EditorMode, InteractiveStep, TelemetryFieldInspectorRequest } from "./pipelines/types";
+import type { EditorMode, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "./pipelines/types";
 import {
   buildGraphFromInteractiveSteps,
   buildInteractiveStepsFromGraph,
@@ -129,6 +129,17 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
     if (!selectedName) return null;
     return pipelines.find((pipeline) => pipeline.name === selectedName) ?? null;
   }, [pipelines, selectedName]);
+  const aggregatePipelineOptions = useMemo<SelectOption[]>(
+    () =>
+      pipelines
+        .map((pipeline) => {
+          const name = String(pipeline.name || "").trim();
+          if (!name) return null;
+          return { value: name, label: name };
+        })
+        .filter(Boolean) as SelectOption[],
+    [pipelines],
+  );
 
   const interactiveGraph = useMemo(
     () => buildGraphFromInteractiveSteps(interactiveSteps, operatorsById),
@@ -661,7 +672,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                   <div className="cardBody">{error}</div>
                 </div>
               ) : null}
-              <PipelineTelemetryOverviewCard aggregate pipelineName={null} steps={[]} />
+              <PipelineTelemetryOverviewCard aggregate pipelineName={null} steps={[]} availablePipelines={aggregatePipelineOptions} />
             </>
           ) : loading ? (
             <div className="card">

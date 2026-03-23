@@ -1398,6 +1398,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.telemetry.aggregate.scope": "Todos os pipelines",
     "core.ui.pipelines.telemetry.aggregate.subtitle":
       "Mesclada entre todos os pipelines. Cada linha mantém a janela mais forte observada para aquela métrica.",
+    "core.ui.pipelines.telemetry.aggregate.filter.label": "Pipelines",
+    "core.ui.pipelines.telemetry.aggregate.filter.placeholder": "Selecione os pipelines",
+    "core.ui.pipelines.telemetry.aggregate.filter.empty": "Nenhum pipeline disponível",
+    "core.ui.pipelines.telemetry.aggregate.filter.none_selected": "Selecione ao menos um pipeline para ver a telemetria agregada.",
     "core.ui.pipelines.telemetry.overview.range.short": "Curto (2h)",
     "core.ui.pipelines.telemetry.overview.range.default": "Padrão (24h)",
     "core.ui.pipelines.telemetry.overview.range.long": "Longo (3 dias)",

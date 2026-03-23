@@ -260,6 +260,40 @@ def test_pipeline_telemetry_store_filters_image_markers_by_window() -> None:
     assert [str(item.get("rel_path") or "") for item in newest_only] == ["pipelines/test/frame_2.png"]
 
 
+def test_pipeline_telemetry_store_filters_aggregate_queries_by_pipeline_names() -> None:
+    store = PipelineTelemetryStore(
+        metric_specs=[
+            NumericMetricSpec(
+                metric_id="test.score",
+                window_seconds=120,
+                bucket_seconds=10,
+                histogram_min=0.0,
+                histogram_max=1.0,
+                histogram_bins=20,
+                min_sample_interval_s=0.0,
+            )
+        ],
+        max_numeric_series=8,
+        max_image_markers_per_pipeline=16,
+        max_image_pipelines=4,
+    )
+
+    assert store.observe_numeric("pipe_a", "node", "test.score", 0.2, now_s=100.0)
+    assert store.observe_numeric("pipe_b", "node", "test.score", 0.8, now_s=100.0)
+    assert store.record_image_marker("pipe_a", node_id="node", rel_path="pipelines/a/frame.png", metric_id="test.image", ts_s=100.0)
+    assert store.record_image_marker("pipe_b", node_id="node", rel_path="pipelines/b/frame.png", metric_id="test.image", ts_s=100.0)
+
+    filtered_numeric = store.snapshot_numeric_metric_aggregate("test.score", pipeline_names=["pipe_a"], now_s=105.0)
+    assert filtered_numeric is not None
+    assert int(filtered_numeric["pipeline_count"]) == 1
+    assert int(filtered_numeric["series_count"]) == 1
+    assert [float(item["avg"]) for item in filtered_numeric["points"]] == [0.2]
+
+    filtered_markers = store.list_all_image_markers(metric_id="test.image", pipeline_names=["pipe_b"], now_s=105.0)
+    assert [str(item.get("pipeline_name") or "") for item in filtered_markers] == ["pipe_b"]
+    assert [str(item.get("rel_path") or "") for item in filtered_markers] == ["pipelines/b/frame.png"]
+
+
 def test_pipeline_telemetry_store_roundtrips_checkpoint_bytes() -> None:
     store = PipelineTelemetryStore(
         metric_specs=[

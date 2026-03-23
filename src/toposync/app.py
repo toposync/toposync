@@ -1633,6 +1633,7 @@ def create_app() -> FastAPI:
     async def get_pipelines_telemetry_numeric_overview(
         request: Request,
         metric_id: list[str] | None = Query(default=None),
+        pipeline_name: list[str] | None = Query(default=None),
         aggregation: str = Query(default="max"),
         window_seconds: int | None = Query(default=None, ge=1, le=30 * 24 * 60 * 60),
         point_limit: int = Query(default=720, ge=50, le=5000),
@@ -1644,6 +1645,11 @@ def create_app() -> FastAPI:
             normalized = str(item or "").strip().lower()
             if normalized and normalized not in metric_ids:
                 metric_ids.append(normalized)
+        pipeline_names: list[str] = []
+        for item in (pipeline_name or []):
+            normalized = str(item or "").strip()
+            if normalized and normalized not in pipeline_names:
+                pipeline_names.append(normalized)
         telemetry_store = getattr(request.app.state, "pipeline_telemetry_store", None)
         if telemetry_store is None or not metric_ids:
             return PipelinesTelemetryNumericOverviewResponse(aggregation=aggregation_name)
@@ -1653,6 +1659,7 @@ def create_app() -> FastAPI:
             snapshot = telemetry_store.snapshot_numeric_metric_aggregate(
                 metric_name,
                 aggregation=aggregation_name,
+                pipeline_names=(pipeline_names or None),
                 max_points=int(point_limit),
                 window_seconds=(int(window_seconds) if window_seconds is not None else None),
             )
@@ -1674,6 +1681,7 @@ def create_app() -> FastAPI:
         limit: int = Query(default=500, ge=1, le=MAX_IMAGE_MARKER_QUERY_LIMIT),
         node_id: str | None = Query(default=None),
         metric_id: str | None = Query(default=METRIC_STORE_IMAGE),
+        pipeline_name: list[str] | None = Query(default=None),
         window_seconds: int | None = Query(default=None, ge=1, le=7 * 24 * 60 * 60),
     ) -> PipelinesTelemetryImageMarkersResponse:
         _require(request, action="core:pipelines:read")
@@ -1681,11 +1689,17 @@ def create_app() -> FastAPI:
         telemetry_store = getattr(request.app.state, "pipeline_telemetry_store", None)
         if telemetry_store is None:
             return PipelinesTelemetryImageMarkersResponse(aggregation=aggregation_name)
+        pipeline_names: list[str] = []
+        for item in (pipeline_name or []):
+            normalized = str(item or "").strip()
+            if normalized and normalized not in pipeline_names:
+                pipeline_names.append(normalized)
 
         markers = telemetry_store.list_all_image_markers(
             limit=int(limit),
             node_id=(str(node_id or "").strip() or None),
             metric_id=(str(metric_id or "").strip() or None),
+            pipeline_names=(pipeline_names or None),
             window_seconds=(int(window_seconds) if window_seconds is not None else None),
         )
         pipeline_count = len({str(item.get("pipeline_name") or "").strip() for item in markers if str(item.get("pipeline_name") or "").strip()})

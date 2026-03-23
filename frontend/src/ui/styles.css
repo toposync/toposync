@@ -700,10 +700,16 @@ textarea {
 
 .pipelinesStepStatsHeader {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 8px;
   margin-bottom: 10px;
+}
+
+.pipelinesStepStatsControls {
+  display: grid;
+  gap: 8px;
 }
 
 .pipelinesStepStatsGrid {
@@ -1067,6 +1073,11 @@ textarea {
 
 .pipelinesTelemetryLegendSwatch.isImage {
   background: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+.pipelinesTelemetryFilterLabel {
+  min-width: 0;
+  width: 100%;
 }
 
 .pipelinesTelemetryTimelineWrap {

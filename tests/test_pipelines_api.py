@@ -206,6 +206,40 @@ def test_pipeline_publish_video_host_mismatch_returns_400(tmp_path: Path, monkey
         assert "stream.publish_video host mismatch" in str(res.json().get("detail") or "")
 
 
+def test_pipelines_telemetry_aggregate_endpoints_filter_by_pipeline_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        telemetry_store = getattr(client.app.state, "pipeline_telemetry_store", None)
+        assert telemetry_store is not None
+        now_s = time.time()
+
+        telemetry_store.observe_numeric("pipe_a", "node", "motion.score", 0.2, now_s=now_s)
+        telemetry_store.observe_numeric("pipe_b", "node", "motion.score", 0.9, now_s=now_s)
+        telemetry_store.record_image_marker("pipe_a", node_id="node", rel_path="pipelines/a/frame.png", metric_id="store.image", ts_s=now_s)
+        telemetry_store.record_image_marker("pipe_b", node_id="node", rel_path="pipelines/b/frame.png", metric_id="store.image", ts_s=now_s)
+
+        numeric_res = client.get(
+            "/api/pipelines/telemetry/all/numeric",
+            params=[("metric_id", "motion.score"), ("pipeline_name", "pipe_a"), ("window_seconds", "3600")],
+        )
+        assert numeric_res.status_code == 200
+        numeric_body = numeric_res.json()
+        assert numeric_body["aggregation"] == "max"
+        assert len(numeric_body["series"]) == 1
+        assert numeric_body["series"][0]["pipeline_count"] == 1
+        assert numeric_body["series"][0]["series_count"] == 1
+        assert [point["avg"] for point in numeric_body["series"][0]["points"]] == [0.2]
+
+        markers_res = client.get(
+            "/api/pipelines/telemetry/all/image-markers",
+            params=[("metric_id", "store.image"), ("pipeline_name", "pipe_b"), ("window_seconds", "3600")],
+        )
+        assert markers_res.status_code == 200
+        markers_body = markers_res.json()
+        assert markers_body["pipeline_count"] == 1
+        assert [item["pipeline_name"] for item in markers_body["markers"]] == ["pipe_b"]
+        assert [item["rel_path"] for item in markers_body["markers"]] == ["pipelines/b/frame.png"]
+
+
 def test_processing_servers_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         res = client.get("/api/processing-servers")

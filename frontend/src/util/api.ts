@@ -811,7 +811,7 @@ export async function getPipelineTelemetryImageMarkers(
 }
 
 export async function getPipelinesTelemetryNumericOverview(
-  options?: { metricIds?: string[]; pointLimit?: number; windowSeconds?: number; aggregation?: string },
+  options?: { metricIds?: string[]; pipelineNames?: string[]; pointLimit?: number; windowSeconds?: number; aggregation?: string },
 ): Promise<PipelinesTelemetryNumericOverview> {
   const params = new URLSearchParams();
   const aggregation = String(options?.aggregation || "max").trim() || "max";
@@ -820,6 +820,11 @@ export async function getPipelinesTelemetryNumericOverview(
   for (const metricId of metricIds) {
     const value = String(metricId || "").trim();
     if (value) params.append("metric_id", value);
+  }
+  const pipelineNames = Array.isArray(options?.pipelineNames) ? options?.pipelineNames : [];
+  for (const pipelineName of pipelineNames) {
+    const value = String(pipelineName || "").trim();
+    if (value) params.append("pipeline_name", value);
   }
   const pointLimit = Math.max(50, Math.min(5000, Math.floor(options?.pointLimit ?? 720)));
   params.set("point_limit", String(pointLimit));
@@ -832,7 +837,7 @@ export async function getPipelinesTelemetryNumericOverview(
 }
 
 export async function getPipelinesTelemetryImageMarkers(
-  options?: { limit?: number; nodeId?: string; metricId?: string; windowSeconds?: number; aggregation?: string },
+  options?: { limit?: number; nodeId?: string; metricId?: string; pipelineNames?: string[]; windowSeconds?: number; aggregation?: string },
 ): Promise<PipelinesTelemetryImageMarkers> {
   const params = new URLSearchParams();
   const aggregation = String(options?.aggregation || "max").trim() || "max";
@@ -841,6 +846,11 @@ export async function getPipelinesTelemetryImageMarkers(
   params.set("limit", String(limit));
   if (options?.nodeId) params.set("node_id", String(options.nodeId));
   if (options?.metricId) params.set("metric_id", String(options.metricId));
+  const pipelineNames = Array.isArray(options?.pipelineNames) ? options?.pipelineNames : [];
+  for (const pipelineName of pipelineNames) {
+    const value = String(pipelineName || "").trim();
+    if (value) params.append("pipeline_name", value);
+  }
   if (Number.isFinite(options?.windowSeconds) && (options?.windowSeconds ?? 0) > 0) {
     params.set("window_seconds", String(Math.max(1, Math.floor(options?.windowSeconds ?? 0))));
   }

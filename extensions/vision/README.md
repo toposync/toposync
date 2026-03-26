@@ -29,6 +29,14 @@ The public surface is task-based, not vendor-based. The first-party detection an
   - `rtmdet_det_medium`
 - Their local ONNX artifacts live under `extensions/vision/models/rtmdet/` and are intentionally not versioned in git.
 - The validated manual provisioning flow is documented in `docs/VISION_MODEL_PROVISIONING.md`.
+- The UI can also trigger installation for models that have an admin-configured source. Supported source env vars are:
+  - `TOPOSYNC_VISION_MODEL_SOURCE_<MODEL_ID>`
+  - `TOPOSYNC_VISION_MODEL_URL_<MODEL_ID>`
+  - `TOPOSYNC_VISION_MODEL_PATH_<MODEL_ID>`
+  - `TOPOSYNC_VISION_OFFICIAL_MODEL_SOURCE_DIR`
+  - `TOPOSYNC_VISION_OFFICIAL_MODEL_BASE_URL`
+- Remote download sources are only enabled when the manifest explicitly allows redistribution. The current built-in RTMDet/RTMDet-Ins manifests do not, so the safe first-party flow is local admin-managed copy.
+- Product policy: RTMDet and RTMDet-Ins stay on `guided_upload` for now. When TopoSync adds a first-party `Baixar nesta máquina` / auto-download family, the first planned candidate is RF-DETR, subject to a fresh license and redistribution review at that time.
 - The extension now also ships a built-in RTMDet-Ins segmentation shortlist:
   - `rtmdet_ins_tiny`
   - `rtmdet_ins_small`
@@ -38,6 +46,7 @@ The public surface is task-based, not vendor-based. The first-party detection an
 - The processing server status now exposes:
   - heuristic hardware recommendations
   - a per-task model catalog with availability (`available`, `manifest_only`, `incompatible`)
+  - installation capability and progress for models that can be fetched/copied automatically
   - badges such as `recommended`, `fastest`, `best_quality`, `edge`
 - `vision.detect` remains annotate-first in this phase: it writes `payload["vision"]` plus compatibility fields used by downstream camera operators.
 - `vision.track` is now first-party and detector-agnostic: it consumes `payload["vision"]["detections"]`.

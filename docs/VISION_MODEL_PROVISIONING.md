@@ -9,6 +9,11 @@ Provisioned model ids:
 
 The ONNX artifacts are local machine assets. They are intentionally not versioned in git because the manifests already mark redistribution as review-required.
 
+Current product policy:
+- RTMDet / RTMDet-Ins stay on `guided_upload`.
+- TopoSync should not offer generic remote auto-download for these built-in manifests.
+- When a first-party `Baixar nesta máquina` family is introduced officially, the first planned candidate is RF-DETR, after a new license and redistribution review for the exact weights/artifacts we would automate.
+
 ## Where the files must end up
 
 Toposync expects these files:
@@ -131,3 +136,64 @@ For a normal user, the practical flow is:
 3. In `vision.detect`, pick `RTMDet Small` for general use, or `RTMDet Tiny` on weaker machines.
 4. Save the pipeline.
 5. If a pipeline was previously disabled only because the model was missing, re-enable it.
+
+## Enabling one-click install in the UI
+
+TopoSync does not bundle the official ONNX files in git. To let the UI install recommended models automatically, configure a source on the processing server machine.
+
+### Recommended: local mirror directory
+
+If you already exported or downloaded the ONNX files somewhere else on disk, point TopoSync to that directory:
+
+```bash
+export TOPOSYNC_VISION_OFFICIAL_MODEL_SOURCE_DIR=/absolute/path/to/onnx-mirror
+```
+
+The directory must contain files with these names:
+
+```text
+rtmdet_det_tiny.end2end.onnx
+rtmdet_det_small.end2end.onnx
+rtmdet_det_medium.end2end.onnx
+```
+
+### Alternative: HTTP mirror
+
+If you host the ONNX files on an internal server or object storage:
+
+```bash
+export TOPOSYNC_VISION_OFFICIAL_MODEL_BASE_URL=https://models.example.com/toposync/rtmdet
+```
+
+TopoSync will try to fetch:
+- `https://models.example.com/toposync/rtmdet/rtmdet_det_tiny.end2end.onnx`
+- `https://models.example.com/toposync/rtmdet/rtmdet_det_small.end2end.onnx`
+- `https://models.example.com/toposync/rtmdet/rtmdet_det_medium.end2end.onnx`
+
+Important:
+- the generic base-URL download path should only be used when the manifest license explicitly allows redistribution
+- the same restriction applies to per-model remote URL sources
+- the current built-in RTMDet manifests in this repository are marked as `redistribution_allowed: false`
+- for those built-in manifests, prefer `TOPOSYNC_VISION_OFFICIAL_MODEL_SOURCE_DIR` or an explicit per-model local source after your own legal review
+
+### Per-model override
+
+For a single model, you can configure a dedicated source:
+
+```bash
+export TOPOSYNC_VISION_MODEL_SOURCE_RTMDET_DET_SMALL=/absolute/path/to/rtmdet_det_small.end2end.onnx
+```
+
+You can also use:
+- `TOPOSYNC_VISION_MODEL_URL_<MODEL_ID>`
+- `TOPOSYNC_VISION_MODEL_PATH_<MODEL_ID>`
+
+Where `<MODEL_ID>` is uppercased and non-alphanumeric characters become `_`.
+
+### What the user sees
+
+Once a source is configured, the user can:
+1. Open the pipeline editor or Processing Servers screen.
+2. Click `Install` for a recommended model that is not ready yet.
+3. Follow progress (`waiting`, `downloading`/`copying`, `verifying`, `finishing`, `ready`).
+4. Use the model as soon as the install completes.

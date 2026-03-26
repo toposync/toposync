@@ -168,6 +168,43 @@ class ProcessingServerVisionManifestImportResponse(BaseModel):
     replaced: bool = False
 
 
+class ProcessingServerVisionModelInstallRequest(BaseModel):
+    force: bool = False
+
+
+class ProcessingServerVisionModelInstallResponse(BaseModel):
+    job_id: str
+    model_id: str
+    display_name: str = ""
+    artifact_path: str = ""
+    status: str = ""
+    phase: str = ""
+    progress_pct: float = 0.0
+    bytes_completed: int = 0
+    bytes_total: int = 0
+    source_kind: str = ""
+    source_label: str = ""
+    error: str | None = None
+    started_at: float = 0.0
+    updated_at: float = 0.0
+    finished_at: float | None = None
+
+
+class ProcessingServerVisionModelArtifactUploadResponse(BaseModel):
+    model_id: str
+    display_name: str = ""
+    task: str = ""
+    runtime: str = ""
+    artifact_path: str = ""
+    artifact_exists: bool = False
+    expected_filename: str = ""
+    uploaded_filename: str = ""
+    sha256: str = ""
+    size_bytes: int = 0
+    replaced: bool = False
+    custom: bool = False
+
+
 class OperatorsListResponse(BaseModel):
     operators: list[OperatorDefinition]
 
@@ -1107,7 +1144,7 @@ def create_app() -> FastAPI:
         if server.kind != "http":
             status: dict[str, Any] = {"kind": server.kind, "id": server.id}
             try:
-                status.update(await collect_processing_server_diagnostics())
+                status.update(await collect_processing_server_diagnostics(data_dir=str(config_store.paths.data_dir)))
             except Exception:
                 pass
             return ProcessingServerStatusResponse(ok=True, status=status)
@@ -1182,6 +1219,132 @@ def create_app() -> FastAPI:
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         finally:
+            try:
+                await transport.close()
+            except Exception:
+                pass
+
+    @app.post(
+        "/api/processing-servers/{server_id}/vision/models/{model_id}/install",
+        response_model=ProcessingServerVisionModelInstallResponse,
+    )
+    async def install_processing_server_vision_model(
+        request: Request,
+        server_id: str,
+        model_id: str,
+        body: ProcessingServerVisionModelInstallRequest,
+    ) -> ProcessingServerVisionModelInstallResponse:
+        _require(request, action="core:processing_servers:write")
+        config_store: ConfigStore = request.app.state.config_store
+        sid = str(server_id or "").strip().lower()
+        servers = await config_store.list_processing_servers()
+        server = next((item for item in servers if item.id == sid), None)
+        if server is None:
+            raise HTTPException(status_code=404, detail="Unknown processing server")
+
+        if server.kind != "http":
+            services = getattr(request.app.state, "services", None)
+            if services is None:
+                raise HTTPException(status_code=500, detail="Service registry unavailable")
+            try:
+                result = await services.call(
+                    "vision.model_install.start",
+                    model_id=model_id,
+                    force=bool(body.force),
+                    data_dir=config_store.paths.data_dir,
+                )
+            except KeyError as exc:
+                raise HTTPException(status_code=500, detail=f"Vision install service unavailable: {exc}") from exc
+            except (RuntimeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return ProcessingServerVisionModelInstallResponse.model_validate(result)
+
+        try:
+            transport = HttpProcessingTransport(
+                base_url=server.url,
+                username=getattr(server, "username", ""),
+                password=getattr(server, "password", ""),
+                timeout_s=20.0,
+            )
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            result = await transport.install_vision_model(model_id=model_id, payload=body.model_dump(mode="json"))
+            return ProcessingServerVisionModelInstallResponse.model_validate(result)
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            try:
+                await transport.close()
+            except Exception:
+                pass
+
+    @app.post(
+        "/api/processing-servers/{server_id}/vision/models/{model_id}/artifact",
+        response_model=ProcessingServerVisionModelArtifactUploadResponse,
+    )
+    async def upload_processing_server_vision_model_artifact(
+        request: Request,
+        server_id: str,
+        model_id: str,
+        file: UploadFile = File(...),
+    ) -> ProcessingServerVisionModelArtifactUploadResponse:
+        _require(request, action="core:processing_servers:write")
+        config_store: ConfigStore = request.app.state.config_store
+        sid = str(server_id or "").strip().lower()
+        servers = await config_store.list_processing_servers()
+        server = next((item for item in servers if item.id == sid), None)
+        if server is None:
+            raise HTTPException(status_code=404, detail="Unknown processing server")
+
+        if server.kind != "http":
+            try:
+                from toposync_ext_vision.registry.artifact_upload import upload_model_artifact
+                from toposync_ext_vision.registry.manifests import ModelRegistryError
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            try:
+                result = await asyncio.to_thread(
+                    upload_model_artifact,
+                    model_id=model_id,
+                    stream=file.file,
+                    filename=file.filename or "",
+                    data_dir=config_store.paths.data_dir,
+                )
+            except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            finally:
+                await file.close()
+            return ProcessingServerVisionModelArtifactUploadResponse.model_validate(result)
+
+        try:
+            transport = HttpProcessingTransport(
+                base_url=server.url,
+                username=getattr(server, "username", ""),
+                password=getattr(server, "password", ""),
+                timeout_s=120.0,
+            )
+        except ProcessingTransportError as exc:
+            await file.close()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            file_bytes = await file.read()
+            result = await transport.upload_vision_model_artifact(
+                model_id=model_id,
+                filename=file.filename or f"{model_id}.onnx",
+                content_type=file.content_type or "application/octet-stream",
+                content=file_bytes,
+            )
+            return ProcessingServerVisionModelArtifactUploadResponse.model_validate(result)
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            try:
+                await file.close()
+            except Exception:
+                pass
             try:
                 await transport.close()
             except Exception:

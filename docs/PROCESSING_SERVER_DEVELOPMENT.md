@@ -36,6 +36,17 @@ Their manifests are discovered automatically from `extensions/vision/manifests/`
 
 Official RTMDet detection artifacts are local files under `extensions/vision/models/rtmdet/`. A validated manual provisioning flow for `rtmdet_det_tiny`, `rtmdet_det_small`, and `rtmdet_det_medium` is documented in [VISION_MODEL_PROVISIONING.md](VISION_MODEL_PROVISIONING.md).
 
+If you want the UI to offer one-click install for recommended models, configure one of these source mechanisms on the processing server:
+- `TOPOSYNC_VISION_MODEL_SOURCE_<MODEL_ID>`: absolute file path or HTTP/HTTPS URL for one specific model
+- `TOPOSYNC_VISION_MODEL_URL_<MODEL_ID>`: HTTP/HTTPS URL for one specific model
+- `TOPOSYNC_VISION_MODEL_PATH_<MODEL_ID>`: absolute file path for one specific model
+- `TOPOSYNC_VISION_OFFICIAL_MODEL_SOURCE_DIR`: local directory that already contains the official ONNX files
+- `TOPOSYNC_VISION_OFFICIAL_MODEL_BASE_URL`: base URL that exposes the official ONNX files by filename
+
+When one of those sources is configured and the manifest has a checksum, the pipeline editor and processing server screen can start the install and show progress.
+For legal safety, remote download sources are only enabled when the manifest says redistribution is allowed. The current built-in RTMDet manifests are intentionally marked as review-required for redistribution, so the supported default path is local copy from an admin-managed directory.
+Product direction: keep RTMDet / RTMDet-Ins on `guided_upload`. The first family planned for future official `Baixar nesta máquina` / `auto_download` support is RF-DETR, pending a fresh review of the exact weights/artifacts chosen for distribution.
+
 `ModelManifest` also accepts optional `capabilities` such as `reid`. This does not enable multi-camera tracking yet; it only reserves the registry/catalog shape so future re-identification models can be added without changing the API.
 
 ## 2) Run the processing server
@@ -60,6 +71,7 @@ The status payload now includes:
 - ONNX Runtime availability and execution providers
 - registered/installed vision model manifests
 - per-task model catalogs with availability/compatibility for the current machine
+- install capability and active/recent install jobs for models with automatic sources configured
 - model capabilities declared by each manifest
 - RTMDet detection shortlist
 - RTMDet-Ins segmentation shortlist

@@ -40,6 +40,12 @@
     "commercial_use_status": "review_required",
     "official_build_allowed": false
   },
+  "acquisition": {
+    "mode": "guided_upload",
+    "artifact_source": "checkpoint_export_required",
+    "guide_url": "https://github.com/open-mmlab/mmdetection/blob/main/configs/rtmdet/README.md",
+    "export_guide_url": "https://mmdeploy.readthedocs.io/en/latest/01-how-to-build/build_from_docker.html"
+  },
   "hardware_profiles": {
     "cpu": true,
     "cuda": true,

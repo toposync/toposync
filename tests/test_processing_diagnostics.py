@@ -95,6 +95,11 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     assert isinstance(detection_items, list)
     assert any(item.get("availability") in {"available", "manifest_only", "incompatible"} for item in detection_items)
     assert any(isinstance(item.get("capabilities"), list) for item in detection_items)
+    assert any(item.get("acquisition_mode") in {"guided_upload", "auto_download"} for item in detection_items)
+    assert any(isinstance(item.get("acquisition"), dict) for item in detection_items)
+    assert any("install_supported" in item for item in detection_items)
+    assert any("install_reason" in item for item in detection_items)
     assert vision["task_catalogs"]["pose"].get("items") == []
+    assert isinstance(vision["install_jobs"], list)
     assert isinstance(vision["last_benchmark"], dict)
     assert vision["last_benchmark"]["model_id"] == "constant.detector"

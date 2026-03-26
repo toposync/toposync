@@ -10,7 +10,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from starlette.responses import Response, StreamingResponse
 
@@ -52,6 +52,10 @@ class ProcessingVisionManifestImportRequest(BaseModel):
     manifest_text: str = ""
     artifact_path: str = ""
     replace_existing: bool = False
+
+
+class ProcessingVisionModelInstallRequest(BaseModel):
+    force: bool = False
 
 
 @dataclass(slots=True)
@@ -346,7 +350,7 @@ def create_processing_app() -> FastAPI:
     async def get_processing_status() -> dict[str, Any]:
         status = runtime.status()
         try:
-            status.update(await collect_processing_server_diagnostics())
+            status.update(await collect_processing_server_diagnostics(data_dir=str(config_store.paths.data_dir)))
         except Exception:
             pass
         return status
@@ -367,6 +371,49 @@ def create_processing_app() -> FastAPI:
             )
         except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/processing/vision/models/{model_id}/install")
+    async def install_processing_vision_model(
+        model_id: str,
+        body: ProcessingVisionModelInstallRequest,
+    ) -> dict[str, Any]:
+        try:
+            result = await services.call(
+                "vision.model_install.start",
+                model_id=model_id,
+                force=bool(body.force),
+                data_dir=config_store.paths.data_dir,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=500, detail=f"Vision install service unavailable: {exc}") from exc
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return dict(result or {})
+
+    @app.post("/api/processing/vision/models/{model_id}/artifact")
+    async def upload_processing_vision_model_artifact(
+        model_id: str,
+        file: UploadFile = File(...),
+    ) -> dict[str, Any]:
+        try:
+            from toposync_ext_vision.registry.artifact_upload import upload_model_artifact
+            from toposync_ext_vision.registry.manifests import ModelRegistryError
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+
+        try:
+            result = await asyncio.to_thread(
+                upload_model_artifact,
+                model_id=model_id,
+                stream=file.file,
+                filename=file.filename or "",
+                data_dir=config_store.paths.data_dir,
+            )
+        except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            await file.close()
+        return dict(result or {})
 
     @app.post("/api/processing/events/ack")
     async def ack_processing_events(body: ProcessingAck) -> dict[str, Any]:

@@ -116,6 +116,20 @@ class ModelHardwareProfiles(BaseModel):
     mps: bool | None = None
 
 
+class ModelAcquisitionSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["guided_upload", "auto_download"] = "guided_upload"
+    artifact_source: Literal["onnx_ready", "checkpoint_export_required"] = "onnx_ready"
+    guide_url: str = ""
+    export_guide_url: str = ""
+    source_url: str = ""
+
+    @field_validator("guide_url", "export_guide_url", "source_url")
+    @classmethod
+    def _trim_urls(cls, value: str) -> str:
+        return str(value or "").strip()
+
+
 class ModelManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model_id: str
@@ -130,6 +144,7 @@ class ModelManifest(BaseModel):
     classes: ModelClassesSpec = Field(default_factory=ModelClassesSpec)
     license: ModelLicenseSpec = Field(default_factory=ModelLicenseSpec)
     hardware_profiles: ModelHardwareProfiles = Field(default_factory=ModelHardwareProfiles)
+    acquisition: ModelAcquisitionSpec = Field(default_factory=ModelAcquisitionSpec)
     capabilities: list[str] = Field(default_factory=list)
     recommended_profiles: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)

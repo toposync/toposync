@@ -1038,6 +1038,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.filter_frames": "Filter frames (recommended)",
     "core.ui.pipelines.panels.yolo.filter_frames_hint": "When disabled, vision inference still runs but keeps all frames downstream.",
     "core.ui.pipelines.panels.yolo.categories": "Objects of interest",
+    "core.ui.pipelines.panels.yolo.categories_all": "Everything",
+    "core.ui.pipelines.panels.yolo.category.person": "People",
+    "core.ui.pipelines.panels.yolo.category.car": "Cars",
+    "core.ui.pipelines.panels.yolo.category.truck": "Trucks",
+    "core.ui.pipelines.panels.yolo.category.bus": "Buses",
+    "core.ui.pipelines.panels.yolo.category.bicycle": "Bicycles",
+    "core.ui.pipelines.panels.yolo.category.motorcycle": "Motorcycles",
+    "core.ui.pipelines.panels.yolo.category.dog": "Dogs",
+    "core.ui.pipelines.panels.yolo.category.cat": "Cats",
     "core.ui.pipelines.panels.yolo.categories_placeholder": "Everything the model supports",
     "core.ui.pipelines.panels.yolo.categories_hint":
       "Leave empty to detect everything the selected model knows how to find.",
@@ -1056,12 +1065,12 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Recommendations below come from processing server '{{serverId}}'.",
     "core.ui.pipelines.panels.yolo.model_select_placeholder": "Choose a model",
     "core.ui.pipelines.panels.yolo.model_availability.available": "Available on this machine",
-    "core.ui.pipelines.panels.yolo.model_availability.manifest_only": "Manifest imported, artifact missing",
+    "core.ui.pipelines.panels.yolo.model_availability.manifest_only": "Needs its model file on this machine",
     "core.ui.pipelines.panels.yolo.model_availability.incompatible": "Unavailable on this machine",
     "core.ui.pipelines.panels.yolo.model_availability_reason.fallback": "Using the built-in shortlist fallback.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.ok": "Ready to run on the selected processing server.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.artifact_missing":
-      "The manifest exists, but the model artifact is missing on that machine.",
+      "The model is known, but its ONNX file has not been installed on that machine yet.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.backend_unavailable":
       "ONNX Runtime is not available on that machine.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.hardware_incompatible":
@@ -1069,6 +1078,118 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.model_availability_reason.runtime_unsupported":
       "This runtime is not supported by the current first-party UI.",
     "core.ui.pipelines.panels.yolo.model_custom_badge": "custom model",
+    "core.ui.pipelines.panels.yolo.model_recovery.install_needed":
+      "{{model}} is selected, but this machine still does not have its model file.",
+    "core.ui.pipelines.panels.yolo.model_recovery.incompatible":
+      "{{model}} is selected, but it is not compatible with processing server '{{serverId}}'.",
+    "core.ui.pipelines.panels.yolo.model_recovery.none_ready":
+      "No ready-to-run models were found on processing server '{{serverId}}'.",
+    "core.ui.pipelines.panels.yolo.model_recovery.recommended_ready":
+      "{{model}} is already ready on this machine and is the fastest way to continue now.",
+    "core.ui.pipelines.panels.yolo.model_recovery.no_ready_action":
+      "Get the model file for this machine or switch to another server before enabling this step.",
+    "core.ui.pipelines.panels.yolo.model_recovery.use_recommended": "Use {{model}}",
+    "core.ui.pipelines.panels.yolo.artifact_modal.open_get": "Get model file",
+    "core.ui.pipelines.panels.yolo.artifact_modal.open_prepare": "Prepare model file",
+    "core.ui.pipelines.panels.yolo.artifact_modal.open_update": "Update model file",
+    "core.ui.pipelines.panels.yolo.artifact_modal.title_get": "Get {{model}}",
+    "core.ui.pipelines.panels.yolo.artifact_modal.title_prepare": "Prepare {{model}}",
+    "core.ui.pipelines.panels.yolo.artifact_modal.title_update": "Update {{model}}",
+    "core.ui.pipelines.panels.yolo.artifact_modal.intro":
+      "Use this flow when the selected machine still does not have the ONNX file for {{model}}.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.intro_checkpoint_export":
+      "The official page for {{model}} gives you a checkpoint file like .pth. This step needs the exported .onnx file, and TopoSync handles the validation and placement after you upload it.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.expected_file": "Expected file: {{file}}",
+    "core.ui.pipelines.panels.yolo.artifact_modal.steps_intro": "Simple path:",
+    "core.ui.pipelines.panels.yolo.artifact_modal.steps_intro_checkpoint_export": "Best path for this model:",
+    "core.ui.pipelines.panels.yolo.artifact_modal.step_find":
+      "1. Open the official model page to confirm the correct model and license notes.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.step_download":
+      "2. Download or export the ONNX file on your computer. Checkpoint files like .pth do not work here.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.step_drop":
+      "3. Drag the file here or choose it manually. TopoSync will verify it and place it correctly.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.step_checkpoint_page":
+      "1. Open the official checkpoint page and download the model checkpoint (.pth).",
+    "core.ui.pipelines.panels.yolo.artifact_modal.step_export_onnx":
+      "2. Follow the export guide to generate the final .onnx file for this model.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.step_upload_exported_onnx":
+      "3. Upload the exported .onnx here. TopoSync verifies it and puts it in the right place automatically.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.open_official_page": "Open official model page",
+    "core.ui.pipelines.panels.yolo.artifact_modal.open_checkpoint_page": "Open checkpoint page",
+    "core.ui.pipelines.panels.yolo.artifact_modal.open_export_guide": "Open export guide",
+    "core.ui.pipelines.panels.yolo.artifact_modal.drop_title": "Drag the .onnx file here or click to choose it",
+    "core.ui.pipelines.panels.yolo.artifact_modal.drop_title_exported_onnx":
+      "Drag the exported .onnx file here or click to choose it",
+    "core.ui.pipelines.panels.yolo.artifact_modal.drop_subtitle":
+      "After you select the file, TopoSync checks whether it matches this model before saving it.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.drop_subtitle_checkpoint_export":
+      "If you only have a .pth checkpoint, use the export guide first. Upload the final .onnx here and TopoSync does the rest on this machine.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_progress": "Sending file… {{progress}}%",
+    "core.ui.pipelines.panels.yolo.artifact_modal.uploading": "Sending…",
+    "core.ui.pipelines.panels.yolo.artifact_modal.apply_add": "Save this model file",
+    "core.ui.pipelines.panels.yolo.artifact_modal.apply_update": "Replace with this file",
+    "core.ui.pipelines.panels.yolo.artifact_modal.close": "Close",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_success_added":
+      "{{model}} is now ready on this machine.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_success_replaced":
+      "{{model}} was updated on this machine.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_error_generic":
+      "Could not validate this file for the selected model.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_error_mismatch":
+      "This file does not match the selected model. Check that you chose the correct ONNX file.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_error_extension":
+      "This step only accepts {{fileType}} files for the selected model.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_error_checkpoint_generic":
+      "You selected a checkpoint file. This step still needs the exported .onnx file. Use the export guide first, then upload the ONNX here.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_error_checkpoint_selected":
+      "You selected a checkpoint file ({{file}}). This step still needs the exported .onnx file. Use the export guide first, then upload the ONNX here.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.recovery_intro": "To unblock this now:",
+    "core.ui.pipelines.panels.yolo.artifact_modal.recovery_file": "1. Get the ONNX file: {{file}}.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.recovery_checkpoint_page":
+      "1. Open the checkpoint page for {{model}} and download the checkpoint file (.pth).",
+    "core.ui.pipelines.panels.yolo.artifact_modal.recovery_export_onnx":
+      "2. Follow the export guide to generate the ONNX file {{file}}.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.recovery_send":
+      "3. Click “Get model file” and drop that ONNX file here, or pick it from your computer.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.recovery_send_prepare":
+      "3. Click “Prepare model file” and upload that ONNX file here after the export step.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.recovery_refresh": "4. Save the file and, if needed, click “Refresh options”.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.advanced_hint":
+      "Advanced: this model expects the ONNX file {{file}}.",
+    "core.ui.pipelines.panels.yolo.install_offer": "Install {{model}} on this machine and keep this step selected.",
+    "core.ui.pipelines.panels.yolo.install_model": "Install {{model}}",
+    "core.ui.pipelines.panels.yolo.installing_model": "Installing…",
+    "core.ui.pipelines.panels.yolo.install_started": "Started installing {{model}} on this machine.",
+    "core.ui.pipelines.panels.yolo.install_progress": "{{model}} • {{phase}} • {{progress}}%",
+    "core.ui.pipelines.panels.yolo.manual_fix_intro": "To unblock this now:",
+    "core.ui.pipelines.panels.yolo.manual_fix_step_file": "1. Get the model file: {{file}}.",
+    "core.ui.pipelines.panels.yolo.manual_fix_step_path":
+      "2. Place that file in this folder on the processing machine: {{path}}.",
+    "core.ui.pipelines.panels.yolo.manual_fix_step_refresh": "3. Come back here and click “Refresh options”.",
+    "core.ui.pipelines.panels.yolo.install_reason.configured_source":
+      "Automatic installation is available for this model on the selected machine.",
+    "core.ui.pipelines.panels.yolo.install_reason.source_not_configured":
+      "Automatic installation is not configured for this model on the selected machine yet.",
+    "core.ui.pipelines.panels.yolo.install_reason.source_missing":
+      "A configured source was found, but the model file is not available there right now.",
+    "core.ui.pipelines.panels.yolo.install_reason.source_invalid":
+      "The configured source for this model is invalid.",
+    "core.ui.pipelines.panels.yolo.install_reason.runtime_unsupported":
+      "Automatic installation is only available for supported ONNX Runtime models.",
+    "core.ui.pipelines.panels.yolo.install_reason.artifact_format_unsupported":
+      "Automatic installation is only available for ONNX artifacts.",
+    "core.ui.pipelines.panels.yolo.install_reason.checksum_missing":
+      "Automatic installation needs a checksum so the downloaded file can be verified safely.",
+    "core.ui.pipelines.panels.yolo.install_reason.license_restricted":
+      "Automatic download is blocked for this model because redistribution is not approved in its current license policy.",
+    "core.ui.pipelines.panels.yolo.install_phase.queued": "waiting",
+    "core.ui.pipelines.panels.yolo.install_phase.downloading": "downloading",
+    "core.ui.pipelines.panels.yolo.install_phase.copying": "copying",
+    "core.ui.pipelines.panels.yolo.install_phase.verifying": "verifying",
+    "core.ui.pipelines.panels.yolo.install_phase.finalizing": "finishing",
+    "core.ui.pipelines.panels.yolo.install_phase.completed": "ready",
+    "core.ui.pipelines.panels.yolo.install_phase.failed": "failed",
+    "core.ui.pipelines.panels.yolo.install_phase.already_ready": "already ready",
     "core.ui.pipelines.panels.yolo.hidden_unavailable_count":
       "{{count}} model(s) are hidden because they are not ready on this machine. Open advanced details to review them.",
     "core.ui.pipelines.panels.yolo.refresh_models": "Refresh options",
@@ -1189,6 +1310,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.processing_servers.vision_recommendations.profile": "profile {{profile}}",
     "core.ui.processing_servers.vision_recommendations.installed": "installed",
     "core.ui.processing_servers.vision_recommendations.manifest_only": "manifest only",
+    "core.ui.processing_servers.vision_recommendations.install": "Install",
+    "core.ui.processing_servers.vision_recommendations.installing": "Installing…",
+    "core.ui.processing_servers.vision_recommendations.install_progress": "{{phase}} • {{progress}}%",
     "core.ui.processing_servers.vision_recommendations.badge.recommended": "recommended",
     "core.ui.processing_servers.vision_recommendations.badge.fastest": "fastest",
     "core.ui.processing_servers.vision_recommendations.badge.best_quality": "best quality",
@@ -1199,6 +1323,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.processing_servers.vision_recommendations.profile_label.cuda_balanced": "CUDA balanced",
     "core.ui.processing_servers.vision_recommendations.profile_label.cuda_quality": "CUDA quality",
     "core.ui.processing_servers.vision_recommendations.profile_label.openvino_balanced": "OpenVINO balanced",
+    "core.ui.pipelines.editor.step.drag_handle": "Reorder step",
 
     "core.ui.processing_server_modal.title_add": "Add processing server",
     "core.ui.processing_server_modal.title_edit": "Edit processing server",
@@ -2246,6 +2371,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.filter_frames": "Filtrar frames (recomendado)",
     "core.ui.pipelines.panels.yolo.filter_frames_hint": "Quando desligado, a inferência de visão ainda roda, mas mantém todos os frames no fluxo.",
     "core.ui.pipelines.panels.yolo.categories": "Objetos de interesse",
+    "core.ui.pipelines.panels.yolo.categories_all": "Tudo",
+    "core.ui.pipelines.panels.yolo.category.person": "Pessoas",
+    "core.ui.pipelines.panels.yolo.category.car": "Carros",
+    "core.ui.pipelines.panels.yolo.category.truck": "Caminhões",
+    "core.ui.pipelines.panels.yolo.category.bus": "Ônibus",
+    "core.ui.pipelines.panels.yolo.category.bicycle": "Bicicletas",
+    "core.ui.pipelines.panels.yolo.category.motorcycle": "Motos",
+    "core.ui.pipelines.panels.yolo.category.dog": "Cachorros",
+    "core.ui.pipelines.panels.yolo.category.cat": "Gatos",
     "core.ui.pipelines.panels.yolo.categories_placeholder": "Tudo o que o modelo suporta",
     "core.ui.pipelines.panels.yolo.categories_hint":
       "Deixe em branco para detectar tudo o que o modelo selecionado sabe encontrar.",
@@ -2264,13 +2398,13 @@ const translationsByLocale: Record<Locale, Translations> = {
       "As recomendações abaixo vêm do servidor de processamento '{{serverId}}'.",
     "core.ui.pipelines.panels.yolo.model_select_placeholder": "Escolha um modelo",
     "core.ui.pipelines.panels.yolo.model_availability.available": "Disponível nesta máquina",
-    "core.ui.pipelines.panels.yolo.model_availability.manifest_only": "Manifesto importado, artifact ausente",
+    "core.ui.pipelines.panels.yolo.model_availability.manifest_only": "Precisa do arquivo do modelo nesta máquina",
     "core.ui.pipelines.panels.yolo.model_availability.incompatible": "Indisponível nesta máquina",
     "core.ui.pipelines.panels.yolo.model_availability_reason.fallback": "Usando o fallback da shortlist embutida.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.ok":
       "Pronto para rodar no servidor de processamento selecionado.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.artifact_missing":
-      "O manifesto existe, mas o artifact do modelo não está presente nessa máquina.",
+      "O modelo é conhecido, mas o arquivo ONNX dele ainda não foi instalado nessa máquina.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.backend_unavailable":
       "O ONNX Runtime não está disponível nessa máquina.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.hardware_incompatible":
@@ -2278,6 +2412,119 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.model_availability_reason.runtime_unsupported":
       "Esse runtime ainda não é suportado pela UI first-party atual.",
     "core.ui.pipelines.panels.yolo.model_custom_badge": "modelo personalizado",
+    "core.ui.pipelines.panels.yolo.model_recovery.install_needed":
+      "{{model}} está selecionado, mas esta máquina ainda não tem o arquivo dele.",
+    "core.ui.pipelines.panels.yolo.model_recovery.incompatible":
+      "{{model}} está selecionado, mas não é compatível com o servidor de processamento '{{serverId}}'.",
+    "core.ui.pipelines.panels.yolo.model_recovery.none_ready":
+      "Nenhum modelo pronto para uso foi encontrado no servidor de processamento '{{serverId}}'.",
+    "core.ui.pipelines.panels.yolo.model_recovery.recommended_ready":
+      "{{model}} já está pronto nessa máquina e é o caminho mais rápido para continuar agora.",
+    "core.ui.pipelines.panels.yolo.model_recovery.no_ready_action":
+      "Consiga o arquivo do modelo para esta máquina ou troque para outro servidor antes de ativar esta etapa.",
+    "core.ui.pipelines.panels.yolo.model_recovery.use_recommended": "Usar {{model}}",
+    "core.ui.pipelines.panels.yolo.artifact_modal.open_get": "Obter arquivo do modelo",
+    "core.ui.pipelines.panels.yolo.artifact_modal.open_prepare": "Preparar arquivo do modelo",
+    "core.ui.pipelines.panels.yolo.artifact_modal.open_update": "Atualizar arquivo do modelo",
+    "core.ui.pipelines.panels.yolo.artifact_modal.title_get": "Obter {{model}}",
+    "core.ui.pipelines.panels.yolo.artifact_modal.title_prepare": "Preparar {{model}}",
+    "core.ui.pipelines.panels.yolo.artifact_modal.title_update": "Atualizar {{model}}",
+    "core.ui.pipelines.panels.yolo.artifact_modal.intro":
+      "Use este fluxo quando a máquina selecionada ainda não tiver o arquivo ONNX de {{model}}.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.intro_checkpoint_export":
+      "A página oficial de {{model}} entrega um arquivo de checkpoint como .pth. Esta etapa precisa do arquivo .onnx exportado, e o TopoSync faz a validação e coloca no lugar certo depois do upload.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.expected_file": "Arquivo esperado: {{file}}",
+    "core.ui.pipelines.panels.yolo.artifact_modal.steps_intro": "Caminho simples:",
+    "core.ui.pipelines.panels.yolo.artifact_modal.steps_intro_checkpoint_export": "Melhor caminho para este modelo:",
+    "core.ui.pipelines.panels.yolo.artifact_modal.step_find":
+      "1. Abra a página oficial do modelo para confirmar qual arquivo correto você precisa e ler as observações de licença.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.step_download":
+      "2. Baixe ou exporte o arquivo ONNX no seu computador. Arquivos de checkpoint como .pth não funcionam aqui.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.step_drop":
+      "3. Arraste o arquivo aqui ou escolha manualmente. O TopoSync verifica e coloca no lugar certo.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.step_checkpoint_page":
+      "1. Abra a página oficial do checkpoint e baixe o checkpoint do modelo (.pth).",
+    "core.ui.pipelines.panels.yolo.artifact_modal.step_export_onnx":
+      "2. Siga o guia de exportação para gerar o arquivo final .onnx deste modelo.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.step_upload_exported_onnx":
+      "3. Envie aqui o .onnx exportado. O TopoSync verifica e coloca automaticamente no lugar certo.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.open_official_page": "Abrir página oficial do modelo",
+    "core.ui.pipelines.panels.yolo.artifact_modal.open_checkpoint_page": "Abrir página do checkpoint",
+    "core.ui.pipelines.panels.yolo.artifact_modal.open_export_guide": "Abrir guia de exportação",
+    "core.ui.pipelines.panels.yolo.artifact_modal.drop_title": "Arraste o arquivo .onnx aqui ou clique para escolher",
+    "core.ui.pipelines.panels.yolo.artifact_modal.drop_title_exported_onnx":
+      "Arraste o arquivo .onnx exportado aqui ou clique para escolher",
+    "core.ui.pipelines.panels.yolo.artifact_modal.drop_subtitle":
+      "Depois que você escolher o arquivo, o TopoSync verifica se ele corresponde a este modelo antes de salvar.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.drop_subtitle_checkpoint_export":
+      "Se você só tem um checkpoint .pth, use primeiro o guia de exportação. Envie aqui o .onnx final e o TopoSync faz o resto nesta máquina.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_progress": "Enviando arquivo… {{progress}}%",
+    "core.ui.pipelines.panels.yolo.artifact_modal.uploading": "Enviando…",
+    "core.ui.pipelines.panels.yolo.artifact_modal.apply_add": "Salvar este arquivo do modelo",
+    "core.ui.pipelines.panels.yolo.artifact_modal.apply_update": "Substituir por este arquivo",
+    "core.ui.pipelines.panels.yolo.artifact_modal.close": "Fechar",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_success_added":
+      "{{model}} agora está pronto nesta máquina.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_success_replaced":
+      "{{model}} foi atualizado nesta máquina.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_error_generic":
+      "Não foi possível validar este arquivo para o modelo selecionado.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_error_mismatch":
+      "Este arquivo não corresponde ao modelo selecionado. Confira se você escolheu o ONNX correto.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_error_extension":
+      "Esta etapa aceita apenas arquivos {{fileType}} para o modelo selecionado.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_error_checkpoint_generic":
+      "Você escolheu um arquivo de checkpoint. Esta etapa ainda precisa do arquivo .onnx exportado. Use primeiro o guia de exportação e depois envie o ONNX aqui.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.upload_error_checkpoint_selected":
+      "Você escolheu um arquivo de checkpoint ({{file}}). Esta etapa ainda precisa do arquivo .onnx exportado. Use primeiro o guia de exportação e depois envie o ONNX aqui.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.recovery_intro": "Para destravar agora:",
+    "core.ui.pipelines.panels.yolo.artifact_modal.recovery_file": "1. Consiga o arquivo ONNX: {{file}}.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.recovery_checkpoint_page":
+      "1. Abra a página do checkpoint de {{model}} e baixe o arquivo do checkpoint (.pth).",
+    "core.ui.pipelines.panels.yolo.artifact_modal.recovery_export_onnx":
+      "2. Siga o guia de exportação para gerar o arquivo ONNX {{file}}.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.recovery_send":
+      "3. Clique em “Obter arquivo do modelo” e solte esse arquivo ONNX aqui, ou escolha no computador.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.recovery_send_prepare":
+      "3. Clique em “Preparar arquivo do modelo” e envie aqui esse arquivo ONNX depois da exportação.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.recovery_refresh":
+      "4. Salve o arquivo e, se precisar, clique em “Atualizar opções”.",
+    "core.ui.pipelines.panels.yolo.artifact_modal.advanced_hint":
+      "Avançado: este modelo espera o arquivo ONNX {{file}}.",
+    "core.ui.pipelines.panels.yolo.install_offer":
+      "Instale {{model}} nesta máquina e mantenha esta etapa configurada com ele.",
+    "core.ui.pipelines.panels.yolo.install_model": "Instalar {{model}}",
+    "core.ui.pipelines.panels.yolo.installing_model": "Instalando…",
+    "core.ui.pipelines.panels.yolo.install_started": "A instalação de {{model}} foi iniciada nesta máquina.",
+    "core.ui.pipelines.panels.yolo.install_progress": "{{model}} • {{phase}} • {{progress}}%",
+    "core.ui.pipelines.panels.yolo.manual_fix_intro": "Para destravar agora:",
+    "core.ui.pipelines.panels.yolo.manual_fix_step_file": "1. Separe o arquivo do modelo: {{file}}.",
+    "core.ui.pipelines.panels.yolo.manual_fix_step_path": "2. Coloque esse arquivo nesta pasta da máquina de processamento: {{path}}.",
+    "core.ui.pipelines.panels.yolo.manual_fix_step_refresh": "3. Volte aqui e clique em “Atualizar opções”.",
+    "core.ui.pipelines.panels.yolo.install_reason.configured_source":
+      "A instalação automática está disponível para este modelo na máquina selecionada.",
+    "core.ui.pipelines.panels.yolo.install_reason.source_not_configured":
+      "A instalação automática ainda não foi configurada para este modelo na máquina selecionada.",
+    "core.ui.pipelines.panels.yolo.install_reason.source_missing":
+      "Existe uma origem configurada, mas o arquivo do modelo não está disponível nela agora.",
+    "core.ui.pipelines.panels.yolo.install_reason.source_invalid":
+      "A origem configurada para este modelo é inválida.",
+    "core.ui.pipelines.panels.yolo.install_reason.runtime_unsupported":
+      "A instalação automática está disponível apenas para modelos compatíveis com ONNX Runtime.",
+    "core.ui.pipelines.panels.yolo.install_reason.artifact_format_unsupported":
+      "A instalação automática está disponível apenas para artefatos ONNX.",
+    "core.ui.pipelines.panels.yolo.install_reason.checksum_missing":
+      "A instalação automática precisa de checksum para verificar com segurança o arquivo baixado.",
+    "core.ui.pipelines.panels.yolo.install_reason.license_restricted":
+      "O download automático está bloqueado para este modelo porque a redistribuição ainda não foi aprovada na política de licença atual.",
+    "core.ui.pipelines.panels.yolo.install_phase.queued": "na fila",
+    "core.ui.pipelines.panels.yolo.install_phase.downloading": "baixando",
+    "core.ui.pipelines.panels.yolo.install_phase.copying": "copiando",
+    "core.ui.pipelines.panels.yolo.install_phase.verifying": "verificando",
+    "core.ui.pipelines.panels.yolo.install_phase.finalizing": "finalizando",
+    "core.ui.pipelines.panels.yolo.install_phase.completed": "pronto",
+    "core.ui.pipelines.panels.yolo.install_phase.failed": "falhou",
+    "core.ui.pipelines.panels.yolo.install_phase.already_ready": "já pronto",
     "core.ui.pipelines.panels.yolo.hidden_unavailable_count":
       "{{count}} modelo(s) foram ocultados porque ainda não estão prontos nesta máquina. Abra os detalhes avançados para revisá-los.",
     "core.ui.pipelines.panels.yolo.refresh_models": "Atualizar opções",
@@ -2399,6 +2646,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.processing_servers.vision_recommendations.profile": "perfil {{profile}}",
     "core.ui.processing_servers.vision_recommendations.installed": "instalado",
     "core.ui.processing_servers.vision_recommendations.manifest_only": "somente manifesto",
+    "core.ui.processing_servers.vision_recommendations.install": "Instalar",
+    "core.ui.processing_servers.vision_recommendations.installing": "Instalando…",
+    "core.ui.processing_servers.vision_recommendations.install_progress": "{{phase}} • {{progress}}%",
     "core.ui.processing_servers.vision_recommendations.badge.recommended": "recomendado",
     "core.ui.processing_servers.vision_recommendations.badge.fastest": "mais rápido",
     "core.ui.processing_servers.vision_recommendations.badge.best_quality": "melhor qualidade",
@@ -2409,6 +2659,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.processing_servers.vision_recommendations.profile_label.cuda_balanced": "CUDA equilibrado",
     "core.ui.processing_servers.vision_recommendations.profile_label.cuda_quality": "CUDA qualidade",
     "core.ui.processing_servers.vision_recommendations.profile_label.openvino_balanced": "OpenVINO equilibrado",
+    "core.ui.pipelines.editor.step.drag_handle": "Reordenar etapa",
 
     "core.ui.processing_server_modal.title_add": "Adicionar servidor de processamento",
     "core.ui.processing_server_modal.title_edit": "Editar servidor de processamento",

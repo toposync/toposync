@@ -1,7 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { ProcessingServer, ProcessingServerStatus } from "../../util/api";
-import { deleteProcessingServer, getProcessingServerStatus, listProcessingServers, putProcessingServer } from "../../util/api";
+import {
+  deleteProcessingServer,
+  getProcessingServerStatus,
+  listProcessingServers,
+  putProcessingServer,
+} from "../../util/api";
 import { i18n } from "../../util/i18n";
 import { ProcessingServerModal } from "../ProcessingServerModal";
 
@@ -88,7 +93,13 @@ function buildDiagnosticsSummary(status: Record<string, unknown> | undefined): s
 
 function readVisionDetectionRecommendation(status: Record<string, unknown> | undefined): {
   profile: string;
-  items: Array<{ modelId: string; displayName: string; badgeIds: string[]; artifactExists: boolean }>;
+  items: Array<{
+    modelId: string;
+    displayName: string;
+    badgeIds: string[];
+    artifactExists: boolean;
+    installJob: { status: string; phase: string; progressPct: number; error: string } | null;
+  }>;
 } | null {
   if (!status || !isRecord(status)) return null;
   const vision = isRecord(status.vision) ? status.vision : null;
@@ -103,9 +114,27 @@ function readVisionDetectionRecommendation(status: Record<string, unknown> | und
         displayName: String(raw.display_name || raw.model_id || "").trim(),
         badgeIds: Array.isArray(raw.badge_ids) ? raw.badge_ids.map((value) => String(value || "").trim()).filter(Boolean) : [],
         artifactExists: !!raw.artifact_exists,
+        installJob: isRecord(raw.install_job)
+          ? {
+              status: String(raw.install_job.status || "").trim(),
+              phase: String(raw.install_job.phase || "").trim(),
+              progressPct: Number(raw.install_job.progress_pct ?? 0),
+              error: String(raw.install_job.error || "").trim(),
+            }
+          : null,
       };
     })
-    .filter((item): item is { modelId: string; displayName: string; badgeIds: string[]; artifactExists: boolean } => !!item && !!item.modelId);
+    .filter(
+      (
+        item,
+      ): item is {
+        modelId: string;
+        displayName: string;
+        badgeIds: string[];
+        artifactExists: boolean;
+        installJob: { status: string; phase: string; progressPct: number; error: string } | null;
+      } => !!item && !!item.modelId,
+    );
   if (!items.length) return null;
   return {
     profile: String(detection?.profile || "").trim(),
@@ -195,6 +224,27 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
       setServerTestingById((prev) => ({ ...prev, [sid]: false }));
     }
   };
+
+  useEffect(() => {
+    const activeIds = Object.entries(serverStatusById)
+      .filter(([, probe]) => {
+        if (!probe?.ok || !isRecord(probe.status)) return false;
+        const recommendation = readVisionDetectionRecommendation(probe.status);
+        if (!recommendation) return false;
+        return recommendation.items.some((item) => {
+          const status = String(item.installJob?.status || "").trim();
+          return ["queued", "downloading", "verifying", "installing"].includes(status);
+        });
+      })
+      .map(([serverId]) => serverId);
+    if (!activeIds.length) return undefined;
+    const timer = window.setInterval(() => {
+      activeIds.forEach((serverId) => {
+        void handleTestServer(serverId);
+      });
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [handleTestServer, serverStatusById]);
 
   return (
     <div className="pipelinesRoot screenRoot">
@@ -289,9 +339,11 @@ export function ProcessingServersScreen({ onClose }: Props): React.ReactElement 
                             : ` • ${t("core.ui.processing_servers.vision_recommendations.manifest_only")}`;
                           return (
                             <div key={item.modelId} className="pipelinesServerMeta pipelinesServerMetaDiag">
-                              {item.displayName}
-                              {suffix}
-                              {installedSuffix}
+                              <div>
+                                {item.displayName}
+                                {suffix}
+                                {installedSuffix}
+                              </div>
                             </div>
                           );
                         })

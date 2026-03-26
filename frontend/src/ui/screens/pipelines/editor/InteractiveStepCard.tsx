@@ -16,6 +16,7 @@ type Props = {
   operatorsById: Record<string, PipelineOperatorDefinition>;
   pipelineName: string | null;
   processingServerId: string;
+  onOpenProcessingServers?: () => void;
 
   interactiveCameraId: string;
   cameraSelectOptions: SelectOption[];
@@ -103,6 +104,7 @@ export function InteractiveStepCard({
   operatorsById,
   pipelineName,
   processingServerId,
+  onOpenProcessingServers,
   interactiveCameraId,
   cameraSelectOptions,
   cameraSelectOptionById,
@@ -168,9 +170,6 @@ export function InteractiveStepCard({
   return (
     <div
       className={rowClass.join(" ")}
-      draggable
-      onDragStart={(event) => onBeginDrag(event, step.uid)}
-      onDragEnd={onEndDrag}
       onDragOver={(event) => onDragOver(event, step.uid)}
       onDrop={(event) => onDrop(event, step.uid)}
     >
@@ -187,6 +186,17 @@ export function InteractiveStepCard({
         </div>
 
         <div className="pipelinesStepHeaderActions">
+          <button
+            className="iconButton"
+            type="button"
+            draggable
+            onDragStart={(event) => onBeginDrag(event, step.uid)}
+            onDragEnd={onEndDrag}
+            title={t("core.ui.pipelines.editor.step.drag_handle", {}, "Reordenar etapa")}
+          >
+            <i className="fa-solid fa-grip-vertical" aria-hidden="true" />
+          </button>
+
           <button
             className="iconButton"
             type="button"
@@ -252,8 +262,9 @@ export function InteractiveStepCard({
             steps={steps}
             config={config}
             pipelineName={pipelineName}
-            processingServerId={processingServerId}
-            interactiveCameraId={interactiveCameraId}
+                processingServerId={processingServerId}
+                onOpenProcessingServers={onOpenProcessingServers}
+                interactiveCameraId={interactiveCameraId}
             cameraSelectOptions={cameraSelectOptions}
             cameraSelectOptionById={cameraSelectOptionById}
             activeCameraContexts={activeCameraContexts}

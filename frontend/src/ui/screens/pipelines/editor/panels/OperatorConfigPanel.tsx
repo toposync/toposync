@@ -42,6 +42,7 @@ type Props = {
   config: Record<string, unknown>;
   pipelineName: string | null;
   processingServerId: string;
+  onOpenProcessingServers?: () => void;
 
   interactiveCameraId: string;
   cameraSelectOptions: SelectOption[];
@@ -62,6 +63,7 @@ export function OperatorConfigPanel({
   config,
   pipelineName,
   processingServerId,
+  onOpenProcessingServers,
   interactiveCameraId,
   cameraSelectOptions,
   cameraSelectOptionById,
@@ -102,6 +104,7 @@ export function OperatorConfigPanel({
         showAdvanced={showAdvanced}
         onUpdateConfig={onUpdateConfig}
         onOpenTelemetryField={onOpenTelemetryField}
+        onOpenProcessingServers={onOpenProcessingServers}
       />
     );
   }

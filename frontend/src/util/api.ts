@@ -242,6 +242,43 @@ export type ProcessingServerVisionManifestImportResponse = {
   replaced: boolean;
 };
 
+export type ProcessingServerVisionModelInstallRequest = {
+  force?: boolean;
+};
+
+export type ProcessingServerVisionModelInstallResponse = {
+  job_id: string;
+  model_id: string;
+  display_name: string;
+  artifact_path: string;
+  status: string;
+  phase: string;
+  progress_pct: number;
+  bytes_completed: number;
+  bytes_total: number;
+  source_kind: string;
+  source_label: string;
+  error?: string | null;
+  started_at: number;
+  updated_at: number;
+  finished_at?: number | null;
+};
+
+export type ProcessingServerVisionModelArtifactUploadResponse = {
+  model_id: string;
+  display_name: string;
+  task: string;
+  runtime: string;
+  artifact_path: string;
+  artifact_exists: boolean;
+  expected_filename: string;
+  uploaded_filename: string;
+  sha256: string;
+  size_bytes: number;
+  replaced: boolean;
+  custom: boolean;
+};
+
 export type CameraSummary = {
   id: string;
   name: string;
@@ -747,6 +784,65 @@ export async function importProcessingServerVisionManifest(
     );
   }
   return res.json();
+}
+
+export async function installProcessingServerVisionModel(
+  serverId: string,
+  modelId: string,
+  payload: ProcessingServerVisionModelInstallRequest = {},
+): Promise<ProcessingServerVisionModelInstallResponse> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/vision/models/${encodeURIComponent(modelId)}/install`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(
+      await _parseHttpError(res, `Failed to install vision model ${modelId} on processing server ${serverId}: ${res.status}`),
+    );
+  }
+  return res.json();
+}
+
+export async function uploadProcessingServerVisionModelArtifact(
+  serverId: string,
+  modelId: string,
+  file: File,
+  options: {
+    onProgress?: (progressPct: number, bytesUploaded: number, bytesTotal: number) => void;
+  } = {},
+): Promise<ProcessingServerVisionModelArtifactUploadResponse> {
+  return await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(
+      "POST",
+      `/api/processing-servers/${encodeURIComponent(serverId)}/vision/models/${encodeURIComponent(modelId)}/artifact`,
+    );
+    xhr.responseType = "json";
+    xhr.upload.onprogress = (event) => {
+      if (!options.onProgress) return;
+      const total = Number(event.total || file.size || 0);
+      const loaded = Number(event.loaded || 0);
+      const progress = total > 0 ? Math.max(0, Math.min(100, (loaded / total) * 100)) : 0;
+      options.onProgress(progress, loaded, total);
+    };
+    xhr.onerror = () => reject(new Error(`Failed to upload vision model artifact for ${modelId}`));
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.response as ProcessingServerVisionModelArtifactUploadResponse);
+        return;
+      }
+      const response = xhr.response;
+      if (response && typeof response === "object" && "detail" in response && typeof response.detail === "string") {
+        reject(new Error(response.detail));
+        return;
+      }
+      reject(new Error(`Failed to upload vision model artifact ${modelId} on processing server ${serverId}: ${xhr.status}`));
+    };
+    const form = new FormData();
+    form.set("file", file, file.name);
+    xhr.send(form);
+  });
 }
 
 export async function listPipelines(): Promise<Pipeline[]> {

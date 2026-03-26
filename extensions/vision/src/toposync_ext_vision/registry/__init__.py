@@ -1,4 +1,5 @@
 from .manifests import (
+    ModelAcquisitionSpec,
     ModelClassesSpec,
     ModelHardwareProfiles,
     ModelInputNormalization,
@@ -20,6 +21,11 @@ from .model_store import (
     parse_manifest_text,
     validate_custom_manifest_payload,
 )
+from .installer import (
+    VisionModelInstallManager,
+    get_default_model_install_manager,
+    install_model_via_default_manager,
+)
 from .recommendations import (
     build_task_model_catalog,
     list_official_detection_shortlist,
@@ -32,6 +38,7 @@ from .recommendations import (
 
 __all__ = [
     "ModelClassesSpec",
+    "ModelAcquisitionSpec",
     "ModelHardwareProfiles",
     "ModelInputNormalization",
     "ModelInputSpec",
@@ -46,7 +53,9 @@ __all__ = [
     "default_custom_manifest_dir",
     "discover_manifest_paths",
     "import_custom_manifest",
+    "install_model_via_default_manager",
     "is_official_model_id",
+    "get_default_model_install_manager",
     "list_official_detection_shortlist",
     "list_official_pose_shortlist",
     "list_official_segmentation_shortlist",
@@ -56,4 +65,5 @@ __all__ = [
     "recommend_pose_models",
     "recommend_segmentation_models",
     "validate_custom_manifest_payload",
+    "VisionModelInstallManager",
 ]

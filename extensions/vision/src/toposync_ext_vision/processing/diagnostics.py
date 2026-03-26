@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..registry import ModelRegistry, build_default_model_registry
+from ..registry import ModelRegistry, build_default_model_registry, get_default_model_install_manager
 from ..registry.recommendations import (
     build_task_model_catalog,
     list_official_detection_shortlist,
@@ -34,8 +34,10 @@ def collect_vision_diagnostics(
     model_registry: ModelRegistry | None = None,
     *,
     system_info: dict[str, Any] | None = None,
+    data_dir: str | None = None,
 ) -> dict[str, Any]:
     registry = model_registry if isinstance(model_registry, ModelRegistry) else build_default_model_registry()
+    install_manager = get_default_model_install_manager(data_dir=data_dir)
     try:
         import onnxruntime as ort  # type: ignore
 
@@ -88,18 +90,21 @@ def collect_vision_diagnostics(
                 system_info=system_info,
                 execution_providers=execution_providers,
                 model_registry=registry,
+                install_manager=install_manager,
             ),
             "segmentation": build_task_model_catalog(
                 task="segmentation",
                 system_info=system_info,
                 execution_providers=execution_providers,
                 model_registry=registry,
+                install_manager=install_manager,
             ),
             "pose": build_task_model_catalog(
                 task="pose",
                 system_info=system_info,
                 execution_providers=execution_providers,
                 model_registry=registry,
+                install_manager=install_manager,
             ),
         },
         "recommendations": {
@@ -107,17 +112,21 @@ def collect_vision_diagnostics(
                 system_info=system_info,
                 execution_providers=execution_providers,
                 model_registry=registry,
+                install_manager=install_manager,
             ),
             "segmentation": recommend_segmentation_models(
                 system_info=system_info,
                 execution_providers=execution_providers,
                 model_registry=registry,
+                install_manager=install_manager,
             ),
             "pose": recommend_pose_models(
                 system_info=system_info,
                 execution_providers=execution_providers,
                 model_registry=registry,
+                install_manager=install_manager,
             ),
         },
+        "install_jobs": install_manager.snapshot_jobs(),
         "last_benchmark": get_last_benchmark(),
     }

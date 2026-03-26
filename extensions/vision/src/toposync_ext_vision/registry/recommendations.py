@@ -7,6 +7,7 @@ from .builtin_data import (
     OFFICIAL_RTMDET_SEGMENTATION_MODEL_IDS,
     OFFICIAL_RTMPOSE_MODEL_IDS,
 )
+from .installer import VisionModelInstallManager
 from .manifests import ModelManifest, ModelRegistry, VisionTask, build_default_model_registry
 from .model_store import is_official_model_id
 
@@ -172,12 +173,30 @@ def _catalog_entry(
     profile: ProfileId,
     execution_providers: list[str] | None,
     recommended_index: int | None,
+    install_manager: VisionModelInstallManager | None,
 ) -> dict[str, Any]:
     availability, availability_reason, compatible_provider_ids = _availability_for_manifest(
         manifest,
         execution_providers=execution_providers,
     )
     official = is_official_model_id(manifest.model_id)
+    install_info = (
+        install_manager.acquisition_info(manifest)
+        if isinstance(install_manager, VisionModelInstallManager)
+        else {
+            "acquisition_mode": str(getattr(getattr(manifest, "acquisition", None), "mode", "guided_upload") or "guided_upload"),
+            "acquisition_supported": False,
+            "acquisition_reason": "guided_upload_ready",
+            "acquisition_source_kind": "",
+            "acquisition_source_label": "",
+            "acquisition_job": None,
+            "install_supported": False,
+            "install_reason": "source_not_configured",
+            "install_source_kind": "",
+            "install_source_label": "",
+            "install_job": None,
+        }
+    )
     return {
         "model_id": manifest.model_id,
         "display_name": manifest.display_name,
@@ -198,6 +217,25 @@ def _catalog_entry(
         "expected_provider_ids": _candidate_provider_ids(manifest),
         "source_kind": "official" if official else "custom",
         "custom": not official,
+        "acquisition_mode": str(install_info.get("acquisition_mode") or "guided_upload").strip(),
+        "acquisition_supported": bool(install_info.get("acquisition_supported")),
+        "acquisition_reason": str(install_info.get("acquisition_reason") or "").strip(),
+        "acquisition_source_kind": str(install_info.get("acquisition_source_kind") or "").strip(),
+        "acquisition_source_label": str(install_info.get("acquisition_source_label") or "").strip(),
+        "acquisition_artifact_source": str(install_info.get("acquisition_artifact_source") or "onnx_ready").strip(),
+        "acquisition_job": install_info.get("acquisition_job"),
+        "acquisition": {
+            "mode": manifest.acquisition.mode,
+            "artifact_source": manifest.acquisition.artifact_source,
+            "guide_url": manifest.acquisition.guide_url,
+            "export_guide_url": manifest.acquisition.export_guide_url,
+            "source_url": manifest.acquisition.source_url,
+        },
+        "install_supported": bool(install_info.get("install_supported")),
+        "install_reason": str(install_info.get("install_reason") or "").strip(),
+        "install_source_kind": str(install_info.get("install_source_kind") or "").strip(),
+        "install_source_label": str(install_info.get("install_source_label") or "").strip(),
+        "install_job": install_info.get("install_job"),
         "input": {
             "width": int(manifest.input.width),
             "height": int(manifest.input.height),
@@ -227,6 +265,7 @@ def build_task_model_catalog(
     system_info: dict[str, Any] | None = None,
     execution_providers: list[str] | None = None,
     model_registry: ModelRegistry | None = None,
+    install_manager: VisionModelInstallManager | None = None,
 ) -> dict[str, Any]:
     registry = _coerce_registry(model_registry)
     profile, reason = _pick_profile(system_info=system_info, execution_providers=execution_providers)
@@ -243,6 +282,7 @@ def build_task_model_catalog(
                 profile=profile,
                 execution_providers=execution_providers,
                 recommended_index=recommended_index,
+                install_manager=install_manager,
             )
         )
 
@@ -332,12 +372,14 @@ def recommend_detection_models(
     system_info: dict[str, Any] | None = None,
     execution_providers: list[str] | None = None,
     model_registry: ModelRegistry | None = None,
+    install_manager: VisionModelInstallManager | None = None,
 ) -> dict[str, Any]:
     catalog = build_task_model_catalog(
         task="detection",
         system_info=system_info,
         execution_providers=execution_providers,
         model_registry=model_registry,
+        install_manager=install_manager,
     )
     return {
         "profile": catalog.get("profile"),
@@ -352,12 +394,14 @@ def recommend_segmentation_models(
     system_info: dict[str, Any] | None = None,
     execution_providers: list[str] | None = None,
     model_registry: ModelRegistry | None = None,
+    install_manager: VisionModelInstallManager | None = None,
 ) -> dict[str, Any]:
     catalog = build_task_model_catalog(
         task="segmentation",
         system_info=system_info,
         execution_providers=execution_providers,
         model_registry=model_registry,
+        install_manager=install_manager,
     )
     return {
         "profile": catalog.get("profile"),
@@ -372,12 +416,14 @@ def recommend_pose_models(
     system_info: dict[str, Any] | None = None,
     execution_providers: list[str] | None = None,
     model_registry: ModelRegistry | None = None,
+    install_manager: VisionModelInstallManager | None = None,
 ) -> dict[str, Any]:
     catalog = build_task_model_catalog(
         task="pose",
         system_info=system_info,
         execution_providers=execution_providers,
         model_registry=model_registry,
+        install_manager=install_manager,
     )
     return {
         "profile": catalog.get("profile"),

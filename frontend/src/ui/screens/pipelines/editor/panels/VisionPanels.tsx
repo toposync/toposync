@@ -1,15 +1,18 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Select, { type MultiValue, type SingleValue } from "react-select";
 
 import type {
   ProcessingServerStatus,
+  ProcessingServerVisionModelArtifactUploadResponse,
   ProcessingServerVisionManifestImportResponse,
 } from "../../../../../util/api";
 import {
   getProcessingServerStatus,
   importProcessingServerVisionManifest,
+  uploadProcessingServerVisionModelArtifact,
 } from "../../../../../util/api";
 import { i18n } from "../../../../../util/i18n";
+import { Modal } from "../../../../Modal";
 import { pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constants";
 import type { SelectOption, TelemetryFieldInspectorRequest } from "../../types";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
@@ -25,11 +28,13 @@ type Props = {
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
   onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
+  onOpenProcessingServers?: () => void;
 };
 
 type VisionModelCatalogItem = {
   modelId: string;
   displayName: string;
+  artifactPath: string;
   availability: "available" | "manifest_only" | "incompatible";
   availabilityReason: string;
   badgeIds: string[];
@@ -37,6 +42,18 @@ type VisionModelCatalogItem = {
   sourceKind: "official" | "custom";
   custom: boolean;
   artifactExists: boolean;
+  acquisitionMode: "guided_upload" | "auto_download";
+  acquisitionSupported: boolean;
+  acquisitionReason: string;
+  acquisitionSourceKind: string;
+  acquisitionSourceLabel: string;
+  acquisitionArtifactSource: "onnx_ready" | "checkpoint_export_required";
+  acquisition: VisionModelAcquisition;
+  installSupported: boolean;
+  installReason: string;
+  installSourceKind: string;
+  installSourceLabel: string;
+  installJob: VisionModelInstallJob | null;
   compatibleProviderIds: string[];
   inputWidth: number;
   inputHeight: number;
@@ -47,6 +64,26 @@ type VisionModelCatalogItem = {
   commercialUseStatus: string;
   resourceTier: string;
   notes: string[];
+};
+
+type VisionModelAcquisition = {
+  mode: "guided_upload" | "auto_download";
+  artifactSource: "onnx_ready" | "checkpoint_export_required";
+  guideUrl: string;
+  exportGuideUrl: string;
+  sourceUrl: string;
+};
+
+type VisionModelInstallJob = {
+  jobId: string;
+  modelId: string;
+  displayName: string;
+  status: string;
+  phase: string;
+  progressPct: number;
+  bytesCompleted: number;
+  bytesTotal: number;
+  error: string;
 };
 
 type VisionTaskCatalog = {
@@ -66,6 +103,24 @@ function isRecord(value: unknown): value is Record<string, any> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function parseInstallJob(raw: unknown): VisionModelInstallJob | null {
+  if (!isRecord(raw)) return null;
+  const jobId = String(raw.job_id || "").trim();
+  const modelId = String(raw.model_id || "").trim();
+  if (!jobId || !modelId) return null;
+  return {
+    jobId,
+    modelId,
+    displayName: String(raw.display_name || raw.model_id || "").trim() || modelId,
+    status: String(raw.status || "").trim(),
+    phase: String(raw.phase || "").trim(),
+    progressPct: Number(raw.progress_pct ?? 0),
+    bytesCompleted: Number(raw.bytes_completed ?? 0),
+    bytesTotal: Number(raw.bytes_total ?? 0),
+    error: String(raw.error || "").trim(),
+  };
+}
+
 function parseCatalogItem(raw: unknown): VisionModelCatalogItem | null {
   if (!isRecord(raw)) return null;
   const modelId = String(raw.model_id || "").trim();
@@ -73,14 +128,21 @@ function parseCatalogItem(raw: unknown): VisionModelCatalogItem | null {
   const input = isRecord(raw.input) ? raw.input : null;
   const classes = isRecord(raw.classes) ? raw.classes : null;
   const license = isRecord(raw.license) ? raw.license : null;
+  const acquisition = isRecord(raw.acquisition) ? raw.acquisition : null;
   const availability = String(raw.availability || "").trim();
   const normalizedAvailability =
     availability === "available" || availability === "manifest_only" || availability === "incompatible"
       ? availability
       : "incompatible";
+  const rawArtifactSource = String(raw.acquisition_artifact_source || acquisition?.artifact_source || "onnx_ready").trim();
+  const artifactSource =
+    rawArtifactSource === "checkpoint_export_required" ? "checkpoint_export_required" : "onnx_ready";
+  const rawMode = String(raw.acquisition_mode || acquisition?.mode || "guided_upload").trim();
+  const mode = rawMode === "auto_download" ? "auto_download" : "guided_upload";
   return {
     modelId,
     displayName: String(raw.display_name || raw.model_id || "").trim() || modelId,
+    artifactPath: String(raw.artifact_path || "").trim(),
     availability: normalizedAvailability,
     availabilityReason: String(raw.availability_reason || "").trim(),
     badgeIds: Array.isArray(raw.badge_ids) ? raw.badge_ids.map((value) => String(value || "").trim()).filter(Boolean) : [],
@@ -88,6 +150,24 @@ function parseCatalogItem(raw: unknown): VisionModelCatalogItem | null {
     sourceKind: String(raw.source_kind || "").trim() === "custom" ? "custom" : "official",
     custom: !!raw.custom,
     artifactExists: !!raw.artifact_exists,
+    acquisitionMode: mode,
+    acquisitionSupported: !!raw.acquisition_supported,
+    acquisitionReason: String(raw.acquisition_reason || "").trim(),
+    acquisitionSourceKind: String(raw.acquisition_source_kind || "").trim(),
+    acquisitionSourceLabel: String(raw.acquisition_source_label || "").trim(),
+    acquisitionArtifactSource: artifactSource,
+    acquisition: {
+      mode,
+      artifactSource,
+      guideUrl: String(acquisition?.guide_url || "").trim(),
+      exportGuideUrl: String(acquisition?.export_guide_url || "").trim(),
+      sourceUrl: String(acquisition?.source_url || "").trim(),
+    },
+    installSupported: !!raw.install_supported,
+    installReason: String(raw.install_reason || "").trim(),
+    installSourceKind: String(raw.install_source_kind || "").trim(),
+    installSourceLabel: String(raw.install_source_label || "").trim(),
+    installJob: parseInstallJob(raw.install_job),
     compatibleProviderIds: Array.isArray(raw.compatible_provider_ids)
       ? raw.compatible_provider_ids.map((value) => String(value || "").trim()).filter(Boolean)
       : [],
@@ -128,9 +208,11 @@ function fallbackCatalogItem(
   options: { custom: boolean },
 ): VisionModelCatalogItem {
   const custom = !!options.custom;
+  const acquisition = defaultAcquisitionForModelId(value);
   return {
     modelId: value,
     displayName: label,
+    artifactPath: "",
     availability: "available",
     availabilityReason: "fallback",
     badgeIds: [],
@@ -138,6 +220,18 @@ function fallbackCatalogItem(
     sourceKind: custom ? "custom" : "official",
     custom,
     artifactExists: true,
+    acquisitionMode: acquisition.mode,
+    acquisitionSupported: acquisition.mode === "guided_upload",
+    acquisitionReason: acquisition.mode === "guided_upload" ? "guided_upload_ready" : "",
+    acquisitionSourceKind: "",
+    acquisitionSourceLabel: "",
+    acquisitionArtifactSource: acquisition.artifactSource,
+    acquisition,
+    installSupported: false,
+    installReason: "",
+    installSourceKind: "",
+    installSourceLabel: "",
+    installJob: null,
     compatibleProviderIds: [],
     inputWidth: 0,
     inputHeight: 0,
@@ -216,6 +310,18 @@ const MODEL_HINT_KEYS: Record<string, string> = {
   rtmdet_ins_medium: "core.ui.pipelines.panels.yolo.model_rtmdet_ins_medium_hint",
 };
 
+const BASIC_CATEGORY_VALUES = ["person", "car", "truck", "bus", "bicycle", "motorcycle", "dog", "cat"];
+const BASIC_CATEGORY_LABEL_KEYS: Record<string, string> = {
+  person: "core.ui.pipelines.panels.yolo.category.person",
+  car: "core.ui.pipelines.panels.yolo.category.car",
+  truck: "core.ui.pipelines.panels.yolo.category.truck",
+  bus: "core.ui.pipelines.panels.yolo.category.bus",
+  bicycle: "core.ui.pipelines.panels.yolo.category.bicycle",
+  motorcycle: "core.ui.pipelines.panels.yolo.category.motorcycle",
+  dog: "core.ui.pipelines.panels.yolo.category.dog",
+  cat: "core.ui.pipelines.panels.yolo.category.cat",
+};
+
 function availabilityTranslationKey(availability: VisionModelCatalogItem["availability"]): string {
   return `core.ui.pipelines.panels.yolo.model_availability.${availability}`;
 }
@@ -232,6 +338,86 @@ function modelHintTranslationKey(modelId: string): string {
   return MODEL_HINT_KEYS[String(modelId || "").trim()] || "";
 }
 
+function formatProgressBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const gb = bytes / (1024 * 1024 * 1024);
+  if (gb >= 1) return `${gb.toFixed(gb >= 10 ? 0 : 1)} GB`;
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1) return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
+  const kb = bytes / 1024;
+  if (kb >= 1) return `${kb.toFixed(kb >= 10 ? 0 : 1)} KB`;
+  return `${bytes.toFixed(0)} B`;
+}
+
+function artifactFileName(artifactPath: string): string {
+  const clean = String(artifactPath || "").trim();
+  if (!clean) return "";
+  const normalized = clean.replaceAll("\\", "/");
+  const parts = normalized.split("/").filter(Boolean);
+  return parts[parts.length - 1] || clean;
+}
+
+function defaultAcquisitionForModelId(modelId: string): VisionModelAcquisition {
+  const clean = String(modelId || "").trim().toLowerCase();
+  if (clean.startsWith("rtmdet_det_") || clean.startsWith("rtmdet_ins_")) {
+    return {
+      mode: "guided_upload",
+      artifactSource: "checkpoint_export_required",
+      guideUrl: "https://github.com/open-mmlab/mmdetection/blob/main/configs/rtmdet/README.md",
+      exportGuideUrl: "https://mmdeploy.readthedocs.io/en/latest/01-how-to-build/build_from_docker.html",
+      sourceUrl: "",
+    };
+  }
+  return {
+    mode: "guided_upload",
+    artifactSource: "onnx_ready",
+    guideUrl: "",
+    exportGuideUrl: "",
+    sourceUrl: "",
+  };
+}
+
+function normalizeArtifactUploadError(
+  error: unknown,
+  t: (key: string, vars?: Record<string, unknown>, fallback?: string) => string,
+  item: VisionModelCatalogItem | null,
+): string {
+  const raw = String((error as any)?.message ?? error ?? "").trim();
+  if (!raw) {
+    return t(
+      "core.ui.pipelines.panels.yolo.artifact_modal.upload_error_generic",
+      { model: item?.displayName || "" },
+      "Could not validate this file for the selected model.",
+    );
+  }
+  const lower = raw.toLowerCase();
+  if (lower.includes("does not match the selected model") || lower.includes("checksum mismatch")) {
+    return t(
+      "core.ui.pipelines.panels.yolo.artifact_modal.upload_error_mismatch",
+      { model: item?.displayName || "" },
+      "This file does not match the selected model. Check that you chose the correct ONNX file.",
+    );
+  }
+  if (lower.includes("checkpoint") && lower.includes("exported .onnx")) {
+    return t(
+      "core.ui.pipelines.panels.yolo.artifact_modal.upload_error_checkpoint_generic",
+      {},
+      "You selected a checkpoint file. This step still needs the exported .onnx file.",
+    );
+  }
+  return raw;
+}
+
+function pickSuggestedAvailableModel(items: VisionModelCatalogItem[]): VisionModelCatalogItem | null {
+  if (!items.length) return null;
+  const preferredBadges = ["recommended", "fastest", "best_quality", "edge"];
+  for (const badgeId of preferredBadges) {
+    const match = items.find((item) => item.badgeIds.includes(badgeId));
+    if (match) return match;
+  }
+  return items[0] ?? null;
+}
+
 export function VisionConfigCard({
   operatorId,
   stepUid,
@@ -241,6 +427,7 @@ export function VisionConfigCard({
   showAdvanced,
   onUpdateConfig,
   onOpenTelemetryField,
+  onOpenProcessingServers,
 }: Props): React.ReactElement {
   const { t } = i18n.useI18n();
   const categoriesRaw = (config as any).categories;
@@ -285,6 +472,18 @@ export function VisionConfigCard({
   const [importLoading, setImportLoading] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<string | null>(null);
+  const [artifactModalItem, setArtifactModalItem] = useState<VisionModelCatalogItem | null>(null);
+  const [artifactModalFile, setArtifactModalFile] = useState<File | null>(null);
+  const [artifactModalDragActive, setArtifactModalDragActive] = useState(false);
+  const [artifactUploadLoading, setArtifactUploadLoading] = useState(false);
+  const [artifactUploadProgressPct, setArtifactUploadProgressPct] = useState(0);
+  const [artifactUploadProgressBytes, setArtifactUploadProgressBytes] = useState<{ uploaded: number; total: number }>({
+    uploaded: 0,
+    total: 0,
+  });
+  const [artifactUploadError, setArtifactUploadError] = useState<string | null>(null);
+  const [artifactUploadSuccess, setArtifactUploadSuccess] = useState<string | null>(null);
+  const artifactFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const reloadCatalog = useCallback(async () => {
     if (isTracking) return;
@@ -319,6 +518,10 @@ export function VisionConfigCard({
       .filter((value) => !known.has(value))
       .map((value) => ({ value, label: value }));
     return [...YOLO_CATEGORY_OPTIONS, ...extras];
+  }, [categories]);
+  const basicCategoryValues = useMemo(() => {
+    const values = [...BASIC_CATEGORY_VALUES, ...categories.filter((value) => !BASIC_CATEGORY_VALUES.includes(value))];
+    return values.slice(0, 12);
   }, [categories]);
 
   const fallbackCatalogItems = useMemo(
@@ -364,11 +567,33 @@ export function VisionConfigCard({
       };
     });
   }, [catalogItems, modelId, showAdvanced, t]);
-
   const unavailableItems = useMemo(
     () => catalogItems.filter((item) => item.availability !== "available" && item.modelId !== modelId),
     [catalogItems, modelId],
   );
+  const availableItems = useMemo(
+    () => catalogItems.filter((item) => item.availability === "available"),
+    [catalogItems],
+  );
+  const suggestedAvailableItem = useMemo(() => pickSuggestedAvailableModel(availableItems), [availableItems]);
+  const selectedModelNeedsInstall = selectedCatalogItem?.availability === "manifest_only";
+  const selectedModelIncompatible = selectedCatalogItem?.availability === "incompatible";
+  const noReadyModels = !isTracking && !catalogLoading && availableItems.length === 0;
+  const showModelRecoveryCard = !isTracking && (!!selectedModelNeedsInstall || !!selectedModelIncompatible || noReadyModels);
+  const basicModelItems = useMemo(() => {
+    const next: VisionModelCatalogItem[] = [];
+    const seen = new Set<string>();
+    for (const item of [...availableItems, selectedCatalogItem].filter(Boolean) as VisionModelCatalogItem[]) {
+      if (seen.has(item.modelId)) continue;
+      next.push(item);
+      seen.add(item.modelId);
+    }
+    return next.slice(0, 4);
+  }, [availableItems, selectedCatalogItem]);
+  const manualInstallItem = selectedCatalogItem ?? null;
+  const manualInstallFile = artifactFileName(manualInstallItem?.artifactPath || "");
+  const manualInstallAcquisition = manualInstallItem?.acquisition ?? defaultAcquisitionForModelId(manualInstallItem?.modelId || "");
+  const manualInstallNeedsExport = manualInstallAcquisition.artifactSource === "checkpoint_export_required";
 
   const selectedModelOption = useMemo(
     () => modelOptions.find((item) => item.value === modelId) ?? null,
@@ -384,11 +609,6 @@ export function VisionConfigCard({
         label: t(item.labelKey, {}, item.value),
       })),
     [t],
-  );
-
-  const selectedTrackerOption = useMemo<SelectOption | null>(
-    () => trackerOptions.find((item) => item.value === trackerId) ?? null,
-    [trackerId, trackerOptions],
   );
 
   const inputPresetChoices = useMemo(
@@ -416,11 +636,6 @@ export function VisionConfigCard({
       ...options,
     ];
   }, [inputPresetChoices, inputWithFallback, t]);
-
-  const selectedInputPreset = useMemo<SelectOption | null>(
-    () => inputPresetOptions.find((item) => item.value === inputWithFallback) ?? null,
-    [inputPresetOptions, inputWithFallback],
-  );
 
   const selectedInputPresetHintKey = useMemo(
     () => inputPresetChoices.find((item) => item.value === inputWithFallback)?.hintKey ?? "",
@@ -472,23 +687,138 @@ export function VisionConfigCard({
     t,
   ]);
 
+  const applySuggestedAvailableModel = useCallback(() => {
+    if (!suggestedAvailableItem) return;
+    onUpdateConfig((prev) => ({
+      ...prev,
+      model_id: suggestedAvailableItem.modelId,
+      ...(isDetection ? { emit_mode: "annotate" } : {}),
+    }));
+  }, [isDetection, onUpdateConfig, suggestedAvailableItem]);
+
+  const openArtifactModal = useCallback((item: VisionModelCatalogItem | null) => {
+    if (!item) return;
+    setArtifactModalItem(item);
+    setArtifactModalFile(null);
+    setArtifactModalDragActive(false);
+    setArtifactUploadLoading(false);
+    setArtifactUploadProgressPct(0);
+    setArtifactUploadProgressBytes({ uploaded: 0, total: 0 });
+    setArtifactUploadError(null);
+    setArtifactUploadSuccess(null);
+  }, []);
+
+  const closeArtifactModal = useCallback(() => {
+    if (artifactUploadLoading) return;
+    setArtifactModalItem(null);
+    setArtifactModalFile(null);
+    setArtifactModalDragActive(false);
+    setArtifactUploadProgressPct(0);
+    setArtifactUploadProgressBytes({ uploaded: 0, total: 0 });
+    setArtifactUploadError(null);
+    setArtifactUploadSuccess(null);
+  }, [artifactUploadLoading]);
+
+  const handleArtifactFileChosen = useCallback((file: File | null) => {
+    if (!file) return;
+    const fileName = String(file.name || "").trim();
+    const fileNameLower = fileName.toLowerCase();
+    const acquisition = artifactModalItem?.acquisition ?? defaultAcquisitionForModelId(artifactModalItem?.modelId || "");
+    if (!fileNameLower.endsWith(".onnx")) {
+      setArtifactModalFile(null);
+      setArtifactUploadSuccess(null);
+      if (fileNameLower.endsWith(".pth") || fileNameLower.endsWith(".pt") || fileNameLower.endsWith(".ckpt")) {
+        setArtifactUploadError(
+          t(
+            "core.ui.pipelines.panels.yolo.artifact_modal.upload_error_checkpoint_selected",
+            { file: fileName },
+            "You selected a checkpoint file. This step still needs the exported .onnx file.",
+          ),
+        );
+        return;
+      }
+      setArtifactUploadError(
+        t(
+          "core.ui.pipelines.panels.yolo.artifact_modal.upload_error_extension",
+          {
+            fileType:
+              acquisition.artifactSource === "checkpoint_export_required" ? ".onnx (exported from the checkpoint)" : ".onnx",
+          },
+          "This step only accepts .onnx files. If you downloaded a checkpoint like .pth, export it to ONNX first.",
+        ),
+      );
+      return;
+    }
+    setArtifactModalFile(file);
+    setArtifactUploadError(null);
+    setArtifactUploadSuccess(null);
+  }, [artifactModalItem, t]);
+
+  const handleArtifactUpload = useCallback(async () => {
+    if (!artifactModalItem || !artifactModalFile) return;
+    setArtifactUploadLoading(true);
+    setArtifactUploadError(null);
+    setArtifactUploadSuccess(null);
+    setArtifactUploadProgressPct(0);
+    setArtifactUploadProgressBytes({ uploaded: 0, total: artifactModalFile.size || 0 });
+    try {
+      const result: ProcessingServerVisionModelArtifactUploadResponse = await uploadProcessingServerVisionModelArtifact(
+        resolvedProcessingServerId,
+        artifactModalItem.modelId,
+        artifactModalFile,
+        {
+          onProgress: (progressPct, bytesUploaded, bytesTotal) => {
+            setArtifactUploadProgressPct(progressPct);
+            setArtifactUploadProgressBytes({ uploaded: bytesUploaded, total: bytesTotal });
+          },
+        },
+      );
+      setArtifactUploadSuccess(
+        t(
+          result.replaced
+            ? "core.ui.pipelines.panels.yolo.artifact_modal.upload_success_replaced"
+            : "core.ui.pipelines.panels.yolo.artifact_modal.upload_success_added",
+          { model: result.display_name || artifactModalItem.displayName },
+          result.replaced
+            ? `Updated ${result.display_name || artifactModalItem.displayName}`
+            : `Added ${result.display_name || artifactModalItem.displayName}`,
+        ),
+      );
+      await reloadCatalog();
+    } catch (error: unknown) {
+      setArtifactUploadError(normalizeArtifactUploadError(error, t, artifactModalItem));
+    } finally {
+      setArtifactUploadLoading(false);
+    }
+  }, [artifactModalFile, artifactModalItem, reloadCatalog, resolvedProcessingServerId, t]);
+
+  const artifactModalAcquisition = artifactModalItem?.acquisition ?? defaultAcquisitionForModelId(artifactModalItem?.modelId || "");
+  const artifactModalNeedsExport = artifactModalAcquisition.artifactSource === "checkpoint_export_required";
+  const artifactModalGuideUrl = artifactModalAcquisition.guideUrl;
+  const artifactModalExportGuideUrl = artifactModalAcquisition.exportGuideUrl;
+
   return (
     <div className="pipelinesOperatorConfigCard">
       {isTracking ? (
         <>
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.yolo.tracker_id")}</span>
-            <Select<SelectOption, false>
-              styles={pipelinesReactSelectStyles as any}
-              options={trackerOptions}
-              value={selectedTrackerOption}
-              onChange={(value: SingleValue<SelectOption>) => {
+            <select
+              className="pipelinesInput"
+              value={trackerId}
+              onChange={(event) => {
                 onUpdateConfig((prev) => ({
                   ...prev,
-                  tracker_id: String(value?.value || "simple_iou_kalman").trim() || "simple_iou_kalman",
+                  tracker_id: String(event.target.value || "simple_iou_kalman").trim() || "simple_iou_kalman",
                 }));
               }}
-            />
+            >
+              {trackerOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
           <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.tracker_id_hint")}</div>
           {trackerPreset ? <div className="pipelinesStepHint">{t(trackerPreset.hintKey)}</div> : null}
@@ -521,22 +851,47 @@ export function VisionConfigCard({
 
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.yolo.model_id")}</span>
-            <Select<VisionModelOption, false>
-              styles={pipelinesReactSelectStyles as any}
-              options={modelOptions}
-              value={selectedModelOption}
-              isLoading={catalogLoading}
-              isOptionDisabled={(option) => !!option.isDisabled}
-              placeholder={t("core.ui.pipelines.panels.yolo.model_select_placeholder")}
-              onChange={(value: SingleValue<VisionModelOption>) => {
-                const nextModelId = String(value?.value || "").trim();
-                onUpdateConfig((prev) => ({
-                  ...prev,
-                  model_id: nextModelId,
-                  ...(isDetection ? { emit_mode: "annotate" } : {}),
-                }));
-              }}
-            />
+            {showAdvanced ? (
+              <Select<VisionModelOption, false>
+                styles={pipelinesReactSelectStyles as any}
+                options={modelOptions}
+                value={selectedModelOption}
+                isLoading={catalogLoading}
+                isOptionDisabled={(option) => !!option.isDisabled}
+                placeholder={t("core.ui.pipelines.panels.yolo.model_select_placeholder")}
+                onChange={(value: SingleValue<VisionModelOption>) => {
+                  const nextModelId = String(value?.value || "").trim();
+                  onUpdateConfig((prev) => ({
+                    ...prev,
+                    model_id: nextModelId,
+                    ...(isDetection ? { emit_mode: "annotate" } : {}),
+                  }));
+                }}
+              />
+            ) : (
+              <select
+                className="pipelinesInput"
+                value={modelId}
+                onChange={(event) => {
+                  const nextModelId = String(event.target.value || "").trim();
+                  onUpdateConfig((prev) => ({
+                    ...prev,
+                    model_id: nextModelId,
+                    ...(isDetection ? { emit_mode: "annotate" } : {}),
+                  }));
+                }}
+              >
+                {basicModelItems.map((item) => (
+                  <option key={item.modelId} value={item.modelId}>
+                    {item.displayName}
+                    {item.badgeIds.includes("recommended") ? ` • ${t("core.ui.processing_servers.vision_recommendations.badge.recommended")}` : ""}
+                    {item.availability !== "available"
+                      ? ` • ${t(availabilityTranslationKey(item.availability), {}, item.availability)}`
+                      : ""}
+                  </option>
+                ))}
+              </select>
+            )}
           </label>
           <div className="pipelinesStepHint">
             {isSegmentation
@@ -573,6 +928,117 @@ export function VisionConfigCard({
               {selectedCatalogItem.availabilityReason ? ` • ${t(availabilityReasonTranslationKey(selectedCatalogItem.availabilityReason), {}, selectedCatalogItem.availabilityReason)}` : ""}
             </div>
           ) : null}
+          {showModelRecoveryCard ? (
+            <div className="pipelinesOperatorConfigCard" style={{ marginTop: 10 }}>
+              <div className="pipelinesInlineError">
+                {selectedModelNeedsInstall
+                  ? t(
+                      "core.ui.pipelines.panels.yolo.model_recovery.install_needed",
+                      {
+                        model: selectedCatalogItem?.displayName || modelId || t("core.ui.pipelines.panels.yolo.model_id"),
+                        serverId: resolvedProcessingServerId,
+                      },
+                      "This model still needs to be installed on the selected machine.",
+                    )
+                  : selectedModelIncompatible
+                    ? t(
+                        "core.ui.pipelines.panels.yolo.model_recovery.incompatible",
+                        {
+                          model: selectedCatalogItem?.displayName || modelId || t("core.ui.pipelines.panels.yolo.model_id"),
+                          serverId: resolvedProcessingServerId,
+                        },
+                        "This model is not compatible with the selected machine.",
+                      )
+                    : t(
+                        "core.ui.pipelines.panels.yolo.model_recovery.none_ready",
+                        { serverId: resolvedProcessingServerId },
+                        "No ready-to-run models were found on the selected machine.",
+                      )}
+              </div>
+              {suggestedAvailableItem ? (
+                <div className="pipelinesStepHint" style={{ marginTop: 8 }}>
+                  {t(
+                    "core.ui.pipelines.panels.yolo.model_recovery.recommended_ready",
+                    { model: suggestedAvailableItem.displayName },
+                    `Use ${suggestedAvailableItem.displayName} to continue now.`,
+                  )}
+                </div>
+              ) : (
+                <div className="pipelinesStepHint" style={{ marginTop: 8 }}>
+                  {t(
+                    "core.ui.pipelines.panels.yolo.model_recovery.no_ready_action",
+                    { serverId: resolvedProcessingServerId },
+                    "Add a model file on this processing server or switch to another server.",
+                  )}
+                </div>
+              )}
+              {manualInstallItem && manualInstallFile ? (
+                <div style={{ marginTop: 10 }}>
+                  <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_intro")}</div>
+                  {manualInstallNeedsExport ? (
+                    <>
+                      <div className="pipelinesStepHint">
+                        {t(
+                          "core.ui.pipelines.panels.yolo.artifact_modal.recovery_checkpoint_page",
+                          { model: manualInstallItem.displayName },
+                          `1. Open the checkpoint page for ${manualInstallItem.displayName}.`,
+                        )}
+                      </div>
+                      <div className="pipelinesStepHint">
+                        {t(
+                          "core.ui.pipelines.panels.yolo.artifact_modal.recovery_export_onnx",
+                          { file: manualInstallFile },
+                          `2. Export the ONNX file ${manualInstallFile}.`,
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="pipelinesStepHint">
+                      {t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_file", { file: manualInstallFile }, manualInstallFile)}
+                    </div>
+                  )}
+                  <div className="pipelinesStepHint">
+                    {manualInstallNeedsExport
+                      ? t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_send_prepare")
+                      : t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_send")}
+                  </div>
+                  <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_refresh")}</div>
+                </div>
+              ) : null}
+              <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                {manualInstallItem ? (
+                  <button
+                    className="pillButton pillButtonPrimary"
+                    type="button"
+                    onClick={() => openArtifactModal(manualInstallItem)}
+                  >
+                    {manualInstallItem.artifactExists
+                      ? t("core.ui.pipelines.panels.yolo.artifact_modal.open_update")
+                      : manualInstallNeedsExport
+                        ? t("core.ui.pipelines.panels.yolo.artifact_modal.open_prepare")
+                        : t("core.ui.pipelines.panels.yolo.artifact_modal.open_get")}
+                  </button>
+                ) : null}
+                {suggestedAvailableItem ? (
+                  <button className="pillButton pillButtonPrimary" type="button" onClick={applySuggestedAvailableModel}>
+                    {t(
+                      "core.ui.pipelines.panels.yolo.model_recovery.use_recommended",
+                      { model: suggestedAvailableItem.displayName },
+                      `Use ${suggestedAvailableItem.displayName}`,
+                    )}
+                  </button>
+                ) : null}
+                {onOpenProcessingServers ? (
+                  <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
+                    {t("core.ui.pipelines.form.processing_server.manage")}
+                  </button>
+                ) : null}
+                <button className="pillButton" type="button" onClick={() => void reloadCatalog()} disabled={catalogLoading}>
+                  {t("core.ui.pipelines.panels.yolo.refresh_models")}
+                </button>
+              </div>
+            </div>
+          ) : null}
           {catalogError ? <div className="errorText">{catalogError}</div> : null}
           {!showAdvanced && unavailableItems.length > 0 ? (
             <div className="pipelinesStepHint">
@@ -581,6 +1047,15 @@ export function VisionConfigCard({
           ) : null}
 
           <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+            {selectedCatalogItem ? (
+              <button className="pillButton" type="button" onClick={() => openArtifactModal(selectedCatalogItem)}>
+                {selectedCatalogItem.artifactExists
+                  ? t("core.ui.pipelines.panels.yolo.artifact_modal.open_update")
+                  : selectedCatalogItem.acquisition.artifactSource === "checkpoint_export_required"
+                    ? t("core.ui.pipelines.panels.yolo.artifact_modal.open_prepare")
+                    : t("core.ui.pipelines.panels.yolo.artifact_modal.open_get")}
+              </button>
+            ) : null}
             <button className="pillButton" type="button" onClick={() => void reloadCatalog()} disabled={catalogLoading}>
               {t("core.ui.pipelines.panels.yolo.refresh_models")}
             </button>
@@ -692,6 +1167,11 @@ export function VisionConfigCard({
                   {note}
                 </div>
               ))}
+              <div className="pipelinesStepHint">
+                {t("core.ui.pipelines.panels.yolo.artifact_modal.advanced_hint", {
+                  file: artifactFileName(selectedCatalogItem.artifactPath) || selectedCatalogItem.modelId,
+                })}
+              </div>
             </div>
           ) : null}
         </>
@@ -745,19 +1225,60 @@ export function VisionConfigCard({
         <>
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.yolo.categories")}</span>
-            <Select<SelectOption, true>
-              isMulti
-              styles={pipelinesReactSelectStyles}
-              options={categoryOptions}
-              value={categories.map((value) => categoryOptions.find((opt) => opt.value === value) ?? { value, label: value })}
-              placeholder={t("core.ui.pipelines.panels.yolo.categories_placeholder")}
-              onChange={(value: MultiValue<SelectOption>) => {
-                onUpdateConfig((prev) => ({
-                  ...prev,
-                  categories: value.map((item) => item.value),
-                }));
-              }}
-            />
+            {showAdvanced ? (
+              <Select<SelectOption, true>
+                isMulti
+                styles={pipelinesReactSelectStyles}
+                options={categoryOptions}
+                value={categories.map((value) => categoryOptions.find((opt) => opt.value === value) ?? { value, label: value })}
+                placeholder={t("core.ui.pipelines.panels.yolo.categories_placeholder")}
+                onChange={(value: MultiValue<SelectOption>) => {
+                  onUpdateConfig((prev) => ({
+                    ...prev,
+                    categories: value.map((item) => item.value),
+                  }));
+                }}
+              />
+            ) : (
+              <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                <button
+                  className={["pillButton", categories.length === 0 ? "pillButtonPrimary" : ""].filter(Boolean).join(" ")}
+                  type="button"
+                  onClick={() => {
+                    onUpdateConfig((prev) => ({
+                      ...prev,
+                      categories: [],
+                    }));
+                  }}
+                >
+                  {t("core.ui.pipelines.panels.yolo.categories_all")}
+                </button>
+                {basicCategoryValues.map((value) => {
+                  const active = categories.includes(value);
+                  return (
+                    <button
+                      key={value}
+                      className={["pillButton", active ? "pillButtonPrimary" : ""].filter(Boolean).join(" ")}
+                      type="button"
+                      onClick={() => {
+                        onUpdateConfig((prev) => {
+                          const current = Array.isArray(prev.categories)
+                            ? prev.categories.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean)
+                            : [];
+                          const next = active ? current.filter((item) => item !== value) : [...current, value];
+                          return {
+                            ...prev,
+                            categories: next,
+                          };
+                        });
+                      }}
+                    >
+                      {t(BASIC_CATEGORY_LABEL_KEYS[value] || "", {}, value)}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </label>
           <div className="pipelinesStepHint">
             {isSegmentation
@@ -867,17 +1388,22 @@ export function VisionConfigCard({
         <>
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.yolo.input_source")}</span>
-            <Select<SelectOption, false>
-              styles={pipelinesReactSelectStyles as any}
-              options={inputPresetOptions}
-              value={selectedInputPreset}
-              onChange={(value: SingleValue<SelectOption>) => {
+            <select
+              className="pipelinesInput"
+              value={inputWithFallback}
+              onChange={(event) => {
                 onUpdateConfig((prev) => ({
                   ...prev,
-                  input_with_fallback: String(value?.value || "treated,original").trim() || "treated,original",
+                  input_with_fallback: String(event.target.value || "treated,original").trim() || "treated,original",
                 }));
               }}
-            />
+            >
+              {inputPresetOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
           <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.input_source_hint")}</div>
           {selectedInputPresetHintKey ? <div className="pipelinesStepHint">{t(selectedInputPresetHintKey)}</div> : null}
@@ -926,17 +1452,22 @@ export function VisionConfigCard({
         <>
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.yolo.input_source")}</span>
-            <Select<SelectOption, false>
-              styles={pipelinesReactSelectStyles as any}
-              options={inputPresetOptions}
-              value={selectedInputPreset}
-              onChange={(value: SingleValue<SelectOption>) => {
+            <select
+              className="pipelinesInput"
+              value={inputWithFallback}
+              onChange={(event) => {
                 onUpdateConfig((prev) => ({
                   ...prev,
-                  input_with_fallback: String(value?.value || "treated,original").trim() || "treated,original",
+                  input_with_fallback: String(event.target.value || "treated,original").trim() || "treated,original",
                 }));
               }}
-            />
+            >
+              {inputPresetOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
           <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.input_source_hint")}</div>
           {selectedInputPresetHintKey ? <div className="pipelinesStepHint">{t(selectedInputPresetHintKey)}</div> : null}
@@ -1010,6 +1541,193 @@ export function VisionConfigCard({
           ) : null}
         </>
       ) : null}
+
+      <Modal
+        open={!!artifactModalItem}
+        title={
+          artifactModalItem?.artifactExists
+            ? t(
+                "core.ui.pipelines.panels.yolo.artifact_modal.title_update",
+                { model: artifactModalItem?.displayName || "" },
+                `Update ${artifactModalItem?.displayName || ""}`,
+              )
+            : artifactModalNeedsExport
+              ? t(
+                  "core.ui.pipelines.panels.yolo.artifact_modal.title_prepare",
+                  { model: artifactModalItem?.displayName || "" },
+                  `Prepare ${artifactModalItem?.displayName || ""}`,
+                )
+            : t(
+                "core.ui.pipelines.panels.yolo.artifact_modal.title_get",
+                { model: artifactModalItem?.displayName || "" },
+                `Get ${artifactModalItem?.displayName || ""}`,
+              )
+        }
+        onClose={closeArtifactModal}
+      >
+        {artifactModalItem ? (
+          <div>
+            <div className="pipelinesStepHint">
+              {artifactModalNeedsExport
+                ? t(
+                    "core.ui.pipelines.panels.yolo.artifact_modal.intro_checkpoint_export",
+                    { model: artifactModalItem.displayName },
+                    `The official page for ${artifactModalItem.displayName} gives you a checkpoint (.pth). This step needs the exported .onnx file.`,
+                  )
+                : t(
+                    "core.ui.pipelines.panels.yolo.artifact_modal.intro",
+                    { model: artifactModalItem.displayName },
+                    `Use this flow when the selected machine still does not have the ONNX file for ${artifactModalItem.displayName}.`,
+                  )}
+            </div>
+            <div className="pipelinesStepHint" style={{ marginTop: 8 }}>
+              {t("core.ui.pipelines.panels.yolo.artifact_modal.expected_file", {
+                file: artifactFileName(artifactModalItem.artifactPath) || artifactModalItem.modelId,
+              })}
+            </div>
+            <div className="pipelinesStepHint" style={{ marginTop: 8 }}>
+              {artifactModalNeedsExport
+                ? t("core.ui.pipelines.panels.yolo.artifact_modal.steps_intro_checkpoint_export")
+                : t("core.ui.pipelines.panels.yolo.artifact_modal.steps_intro")}
+            </div>
+            <ol className="pipelinesArtifactSteps">
+              {artifactModalNeedsExport ? (
+                <>
+                  <li>{t("core.ui.pipelines.panels.yolo.artifact_modal.step_checkpoint_page")}</li>
+                  <li>{t("core.ui.pipelines.panels.yolo.artifact_modal.step_export_onnx")}</li>
+                  <li>{t("core.ui.pipelines.panels.yolo.artifact_modal.step_upload_exported_onnx")}</li>
+                </>
+              ) : (
+                <>
+                  <li>{t("core.ui.pipelines.panels.yolo.artifact_modal.step_find")}</li>
+                  <li>{t("core.ui.pipelines.panels.yolo.artifact_modal.step_download")}</li>
+                  <li>{t("core.ui.pipelines.panels.yolo.artifact_modal.step_drop")}</li>
+                </>
+              )}
+            </ol>
+
+            <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              {artifactModalGuideUrl ? (
+                <a
+                  className="pillButton"
+                  href={artifactModalGuideUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {artifactModalNeedsExport
+                    ? t("core.ui.pipelines.panels.yolo.artifact_modal.open_checkpoint_page")
+                    : t("core.ui.pipelines.panels.yolo.artifact_modal.open_official_page")}
+                </a>
+              ) : null}
+              {artifactModalExportGuideUrl ? (
+                <a
+                  className="pillButton"
+                  href={artifactModalExportGuideUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {t("core.ui.pipelines.panels.yolo.artifact_modal.open_export_guide")}
+                </a>
+              ) : null}
+            </div>
+
+            <input
+              ref={artifactFileInputRef}
+              type="file"
+              accept=".onnx,.pth,.pt,.ckpt,application/octet-stream"
+              style={{ display: "none" }}
+              onChange={(event) => {
+                handleArtifactFileChosen(event.target.files?.[0] ?? null);
+                event.currentTarget.value = "";
+              }}
+            />
+
+            <div
+              className={["pipelinesArtifactDropzone", artifactModalDragActive ? "isActive" : ""].filter(Boolean).join(" ")}
+              style={{ marginTop: 14 }}
+              role="button"
+              tabIndex={0}
+              onClick={() => artifactFileInputRef.current?.click()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  artifactFileInputRef.current?.click();
+                }
+              }}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                setArtifactModalDragActive(true);
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setArtifactModalDragActive(true);
+              }}
+              onDragLeave={(event) => {
+                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                setArtifactModalDragActive(false);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                setArtifactModalDragActive(false);
+                handleArtifactFileChosen(event.dataTransfer.files?.[0] ?? null);
+              }}
+            >
+              <div className="pipelinesArtifactDropzoneTitle">
+                {artifactModalNeedsExport
+                  ? t("core.ui.pipelines.panels.yolo.artifact_modal.drop_title_exported_onnx")
+                  : t("core.ui.pipelines.panels.yolo.artifact_modal.drop_title")}
+              </div>
+              <div className="pipelinesStepHint">
+                {artifactModalNeedsExport
+                  ? t("core.ui.pipelines.panels.yolo.artifact_modal.drop_subtitle_checkpoint_export")
+                  : t("core.ui.pipelines.panels.yolo.artifact_modal.drop_subtitle")}
+              </div>
+              {artifactModalFile ? (
+                <div className="pipelinesArtifactDropzoneFile">
+                  {artifactModalFile.name} • {formatProgressBytes(artifactModalFile.size)}
+                </div>
+              ) : null}
+            </div>
+
+            {artifactUploadLoading ? (
+              <div className="pipelinesStepHint" style={{ marginTop: 10 }}>
+                {t(
+                  "core.ui.pipelines.panels.yolo.artifact_modal.upload_progress",
+                  { progress: Math.max(0, Math.min(100, Math.round(artifactUploadProgressPct))) },
+                  `Uploading ${Math.round(artifactUploadProgressPct)}%`,
+                )}
+                {artifactUploadProgressBytes.total > 0
+                  ? ` • ${formatProgressBytes(artifactUploadProgressBytes.uploaded)} / ${formatProgressBytes(artifactUploadProgressBytes.total)}`
+                  : ""}
+              </div>
+            ) : null}
+            {artifactUploadError ? <div className="errorText" style={{ marginTop: 10 }}>{artifactUploadError}</div> : null}
+            {artifactUploadSuccess ? (
+              <div className="settingsStatusMuted" style={{ marginTop: 10 }}>
+                {artifactUploadSuccess}
+              </div>
+            ) : null}
+
+            <div className="row" style={{ gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+              <button
+                className="pillButton pillButtonPrimary"
+                type="button"
+                disabled={!artifactModalFile || artifactUploadLoading}
+                onClick={() => void handleArtifactUpload()}
+              >
+                {artifactUploadLoading
+                  ? t("core.ui.pipelines.panels.yolo.artifact_modal.uploading")
+                  : artifactModalItem.artifactExists
+                    ? t("core.ui.pipelines.panels.yolo.artifact_modal.apply_update")
+                    : t("core.ui.pipelines.panels.yolo.artifact_modal.apply_add")}
+              </button>
+              <button className="pillButton" type="button" onClick={closeArtifactModal} disabled={artifactUploadLoading}>
+                {t("core.ui.pipelines.panels.yolo.artifact_modal.close")}
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }

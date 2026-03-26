@@ -45,6 +45,15 @@ class ProcessingTransport(Protocol):
 
     async def import_vision_manifest(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
+    async def upload_vision_model_artifact(
+        self,
+        *,
+        model_id: str,
+        filename: str,
+        content_type: str,
+        content: bytes,
+    ) -> dict[str, Any]: ...
+
     async def close(self) -> None: ...
 
 
@@ -79,6 +88,16 @@ class InProcessProcessingTransport:
 
     async def import_vision_manifest(self, payload: dict[str, Any]) -> dict[str, Any]:
         raise ProcessingTransportError("Vision manifest import is not supported for in-process transport")
+
+    async def upload_vision_model_artifact(
+        self,
+        *,
+        model_id: str,
+        filename: str,
+        content_type: str,
+        content: bytes,
+    ) -> dict[str, Any]:
+        raise ProcessingTransportError("Vision model artifact upload is not supported for in-process transport")
 
     async def close(self) -> None:
         if self._queue is not None:
@@ -174,6 +193,32 @@ class HttpProcessingTransport:
             raise ProcessingTransportError(
                 f"Processing vision manifest import failed: {res.status_code} {res.text}"
             )
+        body = res.json()
+        return body if isinstance(body, dict) else {}
+
+    async def install_vision_model(self, *, model_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        client = await self._ensure_client()
+        url = f"{self._base}/api/processing/vision/models/{model_id}/install"
+        res = await client.post(url, json=payload, timeout=self._timeout_s)
+        if res.status_code >= 300:
+            raise ProcessingTransportError(f"Processing vision model install failed: {res.status_code} {res.text}")
+        body = res.json()
+        return body if isinstance(body, dict) else {}
+
+    async def upload_vision_model_artifact(
+        self,
+        *,
+        model_id: str,
+        filename: str,
+        content_type: str,
+        content: bytes,
+    ) -> dict[str, Any]:
+        client = await self._ensure_client()
+        url = f"{self._base}/api/processing/vision/models/{model_id}/artifact"
+        files = {"file": (filename or f"{model_id}.onnx", content, content_type or "application/octet-stream")}
+        res = await client.post(url, files=files, timeout=max(self._timeout_s, 120.0))
+        if res.status_code >= 300:
+            raise ProcessingTransportError(f"Processing vision model artifact upload failed: {res.status_code} {res.text}")
         body = res.json()
         return body if isinstance(body, dict) else {}
 

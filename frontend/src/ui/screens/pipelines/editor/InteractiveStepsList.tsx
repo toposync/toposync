@@ -12,6 +12,7 @@ type Props = {
   operatorsById: Record<string, PipelineOperatorDefinition>;
   pipelineName: string | null;
   processingServerId: string;
+  onOpenProcessingServers?: () => void;
 
   interactiveCameraId: string;
   cameraSelectOptions: SelectOption[];

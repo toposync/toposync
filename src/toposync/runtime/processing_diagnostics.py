@@ -198,7 +198,11 @@ def collect_yolo_trackers_diagnostics(limit: int = 8) -> list[dict[str, Any]]:
     return list(items or [])
 
 
-def collect_vision_extension_diagnostics(*, system_info: dict[str, Any] | None = None) -> dict[str, Any]:
+def collect_vision_extension_diagnostics(
+    *,
+    system_info: dict[str, Any] | None = None,
+    data_dir: str | None = None,
+) -> dict[str, Any]:
     try:
         from toposync_ext_vision.processing import collect_vision_diagnostics  # type: ignore
     except Exception:
@@ -211,10 +215,11 @@ def collect_vision_extension_diagnostics(*, system_info: dict[str, Any] | None =
             "official_shortlists": {},
             "task_catalogs": {},
             "recommendations": {},
+            "install_jobs": [],
             "last_benchmark": None,
         }
     try:
-        diagnostics = collect_vision_diagnostics(system_info=system_info)
+        diagnostics = collect_vision_diagnostics(system_info=system_info, data_dir=data_dir)
     except Exception:
         return {
             "backends": [],
@@ -225,6 +230,7 @@ def collect_vision_extension_diagnostics(*, system_info: dict[str, Any] | None =
             "official_shortlists": {},
             "task_catalogs": {},
             "recommendations": {},
+            "install_jobs": [],
             "last_benchmark": None,
         }
     return dict(diagnostics or {})
@@ -251,13 +257,13 @@ async def collect_camera_hub_snapshot() -> dict[str, Any] | None:
     }
 
 
-async def collect_processing_server_diagnostics() -> dict[str, Any]:
+async def collect_processing_server_diagnostics(*, data_dir: str | None = None) -> dict[str, Any]:
     system_info = collect_system_info()
     torch_info = collect_torch_info()
     device_env = str(os.getenv("TOPOSYNC_YOLO_DEVICE") or "")
     recommended = recommend_yolo_device(torch_info, device_env=device_env)
     trackers = collect_yolo_trackers_diagnostics(limit=8)
-    vision_runtime = collect_vision_extension_diagnostics(system_info=system_info)
+    vision_runtime = collect_vision_extension_diagnostics(system_info=system_info, data_dir=data_dir)
     cameras = collect_camera_dependency_info()
     hub = await collect_camera_hub_snapshot()
     if hub is not None:
@@ -278,6 +284,7 @@ async def collect_processing_server_diagnostics() -> dict[str, Any]:
             "official_shortlists": vision_runtime.get("official_shortlists", {}),
             "task_catalogs": vision_runtime.get("task_catalogs", {}),
             "recommendations": vision_runtime.get("recommendations", {}),
+            "install_jobs": vision_runtime.get("install_jobs", []),
             "last_benchmark": vision_runtime.get("last_benchmark"),
         },
         "cameras": cameras,

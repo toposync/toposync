@@ -4736,3 +4736,43 @@ select {
   background: color-mix(in srgb, var(--color-surface-solid) 75%, var(--color-application-background));
   border-color: var(--color-border-subtle);
 }
+
+.pipelinesArtifactSteps {
+  margin: 8px 0 0 18px;
+  padding: 0;
+}
+
+.pipelinesArtifactSteps li {
+  margin: 6px 0;
+}
+
+.pipelinesArtifactDropzone {
+  border: 1px dashed var(--color-border-subtle);
+  border-radius: 14px;
+  padding: 18px;
+  background: color-mix(in srgb, var(--color-surface-frost-ultra) 88%, transparent);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.pipelinesArtifactDropzone:hover,
+.pipelinesArtifactDropzone.isActive {
+  border-color: var(--color-accent-teal);
+  background: color-mix(in srgb, var(--color-accent-teal) 10%, var(--color-surface-frost-ultra));
+}
+
+.pipelinesArtifactDropzone:focus-visible {
+  outline: 2px solid var(--color-accent-teal);
+  outline-offset: 2px;
+}
+
+.pipelinesArtifactDropzoneTitle {
+  font-weight: 600;
+}
+
+.pipelinesArtifactDropzoneFile {
+  margin-top: 10px;
+  font-size: 13px;
+  opacity: 0.9;
+  word-break: break-word;
+}

@@ -6,6 +6,8 @@ export type StreamsHealthResponse = {
 export type EngineStatusResponse = {
   running?: boolean;
   pid?: number | null;
+  uptime_seconds?: number | null;
+  started_at_unix?: number | null;
   bind_host?: string;
   ports?: {
     rtsp?: number;
@@ -20,7 +22,14 @@ export type EngineStatusResponse = {
     webrtc_url?: string;
   };
   last_error?: string | null;
+  mediamtx_version?: string;
+  platform?: string | null;
+  binary_path?: string | null;
+  config_path?: string | null;
+  log_path?: string | null;
   warnings?: string[];
+  restart_count?: number;
+  orphan_pids?: number[];
 };
 
 export type TransmissionResolution = {

@@ -3,9 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-import os
-import signal
-import subprocess
 from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib import error as urllib_error
@@ -34,6 +31,7 @@ from ..streaming.camera_ingest import (
 )
 from ..streaming.mediamtx_binary import extract_mediamtx_binary, find_installed_mediamtx_binary
 from ..streaming.platform import detect_mediamtx_platform
+from ..streaming.mediamtx_processes import find_mediamtx_pids_for_config_path, kill_mediamtx_processes_for_config_path
 from ..streaming.publisher_manager import PublisherManager
 from ..streaming.runtime_state import TransmissionRuntimeState
 from ..wizard import build_streaming_wizard_graph, suggested_streaming_wizard_pipeline_name
@@ -152,107 +150,6 @@ def _request_host(request: Request) -> str:
     return str(request.url.hostname or "127.0.0.1").strip() or "127.0.0.1"
 
 
-def _escape_powershell_single_quote(value: str) -> str:
-    # PowerShell escapes single quotes in single-quoted strings by doubling them.
-    return str(value or "").replace("'", "''")
-
-
-def _find_mediamtx_pids_for_config_path(config_path: str) -> list[int]:
-    config = str(config_path or "").strip()
-    if not config:
-        return []
-
-    if os.name == "nt":
-        script = (
-            "$ErrorActionPreference='SilentlyContinue';"
-            f"$cp='{_escape_powershell_single_quote(config)}';"
-            "Get-CimInstance Win32_Process | "
-            "Where-Object { $_.CommandLine -and ($_.CommandLine -like ('*' + $cp + '*')) -and ($_.CommandLine -like '*mediamtx*') } | "
-            "Select-Object -ExpandProperty ProcessId"
-        )
-        try:
-            result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", script],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except Exception:
-            return []
-        out = str(result.stdout or "")
-        pids: list[int] = []
-        for token in out.split():
-            try:
-                pid = int(token)
-            except Exception:
-                continue
-            if pid > 0:
-                pids.append(pid)
-        return sorted(set(pids))
-
-    try:
-        result = subprocess.run(
-            ["ps", "ax", "-o", "pid=,command="],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except Exception:
-        return []
-
-    pids: list[int] = []
-    for raw_line in str(result.stdout or "").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        parts = line.split(None, 1)
-        if len(parts) != 2:
-            continue
-        pid_raw, command = parts
-        if "mediamtx" not in command:
-            continue
-        if config not in command:
-            continue
-        try:
-            pid = int(pid_raw)
-        except Exception:
-            continue
-        if pid > 0:
-            pids.append(pid)
-    return sorted(set(pids))
-
-
-def _kill_mediamtx_processes_for_config_path(config_path: str) -> list[int]:
-    pids = _find_mediamtx_pids_for_config_path(config_path)
-    if not pids:
-        return []
-
-    killed: list[int] = []
-    if os.name == "nt":
-        for pid in pids:
-            try:
-                subprocess.run(
-                    ["taskkill", "/PID", str(pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
-                killed.append(pid)
-            except Exception:
-                continue
-        return killed
-
-    for pid in pids:
-        try:
-            os.kill(pid, signal.SIGTERM)
-            killed.append(pid)
-        except ProcessLookupError:
-            continue
-        except Exception:
-            continue
-    return killed
-
-
 def _status_host(request: Request, settings: StreamingExtensionSettings) -> str:
     if settings.engine.expose_to_lan:
         return _request_host(request)
@@ -261,6 +158,12 @@ def _status_host(request: Request, settings: StreamingExtensionSettings) -> str:
 
 def _current_server_id(request: Request) -> str:
     return normalize_server_id(getattr(request.app.state, "streaming_server_id", "local"), fallback="local")
+
+
+def _engine_orphan_pids(config_store: ConfigStore, *, current_pid: int | None = None) -> list[int]:
+    config_path = config_store.paths.data_dir / "runtime" / "streaming" / "mediamtx.yml"
+    excluded = {int(current_pid)} if current_pid else None
+    return find_mediamtx_pids_for_config_path(str(config_path), exclude_pids=excluded)
 
 
 async def _processing_servers_by_id(config_store: ConfigStore) -> dict[str, ProcessingServer]:
@@ -716,6 +619,13 @@ def create_streaming_router() -> APIRouter:
         if settings.engine.enabled and not status.running:
             warnings.append("Engine is enabled but not running.")
 
+        orphan_pids = _engine_orphan_pids(config_store, current_pid=status.pid)
+        if orphan_pids:
+            warnings.append(
+                f"Found {len(orphan_pids)} external MediaMTX process(es) for this data directory "
+                f"(pids: {', '.join(str(pid) for pid in orphan_pids)})."
+            )
+
         platform = None
         binary_path = None
         try:
@@ -756,6 +666,8 @@ def create_streaming_router() -> APIRouter:
                 "webrtc_url": _webrtc_url(host, ports.webrtc, TEST_PATH),
             },
             warnings=warnings,
+            restart_count=status.restart_count,
+            orphan_pids=orphan_pids,
         )
 
     @router.post("/engine/download", response_model=StreamingEngineStatusResponse)
@@ -881,7 +793,7 @@ def create_streaming_router() -> APIRouter:
             raise HTTPException(status_code=500, detail=f"Failed to stop streaming engine: {exc}") from exc
 
         config_path = config_store.paths.data_dir / "runtime" / "streaming" / "mediamtx.yml"
-        killed_pids = await asyncio.to_thread(_kill_mediamtx_processes_for_config_path, str(config_path))
+        killed_pids = await asyncio.to_thread(kill_mediamtx_processes_for_config_path, str(config_path))
         if killed_pids:
             # Allow sockets to be released before re-starting.
             await asyncio.sleep(0.4)

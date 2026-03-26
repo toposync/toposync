@@ -17,6 +17,7 @@ from ..api.models import StreamingEngineSettings
 from . import MEDIAMTX_VERSION
 from .mediamtx_binary import extract_mediamtx_binary
 from .mediamtx_config import MediaMTXPathAuth, MediaMTXResolvedPorts, render_mediamtx_config
+from .mediamtx_processes import kill_mediamtx_processes_for_config_path
 from .platform import detect_mediamtx_platform
 
 
@@ -317,48 +318,65 @@ class MediaMtxEngineManager:
 
         config_path = runtime_dir / "mediamtx.yml"
         config_path.write_text(config.config_text, encoding="utf-8")
+        extra_warnings: list[str] = []
 
-        log_name = time.strftime("mediamtx-%Y%m%d-%H%M%S.log")
-        log_path = logs_dir / log_name
-        log_file = log_path.open("ab")
+        for attempt in range(2):
+            log_name = time.strftime("mediamtx-%Y%m%d-%H%M%S.log")
+            log_path = logs_dir / log_name
+            log_file = log_path.open("ab")
 
-        try:
-            process = await asyncio.create_subprocess_exec(
-                str(config.binary_path),
-                str(config_path),
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=log_file,
-                stderr=asyncio.subprocess.STDOUT,
-                cwd=str(runtime_dir),
-            )
-        except Exception:
-            log_file.close()
-            raise
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    str(config.binary_path),
+                    str(config_path),
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=log_file,
+                    stderr=asyncio.subprocess.STDOUT,
+                    cwd=str(runtime_dir),
+                )
+            except Exception:
+                log_file.close()
+                raise
 
-        self._process = process
-        self._started_at_unix = time.time()
-        self._bind_host = config.bind_host
-        self._ports = config.ports
-        self._warnings = config.warnings
-        self._config_hash = config.config_hash
-        self._platform_key = config.platform_key
-        self._binary_path = config.binary_path
-        self._config_path = config_path
-        self._log_path = log_path
-        self._log_file = log_file
-        self._publish_credentials_by_path = dict(config.publish_credentials_by_path)
-        self._read_auth_by_path = dict(config.read_auth_by_path)
-        self._last_error = None
+            self._process = process
+            self._started_at_unix = time.time()
+            self._bind_host = config.bind_host
+            self._ports = config.ports
+            self._warnings = config.warnings + tuple(extra_warnings)
+            self._config_hash = config.config_hash
+            self._platform_key = config.platform_key
+            self._binary_path = config.binary_path
+            self._config_path = config_path
+            self._log_path = log_path
+            self._log_file = log_file
+            self._publish_credentials_by_path = dict(config.publish_credentials_by_path)
+            self._read_auth_by_path = dict(config.read_auth_by_path)
+            self._last_error = None
 
-        try:
-            await self._wait_until_ready_locked(timeout_s=8.0)
-        except Exception as exc:
-            log_hint = _mediamtx_log_error_hint(self._log_path)
-            self._last_error = str(exc)
-            if log_hint:
-                self._last_error = f"{self._last_error}. {log_hint}"
-            await self._stop_locked(clear_error=False)
-            raise
+            try:
+                await self._wait_until_ready_locked(timeout_s=8.0)
+                return
+            except Exception as exc:
+                log_hint = _mediamtx_log_error_hint(self._log_path)
+                failed_pid = process.pid
+
+                if attempt == 0 and _should_attempt_auto_reclaim(exc=exc, log_hint=log_hint):
+                    await self._stop_locked(clear_error=False)
+                    killed_pids = await asyncio.to_thread(
+                        kill_mediamtx_processes_for_config_path,
+                        str(config_path),
+                        exclude_pids={failed_pid} if failed_pid else None,
+                    )
+                    if killed_pids:
+                        extra_warnings.append(_format_auto_reclaim_warning(killed_pids))
+                        await asyncio.sleep(0.4)
+                        continue
+
+                self._last_error = str(exc)
+                if log_hint:
+                    self._last_error = f"{self._last_error}. {log_hint}"
+                await self._stop_locked(clear_error=False)
+                raise
 
     async def _wait_until_ready_locked(self, *, timeout_s: float) -> None:
         deadline = time.monotonic() + max(1.0, float(timeout_s))
@@ -860,3 +878,14 @@ def _mediamtx_log_error_hint(log_path: Path | None, *, max_bytes: int = 4096) ->
             if detail:
                 return f"MediaMTX log: {detail}"
     return ""
+
+
+def _should_attempt_auto_reclaim(*, exc: Exception, log_hint: str) -> bool:
+    text = f"{exc} {log_hint}".strip().lower()
+    return "address already in use" in text
+
+
+def _format_auto_reclaim_warning(killed_pids: list[int]) -> str:
+    count = len(killed_pids)
+    suffix = f" (pid: {killed_pids[0]})" if count == 1 else f" (pids: {', '.join(str(pid) for pid in killed_pids)})"
+    return f"Automatically recovered {count} stale MediaMTX process(es) for this data directory{suffix}."

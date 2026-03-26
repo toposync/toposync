@@ -124,6 +124,17 @@ function joinIceServers(values: string[] | undefined): string {
     .join("\n");
 }
 
+function formatDuration(seconds: number | null | undefined): string {
+  if (!Number.isFinite(seconds) || !seconds || seconds < 1) return "-";
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${secs}s`;
+  return `${secs}s`;
+}
+
 function defaultOutput(protocol: "hls" | "rtsp" | "webrtc"): TransmissionOutput {
   return {
     id: createLocalId("output"),
@@ -175,6 +186,7 @@ function StreamingSettingsPanelContent({
 
   const [engineLoading, setEngineLoading] = useState(true);
   const [engineBusy, setEngineBusy] = useState(false);
+  const [enginePendingAction, setEnginePendingAction] = useState<"start" | "stop" | "restart" | "reclaim" | "download" | "refresh" | null>(null);
   const [engineStatus, setEngineStatus] = useState<EngineStatusResponse | null>(null);
   const [engineError, setEngineError] = useState<string | null>(null);
 
@@ -346,6 +358,14 @@ function StreamingSettingsPanelContent({
   }, [fetchAvailableCamerasData, fetchEngineData, fetchHealthData, fetchProcessingServersData, fetchSettingsData, fetchTransmissionsData]);
 
   useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      void fetchEngineData();
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [fetchEngineData]);
+
+  useEffect(() => {
     if (activeTransmissionId && transmissions.some((item) => item.id === activeTransmissionId)) return;
     setActiveTransmissionId(transmissions[0]?.id ?? null);
   }, [activeTransmissionId, transmissions]);
@@ -415,6 +435,7 @@ function StreamingSettingsPanelContent({
       if (!ok) return;
     }
     setEngineBusy(true);
+    setEnginePendingAction(action);
     setEngineError(null);
     try {
       const payload = await postEngineAction(action);
@@ -422,13 +443,16 @@ function StreamingSettingsPanelContent({
       void fetchSettingsData();
     } catch (error) {
       setEngineError(error instanceof Error ? error.message : String(error));
+      void fetchEngineData();
     } finally {
       setEngineBusy(false);
+      setEnginePendingAction(null);
     }
   }
 
   async function downloadEngine(): Promise<void> {
     setEngineBusy(true);
+    setEnginePendingAction("download");
     setEngineError(null);
     try {
       const payload = await postEngineDownload();
@@ -436,8 +460,19 @@ function StreamingSettingsPanelContent({
       void fetchSettingsData();
     } catch (error) {
       setEngineError(error instanceof Error ? error.message : String(error));
+      void fetchEngineData();
     } finally {
       setEngineBusy(false);
+      setEnginePendingAction(null);
+    }
+  }
+
+  async function refreshEngineStatus(): Promise<void> {
+    setEnginePendingAction("refresh");
+    try {
+      await fetchEngineData();
+    } finally {
+      setEnginePendingAction(null);
     }
   }
 
@@ -666,6 +701,31 @@ function StreamingSettingsPanelContent({
   }
 
   const activeUrls = activeTransmissionId ? urlsByTransmissionId[activeTransmissionId] ?? null : null;
+  const engineRunning = Boolean(engineStatus?.running);
+  const orphanPids = Array.isArray(engineStatus?.orphan_pids) ? engineStatus.orphan_pids : [];
+  const primaryEngineAction = engineRunning ? "restart" : "start";
+  const primaryEngineLabel =
+    enginePendingAction === "start"
+      ? t("ext.streaming.engine.starting", {}, "Iniciando…")
+      : enginePendingAction === "restart"
+        ? t("ext.streaming.engine.restarting", {}, "Reiniciando…")
+        : engineRunning
+          ? t("ext.streaming.engine.restart", {}, "Reiniciar")
+          : t("ext.streaming.engine.start", {}, "Iniciar");
+  const stopLabel =
+    enginePendingAction === "stop" ? t("ext.streaming.engine.stopping", {}, "Parando…") : t("ext.streaming.engine.stop", {}, "Parar");
+  const reclaimLabel =
+    enginePendingAction === "reclaim"
+      ? t("ext.streaming.engine.reclaiming", {}, "Recuperando…")
+      : t("ext.streaming.engine.reclaim", {}, "Recuperar");
+  const downloadLabel =
+    enginePendingAction === "download"
+      ? t("ext.streaming.engine.downloading", {}, "Baixando…")
+      : t("ext.streaming.engine.download", {}, "Baixar engine");
+  const refreshLabel =
+    enginePendingAction === "refresh"
+      ? t("ext.streaming.engine.refreshing", {}, "Atualizando…")
+      : t("ext.streaming.engine.refresh", {}, "Atualizar");
 
   return (
     <div className="streamingSettingsPanel">
@@ -739,6 +799,23 @@ function StreamingSettingsPanelContent({
             <div className="settingsStatusMuted">{t("ext.streaming.engine.stopped")}</div>
           ) : null}
 
+          {engineStatus ? (
+            <div className="streamingFormGrid streamingFormGridEnginePorts" style={{ marginTop: 10 }}>
+              <div className="cardMeta">
+                {t("ext.streaming.engine.meta_version", {}, "Versão")}: {engineStatus.mediamtx_version || "-"}
+              </div>
+              <div className="cardMeta">
+                {t("ext.streaming.engine.meta_pid", {}, "PID")}: {engineStatus.pid ?? "-"}
+              </div>
+              <div className="cardMeta">
+                {t("ext.streaming.engine.meta_uptime", {}, "Uptime")}: {formatDuration(engineStatus.uptime_seconds)}
+              </div>
+              <div className="cardMeta">
+                {t("ext.streaming.engine.meta_api", {}, "API")}: {engineStatus.ports?.api ?? "-"}
+              </div>
+            </div>
+          ) : null}
+
           {engineStatus?.bind_host && engineStatus?.ports ? (
             <div className="cardMeta" style={{ marginTop: 6 }}>
               {engineStatus.bind_host} - RTSP {engineStatus.ports.rtsp ?? "-"} - HLS {engineStatus.ports.hls ?? "-"} - WebRTC{" "}
@@ -765,8 +842,22 @@ function StreamingSettingsPanelContent({
           ) : null}
 
           {Array.isArray(engineStatus?.warnings) && engineStatus.warnings.length > 0 ? (
+            <div style={{ marginTop: 6 }}>
+              {engineStatus.warnings.map((warning, index) => (
+                <div className="cardMeta" key={`${warning}-${index}`} style={index > 0 ? { marginTop: 4 } : undefined}>
+                  {warning}
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {orphanPids.length > 0 ? (
             <div className="cardMeta" style={{ marginTop: 6 }}>
-              {engineStatus.warnings.join(" ")}
+              {t(
+                "ext.streaming.engine.orphan_processes",
+                { count: orphanPids.length, pids: orphanPids.join(", ") },
+                `Found ${orphanPids.length} external MediaMTX process(es) for this data directory: ${orphanPids.join(", ")}.`,
+              )}
             </div>
           ) : null}
 
@@ -787,37 +878,57 @@ function StreamingSettingsPanelContent({
               className="primaryButton"
               type="button"
               disabled={engineBusy}
-              onClick={() => void runEngineAction("start")}
+              onClick={() => void runEngineAction(primaryEngineAction)}
             >
-              {t("ext.streaming.engine.start", {}, "Start")}
+              {primaryEngineLabel}
             </button>
             <button className="chipButton" type="button" disabled={engineBusy} onClick={() => void downloadEngine()}>
               <i className="fa-solid fa-download" aria-hidden="true" />{" "}
-              {t("ext.streaming.engine.download", {}, "Download engine")}
+              {downloadLabel}
             </button>
             <button
               className="chipButton"
               type="button"
-              disabled={engineBusy}
+              disabled={engineBusy || !engineRunning}
               onClick={() => void runEngineAction("stop")}
             >
-              {t("ext.streaming.engine.stop", {}, "Stop")}
+              {stopLabel}
+            </button>
+            <button className="chipButton" type="button" disabled={engineBusy} onClick={() => void runEngineAction("reclaim")}>
+              <i className="fa-solid fa-broom" aria-hidden="true" /> {reclaimLabel}
             </button>
             <button
               className="chipButton"
               type="button"
-              disabled={engineBusy}
-              onClick={() => void runEngineAction("restart")}
+              disabled={engineBusy || enginePendingAction === "refresh"}
+              onClick={() => void refreshEngineStatus()}
             >
-              {t("ext.streaming.engine.restart", {}, "Restart")}
-            </button>
-            <button className="chipButton" type="button" disabled={engineBusy} onClick={() => void runEngineAction("reclaim")}>
-              <i className="fa-solid fa-broom" aria-hidden="true" /> {t("ext.streaming.engine.reclaim", {}, "Reclaim")}
-            </button>
-            <button className="chipButton" type="button" disabled={engineBusy} onClick={() => void fetchEngineData()}>
-              <i className="fa-solid fa-rotate-right" aria-hidden="true" /> {t("ext.streaming.engine.refresh", {}, "Refresh")}
+              <i className="fa-solid fa-rotate-right" aria-hidden="true" /> {refreshLabel}
             </button>
           </div>
+
+          {engineStatus ? (
+            <div style={{ marginTop: 10 }}>
+              <div className="cardMeta">
+                {t("ext.streaming.engine.meta_restarts", {}, "Reinícios")}: {engineStatus.restart_count ?? 0}
+              </div>
+              {engineStatus.binary_path ? (
+                <div className="cardMeta" style={{ marginTop: 4 }}>
+                  {t("ext.streaming.engine.meta_binary", {}, "Binário")}: {engineStatus.binary_path}
+                </div>
+              ) : null}
+              {engineStatus.config_path ? (
+                <div className="cardMeta" style={{ marginTop: 4 }}>
+                  {t("ext.streaming.engine.meta_config", {}, "Config")}: {engineStatus.config_path}
+                </div>
+              ) : null}
+              {engineStatus.log_path ? (
+                <div className="cardMeta" style={{ marginTop: 4 }}>
+                  {t("ext.streaming.engine.meta_log", {}, "Log")}: {engineStatus.log_path}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="sectionDivider" />
 

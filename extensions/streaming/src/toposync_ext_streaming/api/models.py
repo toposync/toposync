@@ -372,6 +372,8 @@ class StreamingEngineStatusResponse(BaseModel):
     test_path: str = "test"
     urls: StreamingEngineUrls
     warnings: list[str] = Field(default_factory=list)
+    restart_count: int = Field(default=0, ge=0)
+    orphan_pids: list[int] = Field(default_factory=list)
 
 
 class TransmissionCreateRequest(BaseModel):

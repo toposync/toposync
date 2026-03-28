@@ -3,12 +3,12 @@ import Select, { type MultiValue, type SingleValue } from "react-select";
 import CreatableSelect from "react-select/creatable";
 import type { StylesConfig } from "react-select";
 
-import type { CameraContextsResponse } from "../../../../../util/api";
+import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../../../../util/api";
 import { i18n } from "../../../../../util/i18n";
 
 import { buildArtifactSuggestions, pipelinesReactSelectStyles } from "../../constants";
 import type { CameraAreaOption, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
-import { isRecord, prettyOperatorName, safeJsonParse } from "../../utils";
+import { prettyOperatorName } from "../../utils";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
 import {
   CropRectangleDrawModal,
@@ -17,59 +17,49 @@ import {
   PrivacyRegionDrawModal,
   type SnapshotSource,
 } from "./ImageDrawModals";
+import { buildPipelineStepPreviewRequest } from "./pipelineStepSnapshots";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
+
+type ImageDrawUnavailableReason =
+  | { code: "invalid_graph"; detail?: string }
+  | { code: "no_camera_source" | "no_camera_selected" | "no_pipeline_name" }
+  | { code: "blocked"; operatorId?: string };
 
 type ImageDrawEligibility =
   | { enabled: true; snapshotSource: SnapshotSource }
   | {
       enabled: false;
       snapshotSource: SnapshotSource | null;
-      reason: { code: "no_camera_source" | "no_camera_selected" | "no_pipeline_name" | "blocked"; operatorId?: string };
+      reason: ImageDrawUnavailableReason;
     };
-
-function parseInteractiveStepConfig(step: InteractiveStep): Record<string, unknown> {
-  const parsed = safeJsonParse(step.configText || "{}");
-  if (!parsed.ok) return {};
-  if (!isRecord(parsed.data)) return {};
-  return parsed.data as Record<string, unknown>;
-}
-
-function resolvePipelineStepSourceIdFromCameraSourceConfig(config: Record<string, unknown>): string | null {
-  const cameraId = String((config as any).camera_id ?? "").trim();
-  if (cameraId) return cameraId;
-  const rtspUrl = String((config as any).rtsp_url ?? "").trim();
-  if (!rtspUrl) return null;
-  return "camera:adhoc";
-}
 
 function resolveImageDrawEligibility(
   steps: InteractiveStep[],
   currentIndex: number,
   pipelineName: string | null,
   nodeId: string,
+  operatorsById: Record<string, PipelineOperatorDefinition>,
 ): ImageDrawEligibility {
-  let sourceIndex = -1;
-  for (let idx = currentIndex - 1; idx >= 0; idx -= 1) {
-    if (steps[idx]?.operatorId === "camera.source") {
-      sourceIndex = idx;
-      break;
-    }
+  const built = buildPipelineStepPreviewRequest(steps, currentIndex, pipelineName, nodeId, operatorsById);
+  if (!built.enabled) {
+    return { enabled: false, snapshotSource: null, reason: built.reason };
   }
-  if (sourceIndex < 0) {
-    return { enabled: false, snapshotSource: null, reason: { code: "no_camera_source" } };
+  return { enabled: true, snapshotSource: { kind: "pipeline_step", request: built.request } };
+}
+
+function imageDrawUnavailableMessage(
+  t: (key: string, vars?: Record<string, unknown>) => string,
+  reason: ImageDrawUnavailableReason,
+): string {
+  if (reason.code === "no_camera_source") return t("core.ui.pipelines.panels.image_draw.unavailable.no_source");
+  if (reason.code === "no_camera_selected") return t("core.ui.pipelines.panels.image_draw.unavailable.no_camera");
+  if (reason.code === "no_pipeline_name") return t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline");
+  if (reason.code === "invalid_graph") return String(reason.detail || t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline"));
+  if (reason.code === "blocked") {
+    return t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: prettyOperatorName(reason.operatorId ?? "") });
   }
-
-  const sourceConfig = parseInteractiveStepConfig(steps[sourceIndex]!);
-  const sourceId = resolvePipelineStepSourceIdFromCameraSourceConfig(sourceConfig);
-  if (!sourceId) {
-    return { enabled: false, snapshotSource: null, reason: { code: "no_camera_selected" } };
-  }
-
-  const safePipeline = String(pipelineName ?? "").trim();
-  if (!safePipeline) return { enabled: false, snapshotSource: null, reason: { code: "no_pipeline_name" } };
-
-  return { enabled: true, snapshotSource: { kind: "pipeline_step", pipelineName: safePipeline, nodeId, sourceId } };
+  return t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline");
 }
 
 type CameraSourceProps = {
@@ -377,6 +367,7 @@ type MotionGateProps = {
   nodeId: string;
   pipelineName: string | null;
   steps: InteractiveStep[];
+  operatorsById: Record<string, PipelineOperatorDefinition>;
   index: number;
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
@@ -402,6 +393,7 @@ export function MotionGateConfigCard({
   nodeId,
   pipelineName,
   steps,
+  operatorsById,
   index,
   showAdvanced,
   onUpdateConfig,
@@ -432,8 +424,8 @@ export function MotionGateConfigCard({
   const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? (config as any).fallback_to_payload_frame ?? true;
 
   const drawEligibility = React.useMemo(
-    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId),
-    [steps, index, pipelineName, nodeId],
+    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId, operatorsById),
+    [steps, index, pipelineName, nodeId, operatorsById],
   );
 
   const [isDrawOpen, setIsDrawOpen] = React.useState(false);
@@ -570,13 +562,7 @@ export function MotionGateConfigCard({
 
       {!drawEligibility.enabled ? (
         <div className="pipelinesStepHint" style={{ textAlign: "right" }}>
-          {drawEligibility.reason.code === "no_camera_source"
-            ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
-            : drawEligibility.reason.code === "no_camera_selected"
-              ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
-              : drawEligibility.reason.code === "no_pipeline_name"
-                ? t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline")
-              : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: prettyOperatorName(drawEligibility.reason.operatorId ?? "") })}
+          {imageDrawUnavailableMessage(t, drawEligibility.reason)}
         </div>
       ) : null}
 
@@ -645,6 +631,7 @@ export function MotionBgSubAdaptiveConfigCard({
   nodeId,
   pipelineName,
   steps,
+  operatorsById,
   index,
   showAdvanced,
   onUpdateConfig,
@@ -701,8 +688,8 @@ export function MotionBgSubAdaptiveConfigCard({
   const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? true;
 
   const drawEligibility = React.useMemo(
-    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId),
-    [steps, index, pipelineName, nodeId],
+    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId, operatorsById),
+    [steps, index, pipelineName, nodeId, operatorsById],
   );
 
   const [isDrawOpen, setIsDrawOpen] = React.useState(false);
@@ -861,13 +848,7 @@ export function MotionBgSubAdaptiveConfigCard({
 
       {!drawEligibility.enabled ? (
         <div className="pipelinesStepHint" style={{ textAlign: "right" }}>
-          {drawEligibility.reason.code === "no_camera_source"
-            ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
-            : drawEligibility.reason.code === "no_camera_selected"
-              ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
-              : drawEligibility.reason.code === "no_pipeline_name"
-                ? t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline")
-                : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: prettyOperatorName(drawEligibility.reason.operatorId ?? "") })}
+          {imageDrawUnavailableMessage(t, drawEligibility.reason)}
         </div>
       ) : null}
 
@@ -1112,6 +1093,7 @@ export function MotionSampleBgConfigCard({
   nodeId,
   pipelineName,
   steps,
+  operatorsById,
   index,
   showAdvanced,
   onUpdateConfig,
@@ -1185,8 +1167,8 @@ export function MotionSampleBgConfigCard({
   const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? true;
 
   const drawEligibility = React.useMemo(
-    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId),
-    [steps, index, pipelineName, nodeId],
+    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId, operatorsById),
+    [steps, index, pipelineName, nodeId, operatorsById],
   );
 
   const [isDrawOpen, setIsDrawOpen] = React.useState(false);
@@ -1362,13 +1344,7 @@ export function MotionSampleBgConfigCard({
 
       {!drawEligibility.enabled ? (
         <div className="pipelinesStepHint" style={{ textAlign: "right" }}>
-          {drawEligibility.reason.code === "no_camera_source"
-            ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
-            : drawEligibility.reason.code === "no_camera_selected"
-              ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
-              : drawEligibility.reason.code === "no_pipeline_name"
-                ? t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline")
-                : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: prettyOperatorName(drawEligibility.reason.operatorId ?? "") })}
+          {imageDrawUnavailableMessage(t, drawEligibility.reason)}
         </div>
       ) : null}
 
@@ -1707,12 +1683,13 @@ type ImageCropProps = {
   config: Record<string, unknown>;
   pipelineName: string | null;
   steps: InteractiveStep[];
+  operatorsById: Record<string, PipelineOperatorDefinition>;
   index: number;
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
 };
 
-export function ImageCropConfigCard({ config, pipelineName, steps, index, showAdvanced, onUpdateConfig }: ImageCropProps): React.ReactElement {
+export function ImageCropConfigCard({ config, pipelineName, steps, operatorsById, index, showAdvanced, onUpdateConfig }: ImageCropProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const unitsRaw = String((config as any).units ?? "percent").trim().toLowerCase();
   const units = unitsRaw === "pixels" ? "pixels" : "percent";
@@ -1729,8 +1706,8 @@ export function ImageCropConfigCard({ config, pipelineName, steps, index, showAd
 
   const nodeId = String(steps[index]?.nodeId ?? "").trim();
   const drawEligibility = React.useMemo(
-    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId),
-    [steps, index, pipelineName, nodeId],
+    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId, operatorsById),
+    [steps, index, pipelineName, nodeId, operatorsById],
   );
   const [isDrawOpen, setIsDrawOpen] = React.useState(false);
 
@@ -1749,13 +1726,7 @@ export function ImageCropConfigCard({ config, pipelineName, steps, index, showAd
         </button>
         {!drawEligibility.enabled ? (
           <div className="pipelinesStepHint" style={{ textAlign: "right" }}>
-            {drawEligibility.reason.code === "no_camera_source"
-              ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
-              : drawEligibility.reason.code === "no_camera_selected"
-                ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
-                : drawEligibility.reason.code === "no_pipeline_name"
-                  ? t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline")
-                : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: prettyOperatorName(drawEligibility.reason.operatorId ?? "") })}
+            {imageDrawUnavailableMessage(t, drawEligibility.reason)}
           </div>
         ) : null}
       </div>
@@ -1909,6 +1880,7 @@ type ImagePerspectiveCropProps = {
   config: Record<string, unknown>;
   pipelineName: string | null;
   steps: InteractiveStep[];
+  operatorsById: Record<string, PipelineOperatorDefinition>;
   index: number;
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
@@ -1954,6 +1926,7 @@ export function ImagePerspectiveCropConfigCard({
   config,
   pipelineName,
   steps,
+  operatorsById,
   index,
   showAdvanced,
   onUpdateConfig,
@@ -1965,8 +1938,8 @@ export function ImagePerspectiveCropConfigCard({
   const points = readPerspectivePoints(config, units);
   const nodeId = String(steps[index]?.nodeId ?? "").trim();
   const drawEligibility = React.useMemo(
-    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId),
-    [steps, index, pipelineName, nodeId],
+    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId, operatorsById),
+    [steps, index, pipelineName, nodeId, operatorsById],
   );
   const [isDrawOpen, setIsDrawOpen] = React.useState(false);
 
@@ -2026,13 +1999,7 @@ export function ImagePerspectiveCropConfigCard({
         </button>
         {!drawEligibility.enabled ? (
           <div className="pipelinesStepHint" style={{ textAlign: "right" }}>
-            {drawEligibility.reason.code === "no_camera_source"
-              ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
-              : drawEligibility.reason.code === "no_camera_selected"
-                ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
-                : drawEligibility.reason.code === "no_pipeline_name"
-                  ? t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline")
-                : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: prettyOperatorName(drawEligibility.reason.operatorId ?? "") })}
+            {imageDrawUnavailableMessage(t, drawEligibility.reason)}
           </div>
         ) : null}
       </div>
@@ -2250,6 +2217,7 @@ type ImagePrivacyProps = {
   config: Record<string, unknown>;
   pipelineName: string | null;
   steps: InteractiveStep[];
+  operatorsById: Record<string, PipelineOperatorDefinition>;
   index: number;
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
@@ -2259,6 +2227,7 @@ export function ImagePrivacyConfigCard({
   config,
   pipelineName,
   steps,
+  operatorsById,
   index,
   showAdvanced,
   onUpdateConfig,
@@ -2298,8 +2267,8 @@ export function ImagePrivacyConfigCard({
 
   const nodeId = String(steps[index]?.nodeId ?? "").trim();
   const drawEligibility = React.useMemo(
-    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId),
-    [steps, index, pipelineName, nodeId],
+    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId, operatorsById),
+    [steps, index, pipelineName, nodeId, operatorsById],
   );
   const [isDrawOpen, setIsDrawOpen] = React.useState(false);
 
@@ -2328,13 +2297,7 @@ export function ImagePrivacyConfigCard({
 
       {!drawEligibility.enabled ? (
         <div className="pipelinesStepHint" style={{ textAlign: "right", marginTop: 8 }}>
-          {drawEligibility.reason.code === "no_camera_source"
-            ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
-            : drawEligibility.reason.code === "no_camera_selected"
-              ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
-              : drawEligibility.reason.code === "no_pipeline_name"
-                ? t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline")
-                : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: prettyOperatorName(drawEligibility.reason.operatorId ?? "") })}
+          {imageDrawUnavailableMessage(t, drawEligibility.reason)}
         </div>
       ) : null}
 

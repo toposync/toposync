@@ -115,6 +115,20 @@ export type PipelineCompilePythonOutput = PipelineCompileOutput & {
   graph: Record<string, unknown>;
 };
 
+export type PipelinePreviewFallbackSnapshotRequest = {
+  pipeline_name: string;
+  node_id: string;
+  source_id: string;
+};
+
+export type PipelinePreviewFrameRequest = {
+  pipeline: Pipeline;
+  fallback_snapshot?: PipelinePreviewFallbackSnapshotRequest | null;
+  timeout_seconds?: number;
+  format?: "png" | "jpg";
+  jpeg_quality?: number;
+};
+
 export type PipelineStats = {
   pipeline_name: string;
   window_seconds: number;
@@ -1100,6 +1114,23 @@ export async function fetchRtspSnapshot(
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Snapshot failed: ${response.status}`);
+  }
+  return response.blob();
+}
+
+export async function fetchPipelinePreviewFrame(
+  payload: PipelinePreviewFrameRequest,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const response = await fetch("/api/pipelines/preview/frame", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Preview failed: ${response.status}`);
   }
   return response.blob();
 }

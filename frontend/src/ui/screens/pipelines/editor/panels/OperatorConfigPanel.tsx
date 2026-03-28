@@ -157,6 +157,7 @@ export function OperatorConfigPanel({
         nodeId={step.nodeId}
         pipelineName={pipelineName}
         steps={steps}
+        operatorsById={operatorsById}
         index={index}
         showAdvanced={showAdvanced}
         onUpdateConfig={onUpdateConfig}
@@ -172,6 +173,7 @@ export function OperatorConfigPanel({
         nodeId={step.nodeId}
         pipelineName={pipelineName}
         steps={steps}
+        operatorsById={operatorsById}
         index={index}
         showAdvanced={showAdvanced}
         onUpdateConfig={onUpdateConfig}
@@ -187,6 +189,7 @@ export function OperatorConfigPanel({
         nodeId={step.nodeId}
         pipelineName={pipelineName}
         steps={steps}
+        operatorsById={operatorsById}
         index={index}
         showAdvanced={showAdvanced}
         onUpdateConfig={onUpdateConfig}
@@ -200,6 +203,7 @@ export function OperatorConfigPanel({
         config={config}
         pipelineName={pipelineName}
         steps={steps}
+        operatorsById={operatorsById}
         index={index}
         showAdvanced={showAdvanced}
         onUpdateConfig={onUpdateConfig}
@@ -212,6 +216,7 @@ export function OperatorConfigPanel({
         config={config}
         pipelineName={pipelineName}
         steps={steps}
+        operatorsById={operatorsById}
         index={index}
         showAdvanced={showAdvanced}
         onUpdateConfig={onUpdateConfig}
@@ -227,6 +232,7 @@ export function OperatorConfigPanel({
         config={config}
         pipelineName={pipelineName}
         steps={steps}
+        operatorsById={operatorsById}
         index={index}
         showAdvanced={showAdvanced}
         onUpdateConfig={onUpdateConfig}

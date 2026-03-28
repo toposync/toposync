@@ -1,15 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { fetchCameraSnapshot, fetchRtspSnapshot } from "../../../../../util/api";
+import { fetchCameraSnapshot, fetchPipelinePreviewFrame, fetchRtspSnapshot, type PipelinePreviewFrameRequest } from "../../../../../util/api";
 import { i18n } from "../../../../../util/i18n";
 import { Icon } from "../../../../Icon";
 import { Modal } from "../../../../Modal";
-import { buildPipelineStepSnapshotUrl } from "./pipelineStepSnapshots";
 
 export type SnapshotSource =
   | { kind: "camera"; cameraId: string }
   | { kind: "rtsp"; url: string; username?: string; password?: string }
-  | { kind: "pipeline_step"; pipelineName: string; nodeId: string; sourceId: string };
+  | { kind: "pipeline_step"; request: PipelinePreviewFrameRequest };
 
 type SnapshotState = {
   url: string | null;
@@ -60,23 +59,7 @@ function useSnapshotObjectUrl(open: boolean, source: SnapshotSource | null): Sna
                 { url: source.url, username: source.username, password: source.password },
                 controller.signal,
               )
-            : await (async () => {
-                const url = buildPipelineStepSnapshotUrl(
-                  {
-                    pipelineName: source.pipelineName,
-                    nodeId: source.nodeId,
-                    sourceId: source.sourceId,
-                    filename: "input.png",
-                  },
-                  nonce,
-                );
-                const response = await fetch(url, { signal: controller.signal });
-                if (!response.ok) {
-                  const detail = await response.text().catch(() => "");
-                  throw new Error(detail || `Snapshot failed: ${response.status}`);
-                }
-                return response.blob();
-              })();
+            : await fetchPipelinePreviewFrame(source.request, controller.signal);
       if (cancelled) return;
       const nextUrl = URL.createObjectURL(blob);
       setUrl((previous) => {
@@ -111,9 +94,7 @@ function useSnapshotObjectUrl(open: boolean, source: SnapshotSource | null): Sna
     (source as any)?.url,
     (source as any)?.username,
     (source as any)?.password,
-    (source as any)?.pipelineName,
-    (source as any)?.nodeId,
-    (source as any)?.sourceId,
+    JSON.stringify((source as any)?.request ?? null),
     nonce,
   ]);
 

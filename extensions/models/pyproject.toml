@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Toposync first-party extension: import 3D models (GLB/GLTF) with 2D previews."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["toposync>=0.1.0"]
+dependencies = ["toposync-core>=0.3.0"]
 
 [project.entry-points."toposync.extensions"]
 models = "toposync_ext_models.plugin:ModelsExtension"

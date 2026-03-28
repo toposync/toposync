@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Toposync first-party extension: Home Assistant integration (scaffold)."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["toposync>=0.1.0", "httpx>=0.27", "websockets>=12.0"]
+dependencies = ["toposync-core>=0.3.0", "httpx>=0.27", "websockets>=12.0"]
 
 [project.entry-points."toposync.extensions"]
 home_assistant = "toposync_ext_home_assistant.plugin:HomeAssistantExtension"

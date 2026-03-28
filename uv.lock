@@ -1176,7 +1176,7 @@ wheels = [
 ]
 
 [[package]]
-name = "toposync"
+name = "toposync-core"
 version = "0.3.0"
 source = { editable = "." }
 dependencies = [
@@ -1231,14 +1231,14 @@ source = { editable = "extensions/cameras" }
 dependencies = [
     { name = "numpy" },
     { name = "opencv-python-headless" },
-    { name = "toposync" },
+    { name = "toposync-core" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "opencv-python-headless", specifier = ">=4.10" },
-    { name = "toposync", specifier = ">=0.1.0" },
+    { name = "toposync-core", specifier = ">=0.3.0" },
 ]
 
 [[package]]
@@ -1247,14 +1247,14 @@ version = "0.1.0"
 source = { editable = "extensions/home_assistant" }
 dependencies = [
     { name = "httpx" },
-    { name = "toposync" },
+    { name = "toposync-core" },
     { name = "websockets" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
-    { name = "toposync", specifier = ">=0.1.0" },
+    { name = "toposync-core", specifier = ">=0.3.0" },
     { name = "websockets", specifier = ">=12.0" },
 ]
 
@@ -1263,22 +1263,22 @@ name = "toposync-ext-images"
 version = "0.1.0"
 source = { editable = "extensions/images" }
 dependencies = [
-    { name = "toposync" },
+    { name = "toposync-core" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "toposync", specifier = ">=0.1.0" }]
+requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
 
 [[package]]
 name = "toposync-ext-models"
 version = "0.1.0"
 source = { editable = "extensions/models" }
 dependencies = [
-    { name = "toposync" },
+    { name = "toposync-core" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "toposync", specifier = ">=0.1.0" }]
+requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
 
 [[package]]
 name = "toposync-ext-streaming"
@@ -1287,14 +1287,14 @@ source = { editable = "extensions/streaming" }
 dependencies = [
     { name = "numpy" },
     { name = "opencv-python-headless" },
-    { name = "toposync" },
+    { name = "toposync-core" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "opencv-python-headless", specifier = ">=4.10" },
-    { name = "toposync", specifier = ">=0.1.0" },
+    { name = "toposync-core", specifier = ">=0.3.0" },
 ]
 
 [[package]]
@@ -1302,11 +1302,11 @@ name = "toposync-ext-structural"
 version = "0.1.0"
 source = { editable = "extensions/structural" }
 dependencies = [
-    { name = "toposync" },
+    { name = "toposync-core" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "toposync", specifier = ">=0.1.0" }]
+requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
 
 [[package]]
 name = "toposync-ext-vision"
@@ -1318,7 +1318,7 @@ dependencies = [
     { name = "onnx", version = "1.19.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
     { name = "onnx", version = "1.20.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
     { name = "onnxruntime" },
-    { name = "toposync" },
+    { name = "toposync-core" },
     { name = "toposync-ext-cameras" },
 ]
 
@@ -1328,7 +1328,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "onnx", specifier = ">=1.17" },
     { name = "onnxruntime", specifier = ">=1.20" },
-    { name = "toposync", specifier = ">=0.1.0" },
+    { name = "toposync-core", specifier = ">=0.3.0" },
     { name = "toposync-ext-cameras", specifier = ">=0.1.0" },
 ]
 

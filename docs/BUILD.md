@@ -55,3 +55,9 @@ uv build extensions/images
 ```
 
 Isso gera `extensions/<ext>/dist/*.whl`. Usuário final instala só o wheel (sem Node) e o app carrega o frontend prebuilt.
+
+Para validar que cada wheel leva seus assets de runtime (`extension.json`, `static/`, manifests, dados e licenças), rode:
+
+```bash
+python scripts/check_extension_wheels.py
+```

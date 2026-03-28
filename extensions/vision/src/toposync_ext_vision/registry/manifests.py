@@ -341,9 +341,11 @@ def _default_manifest_search_paths() -> list[Path]:
         paths.append(Path(env_data_dir).expanduser() / "vision-manifests")
     else:
         paths.append(Path.cwd() / ".toposync-data" / "vision-manifests")
-    built_in = Path(__file__).resolve().parents[3] / "manifests"
-    if built_in.exists():
-        paths.append(built_in)
+    package_builtin = Path(__file__).resolve().parents[1] / "manifests"
+    repo_builtin = Path(__file__).resolve().parents[3] / "manifests"
+    for built_in in (package_builtin, repo_builtin):
+        if built_in.exists():
+            paths.append(built_in)
     return paths
 
 

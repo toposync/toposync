@@ -19,5 +19,8 @@ vision = "toposync_ext_vision.plugin:VisionExtension"
 requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/toposync_ext_vision"]

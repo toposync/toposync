@@ -104,5 +104,6 @@ Uma extensão “prebuilt” precisa:
 - `src/<pkg>/extension.json` (manifesto)
 - `src/<pkg>/static/remoteEntry.js` (+ chunks, se houver)
 
-O manifesto base está em `extensions/structural/src/toposync_ext_structural/extension.json`.
+Se a extensão tiver outros assets de runtime, como manifests, modelos, templates, binários auxiliares ou licenças, eles também precisam estar dentro do pacote importável (`src/<pkg>/...`) ou ser copiados para lá no build do wheel. A extensão instalada nunca deve depender de caminhos do checkout do repo.
 
+O manifesto base está em `extensions/structural/src/toposync_ext_structural/extension.json`.

@@ -23,6 +23,7 @@ import {
   CameraSourceConfigCard,
   ImageAdjustConfigCard,
   ImageCropConfigCard,
+  ImagePrivacyConfigCard,
   ImagePerspectiveCropConfigCard,
   ImageResizeConfigCard,
   MotionBgSubAdaptiveConfigCard,
@@ -219,6 +220,18 @@ export function OperatorConfigPanel({
   }
   if (operatorId === "camera.image_adjust") {
     return <ImageAdjustConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
+  }
+  if (operatorId === "camera.image_privacy") {
+    return (
+      <ImagePrivacyConfigCard
+        config={config}
+        pipelineName={pipelineName}
+        steps={steps}
+        index={index}
+        showAdvanced={showAdvanced}
+        onUpdateConfig={onUpdateConfig}
+      />
+    );
   }
   if (operatorId === "core.throttle") {
     return <ThrottleConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;

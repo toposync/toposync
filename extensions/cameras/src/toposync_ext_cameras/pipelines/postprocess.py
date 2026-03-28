@@ -77,6 +77,17 @@ def _frame_crop_expression_hints() -> list[Any]:
     ]
 
 
+def _frame_privacy_expression_hints() -> list[Any]:
+    return [
+        payload_path_hint("payload.frame_privacy", value_type="object", description="Privacy-region metadata for the generated frame artifact."),
+        payload_path_hint("payload.frame_privacy.bbox01", value_type="array", description="Normalized privacy rectangle applied to the current frame."),
+        payload_path_hint("payload.frame_privacy.units", value_type="string", description="Units used to interpret the configured privacy region."),
+        payload_path_hint("payload.frame_privacy.effect", value_type="string", description="Privacy effect applied inside the region."),
+        payload_path_hint("payload.frame_privacy.output_artifact_name", value_type="string", description="Artifact name emitted by the privacy operator."),
+        payload_path_hint("payload.frame_privacy.set_stream_frame", value_type="boolean", description="Whether the privacy artifact becomes the stream frame."),
+    ]
+
+
 def _frame_warp_expression_hints() -> list[Any]:
     return [
         payload_path_hint("payload.frame_warp", value_type="object", description="Perspective warp metadata for the generated artifact."),
@@ -196,6 +207,58 @@ class ImageCropConfig(BaseModel):
     @classmethod
     def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
         return _normalize_artifact_names(value)
+
+    @field_validator("output_artifact_name")
+    @classmethod
+    def _validate_output_artifact_name(cls, value: str) -> str:
+        name = str(value or "").strip()
+        if not name:
+            raise ValueError("output_artifact_name is required")
+        return name
+
+
+class ImagePrivacyConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input_artifact_names: list[str] = Field(default_factory=lambda: ["treated", "original"])
+    fallback_to_stream_frame: bool = True
+    units: Literal["percent", "pixels"] = "percent"
+    left: float = Field(default=0.0, ge=0.0)
+    top: float = Field(default=0.0, ge=0.0)
+    right: float = Field(default=0.0, ge=0.0)
+    bottom: float = Field(default=0.0, ge=0.0)
+    effect: Literal["black", "white", "gray", "blur_medium", "blur_high"] = "blur_medium"
+
+    output_artifact_name: str = "frame"
+    min_region_size_px: int = Field(default=8, ge=1, le=4096)
+    set_stream_frame: bool = True
+    preserve_alpha: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_fields(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            values = dict(values)
+            if "fallback_to_payload_frame" in values and "fallback_to_stream_frame" not in values:
+                values["fallback_to_stream_frame"] = values.pop("fallback_to_payload_frame")
+            if "set_payload_frame" in values and "set_stream_frame" not in values:
+                values["set_stream_frame"] = values.pop("set_payload_frame")
+        return values
+
+    @field_validator("input_artifact_names", mode="after")
+    @classmethod
+    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
+        return _normalize_artifact_names(value)
+
+    @field_validator("effect")
+    @classmethod
+    def _normalize_effect(cls, value: str) -> str:
+        effect = str(value or "").strip().lower()
+        allowed = {"black", "white", "gray", "blur_medium", "blur_high"}
+        if effect in allowed:
+            return effect
+        if not effect:
+            return "blur_medium"
+        raise ValueError("effect must be one of: black, white, gray, blur_medium, blur_high")
 
     @field_validator("output_artifact_name")
     @classmethod
@@ -1091,6 +1154,185 @@ class ImageCropRuntime(TransformOperatorRuntime):
         return [replace(out, payload=payload)]
 
 
+class ImagePrivacyRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = ImagePrivacyConfig.model_validate(config)
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        packet = _ensure_original_artifact(packet)
+        selected_name, image = _resolve_input_image(
+            packet,
+            preferred_artifact_names=self._config.input_artifact_names,
+            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+        )
+        payload = dict(packet.payload)
+
+        shape = getattr(image, "shape", None)
+        if image is None or isinstance(image, (bytes, bytearray, memoryview)) or not shape or len(shape) < 2:
+            payload = _annotate_artifact_contract(
+                payload,
+                packet=packet,
+                preferred_input_artifact_names=self._config.input_artifact_names,
+                selected_input_artifact_name=selected_name,
+            )
+            return [replace(packet, payload=payload)]
+
+        try:
+            height = int(shape[0])
+            width = int(shape[1])
+        except Exception:
+            payload = _annotate_artifact_contract(
+                payload,
+                packet=packet,
+                preferred_input_artifact_names=self._config.input_artifact_names,
+                selected_input_artifact_name=selected_name,
+            )
+            return [replace(packet, payload=payload)]
+        if height <= 1 or width <= 1:
+            payload = _annotate_artifact_contract(
+                payload,
+                packet=packet,
+                preferred_input_artifact_names=self._config.input_artifact_names,
+                selected_input_artifact_name=selected_name,
+            )
+            return [replace(packet, payload=payload)]
+
+        if self._config.units == "pixels":
+            bbox01 = _normalize_bbox01(
+                (
+                    float(self._config.left) / float(width),
+                    float(self._config.top) / float(height),
+                    float(self._config.right) / float(width),
+                    float(self._config.bottom) / float(height),
+                ),
+            )
+        else:
+            bbox01 = _normalize_bbox01(
+                (
+                    float(self._config.left) / 100.0,
+                    float(self._config.top) / 100.0,
+                    float(self._config.right) / 100.0,
+                    float(self._config.bottom) / 100.0,
+                ),
+            )
+
+        px1, py1, px2, py2 = _bbox01_to_px(bbox01, width=width, height=height)
+        if (px2 - px1) < int(self._config.min_region_size_px) or (py2 - py1) < int(self._config.min_region_size_px):
+            payload["frame_privacy"] = {
+                "enabled": False,
+                "bbox01": list(bbox01),
+                "units": str(self._config.units),
+                "left": float(self._config.left),
+                "top": float(self._config.top),
+                "right": float(self._config.right),
+                "bottom": float(self._config.bottom),
+                "effect": str(self._config.effect),
+                "set_stream_frame": bool(self._config.set_stream_frame),
+                "set_payload_frame": bool(self._config.set_stream_frame),
+                "output_artifact_name": self._config.output_artifact_name,
+            }
+            payload = _annotate_artifact_contract(
+                payload,
+                packet=packet,
+                preferred_input_artifact_names=self._config.input_artifact_names,
+                selected_input_artifact_name=selected_name,
+            )
+            return [replace(packet, payload=payload)]
+
+        effect = str(self._config.effect)
+        preserve_alpha = bool(self._config.preserve_alpha)
+        run_blocking = getattr(context, "run_blocking", None)
+        if callable(run_blocking):
+            redacted = await run_blocking(
+                _apply_privacy_region_opencv,
+                image,
+                bbox01,
+                effect=effect,
+                preserve_alpha=preserve_alpha,
+                min_region_size_px=int(self._config.min_region_size_px),
+            )
+        else:
+            redacted = await asyncio.to_thread(
+                _apply_privacy_region_opencv,
+                image,
+                bbox01,
+                effect=effect,
+                preserve_alpha=preserve_alpha,
+                min_region_size_px=int(self._config.min_region_size_px),
+            )
+        if redacted is None:
+            payload = _annotate_artifact_contract(
+                payload,
+                packet=packet,
+                preferred_input_artifact_names=self._config.input_artifact_names,
+                selected_input_artifact_name=selected_name,
+            )
+            return [replace(packet, payload=payload)]
+
+        out = packet.with_artifact(
+            Artifact(
+                name=self._config.output_artifact_name,
+                data=redacted,
+                mime_type="image/raw",
+                metadata={
+                    "source": "camera.image_privacy",
+                    "source_artifact_name": selected_name,
+                    "bbox01": list(bbox01),
+                    "bbox_px": [int(px1), int(py1), int(px2), int(py2)],
+                    "units": str(self._config.units),
+                    "left": float(self._config.left),
+                    "top": float(self._config.top),
+                    "right": float(self._config.right),
+                    "bottom": float(self._config.bottom),
+                    "effect": effect,
+                },
+            ),
+        )
+
+        payload = dict(out.payload)
+        payload["frame_privacy"] = {
+            "enabled": True,
+            "bbox01": list(bbox01),
+            "bbox_px": [int(px1), int(py1), int(px2), int(py2)],
+            "units": str(self._config.units),
+            "left": float(self._config.left),
+            "top": float(self._config.top),
+            "right": float(self._config.right),
+            "bottom": float(self._config.bottom),
+            "effect": effect,
+            "set_stream_frame": bool(self._config.set_stream_frame),
+            "set_payload_frame": bool(self._config.set_stream_frame),
+            "output_artifact_name": self._config.output_artifact_name,
+        }
+
+        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
+            out = out.with_artifact(
+                Artifact(
+                    name="frame",
+                    data=redacted,
+                    mime_type="image/raw",
+                    metadata={"source": "camera.image_privacy", "derived_from": self._config.output_artifact_name},
+                ),
+            )
+        if self._config.set_stream_frame or self._config.output_artifact_name == "frame":
+            redacted_shape = getattr(redacted, "shape", None)
+            if redacted_shape and len(redacted_shape) >= 2:
+                try:
+                    payload["frame_height"] = int(redacted_shape[0])
+                    payload["frame_width"] = int(redacted_shape[1])
+                except Exception:
+                    pass
+
+        payload = _annotate_artifact_contract(
+            payload,
+            packet=out,
+            preferred_input_artifact_names=self._config.input_artifact_names,
+            selected_input_artifact_name=selected_name,
+            latest_artifact_name=self._config.output_artifact_name,
+        )
+        return [replace(out, payload=payload)]
+
+
 class ImagePerspectiveCropRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = ImagePerspectiveCropConfig.model_validate(config)
@@ -1432,6 +1674,79 @@ def _adjust_image_opencv(
         except Exception:
             pass
     return bgr
+
+
+def _apply_privacy_region_opencv(
+    image: Any,
+    bbox01: tuple[float, float, float, float],
+    *,
+    effect: str,
+    preserve_alpha: bool,
+    min_region_size_px: int,
+) -> Any | None:
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("camera.image_privacy requires opencv-python-headless and numpy") from exc
+
+    arr = np.asarray(image)
+    if arr.size == 0:
+        return None
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8, copy=False)
+
+    original_ndim = int(arr.ndim)
+    original_channels = int(arr.shape[2]) if original_ndim == 3 else 1
+    if original_ndim == 2:
+        working = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+    elif original_ndim == 3 and original_channels == 4:
+        working = np.ascontiguousarray(arr[..., :3])
+    elif original_ndim == 3 and original_channels == 3:
+        working = np.ascontiguousarray(arr)
+    else:
+        return None
+
+    alpha: Any | None = None
+    if original_ndim == 3 and original_channels == 4 and preserve_alpha:
+        alpha = np.ascontiguousarray(arr[..., 3])
+
+    height = int(working.shape[0])
+    width = int(working.shape[1])
+    if width <= 1 or height <= 1:
+        return None
+
+    px1, py1, px2, py2 = _bbox01_to_px(bbox01, width=width, height=height)
+    if (px2 - px1) < int(min_region_size_px) or (py2 - py1) < int(min_region_size_px):
+        return None
+
+    out = working.copy()
+    roi = out[py1:py2, px1:px2]
+    if roi.size == 0:
+        return None
+
+    normalized_effect = str(effect or "").strip().lower() or "blur_medium"
+    if normalized_effect == "black":
+        roi[...] = 0
+    elif normalized_effect == "white":
+        roi[...] = 255
+    elif normalized_effect == "gray":
+        roi[...] = 128
+    elif normalized_effect in {"blur_medium", "blur_high"}:
+        sigma = 8.0 if normalized_effect == "blur_medium" else 16.0
+        blurred = cv2.GaussianBlur(roi, (0, 0), sigmaX=sigma, sigmaY=sigma)
+        roi[...] = blurred
+    else:
+        return None
+
+    if original_ndim == 2:
+        return cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+    if alpha is not None:
+        try:
+            return np.dstack([out, alpha])
+        except Exception:
+            return out
+    return out
 
 
 class LocalContrastCLAHERuntime(TransformOperatorRuntime):
@@ -3549,6 +3864,26 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, deps: ImageCropRuntime(config, deps),
+    )
+    registry.register_operator(
+        operator_id="camera.image_privacy",
+        description="Applies a privacy effect inside a configured rectangular region and writes artifact.",
+        config_model=ImagePrivacyConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["camera", "artifact", "privacy"],
+        defaults=ImagePrivacyConfig().model_dump(),
+        execution_mode="thread_pool",
+        requires_artifacts=["frame_original"],
+        produces_payload_keys=["frame_privacy", "artifact_contract", "artifact_names"],
+        produces_artifacts=["frame"],
+        expression_hints=[
+            *_artifact_contract_expression_hints(default_artifact_name="frame"),
+            *_frame_privacy_expression_hints(),
+        ],
+        share_strategy="by_signature",
+        owner="com.toposync.cameras",
+        runtime_factory=lambda config, _deps: ImagePrivacyRuntime(config),
     )
     registry.register_operator(
         operator_id="camera.image_perspective_crop",

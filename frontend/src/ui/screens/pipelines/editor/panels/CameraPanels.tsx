@@ -10,7 +10,13 @@ import { buildArtifactSuggestions, pipelinesReactSelectStyles } from "../../cons
 import type { CameraAreaOption, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
 import { isRecord, prettyOperatorName, safeJsonParse } from "../../utils";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
-import { CropRectangleDrawModal, MotionMaskDrawModal, PerspectiveCropDrawModal, type SnapshotSource } from "./ImageDrawModals";
+import {
+  CropRectangleDrawModal,
+  MotionMaskDrawModal,
+  PerspectiveCropDrawModal,
+  PrivacyRegionDrawModal,
+  type SnapshotSource,
+} from "./ImageDrawModals";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
 
@@ -2231,6 +2237,316 @@ type ImageAdjustProps = {
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
 };
+
+type PrivacyEffect = "black" | "white" | "gray" | "blur_medium" | "blur_high";
+
+function parsePrivacyEffect(value: unknown): PrivacyEffect {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "black" || normalized === "white" || normalized === "gray" || normalized === "blur_high") return normalized;
+  return "blur_medium";
+}
+
+type ImagePrivacyProps = {
+  config: Record<string, unknown>;
+  pipelineName: string | null;
+  steps: InteractiveStep[];
+  index: number;
+  showAdvanced: boolean;
+  onUpdateConfig: UpdateConfig;
+};
+
+export function ImagePrivacyConfigCard({
+  config,
+  pipelineName,
+  steps,
+  index,
+  showAdvanced,
+  onUpdateConfig,
+}: ImagePrivacyProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const inputArtifactNamesRaw = (config as any).input_artifact_names;
+  const inputArtifactNames = Array.isArray(inputArtifactNamesRaw)
+    ? inputArtifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
+    : ["treated", "original"];
+  const artifactSuggestions = buildArtifactSuggestions(t);
+  const selectedInputOptions = inputArtifactNames.map(
+    (value) => artifactSuggestions.find((opt) => opt.value === value) ?? { value, label: value },
+  );
+
+  const unitsRaw = String((config as any).units ?? "percent").trim().toLowerCase();
+  const units = unitsRaw === "pixels" ? "pixels" : "percent";
+  const left = Number((config as any).left ?? 0);
+  const top = Number((config as any).top ?? 0);
+  const right = Number((config as any).right ?? 0);
+  const bottom = Number((config as any).bottom ?? 0);
+  const effect = parsePrivacyEffect((config as any).effect);
+  const outputArtifactName = String((config as any).output_artifact_name ?? "frame").trim() || "frame";
+  const minRegionSizePx = Number((config as any).min_region_size_px ?? 8);
+  const setStreamFrame = (config as any).set_stream_frame ?? (config as any).set_payload_frame ?? true;
+  const preserveAlpha = (config as any).preserve_alpha !== false;
+  const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? (config as any).fallback_to_payload_frame ?? true;
+
+  const clampPercent = (value: number, fallback: number) => {
+    if (!Number.isFinite(value)) return fallback;
+    return Math.max(0, Math.min(100, value));
+  };
+  const clampNonNegative = (value: number, fallback: number) => {
+    if (!Number.isFinite(value)) return fallback;
+    return Math.max(0, value);
+  };
+  const regionDefined = Number.isFinite(left) && Number.isFinite(top) && Number.isFinite(right) && Number.isFinite(bottom) && right > left && bottom > top;
+
+  const nodeId = String(steps[index]?.nodeId ?? "").trim();
+  const drawEligibility = React.useMemo(
+    () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId),
+    [steps, index, pipelineName, nodeId],
+  );
+  const [isDrawOpen, setIsDrawOpen] = React.useState(false);
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_privacy.hint")}</div>
+
+      <div className="rowWrap" style={{ marginTop: 10, justifyContent: "space-between", alignItems: "center" }}>
+        <button
+          className="chipButton"
+          type="button"
+          disabled={!drawEligibility.enabled}
+          onClick={() => setIsDrawOpen(true)}
+        >
+          {t("core.ui.pipelines.panels.image_draw.button")}
+        </button>
+        <button
+          className="chipButton"
+          type="button"
+          disabled={!regionDefined}
+          onClick={() => onUpdateConfig((prev) => ({ ...prev, left: 0, top: 0, right: 0, bottom: 0, units: "percent" }))}
+        >
+          {t("core.ui.pipelines.panels.image_privacy.clear_region")}
+        </button>
+      </div>
+
+      {!drawEligibility.enabled ? (
+        <div className="pipelinesStepHint" style={{ textAlign: "right", marginTop: 8 }}>
+          {drawEligibility.reason.code === "no_camera_source"
+            ? t("core.ui.pipelines.panels.image_draw.unavailable.no_source")
+            : drawEligibility.reason.code === "no_camera_selected"
+              ? t("core.ui.pipelines.panels.image_draw.unavailable.no_camera")
+              : drawEligibility.reason.code === "no_pipeline_name"
+                ? t("core.ui.pipelines.panels.image_draw.unavailable.no_pipeline")
+                : t("core.ui.pipelines.panels.image_draw.unavailable.blocked", { operator: prettyOperatorName(drawEligibility.reason.operatorId ?? "") })}
+        </div>
+      ) : null}
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.image_privacy.effect")}</span>
+        <select
+          className="pipelinesSelect"
+          value={effect}
+          onChange={(event) => {
+            const next = parsePrivacyEffect(event.target.value);
+            onUpdateConfig((prev) => ({ ...prev, effect: next }));
+          }}
+        >
+          <option value="black">{t("core.ui.pipelines.panels.image_privacy.effect.black")}</option>
+          <option value="white">{t("core.ui.pipelines.panels.image_privacy.effect.white")}</option>
+          <option value="gray">{t("core.ui.pipelines.panels.image_privacy.effect.gray")}</option>
+          <option value="blur_medium">{t("core.ui.pipelines.panels.image_privacy.effect.blur_medium")}</option>
+          <option value="blur_high">{t("core.ui.pipelines.panels.image_privacy.effect.blur_high")}</option>
+        </select>
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.image_privacy.units")}</span>
+        <select
+          className="pipelinesSelect"
+          value={units}
+          onChange={(event) => {
+            const next = String(event.target.value || "percent").trim().toLowerCase();
+            onUpdateConfig((prev) => ({ ...prev, units: next === "pixels" ? "pixels" : "percent" }));
+          }}
+        >
+          <option value="percent">{t("core.ui.pipelines.panels.image_privacy.units.percent")}</option>
+          <option value="pixels">{t("core.ui.pipelines.panels.image_privacy.units.pixels")}</option>
+        </select>
+      </label>
+
+      <div className="pipelinesScalarGrid" style={{ marginTop: 8 }}>
+        <label className="pipelinesLabel pipelinesScalarLabel">
+          <span>{t("core.ui.pipelines.panels.image_privacy.left")}</span>
+          <PipelinesNumberInput
+            className="pipelinesInput"
+            min={0}
+            max={units === "percent" ? 100 : undefined}
+            step={units === "percent" ? 0.5 : 1}
+            value={units === "percent" ? clampPercent(left, 0) : clampNonNegative(left, 0)}
+            onChange={(nextValue) =>
+              onUpdateConfig((prev) => ({
+                ...prev,
+                left: units === "percent" ? clampPercent(nextValue, 0) : clampNonNegative(nextValue, 0),
+              }))
+            }
+          />
+        </label>
+
+        <label className="pipelinesLabel pipelinesScalarLabel">
+          <span>{t("core.ui.pipelines.panels.image_privacy.top")}</span>
+          <PipelinesNumberInput
+            className="pipelinesInput"
+            min={0}
+            max={units === "percent" ? 100 : undefined}
+            step={units === "percent" ? 0.5 : 1}
+            value={units === "percent" ? clampPercent(top, 0) : clampNonNegative(top, 0)}
+            onChange={(nextValue) =>
+              onUpdateConfig((prev) => ({
+                ...prev,
+                top: units === "percent" ? clampPercent(nextValue, 0) : clampNonNegative(nextValue, 0),
+              }))
+            }
+          />
+        </label>
+
+        <label className="pipelinesLabel pipelinesScalarLabel">
+          <span>{t("core.ui.pipelines.panels.image_privacy.right")}</span>
+          <PipelinesNumberInput
+            className="pipelinesInput"
+            min={0}
+            max={units === "percent" ? 100 : undefined}
+            step={units === "percent" ? 0.5 : 1}
+            value={units === "percent" ? clampPercent(right, 0) : clampNonNegative(right, 0)}
+            onChange={(nextValue) =>
+              onUpdateConfig((prev) => ({
+                ...prev,
+                right: units === "percent" ? clampPercent(nextValue, 0) : clampNonNegative(nextValue, 0),
+              }))
+            }
+          />
+        </label>
+
+        <label className="pipelinesLabel pipelinesScalarLabel">
+          <span>{t("core.ui.pipelines.panels.image_privacy.bottom")}</span>
+          <PipelinesNumberInput
+            className="pipelinesInput"
+            min={0}
+            max={units === "percent" ? 100 : undefined}
+            step={units === "percent" ? 0.5 : 1}
+            value={units === "percent" ? clampPercent(bottom, 0) : clampNonNegative(bottom, 0)}
+            onChange={(nextValue) =>
+              onUpdateConfig((prev) => ({
+                ...prev,
+                bottom: units === "percent" ? clampPercent(nextValue, 0) : clampNonNegative(nextValue, 0),
+              }))
+            }
+          />
+        </label>
+      </div>
+
+      <div className="rowWrap" style={{ marginTop: 10, justifyContent: "space-between" }}>
+        <div className="pipelinesStepHint">
+          {regionDefined
+            ? t("core.ui.pipelines.panels.image_privacy.region_ready")
+            : t("core.ui.pipelines.panels.image_privacy.region_missing")}
+        </div>
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_privacy.region_hint")}</div>
+      </div>
+
+      {showAdvanced ? (
+        <>
+          <div className="sectionDivider" />
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.image_privacy.input_artifacts")}</span>
+            <CreatableSelect<SelectOption, true>
+              isMulti
+              styles={pipelinesReactSelectStyles}
+              options={artifactSuggestions}
+              value={selectedInputOptions}
+              placeholder={t("core.ui.pipelines.panels.image_privacy.input_artifacts_placeholder")}
+              onChange={(value: MultiValue<SelectOption>) => {
+                onUpdateConfig((prev) => ({
+                  ...prev,
+                  input_artifact_names: value.map((item) => item.value),
+                }));
+              }}
+            />
+          </label>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_privacy.input_artifacts_hint")}</div>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.image_privacy.output_artifact_name")}</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={outputArtifactName}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, output_artifact_name: event.target.value }))}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.image_privacy.min_region_size_px")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={1}
+              max={4096}
+              step={1}
+              value={Number.isFinite(minRegionSizePx) ? Math.max(1, Math.min(4096, minRegionSizePx)) : 8}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(4096, nextValue)) : 8;
+                onUpdateConfig((prev) => ({ ...prev, min_region_size_px: normalized }));
+              }}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.image_privacy.apply_stream_frame")}</span>
+            <input
+              type="checkbox"
+              checked={Boolean(setStreamFrame)}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, set_stream_frame: event.target.checked }))}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.image_privacy.fallback_stream_frame")}</span>
+            <input
+              type="checkbox"
+              checked={Boolean(fallbackToStreamFrame)}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, fallback_to_stream_frame: event.target.checked }))}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.image_privacy.preserve_alpha")}</span>
+            <input
+              type="checkbox"
+              checked={preserveAlpha}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, preserve_alpha: event.target.checked }))}
+            />
+          </label>
+        </>
+      ) : null}
+
+      <PrivacyRegionDrawModal
+        open={isDrawOpen}
+        onClose={() => setIsDrawOpen(false)}
+        snapshotSource={drawEligibility.snapshotSource}
+        units={units}
+        values={{ left, top, right, bottom }}
+        effect={effect}
+        onApply={(next) =>
+          onUpdateConfig((prev) => ({
+            ...prev,
+            left: next.values.left,
+            top: next.values.top,
+            right: next.values.right,
+            bottom: next.values.bottom,
+            effect: next.effect,
+          }))
+        }
+      />
+    </div>
+  );
+}
 
 export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: ImageAdjustProps): React.ReactElement {
   const { t } = i18n.useI18n();

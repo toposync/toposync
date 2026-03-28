@@ -601,6 +601,446 @@ export function CropRectangleDrawModal({
   );
 }
 
+export type PrivacyEffect = "black" | "white" | "gray" | "blur_medium" | "blur_high";
+
+type PrivacyRegionDrawModalProps = {
+  open: boolean;
+  onClose: () => void;
+  snapshotSource: SnapshotSource | null;
+  units: "percent" | "pixels";
+  values: CropRectValues;
+  effect: PrivacyEffect;
+  onApply: (next: { values: CropRectValues; effect: PrivacyEffect }) => void;
+};
+
+function normalizePrivacyEffect(value: unknown): PrivacyEffect {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "black" || normalized === "white" || normalized === "gray" || normalized === "blur_high") return normalized;
+  return "blur_medium";
+}
+
+function defaultPrivacyRect01(): Rect01 {
+  return { x1: 0.22, y1: 0.18, x2: 0.78, y2: 0.82 };
+}
+
+function rect01HasVisibleArea(rect: Rect01): boolean {
+  const normalized = normalizeRect01(rect);
+  return normalized.x2 - normalized.x1 > 0.0001 && normalized.y2 - normalized.y1 > 0.0001;
+}
+
+function privacyFillPreviewColor(effect: PrivacyEffect): string | null {
+  if (effect === "black") return "rgba(0, 0, 0, 0.98)";
+  if (effect === "white") return "rgba(255, 255, 255, 0.98)";
+  if (effect === "gray") return "rgba(128, 128, 128, 0.98)";
+  return null;
+}
+
+function privacyBlurPreviewPx(effect: PrivacyEffect): number | null {
+  if (effect === "blur_medium") return 8;
+  if (effect === "blur_high") return 16;
+  return null;
+}
+
+function privacyPreviewImageStyle(rect: Rect01, blurPx: number): React.CSSProperties {
+  const normalized = normalizeRect01(rect);
+  const width = Math.max(0.0001, normalized.x2 - normalized.x1);
+  const height = Math.max(0.0001, normalized.y2 - normalized.y1);
+  return {
+    position: "absolute",
+    left: `${(-normalized.x1 / width) * 100}%`,
+    top: `${(-normalized.y1 / height) * 100}%`,
+    width: `${100 / width}%`,
+    height: `${100 / height}%`,
+    filter: `blur(${blurPx}px)`,
+    transform: "scale(1.03)",
+    transformOrigin: "center center",
+    pointerEvents: "none",
+    userSelect: "none",
+    WebkitUserSelect: "none",
+  };
+}
+
+export function PrivacyRegionDrawModal({
+  open,
+  onClose,
+  snapshotSource,
+  units,
+  values,
+  effect,
+  onApply,
+}: PrivacyRegionDrawModalProps): React.ReactElement | null {
+  const { t } = i18n.useI18n();
+  const snapshot = useSnapshotObjectUrl(open, snapshotSource);
+  const [dims, setDims] = useState<ImageDims | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const stageSize = useElementClientSize(open, stageRef);
+  const renderDims = useMemo(
+    () => (dims && stageSize ? computeContainedImageSize(dims, stageSize, IMAGE_DRAW_STAGE_PADDING_PX) : null),
+    [dims, stageSize],
+  );
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+
+  const [draftRect01, setDraftRect01] = useState<Rect01>(defaultPrivacyRect01());
+  const [draftEffect, setDraftEffect] = useState<PrivacyEffect>("blur_medium");
+  const initializedRef = useRef(false);
+
+  useEffect(() => {
+    if (!open) {
+      setDims(null);
+      initializedRef.current = false;
+      return;
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !dims) return;
+    if (initializedRef.current) return;
+    initializedRef.current = true;
+    const nextRect = rect01FromValues(values, units, dims);
+    setDraftRect01(rect01HasVisibleArea(nextRect) ? nextRect : defaultPrivacyRect01());
+    setDraftEffect(normalizePrivacyEffect(effect));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, dims?.width, dims?.height]);
+
+  type DragState =
+    | { kind: "draw"; pointerId: number; start: Point01 }
+    | { kind: "move"; pointerId: number; start: Point01; startRect: Rect01 }
+    | { kind: "resize"; pointerId: number; startRect: Rect01; handle: "tl" | "tr" | "br" | "bl" };
+
+  const [drag, setDrag] = useState<DragState | null>(null);
+
+  const hitTestRect = useCallback((p: Point01) => {
+    const r = normalizeRect01(draftRect01);
+    return p.x >= r.x1 && p.x <= r.x2 && p.y >= r.y1 && p.y <= r.y2;
+  }, [draftRect01]);
+
+  const onOverlayPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!dims) return;
+      const el = containerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const p = point01FromPointerEvent(event, rect);
+      const pointerId = event.pointerId;
+      (event.currentTarget as HTMLDivElement).setPointerCapture(pointerId);
+      event.preventDefault();
+
+      if (rect01HasVisibleArea(draftRect01) && hitTestRect(p)) {
+        setDrag({ kind: "move", pointerId, start: p, startRect: draftRect01 });
+      } else {
+        const initial = normalizeRect01({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
+        setDraftRect01(initial);
+        setDrag({ kind: "draw", pointerId, start: p });
+      }
+    },
+    [dims, draftRect01, hitTestRect],
+  );
+
+  const onHandlePointerDown = useCallback(
+    (handle: "tl" | "tr" | "br" | "bl", event: React.PointerEvent<HTMLDivElement>) => {
+      if (!dims) return;
+      const pointerId = event.pointerId;
+      overlayRef.current?.setPointerCapture(pointerId);
+      event.preventDefault();
+      event.stopPropagation();
+      setDrag({ kind: "resize", pointerId, startRect: draftRect01, handle });
+    },
+    [dims, draftRect01],
+  );
+
+  const onOverlayPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!dims || !drag) return;
+      const el = containerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const p = point01FromPointerEvent(event, rect);
+      event.preventDefault();
+
+      if (drag.kind === "draw") {
+        setDraftRect01(normalizeRect01({ x1: drag.start.x, y1: drag.start.y, x2: p.x, y2: p.y }));
+        return;
+      }
+
+      if (drag.kind === "move") {
+        const dx = p.x - drag.start.x;
+        const dy = p.y - drag.start.y;
+        const startRect = normalizeRect01(drag.startRect);
+        const width = startRect.x2 - startRect.x1;
+        const height = startRect.y2 - startRect.y1;
+        let x1 = startRect.x1 + dx;
+        let y1 = startRect.y1 + dy;
+        x1 = Math.max(0, Math.min(1 - width, x1));
+        y1 = Math.max(0, Math.min(1 - height, y1));
+        setDraftRect01(normalizeRect01({ x1, y1, x2: x1 + width, y2: y1 + height }));
+        return;
+      }
+
+      const startRect = normalizeRect01(drag.startRect);
+      let next: Rect01 = startRect;
+      if (drag.handle === "tl") next = { ...startRect, x1: p.x, y1: p.y };
+      if (drag.handle === "tr") next = { ...startRect, x2: p.x, y1: p.y };
+      if (drag.handle === "br") next = { ...startRect, x2: p.x, y2: p.y };
+      if (drag.handle === "bl") next = { ...startRect, x1: p.x, y2: p.y };
+      setDraftRect01(normalizeRect01(next));
+    },
+    [dims, drag],
+  );
+
+  const onOverlayPointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!drag) return;
+    if (event.pointerId !== drag.pointerId) return;
+    event.preventDefault();
+    setDrag(null);
+  }, [drag]);
+
+  const clear = useCallback(() => {
+    setDraftRect01({ x1: 0, y1: 0, x2: 0, y2: 0 });
+  }, []);
+
+  const apply = useCallback(() => {
+    if (!dims) return;
+    onApply({
+      values: rect01HasVisibleArea(draftRect01)
+        ? valuesFromRect01(draftRect01, units, dims)
+        : { left: 0, top: 0, right: 0, bottom: 0 },
+      effect: draftEffect,
+    });
+    onClose();
+  }, [dims, draftEffect, draftRect01, onApply, onClose, units]);
+
+  const rectStyle = useMemo(() => {
+    const r = normalizeRect01(draftRect01);
+    return {
+      left: `${r.x1 * 100}%`,
+      top: `${r.y1 * 100}%`,
+      width: `${Math.max(0, (r.x2 - r.x1) * 100)}%`,
+      height: `${Math.max(0, (r.y2 - r.y1) * 100)}%`,
+    };
+  }, [draftRect01]);
+
+  const canInteract = open && Boolean(snapshot.url) && Boolean(dims);
+  const snapshotError = snapshot.loading ? null : snapshot.error;
+  const showNoSnapshot = !snapshot.loading && !snapshot.url && !snapshotError;
+  const previewFill = privacyFillPreviewColor(draftEffect);
+  const previewBlur = privacyBlurPreviewPx(draftEffect);
+  const hasRegion = rect01HasVisibleArea(draftRect01);
+
+  return (
+    <Modal
+      open={open}
+      title={t("core.ui.pipelines.panels.image_draw.modal_title.privacy")}
+      onClose={onClose}
+      panelStyle={{
+        width: "min(1200px, calc(100vw - 28px))",
+        height: "calc(100vh - 28px)",
+        maxHeight: "calc(100vh - 28px)",
+      }}
+      bodyStyle={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden", flex: 1, minHeight: 0 }}
+    >
+      <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_draw.privacy_instructions")}</div>
+        <div className="rowWrap" style={{ gap: 8 }}>
+          <button className="chipButton" type="button" onClick={snapshot.refresh} disabled={!open || snapshot.loading}>
+            {t("core.ui.pipelines.panels.image_draw.refresh")}
+          </button>
+          <button className="chipButton" type="button" onClick={clear} disabled={!canInteract}>
+            {t("core.ui.pipelines.panels.image_draw.clear_region")}
+          </button>
+        </div>
+      </div>
+
+      <div className="rowWrap" style={{ gap: 10, alignItems: "center", justifyContent: "space-between" }}>
+        <label className="pipelinesLabel" style={{ margin: 0 }}>
+          <span>{t("core.ui.pipelines.panels.image_privacy.effect")}</span>
+          <select
+            className="pipelinesSelect"
+            value={draftEffect}
+            disabled={!open}
+            onChange={(event) => setDraftEffect(normalizePrivacyEffect(event.target.value))}
+            style={{ marginLeft: 8 }}
+          >
+            <option value="black">{t("core.ui.pipelines.panels.image_privacy.effect.black")}</option>
+            <option value="white">{t("core.ui.pipelines.panels.image_privacy.effect.white")}</option>
+            <option value="gray">{t("core.ui.pipelines.panels.image_privacy.effect.gray")}</option>
+            <option value="blur_medium">{t("core.ui.pipelines.panels.image_privacy.effect.blur_medium")}</option>
+            <option value="blur_high">{t("core.ui.pipelines.panels.image_privacy.effect.blur_high")}</option>
+          </select>
+        </label>
+
+        <div className="rowWrap" style={{ gap: 8, alignItems: "center" }}>
+          <div className="pipelinesHint">
+            {hasRegion
+              ? t("core.ui.pipelines.panels.image_privacy.region_ready")
+              : t("core.ui.pipelines.panels.image_privacy.region_missing")}
+          </div>
+          <button className="primaryButton" type="button" onClick={apply} disabled={!canInteract}>
+            {t("core.ui.pipelines.panels.image_draw.apply")}
+          </button>
+          <button className="chipButton" type="button" onClick={onClose}>
+            {t("core.ui.pipelines.panels.image_draw.close")}
+          </button>
+        </div>
+      </div>
+
+      {snapshotError ? <div className="pipelinesInlineError">{snapshotError}</div> : null}
+      {!snapshotError && snapshot.loading ? <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.loading")}</div> : null}
+
+      <div
+        ref={stageRef}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          borderRadius: 16,
+          border: "1px solid var(--color-border-subtle)",
+          background: "rgba(0,0,0,0.22)",
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "flex-start",
+          padding: 10,
+          overflow: "auto",
+        }}
+      >
+        {snapshot.url ? (
+          <div
+            ref={containerRef}
+            style={{
+              position: "relative",
+              display: "inline-block",
+              margin: "auto",
+              width: renderDims?.width,
+              height: renderDims?.height,
+            }}
+          >
+            <img
+              src={snapshot.url}
+              alt={t("core.ui.pipelines.panels.image_draw.snapshot_alt")}
+              style={{
+                display: "block",
+                width: "100%",
+                height: "100%",
+                borderRadius: 14,
+                border: "1px solid rgba(255,255,255,0.12)",
+                userSelect: "none",
+                WebkitUserSelect: "none",
+              }}
+              onLoad={(event) => {
+                const img = event.currentTarget;
+                const width = Number(img.naturalWidth || 0);
+                const height = Number(img.naturalHeight || 0);
+                if (width > 1 && height > 1) setDims({ width, height });
+              }}
+              draggable={false}
+            />
+
+            {hasRegion ? (
+              <div
+                aria-hidden="true"
+                style={{
+                  position: "absolute",
+                  ...rectStyle,
+                  overflow: "hidden",
+                  borderRadius: 12,
+                  boxShadow: "0 14px 26px rgba(0,0,0,0.26)",
+                  pointerEvents: "none",
+                }}
+              >
+                {previewFill ? (
+                  <div
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      background: previewFill,
+                    }}
+                  />
+                ) : previewBlur ? (
+                  <img
+                    src={snapshot.url}
+                    alt=""
+                    aria-hidden="true"
+                    style={privacyPreviewImageStyle(draftRect01, previewBlur)}
+                    draggable={false}
+                  />
+                ) : null}
+              </div>
+            ) : null}
+
+            <div
+              role="presentation"
+              ref={overlayRef}
+              onPointerDown={onOverlayPointerDown}
+              onPointerMove={onOverlayPointerMove}
+              onPointerUp={onOverlayPointerUp}
+              onPointerCancel={onOverlayPointerUp}
+              style={{
+                position: "absolute",
+                inset: 0,
+                cursor: drag?.kind === "move" ? "grabbing" : drag?.kind ? "crosshair" : canInteract ? "crosshair" : "default",
+                touchAction: "none",
+              }}
+            >
+              {hasRegion ? (
+                <div
+                  aria-hidden="true"
+                  style={{
+                    position: "absolute",
+                    ...rectStyle,
+                    border: "2px solid rgba(56,189,248,0.96)",
+                    background: "rgba(56,189,248,0.08)",
+                    boxShadow: "0 12px 28px rgba(0,0,0,0.18)",
+                  }}
+                />
+              ) : null}
+
+              {hasRegion
+                ? (["tl", "tr", "br", "bl"] as const).map((handle) => {
+                    const r = normalizeRect01(draftRect01);
+                    const x = handle === "tl" || handle === "bl" ? r.x1 : r.x2;
+                    const y = handle === "tl" || handle === "tr" ? r.y1 : r.y2;
+                    const cursor = handle === "tl" || handle === "br" ? "nwse-resize" : "nesw-resize";
+                    return (
+                      <div
+                        key={handle}
+                        role="presentation"
+                        onPointerDown={(event) => onHandlePointerDown(handle, event)}
+                        style={{
+                          position: "absolute",
+                          left: `${x * 100}%`,
+                          top: `${y * 100}%`,
+                          transform: "translate(-50%,-50%)",
+                          width: 14,
+                          height: 14,
+                          borderRadius: 4,
+                          background: "rgba(56,189,248,0.95)",
+                          border: "2px solid rgba(255,255,255,0.95)",
+                          boxShadow: "0 10px 18px rgba(0,0,0,0.28)",
+                          cursor,
+                          pointerEvents: canInteract ? "auto" : "none",
+                        }}
+                      />
+                    );
+                  })
+                : null}
+            </div>
+          </div>
+        ) : showNoSnapshot ? (
+          <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.no_snapshot")}</div>
+        ) : (
+          <div className="pipelinesHint">{t("core.ui.pipelines.panels.image_draw.loading")}</div>
+        )}
+      </div>
+
+      <div className="modalFooter" style={{ justifyContent: "space-between" }}>
+        <div className="pipelinesHint">
+          {dims ? t("core.ui.pipelines.panels.image_draw.snapshot_meta", { w: dims.width, h: dims.height, units }) : ""}
+        </div>
+        <div />
+      </div>
+    </Modal>
+  );
+}
+
 type MotionMaskMode = "include" | "exclude";
 type MotionMaskTool = "paint" | "erase";
 type MotionMaskPoint01 = [number, number];

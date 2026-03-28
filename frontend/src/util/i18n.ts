@@ -449,6 +449,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.lifecycle_from_boolean": "Lifecycle from state",
     "core.ui.pipelines.operator_name.core.fps_reducer": "Frame rate reducer",
     "core.ui.pipelines.operator_name.camera.image_crop": "Frame crop",
+    "core.ui.pipelines.operator_name.camera.image_privacy": "Privacy region",
     "core.ui.pipelines.operator_name.camera.image_perspective_crop": "Perspective crop",
     "core.ui.pipelines.operator_name.camera.local_contrast_clahe": "Local contrast",
     "core.ui.pipelines.operator_name.camera.unsharp_mask": "Sharpen image",
@@ -491,6 +492,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Lowers the frame rate before heavier steps to reduce compute cost.",
     "core.ui.pipelines.operator_description.camera.image_crop":
       "Cuts a fixed rectangular region from the frame and can replace the working image for downstream steps.",
+    "core.ui.pipelines.operator_description.camera.image_privacy":
+      "Applies a fixed privacy region with solid fill or blur, useful for windows, neighboring areas, or sensitive zones.",
     "core.ui.pipelines.operator_description.camera.image_perspective_crop":
       "Straightens a four-point region into a frontal crop, useful for doors, parking spots, and panels.",
     "core.ui.pipelines.operator_description.camera.local_contrast_clahe":
@@ -956,6 +959,35 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_crop.min_crop_size_px": "Min crop size (px)",
     "core.ui.pipelines.panels.image_crop.use_cropped_frame": "Use cropped frame for downstream",
 
+    "core.ui.pipelines.panels.image_privacy.hint":
+      "Protects a fixed region of the frame with solid fill or blur before downstream analysis, storage, or video publishing.",
+    "core.ui.pipelines.panels.image_privacy.effect": "Effect",
+    "core.ui.pipelines.panels.image_privacy.effect.black": "Black",
+    "core.ui.pipelines.panels.image_privacy.effect.white": "White",
+    "core.ui.pipelines.panels.image_privacy.effect.gray": "Gray",
+    "core.ui.pipelines.panels.image_privacy.effect.blur_medium": "Medium blur",
+    "core.ui.pipelines.panels.image_privacy.effect.blur_high": "High blur",
+    "core.ui.pipelines.panels.image_privacy.units": "Units",
+    "core.ui.pipelines.panels.image_privacy.units.percent": "Percent (0–100)",
+    "core.ui.pipelines.panels.image_privacy.units.pixels": "Pixels",
+    "core.ui.pipelines.panels.image_privacy.left": "Left",
+    "core.ui.pipelines.panels.image_privacy.top": "Top",
+    "core.ui.pipelines.panels.image_privacy.right": "Right",
+    "core.ui.pipelines.panels.image_privacy.bottom": "Bottom",
+    "core.ui.pipelines.panels.image_privacy.clear_region": "Clear region",
+    "core.ui.pipelines.panels.image_privacy.region_missing": "No privacy region defined yet.",
+    "core.ui.pipelines.panels.image_privacy.region_ready": "Privacy region ready.",
+    "core.ui.pipelines.panels.image_privacy.region_hint": "Use drawing for quick placement, then fine-tune with coordinates if needed.",
+    "core.ui.pipelines.panels.image_privacy.input_artifacts": "Input artifacts (fallback order)",
+    "core.ui.pipelines.panels.image_privacy.input_artifacts_placeholder": "Treated → Original",
+    "core.ui.pipelines.panels.image_privacy.input_artifacts_hint":
+      "Advanced: by default this operator acts on the current stream frame and falls back to the original.",
+    "core.ui.pipelines.panels.image_privacy.output_artifact_name": "Output artifact name",
+    "core.ui.pipelines.panels.image_privacy.min_region_size_px": "Min region size (px)",
+    "core.ui.pipelines.panels.image_privacy.apply_stream_frame": "Apply to stream frame",
+    "core.ui.pipelines.panels.image_privacy.fallback_stream_frame": "Fallback to stream frame",
+    "core.ui.pipelines.panels.image_privacy.preserve_alpha": "Preserve alpha channel",
+
     "core.ui.pipelines.panels.image_draw.button": "Draw on snapshot…",
     "core.ui.pipelines.panels.image_draw.unavailable.no_source": "Add Camera source before this step to enable drawing.",
     "core.ui.pipelines.panels.image_draw.unavailable.no_camera": "Select a camera in Camera source to enable drawing.",
@@ -963,14 +995,18 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_draw.unavailable.blocked":
       "Interactive drawing is disabled because an earlier step may change the frame geometry: {{operator}}.",
     "core.ui.pipelines.panels.image_draw.modal_title.crop": "Draw crop rectangle",
+    "core.ui.pipelines.panels.image_draw.modal_title.privacy": "Draw privacy region",
     "core.ui.pipelines.panels.image_draw.modal_title.perspective": "Draw perspective crop",
     "core.ui.pipelines.panels.image_draw.modal_title.motion_mask": "Draw motion mask",
     "core.ui.pipelines.panels.image_draw.loading": "Loading snapshot…",
     "core.ui.pipelines.panels.image_draw.refresh": "Refresh snapshot",
     "core.ui.pipelines.panels.image_draw.reset": "Reset",
+    "core.ui.pipelines.panels.image_draw.clear_region": "Clear region",
     "core.ui.pipelines.panels.image_draw.apply": "Apply",
     "core.ui.pipelines.panels.image_draw.close": "Close",
     "core.ui.pipelines.panels.image_draw.crop_instructions": "Drag to draw a rectangle. Drag inside to move. Drag corners to resize.",
+    "core.ui.pipelines.panels.image_draw.privacy_instructions":
+      "Drag to draw the privacy region. Drag inside to move. Drag corners to resize. The preview follows the selected effect.",
     "core.ui.pipelines.panels.image_draw.perspective_instructions": "Drag corners to position the quadrilateral. Drag inside to move it.",
     "core.ui.pipelines.panels.image_draw.motion_mask_instructions": "Click and drag to paint. Hold Shift to erase.",
     "core.ui.pipelines.panels.image_draw.motion_mask.mode": "Mode",
@@ -1883,6 +1919,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.lifecycle_from_boolean": "Lifecycle por estado",
     "core.ui.pipelines.operator_name.core.fps_reducer": "Redutor de FPS",
     "core.ui.pipelines.operator_name.camera.image_crop": "Recorte do frame",
+    "core.ui.pipelines.operator_name.camera.image_privacy": "Região de privacidade",
     "core.ui.pipelines.operator_name.camera.image_perspective_crop": "Recorte por perspectiva",
     "core.ui.pipelines.operator_name.camera.local_contrast_clahe": "Contraste local",
     "core.ui.pipelines.operator_name.camera.unsharp_mask": "Nitidez leve",
@@ -1925,6 +1962,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Reduz o FPS antes de etapas mais pesadas para economizar processamento.",
     "core.ui.pipelines.operator_description.camera.image_crop":
       "Recorta uma região retangular fixa do frame e pode substituir a imagem usada pelas próximas etapas.",
+    "core.ui.pipelines.operator_description.camera.image_privacy":
+      "Aplica uma região fixa de privacidade com preenchimento sólido ou blur, útil para janelas, vizinhança e zonas sensíveis.",
     "core.ui.pipelines.operator_description.camera.image_perspective_crop":
       "Endireita uma região de quatro pontos em um recorte frontal, útil para portas, vagas e painéis.",
     "core.ui.pipelines.operator_description.camera.local_contrast_clahe":
@@ -2391,6 +2430,35 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_crop.min_crop_size_px": "Tamanho mínimo do recorte (px)",
     "core.ui.pipelines.panels.image_crop.use_cropped_frame": "Usar frame recortado no fluxo",
 
+    "core.ui.pipelines.panels.image_privacy.hint":
+      "Protege uma região fixa do frame com preenchimento sólido ou blur antes da análise, do armazenamento ou da publicação de vídeo.",
+    "core.ui.pipelines.panels.image_privacy.effect": "Efeito",
+    "core.ui.pipelines.panels.image_privacy.effect.black": "Preto",
+    "core.ui.pipelines.panels.image_privacy.effect.white": "Branco",
+    "core.ui.pipelines.panels.image_privacy.effect.gray": "Cinza",
+    "core.ui.pipelines.panels.image_privacy.effect.blur_medium": "Blur médio",
+    "core.ui.pipelines.panels.image_privacy.effect.blur_high": "Blur alto",
+    "core.ui.pipelines.panels.image_privacy.units": "Unidades",
+    "core.ui.pipelines.panels.image_privacy.units.percent": "Porcentagem (0–100)",
+    "core.ui.pipelines.panels.image_privacy.units.pixels": "Pixels",
+    "core.ui.pipelines.panels.image_privacy.left": "Esquerda",
+    "core.ui.pipelines.panels.image_privacy.top": "Topo",
+    "core.ui.pipelines.panels.image_privacy.right": "Direita",
+    "core.ui.pipelines.panels.image_privacy.bottom": "Base",
+    "core.ui.pipelines.panels.image_privacy.clear_region": "Limpar região",
+    "core.ui.pipelines.panels.image_privacy.region_missing": "Nenhuma região de privacidade definida ainda.",
+    "core.ui.pipelines.panels.image_privacy.region_ready": "Região de privacidade pronta.",
+    "core.ui.pipelines.panels.image_privacy.region_hint": "Use o desenho para posicionar rápido e depois refine pelas coordenadas, se precisar.",
+    "core.ui.pipelines.panels.image_privacy.input_artifacts": "Artefatos de entrada (ordem de fallback)",
+    "core.ui.pipelines.panels.image_privacy.input_artifacts_placeholder": "Tratado → Original",
+    "core.ui.pipelines.panels.image_privacy.input_artifacts_hint":
+      "Avançado: por padrão este operador atua no frame atual do stream e cai para o original se necessário.",
+    "core.ui.pipelines.panels.image_privacy.output_artifact_name": "Nome do artefato de saída",
+    "core.ui.pipelines.panels.image_privacy.min_region_size_px": "Tamanho mínimo da região (px)",
+    "core.ui.pipelines.panels.image_privacy.apply_stream_frame": "Aplicar no frame do stream",
+    "core.ui.pipelines.panels.image_privacy.fallback_stream_frame": "Fallback para o frame do stream",
+    "core.ui.pipelines.panels.image_privacy.preserve_alpha": "Preservar canal alpha",
+
     "core.ui.pipelines.panels.image_draw.button": "Desenhar no snapshot…",
     "core.ui.pipelines.panels.image_draw.unavailable.no_source":
       "Adicione a etapa Fonte da câmera antes desta etapa para habilitar o desenho.",
@@ -2400,15 +2468,19 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_draw.unavailable.blocked":
       "O desenho interativo foi desabilitado porque uma etapa anterior pode alterar a geometria do frame: {{operator}}.",
     "core.ui.pipelines.panels.image_draw.modal_title.crop": "Desenhar retângulo de recorte",
+    "core.ui.pipelines.panels.image_draw.modal_title.privacy": "Desenhar região de privacidade",
     "core.ui.pipelines.panels.image_draw.modal_title.perspective": "Desenhar recorte por perspectiva",
     "core.ui.pipelines.panels.image_draw.modal_title.motion_mask": "Desenhar máscara de movimento",
     "core.ui.pipelines.panels.image_draw.loading": "Carregando snapshot…",
     "core.ui.pipelines.panels.image_draw.refresh": "Atualizar snapshot",
     "core.ui.pipelines.panels.image_draw.reset": "Resetar",
+    "core.ui.pipelines.panels.image_draw.clear_region": "Limpar região",
     "core.ui.pipelines.panels.image_draw.apply": "Aplicar",
     "core.ui.pipelines.panels.image_draw.close": "Fechar",
     "core.ui.pipelines.panels.image_draw.crop_instructions":
       "Arraste para desenhar um retângulo. Arraste dentro para mover. Arraste os cantos para redimensionar.",
+    "core.ui.pipelines.panels.image_draw.privacy_instructions":
+      "Arraste para desenhar a região de privacidade. Arraste dentro para mover. Arraste os cantos para redimensionar. A prévia acompanha o efeito selecionado.",
     "core.ui.pipelines.panels.image_draw.perspective_instructions":
       "Arraste os cantos para posicionar o quadrilátero. Arraste dentro para mover.",
     "core.ui.pipelines.panels.image_draw.motion_mask_instructions": "Clique e arraste para pintar. Segure Shift para apagar.",

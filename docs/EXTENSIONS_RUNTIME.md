@@ -23,6 +23,8 @@ Exemplo:
   "id": "com.suaorg.minha_ext",
   "name": "Minha Extensão",
   "version": "0.1.0",
+  "requires_core_version": ">=0.3,<0.4",
+  "requires_extensions": ["com.toposync.cameras>=0.1.0"],
   "frontend": {
     "kind": "module-federation",
     "remote_entry": "remoteEntry.js",
@@ -31,6 +33,13 @@ Exemplo:
   }
 }
 ```
+
+Campos de compatibilidade:
+
+- `requires_core_version`: specifier PEP 440 avaliado contra a versão atual do `toposync-core`
+- `requires_extensions`: lista de ids de extensão obrigatórios, opcionalmente com specifier de versão no formato `com.suaorg.outra_ext>=1.2`
+
+O loader valida esses requisitos antes do `setup()`. Extensões incompatíveis são ignoradas e registradas em log.
 
 ## 3) Servir assets estáticos
 
@@ -61,4 +70,3 @@ O core expõe (para evoluir):
 - `ServiceRegistry`: registry simples para desacoplar extensões por ID
 
 Ponto de partida de evento (exemplo atual): `device.action_requested`.
-

@@ -56,7 +56,7 @@ Em um diretório do servidor:
 
 ```bash
 uv venv
-uv pip install .
+uv pip install ./packages/toposync
 ```
 
 ### 2) Frontend (UI)
@@ -80,28 +80,32 @@ uv run toposync serve --host 0.0.0.0 --port 8000 --data-dir /var/lib/toposync --
 
 ### 3) Instalar extensões (first‑party e comunidade)
 
-Para instalar uma extensão, basta instalar o pacote Python e reiniciar o backend:
+O pacote `toposync` já instala o conjunto padrão:
+
+- `toposync-core`
+- `toposync-ext-structural`
+- `toposync-ext-models`
+- `toposync-ext-home-assistant`
+- `toposync-ext-images`
+- `toposync-ext-cameras`
+- `toposync-ext-vision`
+
+Para adicionar o stack de streaming:
 
 ```bash
-uv pip install toposync-ext-structural toposync-ext-models toposync-ext-home-assistant toposync-ext-images
+uv pip install toposync-ext-streaming
 ```
 
-Para a extensão de câmeras:
+Para instalar uma extensão extra de comunidade, basta instalar o pacote Python e reiniciar o backend:
 
 ```bash
-uv pip install toposync-ext-cameras
+uv pip install toposync-ext-<nome>
 ```
 
-YOLO (pesado):
+Para remover uma extensão:
 
 ```bash
-uv pip install "toposync-ext-cameras[yolo]"
-```
-
-Para remover:
-
-```bash
-uv pip uninstall toposync-ext-cameras
+uv pip uninstall toposync-ext-<nome>
 ```
 
 Verificação rápida:

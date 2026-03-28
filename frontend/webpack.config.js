@@ -1,6 +1,7 @@
 const path = require("path");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
 const { container } = require("webpack");
+const { createSharedDeps } = require("./moduleFederationShared");
 
 function envInt(name, fallback) {
   const raw = String(process.env[name] ?? "").trim();
@@ -55,11 +56,7 @@ module.exports = {
     new container.ModuleFederationPlugin({
       name: "toposync_host",
       remotes: {},
-      shared: {
-        react: { singleton: true, requiredVersion: false },
-        "react-dom": { singleton: true, requiredVersion: false },
-        three: { singleton: true, requiredVersion: false }
-      }
+      shared: createSharedDeps({ includeThree: true })
     })
   ],
   devtool: "source-map",

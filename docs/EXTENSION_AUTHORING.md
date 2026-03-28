@@ -52,6 +52,7 @@ Crie `extensions/minha_ext/ui` com webpack configurado para:
 - gerar `remoteEntry.js`
 - expor `./activate`
 - **output direto** em `extensions/minha_ext/src/toposync_ext_minha_ext/static/`
+- depender de `@toposync/plugin-api` na mesma linha minor do host alvo
 
 O `activate.tsx` deve exportar `activate(host)` e registrar coisas:
 
@@ -65,6 +66,12 @@ export function activate(host: TopoSyncHost) {
     // ...
   });
 }
+```
+
+Para uma extensão fora deste monorepo, instale o contrato público:
+
+```bash
+npm install @toposync/plugin-api react react-dom three
 ```
 
 ## Passo 3) Build e instalação (dev)

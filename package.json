@@ -11,7 +11,9 @@
     "dev:backend": "uv run --group extensions toposync serve --data-dir .toposync-data",
     "dev:frontend": "npm --workspace @toposync/frontend run dev",
     "build:frontend": "npm --workspace @toposync/frontend run build",
-    "build:extensions": "npm --workspace @toposync/extension-structural-ui run build && npm --workspace @toposync/extension-models-ui run build && npm --workspace @toposync/extension-home-assistant-ui run build && npm --workspace @toposync/extension-cameras-ui run build && npm --workspace @toposync/extension-images-ui run build",
+    "typecheck:plugin-api": "npm --workspace @toposync/plugin-api run typecheck",
+    "pack:plugin-api": "npm --workspace @toposync/plugin-api run pack:dry-run",
+    "build:extensions": "npm --workspace @toposync/extension-structural-ui run build && npm --workspace @toposync/extension-models-ui run build && npm --workspace @toposync/extension-home-assistant-ui run build && npm --workspace @toposync/extension-cameras-ui run build && npm --workspace @toposync/extension-images-ui run build && npm --workspace @toposync/extension-streaming-ui run build",
     "test:e2e": "playwright test"
   },
   "devDependencies": {

@@ -1,6 +1,10 @@
 # Contrato TypeScript (plugin API)
 
-O contrato fica em `frontend/packages/plugin-api/index.d.ts`.
+O contrato público fica no pacote npm `@toposync/plugin-api`.
+
+No monorepo, a fonte canônica continua em `frontend/packages/plugin-api/index.d.ts`.
+
+Para extensões de terceiros, use o pacote publicado e prefira a mesma linha minor do host Toposync alvo.
 
 Hoje, o host suporta:
 
@@ -41,6 +45,15 @@ host.registerEditorTool({
   }),
 })
 ```
+
+## Instalação para extensões externas
+
+```bash
+npm install @toposync/plugin-api react react-dom three
+npm install -D typescript @types/react @types/react-dom webpack webpack-cli ts-loader
+```
+
+O pacote é types-first. Use `import type` sempre que possível.
 
 ## Settings panels (rápido)
 

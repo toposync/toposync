@@ -7,7 +7,7 @@
   },
   "dependencies": {
     "@fortawesome/fontawesome-free": "^6.5.2",
-    "@toposync/plugin-api": "0.1.0",
+    "@toposync/plugin-api": "^0.3.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-select": "^5.9.0",

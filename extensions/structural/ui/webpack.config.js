@@ -1,5 +1,6 @@
 const path = require("path");
 const { container } = require("webpack");
+const { createSharedDeps } = require("../../../frontend/moduleFederationShared");
 
 /** @type {import("webpack").Configuration} */
 module.exports = {
@@ -31,10 +32,7 @@ module.exports = {
       exposes: {
         "./activate": "./src/activate.tsx"
       },
-      shared: {
-        react: { singleton: true, requiredVersion: false },
-        "react-dom": { singleton: true, requiredVersion: false }
-      }
+      shared: createSharedDeps()
     })
   ],
   optimization: {
@@ -42,4 +40,3 @@ module.exports = {
     runtimeChunk: false
   }
 };
-

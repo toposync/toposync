@@ -81,6 +81,8 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     assert any(item.get("id") == "simple_iou_kalman" for item in vision["trackers_available"])
     assert any(item.get("id") == "norfair" for item in vision["trackers_available"])
     assert "CPUExecutionProvider" in vision["execution_providers"]
+    assert "CPUExecutionProvider" in vision["preferred_execution_providers"]
+    assert "yolo_device_recommended" not in vision
     assert any(item.get("model_id") == "constant.detector" for item in vision["models_installed"])
     assert any(isinstance(item.get("capabilities"), list) for item in vision["models_installed"])
     assert vision["model_registry_errors"] == []
@@ -110,6 +112,7 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     assert isinstance(vision["install_jobs"], list)
     assert isinstance(vision["last_benchmark"], dict)
     assert vision["last_benchmark"]["model_id"] == "constant.detector"
+    assert isinstance(diagnostics["cameras"].get("legacy_yolo"), dict)
 
 
 def test_collect_vision_extension_diagnostics_keeps_local_builder_on_failure(monkeypatch) -> None:  # noqa: ANN001

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import statistics
 import time
 from typing import Any
@@ -33,16 +34,32 @@ def available_onnxruntime_execution_providers() -> list[str]:
         return []
 
 
+def _configured_onnxruntime_execution_providers() -> list[str] | None:
+    raw = str(os.getenv("TOPOSYNC_VISION_ONNXRUNTIME_PROVIDERS") or "").strip()
+    if not raw:
+        return None
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw.split(","):
+        provider = str(item or "").strip()
+        if not provider or provider in seen:
+            continue
+        out.append(provider)
+        seen.add(provider)
+    return out or None
+
+
 def resolve_onnxruntime_execution_providers(preferred: list[str] | None = None) -> list[str]:
     available = available_onnxruntime_execution_providers()
     if not available:
         return []
-    ordered = preferred or [
-        "TensorrtExecutionProvider",
-        "CUDAExecutionProvider",
+    ordered = preferred or _configured_onnxruntime_execution_providers() or [
+        "CPUExecutionProvider",
+        "DmlExecutionProvider",
         "OpenVINOExecutionProvider",
         "CoreMLExecutionProvider",
-        "CPUExecutionProvider",
+        "CUDAExecutionProvider",
+        "TensorrtExecutionProvider",
     ]
     selected = [provider for provider in ordered if provider in available]
     if "CPUExecutionProvider" in available and "CPUExecutionProvider" not in selected:

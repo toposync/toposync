@@ -9,11 +9,11 @@ First-party extension focused on public task-oriented vision operators for the P
 - `vision.segment_instances`
 - `vision.pose_estimate` (skeleton only; not launched yet)
 
-The public surface is task-based, not vendor-based. The first-party detection and segmentation runtimes now use ONNX Runtime by default.
+The public surface is task-based, not vendor-based. The official first-party runtime is ONNX Runtime, with CPU as the default execution path.
 
 ## Dependencies
 
-- The official extension package now includes the first-party ONNX Runtime stack.
+- The official extension package now includes the first-party ONNX Runtime CPU stack.
 - The official extension package now also includes the first-party tracker stack:
   - `simple_iou_kalman`
   - `norfair`
@@ -21,6 +21,7 @@ The public surface is task-based, not vendor-based. The first-party detection an
 ## Notes
 
 - `vision.detect` resolves `ModelManifest` entries and builds an ONNX Runtime backend automatically when `runtime=onnxruntime`.
+- By default, the ONNX Runtime backend prefers `CPUExecutionProvider`. Optional acceleration is opt-in via `TOPOSYNC_VISION_ONNXRUNTIME_PROVIDERS`.
 - Manifest files can be loaded from `TOPOSYNC_VISION_MANIFESTS_DIR` or `TOPOSYNC_VISION_MANIFEST_PATHS`.
 - Custom manifests imported from the UI are persisted under `.toposync-data/vision-manifests/` for the selected processing server.
 - The extension now ships a built-in RTMDet detection shortlist in `extensions/vision/manifests/`:
@@ -50,6 +51,7 @@ The public surface is task-based, not vendor-based. The first-party detection an
   - can be started from the model recovery card or the Processing Servers screen
 - Remote download sources are only enabled when the manifest explicitly allows redistribution. The current built-in RTMDet/RTMDet-Ins manifests do not, so the safe first-party flow is local admin-managed copy.
 - Product policy: RTMDet and RTMDet-Ins stay on `guided_upload` for now. When TopoSync adds a first-party `Baixar nesta máquina` / auto-download family, the first planned candidate is RF-DETR, subject to a fresh license and redistribution review at that time.
+- Product policy: Ultralytics/YOLO is not part of the official first-party vision runtime path.
 - The extension now also ships a built-in RTMDet-Ins segmentation shortlist:
   - `rtmdet_ins_tiny`
   - `rtmdet_ins_small`

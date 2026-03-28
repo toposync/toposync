@@ -15,6 +15,7 @@ from ..registry.recommendations import (
     recommend_segmentation_models,
 )
 from .runtime_backends import available_onnxruntime_execution_providers
+from .runtime_backends import resolve_onnxruntime_execution_providers
 from .trackers import available_tracker_backends
 
 
@@ -85,11 +86,13 @@ def collect_vision_diagnostics(
         onnxruntime_installed = True
         onnxruntime_version = str(getattr(ort, "__version__", "") or "")
         execution_providers = available_onnxruntime_execution_providers()
+        preferred_execution_providers = resolve_onnxruntime_execution_providers()
         backend_error = ""
     except Exception as exc:  # noqa: BLE001
         onnxruntime_installed = False
         onnxruntime_version = ""
         execution_providers = []
+        preferred_execution_providers = []
         backend_error = str(exc)
 
     models_installed = [
@@ -120,6 +123,7 @@ def collect_vision_diagnostics(
         "backends": backends,
         "trackers_available": available_tracker_backends(),
         "execution_providers": execution_providers,
+        "preferred_execution_providers": preferred_execution_providers,
         "models_installed": models_installed,
         "model_registry_errors": list(getattr(registry, "load_errors", []) or []),
         "official_shortlists": {

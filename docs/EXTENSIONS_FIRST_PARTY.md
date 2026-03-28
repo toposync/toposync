@@ -18,8 +18,14 @@
 
 ## `extensions/cameras`
 
-- RTSP snapshots + processamento local/remoto + detecções (opcional via extra `yolo`).
+- RTSP snapshots, ingestão e operadores de pré/pós-processamento para pipelines de câmera.
 
 ## `extensions/images`
 
 - Importar imagens como sobreposição ou decalque.
+
+## `extensions/vision`
+
+- Detecção, rastreamento, segmentação de instâncias e pose por tarefa pública.
+- Runtime oficial first-party baseado em ONNX Runtime.
+- Caminho padrão do produto: ONNX Runtime CPU; aceleração é opcional e explícita.

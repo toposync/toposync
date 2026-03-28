@@ -7,9 +7,11 @@ import numpy as np
 import pytest
 
 from toposync_ext_vision.processing import get_last_benchmark
+import toposync_ext_vision.processing.runtime_backends.onnxruntime_backend as ort_backend_mod
 from toposync_ext_vision.processing.runtime_backends import (
     OnnxRuntimeDetectorBackend,
     available_onnxruntime_execution_providers,
+    resolve_onnxruntime_execution_providers,
 )
 from toposync_ext_vision.registry import ModelManifest, build_default_model_registry
 
@@ -96,3 +98,32 @@ def test_onnxruntime_backend_runs_on_cpu_and_benchmarks(tmp_path: Path, monkeypa
 
     loaded_manifest = ModelManifest.model_validate(json.loads(manifest_path.read_text(encoding="utf-8")))
     assert loaded_manifest.model_id == "constant.detector"
+
+
+def test_resolve_onnxruntime_execution_providers_defaults_to_cpu_first(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.delenv("TOPOSYNC_VISION_ONNXRUNTIME_PROVIDERS", raising=False)
+    monkeypatch.setattr(
+        ort_backend_mod,
+        "available_onnxruntime_execution_providers",
+        lambda: ["CUDAExecutionProvider", "CPUExecutionProvider", "OpenVINOExecutionProvider"],
+    )
+
+    assert resolve_onnxruntime_execution_providers() == [
+        "CPUExecutionProvider",
+        "OpenVINOExecutionProvider",
+        "CUDAExecutionProvider",
+    ]
+
+
+def test_resolve_onnxruntime_execution_providers_honors_env_override(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setenv("TOPOSYNC_VISION_ONNXRUNTIME_PROVIDERS", "CUDAExecutionProvider,CPUExecutionProvider")
+    monkeypatch.setattr(
+        ort_backend_mod,
+        "available_onnxruntime_execution_providers",
+        lambda: ["CUDAExecutionProvider", "CPUExecutionProvider", "OpenVINOExecutionProvider"],
+    )
+
+    assert resolve_onnxruntime_execution_providers() == [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]

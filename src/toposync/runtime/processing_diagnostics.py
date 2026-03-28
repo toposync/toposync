@@ -198,6 +198,17 @@ def collect_yolo_trackers_diagnostics(limit: int = 8) -> list[dict[str, Any]]:
     return list(items or [])
 
 
+def collect_legacy_camera_vision_diagnostics() -> dict[str, Any]:
+    torch_info = collect_torch_info()
+    device_env = str(os.getenv("TOPOSYNC_YOLO_DEVICE") or "")
+    return {
+        "torch": torch_info,
+        "device_env": device_env,
+        "device_recommended": recommend_yolo_device(torch_info, device_env=device_env),
+        "trackers": collect_yolo_trackers_diagnostics(limit=8),
+    }
+
+
 def collect_vision_extension_diagnostics(
     *,
     system_info: dict[str, Any] | None = None,
@@ -210,6 +221,7 @@ def collect_vision_extension_diagnostics(
             "backends": [],
             "trackers_available": [],
             "execution_providers": [],
+            "preferred_execution_providers": [],
             "models_installed": [],
             "model_registry_errors": [],
             "official_shortlists": {},
@@ -226,6 +238,7 @@ def collect_vision_extension_diagnostics(
             "backends": [],
             "trackers_available": [],
             "execution_providers": [],
+            "preferred_execution_providers": [],
             "models_installed": [],
             "model_registry_errors": [],
             "official_shortlists": {},
@@ -261,12 +274,9 @@ async def collect_camera_hub_snapshot() -> dict[str, Any] | None:
 
 async def collect_processing_server_diagnostics(*, data_dir: str | None = None) -> dict[str, Any]:
     system_info = collect_system_info()
-    torch_info = collect_torch_info()
-    device_env = str(os.getenv("TOPOSYNC_YOLO_DEVICE") or "")
-    recommended = recommend_yolo_device(torch_info, device_env=device_env)
-    trackers = collect_yolo_trackers_diagnostics(limit=8)
     vision_runtime = collect_vision_extension_diagnostics(system_info=system_info, data_dir=data_dir)
     cameras = collect_camera_dependency_info()
+    cameras["legacy_yolo"] = collect_legacy_camera_vision_diagnostics()
     hub = await collect_camera_hub_snapshot()
     if hub is not None:
         cameras["hub"] = hub
@@ -274,13 +284,10 @@ async def collect_processing_server_diagnostics(*, data_dir: str | None = None) 
     return {
         "system": system_info,
         "vision": {
-            "torch": torch_info,
-            "yolo_device_env": device_env,
-            "yolo_device_recommended": recommended,
-            "yolo_trackers": trackers,
             "trackers_available": vision_runtime.get("trackers_available", []),
             "backends": vision_runtime.get("backends", []),
             "execution_providers": vision_runtime.get("execution_providers", []),
+            "preferred_execution_providers": vision_runtime.get("preferred_execution_providers", []),
             "models_installed": vision_runtime.get("models_installed", []),
             "model_registry_errors": vision_runtime.get("model_registry_errors", []),
             "official_shortlists": vision_runtime.get("official_shortlists", {}),

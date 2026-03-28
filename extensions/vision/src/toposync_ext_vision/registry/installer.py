@@ -183,6 +183,8 @@ class VisionModelInstallManager:
         acquisition_mode = str(getattr(acquisition, "mode", "guided_upload") or "guided_upload").strip().lower()
         artifact_source = str(getattr(acquisition, "artifact_source", "onnx_ready") or "onnx_ready").strip().lower()
         checkpoint_url = str(getattr(acquisition, "checkpoint_url", "") or "").strip()
+        source_url = str(getattr(acquisition, "source_url", "") or "").strip()
+        local_build_source_label = source_url or checkpoint_url
         runtime_id = str(manifest.runtime or "").strip().lower()
         artifact_format = str(manifest.artifact_format or "").strip().lower()
         upload_supported = runtime_id == "onnxruntime" and artifact_format == "onnx"
@@ -218,7 +220,7 @@ class VisionModelInstallManager:
             "local_build_reason": str(local_build.get("reason") or "").strip(),
             "local_build_backend": str(local_build.get("backend") or "").strip(),
             "local_build_runtime": str(local_build.get("container_runtime") or "").strip(),
-            "local_build_source_label": checkpoint_url,
+            "local_build_source_label": local_build_source_label,
         }
 
     def start_install(
@@ -321,6 +323,8 @@ class VisionModelInstallManager:
     def _start_local_build(self, *, manifest: ModelManifest, force: bool, requested_by: dict[str, Any]) -> dict[str, Any]:
         key = manifest.model_id
         checkpoint_url = str(getattr(getattr(manifest, "acquisition", None), "checkpoint_url", "") or "").strip()
+        source_url = str(getattr(getattr(manifest, "acquisition", None), "source_url", "") or "").strip()
+        source_label = source_url or checkpoint_url
         existing_artifact = manifest.resolve_artifact_path().is_file()
         active_statuses = {"queued", "downloading", "verifying", "installing"}
 
@@ -344,7 +348,7 @@ class VisionModelInstallManager:
                         "bytes_completed": int(ready.get("bytes_completed") or 0),
                         "bytes_total": int(ready.get("bytes_total") or 0),
                         "source_kind": "local_build",
-                        "source_label": checkpoint_url,
+                        "source_label": source_label,
                         "accepted_source_labels": list(ready.get("accepted_source_labels") or accepted_upstream_sources(manifest)),
                         "requested_by": dict(ready.get("requested_by") or requested_by),
                         "provenance_path": str(ready.get("provenance_path") or paths["provenance_path"]),
@@ -374,7 +378,7 @@ class VisionModelInstallManager:
                 "bytes_completed": 0,
                 "bytes_total": 0,
                 "source_kind": "local_build",
-                "source_label": checkpoint_url,
+                "source_label": source_label,
                 "accepted_source_labels": accepted_upstream_sources(manifest),
                 "requested_by": requested_by,
                 "provenance_path": str(paths["provenance_path"]),

@@ -31,7 +31,12 @@ The public surface is task-based, not vendor-based. The official first-party run
   - `rtmdet_det_tiny`
   - `rtmdet_det_small`
   - `rtmdet_det_medium`
+- The extension now also ships a built-in RF-DETR detection shortlist in `extensions/vision/manifests/`:
+  - `rfdetr_det_nano`
+  - `rfdetr_det_small`
+  - `rfdetr_det_medium`
 - Their local ONNX artifacts live under `extensions/vision/models/rtmdet/` and are intentionally not versioned in git.
+- RF-DETR artifacts live under `extensions/vision/models/rfdetr/` and are also intentionally not versioned in git.
 - The validated manual provisioning flow is documented in `docs/VISION_MODEL_PROVISIONING.md`.
 - The initial assisted-provisioning foundation for RTMDet detection is already exposed in catalog metadata:
   - upstream checkpoint/config/metafile/paper links
@@ -52,14 +57,21 @@ The public surface is task-based, not vendor-based. The official first-party run
   - now records provenance per job, including actor, accepted upstream sources, builder metadata, and final ONNX sha256
   - still keeps manual upload as the stable fallback path
   - can be started from the model recovery card or the Processing Servers screen
+- RF-DETR detection now also has an experimental assisted local build path:
+  - supports `linux`, `darwin`, and `windows` hosts in this phase
+  - uses a host Python builder (`rfdetr[onnx]`) instead of MMDeploy
+  - downloads the upstream checkpoint directly on that machine before exporting the ONNX locally
+  - keeps manual ONNX upload available as the stable fallback path
+  - is prioritized in the operator UI when nothing is installed and the local builder is actually available on that machine
 - Remote download sources are only enabled when the manifest explicitly allows redistribution. The current built-in RTMDet/RTMDet-Ins manifests do not, so the safe first-party flow is local admin-managed copy.
-- Product policy: RTMDet and RTMDet-Ins stay on `guided_upload` for now. When TopoSync adds a first-party `Baixar nesta máquina` / auto-download family, the first planned candidate is RF-DETR, subject to a fresh license and redistribution review at that time.
+- Product policy: RTMDet and RTMDet-Ins stay on `guided_upload` for now. RF-DETR is available only through assisted local build in this phase; it is not mirrored, bundled, or redistributed by TopoSync.
 - Product policy: Ultralytics/YOLO is not part of the official first-party vision runtime path.
 - The extension now also ships a built-in RTMDet-Ins segmentation shortlist:
   - `rtmdet_ins_tiny`
   - `rtmdet_ins_small`
   - `rtmdet_ins_medium`
 - RTMDet manifests use the dedicated `mmdet_rtmdet` parser, letterbox preprocessing, and COCO-80 labels.
+- RF-DETR manifests use the dedicated `rfdetr_detr` parser and the official DETR-style `dets` + `labels` ONNX outputs.
 - RTMDet-Ins manifests use the dedicated `mmdet_rtmdet_ins` parser and produce real binary mask artifacts.
 - The processing server status now exposes:
   - heuristic hardware recommendations

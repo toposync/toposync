@@ -92,6 +92,7 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     assert "segmentation" in vision["recommendations"]
     assert "pose" in vision["recommendations"]
     assert isinstance(vision["official_shortlists"].get("detection"), list)
+    assert any(item.get("model_id") == "rfdetr_det_small" for item in vision["official_shortlists"]["detection"])
     assert isinstance(vision["official_shortlists"].get("segmentation"), list)
     assert isinstance(vision["official_shortlists"].get("pose"), list)
     assert isinstance(vision["task_catalogs"].get("detection"), dict)
@@ -100,6 +101,7 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     assert isinstance(vision["local_builder"], dict)
     assert "supported" in vision["local_builder"]
     assert isinstance(vision["local_builder"].get("candidates"), list)
+    assert any(item.get("model_id") == "rfdetr_det_small" for item in vision["local_builder"]["candidates"])
     detection_items = vision["task_catalogs"]["detection"].get("items")
     assert isinstance(detection_items, list)
     assert any(item.get("availability") in {"available", "manifest_only", "incompatible"} for item in detection_items)

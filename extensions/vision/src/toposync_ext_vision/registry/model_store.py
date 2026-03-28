@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .builtin_data import (
-    OFFICIAL_RTMDET_DETECTION_MODEL_IDS,
+    OFFICIAL_DETECTION_MODEL_IDS,
     OFFICIAL_RTMDET_SEGMENTATION_MODEL_IDS,
 )
 from .manifests import ModelManifest, ModelRegistryError
@@ -43,7 +43,7 @@ def parse_manifest_text(manifest_text: str) -> dict[str, Any]:
 def is_official_model_id(model_id: str) -> bool:
     clean = str(model_id or "").strip().lower()
     return clean in {
-        *OFFICIAL_RTMDET_DETECTION_MODEL_IDS,
+        *OFFICIAL_DETECTION_MODEL_IDS,
         *OFFICIAL_RTMDET_SEGMENTATION_MODEL_IDS,
     }
 

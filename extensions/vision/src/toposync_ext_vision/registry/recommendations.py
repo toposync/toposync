@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .builtin_data import (
-    OFFICIAL_RTMDET_DETECTION_MODEL_IDS,
+    OFFICIAL_DETECTION_MODEL_IDS,
     OFFICIAL_RTMDET_SEGMENTATION_MODEL_IDS,
     OFFICIAL_RTMPOSE_MODEL_IDS,
 )
@@ -14,12 +14,54 @@ from .model_store import is_official_model_id
 ProfileId = str
 
 _PROFILE_ORDER: dict[ProfileId, tuple[str, ...]] = {
-    "cpu_low": ("rtmdet_det_tiny", "rtmdet_det_small", "rtmdet_det_medium"),
-    "cpu_balanced": ("rtmdet_det_small", "rtmdet_det_tiny", "rtmdet_det_medium"),
-    "cuda_low": ("rtmdet_det_tiny", "rtmdet_det_small", "rtmdet_det_medium"),
-    "cuda_balanced": ("rtmdet_det_small", "rtmdet_det_medium", "rtmdet_det_tiny"),
-    "cuda_quality": ("rtmdet_det_medium", "rtmdet_det_small", "rtmdet_det_tiny"),
-    "openvino_balanced": ("rtmdet_det_tiny", "rtmdet_det_small", "rtmdet_det_medium"),
+    "cpu_low": (
+        "rtmdet_det_tiny",
+        "rfdetr_det_nano",
+        "rtmdet_det_small",
+        "rfdetr_det_small",
+        "rtmdet_det_medium",
+        "rfdetr_det_medium",
+    ),
+    "cpu_balanced": (
+        "rtmdet_det_small",
+        "rfdetr_det_small",
+        "rtmdet_det_tiny",
+        "rfdetr_det_nano",
+        "rtmdet_det_medium",
+        "rfdetr_det_medium",
+    ),
+    "cuda_low": (
+        "rtmdet_det_tiny",
+        "rfdetr_det_nano",
+        "rtmdet_det_small",
+        "rfdetr_det_small",
+        "rtmdet_det_medium",
+        "rfdetr_det_medium",
+    ),
+    "cuda_balanced": (
+        "rtmdet_det_small",
+        "rfdetr_det_small",
+        "rtmdet_det_medium",
+        "rfdetr_det_medium",
+        "rtmdet_det_tiny",
+        "rfdetr_det_nano",
+    ),
+    "cuda_quality": (
+        "rfdetr_det_medium",
+        "rtmdet_det_medium",
+        "rfdetr_det_small",
+        "rtmdet_det_small",
+        "rfdetr_det_nano",
+        "rtmdet_det_tiny",
+    ),
+    "openvino_balanced": (
+        "rtmdet_det_tiny",
+        "rtmdet_det_small",
+        "rtmdet_det_medium",
+        "rfdetr_det_nano",
+        "rfdetr_det_small",
+        "rfdetr_det_medium",
+    ),
 }
 
 _SEGMENTATION_PROFILE_ORDER: dict[ProfileId, tuple[str, ...]] = {
@@ -86,13 +128,13 @@ def _official_model_ids_for_task(task: VisionTask) -> tuple[str, ...]:
     if task == "pose":
         return OFFICIAL_RTMPOSE_MODEL_IDS
     if task == "detection":
-        return OFFICIAL_RTMDET_DETECTION_MODEL_IDS
+        return OFFICIAL_DETECTION_MODEL_IDS
     return ()
 
 
 def _resource_tier(manifest: ModelManifest) -> str:
     model_id = manifest.model_id
-    if model_id.endswith("_tiny"):
+    if model_id.endswith("_tiny") or model_id.endswith("_nano"):
         return "low"
     if model_id.endswith("_small"):
         return "balanced"
@@ -106,7 +148,7 @@ def _badge_ids_for_manifest(manifest: ModelManifest, *, profile: ProfileId, reco
     if recommended_index == 0:
         badges.append("recommended")
     model_id = manifest.model_id
-    if model_id.endswith("_tiny"):
+    if model_id.endswith("_tiny") or model_id.endswith("_nano"):
         badges.append("fastest")
         if profile in {"cpu_low", "openvino_balanced"}:
             badges.append("edge")
@@ -310,12 +352,20 @@ def build_task_model_catalog(
             )
         )
 
-    def _sort_key(item: dict[str, Any]) -> tuple[int, int, str, str]:
+    def _provisioning_rank(item: dict[str, Any]) -> int:
+        if str(item.get("availability") or "") != "manifest_only":
+            return 0
+        if bool(item.get("local_build_supported")):
+            return 0
+        return 1
+
+    def _sort_key(item: dict[str, Any]) -> tuple[int, int, int, str, str]:
         availability_rank = _AVAILABILITY_RANK.get(str(item.get("availability") or ""), 99)
+        provisioning_rank = _provisioning_rank(item)
         preferred_rank = preferred_order.get(str(item.get("model_id") or ""), 999)
         source_rank = 0 if str(item.get("source_kind") or "") == "official" else 1
         display_name = str(item.get("display_name") or item.get("model_id") or "")
-        return (availability_rank, preferred_rank, source_rank, display_name)
+        return (availability_rank, provisioning_rank, preferred_rank, source_rank, display_name)
 
     items.sort(key=_sort_key)
     return {
@@ -347,7 +397,7 @@ def list_official_detection_shortlist(
 ) -> list[dict[str, Any]]:
     registry = _coerce_registry(model_registry)
     manifests: list[dict[str, Any]] = []
-    for model_id in OFFICIAL_RTMDET_DETECTION_MODEL_IDS:
+    for model_id in OFFICIAL_DETECTION_MODEL_IDS:
         manifest = registry.get_manifest(model_id)
         if manifest is None or manifest.task != "detection":
             continue

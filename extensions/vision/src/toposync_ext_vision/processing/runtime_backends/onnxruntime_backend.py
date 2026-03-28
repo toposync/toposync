@@ -13,6 +13,7 @@ from ...registry.manifests import ModelManifest
 from ..contracts import DetectionObject, SegmentationInstance
 from ..parsers import (
     parse_generic_onnx_boxes,
+    parse_rfdetr_outputs,
     parse_rtmdet_ins_outputs,
     parse_rtmdet_outputs,
 )
@@ -328,7 +329,7 @@ class OnnxRuntimeDetectorBackend(_OnnxRuntimeSessionBackend):
         super().__init__(
             manifest,
             task="detection",
-            supported_postprocess={"", "generic_boxes", "mmdet_rtmdet"},
+            supported_postprocess={"", "generic_boxes", "mmdet_rtmdet", "rfdetr_detr"},
         )
 
     def detect(
@@ -348,6 +349,13 @@ class OnnxRuntimeDetectorBackend(_OnnxRuntimeSessionBackend):
             )
         if postprocess_type == "mmdet_rtmdet":
             return parse_rtmdet_outputs(
+                outputs_by_name,
+                manifest=self._manifest,
+                preprocess_meta=preprocess_meta,
+                categories=categories,
+            )
+        if postprocess_type == "rfdetr_detr":
+            return parse_rfdetr_outputs(
                 outputs_by_name,
                 manifest=self._manifest,
                 preprocess_meta=preprocess_meta,

@@ -1,0 +1,63 @@
+{
+  "model_id": "rfdetr_det_nano",
+  "display_name": "RF-DETR Nano",
+  "task": "detection",
+  "runtime": "onnxruntime",
+  "artifact_format": "onnx",
+  "artifact_path": "../models/rfdetr/rfdetr_det_nano.inference_model.onnx",
+  "sha256": "",
+  "input": {
+    "width": 384,
+    "height": 384,
+    "color_order": "rgb",
+    "layout": "nchw",
+    "resize_mode": "stretch",
+    "tensor_name": "input",
+    "normalization": {
+      "mean": [123.675, 116.28, 103.53],
+      "std": [58.395, 57.12, 57.375]
+    }
+  },
+  "postprocess": {
+    "type": "rfdetr_detr",
+    "output_name": "dets",
+    "label_output_name": "labels",
+    "box_format": "xyxy01",
+    "confidence_threshold_default": 0.4,
+    "iou_threshold_default": 0.65
+  },
+  "classes": {
+    "source": "coco80"
+  },
+  "license": {
+    "code_license": "Apache-2.0",
+    "weights_license": "Apache-2.0 (Apache-designated RF-DETR open weights)",
+    "dataset_notes": "COCO-pretrained open weights from the official RF-DETR package; keep Apache notices and upstream attribution.",
+    "redistribution_allowed": false,
+    "commercial_use_status": "apache_notice_required",
+    "official_build_allowed": true
+  },
+  "acquisition": {
+    "mode": "local_build_assisted",
+    "artifact_source": "checkpoint_export_required",
+    "guide_url": "https://github.com/roboflow/rf-detr",
+    "export_guide_url": "https://rfdetr.roboflow.com/learn/export/",
+    "source_url": "https://github.com/roboflow/rf-detr",
+    "checkpoint_url": "https://storage.googleapis.com/rfdetr/nano_coco/checkpoint_best_regular.pth",
+    "paper_url": "https://arxiv.org/abs/2511.09554",
+    "builder_backend": "host_python",
+    "supported_platforms": ["linux", "darwin", "windows"],
+    "explicit_consent_required": true
+  },
+  "hardware_profiles": {
+    "cpu": true,
+    "cuda": true,
+    "openvino": false,
+    "mps": true
+  },
+  "recommended_profiles": ["cpu_low", "cuda_low"],
+  "notes": [
+    "Portable RF-DETR entry point with official ONNX export in the upstream package.",
+    "Strong quality for a lightweight cross-platform assisted local build path."
+  ]
+}

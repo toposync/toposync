@@ -27,6 +27,11 @@ Built-in first-party detection manifests currently target RTMDet:
 - `rtmdet_det_small`
 - `rtmdet_det_medium`
 
+Built-in first-party detection manifests also include RF-DETR:
+- `rfdetr_det_nano`
+- `rfdetr_det_small`
+- `rfdetr_det_medium`
+
 Built-in first-party segmentation manifests currently target RTMDet-Ins:
 - `rtmdet_ins_tiny`
 - `rtmdet_ins_small`
@@ -46,6 +51,17 @@ That flow still stays inside the "yellow" boundary:
 - the checkpoint is downloaded directly by the target processing server
 - the ONNX is exported locally on that machine
 - the final artifact is validated against the manifest checksum
+- TopoSync does not mirror, bundle, or host the checkpoint/ONNX for the user
+
+Experimental assisted local build is also available for RF-DETR detection in this phase when all of these are true:
+- the processing server host is `linux`, `darwin`, or `windows`
+- a compatible local Python runtime is available
+- the user explicitly starts the local build flow from the UI/API
+- the model manifest includes upstream checkpoint metadata
+
+That RF-DETR flow also stays inside the same "yellow" boundary:
+- the checkpoint is downloaded directly by the target processing server
+- the ONNX is exported locally on that machine through the official RF-DETR Python package
 - TopoSync does not mirror, bundle, or host the checkpoint/ONNX for the user
 
 UI entry points in this phase:
@@ -69,7 +85,7 @@ If you want the UI to offer one-click install for recommended models, configure 
 
 When one of those sources is configured and the manifest has a checksum, the pipeline editor and processing server screen can start the install and show progress.
 For legal safety, remote download sources are only enabled when the manifest says redistribution is allowed. The current built-in RTMDet manifests are intentionally marked as review-required for redistribution, so the supported default path is local copy from an admin-managed directory.
-Product direction: keep RTMDet / RTMDet-Ins on `guided_upload`. The first family planned for future official `Baixar nesta máquina` / `auto_download` support is RF-DETR, pending a fresh review of the exact weights/artifacts chosen for distribution.
+Product direction: keep RTMDet / RTMDet-Ins on `guided_upload`. RF-DETR is available through assisted local build only in this phase; it is not exposed as first-party `auto_download`, mirror, or bundle support.
 
 `ModelManifest` also accepts optional `capabilities` such as `reid`. This does not enable multi-camera tracking yet; it only reserves the registry/catalog shape so future re-identification models can be added without changing the API.
 
@@ -98,6 +114,7 @@ The status payload now includes:
 - install capability and active/recent install jobs for models with automatic sources configured
 - model capabilities declared by each manifest
 - RTMDet detection shortlist
+- RF-DETR detection shortlist
 - RTMDet-Ins segmentation shortlist
 - a reserved `pose` task catalog/recommendation slot for future first-party pose models
 - simple hardware-based recommendations for the initial detection/segmentation model

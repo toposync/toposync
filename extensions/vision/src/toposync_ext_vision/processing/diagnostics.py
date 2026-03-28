@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..registry import ModelRegistry, build_default_model_registry, get_default_model_install_manager
-from ..registry.builtin_data import OFFICIAL_RTMDET_DETECTION_MODEL_IDS
+from ..registry.builtin_data import OFFICIAL_DETECTION_MODEL_IDS
 from ..registry.local_build import probe_local_builder
 from ..registry.recommendations import (
     build_task_model_catalog,
@@ -42,7 +42,7 @@ def _collect_local_builder_summary(
     data_dir: str | None,
 ) -> dict[str, Any]:
     candidates: list[dict[str, Any]] = []
-    for model_id in OFFICIAL_RTMDET_DETECTION_MODEL_IDS:
+    for model_id in OFFICIAL_DETECTION_MODEL_IDS:
         manifest = registry.get_manifest(model_id)
         if manifest is None:
             continue

@@ -204,7 +204,7 @@ function parseCatalogItem(raw: unknown): VisionModelCatalogItem | null {
     localBuildReason: String(raw.local_build_reason || "").trim(),
     localBuildBackend: String(raw.local_build_backend || "").trim(),
     localBuildRuntime: String(raw.local_build_runtime || "").trim(),
-    localBuildSourceLabel: String(raw.local_build_source_label || "").trim(),
+    localBuildSourceLabel: String(raw.local_build_source_label || acquisition?.source_url || acquisition?.checkpoint_url || "").trim(),
     compatibleProviderIds: Array.isArray(raw.compatible_provider_ids)
       ? raw.compatible_provider_ids.map((value) => String(value || "").trim()).filter(Boolean)
       : [],
@@ -332,6 +332,9 @@ const SEGMENTATION_INPUT_PRESETS = [
 ] as const;
 
 const MODEL_HINT_KEYS: Record<string, string> = {
+  rfdetr_det_nano: "core.ui.pipelines.panels.yolo.model_rfdetr_nano_hint",
+  rfdetr_det_small: "core.ui.pipelines.panels.yolo.model_rfdetr_small_hint",
+  rfdetr_det_medium: "core.ui.pipelines.panels.yolo.model_rfdetr_medium_hint",
   rtmdet_det_tiny: "core.ui.pipelines.panels.yolo.model_rtmdet_tiny_hint",
   rtmdet_det_small: "core.ui.pipelines.panels.yolo.model_rtmdet_small_hint",
   rtmdet_det_medium: "core.ui.pipelines.panels.yolo.model_rtmdet_medium_hint",
@@ -375,6 +378,45 @@ const RTMDET_DETECTION_ACQUISITION_DEFAULTS: Record<
     paperUrl: "https://arxiv.org/abs/2212.07784",
     builderBackend: "container_local",
     supportedPlatforms: ["linux"],
+    explicitConsentRequired: true,
+  },
+};
+
+const RFDETR_DETECTION_ACQUISITION_DEFAULTS: Record<
+  string,
+  Pick<
+    VisionModelAcquisition,
+    "guideUrl" | "exportGuideUrl" | "sourceUrl" | "checkpointUrl" | "paperUrl" | "builderBackend" | "supportedPlatforms" | "explicitConsentRequired"
+  >
+> = {
+  rfdetr_det_nano: {
+    guideUrl: "https://github.com/roboflow/rf-detr",
+    exportGuideUrl: "https://rfdetr.roboflow.com/learn/export/",
+    sourceUrl: "https://github.com/roboflow/rf-detr",
+    checkpointUrl: "https://storage.googleapis.com/rfdetr/nano_coco/checkpoint_best_regular.pth",
+    paperUrl: "https://arxiv.org/abs/2511.09554",
+    builderBackend: "host_python",
+    supportedPlatforms: ["linux", "darwin", "windows"],
+    explicitConsentRequired: true,
+  },
+  rfdetr_det_small: {
+    guideUrl: "https://github.com/roboflow/rf-detr",
+    exportGuideUrl: "https://rfdetr.roboflow.com/learn/export/",
+    sourceUrl: "https://github.com/roboflow/rf-detr",
+    checkpointUrl: "https://storage.googleapis.com/rfdetr/small_coco/checkpoint_best_regular.pth",
+    paperUrl: "https://arxiv.org/abs/2511.09554",
+    builderBackend: "host_python",
+    supportedPlatforms: ["linux", "darwin", "windows"],
+    explicitConsentRequired: true,
+  },
+  rfdetr_det_medium: {
+    guideUrl: "https://github.com/roboflow/rf-detr",
+    exportGuideUrl: "https://rfdetr.roboflow.com/learn/export/",
+    sourceUrl: "https://github.com/roboflow/rf-detr",
+    checkpointUrl: "https://storage.googleapis.com/rfdetr/medium_coco/checkpoint_best_regular.pth",
+    paperUrl: "https://arxiv.org/abs/2511.09554",
+    builderBackend: "host_python",
+    supportedPlatforms: ["linux", "darwin", "windows"],
     explicitConsentRequired: true,
   },
 };
@@ -444,6 +486,23 @@ function artifactFileName(artifactPath: string): string {
 
 function defaultAcquisitionForModelId(modelId: string): VisionModelAcquisition {
   const clean = String(modelId || "").trim().toLowerCase();
+  if (clean.startsWith("rfdetr_det_")) {
+    const defaults = RFDETR_DETECTION_ACQUISITION_DEFAULTS[clean];
+    return {
+      mode: "local_build_assisted",
+      artifactSource: "checkpoint_export_required",
+      guideUrl: defaults?.guideUrl || "",
+      exportGuideUrl: defaults?.exportGuideUrl || "",
+      sourceUrl: defaults?.sourceUrl || "",
+      checkpointUrl: defaults?.checkpointUrl || "",
+      configUrl: "",
+      metafileUrl: "",
+      paperUrl: defaults?.paperUrl || "",
+      builderBackend: defaults?.builderBackend || "",
+      supportedPlatforms: [...(defaults?.supportedPlatforms || [])],
+      explicitConsentRequired: !!defaults?.explicitConsentRequired,
+    };
+  }
   if (clean.startsWith("rtmdet_det_") || clean.startsWith("rtmdet_ins_")) {
     const detectionDefaults = RTMDET_DETECTION_ACQUISITION_DEFAULTS[clean];
     return {
@@ -479,6 +538,9 @@ function defaultAcquisitionForModelId(modelId: string): VisionModelAcquisition {
 
 function detectionFallbackItems(): VisionModelCatalogItem[] {
   return [
+    fallbackCatalogItem("rfdetr_det_nano", "RF-DETR Nano", "onnxruntime", { custom: false }),
+    fallbackCatalogItem("rfdetr_det_small", "RF-DETR Small", "onnxruntime", { custom: false }),
+    fallbackCatalogItem("rfdetr_det_medium", "RF-DETR Medium", "onnxruntime", { custom: false }),
     fallbackCatalogItem("rtmdet_det_tiny", "RTMDet Tiny", "onnxruntime", { custom: false }),
     fallbackCatalogItem("rtmdet_det_small", "RTMDet Small", "onnxruntime", { custom: false }),
     fallbackCatalogItem("rtmdet_det_medium", "RTMDet Medium", "onnxruntime", { custom: false }),
@@ -731,7 +793,7 @@ export function VisionConfigCard({
       next.push(item);
       seen.add(item.modelId);
     }
-    return next.slice(0, 4);
+    return next.slice(0, isSegmentation ? 4 : 6);
   }, [catalogItems, selectedCatalogItem]);
   const manualInstallItem = selectedCatalogItem ?? null;
   const manualInstallFile = artifactFileName(manualInstallItem?.artifactPath || "");
@@ -1979,7 +2041,12 @@ export function VisionConfigCard({
         serverId={resolvedProcessingServerId}
         modelName={localBuildConsent?.item.displayName || ""}
         runtimeLabel={localBuildConsent?.item.localBuildRuntime || localBuildConsent?.item.localBuildBackend || "local"}
-        sourceLabel={localBuildConsent?.item.localBuildSourceLabel || localBuildConsent?.item.acquisition.checkpointUrl || ""}
+        sourceLabel={
+          localBuildConsent?.item.localBuildSourceLabel ||
+          localBuildConsent?.item.acquisition.sourceUrl ||
+          localBuildConsent?.item.acquisition.checkpointUrl ||
+          ""
+        }
         checked={localBuildConsentChecked}
         submitting={localBuildConsentSubmitting}
         error={localBuildConsentError}

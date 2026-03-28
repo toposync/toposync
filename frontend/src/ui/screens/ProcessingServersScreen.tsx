@@ -147,9 +147,10 @@ function readVisionDetectionCatalog(status: Record<string, unknown> | undefined)
     .map((raw) => {
       if (!isRecord(raw)) return null;
       const modelId = String(raw.model_id || "").trim();
-      if (!modelId.startsWith("rtmdet_det_")) return null;
       if (String(raw.source_kind || "").trim() === "custom") return null;
       const acquisition = isRecord(raw.acquisition) ? raw.acquisition : null;
+      const artifactSource = String(raw.acquisition_artifact_source || acquisition?.artifact_source || "").trim();
+      if (artifactSource !== "checkpoint_export_required") return null;
       return {
         modelId,
         displayName: String(raw.display_name || raw.model_id || "").trim(),
@@ -159,7 +160,7 @@ function readVisionDetectionCatalog(status: Record<string, unknown> | undefined)
         localBuildSupported: !!raw.local_build_supported,
         localBuildReason: String(raw.local_build_reason || "").trim(),
         localBuildRuntime: String(raw.local_build_runtime || "").trim(),
-        localBuildSourceLabel: String(raw.local_build_source_label || acquisition?.checkpoint_url || "").trim(),
+        localBuildSourceLabel: String(raw.local_build_source_label || acquisition?.source_url || acquisition?.checkpoint_url || "").trim(),
         explicitConsentRequired: !!acquisition?.explicit_consent_required,
         installJob: isRecord(raw.install_job)
           ? {
@@ -179,7 +180,7 @@ function readVisionDetectionCatalog(status: Record<string, unknown> | undefined)
   if (!items.length) return null;
   return {
     profile: String(detection?.profile || "").trim(),
-    items: items.slice(0, 3),
+    items: items.slice(0, 6),
   };
 }
 

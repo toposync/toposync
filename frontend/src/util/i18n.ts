@@ -1097,7 +1097,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.segmentation_model_id_hint":
       "Choose the segmentation model. This quick list favors models that fit the selected machine.",
     "core.ui.pipelines.panels.yolo.model_shortlist_hint":
-      "RTMDet Tiny is the lightest option, Small is the default balance, and Medium spends more machine resources for better quality.",
+      "RF-DETR Small is the easiest cross-platform default, RF-DETR Nano is the lighter one-click option, and RTMDet stays available when you prefer the MMDetection/MMDeploy path.",
     "core.ui.pipelines.panels.yolo.segmentation_model_shortlist_hint":
       "RTMDet-Ins Tiny is the lightest option, Small is the default balance, and Medium spends more machine resources for better masks.",
     "core.ui.pipelines.panels.yolo.processing_server_hint":
@@ -1233,6 +1233,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.install_phase.already_ready": "already ready",
     "core.ui.pipelines.panels.yolo.install_phase.preflight": "checking environment",
     "core.ui.pipelines.panels.yolo.install_phase.building_image": "building local builder",
+    "core.ui.pipelines.panels.yolo.install_phase.setting_up_python": "preparing Python builder",
+    "core.ui.pipelines.panels.yolo.install_phase.installing_dependencies": "installing Python dependencies",
     "core.ui.pipelines.panels.yolo.install_phase.exporting_onnx": "exporting ONNX locally",
     "core.ui.pipelines.panels.yolo.install_phase.verifying_output": "verifying exported ONNX",
     "core.ui.pipelines.panels.yolo.install_phase.registering_artifact": "registering model artifact",
@@ -1311,6 +1313,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.resource_tier.balanced": "balanced",
     "core.ui.pipelines.panels.yolo.resource_tier.higher": "higher",
     "core.ui.pipelines.panels.yolo.resource_tier.unknown": "unknown",
+    "core.ui.pipelines.panels.yolo.model_rfdetr_nano_hint":
+      "RF-DETR Nano: easiest cross-platform starting point when you want assisted local export with lower CPU cost.",
+    "core.ui.pipelines.panels.yolo.model_rfdetr_small_hint":
+      "RF-DETR Small: easiest cross-platform default with stronger COCO quality and a simpler export path.",
+    "core.ui.pipelines.panels.yolo.model_rfdetr_medium_hint":
+      "RF-DETR Medium: higher-quality RF-DETR option when you can spend more latency per frame.",
     "core.ui.pipelines.panels.yolo.model_rtmdet_tiny_hint":
       "RTMDet Tiny: fastest option for CPU-first deployments and quick smoke tests.",
     "core.ui.pipelines.panels.yolo.model_rtmdet_small_hint":
@@ -1460,9 +1468,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.processing_servers.local_build.reason.unsupported": "unsupported on this machine",
     "core.ui.processing_servers.local_build.reason.builder_unconfigured": "builder is not configured",
     "core.ui.processing_servers.local_build.reason.task_unsupported": "task not supported by the current builder",
-    "core.ui.processing_servers.local_build.reason.platform_unsupported": "Linux is required in this phase",
+    "core.ui.processing_servers.local_build.reason.platform_unsupported": "this machine is outside the supported platform list for this builder",
     "core.ui.processing_servers.local_build.reason.builder_metadata_missing": "builder metadata is incomplete",
     "core.ui.processing_servers.local_build.reason.container_runtime_missing": "docker or podman was not found",
+    "core.ui.processing_servers.local_build.reason.python_runtime_missing": "a compatible Python runtime was not found",
+    "core.ui.processing_servers.local_build.reason.python_version_unsupported": "Python 3.10 or newer is required for this builder",
     "core.ui.processing_servers.local_build.reason.insufficient_disk_space": "insufficient free disk space",
     "core.ui.pipelines.editor.step.drag_handle": "Reorder step",
 
@@ -2571,7 +2581,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.segmentation_model_id_hint":
       "Escolha o modelo de segmentação. Esta lista rápida prioriza opções que cabem na máquina selecionada.",
     "core.ui.pipelines.panels.yolo.model_shortlist_hint":
-      "RTMDet Tiny é a opção mais leve, Small é o equilíbrio padrão e Medium usa mais máquina para buscar melhor qualidade.",
+      "RF-DETR Small é o caminho mais simples entre Windows, macOS e Linux, RF-DETR Nano é a opção one-click mais leve, e RTMDet continua disponível para quem prefere o fluxo MMDetection/MMDeploy.",
     "core.ui.pipelines.panels.yolo.segmentation_model_shortlist_hint":
       "RTMDet-Ins Tiny é a opção mais leve, Small é o equilíbrio padrão e Medium usa mais máquina para máscaras melhores.",
     "core.ui.pipelines.panels.yolo.processing_server_hint":
@@ -2709,6 +2719,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.install_phase.already_ready": "já pronto",
     "core.ui.pipelines.panels.yolo.install_phase.preflight": "checando ambiente",
     "core.ui.pipelines.panels.yolo.install_phase.building_image": "montando builder local",
+    "core.ui.pipelines.panels.yolo.install_phase.setting_up_python": "preparando builder Python",
+    "core.ui.pipelines.panels.yolo.install_phase.installing_dependencies": "instalando dependências Python",
     "core.ui.pipelines.panels.yolo.install_phase.exporting_onnx": "exportando ONNX localmente",
     "core.ui.pipelines.panels.yolo.install_phase.verifying_output": "verificando ONNX exportado",
     "core.ui.pipelines.panels.yolo.install_phase.registering_artifact": "registrando artefato do modelo",
@@ -2788,6 +2800,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.resource_tier.balanced": "equilibrada",
     "core.ui.pipelines.panels.yolo.resource_tier.higher": "mais alta",
     "core.ui.pipelines.panels.yolo.resource_tier.unknown": "desconhecida",
+    "core.ui.pipelines.panels.yolo.model_rfdetr_nano_hint":
+      "RF-DETR Nano: ponto de partida mais simples entre plataformas quando você quer exportação local assistida com menor custo de CPU.",
+    "core.ui.pipelines.panels.yolo.model_rfdetr_small_hint":
+      "RF-DETR Small: padrão cross-platform mais simples, com qualidade COCO forte e exportação mais direta.",
+    "core.ui.pipelines.panels.yolo.model_rfdetr_medium_hint":
+      "RF-DETR Medium: opção RF-DETR de maior qualidade quando você pode gastar mais latência por frame.",
     "core.ui.pipelines.panels.yolo.model_rtmdet_tiny_hint":
       "RTMDet Tiny: opção mais rápida para implantações focadas em CPU e smoke tests rápidos.",
     "core.ui.pipelines.panels.yolo.model_rtmdet_small_hint":
@@ -2937,9 +2955,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.processing_servers.local_build.reason.unsupported": "não suportado nesta máquina",
     "core.ui.processing_servers.local_build.reason.builder_unconfigured": "o builder não está configurado",
     "core.ui.processing_servers.local_build.reason.task_unsupported": "a tarefa ainda não é suportada pelo builder atual",
-    "core.ui.processing_servers.local_build.reason.platform_unsupported": "Linux é obrigatório nesta fase",
+    "core.ui.processing_servers.local_build.reason.platform_unsupported": "esta máquina está fora da lista de plataformas suportadas por este builder",
     "core.ui.processing_servers.local_build.reason.builder_metadata_missing": "faltam metadados do builder",
     "core.ui.processing_servers.local_build.reason.container_runtime_missing": "docker ou podman não foi encontrado",
+    "core.ui.processing_servers.local_build.reason.python_runtime_missing": "não foi encontrado um Python compatível",
+    "core.ui.processing_servers.local_build.reason.python_version_unsupported": "este builder exige Python 3.10 ou mais recente",
     "core.ui.processing_servers.local_build.reason.insufficient_disk_space": "não há espaço livre em disco suficiente",
     "core.ui.pipelines.editor.step.drag_handle": "Reordenar etapa",
 

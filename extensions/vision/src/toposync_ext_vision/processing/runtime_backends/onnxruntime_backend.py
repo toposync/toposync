@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import platform
 import statistics
 import time
+from importlib import metadata
 from typing import Any
 
 import numpy as np
@@ -49,11 +51,39 @@ def _configured_onnxruntime_execution_providers() -> list[str] | None:
     return out or None
 
 
-def resolve_onnxruntime_execution_providers(preferred: list[str] | None = None) -> list[str]:
-    available = available_onnxruntime_execution_providers()
-    if not available:
-        return []
-    ordered = preferred or _configured_onnxruntime_execution_providers() or [
+def _installed_onnxruntime_runtime_variant() -> str:
+    package_names: list[str] = []
+    for package_name in ("onnxruntime-directml", "onnxruntime-gpu", "onnxruntime"):
+        try:
+            metadata.version(package_name)
+        except metadata.PackageNotFoundError:
+            continue
+        except Exception:
+            continue
+        package_names.append(package_name)
+    if "onnxruntime-directml" in package_names and platform.system().strip().lower() == "windows":
+        return "directml"
+    if "onnxruntime-gpu" in package_names:
+        return "cuda"
+    if "onnxruntime" in package_names:
+        return "cpu"
+    return "unknown"
+
+
+def _default_onnxruntime_execution_providers() -> list[str]:
+    variant = _installed_onnxruntime_runtime_variant()
+    if variant == "directml":
+        return [
+            "DmlExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+    if variant == "cuda":
+        return [
+            "TensorrtExecutionProvider",
+            "CUDAExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+    return [
         "CPUExecutionProvider",
         "DmlExecutionProvider",
         "OpenVINOExecutionProvider",
@@ -61,6 +91,13 @@ def resolve_onnxruntime_execution_providers(preferred: list[str] | None = None) 
         "CUDAExecutionProvider",
         "TensorrtExecutionProvider",
     ]
+
+
+def resolve_onnxruntime_execution_providers(preferred: list[str] | None = None) -> list[str]:
+    available = available_onnxruntime_execution_providers()
+    if not available:
+        return []
+    ordered = preferred or _configured_onnxruntime_execution_providers() or _default_onnxruntime_execution_providers()
     selected = [provider for provider in ordered if provider in available]
     if "CPUExecutionProvider" in available and "CPUExecutionProvider" not in selected:
         selected.append("CPUExecutionProvider")

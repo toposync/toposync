@@ -102,6 +102,7 @@ def test_onnxruntime_backend_runs_on_cpu_and_benchmarks(tmp_path: Path, monkeypa
 
 def test_resolve_onnxruntime_execution_providers_defaults_to_cpu_first(monkeypatch) -> None:  # noqa: ANN001
     monkeypatch.delenv("TOPOSYNC_VISION_ONNXRUNTIME_PROVIDERS", raising=False)
+    monkeypatch.setattr(ort_backend_mod, "_installed_onnxruntime_runtime_variant", lambda: "cpu")
     monkeypatch.setattr(
         ort_backend_mod,
         "available_onnxruntime_execution_providers",
@@ -115,8 +116,40 @@ def test_resolve_onnxruntime_execution_providers_defaults_to_cpu_first(monkeypat
     ]
 
 
+def test_resolve_onnxruntime_execution_providers_prefers_directml_for_directml_bundle(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.delenv("TOPOSYNC_VISION_ONNXRUNTIME_PROVIDERS", raising=False)
+    monkeypatch.setattr(ort_backend_mod, "_installed_onnxruntime_runtime_variant", lambda: "directml")
+    monkeypatch.setattr(
+        ort_backend_mod,
+        "available_onnxruntime_execution_providers",
+        lambda: ["DmlExecutionProvider", "CPUExecutionProvider"],
+    )
+
+    assert resolve_onnxruntime_execution_providers() == [
+        "DmlExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+
+
+def test_resolve_onnxruntime_execution_providers_prefers_cuda_for_gpu_bundle(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.delenv("TOPOSYNC_VISION_ONNXRUNTIME_PROVIDERS", raising=False)
+    monkeypatch.setattr(ort_backend_mod, "_installed_onnxruntime_runtime_variant", lambda: "cuda")
+    monkeypatch.setattr(
+        ort_backend_mod,
+        "available_onnxruntime_execution_providers",
+        lambda: ["CUDAExecutionProvider", "CPUExecutionProvider", "TensorrtExecutionProvider"],
+    )
+
+    assert resolve_onnxruntime_execution_providers() == [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+
+
 def test_resolve_onnxruntime_execution_providers_honors_env_override(monkeypatch) -> None:  # noqa: ANN001
     monkeypatch.setenv("TOPOSYNC_VISION_ONNXRUNTIME_PROVIDERS", "CUDAExecutionProvider,CPUExecutionProvider")
+    monkeypatch.setattr(ort_backend_mod, "_installed_onnxruntime_runtime_variant", lambda: "cpu")
     monkeypatch.setattr(
         ort_backend_mod,
         "available_onnxruntime_execution_providers",

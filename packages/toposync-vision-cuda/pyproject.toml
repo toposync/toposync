@@ -1,7 +1,7 @@
 [project]
-name = "toposync"
+name = "toposync-vision-cuda"
 version = "0.3.0"
-description = "Toposync default application bundle."
+description = "Toposync application bundle with ONNX Runtime CUDA acceleration."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -12,7 +12,7 @@ dependencies = [
   "toposync-ext-images>=0.1.0",
   "toposync-ext-cameras>=0.1.0",
   "toposync-ext-vision>=0.1.0",
-  "onnxruntime>=1.20",
+  "onnxruntime-gpu>=1.20",
 ]
 
 [build-system]

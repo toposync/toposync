@@ -36,6 +36,16 @@ type LocalBuildConsentState = {
   item: VisionDetectionCatalogItem;
 };
 
+type VisionRuntimeUpgradeSuggestion = {
+  id: string;
+  label: string;
+  packageName: string;
+  installCommand: string;
+  replaceCommand: string;
+  replacementRequired: boolean;
+  note: string;
+};
+
 function isRecord(value: unknown): value is Record<string, any> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -226,6 +236,31 @@ function readVisionLocalBuilder(status: Record<string, unknown> | undefined): {
         }
       : null,
   };
+}
+
+function readVisionRuntimeUpgradeSuggestions(
+  status: Record<string, unknown> | undefined,
+): VisionRuntimeUpgradeSuggestion[] {
+  if (!status || !isRecord(status)) return [];
+  const vision = isRecord(status.vision) ? status.vision : null;
+  const runtimeUpgrades = vision && isRecord(vision.runtime_upgrades) ? vision.runtime_upgrades : null;
+  const suggestionsRaw = runtimeUpgrades && Array.isArray(runtimeUpgrades.suggestions) ? runtimeUpgrades.suggestions : [];
+  return suggestionsRaw
+    .map((raw) => {
+      if (!isRecord(raw)) return null;
+      const packageName = String(raw.package_name || "").trim();
+      if (!packageName) return null;
+      return {
+        id: String(raw.id || packageName).trim(),
+        label: String(raw.label || packageName).trim(),
+        packageName,
+        installCommand: String(raw.install_command || "").trim(),
+        replaceCommand: String(raw.replace_command || raw.install_command || "").trim(),
+        replacementRequired: !!raw.replacement_required,
+        note: String(raw.note || "").trim(),
+      };
+    })
+    .filter((item): item is VisionRuntimeUpgradeSuggestion => !!item);
 }
 
 function installPhaseLabel(
@@ -463,6 +498,7 @@ export function ProcessingServersScreen({ onClose, canManageProvisioning = false
               const statusTitle =
                 testing ? t("core.ui.processing_servers.status.testing") : probe && !probe.ok ? String(probe.error || "") : "";
               const diagnosticsLine = probe && probe.ok ? buildDiagnosticsSummary(probe.status) : null;
+              const runtimeUpgrades = probe && probe.ok ? readVisionRuntimeUpgradeSuggestions(probe.status) : [];
               const visionCatalog = probe && probe.ok ? readVisionDetectionCatalog(probe.status) : null;
               const localBuilder = probe && probe.ok ? readVisionLocalBuilder(probe.status) : null;
               const localBuilderLastPhase = localBuilder?.lastJob
@@ -507,6 +543,21 @@ export function ProcessingServersScreen({ onClose, canManageProvisioning = false
                         {diagnosticsLine}
                       </div>
                     ) : null}
+                    {runtimeUpgrades.map((item) => (
+                      <div key={item.id} className="pipelinesServerMeta pipelinesServerMetaDiag">
+                        <div>
+                          {t(
+                            "core.ui.processing_servers.runtime_upgrade.title",
+                            { label: item.label },
+                            `Suggested runtime upgrade: ${item.label}`,
+                          )}
+                        </div>
+                        <div style={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>
+                          {item.replacementRequired ? item.replaceCommand : item.installCommand}
+                        </div>
+                        {item.note ? <div>{item.note}</div> : null}
+                      </div>
+                    ))}
                     {visionCatalog ? (
                       <div className="pipelinesServerMeta pipelinesServerMetaDiag">
                         {t("core.ui.processing_servers.vision_recommendations.title")}{" "}

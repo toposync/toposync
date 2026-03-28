@@ -82,6 +82,8 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     assert any(item.get("id") == "norfair" for item in vision["trackers_available"])
     assert "CPUExecutionProvider" in vision["execution_providers"]
     assert "CPUExecutionProvider" in vision["preferred_execution_providers"]
+    assert isinstance(vision["runtime_upgrades"], dict)
+    assert isinstance(vision["runtime_upgrades"].get("suggestions"), list)
     assert "yolo_device_recommended" not in vision
     assert any(item.get("model_id") == "constant.detector" for item in vision["models_installed"])
     assert any(isinstance(item.get("capabilities"), list) for item in vision["models_installed"])
@@ -123,3 +125,5 @@ def test_collect_vision_extension_diagnostics_keeps_local_builder_on_failure(mon
     diagnostics = collect_vision_extension_diagnostics()
     assert diagnostics["local_builder"] == {}
     assert diagnostics["install_jobs"] == []
+    assert isinstance(diagnostics["runtime_upgrades"], dict)
+    assert diagnostics["runtime_upgrades"]["suggestions"] == []

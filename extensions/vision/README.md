@@ -13,7 +13,10 @@ The public surface is task-based, not vendor-based. The official first-party run
 
 ## Dependencies
 
-- The official extension package now includes the first-party ONNX Runtime CPU stack.
+- The default `toposync` application bundle includes the first-party ONNX Runtime CPU stack.
+- The GPU-oriented first-party bundles are published separately:
+  - `toposync-vision-cuda`
+  - `toposync-vision-directml`
 - The official extension package now also includes the first-party tracker stack:
   - `simple_iou_kalman`
   - `norfair`
@@ -21,7 +24,7 @@ The public surface is task-based, not vendor-based. The official first-party run
 ## Notes
 
 - `vision.detect` resolves `ModelManifest` entries and builds an ONNX Runtime backend automatically when `runtime=onnxruntime`.
-- By default, the ONNX Runtime backend prefers `CPUExecutionProvider`. Optional acceleration is opt-in via `TOPOSYNC_VISION_ONNXRUNTIME_PROVIDERS`.
+- By default, the ONNX Runtime backend prefers `CPUExecutionProvider`. Optional acceleration is opt-in via the `toposync-vision-cuda` / `toposync-vision-directml` bundles or `TOPOSYNC_VISION_ONNXRUNTIME_PROVIDERS`.
 - Manifest files can be loaded from `TOPOSYNC_VISION_MANIFESTS_DIR` or `TOPOSYNC_VISION_MANIFEST_PATHS`.
 - Custom manifests imported from the UI are persisted under `.toposync-data/vision-manifests/` for the selected processing server.
 - The extension now ships a built-in RTMDet detection shortlist in `extensions/vision/manifests/`:
@@ -60,6 +63,7 @@ The public surface is task-based, not vendor-based. The official first-party run
 - RTMDet-Ins manifests use the dedicated `mmdet_rtmdet_ins` parser and produce real binary mask artifacts.
 - The processing server status now exposes:
   - heuristic hardware recommendations
+  - runtime upgrade suggestions for CUDA / DirectML bundles
   - a per-task model catalog with availability (`available`, `manifest_only`, `incompatible`)
   - installation capability and progress for models that can be fetched/copied automatically
   - badges such as `recommended`, `fastest`, `best_quality`, `edge`

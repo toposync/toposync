@@ -20,6 +20,7 @@ dev = [
   "ruff>=0.8",
 ]
 extensions = [
+  "onnxruntime>=1.20",
   "toposync-ext-structural",
   "toposync-ext-models",
   "toposync-ext-home-assistant",

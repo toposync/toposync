@@ -28,6 +28,17 @@ uv build packages/toposync
 
 Isso gera o pacote `toposync`, que depende de `toposync-core` + extensões padrão.
 
+## Bundles alternativos de aceleração
+
+Para gerar os bundles first-party de aceleração opcional:
+
+```bash
+uv build packages/toposync-vision-cuda
+uv build packages/toposync-vision-directml
+```
+
+Eles geram respectivamente `toposync-vision-cuda` e `toposync-vision-directml`.
+
 ## Frontend host (override opcional)
 
 Se você quiser rebuildar manualmente o bundle do host antes do `uv build`:

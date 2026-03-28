@@ -1192,6 +1192,7 @@ dev = [
     { name = "ruff" },
 ]
 extensions = [
+    { name = "onnxruntime" },
     { name = "toposync-ext-cameras" },
     { name = "toposync-ext-home-assistant" },
     { name = "toposync-ext-images" },
@@ -1215,6 +1216,7 @@ dev = [
     { name = "ruff", specifier = ">=0.8" },
 ]
 extensions = [
+    { name = "onnxruntime", specifier = ">=1.20" },
     { name = "toposync-ext-cameras", editable = "extensions/cameras" },
     { name = "toposync-ext-home-assistant", editable = "extensions/home_assistant" },
     { name = "toposync-ext-images", editable = "extensions/images" },
@@ -1317,7 +1319,6 @@ dependencies = [
     { name = "numpy" },
     { name = "onnx", version = "1.19.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
     { name = "onnx", version = "1.20.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
-    { name = "onnxruntime" },
     { name = "toposync-core" },
     { name = "toposync-ext-cameras" },
 ]
@@ -1327,7 +1328,6 @@ requires-dist = [
     { name = "norfair", specifier = ">=2.2,<3" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "onnx", specifier = ">=1.17" },
-    { name = "onnxruntime", specifier = ">=1.20" },
     { name = "toposync-core", specifier = ">=0.3.0" },
     { name = "toposync-ext-cameras", specifier = ">=0.1.0" },
 ]

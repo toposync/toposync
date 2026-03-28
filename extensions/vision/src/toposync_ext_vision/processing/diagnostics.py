@@ -16,6 +16,7 @@ from ..registry.recommendations import (
 )
 from .runtime_backends import available_onnxruntime_execution_providers
 from .runtime_backends import resolve_onnxruntime_execution_providers
+from .runtime_upgrades import collect_runtime_upgrade_guidance
 from .trackers import available_tracker_backends
 
 
@@ -118,12 +119,17 @@ def collect_vision_diagnostics(
     ]
 
     install_jobs = install_manager.snapshot_jobs()
+    runtime_upgrades = collect_runtime_upgrade_guidance(
+        system_info=system_info,
+        execution_providers=execution_providers,
+    )
 
     return {
         "backends": backends,
         "trackers_available": available_tracker_backends(),
         "execution_providers": execution_providers,
         "preferred_execution_providers": preferred_execution_providers,
+        "runtime_upgrades": runtime_upgrades,
         "models_installed": models_installed,
         "model_registry_errors": list(getattr(registry, "load_errors", []) or []),
         "official_shortlists": {

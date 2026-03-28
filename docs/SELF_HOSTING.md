@@ -76,6 +76,28 @@ O pacote `toposync` já instala o conjunto padrão:
 - `toposync-ext-images`
 - `toposync-ext-cameras`
 - `toposync-ext-vision`
+- `onnxruntime`
+
+Esse é o bundle padrão em CPU.
+
+Para provisionar diretamente um ambiente com aceleração first-party:
+
+```bash
+uv pip install ./packages/toposync-vision-cuda
+```
+
+ou no Windows com DirectML:
+
+```bash
+uv pip install ./packages/toposync-vision-directml
+```
+
+Se você já instalou o bundle padrão em CPU e quiser trocar o runtime do mesmo ambiente, remova o bundle CPU e reinstale com o bundle de aceleração:
+
+```bash
+uv pip uninstall toposync onnxruntime
+uv pip install ./packages/toposync-vision-cuda
+```
 
 Para adicionar o stack de streaming:
 

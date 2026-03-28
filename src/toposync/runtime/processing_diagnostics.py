@@ -122,6 +122,16 @@ def collect_vision_extension_diagnostics(
             "trackers_available": [],
             "execution_providers": [],
             "preferred_execution_providers": [],
+            "runtime_upgrades": {
+                "current_variant": "none",
+                "current_packages": [],
+                "hardware": {
+                    "gpu_adapters": [],
+                    "nvidia_detected": False,
+                    "windows_gpu_detected": False,
+                },
+                "suggestions": [],
+            },
             "models_installed": [],
             "model_registry_errors": [],
             "official_shortlists": {},
@@ -139,6 +149,16 @@ def collect_vision_extension_diagnostics(
             "trackers_available": [],
             "execution_providers": [],
             "preferred_execution_providers": [],
+            "runtime_upgrades": {
+                "current_variant": "none",
+                "current_packages": [],
+                "hardware": {
+                    "gpu_adapters": [],
+                    "nvidia_detected": False,
+                    "windows_gpu_detected": False,
+                },
+                "suggestions": [],
+            },
             "models_installed": [],
             "model_registry_errors": [],
             "official_shortlists": {},
@@ -187,6 +207,19 @@ async def collect_processing_server_diagnostics(*, data_dir: str | None = None) 
             "backends": vision_runtime.get("backends", []),
             "execution_providers": vision_runtime.get("execution_providers", []),
             "preferred_execution_providers": vision_runtime.get("preferred_execution_providers", []),
+            "runtime_upgrades": vision_runtime.get(
+                "runtime_upgrades",
+                {
+                    "current_variant": "none",
+                    "current_packages": [],
+                    "hardware": {
+                        "gpu_adapters": [],
+                        "nvidia_detected": False,
+                        "windows_gpu_detected": False,
+                    },
+                    "suggestions": [],
+                },
+            ),
             "models_installed": vision_runtime.get("models_installed", []),
             "model_registry_errors": vision_runtime.get("model_registry_errors", []),
             "official_shortlists": vision_runtime.get("official_shortlists", {}),

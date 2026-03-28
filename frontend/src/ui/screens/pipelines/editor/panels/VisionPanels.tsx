@@ -204,7 +204,7 @@ function parseCatalogItem(raw: unknown): VisionModelCatalogItem | null {
     localBuildReason: String(raw.local_build_reason || "").trim(),
     localBuildBackend: String(raw.local_build_backend || "").trim(),
     localBuildRuntime: String(raw.local_build_runtime || "").trim(),
-    localBuildSourceLabel: String(raw.local_build_source_label || acquisition?.source_url || acquisition?.checkpoint_url || "").trim(),
+    localBuildSourceLabel: String(acquisition?.checkpoint_url || raw.local_build_source_label || acquisition?.source_url || "").trim(),
     compatibleProviderIds: Array.isArray(raw.compatible_provider_ids)
       ? raw.compatible_provider_ids.map((value) => String(value || "").trim()).filter(Boolean)
       : [],
@@ -783,7 +783,6 @@ export function VisionConfigCard({
   const selectedModelNeedsInstall = selectedCatalogItem?.availability === "manifest_only";
   const selectedModelIncompatible = selectedCatalogItem?.availability === "incompatible";
   const noReadyModels = !isTracking && !catalogLoading && availableItems.length === 0;
-  const showModelRecoveryCard = !isTracking && (!!selectedModelNeedsInstall || !!selectedModelIncompatible || noReadyModels);
   const basicModelItems = useMemo(() => {
     const next: VisionModelCatalogItem[] = [];
     const seen = new Set<string>();
@@ -803,10 +802,17 @@ export function VisionConfigCard({
     !!manualInstallItem &&
     manualInstallNeedsExport &&
     manualInstallItem.localBuildSupported;
+  const showModelRecoveryCard =
+    !isTracking &&
+    (!!selectedModelIncompatible || noReadyModels || (!!selectedModelNeedsInstall && !manualLocalBuildActionable));
   const manualInstallBusy = ["queued", "downloading", "verifying", "installing"].includes(
     String(manualInstallItem?.installJob?.status || "").trim(),
   );
   const manualLocalBuildAction: "prepare" | "update" = manualInstallItem?.artifactExists ? "update" : "prepare";
+  const manualSuggestedReadyItem =
+    manualInstallItem && !manualInstallItem.artifactExists && suggestedAvailableItem?.modelId !== manualInstallItem.modelId
+      ? suggestedAvailableItem
+      : null;
   const manualArtifactActionKey = manualInstallItem?.artifactExists
     ? "core.ui.pipelines.panels.yolo.provisioning.action.upload_replace"
     : "core.ui.pipelines.panels.yolo.provisioning.action.upload_add";
@@ -1369,16 +1375,21 @@ export function VisionConfigCard({
                 </div>
               ) : null}
               {manualInstallNeedsExport && manualLocalBuildActionable ? (
-                <div className="pipelinesStepHint">
-                  {t(
-                    manualLocalBuildAction === "update"
-                      ? "core.ui.pipelines.panels.yolo.provisioning.local_build_update_hint"
-                      : "core.ui.pipelines.panels.yolo.provisioning.local_build_prepare_hint",
-                    {
-                      runtime: manualInstallItem.localBuildRuntime || manualInstallItem.localBuildBackend || "local",
-                    },
-                  )}
-                </div>
+                <>
+                  <div className="pipelinesStepHint">
+                    {t(
+                      manualLocalBuildAction === "update"
+                        ? "core.ui.pipelines.panels.yolo.provisioning.local_build_update_hint"
+                        : "core.ui.pipelines.panels.yolo.provisioning.local_build_prepare_hint",
+                      {
+                        runtime: manualInstallItem.localBuildRuntime || manualInstallItem.localBuildBackend || "local",
+                      },
+                    )}
+                  </div>
+                  <div className="pipelinesStepHint">
+                    {t("core.ui.pipelines.panels.yolo.provisioning.manual_fallback_hint")}
+                  </div>
+                </>
               ) : null}
               {manualInstallNeedsExport && !manualLocalBuildActionable && manualInstallItem.localBuildReason ? (
                 <div className="pipelinesStepHint">
@@ -1387,11 +1398,23 @@ export function VisionConfigCard({
                   })}
                 </div>
               ) : null}
-              {manualInstallItem.localBuildSourceLabel ? (
+              {manualInstallItem.acquisition.checkpointUrl || manualInstallItem.localBuildSourceLabel || manualInstallItem.acquisition.sourceUrl ? (
                 <div className="pipelinesStepHint">
                   {t("core.ui.pipelines.panels.yolo.provisioning.source", {
-                    source: manualInstallItem.localBuildSourceLabel,
+                    source:
+                      manualInstallItem.acquisition.checkpointUrl ||
+                      manualInstallItem.localBuildSourceLabel ||
+                      manualInstallItem.acquisition.sourceUrl,
                   })}
+                </div>
+              ) : null}
+              {manualSuggestedReadyItem ? (
+                <div className="pipelinesStepHint">
+                  {t(
+                    "core.ui.pipelines.panels.yolo.model_recovery.recommended_ready",
+                    { model: manualSuggestedReadyItem.displayName },
+                    `Use ${manualSuggestedReadyItem.displayName} to continue now.`,
+                  )}
                 </div>
               ) : null}
               {manualInstallItem.installJob && manualInstallBusy ? (
@@ -1435,6 +1458,17 @@ export function VisionConfigCard({
                 >
                   {t(manualArtifactActionKey)}
                 </button>
+              </div>
+              <div className="pipelinesProvisionActions">
+                {manualSuggestedReadyItem ? (
+                  <button className="pillButton" type="button" onClick={applySuggestedAvailableModel}>
+                    {t(
+                      "core.ui.pipelines.panels.yolo.model_recovery.use_recommended",
+                      { model: manualSuggestedReadyItem.displayName },
+                      `Use ${manualSuggestedReadyItem.displayName}`,
+                    )}
+                  </button>
+                ) : null}
                 {onOpenProcessingServers ? (
                   <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
                     {t("core.ui.pipelines.form.processing_server.manage")}
@@ -1444,7 +1478,8 @@ export function VisionConfigCard({
                   {t("core.ui.pipelines.panels.yolo.refresh_models")}
                 </button>
               </div>
-              {manualInstallItem.acquisition.checkpointUrl || manualInstallItem.acquisition.exportGuideUrl ? (
+              {!manualLocalBuildActionable &&
+              (manualInstallItem.acquisition.checkpointUrl || manualInstallItem.acquisition.exportGuideUrl) ? (
                 <div className="pipelinesProvisionLinks">
                   {manualInstallItem.acquisition.checkpointUrl ? (
                     <a className="pillButton" href={manualInstallItem.acquisition.checkpointUrl} target="_blank" rel="noreferrer">
@@ -2042,9 +2077,9 @@ export function VisionConfigCard({
         modelName={localBuildConsent?.item.displayName || ""}
         runtimeLabel={localBuildConsent?.item.localBuildRuntime || localBuildConsent?.item.localBuildBackend || "local"}
         sourceLabel={
+          localBuildConsent?.item.acquisition.checkpointUrl ||
           localBuildConsent?.item.localBuildSourceLabel ||
           localBuildConsent?.item.acquisition.sourceUrl ||
-          localBuildConsent?.item.acquisition.checkpointUrl ||
           ""
         }
         checked={localBuildConsentChecked}

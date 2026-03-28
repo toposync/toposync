@@ -1253,9 +1253,9 @@ const translationsByLocale: Record<Locale, Translations> = {
       "{{model}} is selected, but this machine is not compatible with it.",
     "core.ui.pipelines.panels.yolo.provisioning.expected_file": "Expected ONNX file: {{file}}",
     "core.ui.pipelines.panels.yolo.provisioning.local_build_prepare_hint":
-      "You can ask this machine to download/build it locally using {{runtime}}, or send an exported ONNX manually.",
+      "This button downloads the upstream checkpoint and generates the ONNX automatically on this machine using {{runtime}}.",
     "core.ui.pipelines.panels.yolo.provisioning.local_build_update_hint":
-      "You can refresh it from the upstream checkpoint using {{runtime}}, or replace it manually with another ONNX.",
+      "This button downloads the upstream checkpoint again and rebuilds the ONNX automatically on this machine using {{runtime}}.",
     "core.ui.pipelines.panels.yolo.provisioning.local_build_unavailable":
       "Assisted local build is not available on this machine: {{reason}}.",
     "core.ui.pipelines.panels.yolo.provisioning.local_build_started_prepare":
@@ -1263,10 +1263,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.provisioning.local_build_started_update":
       "Local update started on {{serverId}}. This panel updates automatically.",
     "core.ui.pipelines.panels.yolo.provisioning.source": "Upstream source: {{source}}",
+    "core.ui.pipelines.panels.yolo.provisioning.manual_fallback_hint":
+      "Manual ONNX upload stays available below if you prefer to prepare the file yourself.",
     "core.ui.pipelines.panels.yolo.provisioning.modal_manual_hint":
       "Manual ONNX upload stays available in this operator if you prefer to prepare the file yourself.",
-    "core.ui.pipelines.panels.yolo.provisioning.action.local_prepare": "Download and prepare locally",
-    "core.ui.pipelines.panels.yolo.provisioning.action.local_update": "Update locally",
+    "core.ui.pipelines.panels.yolo.provisioning.action.local_prepare": "Download and prepare automatically",
+    "core.ui.pipelines.panels.yolo.provisioning.action.local_update": "Update automatically",
     "core.ui.pipelines.panels.yolo.provisioning.action.upload_add": "Send ONNX manually",
     "core.ui.pipelines.panels.yolo.provisioning.action.upload_replace": "Replace ONNX manually",
     "core.ui.pipelines.panels.yolo.hidden_unavailable_count":
@@ -2739,9 +2741,9 @@ const translationsByLocale: Record<Locale, Translations> = {
       "{{model}} está selecionado, mas esta máquina não é compatível com ele.",
     "core.ui.pipelines.panels.yolo.provisioning.expected_file": "Arquivo ONNX esperado: {{file}}",
     "core.ui.pipelines.panels.yolo.provisioning.local_build_prepare_hint":
-      "Você pode pedir para esta máquina baixar/gerar isso localmente usando {{runtime}} ou enviar um ONNX exportado manualmente.",
+      "Este botão baixa o checkpoint upstream e gera o ONNX automaticamente nesta máquina usando {{runtime}}.",
     "core.ui.pipelines.panels.yolo.provisioning.local_build_update_hint":
-      "Você pode atualizar a partir do checkpoint upstream usando {{runtime}} ou substituir manualmente por outro ONNX.",
+      "Este botão baixa novamente o checkpoint upstream e recria o ONNX automaticamente nesta máquina usando {{runtime}}.",
     "core.ui.pipelines.panels.yolo.provisioning.local_build_unavailable":
       "O build local assistido não está disponível nesta máquina: {{reason}}.",
     "core.ui.pipelines.panels.yolo.provisioning.local_build_started_prepare":
@@ -2749,10 +2751,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.provisioning.local_build_started_update":
       "A atualização local começou em {{serverId}}. Este painel atualiza automaticamente.",
     "core.ui.pipelines.panels.yolo.provisioning.source": "Origem upstream: {{source}}",
+    "core.ui.pipelines.panels.yolo.provisioning.manual_fallback_hint":
+      "O envio manual do ONNX continua disponível abaixo se você preferir preparar o arquivo por conta própria.",
     "core.ui.pipelines.panels.yolo.provisioning.modal_manual_hint":
       "O envio manual do ONNX continua disponível neste operador se você preferir preparar o arquivo por conta própria.",
-    "core.ui.pipelines.panels.yolo.provisioning.action.local_prepare": "Baixar e preparar localmente",
-    "core.ui.pipelines.panels.yolo.provisioning.action.local_update": "Atualizar localmente",
+    "core.ui.pipelines.panels.yolo.provisioning.action.local_prepare": "Baixar e preparar automaticamente",
+    "core.ui.pipelines.panels.yolo.provisioning.action.local_update": "Atualizar automaticamente",
     "core.ui.pipelines.panels.yolo.provisioning.action.upload_add": "Enviar ONNX manualmente",
     "core.ui.pipelines.panels.yolo.provisioning.action.upload_replace": "Substituir ONNX manualmente",
     "core.ui.pipelines.panels.yolo.hidden_unavailable_count":

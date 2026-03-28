@@ -160,7 +160,7 @@ function readVisionDetectionCatalog(status: Record<string, unknown> | undefined)
         localBuildSupported: !!raw.local_build_supported,
         localBuildReason: String(raw.local_build_reason || "").trim(),
         localBuildRuntime: String(raw.local_build_runtime || "").trim(),
-        localBuildSourceLabel: String(raw.local_build_source_label || acquisition?.source_url || acquisition?.checkpoint_url || "").trim(),
+        localBuildSourceLabel: String(acquisition?.checkpoint_url || raw.local_build_source_label || acquisition?.source_url || "").trim(),
         explicitConsentRequired: !!acquisition?.explicit_consent_required,
         installJob: isRecord(raw.install_job)
           ? {

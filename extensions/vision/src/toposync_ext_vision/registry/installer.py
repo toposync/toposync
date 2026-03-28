@@ -184,7 +184,7 @@ class VisionModelInstallManager:
         artifact_source = str(getattr(acquisition, "artifact_source", "onnx_ready") or "onnx_ready").strip().lower()
         checkpoint_url = str(getattr(acquisition, "checkpoint_url", "") or "").strip()
         source_url = str(getattr(acquisition, "source_url", "") or "").strip()
-        local_build_source_label = source_url or checkpoint_url
+        local_build_source_label = checkpoint_url or source_url
         runtime_id = str(manifest.runtime or "").strip().lower()
         artifact_format = str(manifest.artifact_format or "").strip().lower()
         upload_supported = runtime_id == "onnxruntime" and artifact_format == "onnx"
@@ -324,7 +324,7 @@ class VisionModelInstallManager:
         key = manifest.model_id
         checkpoint_url = str(getattr(getattr(manifest, "acquisition", None), "checkpoint_url", "") or "").strip()
         source_url = str(getattr(getattr(manifest, "acquisition", None), "source_url", "") or "").strip()
-        source_label = source_url or checkpoint_url
+        source_label = checkpoint_url or source_url
         existing_artifact = manifest.resolve_artifact_path().is_file()
         active_statuses = {"queued", "downloading", "verifying", "installing"}
 

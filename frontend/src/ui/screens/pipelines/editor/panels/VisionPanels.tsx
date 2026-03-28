@@ -447,6 +447,7 @@ export function VisionConfigCard({
   const trackerId = String((config as any).tracker_id ?? "simple_iou_kalman").trim() || "simple_iou_kalman";
   const trackerPreset = TRACKER_CHOICES.find((item) => item.value === trackerId) ?? null;
   const emitMode = String((config as any).emit_mode ?? "events").trim() || "events";
+  const detectionEmitMode = String((config as any).emit_mode ?? "annotate").trim().toLowerCase() === "events" ? "events" : "annotate";
   const pauseWhenGateClosed = Boolean((config as any).pause_when_gate_closed ?? true);
   const useWorldAnchor = Boolean((config as any).use_world_anchor ?? false);
   const modelId = String((config as any).model_id ?? "").trim();
@@ -1180,6 +1181,27 @@ export function VisionConfigCard({
       {isDetection ? (
         <>
           <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.yolo.detect_emit_mode")}</span>
+            <select
+              className="pipelinesInput"
+              value={detectionEmitMode}
+              onChange={(event) => {
+                onUpdateConfig((prev) => ({
+                  ...prev,
+                  emit_mode: String(event.target.value || "annotate").trim().toLowerCase() || "annotate",
+                }));
+              }}
+            >
+              <option value="annotate">{t("core.ui.pipelines.panels.yolo.detect_emit_mode.annotate")}</option>
+            </select>
+          </label>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.detect_annotate_only_hint")}</div>
+        </>
+      ) : null}
+
+      {isDetection ? (
+        <>
+          <label className="pipelinesLabel">
             <div className="pipelinesScalarLabelHeader">
               <span>{t("core.ui.pipelines.panels.yolo.min_confidence")}</span>
               {onOpenTelemetryField ? (
@@ -1442,7 +1464,6 @@ export function VisionConfigCard({
                 />
               </label>
               <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.input_with_fallback_hint")}</div>
-              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.detect_annotate_only_hint")}</div>
             </>
           ) : null}
         </>

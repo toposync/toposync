@@ -61,22 +61,9 @@ uv pip install ./packages/toposync
 
 ### 2) Frontend (UI)
 
-O backend pode servir um frontend já “buildado”. Você tem duas opções:
+O pacote `toposync-core` já leva o frontend host embutido. Depois da instalação, o backend serve a UI por padrão, sem Node no servidor.
 
-- **Build no servidor** (requer Node 20 + npm):
-
-```bash
-npm install
-npm --workspace @toposync/frontend run build
-```
-
-E rode o servidor com:
-
-```bash
-uv run toposync serve --host 0.0.0.0 --port 8000 --data-dir /var/lib/toposync --frontend-dir ./frontend/dist
-```
-
-- **Build em outra máquina**: rode o build do frontend em qualquer lugar e copie a pasta `frontend/dist` para o servidor. Depois aponte `--frontend-dir` para esse caminho.
+Se você quiser sobrescrever a UI host por um bundle externo durante desenvolvimento ou rollout controlado, use `--frontend-dir /caminho/para/frontend/dist` ou `TOPOSYNC_FRONTEND_DIR`.
 
 ### 3) Instalar extensões (first‑party e comunidade)
 
@@ -127,7 +114,7 @@ After=network.target
 Type=simple
 WorkingDirectory=/opt/toposync
 Environment=TOPOSYNC_DATA_DIR=/var/lib/toposync
-ExecStart=/opt/toposync/.venv/bin/toposync serve --host 0.0.0.0 --port 8000 --frontend-dir /opt/toposync/frontend/dist
+ExecStart=/opt/toposync/.venv/bin/toposync serve --host 0.0.0.0 --port 8000
 Restart=on-failure
 
 [Install]
@@ -141,17 +128,18 @@ WantedBy=multi-user.target
   - `files/` (uploads)
   - `notifications/`
 
-## Produzir um bundle (wheels + frontend) para instalar sem Node no servidor
+## Produzir um bundle (wheels) para instalar sem Node no servidor
 
 Se você quer evitar Node no host final, faça o build em uma máquina de build e copie os artefatos:
 
-1) Build do frontend host + bundles das extensões:
+1) Build dos bundles das extensões:
 
 ```bash
 npm install
 npm run build:extensions
-npm run build:frontend
 ```
+
+O `uv build` do core já embute o frontend host; se `frontend/dist` não existir, ele tenta gerá-lo durante o build.
 
 2) Build dos wheels:
 
@@ -165,4 +153,4 @@ uv build extensions/images --wheel
 uv build extensions/cameras --wheel
 ```
 
-3) No servidor, instale os wheels e aponte `--frontend-dir` para o `frontend/dist` copiado.
+3) No servidor, instale os wheels. A UI já vai junto no `toposync-core`, sem precisar copiar `frontend/dist`.

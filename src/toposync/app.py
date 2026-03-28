@@ -514,6 +514,10 @@ def _resolve_frontend_dir() -> Path | None:
     candidate = (Path.cwd() / "frontend" / "dist").resolve()
     if (candidate / "index.html").is_file():
         return candidate
+
+    candidate = (Path(__file__).resolve().parent / "_frontend" / "dist").resolve()
+    if (candidate / "index.html").is_file():
+        return candidate
     return None
 
 

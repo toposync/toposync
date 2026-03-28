@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> None:
     serve.add_argument(
         "--no-frontend",
         action="store_true",
-        help="Disable serving the built frontend (even if TOPOSYNC_FRONTEND_DIR/frontend/dist is present).",
+        help="Disable serving the frontend host (even if TOPOSYNC_FRONTEND_DIR or a bundled UI is present).",
     )
 
     processing = sub.add_parser("processing-serve", help="Run the Toposync processing server (distributed pipelines).")

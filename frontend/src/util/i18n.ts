@@ -1208,6 +1208,29 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.local_build.job_progress": "Current preparation: {{phase}} ({{progress}}%)",
     "core.ui.pipelines.panels.yolo.local_build.confirm":
       "Start assisted local build for {{model}} on {{serverId}}? The processing server will download the upstream checkpoint and export the ONNX locally from {{source}}.",
+    "core.ui.pipelines.panels.yolo.provisioning.title": "Model file on this machine",
+    "core.ui.pipelines.panels.yolo.provisioning.status_ready": "{{model}} is already available on {{serverId}}.",
+    "core.ui.pipelines.panels.yolo.provisioning.status_missing": "{{model}} is not installed on {{serverId}} yet.",
+    "core.ui.pipelines.panels.yolo.provisioning.status_incompatible":
+      "{{model}} is selected, but this machine is not compatible with it.",
+    "core.ui.pipelines.panels.yolo.provisioning.expected_file": "Expected ONNX file: {{file}}",
+    "core.ui.pipelines.panels.yolo.provisioning.local_build_prepare_hint":
+      "You can ask this machine to download/build it locally using {{runtime}}, or send an exported ONNX manually.",
+    "core.ui.pipelines.panels.yolo.provisioning.local_build_update_hint":
+      "You can refresh it from the upstream checkpoint using {{runtime}}, or replace it manually with another ONNX.",
+    "core.ui.pipelines.panels.yolo.provisioning.local_build_unavailable":
+      "Assisted local build is not available on this machine: {{reason}}.",
+    "core.ui.pipelines.panels.yolo.provisioning.local_build_started_prepare":
+      "Local build started on {{serverId}}. This panel updates automatically.",
+    "core.ui.pipelines.panels.yolo.provisioning.local_build_started_update":
+      "Local update started on {{serverId}}. This panel updates automatically.",
+    "core.ui.pipelines.panels.yolo.provisioning.source": "Upstream source: {{source}}",
+    "core.ui.pipelines.panels.yolo.provisioning.modal_manual_hint":
+      "Manual ONNX upload stays available in this operator if you prefer to prepare the file yourself.",
+    "core.ui.pipelines.panels.yolo.provisioning.action.local_prepare": "Download and prepare locally",
+    "core.ui.pipelines.panels.yolo.provisioning.action.local_update": "Update locally",
+    "core.ui.pipelines.panels.yolo.provisioning.action.upload_add": "Send ONNX manually",
+    "core.ui.pipelines.panels.yolo.provisioning.action.upload_replace": "Replace ONNX manually",
     "core.ui.pipelines.panels.yolo.hidden_unavailable_count":
       "{{count}} model(s) are hidden because they are not ready on this machine. Open advanced details to review them.",
     "core.ui.pipelines.panels.yolo.refresh_models": "Refresh options",
@@ -1375,6 +1398,27 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.processing_servers.local_build.modal.open_source": "Open upstream source",
     "core.ui.processing_servers.local_build.modal.start": "Start local build",
     "core.ui.processing_servers.local_build.modal.starting": "Starting…",
+    "core.ui.vision.local_build_modal.title_prepare": "Download and prepare locally",
+    "core.ui.vision.local_build_modal.title_update": "Update local model",
+    "core.ui.vision.local_build_modal.intro_prepare":
+      "The selected processing server will download the upstream checkpoint for {{model}} and export the ONNX locally.",
+    "core.ui.vision.local_build_modal.intro_update":
+      "The selected processing server will download the upstream checkpoint for {{model}} again and replace the current ONNX locally.",
+    "core.ui.vision.local_build_modal.local_only":
+      "This phase keeps the model local to that machine. TopoSync does not mirror or bundle the model artifact.",
+    "core.ui.vision.local_build_modal.field.machine": "Machine",
+    "core.ui.vision.local_build_modal.field.model": "Model",
+    "core.ui.vision.local_build_modal.field.runtime": "Builder runtime",
+    "core.ui.vision.local_build_modal.field.source": "Upstream source",
+    "core.ui.vision.local_build_modal.field.source_unknown": "Not declared",
+    "core.ui.vision.local_build_modal.acknowledge_prepare":
+      "I understand this will use the upstream source shown below and build the ONNX locally on this machine.",
+    "core.ui.vision.local_build_modal.acknowledge_update":
+      "I understand this will use the upstream source shown below and replace the current ONNX locally on this machine.",
+    "core.ui.vision.local_build_modal.open_source": "Open upstream source",
+    "core.ui.vision.local_build_modal.start_prepare": "Start local build",
+    "core.ui.vision.local_build_modal.start_update": "Update locally",
+    "core.ui.vision.local_build_modal.starting": "Starting…",
     "core.ui.processing_servers.local_build.reason": "Local build status: {{reason}}",
     "core.ui.processing_servers.local_build.reason.ok": "ready",
     "core.ui.processing_servers.local_build.reason.unsupported": "unsupported on this machine",
@@ -2604,6 +2648,29 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.local_build.job_progress": "Preparação atual: {{phase}} ({{progress}}%)",
     "core.ui.pipelines.panels.yolo.local_build.confirm":
       "Iniciar build local assistido de {{model}} em {{serverId}}? O processing server vai baixar o checkpoint upstream e exportar o ONNX localmente a partir de {{source}}.",
+    "core.ui.pipelines.panels.yolo.provisioning.title": "Arquivo do modelo nesta máquina",
+    "core.ui.pipelines.panels.yolo.provisioning.status_ready": "{{model}} já está disponível em {{serverId}}.",
+    "core.ui.pipelines.panels.yolo.provisioning.status_missing": "{{model}} ainda não está instalado em {{serverId}}.",
+    "core.ui.pipelines.panels.yolo.provisioning.status_incompatible":
+      "{{model}} está selecionado, mas esta máquina não é compatível com ele.",
+    "core.ui.pipelines.panels.yolo.provisioning.expected_file": "Arquivo ONNX esperado: {{file}}",
+    "core.ui.pipelines.panels.yolo.provisioning.local_build_prepare_hint":
+      "Você pode pedir para esta máquina baixar/gerar isso localmente usando {{runtime}} ou enviar um ONNX exportado manualmente.",
+    "core.ui.pipelines.panels.yolo.provisioning.local_build_update_hint":
+      "Você pode atualizar a partir do checkpoint upstream usando {{runtime}} ou substituir manualmente por outro ONNX.",
+    "core.ui.pipelines.panels.yolo.provisioning.local_build_unavailable":
+      "O build local assistido não está disponível nesta máquina: {{reason}}.",
+    "core.ui.pipelines.panels.yolo.provisioning.local_build_started_prepare":
+      "O build local começou em {{serverId}}. Este painel atualiza automaticamente.",
+    "core.ui.pipelines.panels.yolo.provisioning.local_build_started_update":
+      "A atualização local começou em {{serverId}}. Este painel atualiza automaticamente.",
+    "core.ui.pipelines.panels.yolo.provisioning.source": "Origem upstream: {{source}}",
+    "core.ui.pipelines.panels.yolo.provisioning.modal_manual_hint":
+      "O envio manual do ONNX continua disponível neste operador se você preferir preparar o arquivo por conta própria.",
+    "core.ui.pipelines.panels.yolo.provisioning.action.local_prepare": "Baixar e preparar localmente",
+    "core.ui.pipelines.panels.yolo.provisioning.action.local_update": "Atualizar localmente",
+    "core.ui.pipelines.panels.yolo.provisioning.action.upload_add": "Enviar ONNX manualmente",
+    "core.ui.pipelines.panels.yolo.provisioning.action.upload_replace": "Substituir ONNX manualmente",
     "core.ui.pipelines.panels.yolo.hidden_unavailable_count":
       "{{count}} modelo(s) foram ocultados porque ainda não estão prontos nesta máquina. Abra os detalhes avançados para revisá-los.",
     "core.ui.pipelines.panels.yolo.refresh_models": "Atualizar opções",
@@ -2772,6 +2839,27 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.processing_servers.local_build.modal.open_source": "Abrir origem upstream",
     "core.ui.processing_servers.local_build.modal.start": "Iniciar build local",
     "core.ui.processing_servers.local_build.modal.starting": "Iniciando…",
+    "core.ui.vision.local_build_modal.title_prepare": "Baixar e preparar localmente",
+    "core.ui.vision.local_build_modal.title_update": "Atualizar modelo local",
+    "core.ui.vision.local_build_modal.intro_prepare":
+      "O processing server selecionado vai baixar o checkpoint upstream de {{model}} e exportar o ONNX localmente.",
+    "core.ui.vision.local_build_modal.intro_update":
+      "O processing server selecionado vai baixar novamente o checkpoint upstream de {{model}} e substituir o ONNX atual localmente.",
+    "core.ui.vision.local_build_modal.local_only":
+      "Nesta fase o modelo fica local nessa máquina. O TopoSync não espelha nem embute esse artefato.",
+    "core.ui.vision.local_build_modal.field.machine": "Máquina",
+    "core.ui.vision.local_build_modal.field.model": "Modelo",
+    "core.ui.vision.local_build_modal.field.runtime": "Runtime do builder",
+    "core.ui.vision.local_build_modal.field.source": "Origem upstream",
+    "core.ui.vision.local_build_modal.field.source_unknown": "Não declarada",
+    "core.ui.vision.local_build_modal.acknowledge_prepare":
+      "Entendo que isso vai usar a origem upstream abaixo e gerar o ONNX localmente nesta máquina.",
+    "core.ui.vision.local_build_modal.acknowledge_update":
+      "Entendo que isso vai usar a origem upstream abaixo e substituir o ONNX atual localmente nesta máquina.",
+    "core.ui.vision.local_build_modal.open_source": "Abrir origem upstream",
+    "core.ui.vision.local_build_modal.start_prepare": "Iniciar build local",
+    "core.ui.vision.local_build_modal.start_update": "Atualizar localmente",
+    "core.ui.vision.local_build_modal.starting": "Iniciando…",
     "core.ui.processing_servers.local_build.reason": "Status do build local: {{reason}}",
     "core.ui.processing_servers.local_build.reason.ok": "pronto",
     "core.ui.processing_servers.local_build.reason.unsupported": "não suportado nesta máquina",

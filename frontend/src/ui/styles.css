@@ -584,6 +584,18 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.pipelinesProvisionCard {
+  display: grid;
+  gap: 8px;
+}
+
+.pipelinesProvisionActions,
+.pipelinesProvisionLinks {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .modalFooter {
   margin-top: 12px;
   display: flex;

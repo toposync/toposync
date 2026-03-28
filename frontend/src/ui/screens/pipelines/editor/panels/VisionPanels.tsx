@@ -13,6 +13,7 @@ import {
   uploadProcessingServerVisionModelArtifact,
 } from "../../../../../util/api";
 import { i18n } from "../../../../../util/i18n";
+import { LocalBuildConsentModal } from "../../../../LocalBuildConsentModal";
 import { Modal } from "../../../../Modal";
 import { pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constants";
 import type { SelectOption, TelemetryFieldInspectorRequest } from "../../types";
@@ -97,6 +98,11 @@ type VisionModelInstallJob = {
   bytesCompleted: number;
   bytesTotal: number;
   error: string;
+};
+
+type LocalBuildConsentState = {
+  item: VisionModelCatalogItem;
+  action: "prepare" | "update";
 };
 
 type VisionTaskCatalog = {
@@ -405,6 +411,14 @@ function builderBackendTranslationKey(value: string): string {
   return `core.ui.pipelines.panels.yolo.builder_backend.${String(value || "").trim() || "unknown"}`;
 }
 
+function localBuildReasonLabel(
+  reason: string,
+  t: (key: string, vars?: Record<string, unknown>, fallback?: string) => string,
+): string {
+  const clean = String(reason || "").trim() || "unsupported";
+  return t(`core.ui.processing_servers.local_build.reason.${clean}`, {}, clean);
+}
+
 function modelHintTranslationKey(modelId: string): string {
   return MODEL_HINT_KEYS[String(modelId || "").trim()] || "";
 }
@@ -588,6 +602,11 @@ export function VisionConfigCard({
   const [artifactUploadSuccess, setArtifactUploadSuccess] = useState<string | null>(null);
   const [localBuildLoadingModelId, setLocalBuildLoadingModelId] = useState<string>("");
   const [localBuildError, setLocalBuildError] = useState<string | null>(null);
+  const [localBuildSuccess, setLocalBuildSuccess] = useState<string | null>(null);
+  const [localBuildConsent, setLocalBuildConsent] = useState<LocalBuildConsentState | null>(null);
+  const [localBuildConsentChecked, setLocalBuildConsentChecked] = useState(false);
+  const [localBuildConsentSubmitting, setLocalBuildConsentSubmitting] = useState(false);
+  const [localBuildConsentError, setLocalBuildConsentError] = useState<string | null>(null);
   const artifactFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const reloadCatalog = useCallback(async () => {
@@ -629,6 +648,14 @@ export function VisionConfigCard({
     }, 1500);
     return () => window.clearInterval(timer);
   }, [isTracking, reloadCatalog, taskCatalog]);
+
+  useEffect(() => {
+    setLocalBuildError(null);
+    setLocalBuildSuccess(null);
+    setLocalBuildConsent(null);
+    setLocalBuildConsentChecked(false);
+    setLocalBuildConsentError(null);
+  }, [modelId, resolvedProcessingServerId]);
 
   const categoryOptions = useMemo<SelectOption[]>(() => {
     const known = new Set(YOLO_CATEGORY_OPTIONS.map((item) => item.value));
@@ -698,22 +725,38 @@ export function VisionConfigCard({
   const basicModelItems = useMemo(() => {
     const next: VisionModelCatalogItem[] = [];
     const seen = new Set<string>();
-    for (const item of [...availableItems, selectedCatalogItem].filter(Boolean) as VisionModelCatalogItem[]) {
+    const preferred = catalogItems.filter((item) => item.availability === "available" || item.availability === "manifest_only");
+    for (const item of [selectedCatalogItem, ...preferred].filter(Boolean) as VisionModelCatalogItem[]) {
       if (seen.has(item.modelId)) continue;
       next.push(item);
       seen.add(item.modelId);
     }
     return next.slice(0, 4);
-  }, [availableItems, selectedCatalogItem]);
+  }, [catalogItems, selectedCatalogItem]);
   const manualInstallItem = selectedCatalogItem ?? null;
   const manualInstallFile = artifactFileName(manualInstallItem?.artifactPath || "");
   const manualInstallAcquisition = manualInstallItem?.acquisition ?? defaultAcquisitionForModelId(manualInstallItem?.modelId || "");
   const manualInstallNeedsExport = manualInstallAcquisition.artifactSource === "checkpoint_export_required";
-  const manualLocalBuildAvailable =
+  const manualLocalBuildActionable =
     !!manualInstallItem &&
-    !manualInstallItem.artifactExists &&
     manualInstallNeedsExport &&
     manualInstallItem.localBuildSupported;
+  const manualInstallBusy = ["queued", "downloading", "verifying", "installing"].includes(
+    String(manualInstallItem?.installJob?.status || "").trim(),
+  );
+  const manualLocalBuildAction: "prepare" | "update" = manualInstallItem?.artifactExists ? "update" : "prepare";
+  const manualArtifactActionKey = manualInstallItem?.artifactExists
+    ? "core.ui.pipelines.panels.yolo.provisioning.action.upload_replace"
+    : "core.ui.pipelines.panels.yolo.provisioning.action.upload_add";
+  const manualLocalBuildActionKey =
+    manualLocalBuildAction === "update"
+      ? "core.ui.pipelines.panels.yolo.provisioning.action.local_update"
+      : "core.ui.pipelines.panels.yolo.provisioning.action.local_prepare";
+
+  useEffect(() => {
+    if (!manualInstallItem?.installJob) return;
+    setLocalBuildSuccess(null);
+  }, [manualInstallItem?.installJob?.jobId, manualInstallItem?.installJob?.status]);
 
   const selectedModelOption = useMemo(
     () => modelOptions.find((item) => item.value === modelId) ?? null,
@@ -911,41 +954,85 @@ export function VisionConfigCard({
   }, [artifactModalFile, artifactModalItem, reloadCatalog, resolvedProcessingServerId, t]);
 
   const handleStartLocalBuild = useCallback(
-    async (item: VisionModelCatalogItem | null) => {
+    async (item: VisionModelCatalogItem | null, options: { force?: boolean; action?: "prepare" | "update" } = {}) => {
       if (!item || localBuildLoadingModelId) return;
-      const upstreamLabel = item.localBuildSourceLabel || item.acquisition.checkpointUrl || item.displayName;
-      if (
-        item.acquisition.explicitConsentRequired &&
-        !confirm(
-          t(
-            "core.ui.pipelines.panels.yolo.local_build.confirm",
-            {
-              model: item.displayName,
-              serverId: resolvedProcessingServerId,
-              source: upstreamLabel,
-            },
-            `Start assisted local build for ${item.displayName} on ${resolvedProcessingServerId}? The machine will download the upstream checkpoint and export the ONNX locally from ${upstreamLabel}.`,
-          ),
-        )
-      ) {
-        return;
-      }
+      const action = options.action === "update" ? "update" : "prepare";
       setLocalBuildLoadingModelId(item.modelId);
       setLocalBuildError(null);
+      setLocalBuildSuccess(null);
       try {
         await installProcessingServerVisionModel(resolvedProcessingServerId, item.modelId, {
           mode: "local_build",
           acknowledge_upstream_terms: true,
+          force: !!options.force,
         });
+        setLocalBuildSuccess(
+          t(
+            action === "update"
+              ? "core.ui.pipelines.panels.yolo.provisioning.local_build_started_update"
+              : "core.ui.pipelines.panels.yolo.provisioning.local_build_started_prepare",
+            {
+              serverId: resolvedProcessingServerId,
+            },
+            action === "update"
+              ? `Local update started on ${resolvedProcessingServerId}.`
+              : `Local build started on ${resolvedProcessingServerId}.`,
+          ),
+        );
         await reloadCatalog();
       } catch (error: any) {
-        setLocalBuildError(String(error?.message ?? error));
+        const message = String(error?.message ?? error);
+        setLocalBuildError(message);
+        throw new Error(message);
       } finally {
         setLocalBuildLoadingModelId("");
       }
     },
     [localBuildLoadingModelId, reloadCatalog, resolvedProcessingServerId, t],
   );
+
+  const openLocalBuildConsent = useCallback((item: VisionModelCatalogItem | null) => {
+    if (!item) return;
+    setLocalBuildConsentError(null);
+    if (!item.acquisition.explicitConsentRequired) {
+      void handleStartLocalBuild(item, {
+        force: !!item.artifactExists,
+        action: item.artifactExists ? "update" : "prepare",
+      }).catch(() => undefined);
+      return;
+    }
+    setLocalBuildConsent({
+      item,
+      action: item.artifactExists ? "update" : "prepare",
+    });
+    setLocalBuildConsentChecked(false);
+  }, [handleStartLocalBuild]);
+
+  const closeLocalBuildConsent = useCallback(() => {
+    if (localBuildConsentSubmitting) return;
+    setLocalBuildConsent(null);
+    setLocalBuildConsentChecked(false);
+    setLocalBuildConsentError(null);
+  }, [localBuildConsentSubmitting]);
+
+  const confirmLocalBuildConsent = useCallback(async () => {
+    if (!localBuildConsent) return;
+    if (!localBuildConsentChecked) return;
+    setLocalBuildConsentSubmitting(true);
+    setLocalBuildConsentError(null);
+    try {
+      await handleStartLocalBuild(localBuildConsent.item, {
+        force: localBuildConsent.action === "update",
+        action: localBuildConsent.action,
+      });
+      setLocalBuildConsent(null);
+      setLocalBuildConsentChecked(false);
+    } catch (error: any) {
+      setLocalBuildConsentError(String(error?.message ?? error));
+    } finally {
+      setLocalBuildConsentSubmitting(false);
+    }
+  }, [handleStartLocalBuild, localBuildConsent, localBuildConsentChecked]);
 
   const artifactModalAcquisition = artifactModalItem?.acquisition ?? defaultAcquisitionForModelId(artifactModalItem?.modelId || "");
   const artifactModalNeedsExport = artifactModalAcquisition.artifactSource === "checkpoint_export_required";
@@ -1155,55 +1242,23 @@ export function VisionConfigCard({
                       ? t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_send_prepare")
                       : t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_send")}
                   </div>
-                  {manualLocalBuildAvailable ? (
+                  {manualLocalBuildActionable ? (
                     <div className="pipelinesStepHint">
                       {t("core.ui.pipelines.panels.yolo.local_build.available_hint", {
                         runtime: manualInstallItem.localBuildRuntime || manualInstallItem.localBuildBackend || "local",
+                      })}
+                    </div>
+                  ) : manualInstallNeedsExport && !manualInstallItem.artifactExists && manualInstallItem.localBuildReason ? (
+                    <div className="pipelinesStepHint">
+                      {t("core.ui.pipelines.panels.yolo.provisioning.local_build_unavailable", {
+                        reason: localBuildReasonLabel(manualInstallItem.localBuildReason, t),
                       })}
                     </div>
                   ) : null}
                   <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_refresh")}</div>
                 </div>
               ) : null}
-              {manualInstallItem?.installJob ? (
-                <div className="pipelinesStepHint" style={{ marginTop: 8 }}>
-                  {t("core.ui.pipelines.panels.yolo.local_build.job_progress", {
-                    phase: t(
-                      `core.ui.pipelines.panels.yolo.install_phase.${manualInstallItem.installJob.phase || "queued"}`,
-                      {},
-                      manualInstallItem.installJob.phase || "queued",
-                    ),
-                    progress: Math.max(0, Math.min(100, Math.round(manualInstallItem.installJob.progressPct || 0))),
-                  })}
-                </div>
-              ) : null}
-              {localBuildError ? <div className="errorText" style={{ marginTop: 8 }}>{localBuildError}</div> : null}
               <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                {manualLocalBuildAvailable ? (
-                  <button
-                    className="pillButton pillButtonPrimary"
-                    type="button"
-                    onClick={() => void handleStartLocalBuild(manualInstallItem)}
-                    disabled={!!localBuildLoadingModelId || !!manualInstallItem.installJob}
-                  >
-                    {localBuildLoadingModelId === manualInstallItem.modelId
-                      ? t("core.ui.pipelines.panels.yolo.local_build.starting")
-                      : t("core.ui.pipelines.panels.yolo.local_build.start")}
-                  </button>
-                ) : null}
-                {manualInstallItem ? (
-                  <button
-                    className="pillButton pillButtonPrimary"
-                    type="button"
-                    onClick={() => openArtifactModal(manualInstallItem)}
-                  >
-                    {manualInstallItem.artifactExists
-                      ? t("core.ui.pipelines.panels.yolo.artifact_modal.open_update")
-                      : manualInstallNeedsExport
-                        ? t("core.ui.pipelines.panels.yolo.artifact_modal.open_prepare")
-                        : t("core.ui.pipelines.panels.yolo.artifact_modal.open_get")}
-                  </button>
-                ) : null}
                 {suggestedAvailableItem ? (
                   <button className="pillButton pillButtonPrimary" type="button" onClick={applySuggestedAvailableModel}>
                     {t(
@@ -1224,6 +1279,125 @@ export function VisionConfigCard({
               </div>
             </div>
           ) : null}
+          {manualInstallItem ? (
+            <div className="pipelinesOperatorConfigCard pipelinesProvisionCard" style={{ marginTop: 10 }}>
+              <div className="cardHeaderRow">
+                <div className="cardTitle">{t("core.ui.pipelines.panels.yolo.provisioning.title")}</div>
+                <div className="cardMeta">{resolvedProcessingServerId}</div>
+              </div>
+              <div className="cardBody">
+                {selectedModelIncompatible
+                  ? t("core.ui.pipelines.panels.yolo.provisioning.status_incompatible", {
+                      model: manualInstallItem.displayName,
+                      serverId: resolvedProcessingServerId,
+                    })
+                  : manualInstallItem.artifactExists
+                    ? t("core.ui.pipelines.panels.yolo.provisioning.status_ready", {
+                        model: manualInstallItem.displayName,
+                        serverId: resolvedProcessingServerId,
+                      })
+                    : t("core.ui.pipelines.panels.yolo.provisioning.status_missing", {
+                        model: manualInstallItem.displayName,
+                        serverId: resolvedProcessingServerId,
+                      })}
+              </div>
+              {manualInstallFile ? (
+                <div className="pipelinesStepHint">
+                  {t("core.ui.pipelines.panels.yolo.provisioning.expected_file", { file: manualInstallFile })}
+                </div>
+              ) : null}
+              {manualInstallNeedsExport && manualLocalBuildActionable ? (
+                <div className="pipelinesStepHint">
+                  {t(
+                    manualLocalBuildAction === "update"
+                      ? "core.ui.pipelines.panels.yolo.provisioning.local_build_update_hint"
+                      : "core.ui.pipelines.panels.yolo.provisioning.local_build_prepare_hint",
+                    {
+                      runtime: manualInstallItem.localBuildRuntime || manualInstallItem.localBuildBackend || "local",
+                    },
+                  )}
+                </div>
+              ) : null}
+              {manualInstallNeedsExport && !manualLocalBuildActionable && manualInstallItem.localBuildReason ? (
+                <div className="pipelinesStepHint">
+                  {t("core.ui.pipelines.panels.yolo.provisioning.local_build_unavailable", {
+                    reason: localBuildReasonLabel(manualInstallItem.localBuildReason, t),
+                  })}
+                </div>
+              ) : null}
+              {manualInstallItem.localBuildSourceLabel ? (
+                <div className="pipelinesStepHint">
+                  {t("core.ui.pipelines.panels.yolo.provisioning.source", {
+                    source: manualInstallItem.localBuildSourceLabel,
+                  })}
+                </div>
+              ) : null}
+              {manualInstallItem.installJob && manualInstallBusy ? (
+                <div className="pipelinesStepHint">
+                  {t("core.ui.pipelines.panels.yolo.local_build.job_progress", {
+                    phase: t(
+                      `core.ui.pipelines.panels.yolo.install_phase.${manualInstallItem.installJob.phase || "queued"}`,
+                      {},
+                      manualInstallItem.installJob.phase || "queued",
+                    ),
+                    progress: Math.max(0, Math.min(100, Math.round(manualInstallItem.installJob.progressPct || 0))),
+                  })}
+                </div>
+              ) : null}
+              {manualInstallItem.installJob?.error ? (
+                <div className="errorText" style={{ marginTop: 8 }}>
+                  {manualInstallItem.installJob.error}
+                </div>
+              ) : null}
+              {localBuildSuccess ? <div className="settingsStatusMuted">{localBuildSuccess}</div> : null}
+              {localBuildError ? <div className="errorText">{localBuildError}</div> : null}
+              <div className="pipelinesProvisionActions">
+                {manualInstallNeedsExport && manualLocalBuildActionable ? (
+                  <button
+                    className="pillButton pillButtonPrimary"
+                    type="button"
+                    onClick={() => openLocalBuildConsent(manualInstallItem)}
+                    disabled={!!localBuildLoadingModelId || manualInstallBusy}
+                  >
+                    {localBuildLoadingModelId === manualInstallItem.modelId
+                      ? t("core.ui.pipelines.panels.yolo.local_build.starting")
+                      : t(manualLocalBuildActionKey)}
+                  </button>
+                ) : null}
+                <button
+                  className={["pillButton", manualInstallNeedsExport && manualLocalBuildActionable ? "" : "pillButtonPrimary"]
+                    .filter(Boolean)
+                    .join(" ")}
+                  type="button"
+                  onClick={() => openArtifactModal(manualInstallItem)}
+                >
+                  {t(manualArtifactActionKey)}
+                </button>
+                {onOpenProcessingServers ? (
+                  <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
+                    {t("core.ui.pipelines.form.processing_server.manage")}
+                  </button>
+                ) : null}
+                <button className="pillButton" type="button" onClick={() => void reloadCatalog()} disabled={catalogLoading}>
+                  {t("core.ui.pipelines.panels.yolo.refresh_models")}
+                </button>
+              </div>
+              {manualInstallItem.acquisition.checkpointUrl || manualInstallItem.acquisition.exportGuideUrl ? (
+                <div className="pipelinesProvisionLinks">
+                  {manualInstallItem.acquisition.checkpointUrl ? (
+                    <a className="pillButton" href={manualInstallItem.acquisition.checkpointUrl} target="_blank" rel="noreferrer">
+                      {t("core.ui.pipelines.panels.yolo.artifact_modal.open_checkpoint_page")}
+                    </a>
+                  ) : null}
+                  {manualInstallItem.acquisition.exportGuideUrl ? (
+                    <a className="pillButton" href={manualInstallItem.acquisition.exportGuideUrl} target="_blank" rel="noreferrer">
+                      {t("core.ui.pipelines.panels.yolo.artifact_modal.open_export_guide")}
+                    </a>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {catalogError ? <div className="errorText">{catalogError}</div> : null}
           {!showAdvanced && unavailableItems.length > 0 ? (
             <div className="pipelinesStepHint">
@@ -1232,15 +1406,6 @@ export function VisionConfigCard({
           ) : null}
 
           <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-            {selectedCatalogItem ? (
-              <button className="pillButton" type="button" onClick={() => openArtifactModal(selectedCatalogItem)}>
-                {selectedCatalogItem.artifactExists
-                  ? t("core.ui.pipelines.panels.yolo.artifact_modal.open_update")
-                  : selectedCatalogItem.acquisition.artifactSource === "checkpoint_export_required"
-                    ? t("core.ui.pipelines.panels.yolo.artifact_modal.open_prepare")
-                    : t("core.ui.pipelines.panels.yolo.artifact_modal.open_get")}
-              </button>
-            ) : null}
             <button className="pillButton" type="button" onClick={() => void reloadCatalog()} disabled={catalogLoading}>
               {t("core.ui.pipelines.panels.yolo.refresh_models")}
             </button>
@@ -1807,6 +1972,22 @@ export function VisionConfigCard({
           ) : null}
         </>
       ) : null}
+
+      <LocalBuildConsentModal
+        open={!!localBuildConsent}
+        action={localBuildConsent?.action || "prepare"}
+        serverId={resolvedProcessingServerId}
+        modelName={localBuildConsent?.item.displayName || ""}
+        runtimeLabel={localBuildConsent?.item.localBuildRuntime || localBuildConsent?.item.localBuildBackend || "local"}
+        sourceLabel={localBuildConsent?.item.localBuildSourceLabel || localBuildConsent?.item.acquisition.checkpointUrl || ""}
+        checked={localBuildConsentChecked}
+        submitting={localBuildConsentSubmitting}
+        error={localBuildConsentError}
+        extraHint={t("core.ui.pipelines.panels.yolo.provisioning.modal_manual_hint")}
+        onToggleChecked={setLocalBuildConsentChecked}
+        onClose={closeLocalBuildConsent}
+        onConfirm={() => void confirmLocalBuildConsent()}
+      />
 
       <Modal
         open={!!artifactModalItem}

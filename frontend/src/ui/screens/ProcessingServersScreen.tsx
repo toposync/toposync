@@ -9,7 +9,7 @@ import {
   putProcessingServer,
 } from "../../util/api";
 import { i18n } from "../../util/i18n";
-import { Modal } from "../Modal";
+import { LocalBuildConsentModal } from "../LocalBuildConsentModal";
 import { ProcessingServerModal } from "../ProcessingServerModal";
 
 type Props = {
@@ -40,11 +40,6 @@ function isRecord(value: unknown): value is Record<string, any> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function isHttpUrl(value: string): boolean {
-  const clean = String(value || "").trim().toLowerCase();
-  return clean.startsWith("http://") || clean.startsWith("https://");
-}
-
 function formatBytes(bytes: number): string {
   const value = Number.isFinite(bytes) ? bytes : 0;
   const abs = Math.max(0, value);
@@ -64,6 +59,18 @@ function shortDigest(value: string): string {
   return `${clean.slice(0, 12)}…`;
 }
 
+function formatExecutionProviderLabel(value: string): string {
+  const clean = String(value || "").trim();
+  if (!clean) return "";
+  if (clean === "CPUExecutionProvider") return "CPU";
+  if (clean === "CUDAExecutionProvider") return "CUDA";
+  if (clean === "TensorrtExecutionProvider") return "TensorRT";
+  if (clean === "OpenVINOExecutionProvider") return "OpenVINO";
+  if (clean === "CoreMLExecutionProvider") return "CoreML";
+  if (clean === "DmlExecutionProvider") return "DirectML";
+  return clean.replace(/ExecutionProvider$/, "");
+}
+
 function buildDiagnosticsSummary(status: Record<string, unknown> | undefined): string | null {
   if (!status || !isRecord(status)) return null;
   const system = isRecord(status.system) ? status.system : null;
@@ -72,8 +79,13 @@ function buildDiagnosticsSummary(status: Record<string, unknown> | undefined): s
   const memory = system && isRecord(system.memory) ? system.memory : null;
 
   const vision = isRecord(status.vision) ? status.vision : null;
-  const torch = vision && isRecord(vision.torch) ? vision.torch : null;
-  const yoloRecommended = vision && isRecord(vision.yolo_device_recommended) ? vision.yolo_device_recommended : null;
+  const backends = vision && Array.isArray(vision.backends) ? vision.backends : [];
+  const preferredProviders =
+    vision && Array.isArray(vision.preferred_execution_providers)
+      ? vision.preferred_execution_providers
+      : vision && Array.isArray(vision.execution_providers)
+        ? vision.execution_providers
+        : [];
 
   const cameras = isRecord(status.cameras) ? status.cameras : null;
   const opencv = cameras && isRecord(cameras.opencv) ? cameras.opencv : null;
@@ -88,26 +100,13 @@ function buildDiagnosticsSummary(status: Record<string, unknown> | undefined): s
   const py = String(python?.version || "").trim();
   if (py) parts.push(`Python ${py}`);
 
-  const torchVersion = String(torch?.torch_version || "").trim();
-  if (torchVersion) parts.push(`torch ${torchVersion}`);
+  const ortBackend = backends.find((raw) => isRecord(raw) && String(raw.id || "").trim() === "onnxruntime");
+  const ortVersion = ortBackend && isRecord(ortBackend) ? String(ortBackend.version || "").trim() : "";
+  if (ortVersion) parts.push(`ONNX Runtime ${ortVersion}`);
 
-  const trackers = vision && Array.isArray(vision.trackers_available) ? vision.trackers_available : [];
-  const trackerDevices = new Set<string>();
-  for (const raw of trackers) {
-    if (!isRecord(raw)) continue;
-    const effective = String(raw.device_effective || "").trim();
-    const selected = String(raw.device_selected || "").trim();
-    const chosen = effective && effective !== "unknown" ? effective : selected;
-    if (chosen) trackerDevices.add(chosen);
-  }
-  const recommendedDevice = String(yoloRecommended?.device || "").trim();
-  const deviceLabel = trackerDevices.size ? Array.from(trackerDevices).join(", ") : recommendedDevice;
-  if (deviceLabel) parts.push(`Vision ${deviceLabel}`);
-
-  const cudaDevices = torch && Array.isArray(torch.cuda_devices) ? (torch.cuda_devices as any[]) : [];
-  if (cudaDevices.length) {
-    const first = String(cudaDevices[0] || "").trim();
-    parts.push(first ? `GPU ${first}` : `GPU x${cudaDevices.length}`);
+  const preferredProvider = formatExecutionProviderLabel(String(preferredProviders[0] || "").trim());
+  if (preferredProvider) {
+    parts.push(`Vision ${preferredProvider}`);
   }
 
   const memTotal = Number(memory?.total_bytes ?? 0);
@@ -686,90 +685,20 @@ export function ProcessingServersScreen({ onClose, canManageProvisioning = false
         onTest={handleTestServer}
       />
 
-      <Modal
+      <LocalBuildConsentModal
         open={!!localBuildConsent}
-        title={t("core.ui.processing_servers.local_build.modal.title")}
+        action="prepare"
+        serverId={localBuildConsent?.serverId || ""}
+        modelName={localBuildConsent?.item.displayName || ""}
+        runtimeLabel={localBuildConsent?.item.localBuildRuntime || "docker / podman"}
+        sourceLabel={localBuildConsent?.item.localBuildSourceLabel || ""}
+        checked={localBuildConsentChecked}
+        submitting={localBuildConsentSubmitting}
+        error={localBuildConsentError}
+        onToggleChecked={setLocalBuildConsentChecked}
         onClose={closeLocalBuildConsent}
-      >
-        {localBuildConsent ? (
-          <>
-            <div className="pipelinesHint">
-              {t("core.ui.processing_servers.local_build.modal.intro", {
-                model: localBuildConsent.item.displayName,
-              })}
-            </div>
-
-            <div className="processingServerConsentSummary">
-              <div className="pipelinesStatsRow">
-                <div className="pipelinesStatsItem">
-                  <div className="cardMeta">{t("core.ui.processing_servers.local_build.modal.field.machine")}</div>
-                  <div>{localBuildConsent.serverId}</div>
-                </div>
-                <div className="pipelinesStatsItem">
-                  <div className="cardMeta">{t("core.ui.processing_servers.local_build.modal.field.model")}</div>
-                  <div>{localBuildConsent.item.displayName}</div>
-                </div>
-              </div>
-
-              <div className="pipelinesStatsRow">
-                <div className="pipelinesStatsItem">
-                  <div className="cardMeta">{t("core.ui.processing_servers.local_build.modal.field.runtime")}</div>
-                  <div>{localBuildConsent.item.localBuildRuntime || "docker / podman"}</div>
-                </div>
-                <div className="pipelinesStatsItem">
-                  <div className="cardMeta">{t("core.ui.processing_servers.local_build.modal.field.source")}</div>
-                  <div className="processingServerConsentSource">
-                    {localBuildConsent.item.localBuildSourceLabel ||
-                      t("core.ui.processing_servers.local_build.modal.field.source_unknown")}
-                  </div>
-                </div>
-              </div>
-
-              <div className="pipelinesHint">{t("core.ui.processing_servers.local_build.modal.local_only")}</div>
-
-              {isHttpUrl(localBuildConsent.item.localBuildSourceLabel) ? (
-                <div>
-                  <a className="pillButton" href={localBuildConsent.item.localBuildSourceLabel} target="_blank" rel="noreferrer">
-                    {t("core.ui.processing_servers.local_build.modal.open_source")}
-                  </a>
-                </div>
-              ) : null}
-
-              <label className="processingServerConsentCheck">
-                <input
-                  type="checkbox"
-                  checked={localBuildConsentChecked}
-                  onChange={(event) => setLocalBuildConsentChecked(event.target.checked)}
-                  disabled={localBuildConsentSubmitting}
-                />
-                <span>{t("core.ui.processing_servers.local_build.modal.acknowledge")}</span>
-              </label>
-            </div>
-
-            {localBuildConsentError ? (
-              <div className="card cardDanger">
-                <div className="cardBody">{localBuildConsentError}</div>
-              </div>
-            ) : null}
-
-            <div className="modalFooter">
-              <button className="pillButton" type="button" onClick={closeLocalBuildConsent} disabled={localBuildConsentSubmitting}>
-                {t("core.actions.cancel")}
-              </button>
-              <button
-                className="pillButton pillButtonPrimary"
-                type="button"
-                disabled={localBuildConsentSubmitting || !localBuildConsentChecked}
-                onClick={() => void confirmLocalBuildConsent()}
-              >
-                {localBuildConsentSubmitting
-                  ? t("core.ui.processing_servers.local_build.modal.starting")
-                  : t("core.ui.processing_servers.local_build.modal.start")}
-              </button>
-            </div>
-          </>
-        ) : null}
-      </Modal>
+        onConfirm={() => void confirmLocalBuildConsent()}
+      />
     </div>
   );
 }

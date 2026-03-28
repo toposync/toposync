@@ -506,7 +506,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_description.camera.lens_undistort":
       "Corrects lens distortion using the camera calibration matrix and coefficients.",
     "core.ui.pipelines.operator_description.vision.detect":
-      "Finds supported objects in the frame and annotates the packet for later steps.",
+      "Finds supported objects in the frame and can either filter empty frames or keep every frame annotated for later steps.",
     "core.ui.pipelines.operator_description.vision.track":
       "Links detections over time and can either emit per-object events or keep active tracks on the frame.",
     "core.ui.pipelines.operator_description.vision.segment_instances":
@@ -1240,8 +1240,6 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Best default for most cameras. It is lighter and works well on CPU-first machines.",
     "core.ui.pipelines.panels.yolo.tracker_norfair_hint":
       "Usually steadier, but a little heavier. Use it when the default tracker is losing objects too often.",
-    "core.ui.pipelines.panels.yolo.detect_emit_mode": "Detection result",
-    "core.ui.pipelines.panels.yolo.detect_emit_mode.annotate": "Annotate only (keep all frames)",
     "core.ui.pipelines.panels.yolo.track_emit_mode": "Tracking result",
     "core.ui.pipelines.panels.yolo.track_emit_mode.events": "Create events per object",
     "core.ui.pipelines.panels.yolo.track_emit_mode.annotate": "Keep tracks on the frame",
@@ -1837,7 +1835,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_description.camera.lens_undistort":
       "Corrige a distorção da lente usando a calibração da câmera.",
     "core.ui.pipelines.operator_description.vision.detect":
-      "Encontra objetos suportados no frame e anota o pacote para as etapas seguintes.",
+      "Encontra objetos suportados no frame e pode filtrar frames vazios ou manter todos anotados para as etapas seguintes.",
     "core.ui.pipelines.operator_description.vision.track":
       "Liga detecções ao longo do tempo e pode gerar eventos por objeto ou manter os rastros no frame.",
     "core.ui.pipelines.operator_description.vision.segment_instances":
@@ -2578,8 +2576,6 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Melhor padrão para a maioria das câmeras. É mais leve e funciona bem em máquinas focadas em CPU.",
     "core.ui.pipelines.panels.yolo.tracker_norfair_hint":
       "Costuma ser mais estável, mas um pouco mais pesado. Use quando o rastreador padrão estiver perdendo objetos com frequência.",
-    "core.ui.pipelines.panels.yolo.detect_emit_mode": "Resultado da detecção",
-    "core.ui.pipelines.panels.yolo.detect_emit_mode.annotate": "Apenas anotar (manter todos os frames)",
     "core.ui.pipelines.panels.yolo.track_emit_mode": "Resultado do rastreamento",
     "core.ui.pipelines.panels.yolo.track_emit_mode.events": "Criar eventos por objeto",
     "core.ui.pipelines.panels.yolo.track_emit_mode.annotate": "Manter rastros no frame",

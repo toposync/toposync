@@ -123,3 +123,68 @@ def test_vision_detect_respects_frame_crop_geometry() -> None:
         assert detections[0]["bbox01"] == [0.35, 0.30000000000000004, 0.65, 0.7000000000000001]
 
     asyncio.run(scenario())
+
+
+def test_vision_detect_filter_mode_emits_packet_when_detections_exist() -> None:
+    async def scenario() -> None:
+        class _Backend:
+            backend_id = "fake"
+
+            def detect(self, frame, *, categories=None):  # noqa: ANN001
+                _ = frame, categories
+                return [
+                    DetectionObject(
+                        label="person",
+                        label_id=0,
+                        score=0.88,
+                        bbox01=(0.1, 0.2, 0.3, 0.4),
+                        model_id="fake.detector",
+                    )
+                ]
+
+        deps = PipelineRuntimeDependencies(
+            detector_backend_factory=lambda manifest: _Backend(),
+            vision_model_registry=_build_registry(),
+        )
+        runtime = VisionDetectRuntime({"model_id": "fake.detector", "emit_mode": "events"}, deps)
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={"frame_width": 200, "frame_height": 100},
+            artifacts={"frame_original": Artifact(name="frame_original", data=object(), mime_type="image/raw")},
+        )
+
+        out_packets = await runtime.process_packet(packet, _Context())
+        assert len(out_packets) == 1
+        out = out_packets[0]
+        assert out.stream_id == "camera:test"
+        assert out.payload.get("object_category_label") == "person"
+        assert out.payload.get("object_confidence") == 0.88
+        assert out.payload.get("object_bbox01") == [0.1, 0.2, 0.3, 0.4]
+
+    asyncio.run(scenario())
+
+
+def test_vision_detect_filter_mode_drops_packets_without_detections() -> None:
+    async def scenario() -> None:
+        class _Backend:
+            backend_id = "fake"
+
+            def detect(self, frame, *, categories=None):  # noqa: ANN001
+                _ = frame, categories
+                return []
+
+        deps = PipelineRuntimeDependencies(
+            detector_backend_factory=lambda manifest: _Backend(),
+            vision_model_registry=_build_registry(),
+        )
+        runtime = VisionDetectRuntime({"model_id": "fake.detector", "emit_mode": "events"}, deps)
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={"frame_width": 200, "frame_height": 100},
+            artifacts={"frame_original": Artifact(name="frame_original", data=object(), mime_type="image/raw")},
+        )
+
+        out_packets = await runtime.process_packet(packet, _Context())
+        assert out_packets == []
+
+    asyncio.run(scenario())

@@ -447,7 +447,7 @@ export function VisionConfigCard({
   const trackerId = String((config as any).tracker_id ?? "simple_iou_kalman").trim() || "simple_iou_kalman";
   const trackerPreset = TRACKER_CHOICES.find((item) => item.value === trackerId) ?? null;
   const emitMode = String((config as any).emit_mode ?? "events").trim() || "events";
-  const detectionEmitMode = String((config as any).emit_mode ?? "annotate").trim().toLowerCase() === "events" ? "events" : "annotate";
+  const detectionFilterFrames = String((config as any).emit_mode ?? "events").trim().toLowerCase() !== "annotate";
   const pauseWhenGateClosed = Boolean((config as any).pause_when_gate_closed ?? true);
   const useWorldAnchor = Boolean((config as any).use_world_anchor ?? false);
   const modelId = String((config as any).model_id ?? "").trim();
@@ -667,7 +667,6 @@ export function VisionConfigCard({
         onUpdateConfig((prev) => ({
           ...prev,
           model_id: result.model_id,
-          ...(isDetection ? { emit_mode: "annotate" } : {}),
         }));
       }
       await reloadCatalog();
@@ -693,9 +692,8 @@ export function VisionConfigCard({
     onUpdateConfig((prev) => ({
       ...prev,
       model_id: suggestedAvailableItem.modelId,
-      ...(isDetection ? { emit_mode: "annotate" } : {}),
     }));
-  }, [isDetection, onUpdateConfig, suggestedAvailableItem]);
+  }, [onUpdateConfig, suggestedAvailableItem]);
 
   const openArtifactModal = useCallback((item: VisionModelCatalogItem | null) => {
     if (!item) return;
@@ -865,7 +863,6 @@ export function VisionConfigCard({
                   onUpdateConfig((prev) => ({
                     ...prev,
                     model_id: nextModelId,
-                    ...(isDetection ? { emit_mode: "annotate" } : {}),
                   }));
                 }}
               />
@@ -878,7 +875,6 @@ export function VisionConfigCard({
                   onUpdateConfig((prev) => ({
                     ...prev,
                     model_id: nextModelId,
-                    ...(isDetection ? { emit_mode: "annotate" } : {}),
                   }));
                 }}
               >
@@ -1180,22 +1176,24 @@ export function VisionConfigCard({
 
       {isDetection ? (
         <>
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.yolo.detect_emit_mode")}</span>
-            <select
-              className="pipelinesInput"
-              value={detectionEmitMode}
+          <label className="pipelinesCheckboxLabel">
+            <input
+              type="checkbox"
+              checked={detectionFilterFrames}
               onChange={(event) => {
                 onUpdateConfig((prev) => ({
                   ...prev,
-                  emit_mode: String(event.target.value || "annotate").trim().toLowerCase() || "annotate",
+                  emit_mode: event.target.checked ? "events" : "annotate",
                 }));
               }}
-            >
-              <option value="annotate">{t("core.ui.pipelines.panels.yolo.detect_emit_mode.annotate")}</option>
-            </select>
+            />
+            <span>{t("core.ui.pipelines.panels.yolo.filter_frames")}</span>
           </label>
-          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.detect_annotate_only_hint")}</div>
+          <div className="pipelinesStepHint">
+            {detectionFilterFrames
+              ? t("core.ui.pipelines.panels.yolo.filter_frames_hint")
+              : t("core.ui.pipelines.panels.yolo.detect_annotate_only_hint")}
+          </div>
         </>
       ) : null}
 

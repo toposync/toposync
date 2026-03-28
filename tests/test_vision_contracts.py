@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
 from toposync.runtime.pipelines import OperatorRegistry
 from toposync_ext_vision.pipelines import (
@@ -124,9 +123,15 @@ def test_model_manifest_normalizes_capabilities_and_registry_filters_reid() -> N
     assert [item.model_id for item in registry.list_manifests(capability="reid")] == ["fake.reid"]
 
 
-def test_vision_detect_config_rejects_events_mode_during_phase_one() -> None:
-    with pytest.raises(ValidationError):
-        VisionDetectConfig.model_validate({"emit_mode": "events"})
+def test_vision_detect_config_defaults_to_filter_mode_and_normalizes_aliases() -> None:
+    default_config = VisionDetectConfig.model_validate({})
+    assert default_config.emit_mode == "events"
+
+    event_config = VisionDetectConfig.model_validate({"emit_mode": "event"})
+    assert event_config.emit_mode == "events"
+
+    annotate_config = VisionDetectConfig.model_validate({"emit_mode": "pass-through"})
+    assert annotate_config.emit_mode == "annotate"
 
 
 def test_tracked_object_normalizes_identity_score_and_bbox() -> None:

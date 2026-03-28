@@ -261,5 +261,7 @@ class VisionDetectRuntime(TransformOperatorRuntime):
             detections = self._normalize_detections(raw_detections, packet=packet, manifest=manifest)
 
         self._record_confidence_telemetry(packet=packet, context=context, detections=detections)
+        if self._parsed.emit_mode == "events" and not detections:
+            return []
         out = self._annotate_packet(packet, manifest=manifest, backend=backend, detections=detections)
         return [out]

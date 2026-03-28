@@ -117,7 +117,7 @@ def build_streaming_wizard_graph(
                     "model_id": "rtmdet_det_small",
                     "categories": detection_categories,
                     "confidence_threshold": float(yolo_confidence),
-                    "emit_mode": "annotate",
+                    "emit_mode": yolo_emit_mode,
                 },
             }
         )

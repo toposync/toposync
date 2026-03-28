@@ -15,10 +15,11 @@ class VisionDetectConfig(BaseModel):
 
     model_id: str = ""
     emit_mode: VisionDetectEmitMode = Field(
-        default="annotate",
+        default="events",
         description=(
-            "Phase 1 exposes vision.detect as annotate-first. Lifecycle/event semantics stay in "
-            "vision.track until tracking is fully decoupled."
+            "'events' keeps only packets where detections were found. 'annotate' always passes "
+            "the source frame through with detection payload attached. Use vision.track for "
+            "per-object lifecycle semantics."
         ),
     )
     categories: list[str] = Field(default_factory=list)
@@ -60,9 +61,7 @@ class VisionDetectConfig(BaseModel):
         return out
 
     @model_validator(mode="after")
-    def _validate_phase_one(self) -> "VisionDetectConfig":
-        if self.emit_mode != "annotate":
-            raise ValueError("vision.detect currently supports only emit_mode=annotate")
+    def _validate_defaults(self) -> "VisionDetectConfig":
         if not self.input_with_fallback:
             self.input_with_fallback = "treated,original"
         return self

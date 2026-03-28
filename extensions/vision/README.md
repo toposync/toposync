@@ -48,7 +48,7 @@ The public surface is task-based, not vendor-based. The first-party detection an
   - a per-task model catalog with availability (`available`, `manifest_only`, `incompatible`)
   - installation capability and progress for models that can be fetched/copied automatically
   - badges such as `recommended`, `fastest`, `best_quality`, `edge`
-- `vision.detect` remains annotate-first in this phase: it writes `payload["vision"]` plus compatibility fields used by downstream camera operators.
+- `vision.detect` can either filter the stream to packets that contain detections (`emit_mode="events"`) or keep every frame annotated (`emit_mode="annotate"`).
 - `vision.track` is now first-party and detector-agnostic: it consumes `payload["vision"]["detections"]`.
 - Every `TrackedObject` now carries `camera_id`, and can optionally carry `world_anchor` plus `appearance_embedding_artifact_name` for future multi-camera association work.
 - `vision.segment_instances` writes `payload["vision"]["segmentations"]`, attaches mask artifacts when enabled, and exposes the top mask as the semantic image key `mask`.
@@ -62,4 +62,5 @@ The public surface is task-based, not vendor-based. The first-party detection an
 - `vision.track` supports:
   - `emit_mode="events"` for split-stream lifecycle packets per object
   - `emit_mode="annotate"` for frame passthrough with `payload["vision"]["tracks"]`
+- `vision.detect` keeps per-object lifecycle semantics out of scope; use `vision.track` when you need temporal identity instead of simple frame filtering.
 - Crop by bbox remains in `com.toposync.cameras` as `camera.object_crop`; it is not instance segmentation.

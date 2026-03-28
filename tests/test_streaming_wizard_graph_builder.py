@@ -109,14 +109,14 @@ def test_motion_preset_has_fps_reducer_even_without_optional_parameters() -> Non
     assert "core.fps_reducer" in operators
 
 
-def test_wizard_graph_defaults_detection_to_annotate_and_tracking_to_events() -> None:
+def test_wizard_graph_defaults_detection_to_filter_and_tracking_to_events() -> None:
     detection_graph = build_streaming_wizard_graph(
         transmission_id="transmission_main",
         camera_id="camera_a",
         preset_id="detection_stream",
         optional_parameters=None,
     )
-    assert _operator_config(detection_graph, operator_id="vision.detect").get("emit_mode") == "annotate"
+    assert _operator_config(detection_graph, operator_id="vision.detect").get("emit_mode") == "events"
 
     tracking_graph = build_streaming_wizard_graph(
         transmission_id="transmission_main",

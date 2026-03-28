@@ -126,8 +126,8 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
         registry.register_operator(
             operator_id="vision.detect",
             description=(
-                "Object detection. Phase 1 is annotate-first: frames pass through with a generic "
-                "vision payload plus compatibility fields for downstream operators. "
+                "Object detection. Can either filter the stream to frames that contain detections "
+                "or pass every frame through with detection payload attached. "
                 "Use vision.track for lifecycle and temporal identity."
             ),
             config_model=VisionDetectConfig,

@@ -17,8 +17,16 @@ class _HubEntry:
 
 
 class CameraHub:
-    def __init__(self, *, frame_grabber_factory: Callable[..., Any]) -> None:
+    def __init__(
+        self,
+        *,
+        frame_grabber_factory: Callable[..., Any],
+        start_timeout_s: float | None = None,
+    ) -> None:
         self._frame_grabber_factory = frame_grabber_factory
+        self._start_timeout_s = (
+            None if start_timeout_s is None else max(0.0, float(start_timeout_s))
+        )
         self._lock = asyncio.Lock()
         self._entries: dict[str, _HubEntry] = {}
         self._starting: dict[str, asyncio.Event] = {}
@@ -60,8 +68,16 @@ class CameraHub:
                 grabber = self._frame_grabber_factory(rtsp_url, target_fps=float(target_fps), backend=str(backend))
                 # Starting a grabber may block on network/camera open. Keep the event loop responsive and avoid
                 # holding the hub lock while this runs.
-                started = await asyncio.to_thread(grabber.start)
+                started_task = asyncio.to_thread(grabber.start)
+                if self._start_timeout_s is not None and self._start_timeout_s > 0.0:
+                    started = await asyncio.wait_for(started_task, timeout=self._start_timeout_s)
+                else:
+                    started = await started_task
             except Exception:
+                try:
+                    await asyncio.to_thread(grabber.stop)
+                except Exception:
+                    pass
                 async with self._lock:
                     event = self._starting.pop(hub_key, None)
                     if event is not None:

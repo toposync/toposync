@@ -114,7 +114,15 @@ def _is_hard_capture_open_error(message: str) -> bool:
     )
 
 
-_GLOBAL_CAMERA_HUB = CameraHub(frame_grabber_factory=_frame_grabber_factory)
+_GLOBAL_CAMERA_HUB = CameraHub(
+    frame_grabber_factory=_frame_grabber_factory,
+    start_timeout_s=_read_env_float(
+        "TOPOSYNC_CAMERA_HUB_START_TIMEOUT_S",
+        12.0,
+        min_value=1.0,
+        max_value=120.0,
+    ),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -646,6 +654,10 @@ class _CameraSourcePendingError(RuntimeError):
     """Transient source-resolution error while camera settings/config are converging."""
 
 
+class _CameraSourceTransientError(RuntimeError):
+    """Transient runtime error while the source is retrying capture startup/recovery."""
+
+
 class CameraSourceRuntime(SourceOperatorRuntime):
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = CameraSourceConfig.model_validate(config)
@@ -664,6 +676,8 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._gate_known = False
         self._waiting_for_source_config = False
         self._last_wait_log_monotonic = 0.0
+        self._last_start_error = ""
+        self._start_retry_after_monotonic = 0.0
         self._force_direct_rtsp_until_monotonic = 0.0
         self._backend_override: str | None = None
         self._backend_override_until_monotonic = 0.0
@@ -679,6 +693,12 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             5.0,
             min_value=1.0,
             max_value=120.0,
+        )
+        self._start_failure_backoff_s = _read_env_float(
+            "TOPOSYNC_CAMERA_SOURCE_START_BACKOFF_S",
+            10.0,
+            min_value=1.0,
+            max_value=300.0,
         )
         self._ingest_backoff_s = _read_env_float(
             "TOPOSYNC_CAMERA_SOURCE_INGEST_BACKOFF_S",
@@ -703,6 +723,10 @@ class CameraSourceRuntime(SourceOperatorRuntime):
     async def _ensure_grabber(self) -> None:
         if self._grabber is not None:
             return
+        now_mono = time.monotonic()
+        if now_mono < self._start_retry_after_monotonic:
+            detail = str(self._last_start_error or "").strip() or "Camera capture startup cooldown active"
+            raise _CameraSourceTransientError(detail)
         prefer_ingest = time.monotonic() >= self._force_direct_rtsp_until_monotonic
         resolved = await _resolve_camera_source(
             self._config,
@@ -726,12 +750,49 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 self._backend_override_until_monotonic = 0.0
 
         self._hub_key = _camera_hub_key(camera_id=resolved.camera_id, rtsp_url=resolved.rtsp_url, backend=selected_backend)
-        self._grabber = await _GLOBAL_CAMERA_HUB.acquire(
-            key=self._hub_key,
-            rtsp_url=resolved.rtsp_url,
-            target_fps=float(resolved.fps),
-            backend=selected_backend,
-        )
+        try:
+            self._grabber = await _GLOBAL_CAMERA_HUB.acquire(
+                key=self._hub_key,
+                rtsp_url=resolved.rtsp_url,
+                target_fps=float(resolved.fps),
+                backend=selected_backend,
+            )
+        except Exception as exc:
+            self._grabber = None
+            self._grabber_started_monotonic = 0.0
+            self._last_ts = 0.0
+            self._start_retry_after_monotonic = now_mono + self._start_failure_backoff_s
+            if self._source_uses_ingest:
+                self._force_direct_rtsp_until_monotonic = max(
+                    self._force_direct_rtsp_until_monotonic,
+                    now_mono + self._ingest_backoff_s,
+                )
+            if self._config.backend in {"auto", "opencv"} and selected_backend != "ffmpeg":
+                self._backend_override = "ffmpeg"
+                self._backend_override_until_monotonic = max(
+                    self._backend_override_until_monotonic,
+                    now_mono + self._backend_failover_s,
+                )
+                self._last_backend_failover_monotonic = now_mono
+            transport_path = "ingest" if resolved.used_ingest else "direct rtsp"
+            backend_note = (
+                f" Will retry with backend={self._backend_override} for {self._backend_failover_s:.0f}s."
+                if self._backend_override
+                else ""
+            )
+            direct_note = (
+                f" Bypassing ingest for {self._ingest_backoff_s:.0f}s."
+                if resolved.used_ingest
+                else ""
+            )
+            self._last_start_error = (
+                "Camera capture startup failed "
+                f"(camera_id={resolved.camera_id or '-'} path={transport_path} backend={selected_backend}): {exc}."
+                f"{direct_note}{backend_note}"
+            )
+            raise _CameraSourceTransientError(self._last_start_error) from exc
+        self._last_start_error = ""
+        self._start_retry_after_monotonic = 0.0
         self._grabber_started_monotonic = time.monotonic()
 
     async def _consume_gate_packets(self, context) -> None:  # noqa: ANN001
@@ -890,8 +951,21 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 )
                 self._last_wait_log_monotonic = now
             return None
+        except _CameraSourceTransientError as exc:
+            self._waiting_for_source_config = True
+            now = time.monotonic()
+            if (now - self._last_wait_log_monotonic) >= 5.0:
+                context.logger.warning(
+                    "Node '%s' camera source startup is retrying (camera_id=%s): %s",
+                    context.node_id,
+                    str(self._config.camera_id or "").strip() or "-",
+                    str(exc),
+                )
+                self._last_wait_log_monotonic = now
+            return None
         if self._grabber is None:
             return None
+        self._waiting_for_source_config = False
         frame, frame_ts = self._grabber.get_latest()
         if frame is None or not frame_ts:
             capture_metrics = self._capture_metrics_snapshot()

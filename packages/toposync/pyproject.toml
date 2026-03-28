@@ -1,0 +1,31 @@
+[project]
+name = "toposync"
+version = "0.3.0"
+description = "Toposync default application bundle."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "toposync-core==0.3.0",
+  "toposync-ext-structural>=0.1.0",
+  "toposync-ext-models>=0.1.0",
+  "toposync-ext-home-assistant>=0.1.0",
+  "toposync-ext-images>=0.1.0",
+  "toposync-ext-cameras>=0.1.0",
+  "toposync-ext-vision>=0.1.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["README.md"]
+
+[tool.uv.sources]
+toposync-core = { path = "../.." }
+toposync-ext-structural = { path = "../../extensions/structural" }
+toposync-ext-models = { path = "../../extensions/models" }
+toposync-ext-home-assistant = { path = "../../extensions/home_assistant" }
+toposync-ext-images = { path = "../../extensions/images" }
+toposync-ext-cameras = { path = "../../extensions/cameras" }
+toposync-ext-vision = { path = "../../extensions/vision" }

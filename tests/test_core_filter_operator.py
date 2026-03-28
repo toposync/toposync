@@ -16,6 +16,7 @@ from toposync.runtime.pipelines import (
     SinkRuntime,
     register_builtin_operators,
 )
+from toposync.runtime.pipelines.safe_expression import SafeExpression, SafeExpressionError
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 
 
@@ -189,3 +190,13 @@ def test_core_filter_can_be_used_before_camera_source(monkeypatch: pytest.Monkey
     assert start_calls == 0
     assert stop_calls == 0
 
+
+def test_safe_expression_reports_unknown_name_position() -> None:
+    with pytest.raises(SafeExpressionError) as exc_info:
+        SafeExpression.compile("unknown_flag and payload.enabled")
+
+    exc = exc_info.value
+    assert exc.lineno == 1
+    assert exc.col_offset == 0
+    assert exc.end_lineno == 1
+    assert exc.end_col_offset == len("unknown_flag")

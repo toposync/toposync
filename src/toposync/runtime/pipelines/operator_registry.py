@@ -6,13 +6,14 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator, model_validator
 
 
 OPERATOR_ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 PORT_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 CAPABILITY_NAME_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 CONTRACT_ITEM_RE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
+EXPRESSION_HINT_PATH_RE = re.compile(r"^(payload|metadata)(?:\.[a-z][a-z0-9_]{0,127}|\[[0-9]+\])*$")
 EXECUTION_MODE = Literal["in_event_loop", "thread_pool", "process_pool", "external"]
 
 
@@ -38,6 +39,114 @@ class OperatorPort(BaseModel):
         return name
 
 
+class ExpressionHint(BaseModel):
+    kind: Literal["payload_path", "metadata_path", "artifact_name"]
+    path: str | None = None
+    value: str | None = None
+    type: str = ""
+    description: str = ""
+    examples: list[str] = Field(default_factory=list)
+    enum_values: list[str] = Field(default_factory=list)
+
+    @field_validator("path", "value")
+    @classmethod
+    def _normalize_optional_text(cls, value: str | None) -> str | None:
+        text = str(value or "").strip()
+        return text or None
+
+    @field_validator("type", "description")
+    @classmethod
+    def _normalize_text(cls, value: str) -> str:
+        return str(value or "").strip()
+
+    @field_validator("examples", "enum_values")
+    @classmethod
+    def _normalize_text_list(cls, values: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in values:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            out.append(text)
+            seen.add(text)
+        return out
+
+    @model_validator(mode="after")
+    def _validate_shape(self) -> ExpressionHint:
+        if self.kind in {"payload_path", "metadata_path"}:
+            if not self.path:
+                raise ValueError(f"{self.kind} requires a non-empty path")
+            if not EXPRESSION_HINT_PATH_RE.match(self.path):
+                raise ValueError(
+                    "Expression hint path must start with payload or metadata and use dotted identifiers / numeric indexes"
+                )
+            expected_root = "payload" if self.kind == "payload_path" else "metadata"
+            if not self.path.startswith(expected_root):
+                raise ValueError(f"{self.kind} path must start with '{expected_root}'")
+            if self.value is not None:
+                raise ValueError(f"{self.kind} does not accept a value field")
+            return self
+
+        if not self.value:
+            raise ValueError("artifact_name requires a non-empty value")
+        if self.path is not None:
+            raise ValueError("artifact_name does not accept a path field")
+        return self
+
+
+def payload_path_hint(
+    path: str,
+    *,
+    value_type: str = "",
+    description: str = "",
+    examples: list[str] | None = None,
+    enum_values: list[str] | None = None,
+) -> ExpressionHint:
+    return ExpressionHint(
+        kind="payload_path",
+        path=path,
+        type=value_type,
+        description=description,
+        examples=list(examples or []),
+        enum_values=list(enum_values or []),
+    )
+
+
+def metadata_path_hint(
+    path: str,
+    *,
+    value_type: str = "",
+    description: str = "",
+    examples: list[str] | None = None,
+    enum_values: list[str] | None = None,
+) -> ExpressionHint:
+    return ExpressionHint(
+        kind="metadata_path",
+        path=path,
+        type=value_type,
+        description=description,
+        examples=list(examples or []),
+        enum_values=list(enum_values or []),
+    )
+
+
+def artifact_name_hint(
+    value: str,
+    *,
+    description: str = "",
+    examples: list[str] | None = None,
+    enum_values: list[str] | None = None,
+) -> ExpressionHint:
+    return ExpressionHint(
+        kind="artifact_name",
+        value=value,
+        description=description,
+        examples=list(examples or []),
+        enum_values=list(enum_values or []),
+    )
+
+
 class OperatorDefinition(BaseModel):
     id: str
     description: str = ""
@@ -59,6 +168,7 @@ class OperatorDefinition(BaseModel):
     produces_media_fields: list[str] = Field(default_factory=list)
     input_modalities: list[str] = Field(default_factory=list)
     output_modalities: list[str] = Field(default_factory=list)
+    expression_hints: list[ExpressionHint] = Field(default_factory=list)
 
     @field_validator("id")
     @classmethod
@@ -94,6 +204,19 @@ class OperatorDefinition(BaseModel):
                 raise ValueError(f"Duplicate port name: {port.name}")
             names.add(port.name)
         return ports
+
+    @field_validator("expression_hints")
+    @classmethod
+    def _dedupe_expression_hints(cls, values: list[ExpressionHint]) -> list[ExpressionHint]:
+        out: list[ExpressionHint] = []
+        seen: set[tuple[str, str, str]] = set()
+        for item in values:
+            key = (item.kind, str(item.path or ""), str(item.value or ""))
+            if key in seen:
+                continue
+            out.append(item)
+            seen.add(key)
+        return out
 
     @field_validator(
         "requires_payload_keys",
@@ -164,6 +287,7 @@ class OperatorRegistry:
         produces_media_fields: list[str] | None = None,
         input_modalities: list[str] | None = None,
         output_modalities: list[str] | None = None,
+        expression_hints: list[ExpressionHint | dict[str, Any]] | None = None,
         owner: str | None = None,
         runtime_factory: Callable[[dict[str, Any], Any], Any] | None = None,
     ) -> OperatorDefinition:
@@ -174,6 +298,10 @@ class OperatorRegistry:
         cfg_model = _ensure_config_model(config_model)
         parsed_inputs = [i if isinstance(i, OperatorPort) else OperatorPort.model_validate(i) for i in (inputs or [])]
         parsed_outputs = [o if isinstance(o, OperatorPort) else OperatorPort.model_validate(o) for o in outputs] if outputs is not None else []
+        parsed_expression_hints = [
+            item if isinstance(item, ExpressionHint) else ExpressionHint.model_validate(item)
+            for item in (expression_hints or [])
+        ]
         if outputs is None and not parsed_outputs:
             parsed_outputs = [OperatorPort(name="out")]
 
@@ -211,6 +339,7 @@ class OperatorRegistry:
             produces_media_fields=list(produces_media_fields or []),
             input_modalities=list(input_modalities or []),
             output_modalities=list(output_modalities or []),
+            expression_hints=parsed_expression_hints,
         )
 
         self._items[definition.id] = RegisteredOperator(

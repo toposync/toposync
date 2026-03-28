@@ -159,3 +159,66 @@ def test_operator_registry_preserves_explicit_empty_outputs() -> None:
     sink = registry.get("test.sink")
     assert sink is not None
     assert sink.definition.outputs == []
+
+
+def test_operator_registry_preserves_expression_hints() -> None:
+    registry = OperatorRegistry()
+    registry.register_operator(
+        operator_id="test.hinted",
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        defaults={},
+        expression_hints=[
+            {
+                "kind": "payload_path",
+                "path": "payload.motion.score",
+                "type": "number",
+                "description": "Motion score emitted by the operator.",
+                "examples": ["payload.motion.score > 0.2"],
+            },
+            {
+                "kind": "metadata_path",
+                "path": "metadata.motion_gate_open",
+                "type": "boolean",
+                "description": "Gate-open state copied into metadata.",
+            },
+            {
+                "kind": "artifact_name",
+                "value": "best_frame",
+                "description": "Default artifact emitted by the operator.",
+            },
+        ],
+    )
+
+    hinted = registry.get("test.hinted")
+    assert hinted is not None
+    dumped = [item.model_dump(mode="json") for item in hinted.definition.expression_hints]
+    assert dumped == [
+        {
+            "kind": "payload_path",
+            "path": "payload.motion.score",
+            "value": None,
+            "type": "number",
+            "description": "Motion score emitted by the operator.",
+            "examples": ["payload.motion.score > 0.2"],
+            "enum_values": [],
+        },
+        {
+            "kind": "metadata_path",
+            "path": "metadata.motion_gate_open",
+            "value": None,
+            "type": "boolean",
+            "description": "Gate-open state copied into metadata.",
+            "examples": [],
+            "enum_values": [],
+        },
+        {
+            "kind": "artifact_name",
+            "path": None,
+            "value": "best_frame",
+            "type": "",
+            "description": "Default artifact emitted by the operator.",
+            "examples": [],
+            "enum_values": [],
+        },
+    ]

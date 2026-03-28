@@ -8,14 +8,23 @@ import {
   listStreamingTransmissions,
   type HomeAssistantServerInfo,
   type HomeAssistantServiceInfo,
+  type PipelineOperatorDefinition,
   type StreamingTransmission,
 } from "../../../../../util/api";
-import { buildArtifactSuggestions, buildScheduleWeekdayOptions, pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constants";
+import {
+  buildArtifactSuggestions,
+  buildPacketArtifactSuggestions,
+  buildScheduleWeekdayOptions,
+  pipelinesReactSelectStyles,
+  YOLO_CATEGORY_OPTIONS,
+} from "../../constants";
 import type { InteractiveStep, SelectOption } from "../../types";
 import { isRecord, safeJsonParse } from "../../utils";
 import { i18n } from "../../../../../util/i18n";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
 import type { PipelineStepSnapshotKey } from "./pipelineStepSnapshots";
+import { FilterExpressionEditor } from "./FilterExpressionEditor";
+import { buildFilterExpressionUpstreamContext } from "./filterExpressionContext";
 import { buildPipelineStepSnapshotUrl } from "./pipelineStepSnapshots";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
@@ -178,14 +187,21 @@ export function CategoryGateConfigCard({ config, onUpdateConfig }: CategoryGateP
 
 type FilterProps = {
   config: Record<string, unknown>;
+  steps: InteractiveStep[];
+  index: number;
+  operatorsById: Record<string, PipelineOperatorDefinition>;
   onUpdateConfig: UpdateConfig;
 };
 
-export function FilterConfigCard({ config, onUpdateConfig }: FilterProps): React.ReactElement {
+export function FilterConfigCard({ config, steps, index, operatorsById, onUpdateConfig }: FilterProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const presetId = String((config as any).preset_id ?? "").trim();
   const expression = String((config as any).expression ?? "").trim();
   const invert = Boolean((config as any).invert ?? false);
+  const upstreamContext = useMemo(
+    () => buildFilterExpressionUpstreamContext(steps, index, operatorsById),
+    [index, operatorsById, steps],
+  );
 
   const categoriesRaw = (config as any).categories;
   const categories = Array.isArray(categoriesRaw)
@@ -208,8 +224,26 @@ export function FilterConfigCard({ config, onUpdateConfig }: FilterProps): React
   const artifactNames = Array.isArray(artifactNamesRaw)
     ? artifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
     : [];
-  const artifactSuggestions = buildArtifactSuggestions(t);
-  const selectedArtifactOptions = artifactNames.map((value) => artifactSuggestions.find((opt) => opt.value === value) ?? { value, label: value });
+  const packetArtifactSuggestions = useMemo(() => {
+    const defaults = buildPacketArtifactSuggestions(t);
+    const optionByValue = new Map(defaults.map((option) => [String(option.value || "").trim(), option] as const));
+    const orderedValues = [
+      ...upstreamContext.artifactNames,
+      ...defaults.map((option) => String(option.value || "").trim()),
+    ];
+    const merged: SelectOption[] = [];
+    const seen = new Set<string>();
+    for (const rawValue of orderedValues) {
+      const value = String(rawValue || "").trim();
+      if (!value || seen.has(value)) continue;
+      seen.add(value);
+      merged.push(optionByValue.get(value) ?? { value, label: value });
+    }
+    return merged;
+  }, [t, upstreamContext.artifactNames]);
+  const selectedArtifactOptions = artifactNames.map(
+    (value) => packetArtifactSuggestions.find((opt) => opt.value === value) ?? { value, label: value },
+  );
 
   const presetOptions: Array<{ value: string; label: string; hint: string }> = [
     {
@@ -270,13 +304,12 @@ export function FilterConfigCard({ config, onUpdateConfig }: FilterProps): React
         <>
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.filter.expression")}</span>
-            <textarea
-              className="pipelinesTextArea"
-              rows={4}
+            <FilterExpressionEditor
               value={expression}
-              placeholder={'payload.object_category_label == "person" and metadata.motion_gate_open'}
-              onChange={(event) => {
-                const nextValue = String(event.target.value ?? "");
+              artifactSuggestions={packetArtifactSuggestions}
+              payloadPathSuggestions={upstreamContext.payloadPathSuggestions}
+              metadataPathSuggestions={upstreamContext.metadataPathSuggestions}
+              onChange={(nextValue) => {
                 onUpdateConfig((prev) => ({ ...prev, expression: nextValue }));
               }}
             />
@@ -323,7 +356,7 @@ export function FilterConfigCard({ config, onUpdateConfig }: FilterProps): React
           <CreatableSelect<SelectOption, true>
             isMulti
             styles={pipelinesReactSelectStyles}
-            options={artifactSuggestions}
+            options={packetArtifactSuggestions}
             value={selectedArtifactOptions}
             placeholder={t("core.ui.pipelines.panels.filter.artifacts_placeholder")}
             onChange={(value: MultiValue<SelectOption>) => {

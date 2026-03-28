@@ -651,6 +651,16 @@ textarea {
   box-shadow: var(--shadow);
 }
 
+.pipelinesMonacoWrapCompact {
+  border-radius: var(--radius-control);
+  min-height: 188px;
+}
+
+.pipelinesFilterExpressionEditor {
+  display: grid;
+  gap: 8px;
+}
+
 .pipelinesTextarea {
   width: 100%;
   height: 520px;

@@ -6,7 +6,20 @@ from typing import Any
 
 
 class SafeExpressionError(ValueError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        lineno: int | None = None,
+        col_offset: int | None = None,
+        end_lineno: int | None = None,
+        end_col_offset: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.lineno = int(lineno) if lineno is not None else None
+        self.col_offset = int(col_offset) if col_offset is not None else None
+        self.end_lineno = int(end_lineno) if end_lineno is not None else None
+        self.end_col_offset = int(end_col_offset) if end_col_offset is not None else None
 
 
 _MAX_SOURCE_LEN = 2048
@@ -28,7 +41,15 @@ class SafeExpression:
         try:
             parsed = ast.parse(text, mode="eval")
         except SyntaxError as exc:  # pragma: no cover - depends on CPython messages
-            raise SafeExpressionError(f"Invalid expression syntax: {exc}") from exc
+            offset = getattr(exc, "offset", None)
+            end_offset = getattr(exc, "end_offset", None)
+            raise SafeExpressionError(
+                f"Invalid expression syntax: {exc}",
+                lineno=getattr(exc, "lineno", None),
+                col_offset=(max(0, int(offset) - 1) if offset is not None else None),
+                end_lineno=getattr(exc, "end_lineno", None),
+                end_col_offset=(max(0, int(end_offset) - 1) if end_offset is not None else None),
+            ) from exc
 
         _SafeAstValidator(text).visit(parsed)
         compiled = compile(parsed, filename="<core.filter>", mode="eval")
@@ -159,37 +180,48 @@ class _SafeAstValidator(ast.NodeVisitor):
     def __init__(self, source: str) -> None:
         self._source = source
 
+    def _raise(self, message: str, node: ast.AST | None = None) -> None:
+        if node is None:
+            raise SafeExpressionError(message)
+        raise SafeExpressionError(
+            message,
+            lineno=getattr(node, "lineno", None),
+            col_offset=getattr(node, "col_offset", None),
+            end_lineno=getattr(node, "end_lineno", None),
+            end_col_offset=getattr(node, "end_col_offset", None),
+        )
+
     def generic_visit(self, node: ast.AST) -> None:  # noqa: D401 - clear for safety
-        raise SafeExpressionError(f"Unsupported syntax: {type(node).__name__}")
+        self._raise(f"Unsupported syntax: {type(node).__name__}", node)
 
     def visit_Expression(self, node: ast.Expression) -> None:
         self.visit(node.body)
 
     def visit_Name(self, node: ast.Name) -> None:
         if node.id not in {"payload", "metadata", "stream_id", "lifecycle", "artifacts"}:
-            raise SafeExpressionError(f"Unknown name: {node.id!r}")
+            self._raise(f"Unknown name: {node.id!r}", node)
 
     def visit_Constant(self, node: ast.Constant) -> None:
         if node.value is None:
             return
         if isinstance(node.value, (bool, int, float, str)):
             return
-        raise SafeExpressionError("Only None/bool/int/float/str constants are allowed")
+        self._raise("Only None/bool/int/float/str constants are allowed", node)
 
     def visit_BoolOp(self, node: ast.BoolOp) -> None:
         if not isinstance(node.op, (ast.And, ast.Or)):
-            raise SafeExpressionError("Only 'and'/'or' boolean ops are allowed")
+            self._raise("Only 'and'/'or' boolean ops are allowed", node)
         for value in node.values:
             self.visit(value)
 
     def visit_UnaryOp(self, node: ast.UnaryOp) -> None:
         if not isinstance(node.op, ast.Not):
-            raise SafeExpressionError("Only 'not' unary op is allowed")
+            self._raise("Only 'not' unary op is allowed", node)
         self.visit(node.operand)
 
     def visit_BinOp(self, node: ast.BinOp) -> None:
         if not isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod)):
-            raise SafeExpressionError("Unsupported binary operator")
+            self._raise("Unsupported binary operator", node)
         self.visit(node.left)
         self.visit(node.right)
 
@@ -211,33 +243,33 @@ class _SafeAstValidator(ast.NodeVisitor):
                     ast.IsNot,
                 ),
             ):
-                raise SafeExpressionError("Unsupported comparison operator")
+                self._raise("Unsupported comparison operator", node)
         for comparator in node.comparators:
             self.visit(comparator)
 
     def visit_IfExp(self, node: ast.IfExp) -> None:
-        raise SafeExpressionError("Conditional expressions are not allowed")
+        self._raise("Conditional expressions are not allowed", node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         if node.attr.startswith("_"):
-            raise SafeExpressionError("Attribute access starting with '_' is not allowed")
+            self._raise("Attribute access starting with '_' is not allowed", node)
         if not _is_rooted_in_payload_or_metadata(node):
-            raise SafeExpressionError("Attribute access is only allowed on payload/metadata")
+            self._raise("Attribute access is only allowed on payload/metadata", node)
         self.visit(node.value)
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
         if not _is_rooted_in_payload_or_metadata(node):
-            raise SafeExpressionError("Subscript access is only allowed on payload/metadata")
+            self._raise("Subscript access is only allowed on payload/metadata", node)
 
         self.visit(node.value)
         index_node = node.slice
         if isinstance(index_node, ast.Slice):
-            raise SafeExpressionError("Slices are not allowed")
+            self._raise("Slices are not allowed", node)
         if isinstance(index_node, ast.Constant) and isinstance(index_node.value, (str, int)):
             if isinstance(index_node.value, str) and str(index_node.value).startswith("_"):
-                raise SafeExpressionError("Keys starting with '_' are not allowed")
+                self._raise("Keys starting with '_' are not allowed", index_node)
             return
-        raise SafeExpressionError("Only constant string/int subscripts are allowed")
+        self._raise("Only constant string/int subscripts are allowed", index_node)
 
     def visit_List(self, node: ast.List) -> None:
         for item in node.elts:
@@ -257,4 +289,3 @@ class _SafeAstValidator(ast.NodeVisitor):
                 self.visit(key)
         for value in node.values:
             self.visit(value)
-

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from toposync.runtime.pipelines.operator_registry import OperatorRegistry
+from typing import Any
+
+from toposync.runtime.pipelines.operator_registry import OperatorRegistry, payload_path_hint
 
 from ..processing.tasks import (
     VisionDetectRuntime,
@@ -14,6 +16,34 @@ from .schemas import (
     VisionSegmentInstancesConfig,
     VisionTrackConfig,
 )
+
+
+def _vision_expression_hints(*, branch: str | None = None) -> list[Any]:
+    hints: list[Any] = [
+        payload_path_hint("payload.vision", value_type="object", description="Structured vision annotations attached to the packet."),
+        payload_path_hint("payload.event_id", value_type="string", description="Event identifier derived from the vision operator."),
+        payload_path_hint("payload.tracking_id", value_type="string", description="Tracking identifier associated with the current object stream."),
+        payload_path_hint("payload.tracker_track_id", value_type="string", description="Raw tracker-specific track identifier."),
+        payload_path_hint("payload.correlation_id", value_type="string", description="Correlation identifier connecting related packets."),
+        payload_path_hint("payload.source_stream_id", value_type="string", description="Source stream identifier emitted by the vision operator."),
+        payload_path_hint("payload.object_category_label", value_type="string", description="Primary detected object category label."),
+        payload_path_hint("payload.object_confidence", value_type="number", description="Confidence score for the primary detected object."),
+        payload_path_hint("payload.object_bbox01", value_type="array", description="Normalized bounding box for the primary detected object."),
+        payload_path_hint("payload.object_bbox01[0]", value_type="number", description="Normalized left coordinate of the primary bounding box."),
+        payload_path_hint("payload.object_bbox01[1]", value_type="number", description="Normalized top coordinate of the primary bounding box."),
+        payload_path_hint("payload.object_bbox01[2]", value_type="number", description="Normalized right coordinate of the primary bounding box."),
+        payload_path_hint("payload.object_bbox01[3]", value_type="number", description="Normalized bottom coordinate of the primary bounding box."),
+        payload_path_hint("payload.detected_object", value_type="object", description="Primary detected object payload."),
+        payload_path_hint("payload.detected_objects", value_type="array", description="All detected or tracked objects on the packet."),
+        payload_path_hint("payload.detected_objects[0]", value_type="object", description="First detected or tracked object on the packet."),
+    ]
+    if branch == "detections":
+        hints.append(payload_path_hint("payload.vision.detections", value_type="array", description="Frame-level detection annotations."))
+    if branch == "tracks":
+        hints.append(payload_path_hint("payload.vision.tracks", value_type="array", description="Frame-level track annotations."))
+    if branch == "segmentations":
+        hints.append(payload_path_hint("payload.vision.segmentations", value_type="array", description="Frame-level instance segmentation annotations."))
+    return hints
 
 
 def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
@@ -45,6 +75,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
                 "detected_object",
                 "detected_objects",
             ],
+            expression_hints=_vision_expression_hints(),
             share_strategy="by_signature",
             owner="com.toposync.vision",
             runtime_factory=lambda config, deps: VisionPoseEstimateRuntime(
@@ -77,6 +108,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
                 "detected_object",
                 "detected_objects",
             ],
+            expression_hints=_vision_expression_hints(branch="segmentations"),
             share_strategy="by_signature",
             owner="com.toposync.vision",
             runtime_factory=lambda config, deps: VisionSegmentInstancesRuntime(
@@ -114,6 +146,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
                 "detected_object",
                 "detected_objects",
             ],
+            expression_hints=_vision_expression_hints(branch="tracks"),
             share_strategy="by_signature",
             owner="com.toposync.vision",
             runtime_factory=lambda config, deps: VisionTrackRuntime(
@@ -151,6 +184,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
                 "detected_object",
                 "detected_objects",
             ],
+            expression_hints=_vision_expression_hints(branch="detections"),
             share_strategy="by_signature",
             owner="com.toposync.vision",
             runtime_factory=lambda config, deps: VisionDetectRuntime(

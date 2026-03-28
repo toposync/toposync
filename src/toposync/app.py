@@ -48,6 +48,7 @@ from toposync.runtime.pipelines import (
 from toposync.runtime.pipelines.execution_scheduler import ExecutionScheduler
 from toposync.runtime.pipelines.python_dsl import PythonDslCompileError, compile_python_source_to_graph
 from toposync.runtime.pipelines.recommendations import PipelineAlert, analyze_compiled_pipeline
+from toposync.runtime.pipelines.safe_expression import SafeExpression, SafeExpressionError
 from toposync.runtime.pipelines.stats import PipelineStatsStore
 from toposync.runtime.pipelines.telemetry import (
     MAX_IMAGE_MARKER_QUERY_LIMIT,
@@ -224,6 +225,24 @@ class PipelineCompilePythonResponse(BaseModel):
     pipeline: dict[str, Any]
     shared_signatures: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     alerts: list[PipelineAlert] = Field(default_factory=list)
+
+
+class FilterExpressionValidationMarker(BaseModel):
+    start_line_number: int = 1
+    start_column: int = 1
+    end_line_number: int = 1
+    end_column: int = 1
+
+
+class FilterExpressionValidateRequest(BaseModel):
+    expression: str = ""
+
+
+class FilterExpressionValidateResponse(BaseModel):
+    ok: bool
+    normalized_expression: str = ""
+    error: str | None = None
+    marker: FilterExpressionValidationMarker | None = None
 
 
 class PipelineDuplicateRequest(BaseModel):
@@ -1362,6 +1381,47 @@ def create_app() -> FastAPI:
         _require(request, action="core:pipelines:read")
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
         return OperatorsListResponse(operators=registry.list_operators())
+
+    @app.post("/api/pipelines/filter-expression/validate", response_model=FilterExpressionValidateResponse)
+    async def validate_filter_expression(
+        request: Request,
+        body: FilterExpressionValidateRequest,
+    ) -> FilterExpressionValidateResponse:
+        _require(request, action="core:pipelines:compile")
+        expression = str(body.expression or "")
+        try:
+            compiled = SafeExpression.compile(expression)
+        except SafeExpressionError as exc:
+            text = expression.splitlines() or [""]
+            start_line = max(1, int(exc.lineno or 1))
+            safe_line_index = min(len(text), start_line) - 1
+            line_text = text[safe_line_index] if 0 <= safe_line_index < len(text) else ""
+            line_len = len(line_text)
+            start_col = max(1, min(line_len + 1, int(exc.col_offset or 0) + 1))
+            end_line = max(start_line, int(exc.end_lineno or start_line))
+            end_col = int(exc.end_col_offset or 0) + 1
+            if end_line == start_line:
+                end_col = max(start_col + 1, min(line_len + 1, end_col))
+            else:
+                end_col = max(1, end_col)
+            return FilterExpressionValidateResponse(
+                ok=False,
+                normalized_expression=str(expression),
+                error=str(exc),
+                marker=FilterExpressionValidationMarker(
+                    start_line_number=start_line,
+                    start_column=start_col,
+                    end_line_number=end_line,
+                    end_column=end_col,
+                ),
+            )
+
+        return FilterExpressionValidateResponse(
+            ok=True,
+            normalized_expression=compiled.source,
+            error=None,
+            marker=None,
+        )
 
     @app.post("/api/pipelines/compile", response_model=PipelineCompileResponse)
     async def compile_pipeline_graph(request: Request, body: PipelineCompileRequest) -> PipelineCompileResponse:

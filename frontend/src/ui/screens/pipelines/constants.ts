@@ -245,6 +245,23 @@ export function buildArtifactSuggestions(t: TranslateFn): SelectOption[] {
   return ARTIFACT_SUGGESTION_DEFS.map((item) => ({ value: item.value, label: t(item.labelKey, {}, item.fallback) }));
 }
 
+const PACKET_ARTIFACT_SUGGESTION_DEFS: Array<{ value: string; labelKey: string; fallback: string }> = [
+  { value: "frame", labelKey: "core.ui.pipelines.artifacts.frame", fallback: "Frame" },
+  { value: "frame_original", labelKey: "core.ui.pipelines.artifacts.frame_original", fallback: "Full frame" },
+  { value: "best_frame", labelKey: "core.ui.pipelines.artifacts.best_frame", fallback: "Best frame" },
+  { value: "segmented", labelKey: "core.ui.pipelines.artifacts.segmented", fallback: "Segmented" },
+  { value: "face", labelKey: "core.ui.pipelines.artifacts.face", fallback: "Face" },
+  { value: "pose", labelKey: "core.ui.pipelines.artifacts.pose", fallback: "Pose" },
+  { value: "mask", labelKey: "", fallback: "Mask" },
+];
+
+export function buildPacketArtifactSuggestions(t: TranslateFn): SelectOption[] {
+  return PACKET_ARTIFACT_SUGGESTION_DEFS.map((item) => ({
+    value: item.value,
+    label: item.labelKey ? t(item.labelKey, {}, item.fallback) : item.fallback,
+  }));
+}
+
 const WEEKDAY_DEFS: Array<{ value: string; labelKey: string; fallback: string }> = [
   { value: "mon", labelKey: "core.ui.pipelines.weekday.mon", fallback: "Mon" },
   { value: "tue", labelKey: "core.ui.pipelines.weekday.tue", fallback: "Tue" },

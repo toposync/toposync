@@ -17,7 +17,11 @@ from toposync.runtime.pipelines.images import (
     resolve_image_artifact_name,
     set_image_key,
 )
-from toposync.runtime.pipelines.operator_registry import OperatorRegistry
+from toposync.runtime.pipelines.operator_registry import (
+    OperatorRegistry,
+    artifact_name_hint,
+    payload_path_hint,
+)
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts, resolve_source_device_id
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync.runtime.services import ServiceRegistry
@@ -34,6 +38,89 @@ from ..processing.mapping import (
     normalize_move_status,
     select_control_point_set,
 )
+
+
+def _artifact_contract_expression_hints(*, default_artifact_name: str | None = None) -> list[Any]:
+    hints: list[Any] = [
+        payload_path_hint("payload.artifact_contract", value_type="object", description="Artifact selection contract for downstream operators."),
+        payload_path_hint(
+            "payload.artifact_contract.available_artifact_names",
+            value_type="array",
+            description="Artifact names currently present on the packet.",
+        ),
+        payload_path_hint(
+            "payload.artifact_contract.preferred_input_artifact_names",
+            value_type="array",
+            description="Configured preferred artifact names for upstream image selection.",
+        ),
+        payload_path_hint(
+            "payload.artifact_contract.selected_input_artifact_name",
+            value_type="string",
+            description="Artifact name selected as input by the operator.",
+        ),
+        payload_path_hint("payload.artifact_names", value_type="array", description="Artifact names available after this operator runs."),
+        payload_path_hint("payload.artifact_names[0]", value_type="string", description="First artifact name available after this operator runs."),
+    ]
+    if default_artifact_name:
+        hints.append(artifact_name_hint(default_artifact_name, description="Default output artifact name for the operator."))
+    return hints
+
+
+def _frame_crop_expression_hints() -> list[Any]:
+    return [
+        payload_path_hint("payload.frame_crop", value_type="object", description="Crop metadata for the generated frame artifact."),
+        payload_path_hint("payload.frame_crop.bbox01", value_type="array", description="Configured normalized crop rectangle."),
+        payload_path_hint("payload.frame_crop.bbox01_current", value_type="array", description="Normalized crop rectangle applied to the current frame."),
+        payload_path_hint("payload.frame_crop.units", value_type="string", description="Units used to interpret crop values."),
+        payload_path_hint("payload.frame_crop.output_artifact_name", value_type="string", description="Artifact name emitted by the crop operator."),
+        payload_path_hint("payload.frame_crop.set_stream_frame", value_type="boolean", description="Whether the cropped artifact becomes the stream frame."),
+    ]
+
+
+def _frame_warp_expression_hints() -> list[Any]:
+    return [
+        payload_path_hint("payload.frame_warp", value_type="object", description="Perspective warp metadata for the generated artifact."),
+        payload_path_hint("payload.frame_warp.source_frame_width", value_type="number", description="Source frame width before the warp."),
+        payload_path_hint("payload.frame_warp.source_frame_height", value_type="number", description="Source frame height before the warp."),
+        payload_path_hint("payload.frame_warp.dest_frame_width", value_type="number", description="Output frame width after the warp."),
+        payload_path_hint("payload.frame_warp.dest_frame_height", value_type="number", description="Output frame height after the warp."),
+        payload_path_hint("payload.frame_warp.output_artifact_name", value_type="string", description="Artifact name emitted by the perspective crop."),
+        payload_path_hint("payload.frame_warp.set_stream_frame", value_type="boolean", description="Whether the warped artifact becomes the stream frame."),
+    ]
+
+
+def _world_mapping_expression_hints() -> list[Any]:
+    return [
+        payload_path_hint("payload.world", value_type="object", description="World-space coordinates mapped from the image plane."),
+        payload_path_hint("payload.world.x", value_type="number", description="Mapped world X coordinate."),
+        payload_path_hint("payload.world.z", value_type="number", description="Mapped world Z coordinate."),
+        payload_path_hint("payload.mapping", value_type="object", description="Mapping metadata produced alongside world coordinates."),
+    ]
+
+
+def _area_restriction_expression_hints() -> list[Any]:
+    return [
+        payload_path_hint("payload.area_label", value_type="string", description="Primary matched world area label."),
+        payload_path_hint("payload.area_labels", value_type="array", description="All matched world area labels."),
+        payload_path_hint("payload.area_labels[0]", value_type="string", description="First matched world area label."),
+    ]
+
+
+def _velocity_expression_hints() -> list[Any]:
+    return [
+        payload_path_hint("payload.velocity", value_type="object", description="Velocity estimate derived from world coordinates."),
+        payload_path_hint("payload.velocity.speed", value_type="number", description="Velocity magnitude in native operator units."),
+        payload_path_hint("payload.velocity.speed_mps", value_type="number", description="Velocity magnitude in meters per second."),
+        payload_path_hint("payload.velocity.speed_kmh", value_type="number", description="Velocity magnitude in kilometers per hour."),
+        payload_path_hint("payload.velocity.distance", value_type="number", description="Accumulated travel distance in native operator units."),
+        payload_path_hint("payload.velocity.distance_m", value_type="number", description="Accumulated travel distance in meters."),
+        payload_path_hint("payload.velocity.elapsed_seconds", value_type="number", description="Elapsed time used for the current estimate."),
+        payload_path_hint("payload.velocity.moving", value_type="boolean", description="Whether the tracked object is moving."),
+        payload_path_hint("payload.velocity.stopped", value_type="boolean", description="Whether the tracked object is considered stopped."),
+        payload_path_hint("payload.velocity.valid", value_type="boolean", description="Whether the current velocity estimate is valid."),
+        payload_path_hint("payload.velocity.ever_stopped", value_type="boolean", description="Whether the tracked object has ever been stopped."),
+        payload_path_hint("payload.velocity.reason", value_type="string", description="Reason or status message for the current estimate."),
+    ]
 
 
 class ObjectCropConfig(BaseModel):
@@ -3439,6 +3526,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         requires_artifacts=["frame_original"],
         produces_payload_keys=["artifact_contract", "artifact_names"],
         produces_artifacts=["segmented"],
+        expression_hints=_artifact_contract_expression_hints(default_artifact_name="segmented"),
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: ObjectCropRuntime(config),
@@ -3454,6 +3542,10 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         requires_artifacts=["frame_original"],
         produces_payload_keys=["frame_crop", "artifact_contract", "artifact_names"],
         produces_artifacts=["frame"],
+        expression_hints=[
+            *_artifact_contract_expression_hints(default_artifact_name="frame"),
+            *_frame_crop_expression_hints(),
+        ],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, deps: ImageCropRuntime(config, deps),
@@ -3470,6 +3562,10 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         requires_artifacts=["frame_original"],
         produces_payload_keys=["frame_warp", "artifact_contract", "artifact_names"],
         produces_artifacts=["frame"],
+        expression_hints=[
+            *_artifact_contract_expression_hints(default_artifact_name="frame"),
+            *_frame_warp_expression_hints(),
+        ],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, deps: ImagePerspectiveCropRuntime(config, deps),
@@ -3486,6 +3582,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         requires_artifacts=["frame_original"],
         produces_payload_keys=["artifact_contract", "artifact_names"],
         produces_artifacts=["frame"],
+        expression_hints=_artifact_contract_expression_hints(default_artifact_name="frame"),
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: ImageAdjustRuntime(config),
@@ -3502,6 +3599,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         requires_artifacts=["frame_original"],
         produces_payload_keys=["artifact_contract", "artifact_names"],
         produces_artifacts=["frame"],
+        expression_hints=_artifact_contract_expression_hints(default_artifact_name="frame"),
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: LocalContrastCLAHERuntime(config),
@@ -3518,6 +3616,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         requires_artifacts=["frame_original"],
         produces_payload_keys=["artifact_contract", "artifact_names"],
         produces_artifacts=["frame"],
+        expression_hints=_artifact_contract_expression_hints(default_artifact_name="frame"),
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: UnsharpMaskRuntime(config),
@@ -3534,6 +3633,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         requires_artifacts=["frame_original"],
         produces_payload_keys=["artifact_contract", "artifact_names"],
         produces_artifacts=["frame"],
+        expression_hints=_artifact_contract_expression_hints(default_artifact_name="frame"),
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: DenoiseLumaRuntime(config),
@@ -3550,6 +3650,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         requires_artifacts=["frame_original"],
         produces_payload_keys=["artifact_contract", "artifact_names"],
         produces_artifacts=["frame"],
+        expression_hints=_artifact_contract_expression_hints(default_artifact_name="frame"),
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: AutoGammaRuntime(config),
@@ -3566,6 +3667,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         requires_artifacts=["frame_original"],
         produces_payload_keys=["artifact_contract", "artifact_names"],
         produces_artifacts=["frame"],
+        expression_hints=_artifact_contract_expression_hints(default_artifact_name="frame"),
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: GlobalStabilizeRuntime(config),
@@ -3582,6 +3684,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         requires_artifacts=["frame_original"],
         produces_payload_keys=["artifact_contract", "artifact_names"],
         produces_artifacts=["frame"],
+        expression_hints=_artifact_contract_expression_hints(default_artifact_name="frame"),
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: LensUndistortRuntime(config),
@@ -3610,6 +3713,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         defaults=CameraMappingConfig().model_dump(),
         requires_payload_keys=["camera_id", "object_bbox01"],
         produces_payload_keys=["world", "mapping"],
+        expression_hints=_world_mapping_expression_hints(),
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, deps: CameraMappingRuntime(config, deps),
@@ -3624,6 +3728,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         defaults=AreaRestrictionConfig().model_dump(),
         requires_payload_keys=["world"],
         produces_payload_keys=["area_label", "area_labels"],
+        expression_hints=_area_restriction_expression_hints(),
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: AreaRestrictionRuntime(config),
@@ -3638,6 +3743,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         defaults=VelocityEstimationConfig().model_dump(),
         requires_payload_keys=["world", "frame_ts"],
         produces_payload_keys=["velocity"],
+        expression_hints=_velocity_expression_hints(),
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: VelocityEstimationRuntime(config),
@@ -3653,6 +3759,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         requires_artifacts=["frame_original"],
         produces_payload_keys=["artifact_contract", "artifact_names"],
         produces_artifacts=["best_frame"],
+        expression_hints=_artifact_contract_expression_hints(default_artifact_name="best_frame"),
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: BestFrameSelectorRuntime(config),

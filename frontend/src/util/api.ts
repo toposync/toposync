@@ -244,6 +244,8 @@ export type ProcessingServerVisionManifestImportResponse = {
 
 export type ProcessingServerVisionModelInstallRequest = {
   force?: boolean;
+  mode?: string;
+  acknowledge_upstream_terms?: boolean;
 };
 
 export type ProcessingServerVisionModelInstallResponse = {
@@ -324,6 +326,16 @@ export type PipelineOperatorPort = {
   description: string;
 };
 
+export type PipelineOperatorExpressionHint = {
+  kind: "payload_path" | "metadata_path" | "artifact_name";
+  path?: string | null;
+  value?: string | null;
+  type?: string;
+  description?: string;
+  examples?: string[];
+  enum_values?: string[];
+};
+
 export type PipelineOperatorDefinition = {
   id: string;
   description: string;
@@ -343,6 +355,21 @@ export type PipelineOperatorDefinition = {
   produces_media_fields?: string[];
   input_modalities?: string[];
   output_modalities?: string[];
+  expression_hints?: PipelineOperatorExpressionHint[];
+};
+
+export type FilterExpressionValidationMarker = {
+  start_line_number: number;
+  start_column: number;
+  end_line_number: number;
+  end_column: number;
+};
+
+export type FilterExpressionValidateResponse = {
+  ok: boolean;
+  normalized_expression: string;
+  error?: string | null;
+  marker?: FilterExpressionValidationMarker | null;
 };
 
 export type HomeAssistantServerInfo = {
@@ -1082,6 +1109,23 @@ export async function listPipelineOperators(): Promise<PipelineOperatorDefinitio
   if (!res.ok) throw new Error(`Failed to list pipeline operators: ${res.status}`);
   const body = (await res.json()) as { operators?: PipelineOperatorDefinition[] };
   return body.operators ?? [];
+}
+
+export async function validateFilterExpression(
+  expression: string,
+  options?: { signal?: AbortSignal },
+): Promise<FilterExpressionValidateResponse> {
+  const res = await fetch("/api/pipelines/filter-expression/validate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expression }),
+    signal: options?.signal,
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail || `Failed to validate filter expression: ${res.status}`);
+  }
+  return (await res.json()) as FilterExpressionValidateResponse;
 }
 
 export async function listHomeAssistantServers(): Promise<HomeAssistantServerInfo[]> {

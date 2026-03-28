@@ -260,11 +260,12 @@ export function InteractiveStepCard({
             step={step}
             index={index}
             steps={steps}
+            operatorsById={operatorsById}
             config={config}
             pipelineName={pipelineName}
-                processingServerId={processingServerId}
-                onOpenProcessingServers={onOpenProcessingServers}
-                interactiveCameraId={interactiveCameraId}
+            processingServerId={processingServerId}
+            onOpenProcessingServers={onOpenProcessingServers}
+            interactiveCameraId={interactiveCameraId}
             cameraSelectOptions={cameraSelectOptions}
             cameraSelectOptionById={cameraSelectOptionById}
             activeCameraContexts={activeCameraContexts}

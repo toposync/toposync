@@ -12,12 +12,16 @@ from .runtime import (
     QueueOperationStatus,
 )
 from .operator_registry import (
+    ExpressionHint,
     OperatorConfigValidationError,
     OperatorDefinition,
     OperatorPort,
     OperatorRegistrationError,
     OperatorRegistry,
+    artifact_name_hint,
     create_config_model,
+    metadata_path_hint,
+    payload_path_hint,
 )
 from .compiler import (
     CompilationReport,
@@ -60,11 +64,15 @@ __all__ = [
     "Packet",
     "QueueOperationStatus",
     "OperatorConfigValidationError",
+    "ExpressionHint",
     "OperatorDefinition",
     "OperatorPort",
     "OperatorRegistrationError",
     "OperatorRegistry",
+    "artifact_name_hint",
     "create_config_model",
+    "metadata_path_hint",
+    "payload_path_hint",
     "CompilationReport",
     "CompiledEdge",
     "CompiledNode",

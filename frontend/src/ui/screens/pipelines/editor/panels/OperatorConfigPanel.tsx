@@ -1,6 +1,6 @@
 import React from "react";
 
-import type { CameraContextsResponse } from "../../../../../util/api";
+import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../../../../util/api";
 
 import type { CameraAreaOption, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
 
@@ -39,6 +39,7 @@ type Props = {
   step: InteractiveStep;
   index: number;
   steps: InteractiveStep[];
+  operatorsById: Record<string, PipelineOperatorDefinition>;
   config: Record<string, unknown>;
   pipelineName: string | null;
   processingServerId: string;
@@ -60,6 +61,7 @@ export function OperatorConfigPanel({
   step,
   index,
   steps,
+  operatorsById,
   config,
   pipelineName,
   processingServerId,
@@ -112,7 +114,7 @@ export function OperatorConfigPanel({
     return <CategoryGateConfigCard config={config} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "core.filter") {
-    return <FilterConfigCard config={config} onUpdateConfig={onUpdateConfig} />;
+    return <FilterConfigCard config={config} steps={steps} index={index} operatorsById={operatorsById} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "camera.camera_mapping") {
     return (

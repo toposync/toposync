@@ -641,8 +641,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.filter.preset.has_artifact.label": "Has artifact",
     "core.ui.pipelines.panels.filter.preset.has_artifact.hint": "Requires at least one artifact name to be present.",
     "core.ui.pipelines.panels.filter.expression": "Expression",
+    "core.ui.pipelines.panels.filter.expression_autocomplete_hint":
+      "Press Ctrl+Space to insert safe names, operators, and artifact checks.",
     "core.ui.pipelines.panels.filter.expression_hint":
       "Available names: payload, metadata, stream_id, lifecycle, artifacts. No function calls; only boolean logic, comparisons, and literals.",
+    "core.ui.pipelines.panels.filter.expression_validation_unavailable": "Validation unavailable: {{error}}",
     "core.ui.pipelines.panels.filter.categories": "Categories",
     "core.ui.pipelines.panels.filter.categories_placeholder": "All categories",
     "core.ui.pipelines.panels.filter.lifecycles": "Lifecycles",
@@ -1971,8 +1974,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.filter.preset.has_artifact.label": "Possui artefato",
     "core.ui.pipelines.panels.filter.preset.has_artifact.hint": "Requer ao menos um nome de artefato presente.",
     "core.ui.pipelines.panels.filter.expression": "Expressão",
+    "core.ui.pipelines.panels.filter.expression_autocomplete_hint":
+      "Pressione Ctrl+Espaço para inserir nomes seguros, operadores e verificações de artefato.",
     "core.ui.pipelines.panels.filter.expression_hint":
       "Nomes disponíveis: payload, metadata, stream_id, lifecycle, artifacts. Sem chamadas de função; apenas lógica booleana, comparações e literais.",
+    "core.ui.pipelines.panels.filter.expression_validation_unavailable": "Validação indisponível: {{error}}",
     "core.ui.pipelines.panels.filter.categories": "Categorias",
     "core.ui.pipelines.panels.filter.categories_placeholder": "Todas as categorias",
     "core.ui.pipelines.panels.filter.lifecycles": "Lifecycles",

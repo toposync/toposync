@@ -43,6 +43,14 @@ class _PipelineExtension:
             capabilities=["source"],
             defaults={"fps": 8},
             description="Fake camera source from extension",
+            expression_hints=[
+                {
+                    "kind": "payload_path",
+                    "path": "payload.fake_frame_rate",
+                    "type": "number",
+                    "description": "Synthetic frame-rate field from the extension contract.",
+                }
+            ],
             owner="com.test.pipeline_ext",
         )
 
@@ -62,6 +70,18 @@ def test_extension_operator_registration_and_graph_validation(tmp_path: Path, mo
         operators = operators_res.json()["operators"]
         operator_ids = {str(item.get("id") or "") for item in operators}
         assert "test.camera_source" in operator_ids
+        hinted_operator = next(item for item in operators if item.get("id") == "test.camera_source")
+        assert hinted_operator["expression_hints"] == [
+            {
+                "kind": "payload_path",
+                "path": "payload.fake_frame_rate",
+                "value": None,
+                "type": "number",
+                "description": "Synthetic frame-rate field from the extension contract.",
+                "examples": [],
+                "enum_values": [],
+            }
+        ]
 
         valid_pipeline = {
             "name": "camera_pipeline",

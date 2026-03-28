@@ -112,7 +112,7 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     assert isinstance(vision["install_jobs"], list)
     assert isinstance(vision["last_benchmark"], dict)
     assert vision["last_benchmark"]["model_id"] == "constant.detector"
-    assert isinstance(diagnostics["cameras"].get("legacy_yolo"), dict)
+    assert "legacy_yolo" not in diagnostics["cameras"]
 
 
 def test_collect_vision_extension_diagnostics_keeps_local_builder_on_failure(monkeypatch) -> None:  # noqa: ANN001

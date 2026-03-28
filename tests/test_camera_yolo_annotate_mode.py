@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 
 def test_yolo_detection_operator_annotate_mode_passes_through_frames() -> None:
     async def scenario() -> None:
@@ -22,8 +24,12 @@ def test_yolo_detection_operator_annotate_mode_passes_through_frames() -> None:
                 _ = kwargs
                 return func(*args)
 
-        deps = PipelineRuntimeDependencies(yolo_backend_factory=lambda config: _Backend())
-        runtime = ObjectDetectionYOLORuntime({"emit_mode": "annotate"}, deps)
+        deps = PipelineRuntimeDependencies()
+        runtime = ObjectDetectionYOLORuntime(
+            {"emit_mode": "annotate"},
+            deps,
+            backend_factory=lambda _config: _Backend(),
+        )
         packet = Packet.create(
             stream_id="camera:test",
             payload={"frame_width": 200, "frame_height": 100},
@@ -66,8 +72,12 @@ def test_yolo_detection_operator_annotate_mode_emits_even_without_detections() -
                 _ = kwargs
                 return func(*args)
 
-        deps = PipelineRuntimeDependencies(yolo_backend_factory=lambda config: _Backend())
-        runtime = ObjectDetectionYOLORuntime({"emit_mode": "annotate"}, deps)
+        deps = PipelineRuntimeDependencies()
+        runtime = ObjectDetectionYOLORuntime(
+            {"emit_mode": "annotate"},
+            deps,
+            backend_factory=lambda _config: _Backend(),
+        )
         packet = Packet.create(
             stream_id="camera:test",
             payload={"frame_width": 200, "frame_height": 100},
@@ -105,8 +115,12 @@ def test_yolo_tracking_operator_annotate_mode_passes_through_frames() -> None:
                 _ = kwargs
                 return func(*args)
 
-        deps = PipelineRuntimeDependencies(yolo_backend_factory=lambda config: _Backend())
-        runtime = ObjectTrackingYOLORuntime({"emit_mode": "annotate"}, deps)
+        deps = PipelineRuntimeDependencies()
+        runtime = ObjectTrackingYOLORuntime(
+            {"emit_mode": "annotate"},
+            deps,
+            backend_factory=lambda _config: _Backend(),
+        )
         packet = Packet.create(
             stream_id="camera:test",
             payload={"frame_width": 200, "frame_height": 100},
@@ -129,5 +143,28 @@ def test_yolo_tracking_operator_annotate_mode_passes_through_frames() -> None:
         assert isinstance(objects, list)
         assert len(objects) == 1
         assert objects[0].get("tracker_track_id") == "1"
+
+    asyncio.run(scenario())
+
+
+def test_legacy_yolo_runtime_requires_explicit_backend_factory() -> None:
+    async def scenario() -> None:
+        from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+        from toposync.runtime.pipelines.runtime import Artifact, Packet
+        from toposync_ext_cameras.pipelines.operators import ObjectDetectionYOLORuntime
+
+        class _Context:
+            async def run_blocking(self, func, /, *args, **kwargs):  # noqa: ANN001
+                _ = kwargs
+                return func(*args)
+
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={"frame_width": 200, "frame_height": 100},
+            artifacts={"frame_original": Artifact(name="frame_original", data=object(), mime_type="image/raw")},
+        )
+        runtime = ObjectDetectionYOLORuntime({"emit_mode": "annotate"}, PipelineRuntimeDependencies())
+        with pytest.raises(RuntimeError, match="no longer ship with a first-party Ultralytics backend"):
+            await runtime.process_packet(packet, _Context())
 
     asyncio.run(scenario())

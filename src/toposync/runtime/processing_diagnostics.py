@@ -66,83 +66,6 @@ def _collect_memory_info() -> dict[str, Any]:
     return info
 
 
-def collect_torch_info() -> dict[str, Any]:
-    info: dict[str, Any] = {
-        "imported": False,
-        "torch_version": "",
-        "cuda_version": "",
-        "hip_version": "",
-        "cuda_available": False,
-        "cuda_device_count": 0,
-        "cuda_devices": [],
-        "mps_available": False,
-        "mps_built": False,
-    }
-    try:
-        import torch  # type: ignore
-    except Exception as exc:  # noqa: BLE001
-        info["error"] = str(exc)
-        return info
-
-    info["imported"] = True
-    info["torch_version"] = str(getattr(torch, "__version__", "") or "")
-
-    version = getattr(torch, "version", None)
-    info["cuda_version"] = str(getattr(version, "cuda", "") or "")
-    info["hip_version"] = str(getattr(version, "hip", "") or "")
-
-    try:
-        cuda_available = bool(torch.cuda.is_available())
-    except Exception:
-        cuda_available = False
-    info["cuda_available"] = cuda_available
-
-    if cuda_available:
-        try:
-            count = int(torch.cuda.device_count())
-        except Exception:
-            count = 0
-        info["cuda_device_count"] = max(0, count)
-        devices: list[str] = []
-        for idx in range(max(0, count)):
-            try:
-                devices.append(str(torch.cuda.get_device_name(idx)))
-            except Exception:
-                devices.append(f"cuda:{idx}")
-        info["cuda_devices"] = devices
-
-    try:
-        mps_backend = getattr(getattr(torch, "backends", None), "mps", None)
-        info["mps_available"] = bool(mps_backend and mps_backend.is_available())
-        info["mps_built"] = bool(mps_backend and mps_backend.is_built())
-    except Exception:
-        info["mps_available"] = False
-        info["mps_built"] = False
-
-    return info
-
-
-def _clean_device(value: str | None) -> str | None:
-    raw = str(value).strip() if value is not None else ""
-    if not raw:
-        return None
-    low = raw.lower()
-    if low in {"", "none", "null", "auto", "default"}:
-        return None
-    return raw
-
-
-def recommend_yolo_device(torch_info: dict[str, Any], *, device_env: str | None) -> dict[str, str]:
-    explicit = _clean_device(device_env)
-    if explicit is not None:
-        return {"device": explicit, "reason": "env_override"}
-    if bool(torch_info.get("cuda_available")):
-        return {"device": "cuda:0", "reason": "torch_cuda_available"}
-    if bool(torch_info.get("mps_available")):
-        return {"device": "mps", "reason": "torch_mps_available"}
-    return {"device": "cpu", "reason": "torch_cpu_fallback"}
-
-
 def collect_system_info() -> dict[str, Any]:
     return {
         "collected_at_ts": float(time.time()),
@@ -183,29 +106,6 @@ def collect_camera_dependency_info() -> dict[str, Any]:
     return {
         "opencv": {"available": bool(opencv_available), "version": opencv_version},
         "ffmpeg": {"available": bool(ffmpeg_path), "path": ffmpeg_path, "version": ffmpeg_version},
-    }
-
-
-def collect_yolo_trackers_diagnostics(limit: int = 8) -> list[dict[str, Any]]:
-    try:
-        from toposync_ext_cameras.processing.yolo import registered_yolo_trackers_diagnostics  # type: ignore
-    except Exception:
-        return []
-    try:
-        items = registered_yolo_trackers_diagnostics(limit=limit)
-    except Exception:
-        return []
-    return list(items or [])
-
-
-def collect_legacy_camera_vision_diagnostics() -> dict[str, Any]:
-    torch_info = collect_torch_info()
-    device_env = str(os.getenv("TOPOSYNC_YOLO_DEVICE") or "")
-    return {
-        "torch": torch_info,
-        "device_env": device_env,
-        "device_recommended": recommend_yolo_device(torch_info, device_env=device_env),
-        "trackers": collect_yolo_trackers_diagnostics(limit=8),
     }
 
 
@@ -276,7 +176,6 @@ async def collect_processing_server_diagnostics(*, data_dir: str | None = None) 
     system_info = collect_system_info()
     vision_runtime = collect_vision_extension_diagnostics(system_info=system_info, data_dir=data_dir)
     cameras = collect_camera_dependency_info()
-    cameras["legacy_yolo"] = collect_legacy_camera_vision_diagnostics()
     hub = await collect_camera_hub_snapshot()
     if hub is not None:
         cameras["hub"] = hub

@@ -8,7 +8,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, replace
-from typing import Any, Literal, Protocol
+from typing import Any, Callable, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -39,7 +39,6 @@ from ..processing.camera_hub import CameraHub
 from ..processing.motion import MotionDetector
 from ..processing.motion_bgsub import AdaptiveBackgroundMotionDetector
 from ..processing.motion_sample_bg import SampleBackgroundMotionDetector
-from ..processing.yolo import YoloTracker
 from ..onvif import OnvifClient, OnvifError, OnvifProfile
 from ..settings import get_camera_device, get_primary_video_channel, normalize_cameras_settings
 from .postprocess import register_camera_postprocess_operators
@@ -1718,11 +1717,13 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         dependencies: PipelineRuntimeDependencies,
         *,
         operator_id: str,
+        backend_factory: Callable[[YoloBackendConfig], YoloBackend] | None = None,
     ) -> None:
         self._config = config
         self._dependencies = dependencies
         self._operator_id = str(operator_id or "").strip() or "vision.track"
         self._backend: YoloBackend | None = None
+        self._backend_factory = backend_factory
         self._categories_set = set(config.categories)
         self._last_inference_by_stream: dict[str, float] = {}
         self._last_emit_by_category: dict[str, float] = {}
@@ -1733,9 +1734,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
     def _ensure_backend(self) -> YoloBackend:
         if self._backend is not None:
             return self._backend
-        backend_factory = getattr(self._dependencies, "yolo_backend_factory", None)
-        if backend_factory is None:
-            backend_factory = _default_yolo_backend_factory
+        backend_factory = self._backend_factory or _default_yolo_backend_factory
         backend = backend_factory(
             YoloBackendConfig(
                 model_name=self._config.model_name,
@@ -1968,9 +1967,15 @@ class ObjectTrackingYOLORuntime(_BaseYoloRuntime):
         dependencies: PipelineRuntimeDependencies,
         *,
         operator_id: str = "vision.track",
+        backend_factory: Callable[[YoloBackendConfig], YoloBackend] | None = None,
     ) -> None:
         parsed = ObjectTrackingYOLOConfig.model_validate(config)
-        super().__init__(parsed, dependencies, operator_id=operator_id)
+        super().__init__(
+            parsed,
+            dependencies,
+            operator_id=operator_id,
+            backend_factory=backend_factory,
+        )
         self._parsed = parsed
         self._state_by_tracking_key: dict[str, _TrackingState] = {}
         self._synthetic_tracking_counter: int = 0
@@ -2412,9 +2417,15 @@ class ObjectDetectionYOLORuntime(_BaseYoloRuntime):
         dependencies: PipelineRuntimeDependencies,
         *,
         operator_id: str = "vision.detect",
+        backend_factory: Callable[[YoloBackendConfig], YoloBackend] | None = None,
     ) -> None:
         parsed = ObjectDetectionYOLOConfig.model_validate(config)
-        super().__init__(parsed, dependencies, operator_id=operator_id)
+        super().__init__(
+            parsed,
+            dependencies,
+            operator_id=operator_id,
+            backend_factory=backend_factory,
+        )
         self._parsed = parsed
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
@@ -2575,11 +2586,18 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
 
 
 def _default_yolo_backend_factory(config: YoloBackendConfig) -> YoloBackend:
-    return _UltralyticsYoloBackend(config)
+    _ = config
+    raise RuntimeError(
+        "Legacy camera YOLO runtimes no longer ship with a first-party Ultralytics backend. "
+        "Use the official vision.detect / vision.track operators, or provide an explicit "
+        "backend_factory from a separate vendor-specific package."
+    )
 
 
 class _UltralyticsYoloBackend:
     def __init__(self, config: YoloBackendConfig) -> None:
+        from ..processing.yolo import YoloTracker
+
         selected_device = config.device or None
         self._tracker = YoloTracker(
             model=config.model_name,

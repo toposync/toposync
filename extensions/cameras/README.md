@@ -40,6 +40,8 @@ Public vision operators are registered by the `com.toposync.vision` extension:
 - `vision.detect`
 - `vision.track`
 
+Legacy vendor-specific YOLO/Ultralytics runtimes are not part of the official first-party path in this extension. If you need one of those integrations in the future, ship it as a separate package and keep `vision.detect` / `vision.track` as the public operator contract.
+
 ## Dependencies
 
 - `ffmpeg` must be available in `PATH` for snapshot capture.

@@ -20,4 +20,6 @@ Alternative first-party bundles:
 - `toposync-vision-cuda` for NVIDIA CUDA environments
 - `toposync-vision-directml` for Windows DirectML environments
 
-For now, install `toposync-ext-streaming` separately when you want the streaming stack.
+Optional first-party add-on bundles:
+
+- `toposync-streaming` for the MediaMTX/FFmpeg streaming stack

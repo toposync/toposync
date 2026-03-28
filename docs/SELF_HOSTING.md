@@ -102,8 +102,10 @@ uv pip install ./packages/toposync-vision-cuda
 Para adicionar o stack de streaming:
 
 ```bash
-uv pip install toposync-ext-streaming
+uv pip install ./packages/toposync-streaming
 ```
+
+Esse bundle instala `toposync` + `toposync-ext-streaming`. O runtime de streaming baixa o MediaMTX sob demanda quando a engine é iniciada, e o FFmpeg deve vir do `PATH` ou de `TOPOSYNC_STREAMING_FFMPEG_PATH`.
 
 Para instalar uma extensão extra de comunidade, basta instalar o pacote Python e reiniciar o backend:
 

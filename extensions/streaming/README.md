@@ -668,8 +668,9 @@ Debug:
 Publishers require `ffmpeg`.
 
 Current behavior:
-- Tries embedded FFmpeg first (if bundled).
+- Uses `TOPOSYNC_STREAMING_FFMPEG_PATH` when set.
 - Falls back to `ffmpeg` from `PATH`.
+- Only tries a packaged FFmpeg binary when a custom distribution explicitly ships one.
 
 Install system FFmpeg if needed:
 - macOS: `brew install ffmpeg`
@@ -703,9 +704,9 @@ Then run Toposync as usual (see repo `docs/DEVELOPMENT.md`).
 
 ## Licensing and packaging notes
 
-- MediaMTX binaries are bundled under `src/toposync_ext_streaming/bin/mediamtx/`
-  - License: [LICENSE.mediamtx](LICENSE.mediamtx)
-- FFmpeg integration is implemented. Bundling FFmpeg binaries is optional and must be handled carefully for redistribution.
+- Public wheels do not ship MediaMTX binaries. The extension downloads the correct release asset on demand and caches it under `runtime/streaming/mediamtx/<version>/<platform>/`.
+  - License notice: [LICENSE.mediamtx](LICENSE.mediamtx)
+- FFmpeg integration expects an external binary by default (`PATH` or `TOPOSYNC_STREAMING_FFMPEG_PATH`). Bundling FFmpeg binaries is optional and must be handled carefully for redistribution.
   - License placeholder: [LICENSE.ffmpeg](LICENSE.ffmpeg)
 
 If you plan to ship FFmpeg binaries, pay attention to LGPL/GPL build flags and codec licensing constraints depending on distribution model.

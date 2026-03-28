@@ -28,6 +28,14 @@ uv build packages/toposync
 
 Isso gera o pacote `toposync`, que depende de `toposync-core` + extensões padrão.
 
+Para gerar o bundle opcional de streaming:
+
+```bash
+uv build packages/toposync-streaming
+```
+
+Isso gera o pacote `toposync-streaming`, que depende do bundle padrão `toposync` + `toposync-ext-streaming`.
+
 ## Bundles alternativos de aceleração
 
 Para gerar os bundles first-party de aceleração opcional:
@@ -63,6 +71,7 @@ uv build extensions/models
 uv build extensions/home_assistant
 uv build extensions/cameras
 uv build extensions/images
+uv build extensions/streaming
 ```
 
 Isso gera `extensions/<ext>/dist/*.whl`. Usuário final instala só o wheel (sem Node) e o app carrega o frontend prebuilt.

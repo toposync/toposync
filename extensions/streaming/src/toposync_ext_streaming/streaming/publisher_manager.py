@@ -16,8 +16,7 @@ from typing import Any, Literal
 import numpy
 
 from . import FFMPEG_VERSION
-from .ffmpeg_binary import extract_ffmpeg_binary
-from .platform import detect_ffmpeg_platform
+from .ffmpeg_binary import resolve_ffmpeg_binary
 
 
 LOGGER = logging.getLogger("toposync.extensions.streaming.publisher")
@@ -530,39 +529,12 @@ class PublisherManager:
         return self._ffmpeg_last_probe_error
 
     def probe_ffmpeg(self) -> str | None:
-        embedded_error: str | None = None
-
-        try:
-            platform_info = detect_ffmpeg_platform()
-            embedded_path = extract_ffmpeg_binary(
-                data_dir=self._data_dir,
-                platform=platform_info,
-                version=self._ffmpeg_version,
-            )
-            if embedded_path.is_file():
-                self._ffmpeg_path = str(embedded_path)
-                self._ffmpeg_source = "embedded"
-            else:
-                embedded_error = "embedded FFmpeg binary is not a file"
-        except Exception as exc:
-            embedded_error = str(exc)
+        resolved = resolve_ffmpeg_binary(data_dir=self._data_dir, version=self._ffmpeg_version)
+        self._ffmpeg_path = str(resolved.path).strip() if resolved.path is not None else None
+        self._ffmpeg_source = str(resolved.source).strip() if resolved.source else None
 
         if self._ffmpeg_path is None:
-            system_path = shutil.which("ffmpeg")
-            if system_path:
-                self._ffmpeg_path = str(system_path).strip()
-                self._ffmpeg_source = "system"
-            else:
-                self._ffmpeg_source = None
-
-        if self._ffmpeg_path is None:
-            if embedded_error:
-                self._ffmpeg_last_probe_error = (
-                    "ffmpeg executable not found (embedded unavailable and PATH fallback failed). "
-                    f"embedded_error={embedded_error}"
-                )
-            else:
-                self._ffmpeg_last_probe_error = "ffmpeg executable not found in PATH"
+            self._ffmpeg_last_probe_error = resolved.error
             self._ffmpeg_supported_encoders.clear()
             return None
 

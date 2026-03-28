@@ -171,6 +171,7 @@ def _catalog_entry(
     *,
     task: VisionTask,
     profile: ProfileId,
+    system_info: dict[str, Any] | None,
     execution_providers: list[str] | None,
     recommended_index: int | None,
     install_manager: VisionModelInstallManager | None,
@@ -181,12 +182,17 @@ def _catalog_entry(
     )
     official = is_official_model_id(manifest.model_id)
     install_info = (
-        install_manager.acquisition_info(manifest)
+        install_manager.acquisition_info(manifest, system_info=system_info)
         if isinstance(install_manager, VisionModelInstallManager)
         else {
             "acquisition_mode": str(getattr(getattr(manifest, "acquisition", None), "mode", "guided_upload") or "guided_upload"),
             "acquisition_supported": False,
-            "acquisition_reason": "guided_upload_ready",
+            "acquisition_reason": (
+                "local_build_info_only"
+                if str(getattr(getattr(manifest, "acquisition", None), "mode", "guided_upload") or "guided_upload").strip().lower()
+                == "local_build_assisted"
+                else "guided_upload_ready"
+            ),
             "acquisition_source_kind": "",
             "acquisition_source_label": "",
             "acquisition_job": None,
@@ -195,6 +201,11 @@ def _catalog_entry(
             "install_source_kind": "",
             "install_source_label": "",
             "install_job": None,
+            "local_build_supported": False,
+            "local_build_reason": "",
+            "local_build_backend": "",
+            "local_build_runtime": "",
+            "local_build_source_label": "",
         }
     )
     return {
@@ -230,12 +241,24 @@ def _catalog_entry(
             "guide_url": manifest.acquisition.guide_url,
             "export_guide_url": manifest.acquisition.export_guide_url,
             "source_url": manifest.acquisition.source_url,
+            "checkpoint_url": manifest.acquisition.checkpoint_url,
+            "config_url": manifest.acquisition.config_url,
+            "metafile_url": manifest.acquisition.metafile_url,
+            "paper_url": manifest.acquisition.paper_url,
+            "builder_backend": manifest.acquisition.builder_backend,
+            "supported_platforms": list(manifest.acquisition.supported_platforms or []),
+            "explicit_consent_required": bool(manifest.acquisition.explicit_consent_required),
         },
         "install_supported": bool(install_info.get("install_supported")),
         "install_reason": str(install_info.get("install_reason") or "").strip(),
         "install_source_kind": str(install_info.get("install_source_kind") or "").strip(),
         "install_source_label": str(install_info.get("install_source_label") or "").strip(),
         "install_job": install_info.get("install_job"),
+        "local_build_supported": bool(install_info.get("local_build_supported")),
+        "local_build_reason": str(install_info.get("local_build_reason") or "").strip(),
+        "local_build_backend": str(install_info.get("local_build_backend") or "").strip(),
+        "local_build_runtime": str(install_info.get("local_build_runtime") or "").strip(),
+        "local_build_source_label": str(install_info.get("local_build_source_label") or "").strip(),
         "input": {
             "width": int(manifest.input.width),
             "height": int(manifest.input.height),
@@ -280,6 +303,7 @@ def build_task_model_catalog(
                 manifest,
                 task=task,
                 profile=profile,
+                system_info=system_info,
                 execution_providers=execution_providers,
                 recommended_index=recommended_index,
                 install_manager=install_manager,

@@ -36,11 +36,21 @@ class VisionExtension(BaseExtension):
             *,
             model_id: str,
             force: bool = False,
+            mode: str | None = None,
+            acknowledge_upstream_terms: bool = False,
+            requested_by: dict[str, Any] | None = None,
             data_dir: str | None = None,
         ) -> dict[str, Any]:
             manager = get_default_model_install_manager(data_dir=(data_dir or configured_data_dir))
             registry = build_default_model_registry()
-            return manager.start_install(model_id=model_id, force=force, model_registry=registry)
+            return manager.start_install(
+                model_id=model_id,
+                force=force,
+                mode=mode,
+                acknowledge_upstream_terms=acknowledge_upstream_terms,
+                requested_by=requested_by,
+                model_registry=registry,
+            )
 
         async def _list_model_install_jobs(*, data_dir: str | None = None) -> list[dict[str, Any]]:
             manager = get_default_model_install_manager(data_dir=(data_dir or configured_data_dir))

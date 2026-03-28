@@ -86,6 +86,43 @@ def _write_manifest(path: Path, *, artifact_path: Path, sha256: str) -> Path:
     return path
 
 
+def _write_local_build_manifest(path: Path, *, artifact_path: Path, sha256: str) -> Path:
+    payload = {
+        "model_id": "custom.detector.localbuild",
+        "display_name": "Local Build Custom Detector",
+        "task": "detection",
+        "runtime": "onnxruntime",
+        "artifact_format": "onnx",
+        "artifact_path": str(artifact_path),
+        "sha256": sha256,
+        "input": {
+            "width": 4,
+            "height": 4,
+            "layout": "nchw",
+            "color_order": "rgb",
+            "tensor_name": "images",
+            "normalization": {"mean": [0.0, 0.0, 0.0], "std": [1.0, 1.0, 1.0]},
+        },
+        "postprocess": {
+            "type": "generic_boxes",
+            "output_name": "boxes",
+            "box_format": "xyxy01",
+        },
+        "classes": {"source": "test", "labels": ["person"]},
+        "acquisition": {
+            "mode": "guided_upload",
+            "artifact_source": "checkpoint_export_required",
+            "checkpoint_url": "https://download.example.com/upstream/model.pth",
+            "config_url": "https://github.com/open-mmlab/mmdetection/blob/main/configs/rtmdet/rtmdet_tiny_8xb32-300e_coco.py",
+            "builder_backend": "container_local",
+            "supported_platforms": ["linux"],
+            "explicit_consent_required": True,
+        },
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 def test_install_processing_server_vision_model_from_configured_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -241,3 +278,193 @@ def test_upload_processing_server_vision_model_artifact_rejects_checkpoint_file(
             )
         assert upload_res.status_code == 400, upload_res.text
         assert "exported .onnx file" in upload_res.text
+
+
+def test_install_processing_server_vision_model_local_build_requires_acknowledgement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_model = tmp_path / "source" / "custom_detector_localbuild.onnx"
+    source_model.parent.mkdir(parents=True, exist_ok=True)
+    _write_constant_detection_model(source_model)
+    target_model = tmp_path / "installed" / "custom_detector_localbuild.onnx"
+    manifests_dir = tmp_path / "manifests"
+    manifests_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_build_manifest(
+        manifests_dir / "custom_detector_localbuild.json",
+        artifact_path=target_model,
+        sha256=_sha256(source_model),
+    )
+
+    monkeypatch.setenv("TOPOSYNC_VISION_MANIFESTS_DIR", str(manifests_dir))
+    monkeypatch.setattr(
+        "toposync_ext_vision.registry.installer.probe_local_builder",
+        lambda manifest, **kwargs: {
+            "supported": True,
+            "reason": "ok",
+            "backend": "container_local",
+            "container_runtime": "docker",
+        },
+    )
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        install_res = client.post(
+            "/api/processing-servers/local/vision/models/custom.detector.localbuild/install",
+            json={"mode": "local_build"},
+        )
+        assert install_res.status_code == 400, install_res.text
+        assert "explicit consent" in install_res.text.lower()
+
+
+def test_install_processing_server_vision_model_local_build_uses_builder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_model = tmp_path / "source" / "custom_detector_localbuild.onnx"
+    source_model.parent.mkdir(parents=True, exist_ok=True)
+    _write_constant_detection_model(source_model)
+    target_model = tmp_path / "installed" / "custom_detector_localbuild.onnx"
+    manifests_dir = tmp_path / "manifests"
+    manifests_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_build_manifest(
+        manifests_dir / "custom_detector_localbuild.json",
+        artifact_path=target_model,
+        sha256=_sha256(source_model),
+    )
+
+    monkeypatch.setenv("TOPOSYNC_VISION_MANIFESTS_DIR", str(manifests_dir))
+
+    monkeypatch.setattr(
+        "toposync_ext_vision.registry.installer.probe_local_builder",
+        lambda manifest, **kwargs: {
+            "supported": True,
+            "reason": "ok",
+            "backend": "container_local",
+            "container_runtime": "docker",
+        },
+    )
+
+    def _fake_run_local_builder(manifest, *, data_dir, job_id, requested_by=None, on_progress=None):  # noqa: ANN001
+        workspace_dir = Path(data_dir) / "fake-local-builds" / job_id
+        output_path = workspace_dir / "output" / "end2end.onnx"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_constant_detection_model(output_path)
+        if on_progress is not None:
+            on_progress({"status": "installing", "phase": "exporting_onnx", "progress_pct": 60.0})
+        return {
+            "workspace_dir": str(workspace_dir),
+            "output_path": str(output_path),
+        }
+
+    monkeypatch.setattr("toposync_ext_vision.registry.installer.run_local_builder", _fake_run_local_builder)
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        install_res = client.post(
+            "/api/processing-servers/local/vision/models/custom.detector.localbuild/install",
+            json={"mode": "local_build", "acknowledge_upstream_terms": True},
+        )
+        assert install_res.status_code == 200, install_res.text
+        install_body = install_res.json()
+        assert install_body["model_id"] == "custom.detector.localbuild"
+        assert install_body["source_kind"] == "local_build"
+        assert install_body["requested_by"]["username"] == "bypass"
+
+        deadline = time.time() + 5.0
+        last_status: dict[str, object] | None = None
+        model_item: dict[str, object] | None = None
+        while time.time() < deadline:
+            status_res = client.get("/api/processing-servers/local/status")
+            assert status_res.status_code == 200, status_res.text
+            status_body = status_res.json()
+            assert status_body["ok"] is True
+            detection_items = status_body["status"]["vision"]["task_catalogs"]["detection"]["items"]
+            model_item = next(item for item in detection_items if item["model_id"] == "custom.detector.localbuild")
+            last_status = model_item.get("install_job")
+            if model_item["artifact_exists"] is True and model_item["availability"] == "available":
+                assert model_item["local_build_supported"] is True
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError(f"local build did not complete in time; last job={last_status!r}")
+
+        assert isinstance(model_item, dict)
+        install_job = model_item["install_job"]
+        assert isinstance(install_job, dict)
+        assert install_job["requested_by"]["username"] == "bypass"
+        assert "https://download.example.com/upstream/model.pth" in list(install_job["accepted_source_labels"])
+        assert install_job["output_sha256"] == _sha256(source_model)
+        assert str(install_job["provenance_path"]).endswith(".json")
+        assert str(install_job["build_log_path"]).endswith(".log")
+        assert str(install_job["export_log_path"]).endswith(".log")
+        assert target_model.is_file()
+
+
+def test_install_processing_server_vision_model_local_build_reuses_active_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_model = tmp_path / "source" / "custom_detector_localbuild_locked.onnx"
+    source_model.parent.mkdir(parents=True, exist_ok=True)
+    _write_constant_detection_model(source_model)
+    target_model = tmp_path / "installed" / "custom_detector_localbuild_locked.onnx"
+    manifests_dir = tmp_path / "manifests"
+    manifests_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_build_manifest(
+        manifests_dir / "custom_detector_localbuild_locked.json",
+        artifact_path=target_model,
+        sha256=_sha256(source_model),
+    )
+
+    monkeypatch.setenv("TOPOSYNC_VISION_MANIFESTS_DIR", str(manifests_dir))
+    monkeypatch.setattr(
+        "toposync_ext_vision.registry.installer.probe_local_builder",
+        lambda manifest, **kwargs: {
+            "supported": True,
+            "reason": "ok",
+            "backend": "container_local",
+            "container_runtime": "docker",
+        },
+    )
+
+    def _fake_run_local_builder(manifest, *, data_dir, job_id, requested_by=None, on_progress=None):  # noqa: ANN001
+        workspace_dir = Path(data_dir) / "fake-local-builds" / job_id
+        output_path = workspace_dir / "output" / "end2end.onnx"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if on_progress is not None:
+            on_progress({"status": "installing", "phase": "preflight", "progress_pct": 10.0})
+        time.sleep(0.2)
+        _write_constant_detection_model(output_path)
+        if on_progress is not None:
+            on_progress({"status": "installing", "phase": "exporting_onnx", "progress_pct": 60.0})
+        return {
+            "workspace_dir": str(workspace_dir),
+            "output_path": str(output_path),
+        }
+
+    monkeypatch.setattr("toposync_ext_vision.registry.installer.run_local_builder", _fake_run_local_builder)
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        first = client.post(
+            "/api/processing-servers/local/vision/models/custom.detector.localbuild/install",
+            json={"mode": "local_build", "acknowledge_upstream_terms": True},
+        )
+        assert first.status_code == 200, first.text
+        second = client.post(
+            "/api/processing-servers/local/vision/models/custom.detector.localbuild/install",
+            json={"mode": "local_build", "acknowledge_upstream_terms": True},
+        )
+        assert second.status_code == 200, second.text
+        assert second.json()["job_id"] == first.json()["job_id"]
+
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            status_res = client.get("/api/processing-servers/local/status")
+            assert status_res.status_code == 200, status_res.text
+            status_body = status_res.json()
+            detection_items = status_body["status"]["vision"]["task_catalogs"]["detection"]["items"]
+            model_item = next(item for item in detection_items if item["model_id"] == "custom.detector.localbuild")
+            if model_item["artifact_exists"] is True and model_item["availability"] == "available":
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("reused local build job did not complete in time")

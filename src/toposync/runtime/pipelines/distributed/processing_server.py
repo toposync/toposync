@@ -56,6 +56,9 @@ class ProcessingVisionManifestImportRequest(BaseModel):
 
 class ProcessingVisionModelInstallRequest(BaseModel):
     force: bool = False
+    mode: str = ""
+    acknowledge_upstream_terms: bool = False
+    requested_by: dict[str, Any] = Field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -382,6 +385,9 @@ def create_processing_app() -> FastAPI:
                 "vision.model_install.start",
                 model_id=model_id,
                 force=bool(body.force),
+                mode=str(body.mode or "").strip(),
+                acknowledge_upstream_terms=bool(body.acknowledge_upstream_terms),
+                requested_by=dict(body.requested_by or {}),
                 data_dir=config_store.paths.data_dir,
             )
         except KeyError as exc:

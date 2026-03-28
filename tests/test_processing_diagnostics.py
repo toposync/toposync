@@ -4,7 +4,9 @@ import asyncio
 import json
 from pathlib import Path
 
+import toposync_ext_vision.processing as vision_processing
 from toposync.runtime.processing_diagnostics import collect_processing_server_diagnostics
+from toposync.runtime.processing_diagnostics import collect_vision_extension_diagnostics
 from toposync_ext_vision.processing.runtime_backends import OnnxRuntimeDetectorBackend
 from toposync_ext_vision.registry import build_default_model_registry
 
@@ -91,15 +93,30 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     assert isinstance(vision["task_catalogs"].get("detection"), dict)
     assert isinstance(vision["task_catalogs"].get("segmentation"), dict)
     assert isinstance(vision["task_catalogs"].get("pose"), dict)
+    assert isinstance(vision["local_builder"], dict)
+    assert "supported" in vision["local_builder"]
+    assert isinstance(vision["local_builder"].get("candidates"), list)
     detection_items = vision["task_catalogs"]["detection"].get("items")
     assert isinstance(detection_items, list)
     assert any(item.get("availability") in {"available", "manifest_only", "incompatible"} for item in detection_items)
     assert any(isinstance(item.get("capabilities"), list) for item in detection_items)
-    assert any(item.get("acquisition_mode") in {"guided_upload", "auto_download"} for item in detection_items)
+    assert any(item.get("acquisition_mode") in {"guided_upload", "auto_download", "local_build_assisted"} for item in detection_items)
     assert any(isinstance(item.get("acquisition"), dict) for item in detection_items)
     assert any("install_supported" in item for item in detection_items)
     assert any("install_reason" in item for item in detection_items)
+    assert any("local_build_supported" in item for item in detection_items)
+    assert any("local_build_reason" in item for item in detection_items)
     assert vision["task_catalogs"]["pose"].get("items") == []
     assert isinstance(vision["install_jobs"], list)
     assert isinstance(vision["last_benchmark"], dict)
     assert vision["last_benchmark"]["model_id"] == "constant.detector"
+
+
+def test_collect_vision_extension_diagnostics_keeps_local_builder_on_failure(monkeypatch) -> None:  # noqa: ANN001
+    def _raise(*args, **kwargs):  # noqa: ANN001, ARG001
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(vision_processing, "collect_vision_diagnostics", _raise)
+    diagnostics = collect_vision_extension_diagnostics()
+    assert diagnostics["local_builder"] == {}
+    assert diagnostics["install_jobs"] == []

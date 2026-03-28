@@ -41,7 +41,14 @@
     "mode": "guided_upload",
     "artifact_source": "checkpoint_export_required",
     "guide_url": "https://github.com/open-mmlab/mmdetection/blob/main/configs/rtmdet/README.md",
-    "export_guide_url": "https://mmdeploy.readthedocs.io/en/latest/01-how-to-build/build_from_docker.html"
+    "export_guide_url": "https://mmdeploy.readthedocs.io/en/v1.2.0/04-supported-codebases/mmdet.html",
+    "checkpoint_url": "https://download.openmmlab.com/mmdetection/v3.0/rtmdet/rtmdet_m_8xb32-300e_coco/rtmdet_m_8xb32-300e_coco_20220719_112220-229f527c.pth",
+    "config_url": "https://github.com/open-mmlab/mmdetection/blob/main/configs/rtmdet/rtmdet_m_8xb32-300e_coco.py",
+    "metafile_url": "https://github.com/open-mmlab/mmdetection/blob/main/configs/rtmdet/metafile.yml",
+    "paper_url": "https://arxiv.org/abs/2212.07784",
+    "builder_backend": "container_local",
+    "supported_platforms": ["linux"],
+    "explicit_consent_required": true
   },
   "hardware_profiles": {
     "cpu": true,

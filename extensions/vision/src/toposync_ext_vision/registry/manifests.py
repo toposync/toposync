@@ -118,16 +118,44 @@ class ModelHardwareProfiles(BaseModel):
 
 class ModelAcquisitionSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    mode: Literal["guided_upload", "auto_download"] = "guided_upload"
+    mode: Literal["guided_upload", "auto_download", "local_build_assisted"] = "guided_upload"
     artifact_source: Literal["onnx_ready", "checkpoint_export_required"] = "onnx_ready"
     guide_url: str = ""
     export_guide_url: str = ""
     source_url: str = ""
+    checkpoint_url: str = ""
+    config_url: str = ""
+    metafile_url: str = ""
+    paper_url: str = ""
+    builder_backend: Literal["", "container_local", "host_python"] = ""
+    supported_platforms: list[str] = Field(default_factory=list)
+    explicit_consent_required: bool = False
 
-    @field_validator("guide_url", "export_guide_url", "source_url")
+    @field_validator(
+        "guide_url",
+        "export_guide_url",
+        "source_url",
+        "checkpoint_url",
+        "config_url",
+        "metafile_url",
+        "paper_url",
+    )
     @classmethod
     def _trim_urls(cls, value: str) -> str:
         return str(value or "").strip()
+
+    @field_validator("supported_platforms")
+    @classmethod
+    def _normalize_supported_platforms(cls, value: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            item = str(raw or "").strip().lower()
+            if not item or item in seen:
+                continue
+            out.append(item)
+            seen.add(item)
+        return out
 
 
 class ModelManifest(BaseModel):

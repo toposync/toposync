@@ -171,6 +171,9 @@ class ProcessingServerVisionManifestImportResponse(BaseModel):
 
 class ProcessingServerVisionModelInstallRequest(BaseModel):
     force: bool = False
+    mode: str = ""
+    acknowledge_upstream_terms: bool = False
+    requested_by: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProcessingServerVisionModelInstallResponse(BaseModel):
@@ -185,6 +188,12 @@ class ProcessingServerVisionModelInstallResponse(BaseModel):
     bytes_total: int = 0
     source_kind: str = ""
     source_label: str = ""
+    requested_by: dict[str, Any] = Field(default_factory=dict)
+    accepted_source_labels: list[str] = Field(default_factory=list)
+    provenance_path: str = ""
+    build_log_path: str = ""
+    export_log_path: str = ""
+    output_sha256: str = ""
     error: str | None = None
     started_at: float = 0.0
     updated_at: float = 0.0
@@ -673,6 +682,18 @@ def create_app() -> FastAPI:
             resource_type=resource_type,
             resource_selector=resource_selector,
         )
+
+    def _processing_install_requested_by(request: Request) -> dict[str, Any]:
+        principal = _auth_context(request).principal
+        if principal is None:
+            return {}
+        return {
+            "user_id": str(principal.user_id or "").strip(),
+            "username": str(principal.username or "").strip(),
+            "display_name": str(principal.display_name or "").strip(),
+            "role": str(principal.role or "").strip(),
+            "bypass": bool(principal.bypass),
+        }
 
     @app.middleware("http")
     async def auth_and_extension_guard(
@@ -1266,10 +1287,14 @@ def create_app() -> FastAPI:
             if services is None:
                 raise HTTPException(status_code=500, detail="Service registry unavailable")
             try:
+                requested_by = dict(body.requested_by or {}) or _processing_install_requested_by(request)
                 result = await services.call(
                     "vision.model_install.start",
                     model_id=model_id,
                     force=bool(body.force),
+                    mode=str(body.mode or "").strip(),
+                    acknowledge_upstream_terms=bool(body.acknowledge_upstream_terms),
+                    requested_by=requested_by,
                     data_dir=config_store.paths.data_dir,
                 )
             except KeyError as exc:
@@ -1289,7 +1314,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         try:
-            result = await transport.install_vision_model(model_id=model_id, payload=body.model_dump(mode="json"))
+            payload = body.model_dump(mode="json")
+            payload["requested_by"] = dict(body.requested_by or {}) or _processing_install_requested_by(request)
+            result = await transport.install_vision_model(model_id=model_id, payload=payload)
             return ProcessingServerVisionModelInstallResponse.model_validate(result)
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc

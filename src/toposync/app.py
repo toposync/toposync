@@ -42,6 +42,7 @@ from toposync.runtime.pipelines import (
     OperatorDefinition,
     OperatorRegistry,
     PipelineGraphCompiler,
+    PipelineRuntime,
     PipelineRuntimeDependencies,
     register_builtin_operators,
 )
@@ -58,7 +59,15 @@ from toposync.runtime.pipelines.telemetry import (
     create_default_pipeline_telemetry_disk_checkpoint,
     create_default_pipeline_telemetry_store,
 )
+from toposync.runtime.pipelines.preview import (
+    PipelinePreviewError,
+    build_preview_registry,
+    prepare_preview_pipeline,
+    resolve_preview_packet_image,
+)
+from toposync.runtime.pipelines.operators_sinks import _encode_image_bytes
 from toposync.runtime.pipelines.step_snapshots import PipelineStepSnapshotStore
+from toposync.runtime.pipelines.step_snapshots import build_step_input_snapshot_rel_path
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
 from toposync.runtime.pipelines.distributed.transport import HttpProcessingTransport, ProcessingTransportError
 from toposync.runtime.pipelines.migration_legacy_cameras import (
@@ -234,6 +243,20 @@ class PipelineCompilePythonResponse(BaseModel):
     pipeline: dict[str, Any]
     shared_signatures: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     alerts: list[PipelineAlert] = Field(default_factory=list)
+
+
+class PipelinePreviewFallbackSnapshotRequest(BaseModel):
+    pipeline_name: str = ""
+    node_id: str = ""
+    source_id: str = ""
+
+
+class PipelinePreviewFrameRequest(BaseModel):
+    pipeline: Pipeline
+    fallback_snapshot: PipelinePreviewFallbackSnapshotRequest | None = None
+    timeout_seconds: float = Field(default=12.0, ge=0.5, le=60.0)
+    format: Literal["jpg", "png"] = "png"
+    jpeg_quality: int = Field(default=85, ge=1, le=100)
 
 
 class FilterExpressionValidationMarker(BaseModel):
@@ -479,6 +502,65 @@ def _guess_media_type(path: str) -> str:
         return "model/gltf+json"
     media_type, _ = mimetypes.guess_type(path)
     return media_type or "application/octet-stream"
+
+
+def _build_preview_runtime_dependencies(
+    request: Request,
+    *,
+    collector: Callable[[Any, str, str], Awaitable[None] | None],
+) -> PipelineRuntimeDependencies:
+    orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+    if orchestrator is not None and hasattr(orchestrator, "_build_runtime_dependencies"):
+        deps = orchestrator._build_runtime_dependencies(origin_inbox=None)
+    else:
+        config_store: ConfigStore = request.app.state.config_store
+        deps = PipelineRuntimeDependencies(
+            config_store=config_store,
+            services=getattr(request.app.state, "services", None),
+            files_dir=config_store.paths.files_dir,
+            pipeline_stats_store=getattr(request.app.state, "pipeline_stats_store", None),
+            pipeline_telemetry_store=getattr(request.app.state, "pipeline_telemetry_store", None),
+            execution_scheduler=ExecutionScheduler(),
+        )
+    deps.preview_packet_collector = collector
+    return deps
+
+
+def _pipeline_preview_fallback_response(
+    request: Request,
+    fallback: PipelinePreviewFallbackSnapshotRequest | None,
+) -> Response | None:
+    if fallback is None:
+        return None
+
+    pipeline_name = str(fallback.pipeline_name or "").strip()
+    node_id = str(fallback.node_id or "").strip()
+    source_id = str(fallback.source_id or "").strip()
+    if not pipeline_name or not node_id or not source_id:
+        return None
+
+    config_store: ConfigStore = request.app.state.config_store
+    base_dir = config_store.paths.files_dir.resolve()
+    rel_path = build_step_input_snapshot_rel_path(
+        pipeline_name=pipeline_name,
+        node_id=node_id,
+        source_id=source_id,
+        filename="input.png",
+    )
+    candidate = (base_dir / rel_path).resolve()
+    if not candidate.is_relative_to(base_dir):
+        return None
+    if not candidate.is_file():
+        return None
+
+    return FileResponse(
+        path=candidate,
+        media_type=_guess_media_type(candidate.name),
+        headers={
+            "Cache-Control": "no-store",
+            "X-Toposync-Pipeline-Preview-Mode": "fallback_snapshot",
+        },
+    )
 
 
 _SAFE_DIR_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
@@ -1596,6 +1678,93 @@ def create_app() -> FastAPI:
             pipeline=compiled_dict,
             shared_signatures=shared_signatures,
             alerts=alerts,
+        )
+
+    @app.post("/api/pipelines/preview/frame")
+    async def preview_pipeline_frame(request: Request, body: PipelinePreviewFrameRequest) -> Response:
+        _require(request, action="core:pipelines:read")
+        compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
+        registry: OperatorRegistry = request.app.state.pipeline_operator_registry
+
+        try:
+            preview_pipeline = prepare_preview_pipeline(pipeline=body.pipeline, registry=registry)
+        except PipelinePreviewError as exc:
+            fallback_response = _pipeline_preview_fallback_response(request, body.fallback_snapshot)
+            if fallback_response is not None:
+                return fallback_response
+            raise HTTPException(
+                status_code=409 if exc.code == "preview_requires_fallback" else 400,
+                detail=exc.detail,
+            ) from exc
+
+        try:
+            compiled = compiler.compile_pipeline(preview_pipeline)
+        except GraphCompileError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        loop = asyncio.get_running_loop()
+        captured_image: asyncio.Future[Any] = loop.create_future()
+
+        async def _collector(packet: Any, _node_id: str, _pipeline_name: str) -> None:
+            if captured_image.done():
+                return
+            image = resolve_preview_packet_image(packet)
+            if image is None:
+                return
+            captured_image.set_result(image)
+
+        deps = _build_preview_runtime_dependencies(request, collector=_collector)
+        preview_registry = build_preview_registry(registry)
+        runtime = PipelineRuntime(
+            compiled=compiled,
+            registry=preview_registry,
+            dependencies=deps,
+            logger=logging.getLogger("toposync.pipelines.preview"),
+        )
+
+        try:
+            await runtime.start()
+            try:
+                image = await asyncio.wait_for(captured_image, timeout=float(body.timeout_seconds))
+            except TimeoutError as exc:
+                fallback_response = _pipeline_preview_fallback_response(request, body.fallback_snapshot)
+                if fallback_response is not None:
+                    return fallback_response
+                raise HTTPException(
+                    status_code=504,
+                    detail=(
+                        "Timed out waiting for a preview frame. Check the camera source or leave the pipeline "
+                        "running until this point so a stored snapshot can be collected."
+                    ),
+                ) from exc
+        finally:
+            await runtime.stop()
+
+        if image is None:
+            fallback_response = _pipeline_preview_fallback_response(request, body.fallback_snapshot)
+            if fallback_response is not None:
+                return fallback_response
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Preview execution finished without an in-memory image. Leave the pipeline running until this "
+                    "point so a stored snapshot can be collected, then try again."
+                ),
+            )
+
+        blob, _ext, mime_type = await asyncio.to_thread(
+            _encode_image_bytes,
+            image,
+            fmt=str(body.format or "png"),
+            jpeg_quality=int(body.jpeg_quality),
+        )
+        return Response(
+            content=blob,
+            media_type=mime_type,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Toposync-Pipeline-Preview-Mode": "runtime",
+            },
         )
 
     @app.post("/api/pipelines/templates/apply-cameras", response_model=PipelineTemplateApplyCamerasResponse)

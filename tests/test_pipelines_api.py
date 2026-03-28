@@ -2,13 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
+from typing import Any
 
 from fastapi.testclient import TestClient
+import numpy as np
 import pytest
 
 from toposync.app import create_app
 from toposync.runtime.config_store import Pipeline, ProcessingServer
+from toposync.runtime.pipelines.operators_sinks import _encode_image_bytes
+from toposync.runtime.pipelines.step_snapshots import build_step_input_snapshot_rel_path
 import toposync.extensions.manager as ext_manager_mod
+from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
+from toposync_ext_vision.pipelines import register_vision_pipeline_operators
 
 
 def _create_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
@@ -17,6 +23,222 @@ def _create_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClien
     monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "bypass")
     monkeypatch.setattr(ext_manager_mod, "_iter_entry_points", lambda _group: [])
     return TestClient(create_app())
+
+
+def _register_preview_test_operators(client: TestClient) -> None:
+    registry = client.app.state.pipeline_operator_registry
+    if registry.get("camera.source") is None:
+        register_camera_pipeline_operators(registry)
+    if registry.get("vision.segment_instances") is None:
+        register_vision_pipeline_operators(registry)
+
+
+def _png_size(blob: bytes) -> tuple[int, int]:
+    assert blob[:8] == b"\x89PNG\r\n\x1a\n"
+    width = int.from_bytes(blob[16:20], "big")
+    height = int.from_bytes(blob[20:24], "big")
+    return width, height
+
+
+def test_pipeline_preview_frame_replays_upstream_slice_and_skips_filters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import toposync_ext_cameras.pipelines.operators as camera_ops
+
+    class _FakeFrameGrabber:
+        start_calls = 0
+        stop_calls = 0
+
+        def __init__(self, rtsp_url: str, *, target_fps: float = 15.0, backend: str = "auto", **_kwargs: Any) -> None:
+            self.rtsp_url = rtsp_url
+            self.target_fps = float(target_fps)
+            self.backend = str(backend)
+            self._frame = np.zeros((40, 60, 3), dtype=np.uint8)
+            self._frame[:, :30, 1] = 255
+            self._frame_ts = 1_710_000_000.0
+
+        def start(self) -> "_FakeFrameGrabber":
+            type(self).start_calls += 1
+            return self
+
+        def get_latest(self) -> tuple[Any, float]:
+            return self._frame, self._frame_ts
+
+        def metrics_snapshot(self) -> dict[str, Any]:
+            return {"backend": self.backend}
+
+        def stop(self) -> None:
+            type(self).stop_calls += 1
+
+    monkeypatch.setattr(camera_ops, "FrameGrabber", _FakeFrameGrabber)
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        _register_preview_test_operators(client)
+
+        payload = {
+            "pipeline": {
+                "name": "preview_crop_runtime",
+                "type": "final",
+                "graph": {
+                    "schema_version": 1,
+                    "nodes": [
+                        {
+                            "id": "source",
+                            "operator": "camera.source",
+                            "config": {"rtsp_url": "rtsp://preview-crop-runtime", "fps": 5.0},
+                        },
+                        {
+                            "id": "filter",
+                            "operator": "core.filter",
+                            "config": {"expression": "False"},
+                        },
+                        {
+                            "id": "throttle",
+                            "operator": "core.throttle",
+                            "config": {"interval_seconds": 60.0},
+                        },
+                        {
+                            "id": "crop",
+                            "operator": "camera.image_crop",
+                            "config": {
+                                "units": "percent",
+                                "left": 25.0,
+                                "top": 10.0,
+                                "right": 75.0,
+                                "bottom": 60.0,
+                                "output_artifact_name": "frame",
+                                "set_stream_frame": True,
+                                "min_crop_size_px": 8,
+                            },
+                        },
+                    ],
+                    "edges": [
+                        {"from": {"node": "source", "port": "out"}, "to": {"node": "filter", "port": "in"}},
+                        {"from": {"node": "filter", "port": "out"}, "to": {"node": "throttle", "port": "in"}},
+                        {"from": {"node": "throttle", "port": "out"}, "to": {"node": "crop", "port": "in"}},
+                    ],
+                },
+            },
+            "timeout_seconds": 5.0,
+            "format": "png",
+        }
+
+        response = client.post("/api/pipelines/preview/frame", json=payload)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["x-toposync-pipeline-preview-mode"] == "runtime"
+    assert _png_size(response.content) == (30, 20)
+    assert _FakeFrameGrabber.start_calls == 1
+    assert _FakeFrameGrabber.stop_calls == 1
+
+
+def test_pipeline_preview_frame_falls_back_to_stored_snapshot_for_upstream_segmentation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        _register_preview_test_operators(client)
+
+        config_store = client.app.state.config_store
+        fallback = {
+            "pipeline_name": "preview_segmentation_fallback",
+            "node_id": "segment",
+            "source_id": "camera:adhoc",
+        }
+        rel_path = build_step_input_snapshot_rel_path(
+            pipeline_name=fallback["pipeline_name"],
+            node_id=fallback["node_id"],
+            source_id=fallback["source_id"],
+            filename="input.png",
+        )
+        fallback_path = config_store.paths.files_dir / rel_path
+        frame = np.full((24, 36, 3), 180, dtype=np.uint8)
+        blob, _ext, _mime = _encode_image_bytes(frame, fmt="png", jpeg_quality=85)
+        fallback_path.parent.mkdir(parents=True, exist_ok=True)
+        fallback_path.write_bytes(blob)
+
+        payload = {
+            "pipeline": {
+                "name": "preview_segmentation_runtime",
+                "type": "final",
+                "graph": {
+                    "schema_version": 1,
+                    "nodes": [
+                        {
+                            "id": "source",
+                            "operator": "camera.source",
+                            "config": {"rtsp_url": "rtsp://preview-segmentation-fallback", "fps": 5.0},
+                        },
+                        {
+                            "id": "segment",
+                            "operator": "vision.segment_instances",
+                            "config": {},
+                        },
+                    ],
+                    "edges": [
+                        {"from": {"node": "source", "port": "out"}, "to": {"node": "segment", "port": "in"}},
+                    ],
+                },
+            },
+            "fallback_snapshot": fallback,
+            "timeout_seconds": 5.0,
+            "format": "png",
+        }
+
+        response = client.post("/api/pipelines/preview/frame", json=payload)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["x-toposync-pipeline-preview-mode"] == "fallback_snapshot"
+    assert response.content == blob
+
+
+def test_pipeline_preview_frame_returns_guided_message_when_fallback_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        _register_preview_test_operators(client)
+
+        payload = {
+            "pipeline": {
+                "name": "preview_segmentation_missing",
+                "type": "final",
+                "graph": {
+                    "schema_version": 1,
+                    "nodes": [
+                        {
+                            "id": "source",
+                            "operator": "camera.source",
+                            "config": {"rtsp_url": "rtsp://preview-segmentation-missing", "fps": 5.0},
+                        },
+                        {
+                            "id": "segment",
+                            "operator": "vision.segment_instances",
+                            "config": {},
+                        },
+                    ],
+                    "edges": [
+                        {"from": {"node": "source", "port": "out"}, "to": {"node": "segment", "port": "in"}},
+                    ],
+                },
+            },
+            "fallback_snapshot": {
+                "pipeline_name": "preview_segmentation_missing",
+                "node_id": "segment",
+                "source_id": "camera:adhoc",
+            },
+            "timeout_seconds": 5.0,
+            "format": "png",
+        }
+
+        response = client.post("/api/pipelines/preview/frame", json=payload)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] != "File not found"
+    assert "Leave the pipeline running until this point" in str(response.json()["detail"])
 
 
 def test_pipelines_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -48,6 +48,7 @@ class PipelineRuntimeDependencies:
     pipeline_stats_store: PipelineStatsStore | None = None
     pipeline_stats_node_occurrences: dict[str, tuple[tuple[str, str], ...]] | None = None
     pipeline_telemetry_store: PipelineTelemetryStore | None = None
+    preview_packet_collector: Callable[[Packet, str, str], Awaitable[None] | None] | None = None
     execution_scheduler: ExecutionScheduler | None = None
     artifact_max_bytes_per_packet: int | None = 128 * 1024 * 1024
     artifact_max_total_bytes_per_pipeline: int | None = 512 * 1024 * 1024

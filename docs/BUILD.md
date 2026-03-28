@@ -81,3 +81,23 @@ Para validar que cada wheel leva seus assets de runtime (`extension.json`, `stat
 ```bash
 python scripts/check_extension_wheels.py
 ```
+
+## Smoke test de distribuição
+
+Para validar o fluxo de release fora do monorepo, rode:
+
+```bash
+python scripts/test_distribution_install.py
+```
+
+Esse smoke test:
+
+- rebuilda o frontend host e as UIs das extensões padrão
+- gera um wheelhouse local com `toposync-core`, `toposync` e as extensões padrão
+- cria um venv limpo fora do checkout
+- instala `toposync` com `pip` a partir dos wheels gerados
+- sobe `toposync serve` usando apenas o ambiente instalado
+- valida `/api/extensions`
+- roda Playwright contra a UI host embutida para confirmar carregamento dos remotes
+
+A CI executa esse mesmo fluxo no workflow [`.github/workflows/distribution-smoke.yml`](/Users/c/Projects/toposync-2/.github/workflows/distribution-smoke.yml).

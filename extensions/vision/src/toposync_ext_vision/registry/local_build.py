@@ -176,8 +176,8 @@ def main() -> int:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--output-path", required=True)
     parser.add_argument("--metadata-path", required=True)
-    parser.add_argument("--height", type=int, required=True)
-    parser.add_argument("--width", type=int, required=True)
+    parser.add_argument("--height", type=int)
+    parser.add_argument("--width", type=int)
     args = parser.parse_args()
 
     model_class = _MODEL_CLASSES.get(args.model_class)
@@ -198,11 +198,17 @@ def main() -> int:
             shutil.copyfileobj(response, handle)
 
     model = model_class(device="cpu", pretrain_weights=str(weights_path))
-    model.export(
-        output_dir=str(output_dir),
-        verbose=False,
-        shape=(int(args.height), int(args.width)),
-    )
+    export_kwargs = {
+        "output_dir": str(output_dir),
+        "verbose": False,
+    }
+    requested_shape = None
+    if args.height is not None or args.width is not None:
+        if args.height is None or args.width is None:
+            raise ValueError("Height and width must be provided together for RF-DETR export overrides")
+        requested_shape = (int(args.height), int(args.width))
+        export_kwargs["shape"] = requested_shape
+    model.export(**export_kwargs)
 
     exported = output_dir / "inference_model.onnx"
     if not exported.is_file():
@@ -215,6 +221,11 @@ def main() -> int:
                 "model_class": args.model_class,
                 "pretrain_weights": str(getattr(model.model_config, "pretrain_weights", "")),
                 "resolution": int(getattr(model.model_config, "resolution", 0) or 0),
+                "shape_override": list(requested_shape) if requested_shape is not None else [],
+                "effective_shape": list(requested_shape) if requested_shape is not None else [
+                    int(getattr(model.model_config, "resolution", 0) or 0),
+                    int(getattr(model.model_config, "resolution", 0) or 0),
+                ],
             },
             indent=2,
             sort_keys=True,
@@ -232,14 +243,17 @@ _RFDETR_MODEL_SPECS: dict[str, dict[str, str]] = {
     "rfdetr_det_nano": {
         "class_name": "RFDETRNano",
         "weights_filename": "rf-detr-nano.pth",
+        "default_resolution": "384",
     },
     "rfdetr_det_small": {
         "class_name": "RFDETRSmall",
         "weights_filename": "rf-detr-small.pth",
+        "default_resolution": "512",
     },
     "rfdetr_det_medium": {
         "class_name": "RFDETRMedium",
         "weights_filename": "rf-detr-medium.pth",
+        "default_resolution": "576",
     },
 }
 
@@ -354,6 +368,24 @@ def _source_url(manifest: ModelManifest) -> str:
 
 def _rfdetr_model_spec(manifest: ModelManifest) -> dict[str, str] | None:
     return _RFDETR_MODEL_SPECS.get(str(manifest.model_id or "").strip().lower())
+
+
+def _rfdetr_export_shape_args(manifest: ModelManifest, *, spec: dict[str, str] | None = None) -> list[str]:
+    resolved_spec = spec or _rfdetr_model_spec(manifest)
+    if resolved_spec is None:
+        return []
+    width = int(manifest.input.width)
+    height = int(manifest.input.height)
+    if width <= 0 or height <= 0:
+        raise RuntimeError(f"RF-DETR local build requires positive input size for {manifest.model_id}")
+    if width != height:
+        raise RuntimeError(
+            f"RF-DETR local build currently requires square input sizes; got {width}x{height} for {manifest.model_id}"
+        )
+    default_resolution = int(str(resolved_spec.get("default_resolution") or "0") or 0)
+    if default_resolution > 0 and width == default_resolution and height == default_resolution:
+        return []
+    return ["--height", str(height), "--width", str(width)]
 
 
 def _builder_metadata_complete(manifest: ModelManifest) -> bool:
@@ -786,10 +818,7 @@ def run_local_builder(
                     str(output_path),
                     "--metadata-path",
                     str(builder_metadata_path),
-                    "--height",
-                    str(int(manifest.input.height)),
-                    "--width",
-                    str(int(manifest.input.width)),
+                    *_rfdetr_export_shape_args(manifest, spec=spec),
                 ],
                 cwd=workspace_dir,
                 log_path=export_log_path,

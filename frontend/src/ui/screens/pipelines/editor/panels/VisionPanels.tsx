@@ -9,6 +9,7 @@ import type {
 import {
   getProcessingServerStatus,
   importProcessingServerVisionManifest,
+  installProcessingServerVisionModel,
   uploadProcessingServerVisionModelArtifact,
 } from "../../../../../util/api";
 import { i18n } from "../../../../../util/i18n";
@@ -42,7 +43,7 @@ type VisionModelCatalogItem = {
   sourceKind: "official" | "custom";
   custom: boolean;
   artifactExists: boolean;
-  acquisitionMode: "guided_upload" | "auto_download";
+  acquisitionMode: "guided_upload" | "auto_download" | "local_build_assisted";
   acquisitionSupported: boolean;
   acquisitionReason: string;
   acquisitionSourceKind: string;
@@ -54,6 +55,11 @@ type VisionModelCatalogItem = {
   installSourceKind: string;
   installSourceLabel: string;
   installJob: VisionModelInstallJob | null;
+  localBuildSupported: boolean;
+  localBuildReason: string;
+  localBuildBackend: string;
+  localBuildRuntime: string;
+  localBuildSourceLabel: string;
   compatibleProviderIds: string[];
   inputWidth: number;
   inputHeight: number;
@@ -67,11 +73,18 @@ type VisionModelCatalogItem = {
 };
 
 type VisionModelAcquisition = {
-  mode: "guided_upload" | "auto_download";
+  mode: "guided_upload" | "auto_download" | "local_build_assisted";
   artifactSource: "onnx_ready" | "checkpoint_export_required";
   guideUrl: string;
   exportGuideUrl: string;
   sourceUrl: string;
+  checkpointUrl: string;
+  configUrl: string;
+  metafileUrl: string;
+  paperUrl: string;
+  builderBackend: "" | "container_local" | "host_python";
+  supportedPlatforms: string[];
+  explicitConsentRequired: boolean;
 };
 
 type VisionModelInstallJob = {
@@ -138,7 +151,11 @@ function parseCatalogItem(raw: unknown): VisionModelCatalogItem | null {
   const artifactSource =
     rawArtifactSource === "checkpoint_export_required" ? "checkpoint_export_required" : "onnx_ready";
   const rawMode = String(raw.acquisition_mode || acquisition?.mode || "guided_upload").trim();
-  const mode = rawMode === "auto_download" ? "auto_download" : "guided_upload";
+  const mode: VisionModelAcquisition["mode"] =
+    rawMode === "auto_download" || rawMode === "local_build_assisted" ? rawMode : "guided_upload";
+  const rawBuilderBackend = String(acquisition?.builder_backend || "").trim();
+  const builderBackend: VisionModelAcquisition["builderBackend"] =
+    rawBuilderBackend === "container_local" || rawBuilderBackend === "host_python" ? rawBuilderBackend : "";
   return {
     modelId,
     displayName: String(raw.display_name || raw.model_id || "").trim() || modelId,
@@ -162,12 +179,26 @@ function parseCatalogItem(raw: unknown): VisionModelCatalogItem | null {
       guideUrl: String(acquisition?.guide_url || "").trim(),
       exportGuideUrl: String(acquisition?.export_guide_url || "").trim(),
       sourceUrl: String(acquisition?.source_url || "").trim(),
+      checkpointUrl: String(acquisition?.checkpoint_url || "").trim(),
+      configUrl: String(acquisition?.config_url || "").trim(),
+      metafileUrl: String(acquisition?.metafile_url || "").trim(),
+      paperUrl: String(acquisition?.paper_url || "").trim(),
+      builderBackend,
+      supportedPlatforms: Array.isArray(acquisition?.supported_platforms)
+        ? acquisition.supported_platforms.map((value: unknown) => String(value || "").trim().toLowerCase()).filter(Boolean)
+        : [],
+      explicitConsentRequired: !!acquisition?.explicit_consent_required,
     },
     installSupported: !!raw.install_supported,
     installReason: String(raw.install_reason || "").trim(),
     installSourceKind: String(raw.install_source_kind || "").trim(),
     installSourceLabel: String(raw.install_source_label || "").trim(),
     installJob: parseInstallJob(raw.install_job),
+    localBuildSupported: !!raw.local_build_supported,
+    localBuildReason: String(raw.local_build_reason || "").trim(),
+    localBuildBackend: String(raw.local_build_backend || "").trim(),
+    localBuildRuntime: String(raw.local_build_runtime || "").trim(),
+    localBuildSourceLabel: String(raw.local_build_source_label || "").trim(),
     compatibleProviderIds: Array.isArray(raw.compatible_provider_ids)
       ? raw.compatible_provider_ids.map((value) => String(value || "").trim()).filter(Boolean)
       : [],
@@ -232,6 +263,11 @@ function fallbackCatalogItem(
     installSourceKind: "",
     installSourceLabel: "",
     installJob: null,
+    localBuildSupported: false,
+    localBuildReason: "",
+    localBuildBackend: "",
+    localBuildRuntime: "",
+    localBuildSourceLabel: "",
     compatibleProviderIds: [],
     inputWidth: 0,
     inputHeight: 0,
@@ -244,18 +280,6 @@ function fallbackCatalogItem(
     notes: [],
   };
 }
-
-const DETECTION_FALLBACK_ITEMS = [
-  fallbackCatalogItem("rtmdet_det_tiny", "RTMDet Tiny", "onnxruntime", { custom: false }),
-  fallbackCatalogItem("rtmdet_det_small", "RTMDet Small", "onnxruntime", { custom: false }),
-  fallbackCatalogItem("rtmdet_det_medium", "RTMDet Medium", "onnxruntime", { custom: false }),
-];
-
-const SEGMENTATION_FALLBACK_ITEMS = [
-  fallbackCatalogItem("rtmdet_ins_tiny", "RTMDet-Ins Tiny", "onnxruntime", { custom: false }),
-  fallbackCatalogItem("rtmdet_ins_small", "RTMDet-Ins Small", "onnxruntime", { custom: false }),
-  fallbackCatalogItem("rtmdet_ins_medium", "RTMDet-Ins Medium", "onnxruntime", { custom: false }),
-];
 
 const TRACKER_CHOICES = [
   {
@@ -310,6 +334,45 @@ const MODEL_HINT_KEYS: Record<string, string> = {
   rtmdet_ins_medium: "core.ui.pipelines.panels.yolo.model_rtmdet_ins_medium_hint",
 };
 
+const RTMDET_DETECTION_ACQUISITION_DEFAULTS: Record<
+  string,
+  Pick<
+    VisionModelAcquisition,
+    "checkpointUrl" | "configUrl" | "metafileUrl" | "paperUrl" | "builderBackend" | "supportedPlatforms" | "explicitConsentRequired"
+  >
+> = {
+  rtmdet_det_tiny: {
+    checkpointUrl:
+      "https://download.openmmlab.com/mmdetection/v3.0/rtmdet/rtmdet_tiny_8xb32-300e_coco/rtmdet_tiny_8xb32-300e_coco_20220902_112414-78e30dcc.pth",
+    configUrl: "https://github.com/open-mmlab/mmdetection/blob/main/configs/rtmdet/rtmdet_tiny_8xb32-300e_coco.py",
+    metafileUrl: "https://github.com/open-mmlab/mmdetection/blob/main/configs/rtmdet/metafile.yml",
+    paperUrl: "https://arxiv.org/abs/2212.07784",
+    builderBackend: "container_local",
+    supportedPlatforms: ["linux"],
+    explicitConsentRequired: true,
+  },
+  rtmdet_det_small: {
+    checkpointUrl:
+      "https://download.openmmlab.com/mmdetection/v3.0/rtmdet/rtmdet_s_8xb32-300e_coco/rtmdet_s_8xb32-300e_coco_20220905_161602-387a891e.pth",
+    configUrl: "https://github.com/open-mmlab/mmdetection/blob/main/configs/rtmdet/rtmdet_s_8xb32-300e_coco.py",
+    metafileUrl: "https://github.com/open-mmlab/mmdetection/blob/main/configs/rtmdet/metafile.yml",
+    paperUrl: "https://arxiv.org/abs/2212.07784",
+    builderBackend: "container_local",
+    supportedPlatforms: ["linux"],
+    explicitConsentRequired: true,
+  },
+  rtmdet_det_medium: {
+    checkpointUrl:
+      "https://download.openmmlab.com/mmdetection/v3.0/rtmdet/rtmdet_m_8xb32-300e_coco/rtmdet_m_8xb32-300e_coco_20220719_112220-229f527c.pth",
+    configUrl: "https://github.com/open-mmlab/mmdetection/blob/main/configs/rtmdet/rtmdet_m_8xb32-300e_coco.py",
+    metafileUrl: "https://github.com/open-mmlab/mmdetection/blob/main/configs/rtmdet/metafile.yml",
+    paperUrl: "https://arxiv.org/abs/2212.07784",
+    builderBackend: "container_local",
+    supportedPlatforms: ["linux"],
+    explicitConsentRequired: true,
+  },
+};
+
 const BASIC_CATEGORY_VALUES = ["person", "car", "truck", "bus", "bicycle", "motorcycle", "dog", "cat"];
 const BASIC_CATEGORY_LABEL_KEYS: Record<string, string> = {
   person: "core.ui.pipelines.panels.yolo.category.person",
@@ -332,6 +395,14 @@ function availabilityReasonTranslationKey(reason: string): string {
 
 function resourceTierTranslationKey(value: string): string {
   return `core.ui.pipelines.panels.yolo.resource_tier.${String(value || "").trim() || "unknown"}`;
+}
+
+function acquisitionModeTranslationKey(value: string): string {
+  return `core.ui.pipelines.panels.yolo.acquisition_mode.${String(value || "").trim() || "guided_upload"}`;
+}
+
+function builderBackendTranslationKey(value: string): string {
+  return `core.ui.pipelines.panels.yolo.builder_backend.${String(value || "").trim() || "unknown"}`;
 }
 
 function modelHintTranslationKey(modelId: string): string {
@@ -360,12 +431,20 @@ function artifactFileName(artifactPath: string): string {
 function defaultAcquisitionForModelId(modelId: string): VisionModelAcquisition {
   const clean = String(modelId || "").trim().toLowerCase();
   if (clean.startsWith("rtmdet_det_") || clean.startsWith("rtmdet_ins_")) {
+    const detectionDefaults = RTMDET_DETECTION_ACQUISITION_DEFAULTS[clean];
     return {
       mode: "guided_upload",
       artifactSource: "checkpoint_export_required",
       guideUrl: "https://github.com/open-mmlab/mmdetection/blob/main/configs/rtmdet/README.md",
-      exportGuideUrl: "https://mmdeploy.readthedocs.io/en/latest/01-how-to-build/build_from_docker.html",
+      exportGuideUrl: "https://mmdeploy.readthedocs.io/en/v1.2.0/04-supported-codebases/mmdet.html",
       sourceUrl: "",
+      checkpointUrl: detectionDefaults?.checkpointUrl || "",
+      configUrl: detectionDefaults?.configUrl || "",
+      metafileUrl: detectionDefaults?.metafileUrl || "",
+      paperUrl: detectionDefaults?.paperUrl || "",
+      builderBackend: detectionDefaults?.builderBackend || "",
+      supportedPlatforms: [...(detectionDefaults?.supportedPlatforms || [])],
+      explicitConsentRequired: !!detectionDefaults?.explicitConsentRequired,
     };
   }
   return {
@@ -374,7 +453,30 @@ function defaultAcquisitionForModelId(modelId: string): VisionModelAcquisition {
     guideUrl: "",
     exportGuideUrl: "",
     sourceUrl: "",
+    checkpointUrl: "",
+    configUrl: "",
+    metafileUrl: "",
+    paperUrl: "",
+    builderBackend: "",
+    supportedPlatforms: [],
+    explicitConsentRequired: false,
   };
+}
+
+function detectionFallbackItems(): VisionModelCatalogItem[] {
+  return [
+    fallbackCatalogItem("rtmdet_det_tiny", "RTMDet Tiny", "onnxruntime", { custom: false }),
+    fallbackCatalogItem("rtmdet_det_small", "RTMDet Small", "onnxruntime", { custom: false }),
+    fallbackCatalogItem("rtmdet_det_medium", "RTMDet Medium", "onnxruntime", { custom: false }),
+  ];
+}
+
+function segmentationFallbackItems(): VisionModelCatalogItem[] {
+  return [
+    fallbackCatalogItem("rtmdet_ins_tiny", "RTMDet-Ins Tiny", "onnxruntime", { custom: false }),
+    fallbackCatalogItem("rtmdet_ins_small", "RTMDet-Ins Small", "onnxruntime", { custom: false }),
+    fallbackCatalogItem("rtmdet_ins_medium", "RTMDet-Ins Medium", "onnxruntime", { custom: false }),
+  ];
 }
 
 function normalizeArtifactUploadError(
@@ -484,6 +586,8 @@ export function VisionConfigCard({
   });
   const [artifactUploadError, setArtifactUploadError] = useState<string | null>(null);
   const [artifactUploadSuccess, setArtifactUploadSuccess] = useState<string | null>(null);
+  const [localBuildLoadingModelId, setLocalBuildLoadingModelId] = useState<string>("");
+  const [localBuildError, setLocalBuildError] = useState<string | null>(null);
   const artifactFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const reloadCatalog = useCallback(async () => {
@@ -513,6 +617,19 @@ export function VisionConfigCard({
     return readTaskCatalog(serverStatus.status, task);
   }, [serverStatus, task]);
 
+  useEffect(() => {
+    if (isTracking) return undefined;
+    const hasActiveInstall = (taskCatalog?.items || []).some((item) => {
+      const status = String(item.installJob?.status || "").trim();
+      return ["queued", "downloading", "verifying", "installing"].includes(status);
+    });
+    if (!hasActiveInstall) return undefined;
+    const timer = window.setInterval(() => {
+      void reloadCatalog();
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [isTracking, reloadCatalog, taskCatalog]);
+
   const categoryOptions = useMemo<SelectOption[]>(() => {
     const known = new Set(YOLO_CATEGORY_OPTIONS.map((item) => item.value));
     const extras = categories
@@ -525,10 +642,7 @@ export function VisionConfigCard({
     return values.slice(0, 12);
   }, [categories]);
 
-  const fallbackCatalogItems = useMemo(
-    () => (isSegmentation ? SEGMENTATION_FALLBACK_ITEMS : DETECTION_FALLBACK_ITEMS),
-    [isSegmentation],
-  );
+  const fallbackCatalogItems = useMemo(() => (isSegmentation ? segmentationFallbackItems() : detectionFallbackItems()), [isSegmentation]);
 
   const catalogItems = useMemo(() => {
     const rawItems = taskCatalog?.items ?? [];
@@ -595,6 +709,11 @@ export function VisionConfigCard({
   const manualInstallFile = artifactFileName(manualInstallItem?.artifactPath || "");
   const manualInstallAcquisition = manualInstallItem?.acquisition ?? defaultAcquisitionForModelId(manualInstallItem?.modelId || "");
   const manualInstallNeedsExport = manualInstallAcquisition.artifactSource === "checkpoint_export_required";
+  const manualLocalBuildAvailable =
+    !!manualInstallItem &&
+    !manualInstallItem.artifactExists &&
+    manualInstallNeedsExport &&
+    manualInstallItem.localBuildSupported;
 
   const selectedModelOption = useMemo(
     () => modelOptions.find((item) => item.value === modelId) ?? null,
@@ -790,6 +909,43 @@ export function VisionConfigCard({
       setArtifactUploadLoading(false);
     }
   }, [artifactModalFile, artifactModalItem, reloadCatalog, resolvedProcessingServerId, t]);
+
+  const handleStartLocalBuild = useCallback(
+    async (item: VisionModelCatalogItem | null) => {
+      if (!item || localBuildLoadingModelId) return;
+      const upstreamLabel = item.localBuildSourceLabel || item.acquisition.checkpointUrl || item.displayName;
+      if (
+        item.acquisition.explicitConsentRequired &&
+        !confirm(
+          t(
+            "core.ui.pipelines.panels.yolo.local_build.confirm",
+            {
+              model: item.displayName,
+              serverId: resolvedProcessingServerId,
+              source: upstreamLabel,
+            },
+            `Start assisted local build for ${item.displayName} on ${resolvedProcessingServerId}? The machine will download the upstream checkpoint and export the ONNX locally from ${upstreamLabel}.`,
+          ),
+        )
+      ) {
+        return;
+      }
+      setLocalBuildLoadingModelId(item.modelId);
+      setLocalBuildError(null);
+      try {
+        await installProcessingServerVisionModel(resolvedProcessingServerId, item.modelId, {
+          mode: "local_build",
+          acknowledge_upstream_terms: true,
+        });
+        await reloadCatalog();
+      } catch (error: any) {
+        setLocalBuildError(String(error?.message ?? error));
+      } finally {
+        setLocalBuildLoadingModelId("");
+      }
+    },
+    [localBuildLoadingModelId, reloadCatalog, resolvedProcessingServerId, t],
+  );
 
   const artifactModalAcquisition = artifactModalItem?.acquisition ?? defaultAcquisitionForModelId(artifactModalItem?.modelId || "");
   const artifactModalNeedsExport = artifactModalAcquisition.artifactSource === "checkpoint_export_required";
@@ -999,10 +1155,42 @@ export function VisionConfigCard({
                       ? t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_send_prepare")
                       : t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_send")}
                   </div>
+                  {manualLocalBuildAvailable ? (
+                    <div className="pipelinesStepHint">
+                      {t("core.ui.pipelines.panels.yolo.local_build.available_hint", {
+                        runtime: manualInstallItem.localBuildRuntime || manualInstallItem.localBuildBackend || "local",
+                      })}
+                    </div>
+                  ) : null}
                   <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_refresh")}</div>
                 </div>
               ) : null}
+              {manualInstallItem?.installJob ? (
+                <div className="pipelinesStepHint" style={{ marginTop: 8 }}>
+                  {t("core.ui.pipelines.panels.yolo.local_build.job_progress", {
+                    phase: t(
+                      `core.ui.pipelines.panels.yolo.install_phase.${manualInstallItem.installJob.phase || "queued"}`,
+                      {},
+                      manualInstallItem.installJob.phase || "queued",
+                    ),
+                    progress: Math.max(0, Math.min(100, Math.round(manualInstallItem.installJob.progressPct || 0))),
+                  })}
+                </div>
+              ) : null}
+              {localBuildError ? <div className="errorText" style={{ marginTop: 8 }}>{localBuildError}</div> : null}
               <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                {manualLocalBuildAvailable ? (
+                  <button
+                    className="pillButton pillButtonPrimary"
+                    type="button"
+                    onClick={() => void handleStartLocalBuild(manualInstallItem)}
+                    disabled={!!localBuildLoadingModelId || !!manualInstallItem.installJob}
+                  >
+                    {localBuildLoadingModelId === manualInstallItem.modelId
+                      ? t("core.ui.pipelines.panels.yolo.local_build.starting")
+                      : t("core.ui.pipelines.panels.yolo.local_build.start")}
+                  </button>
+                ) : null}
                 {manualInstallItem ? (
                   <button
                     className="pillButton pillButtonPrimary"
@@ -1155,10 +1343,69 @@ export function VisionConfigCard({
                 })}
               </div>
               <div className="pipelinesStepHint">
+                {t("core.ui.pipelines.panels.yolo.details_acquisition_mode", {
+                  mode: t(
+                    acquisitionModeTranslationKey(selectedCatalogItem.acquisition.mode),
+                    {},
+                    selectedCatalogItem.acquisition.mode || "guided_upload",
+                  ),
+                })}
+              </div>
+              {selectedCatalogItem.acquisition.builderBackend ? (
+                <div className="pipelinesStepHint">
+                  {t("core.ui.pipelines.panels.yolo.details_builder_backend", {
+                    backend: t(
+                      builderBackendTranslationKey(selectedCatalogItem.acquisition.builderBackend),
+                      {},
+                      selectedCatalogItem.acquisition.builderBackend,
+                    ),
+                  })}
+                </div>
+              ) : null}
+              {selectedCatalogItem.acquisition.supportedPlatforms.length ? (
+                <div className="pipelinesStepHint">
+                  {t("core.ui.pipelines.panels.yolo.details_supported_platforms", {
+                    platforms: selectedCatalogItem.acquisition.supportedPlatforms.join(", "),
+                  })}
+                </div>
+              ) : null}
+              {selectedCatalogItem.acquisition.explicitConsentRequired ? (
+                <div className="pipelinesStepHint">
+                  {t("core.ui.pipelines.panels.yolo.details_consent_required")}
+                </div>
+              ) : null}
+              <div className="pipelinesStepHint">
                 {selectedCatalogItem.custom
                   ? t("core.ui.pipelines.panels.yolo.details_source_custom")
                   : t("core.ui.pipelines.panels.yolo.details_source_official")}
               </div>
+              {selectedCatalogItem.acquisition.checkpointUrl ||
+              selectedCatalogItem.acquisition.configUrl ||
+              selectedCatalogItem.acquisition.metafileUrl ||
+              selectedCatalogItem.acquisition.paperUrl ? (
+                <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                  {selectedCatalogItem.acquisition.checkpointUrl ? (
+                    <a className="pillButton" href={selectedCatalogItem.acquisition.checkpointUrl} target="_blank" rel="noreferrer">
+                      {t("core.ui.pipelines.panels.yolo.upstream_link.checkpoint")}
+                    </a>
+                  ) : null}
+                  {selectedCatalogItem.acquisition.configUrl ? (
+                    <a className="pillButton" href={selectedCatalogItem.acquisition.configUrl} target="_blank" rel="noreferrer">
+                      {t("core.ui.pipelines.panels.yolo.upstream_link.config")}
+                    </a>
+                  ) : null}
+                  {selectedCatalogItem.acquisition.metafileUrl ? (
+                    <a className="pillButton" href={selectedCatalogItem.acquisition.metafileUrl} target="_blank" rel="noreferrer">
+                      {t("core.ui.pipelines.panels.yolo.upstream_link.metafile")}
+                    </a>
+                  ) : null}
+                  {selectedCatalogItem.acquisition.paperUrl ? (
+                    <a className="pillButton" href={selectedCatalogItem.acquisition.paperUrl} target="_blank" rel="noreferrer">
+                      {t("core.ui.pipelines.panels.yolo.upstream_link.paper")}
+                    </a>
+                  ) : null}
+                </div>
+              ) : null}
               {selectedCatalogItem.notes.map((note, index) => (
                 <div key={`${selectedCatalogItem.modelId}:note:${index}`} className="pipelinesStepHint">
                   {note}

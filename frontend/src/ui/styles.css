@@ -561,6 +561,29 @@ textarea {
   align-items: end;
 }
 
+.processingServerConsentSummary {
+  margin-top: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.processingServerConsentCheck {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.processingServerConsentCheck input {
+  margin-top: 2px;
+}
+
+.processingServerConsentSource {
+  overflow-wrap: anywhere;
+}
+
 .modalFooter {
   margin-top: 12px;
   display: flex;

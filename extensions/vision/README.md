@@ -29,12 +29,25 @@ The public surface is task-based, not vendor-based. The first-party detection an
   - `rtmdet_det_medium`
 - Their local ONNX artifacts live under `extensions/vision/models/rtmdet/` and are intentionally not versioned in git.
 - The validated manual provisioning flow is documented in `docs/VISION_MODEL_PROVISIONING.md`.
+- The initial assisted-provisioning foundation for RTMDet detection is already exposed in catalog metadata:
+  - upstream checkpoint/config/metafile/paper links
+  - planned local builder backend
+  - planned supported platforms
+  - explicit-consent requirement
 - The UI can also trigger installation for models that have an admin-configured source. Supported source env vars are:
   - `TOPOSYNC_VISION_MODEL_SOURCE_<MODEL_ID>`
   - `TOPOSYNC_VISION_MODEL_URL_<MODEL_ID>`
   - `TOPOSYNC_VISION_MODEL_PATH_<MODEL_ID>`
   - `TOPOSYNC_VISION_OFFICIAL_MODEL_SOURCE_DIR`
   - `TOPOSYNC_VISION_OFFICIAL_MODEL_BASE_URL`
+- RTMDet detection now also has an experimental assisted local build path:
+  - Linux only in this phase
+  - requires a local container runtime (`docker` or `podman`) on the processing server
+  - still downloads the upstream checkpoint directly on that machine
+  - still validates the exported `end2end.onnx` against the manifest checksum
+  - now records provenance per job, including actor, accepted upstream sources, builder metadata, and final ONNX sha256
+  - still keeps manual upload as the stable fallback path
+  - can be started from the model recovery card or the Processing Servers screen
 - Remote download sources are only enabled when the manifest explicitly allows redistribution. The current built-in RTMDet/RTMDet-Ins manifests do not, so the safe first-party flow is local admin-managed copy.
 - Product policy: RTMDet and RTMDet-Ins stay on `guided_upload` for now. When TopoSync adds a first-party `Baixar nesta máquina` / auto-download family, the first planned candidate is RF-DETR, subject to a fresh license and redistribution review at that time.
 - The extension now also ships a built-in RTMDet-Ins segmentation shortlist:

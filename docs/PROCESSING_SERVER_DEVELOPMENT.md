@@ -36,6 +36,30 @@ Their manifests are discovered automatically from `extensions/vision/manifests/`
 
 Official RTMDet detection artifacts are local files under `extensions/vision/models/rtmdet/`. A validated manual provisioning flow for `rtmdet_det_tiny`, `rtmdet_det_small`, and `rtmdet_det_medium` is documented in [VISION_MODEL_PROVISIONING.md](VISION_MODEL_PROVISIONING.md).
 
+Experimental assisted local build is also available for RTMDet detection in this phase when all of these are true:
+- the processing server is Linux
+- `docker` or `podman` is available in `PATH`
+- the user explicitly starts the local build flow from the UI/API
+- the model manifest includes upstream checkpoint/config metadata and a known ONNX checksum
+
+That flow still stays inside the "yellow" boundary:
+- the checkpoint is downloaded directly by the target processing server
+- the ONNX is exported locally on that machine
+- the final artifact is validated against the manifest checksum
+- TopoSync does not mirror, bundle, or host the checkpoint/ONNX for the user
+
+UI entry points in this phase:
+- pipeline editor recovery card for `vision.detect`
+- Processing Servers screen after the server status has been tested/refreshed
+
+The assisted local-build audit trail now records, per job:
+- who started it
+- which upstream sources were accepted
+- builder/runtime metadata
+- the final exported ONNX sha256 after verification
+
+The Processing Servers screen also surfaces the latest assisted-build actor/source/hash summary from status, so admins do not need shell access just to understand the last run.
+
 If you want the UI to offer one-click install for recommended models, configure one of these source mechanisms on the processing server:
 - `TOPOSYNC_VISION_MODEL_SOURCE_<MODEL_ID>`: absolute file path or HTTP/HTTPS URL for one specific model
 - `TOPOSYNC_VISION_MODEL_URL_<MODEL_ID>`: HTTP/HTTPS URL for one specific model

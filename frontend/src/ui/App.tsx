@@ -1076,7 +1076,10 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       {normalizedPathname.startsWith("/settings/pipelines") ? (
         <PipelinesScreen onClose={closeSettingsChild} onOpenProcessingServers={openProcessingServersSettings} />
       ) : normalizedPathname.startsWith("/settings/processing-servers") ? (
-        <ProcessingServersScreen onClose={closeSettingsChild} />
+        <ProcessingServersScreen
+          onClose={closeSettingsChild}
+          canManageProvisioning={Boolean(authMode === "bypass" || (authUser && (authUser.role === "owner" || authUser.role === "admin")))}
+        />
       ) : normalizedPathname.startsWith("/settings/access") ? (
         <AccessScreen
           authUser={authUser}

@@ -256,12 +256,14 @@ export type ProcessingServerVisionManifestImportResponse = {
   custom: boolean;
   replaced: boolean;
   provenance?: Record<string, unknown>;
+  provenance_diff?: Record<string, unknown>;
 };
 
 export type ProcessingServerVisionModelInstallRequest = {
   force?: boolean;
   mode?: string;
   acknowledge_upstream_terms?: boolean;
+  requested_by?: Record<string, unknown>;
 };
 
 export type ProcessingServerVisionModelInstallResponse = {
@@ -276,6 +278,12 @@ export type ProcessingServerVisionModelInstallResponse = {
   bytes_total: number;
   source_kind: string;
   source_label: string;
+  requested_by?: Record<string, unknown>;
+  accepted_source_labels?: string[];
+  provenance_path?: string;
+  build_log_path?: string;
+  export_log_path?: string;
+  output_sha256?: string;
   error?: string | null;
   started_at: number;
   updated_at: number;
@@ -1137,6 +1145,42 @@ export async function installProcessingServerVisionModel(
   if (!res.ok) {
     throw new Error(
       await _parseHttpError(res, `Failed to install vision model ${modelId} on processing server ${serverId}: ${res.status}`),
+    );
+  }
+  return res.json();
+}
+
+export async function cancelProcessingServerVisionModel(
+  serverId: string,
+  modelId: string,
+  payload: ProcessingServerVisionModelInstallRequest = {},
+): Promise<ProcessingServerVisionModelInstallResponse> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/vision/models/${encodeURIComponent(modelId)}/cancel`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(
+      await _parseHttpError(res, `Failed to cancel vision model ${modelId} on processing server ${serverId}: ${res.status}`),
+    );
+  }
+  return res.json();
+}
+
+export async function retryProcessingServerVisionModel(
+  serverId: string,
+  modelId: string,
+  payload: ProcessingServerVisionModelInstallRequest = {},
+): Promise<ProcessingServerVisionModelInstallResponse> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/vision/models/${encodeURIComponent(modelId)}/retry`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(
+      await _parseHttpError(res, `Failed to retry vision model ${modelId} on processing server ${serverId}: ${res.status}`),
     );
   }
   return res.json();

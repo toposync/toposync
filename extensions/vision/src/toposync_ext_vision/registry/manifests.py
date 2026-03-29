@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 
-VisionTask = Literal["detection", "tracking", "segmentation", "pose"]
+VisionTask = Literal["detection", "tracking", "segmentation", "pose", "classification"]
 
 
 class ModelInputNormalization(BaseModel):
@@ -25,6 +25,7 @@ class ModelInputSpec(BaseModel):
     layout: str = "nchw"
     resize_mode: Literal["stretch", "letterbox"] = "stretch"
     pad_value: float = 0.0
+    rescale_factor: float = 1.0
     tensor_name: str = ""
     normalization: ModelInputNormalization = Field(default_factory=ModelInputNormalization)
 
@@ -38,10 +39,19 @@ class ModelInputSpec(BaseModel):
     def _trim_tensor_name(cls, value: str) -> str:
         return str(value or "").strip()
 
+    @field_validator("pad_value", "rescale_factor")
+    @classmethod
+    def _normalize_finite_float(cls, value: float) -> float:
+        parsed = float(value)
+        if parsed != parsed or parsed in {float("inf"), float("-inf")}:
+            raise ValueError("value must be a finite number")
+        return parsed
+
 
 class ModelPostprocessSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: str = ""
+    adapter_family: str = ""
     confidence_threshold_default: float | None = Field(default=None, ge=0.0, le=1.0)
     iou_threshold_default: float | None = Field(default=None, ge=0.0, le=1.0)
     output_name: str = ""
@@ -56,10 +66,13 @@ class ModelPostprocessSpec(BaseModel):
     ] = "full_frame_binary"
     polygon_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
 
-    @field_validator("type", "output_name", "label_output_name", "mask_output_name")
+    @field_validator("type", "adapter_family", "output_name", "label_output_name", "mask_output_name")
     @classmethod
     def _trim_type(cls, value: str) -> str:
         return str(value or "").strip()
+
+    def resolved_adapter_family(self) -> str:
+        return str(self.adapter_family or self.type or "").strip().lower()
 
 
 class ModelClassesSpec(BaseModel):
@@ -158,6 +171,22 @@ class ModelAcquisitionSpec(BaseModel):
         return out
 
 
+class ModelProvenanceSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    origin: str = ""
+    source_url: str = ""
+    source_ref: str = ""
+    source_file: str = ""
+    imported_via: str = ""
+    imported_at: float = 0.0
+    imported_by: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("origin", "source_url", "source_ref", "source_file", "imported_via")
+    @classmethod
+    def _trim_provenance_strings(cls, value: str) -> str:
+        return str(value or "").strip()
+
+
 class ModelManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model_id: str
@@ -173,6 +202,7 @@ class ModelManifest(BaseModel):
     license: ModelLicenseSpec = Field(default_factory=ModelLicenseSpec)
     hardware_profiles: ModelHardwareProfiles = Field(default_factory=ModelHardwareProfiles)
     acquisition: ModelAcquisitionSpec = Field(default_factory=ModelAcquisitionSpec)
+    provenance: ModelProvenanceSpec = Field(default_factory=ModelProvenanceSpec)
     capabilities: list[str] = Field(default_factory=list)
     recommended_profiles: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
@@ -235,6 +265,9 @@ class ModelManifest(BaseModel):
         if self._source_path is not None:
             return (self._source_path.parent / artifact).resolve()
         return artifact.resolve()
+
+    def resolved_adapter_family(self) -> str:
+        return self.postprocess.resolved_adapter_family()
 
 
 class ModelRegistryError(RuntimeError):
@@ -315,6 +348,9 @@ class ModelRegistry:
 
     def resolve_pose_manifest(self, model_id: str) -> ModelManifest:
         return self._resolve_manifest_for_task(model_id, task="pose")
+
+    def resolve_classifier_manifest(self, model_id: str) -> ModelManifest:
+        return self._resolve_manifest_for_task(model_id, task="classification")
 
 
 def build_default_model_registry() -> ModelRegistry:

@@ -52,6 +52,7 @@ class ProcessingVisionManifestImportRequest(BaseModel):
     manifest_text: str = ""
     artifact_path: str = ""
     replace_existing: bool = False
+    imported_by: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProcessingVisionModelInstallRequest(BaseModel):
@@ -371,6 +372,8 @@ def create_processing_app() -> FastAPI:
                 artifact_path_override=body.artifact_path,
                 data_dir=config_store.paths.data_dir,
                 replace_existing=bool(body.replace_existing),
+                imported_by=dict(body.imported_by or {}),
+                imported_via="api_processing_server_import",
             )
         except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

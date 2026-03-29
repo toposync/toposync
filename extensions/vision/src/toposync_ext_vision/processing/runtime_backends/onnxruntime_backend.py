@@ -136,6 +136,9 @@ def _frame_to_hwc_array(frame: Any) -> np.ndarray:
 
 
 def _normalize_image(array: np.ndarray, manifest: ModelManifest) -> np.ndarray:
+    rescale_factor = float(getattr(manifest.input, "rescale_factor", 1.0) or 1.0)
+    if rescale_factor != 1.0:
+        array = np.asarray(array, dtype=np.float32) * rescale_factor
     channels = array.shape[2]
     mean_values = manifest.input.normalization.mean or [0.0] * channels
     std_values = manifest.input.normalization.std or [1.0] * channels
@@ -240,10 +243,10 @@ class _OnnxRuntimeSessionBackend:
             raise RuntimeError(
                 f"{self.__class__.__name__} only supports task={task!r}, got {manifest.task!r}"
             )
-        postprocess_type = str(manifest.postprocess.type or "").strip().lower()
-        if postprocess_type not in supported_postprocess:
+        adapter_family = manifest.resolved_adapter_family()
+        if adapter_family not in supported_postprocess:
             raise RuntimeError(
-                f"Unsupported ONNX {task} parser for this phase: {manifest.postprocess.type!r}"
+                f"Unsupported ONNX {task} parser for this phase: {adapter_family or manifest.postprocess.type!r}"
             )
 
         ort = _import_onnxruntime()
@@ -339,29 +342,29 @@ class OnnxRuntimeDetectorBackend(_OnnxRuntimeSessionBackend):
         categories: set[str] | None = None,
     ) -> list[DetectionObject]:
         outputs_by_name, preprocess_meta = self._run_outputs(frame)
-        postprocess_type = str(self._manifest.postprocess.type or "").strip().lower()
-        if postprocess_type in {"", "generic_boxes"}:
+        adapter_family = self._manifest.resolved_adapter_family()
+        if adapter_family in {"", "generic_boxes"}:
             return parse_generic_onnx_boxes(
                 outputs_by_name,
                 manifest=self._manifest,
                 preprocess_meta=preprocess_meta,
                 categories=categories,
             )
-        if postprocess_type == "mmdet_rtmdet":
+        if adapter_family == "mmdet_rtmdet":
             return parse_rtmdet_outputs(
                 outputs_by_name,
                 manifest=self._manifest,
                 preprocess_meta=preprocess_meta,
                 categories=categories,
             )
-        if postprocess_type == "rfdetr_detr":
+        if adapter_family == "rfdetr_detr":
             return parse_rfdetr_outputs(
                 outputs_by_name,
                 manifest=self._manifest,
                 preprocess_meta=preprocess_meta,
                 categories=categories,
             )
-        raise RuntimeError(f"Unsupported ONNX detection parser for this phase: {postprocess_type!r}")
+        raise RuntimeError(f"Unsupported ONNX detection parser for this phase: {adapter_family!r}")
 
 
 class OnnxRuntimeSegmentationBackend(_OnnxRuntimeSessionBackend):
@@ -380,8 +383,8 @@ class OnnxRuntimeSegmentationBackend(_OnnxRuntimeSessionBackend):
         categories: set[str] | None = None,
     ) -> list[SegmentationInstance]:
         outputs_by_name, preprocess_meta = self._run_outputs(frame)
-        postprocess_type = str(self._manifest.postprocess.type or "").strip().lower()
-        if postprocess_type == "mmdet_rtmdet_ins":
+        adapter_family = self._manifest.resolved_adapter_family()
+        if adapter_family == "mmdet_rtmdet_ins":
             return parse_rtmdet_ins_outputs(
                 outputs_by_name,
                 manifest=self._manifest,
@@ -389,7 +392,7 @@ class OnnxRuntimeSegmentationBackend(_OnnxRuntimeSessionBackend):
                 categories=categories,
             )
         raise RuntimeError(
-            f"Unsupported ONNX segmentation parser for this phase: {postprocess_type!r}"
+            f"Unsupported ONNX segmentation parser for this phase: {adapter_family!r}"
         )
 
 

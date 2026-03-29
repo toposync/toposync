@@ -83,8 +83,14 @@ def test_import_custom_vision_manifest_persists_and_appears_in_catalog(
         assert body["model_id"] == "custom.detector"
         assert body["task"] == "detection"
         assert body["artifact_exists"] is True
+        assert body["provenance"]["origin"] == "custom_manifest"
+        assert body["provenance"]["imported_via"] == "api_processing_server_import"
+        assert body["provenance"]["imported_by"]["username"] == "bypass"
         manifest_path = Path(body["manifest_path"])
         assert manifest_path.is_file()
+        saved_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert saved_manifest["provenance"]["origin"] == "custom_manifest"
+        assert saved_manifest["provenance"]["imported_by"]["username"] == "bypass"
 
         status_res = client.get("/api/processing-servers/local/status")
         assert status_res.status_code == 200
@@ -95,3 +101,6 @@ def test_import_custom_vision_manifest_persists_and_appears_in_catalog(
         assert custom_item["source_kind"] == "custom"
         assert custom_item["availability"] == "available"
         assert custom_item["artifact_exists"] is True
+        assert custom_item["adapter_family"] == "generic_boxes"
+        assert custom_item["input"]["rescale_factor"] == pytest.approx(1.0)
+        assert custom_item["provenance"]["origin"] == "custom_manifest"

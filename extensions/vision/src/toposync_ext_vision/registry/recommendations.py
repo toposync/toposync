@@ -307,7 +307,9 @@ def _catalog_entry(
             "layout": manifest.input.layout,
             "color_order": manifest.input.color_order,
             "resize_mode": manifest.input.resize_mode,
+            "rescale_factor": float(manifest.input.rescale_factor),
         },
+        "adapter_family": manifest.resolved_adapter_family(),
         "classes": {
             "source": manifest.classes.source,
             "count": _labels_count(manifest),
@@ -320,6 +322,15 @@ def _catalog_entry(
             "official_build_allowed": bool(manifest.license.official_build_allowed),
         },
         "resource_tier": _resource_tier(manifest),
+        "provenance": {
+            "origin": manifest.provenance.origin,
+            "source_url": manifest.provenance.source_url,
+            "source_ref": manifest.provenance.source_ref,
+            "source_file": manifest.provenance.source_file,
+            "imported_via": manifest.provenance.imported_via,
+            "imported_at": float(manifest.provenance.imported_at),
+            "imported_by": dict(manifest.provenance.imported_by or {}),
+        },
         "notes": list(manifest.notes or []),
     }
 

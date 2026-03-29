@@ -106,6 +106,24 @@ def test_model_registry_resolves_single_pose_manifest_as_default() -> None:
     assert manifest.model_id == "fake.pose"
 
 
+def test_model_registry_resolves_single_classification_manifest_as_default() -> None:
+    registry = ModelRegistry(
+        [
+            ModelManifest(
+                model_id="fake.classifier",
+                display_name="Fake Classifier",
+                task="classification",
+                runtime="fake",
+                artifact_format="fake",
+                artifact_path="fake://classifier",
+            )
+        ]
+    )
+
+    manifest = registry.resolve_classifier_manifest("")
+    assert manifest.model_id == "fake.classifier"
+
+
 def test_model_manifest_normalizes_capabilities_and_registry_filters_reid() -> None:
     manifest = ModelManifest(
         model_id="fake.reid",
@@ -121,6 +139,30 @@ def test_model_manifest_normalizes_capabilities_and_registry_filters_reid() -> N
     assert manifest.capabilities == ["reid", "embedding"]
     assert manifest.supports_capability("REID")
     assert [item.model_id for item in registry.list_manifests(capability="reid")] == ["fake.reid"]
+
+
+def test_model_manifest_resolves_adapter_family_with_fallback_to_postprocess_type() -> None:
+    manifest = ModelManifest(
+        model_id="fake.detector",
+        display_name="Fake Detector",
+        task="detection",
+        runtime="onnxruntime",
+        artifact_format="onnx",
+        artifact_path="fake://detector",
+        postprocess={"type": "generic_boxes"},
+    )
+    explicit = ModelManifest(
+        model_id="fake.classifier",
+        display_name="Fake Classifier",
+        task="classification",
+        runtime="onnxruntime",
+        artifact_format="onnx",
+        artifact_path="fake://classifier",
+        postprocess={"type": "legacy_parser", "adapter_family": "image_classification_logits"},
+    )
+
+    assert manifest.resolved_adapter_family() == "generic_boxes"
+    assert explicit.resolved_adapter_family() == "image_classification_logits"
 
 
 def test_vision_detect_config_defaults_to_filter_mode_and_normalizes_aliases() -> None:

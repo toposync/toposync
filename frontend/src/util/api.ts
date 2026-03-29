@@ -242,6 +242,7 @@ export type ProcessingServerVisionManifestImportRequest = {
   manifest_text: string;
   artifact_path?: string;
   replace_existing?: boolean;
+  imported_by?: Record<string, unknown>;
 };
 
 export type ProcessingServerVisionManifestImportResponse = {
@@ -254,6 +255,7 @@ export type ProcessingServerVisionManifestImportResponse = {
   manifest_path: string;
   custom: boolean;
   replaced: boolean;
+  provenance?: Record<string, unknown>;
 };
 
 export type ProcessingServerVisionModelInstallRequest = {

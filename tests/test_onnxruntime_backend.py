@@ -100,6 +100,36 @@ def test_onnxruntime_backend_runs_on_cpu_and_benchmarks(tmp_path: Path, monkeypa
     assert loaded_manifest.model_id == "constant.detector"
 
 
+def test_prepare_onnx_input_applies_rescale_factor_before_normalization() -> None:
+    manifest = ModelManifest.model_validate(
+        {
+            "model_id": "rescale.detector",
+            "display_name": "Rescale Detector",
+            "task": "detection",
+            "runtime": "onnxruntime",
+            "artifact_format": "onnx",
+            "artifact_path": "/tmp/rescale.detector.onnx",
+            "input": {
+                "width": 1,
+                "height": 1,
+                "layout": "nchw",
+                "color_order": "bgr",
+                "rescale_factor": 1.0 / 255.0,
+                "normalization": {"mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5]},
+            },
+            "postprocess": {"type": "generic_boxes"},
+        }
+    )
+
+    tensor, meta = ort_backend_mod.prepare_onnx_input(np.asarray([[[255.0, 127.5, 0.0]]], dtype=np.float32), manifest)
+
+    assert tensor.shape == (1, 3, 1, 1)
+    assert meta["input_width"] == 1
+    assert tensor[0, 0, 0, 0] == pytest.approx(1.0, abs=1e-6)
+    assert tensor[0, 1, 0, 0] == pytest.approx(0.0, abs=1e-6)
+    assert tensor[0, 2, 0, 0] == pytest.approx(-1.0, abs=1e-6)
+
+
 def test_resolve_onnxruntime_execution_providers_defaults_to_cpu_first(monkeypatch) -> None:  # noqa: ANN001
     monkeypatch.delenv("TOPOSYNC_VISION_ONNXRUNTIME_PROVIDERS", raising=False)
     monkeypatch.setattr(ort_backend_mod, "_installed_onnxruntime_runtime_variant", lambda: "cpu")

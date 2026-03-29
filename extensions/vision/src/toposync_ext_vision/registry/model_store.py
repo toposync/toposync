@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -102,11 +103,23 @@ def import_custom_manifest(
     artifact_path_override: str = "",
     data_dir: str | Path | None = None,
     replace_existing: bool = False,
+    imported_by: dict[str, Any] | None = None,
+    imported_via: str = "",
 ) -> dict[str, Any]:
     manifest = validate_custom_manifest_payload(
         parse_manifest_text(manifest_text),
         artifact_path_override=artifact_path_override,
     )
+    if not str(manifest.provenance.origin or "").strip():
+        manifest.provenance.origin = "custom_manifest"
+    if not str(manifest.provenance.imported_via or "").strip():
+        manifest.provenance.imported_via = str(imported_via or "").strip() or "manual_manifest_import"
+    if not float(manifest.provenance.imported_at or 0.0):
+        manifest.provenance.imported_at = float(time.time())
+    if not dict(manifest.provenance.imported_by or {}):
+        manifest.provenance.imported_by = dict(imported_by or {})
+    if not str(manifest.provenance.source_url or "").strip():
+        manifest.provenance.source_url = str(manifest.acquisition.source_url or "").strip()
     _validate_manifest_runtime(manifest)
 
     target_dir = default_custom_manifest_dir(data_dir=data_dir)
@@ -129,4 +142,5 @@ def import_custom_manifest(
         "manifest_path": str(target_path),
         "custom": True,
         "replaced": bool(replace_existing and existed_before),
+        "provenance": manifest.provenance.model_dump(mode="json"),
     }

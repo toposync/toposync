@@ -164,6 +164,7 @@ class ProcessingServerVisionManifestImportRequest(BaseModel):
     manifest_text: str = ""
     artifact_path: str = ""
     replace_existing: bool = False
+    imported_by: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProcessingServerVisionManifestImportResponse(BaseModel):
@@ -176,6 +177,7 @@ class ProcessingServerVisionManifestImportResponse(BaseModel):
     manifest_path: str = ""
     custom: bool = True
     replaced: bool = False
+    provenance: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProcessingServerVisionModelInstallRequest(BaseModel):
@@ -1324,6 +1326,8 @@ def create_app() -> FastAPI:
                     artifact_path_override=body.artifact_path,
                     data_dir=config_store.paths.data_dir,
                     replace_existing=bool(body.replace_existing),
+                    imported_by=dict(body.imported_by or {}) or _processing_install_requested_by(request),
+                    imported_via="api_processing_server_import",
                 )
             except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1340,7 +1344,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         try:
-            result = await transport.import_vision_manifest(body.model_dump(mode="json"))
+            payload = body.model_dump(mode="json")
+            payload["imported_by"] = dict(body.imported_by or {}) or _processing_install_requested_by(request)
+            result = await transport.import_vision_manifest(payload)
             return ProcessingServerVisionManifestImportResponse.model_validate(result)
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc

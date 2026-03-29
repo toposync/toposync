@@ -12,6 +12,7 @@ import {
   uploadProcessingServerVisionModelArtifact,
 } from "../../../../../util/api";
 import { CustomOnnxWizardModal } from "../../../../CustomOnnxWizardModal";
+import { HuggingFaceImportModal } from "../../../../HuggingFaceImportModal";
 import { i18n } from "../../../../../util/i18n";
 import { LocalBuildConsentModal } from "../../../../LocalBuildConsentModal";
 import { Modal } from "../../../../Modal";
@@ -645,6 +646,7 @@ export function VisionConfigCard({
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [showCustomOnnxWizard, setShowCustomOnnxWizard] = useState(false);
+  const [showHuggingFaceWizard, setShowHuggingFaceWizard] = useState(false);
   const [customOnnxSuccess, setCustomOnnxSuccess] = useState<string | null>(null);
   const [artifactModalItem, setArtifactModalItem] = useState<VisionModelCatalogItem | null>(null);
   const [artifactModalFile, setArtifactModalFile] = useState<File | null>(null);
@@ -1383,6 +1385,18 @@ export function VisionConfigCard({
                   type="button"
                   onClick={() => {
                     setCustomOnnxSuccess(null);
+                    setShowHuggingFaceWizard(true);
+                  }}
+                >
+                  {t("core.ui.pipelines.panels.yolo.huggingface")}
+                </button>
+              ) : null}
+              {customOnnxSupported ? (
+                <button
+                  className="pillButton"
+                  type="button"
+                  onClick={() => {
+                    setCustomOnnxSuccess(null);
                     setShowCustomOnnxWizard(true);
                   }}
                 >
@@ -1987,6 +2001,13 @@ export function VisionConfigCard({
         serverId={resolvedProcessingServerId}
         task={isClassification ? "classification" : "detection"}
         onClose={() => setShowCustomOnnxWizard(false)}
+        onSaved={handleCustomOnnxSaved}
+      />
+      <HuggingFaceImportModal
+        open={showHuggingFaceWizard}
+        serverId={resolvedProcessingServerId}
+        task={isClassification ? "classification" : "detection"}
+        onClose={() => setShowHuggingFaceWizard(false)}
         onSaved={handleCustomOnnxSaved}
       />
 

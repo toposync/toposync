@@ -297,6 +297,80 @@ export type ProcessingServerVisionModelArtifactUploadResponse = {
   custom: boolean;
 };
 
+export type ProcessingServerVisionCustomOnnxTensor = {
+  name: string;
+  dtype: string;
+  shape: Array<number | string | null>;
+  rank: number;
+};
+
+export type ProcessingServerVisionCustomOnnxSuggestionDefaults = {
+  tensor_name: string;
+  output_name: string;
+  width: number;
+  height: number;
+  layout: string;
+  channels: number;
+  color_order: string;
+  resize_mode: string;
+  rescale_factor: number;
+  normalization_mean: number[];
+  normalization_std: number[];
+  box_format: string;
+  labels_count_hint: number;
+};
+
+export type ProcessingServerVisionCustomOnnxTaskSuggestion = {
+  task: "classification" | "detection";
+  adapter_family: string;
+  label: string;
+  reason: string;
+  confidence: string;
+  defaults: ProcessingServerVisionCustomOnnxSuggestionDefaults;
+};
+
+export type ProcessingServerVisionCustomOnnxInspectResponse = {
+  artifact_path: string;
+  uploaded_filename: string;
+  file_size_bytes: number;
+  suggested_display_name: string;
+  input_tensors: ProcessingServerVisionCustomOnnxTensor[];
+  output_tensors: ProcessingServerVisionCustomOnnxTensor[];
+  task_suggestions: ProcessingServerVisionCustomOnnxTaskSuggestion[];
+  supported_task_adapters: Array<{
+    task: "classification" | "detection";
+    adapter_family: string;
+    label: string;
+  }>;
+};
+
+export type ProcessingServerVisionCustomOnnxRequest = {
+  artifact_path: string;
+  uploaded_filename?: string;
+  display_name: string;
+  task: "classification" | "detection";
+  adapter_family: string;
+  tensor_name?: string;
+  width?: number;
+  height?: number;
+  layout?: string;
+  color_order?: string;
+  resize_mode?: string;
+  rescale_factor?: number;
+  normalization_mean?: number[];
+  normalization_std?: number[];
+  output_name?: string;
+  box_format?: string;
+  class_labels?: string[];
+  source_url?: string;
+  replace_existing?: boolean;
+};
+
+export type ProcessingServerVisionCustomOnnxPreviewResponse = {
+  task: "classification" | "detection";
+  summary: Record<string, unknown>;
+};
+
 export type CameraSummary = {
   id: string;
   name: string;
@@ -824,6 +898,61 @@ export async function importProcessingServerVisionManifest(
   if (!res.ok) {
     throw new Error(
       await _parseHttpError(res, `Failed to import vision manifest on processing server ${serverId}: ${res.status}`),
+    );
+  }
+  return res.json();
+}
+
+export async function inspectProcessingServerCustomOnnx(
+  serverId: string,
+  file: File,
+): Promise<ProcessingServerVisionCustomOnnxInspectResponse> {
+  const form = new FormData();
+  form.set("file", file, file.name);
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/vision/custom-onnx/inspect`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(
+      await _parseHttpError(res, `Failed to inspect custom ONNX on processing server ${serverId}: ${res.status}`),
+    );
+  }
+  return res.json();
+}
+
+export async function previewProcessingServerCustomOnnx(
+  serverId: string,
+  payload: ProcessingServerVisionCustomOnnxRequest,
+  image: File,
+): Promise<ProcessingServerVisionCustomOnnxPreviewResponse> {
+  const form = new FormData();
+  form.set("config_json", JSON.stringify(payload));
+  form.set("image", image, image.name);
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/vision/custom-onnx/preview`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(
+      await _parseHttpError(res, `Failed to preview custom ONNX on processing server ${serverId}: ${res.status}`),
+    );
+  }
+  return res.json();
+}
+
+export async function importProcessingServerCustomOnnx(
+  serverId: string,
+  payload: ProcessingServerVisionCustomOnnxRequest,
+): Promise<ProcessingServerVisionManifestImportResponse> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/vision/custom-onnx/import`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(
+      await _parseHttpError(res, `Failed to import custom ONNX on processing server ${serverId}: ${res.status}`),
     );
   }
   return res.json();

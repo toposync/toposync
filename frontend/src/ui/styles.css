@@ -4862,3 +4862,40 @@ select {
   opacity: 0.9;
   word-break: break-word;
 }
+
+.customOnnxWizardModal {
+  max-width: 780px;
+}
+
+.customOnnxWizardDetails {
+  margin-top: 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--color-surface-frost-ultra) 92%, transparent);
+}
+
+.customOnnxWizardDetails > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.customOnnxWizardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.customOnnxWizardTensorList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.customOnnxWizardPreviewList {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}

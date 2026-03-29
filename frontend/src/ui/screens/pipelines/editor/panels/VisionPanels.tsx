@@ -8,10 +8,10 @@ import type {
 } from "../../../../../util/api";
 import {
   getProcessingServerStatus,
-  importProcessingServerVisionManifest,
   installProcessingServerVisionModel,
   uploadProcessingServerVisionModelArtifact,
 } from "../../../../../util/api";
+import { CustomOnnxWizardModal } from "../../../../CustomOnnxWizardModal";
 import { i18n } from "../../../../../util/i18n";
 import { LocalBuildConsentModal } from "../../../../LocalBuildConsentModal";
 import { Modal } from "../../../../Modal";
@@ -637,19 +637,15 @@ export function VisionConfigCard({
   const isClassification = String(operatorId || "").trim() === "vision.classify_image";
   const isSegmentation = String(operatorId || "").trim() === "vision.segment_instances";
   const isDetection = !isTracking && !isClassification && !isSegmentation;
+  const customOnnxSupported = isDetection || isClassification;
   const task = isSegmentation ? "segmentation" : isClassification ? "classification" : "detection";
   const resolvedProcessingServerId = String(processingServerId || "").trim() || "local";
 
   const [serverStatus, setServerStatus] = useState<ProcessingServerStatus | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [showImport, setShowImport] = useState(false);
-  const [manifestText, setManifestText] = useState("");
-  const [artifactPath, setArtifactPath] = useState("");
-  const [replaceExisting, setReplaceExisting] = useState(false);
-  const [importLoading, setImportLoading] = useState(false);
-  const [importError, setImportError] = useState<string | null>(null);
-  const [importSuccess, setImportSuccess] = useState<string | null>(null);
+  const [showCustomOnnxWizard, setShowCustomOnnxWizard] = useState(false);
+  const [customOnnxSuccess, setCustomOnnxSuccess] = useState<string | null>(null);
   const [artifactModalItem, setArtifactModalItem] = useState<VisionModelCatalogItem | null>(null);
   const [artifactModalFile, setArtifactModalFile] = useState<File | null>(null);
   const [artifactModalDragActive, setArtifactModalDragActive] = useState(false);
@@ -902,54 +898,26 @@ export function VisionConfigCard({
     [inputPresetChoices, inputWithFallback],
   );
 
-  const handleImport = useCallback(async () => {
-    setImportLoading(true);
-    setImportError(null);
-    setImportSuccess(null);
-    try {
-      const result: ProcessingServerVisionManifestImportResponse = await importProcessingServerVisionManifest(
-        resolvedProcessingServerId,
-        {
-          manifest_text: manifestText,
-          artifact_path: artifactPath,
-          replace_existing: replaceExisting,
-        },
-      );
-      setImportSuccess(
+  const handleCustomOnnxSaved = useCallback(
+    async (result: ProcessingServerVisionManifestImportResponse) => {
+      setCustomOnnxSuccess(
         t(
           "core.ui.pipelines.panels.yolo.import_success",
           { modelId: result.model_id, task: result.task },
           `Imported ${result.model_id}`,
         ),
       );
-      if (
-        (isSegmentation && result.task === "segmentation") ||
-        (isDetection && result.task === "detection") ||
-        (isClassification && result.task === "classification")
-      ) {
+      if ((isDetection && result.task === "detection") || (isClassification && result.task === "classification")) {
         onUpdateConfig((prev) => ({
           ...prev,
           model_id: result.model_id,
         }));
       }
       await reloadCatalog();
-    } catch (error: any) {
-      setImportError(String(error?.message ?? error));
-    } finally {
-      setImportLoading(false);
-    }
-  }, [
-    artifactPath,
-    isClassification,
-    isDetection,
-    isSegmentation,
-    manifestText,
-    onUpdateConfig,
-    reloadCatalog,
-    replaceExisting,
-    resolvedProcessingServerId,
-    t,
-  ]);
+      setShowCustomOnnxWizard(false);
+    },
+    [isClassification, isDetection, onUpdateConfig, reloadCatalog, t],
+  );
 
   const applySuggestedAvailableModel = useCallback(() => {
     if (!suggestedAvailableItem) return;
@@ -1409,63 +1377,21 @@ export function VisionConfigCard({
 
           {showAdvanced ? (
             <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-              <button
-                className="pillButton"
-                type="button"
-                onClick={() => {
-                  setShowImport((prev) => !prev);
-                  setImportError(null);
-                  setImportSuccess(null);
-                }}
-              >
-                {t("core.ui.pipelines.panels.yolo.import_manifest")}
-              </button>
-            </div>
-          ) : null}
-
-          {showAdvanced && showImport ? (
-            <div className="pipelinesOperatorConfigCard" style={{ marginTop: 10 }}>
-              <label className="pipelinesLabel">
-                <span>{t("core.ui.pipelines.panels.yolo.import_manifest_text")}</span>
-                <textarea
-                  className="pipelinesTextArea"
-                  rows={8}
-                  value={manifestText}
-                  placeholder='{"model_id":"custom_det","task":"detection","runtime":"onnxruntime"}'
-                  onChange={(event) => setManifestText(event.target.value)}
-                />
-              </label>
-              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.import_manifest_text_hint")}</div>
-
-              <label className="pipelinesLabel">
-                <span>{t("core.ui.pipelines.panels.yolo.import_artifact_path")}</span>
-                <input
-                  className="pipelinesInput"
-                  type="text"
-                  value={artifactPath}
-                  placeholder="/models/custom/model.onnx"
-                  onChange={(event) => setArtifactPath(event.target.value)}
-                />
-              </label>
-              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.import_artifact_path_hint")}</div>
-
-              <label className="pipelinesCheckboxLabel">
-                <input type="checkbox" checked={replaceExisting} onChange={(event) => setReplaceExisting(event.target.checked)} />
-                <span>{t("core.ui.pipelines.panels.yolo.import_replace_existing")}</span>
-              </label>
-
-              {importError ? <div className="errorText">{importError}</div> : null}
-              {importSuccess ? <div className="settingsStatusMuted">{importSuccess}</div> : null}
-
-              <div className="row" style={{ gap: 8, marginTop: 8 }}>
-                <button className="pillButton pillButtonPrimary" type="button" onClick={() => void handleImport()} disabled={importLoading}>
-                  {importLoading
-                    ? t("core.ui.pipelines.panels.yolo.importing_manifest")
-                    : t("core.ui.pipelines.panels.yolo.apply_import_manifest")}
+              {customOnnxSupported ? (
+                <button
+                  className="pillButton"
+                  type="button"
+                  onClick={() => {
+                    setCustomOnnxSuccess(null);
+                    setShowCustomOnnxWizard(true);
+                  }}
+                >
+                  {t("core.ui.pipelines.panels.yolo.custom_onnx")}
                 </button>
-              </div>
+              ) : null}
             </div>
           ) : null}
+          {customOnnxSuccess ? <div className="settingsStatusMuted">{customOnnxSuccess}</div> : null}
 
           {showAdvanced && selectedCatalogItem ? (
             <div className="pipelinesOperatorConfigCard" style={{ marginTop: 10 }}>
@@ -2055,6 +1981,13 @@ export function VisionConfigCard({
         onToggleChecked={setLocalBuildConsentChecked}
         onClose={closeLocalBuildConsent}
         onConfirm={() => void confirmLocalBuildConsent()}
+      />
+      <CustomOnnxWizardModal
+        open={showCustomOnnxWizard}
+        serverId={resolvedProcessingServerId}
+        task={isClassification ? "classification" : "detection"}
+        onClose={() => setShowCustomOnnxWizard(false)}
+        onSaved={handleCustomOnnxSaved}
       />
 
       <Modal

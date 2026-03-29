@@ -589,11 +589,52 @@ textarea {
   gap: 8px;
 }
 
+.pipelinesProvisionStatus {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.pipelinesProvisionStatus-ready {
+  background: rgba(42, 110, 74, 0.28);
+  color: rgba(196, 255, 214, 0.92);
+}
+
+.pipelinesProvisionStatus-missing {
+  background: rgba(161, 113, 16, 0.28);
+  color: rgba(255, 229, 170, 0.95);
+}
+
+.pipelinesProvisionStatus-busy {
+  background: rgba(49, 92, 171, 0.28);
+  color: rgba(192, 220, 255, 0.95);
+}
+
+.pipelinesProvisionStatus-failed,
+.pipelinesProvisionStatus-unavailable {
+  background: rgba(142, 43, 66, 0.26);
+  color: rgba(255, 196, 208, 0.95);
+}
+
 .pipelinesProvisionActions,
 .pipelinesProvisionLinks {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.pipelinesProvisionSecondaryActions {
+  margin-top: -2px;
+}
+
+.pipelinesProvisionDetails {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .modalFooter {

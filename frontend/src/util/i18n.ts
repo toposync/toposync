@@ -1251,6 +1251,22 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.provisioning.status_missing": "{{model}} is not installed on {{serverId}} yet.",
     "core.ui.pipelines.panels.yolo.provisioning.status_incompatible":
       "{{model}} is selected, but this machine is not compatible with it.",
+    "core.ui.pipelines.panels.yolo.provisioning.compact_state.ready": "Ready",
+    "core.ui.pipelines.panels.yolo.provisioning.compact_state.missing": "Needs setup",
+    "core.ui.pipelines.panels.yolo.provisioning.compact_state.busy": "Preparing",
+    "core.ui.pipelines.panels.yolo.provisioning.compact_state.failed": "Failed",
+    "core.ui.pipelines.panels.yolo.provisioning.compact_state.unavailable": "Unavailable",
+    "core.ui.pipelines.panels.yolo.provisioning.summary_ready": "This model is already ready on this machine.",
+    "core.ui.pipelines.panels.yolo.provisioning.summary_missing_actionable":
+      "This model is not ready here yet, but you can prepare it from this step.",
+    "core.ui.pipelines.panels.yolo.provisioning.summary_missing_manual":
+      "This model is not ready on this machine yet.",
+    "core.ui.pipelines.panels.yolo.provisioning.summary_busy":
+      "This machine is preparing the selected model now.",
+    "core.ui.pipelines.panels.yolo.provisioning.summary_failed":
+      "The last preparation failed. Retry or use the manual ONNX path.",
+    "core.ui.pipelines.panels.yolo.provisioning.summary_incompatible":
+      "The selected machine cannot run this model.",
     "core.ui.pipelines.panels.yolo.provisioning.expected_file": "Expected ONNX file: {{file}}",
     "core.ui.pipelines.panels.yolo.provisioning.local_build_prepare_hint":
       "This button downloads the upstream checkpoint and generates the ONNX automatically on this machine using {{runtime}}.",
@@ -1271,6 +1287,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.provisioning.action.local_update": "Update automatically",
     "core.ui.pipelines.panels.yolo.provisioning.action.upload_add": "Send ONNX manually",
     "core.ui.pipelines.panels.yolo.provisioning.action.upload_replace": "Replace ONNX manually",
+    "core.ui.pipelines.panels.yolo.provisioning.details_show": "Preparation details",
+    "core.ui.pipelines.panels.yolo.provisioning.details_hide": "Hide details",
     "core.ui.pipelines.panels.yolo.hidden_unavailable_count":
       "{{count}} model(s) are hidden because they are not ready on this machine. Open advanced details to review them.",
     "core.ui.pipelines.panels.yolo.refresh_models": "Refresh options",
@@ -2739,6 +2757,22 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.provisioning.status_missing": "{{model}} ainda não está instalado em {{serverId}}.",
     "core.ui.pipelines.panels.yolo.provisioning.status_incompatible":
       "{{model}} está selecionado, mas esta máquina não é compatível com ele.",
+    "core.ui.pipelines.panels.yolo.provisioning.compact_state.ready": "Pronto",
+    "core.ui.pipelines.panels.yolo.provisioning.compact_state.missing": "Preparar",
+    "core.ui.pipelines.panels.yolo.provisioning.compact_state.busy": "Preparando",
+    "core.ui.pipelines.panels.yolo.provisioning.compact_state.failed": "Falhou",
+    "core.ui.pipelines.panels.yolo.provisioning.compact_state.unavailable": "Indisponível",
+    "core.ui.pipelines.panels.yolo.provisioning.summary_ready": "Este modelo já está pronto nesta máquina.",
+    "core.ui.pipelines.panels.yolo.provisioning.summary_missing_actionable":
+      "Este modelo ainda não está pronto aqui, mas você pode prepará-lo a partir desta etapa.",
+    "core.ui.pipelines.panels.yolo.provisioning.summary_missing_manual":
+      "Este modelo ainda não está pronto nesta máquina.",
+    "core.ui.pipelines.panels.yolo.provisioning.summary_busy":
+      "Esta máquina está preparando o modelo selecionado agora.",
+    "core.ui.pipelines.panels.yolo.provisioning.summary_failed":
+      "A última preparação falhou. Tente novamente ou use o caminho manual do ONNX.",
+    "core.ui.pipelines.panels.yolo.provisioning.summary_incompatible":
+      "A máquina selecionada não consegue rodar este modelo.",
     "core.ui.pipelines.panels.yolo.provisioning.expected_file": "Arquivo ONNX esperado: {{file}}",
     "core.ui.pipelines.panels.yolo.provisioning.local_build_prepare_hint":
       "Este botão baixa o checkpoint upstream e gera o ONNX automaticamente nesta máquina usando {{runtime}}.",
@@ -2759,6 +2793,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.provisioning.action.local_update": "Atualizar automaticamente",
     "core.ui.pipelines.panels.yolo.provisioning.action.upload_add": "Enviar ONNX manualmente",
     "core.ui.pipelines.panels.yolo.provisioning.action.upload_replace": "Substituir ONNX manualmente",
+    "core.ui.pipelines.panels.yolo.provisioning.details_show": "Detalhes do preparo",
+    "core.ui.pipelines.panels.yolo.provisioning.details_hide": "Ocultar detalhes",
     "core.ui.pipelines.panels.yolo.hidden_unavailable_count":
       "{{count}} modelo(s) foram ocultados porque ainda não estão prontos nesta máquina. Abra os detalhes avançados para revisá-los.",
     "core.ui.pipelines.panels.yolo.refresh_models": "Atualizar opções",

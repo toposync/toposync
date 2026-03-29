@@ -433,14 +433,6 @@ const BASIC_CATEGORY_LABEL_KEYS: Record<string, string> = {
   cat: "core.ui.pipelines.panels.yolo.category.cat",
 };
 
-function availabilityTranslationKey(availability: VisionModelCatalogItem["availability"]): string {
-  return `core.ui.pipelines.panels.yolo.model_availability.${availability}`;
-}
-
-function availabilityReasonTranslationKey(reason: string): string {
-  return `core.ui.pipelines.panels.yolo.model_availability_reason.${reason}`;
-}
-
 function resourceTierTranslationKey(value: string): string {
   return `core.ui.pipelines.panels.yolo.resource_tier.${String(value || "").trim() || "unknown"}`;
 }
@@ -669,6 +661,7 @@ export function VisionConfigCard({
   const [localBuildConsentChecked, setLocalBuildConsentChecked] = useState(false);
   const [localBuildConsentSubmitting, setLocalBuildConsentSubmitting] = useState(false);
   const [localBuildConsentError, setLocalBuildConsentError] = useState<string | null>(null);
+  const [showProvisionDetails, setShowProvisionDetails] = useState(false);
   const artifactFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const reloadCatalog = useCallback(async () => {
@@ -717,6 +710,7 @@ export function VisionConfigCard({
     setLocalBuildConsent(null);
     setLocalBuildConsentChecked(false);
     setLocalBuildConsentError(null);
+    setShowProvisionDetails(false);
   }, [modelId, resolvedProcessingServerId]);
 
   const categoryOptions = useMemo<SelectOption[]>(() => {
@@ -756,33 +750,24 @@ export function VisionConfigCard({
       ? catalogItems.filter((item) => item.availability === "available" || item.modelId === modelId)
       : catalogItems;
     return visibleItems.map((item) => {
-      const badges = item.badgeIds.map((badgeId) => t(`core.ui.processing_servers.vision_recommendations.badge.${badgeId}`, {}, badgeId));
-      const availabilityText =
-        item.availability === "available"
-          ? ""
-          : ` • ${t(availabilityTranslationKey(item.availability), {}, item.availability)}`;
-      const badgeText = badges.length ? ` • ${badges.join(" • ")}` : "";
+      const recommendedText = item.badgeIds.includes("recommended")
+        ? ` • ${t("core.ui.processing_servers.vision_recommendations.badge.recommended")}`
+        : "";
       const customText = item.custom ? ` • ${t("core.ui.pipelines.panels.yolo.model_custom_badge")}` : "";
       return {
         value: item.modelId,
-        label: `${item.displayName}${badgeText}${customText}${availabilityText}`,
+        label: `${item.displayName}${recommendedText}${customText}`,
         item,
         isDisabled: item.availability !== "available" && item.modelId !== modelId,
       };
     });
   }, [catalogItems, modelId, showAdvanced, t]);
-  const unavailableItems = useMemo(
-    () => catalogItems.filter((item) => item.availability !== "available" && item.modelId !== modelId),
-    [catalogItems, modelId],
-  );
   const availableItems = useMemo(
     () => catalogItems.filter((item) => item.availability === "available"),
     [catalogItems],
   );
   const suggestedAvailableItem = useMemo(() => pickSuggestedAvailableModel(availableItems), [availableItems]);
-  const selectedModelNeedsInstall = selectedCatalogItem?.availability === "manifest_only";
   const selectedModelIncompatible = selectedCatalogItem?.availability === "incompatible";
-  const noReadyModels = !isTracking && !catalogLoading && availableItems.length === 0;
   const basicModelItems = useMemo(() => {
     const next: VisionModelCatalogItem[] = [];
     const seen = new Set<string>();
@@ -802,9 +787,6 @@ export function VisionConfigCard({
     !!manualInstallItem &&
     manualInstallNeedsExport &&
     manualInstallItem.localBuildSupported;
-  const showModelRecoveryCard =
-    !isTracking &&
-    (!!selectedModelIncompatible || noReadyModels || (!!selectedModelNeedsInstall && !manualLocalBuildActionable));
   const manualInstallBusy = ["queued", "downloading", "verifying", "installing"].includes(
     String(manualInstallItem?.installJob?.status || "").trim(),
   );
@@ -820,6 +802,45 @@ export function VisionConfigCard({
     manualLocalBuildAction === "update"
       ? "core.ui.pipelines.panels.yolo.provisioning.action.local_update"
       : "core.ui.pipelines.panels.yolo.provisioning.action.local_prepare";
+  const selectedProfileLabel = taskCatalog?.profile
+    ? t(`core.ui.processing_servers.vision_recommendations.profile_label.${taskCatalog.profile}`, {}, taskCatalog.profile)
+    : "";
+  const selectedBadgeText = selectedCatalogItem?.badgeIds.length
+    ? selectedCatalogItem.badgeIds
+        .map((badgeId) => t(`core.ui.processing_servers.vision_recommendations.badge.${badgeId}`, {}, badgeId))
+        .join(" • ")
+    : "";
+  const selectedModelMeta = [selectedBadgeText, selectedProfileLabel].filter(Boolean).join(" • ");
+  const selectedModelHintKey = useMemo(() => modelHintTranslationKey(modelId), [modelId]);
+  const manualInstallFailed = !!manualInstallItem?.installJob?.error || !!localBuildError;
+  const provisionStatusTone = selectedModelIncompatible
+    ? "unavailable"
+    : manualInstallFailed
+      ? "failed"
+      : manualInstallBusy
+        ? "busy"
+        : manualInstallItem?.artifactExists
+          ? "ready"
+          : "missing";
+  const provisionStatusLabel = t(
+    `core.ui.pipelines.panels.yolo.provisioning.compact_state.${provisionStatusTone}`,
+    {},
+    provisionStatusTone,
+  );
+  const provisionSummary = selectedModelIncompatible
+    ? t("core.ui.pipelines.panels.yolo.provisioning.summary_incompatible")
+    : manualInstallBusy
+      ? t("core.ui.pipelines.panels.yolo.provisioning.summary_busy")
+      : manualInstallFailed
+        ? t("core.ui.pipelines.panels.yolo.provisioning.summary_failed")
+        : manualInstallItem?.artifactExists
+          ? t("core.ui.pipelines.panels.yolo.provisioning.summary_ready")
+          : manualLocalBuildActionable
+            ? t("core.ui.pipelines.panels.yolo.provisioning.summary_missing_actionable")
+            : t("core.ui.pipelines.panels.yolo.provisioning.summary_missing_manual");
+  const showSelectedModelNarrative =
+    !!selectedModelHintKey && (!manualInstallItem?.artifactExists || selectedModelIncompatible || showAdvanced);
+  const provisionDetailsOpen = showProvisionDetails || selectedModelIncompatible || manualInstallFailed;
 
   useEffect(() => {
     if (!manualInstallItem?.installJob) return;
@@ -830,8 +851,6 @@ export function VisionConfigCard({
     () => modelOptions.find((item) => item.value === modelId) ?? null,
     [modelId, modelOptions],
   );
-
-  const selectedModelHintKey = useMemo(() => modelHintTranslationKey(modelId), [modelId]);
 
   const trackerOptions = useMemo<SelectOption[]>(
     () =>
@@ -1193,9 +1212,6 @@ export function VisionConfigCard({
                   <option key={item.modelId} value={item.modelId}>
                     {item.displayName}
                     {item.badgeIds.includes("recommended") ? ` • ${t("core.ui.processing_servers.vision_recommendations.badge.recommended")}` : ""}
-                    {item.availability !== "available"
-                      ? ` • ${t(availabilityTranslationKey(item.availability), {}, item.availability)}`
-                      : ""}
                   </option>
                 ))}
               </select>
@@ -1206,208 +1222,17 @@ export function VisionConfigCard({
               ? t("core.ui.pipelines.panels.yolo.segmentation_model_id_hint")
               : t("core.ui.pipelines.panels.yolo.model_id_hint")}
           </div>
-          <div className="pipelinesStepHint">
-            {isSegmentation
-              ? t("core.ui.pipelines.panels.yolo.segmentation_model_shortlist_hint")
-              : t("core.ui.pipelines.panels.yolo.model_shortlist_hint")}
-          </div>
-          {taskCatalog?.profile ? (
-            <div className="pipelinesStepHint">
-              {t("core.ui.pipelines.panels.yolo.profile_hint", {
-                profile: t(
-                  `core.ui.processing_servers.vision_recommendations.profile_label.${taskCatalog.profile}`,
-                  {},
-                  taskCatalog.profile,
-                ),
-              })}
-            </div>
-          ) : null}
-          {selectedCatalogItem?.badgeIds.length ? (
-            <div className="pipelinesStepHint">
-              {selectedCatalogItem.badgeIds
-                .map((badgeId) => t(`core.ui.processing_servers.vision_recommendations.badge.${badgeId}`, {}, badgeId))
-                .join(" • ")}
-            </div>
-          ) : null}
-          {selectedModelHintKey ? <div className="pipelinesStepHint">{t(selectedModelHintKey)}</div> : null}
-          {selectedCatalogItem ? (
-            <div className="pipelinesStepHint">
-              {t(availabilityTranslationKey(selectedCatalogItem.availability), {}, selectedCatalogItem.availability)}
-              {selectedCatalogItem.availabilityReason ? ` • ${t(availabilityReasonTranslationKey(selectedCatalogItem.availabilityReason), {}, selectedCatalogItem.availabilityReason)}` : ""}
-            </div>
-          ) : null}
-          {showModelRecoveryCard ? (
-            <div className="pipelinesOperatorConfigCard" style={{ marginTop: 10 }}>
-              <div className="pipelinesInlineError">
-                {selectedModelNeedsInstall
-                  ? t(
-                      "core.ui.pipelines.panels.yolo.model_recovery.install_needed",
-                      {
-                        model: selectedCatalogItem?.displayName || modelId || t("core.ui.pipelines.panels.yolo.model_id"),
-                        serverId: resolvedProcessingServerId,
-                      },
-                      "This model still needs to be installed on the selected machine.",
-                    )
-                  : selectedModelIncompatible
-                    ? t(
-                        "core.ui.pipelines.panels.yolo.model_recovery.incompatible",
-                        {
-                          model: selectedCatalogItem?.displayName || modelId || t("core.ui.pipelines.panels.yolo.model_id"),
-                          serverId: resolvedProcessingServerId,
-                        },
-                        "This model is not compatible with the selected machine.",
-                      )
-                    : t(
-                        "core.ui.pipelines.panels.yolo.model_recovery.none_ready",
-                        { serverId: resolvedProcessingServerId },
-                        "No ready-to-run models were found on the selected machine.",
-                      )}
-              </div>
-              {suggestedAvailableItem ? (
-                <div className="pipelinesStepHint" style={{ marginTop: 8 }}>
-                  {t(
-                    "core.ui.pipelines.panels.yolo.model_recovery.recommended_ready",
-                    { model: suggestedAvailableItem.displayName },
-                    `Use ${suggestedAvailableItem.displayName} to continue now.`,
-                  )}
-                </div>
-              ) : (
-                <div className="pipelinesStepHint" style={{ marginTop: 8 }}>
-                  {t(
-                    "core.ui.pipelines.panels.yolo.model_recovery.no_ready_action",
-                    { serverId: resolvedProcessingServerId },
-                    "Add a model file on this processing server or switch to another server.",
-                  )}
-                </div>
-              )}
-              {manualInstallItem && manualInstallFile ? (
-                <div style={{ marginTop: 10 }}>
-                  <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_intro")}</div>
-                  {manualInstallNeedsExport ? (
-                    <>
-                      <div className="pipelinesStepHint">
-                        {t(
-                          "core.ui.pipelines.panels.yolo.artifact_modal.recovery_checkpoint_page",
-                          { model: manualInstallItem.displayName },
-                          `1. Open the checkpoint page for ${manualInstallItem.displayName}.`,
-                        )}
-                      </div>
-                      <div className="pipelinesStepHint">
-                        {t(
-                          "core.ui.pipelines.panels.yolo.artifact_modal.recovery_export_onnx",
-                          { file: manualInstallFile },
-                          `2. Export the ONNX file ${manualInstallFile}.`,
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="pipelinesStepHint">
-                      {t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_file", { file: manualInstallFile }, manualInstallFile)}
-                    </div>
-                  )}
-                  <div className="pipelinesStepHint">
-                    {manualInstallNeedsExport
-                      ? t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_send_prepare")
-                      : t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_send")}
-                  </div>
-                  {manualLocalBuildActionable ? (
-                    <div className="pipelinesStepHint">
-                      {t("core.ui.pipelines.panels.yolo.local_build.available_hint", {
-                        runtime: manualInstallItem.localBuildRuntime || manualInstallItem.localBuildBackend || "local",
-                      })}
-                    </div>
-                  ) : manualInstallNeedsExport && !manualInstallItem.artifactExists && manualInstallItem.localBuildReason ? (
-                    <div className="pipelinesStepHint">
-                      {t("core.ui.pipelines.panels.yolo.provisioning.local_build_unavailable", {
-                        reason: localBuildReasonLabel(manualInstallItem.localBuildReason, t),
-                      })}
-                    </div>
-                  ) : null}
-                  <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.artifact_modal.recovery_refresh")}</div>
-                </div>
-              ) : null}
-              <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                {suggestedAvailableItem ? (
-                  <button className="pillButton pillButtonPrimary" type="button" onClick={applySuggestedAvailableModel}>
-                    {t(
-                      "core.ui.pipelines.panels.yolo.model_recovery.use_recommended",
-                      { model: suggestedAvailableItem.displayName },
-                      `Use ${suggestedAvailableItem.displayName}`,
-                    )}
-                  </button>
-                ) : null}
-                {onOpenProcessingServers ? (
-                  <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
-                    {t("core.ui.pipelines.form.processing_server.manage")}
-                  </button>
-                ) : null}
-                <button className="pillButton" type="button" onClick={() => void reloadCatalog()} disabled={catalogLoading}>
-                  {t("core.ui.pipelines.panels.yolo.refresh_models")}
-                </button>
-              </div>
-            </div>
-          ) : null}
           {manualInstallItem ? (
             <div className="pipelinesOperatorConfigCard pipelinesProvisionCard" style={{ marginTop: 10 }}>
               <div className="cardHeaderRow">
-                <div className="cardTitle">{t("core.ui.pipelines.panels.yolo.provisioning.title")}</div>
-                <div className="cardMeta">{resolvedProcessingServerId}</div>
+                <div>
+                  <div className="cardTitle">{manualInstallItem.displayName}</div>
+                  {selectedModelMeta ? <div className="cardMeta">{selectedModelMeta}</div> : null}
+                </div>
+                <div className={`pipelinesProvisionStatus pipelinesProvisionStatus-${provisionStatusTone}`}>{provisionStatusLabel}</div>
               </div>
-              <div className="cardBody">
-                {selectedModelIncompatible
-                  ? t("core.ui.pipelines.panels.yolo.provisioning.status_incompatible", {
-                      model: manualInstallItem.displayName,
-                      serverId: resolvedProcessingServerId,
-                    })
-                  : manualInstallItem.artifactExists
-                    ? t("core.ui.pipelines.panels.yolo.provisioning.status_ready", {
-                        model: manualInstallItem.displayName,
-                        serverId: resolvedProcessingServerId,
-                      })
-                    : t("core.ui.pipelines.panels.yolo.provisioning.status_missing", {
-                        model: manualInstallItem.displayName,
-                        serverId: resolvedProcessingServerId,
-                      })}
-              </div>
-              {manualInstallFile ? (
-                <div className="pipelinesStepHint">
-                  {t("core.ui.pipelines.panels.yolo.provisioning.expected_file", { file: manualInstallFile })}
-                </div>
-              ) : null}
-              {manualInstallNeedsExport && manualLocalBuildActionable ? (
-                <>
-                  <div className="pipelinesStepHint">
-                    {t(
-                      manualLocalBuildAction === "update"
-                        ? "core.ui.pipelines.panels.yolo.provisioning.local_build_update_hint"
-                        : "core.ui.pipelines.panels.yolo.provisioning.local_build_prepare_hint",
-                      {
-                        runtime: manualInstallItem.localBuildRuntime || manualInstallItem.localBuildBackend || "local",
-                      },
-                    )}
-                  </div>
-                  <div className="pipelinesStepHint">
-                    {t("core.ui.pipelines.panels.yolo.provisioning.manual_fallback_hint")}
-                  </div>
-                </>
-              ) : null}
-              {manualInstallNeedsExport && !manualLocalBuildActionable && manualInstallItem.localBuildReason ? (
-                <div className="pipelinesStepHint">
-                  {t("core.ui.pipelines.panels.yolo.provisioning.local_build_unavailable", {
-                    reason: localBuildReasonLabel(manualInstallItem.localBuildReason, t),
-                  })}
-                </div>
-              ) : null}
-              {manualInstallItem.acquisition.checkpointUrl || manualInstallItem.localBuildSourceLabel || manualInstallItem.acquisition.sourceUrl ? (
-                <div className="pipelinesStepHint">
-                  {t("core.ui.pipelines.panels.yolo.provisioning.source", {
-                    source:
-                      manualInstallItem.acquisition.checkpointUrl ||
-                      manualInstallItem.localBuildSourceLabel ||
-                      manualInstallItem.acquisition.sourceUrl,
-                  })}
-                </div>
-              ) : null}
+              {showSelectedModelNarrative ? <div className="cardBody">{t(selectedModelHintKey)}</div> : null}
+              <div className="cardBody">{provisionSummary}</div>
               {manualSuggestedReadyItem ? (
                 <div className="pipelinesStepHint">
                   {t(
@@ -1436,77 +1261,134 @@ export function VisionConfigCard({
               ) : null}
               {localBuildSuccess ? <div className="settingsStatusMuted">{localBuildSuccess}</div> : null}
               {localBuildError ? <div className="errorText">{localBuildError}</div> : null}
-              <div className="pipelinesProvisionActions">
-                {manualInstallNeedsExport && manualLocalBuildActionable ? (
-                  <button
-                    className="pillButton pillButtonPrimary"
-                    type="button"
-                    onClick={() => openLocalBuildConsent(manualInstallItem)}
-                    disabled={!!localBuildLoadingModelId || manualInstallBusy}
-                  >
-                    {localBuildLoadingModelId === manualInstallItem.modelId
-                      ? t("core.ui.pipelines.panels.yolo.local_build.starting")
-                      : t(manualLocalBuildActionKey)}
-                  </button>
-                ) : null}
-                <button
-                  className={["pillButton", manualInstallNeedsExport && manualLocalBuildActionable ? "" : "pillButtonPrimary"]
-                    .filter(Boolean)
-                    .join(" ")}
-                  type="button"
-                  onClick={() => openArtifactModal(manualInstallItem)}
-                >
-                  {t(manualArtifactActionKey)}
-                </button>
-              </div>
-              <div className="pipelinesProvisionActions">
-                {manualSuggestedReadyItem ? (
-                  <button className="pillButton" type="button" onClick={applySuggestedAvailableModel}>
-                    {t(
-                      "core.ui.pipelines.panels.yolo.model_recovery.use_recommended",
-                      { model: manualSuggestedReadyItem.displayName },
-                      `Use ${manualSuggestedReadyItem.displayName}`,
-                    )}
-                  </button>
-                ) : null}
-                {onOpenProcessingServers ? (
-                  <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
-                    {t("core.ui.pipelines.form.processing_server.manage")}
-                  </button>
-                ) : null}
-                <button className="pillButton" type="button" onClick={() => void reloadCatalog()} disabled={catalogLoading}>
-                  {t("core.ui.pipelines.panels.yolo.refresh_models")}
-                </button>
-              </div>
-              {!manualLocalBuildActionable &&
-              (manualInstallItem.acquisition.checkpointUrl || manualInstallItem.acquisition.exportGuideUrl) ? (
-                <div className="pipelinesProvisionLinks">
-                  {manualInstallItem.acquisition.checkpointUrl ? (
-                    <a className="pillButton" href={manualInstallItem.acquisition.checkpointUrl} target="_blank" rel="noreferrer">
-                      {t("core.ui.pipelines.panels.yolo.artifact_modal.open_checkpoint_page")}
-                    </a>
+              {!manualInstallItem.artifactExists || selectedModelIncompatible ? (
+                <div className="pipelinesProvisionActions">
+                  {manualInstallNeedsExport && manualLocalBuildActionable && !selectedModelIncompatible ? (
+                    <button
+                      className="pillButton pillButtonPrimary"
+                      type="button"
+                      onClick={() => openLocalBuildConsent(manualInstallItem)}
+                      disabled={!!localBuildLoadingModelId || manualInstallBusy}
+                    >
+                      {localBuildLoadingModelId === manualInstallItem.modelId
+                        ? t("core.ui.pipelines.panels.yolo.local_build.starting")
+                        : t(manualLocalBuildActionKey)}
+                    </button>
+                  ) : !selectedModelIncompatible ? (
+                    <button className="pillButton pillButtonPrimary" type="button" onClick={() => openArtifactModal(manualInstallItem)}>
+                      {t(manualArtifactActionKey)}
+                    </button>
                   ) : null}
-                  {manualInstallItem.acquisition.exportGuideUrl ? (
-                    <a className="pillButton" href={manualInstallItem.acquisition.exportGuideUrl} target="_blank" rel="noreferrer">
-                      {t("core.ui.pipelines.panels.yolo.artifact_modal.open_export_guide")}
-                    </a>
+                  {manualSuggestedReadyItem ? (
+                    <button className="pillButton" type="button" onClick={applySuggestedAvailableModel}>
+                      {t(
+                        "core.ui.pipelines.panels.yolo.model_recovery.use_recommended",
+                        { model: manualSuggestedReadyItem.displayName },
+                        `Use ${manualSuggestedReadyItem.displayName}`,
+                      )}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+              <div className="pipelinesProvisionActions pipelinesProvisionSecondaryActions">
+                <button className="pillButton" type="button" onClick={() => setShowProvisionDetails((prev) => !prev)}>
+                  {t(
+                    provisionDetailsOpen
+                      ? "core.ui.pipelines.panels.yolo.provisioning.details_hide"
+                      : "core.ui.pipelines.panels.yolo.provisioning.details_show",
+                  )}
+                </button>
+              </div>
+              {provisionDetailsOpen ? (
+                <div className="pipelinesProvisionDetails">
+                  {manualInstallFile ? (
+                    <div className="pipelinesStepHint">
+                      {t("core.ui.pipelines.panels.yolo.provisioning.expected_file", { file: manualInstallFile })}
+                    </div>
+                  ) : null}
+                  {manualInstallNeedsExport && manualLocalBuildActionable ? (
+                    <>
+                      <div className="pipelinesStepHint">
+                        {t(
+                          manualLocalBuildAction === "update"
+                            ? "core.ui.pipelines.panels.yolo.provisioning.local_build_update_hint"
+                            : "core.ui.pipelines.panels.yolo.provisioning.local_build_prepare_hint",
+                          {
+                            runtime: manualInstallItem.localBuildRuntime || manualInstallItem.localBuildBackend || "local",
+                          },
+                        )}
+                      </div>
+                      <div className="pipelinesStepHint">
+                        {t("core.ui.pipelines.panels.yolo.provisioning.manual_fallback_hint")}
+                      </div>
+                    </>
+                  ) : null}
+                  {manualInstallNeedsExport && !manualLocalBuildActionable && manualInstallItem.localBuildReason ? (
+                    <div className="pipelinesStepHint">
+                      {t("core.ui.pipelines.panels.yolo.provisioning.local_build_unavailable", {
+                        reason: localBuildReasonLabel(manualInstallItem.localBuildReason, t),
+                      })}
+                    </div>
+                  ) : null}
+                  {manualInstallItem.acquisition.checkpointUrl || manualInstallItem.localBuildSourceLabel || manualInstallItem.acquisition.sourceUrl ? (
+                    <div className="pipelinesStepHint">
+                      {t("core.ui.pipelines.panels.yolo.provisioning.source", {
+                        source:
+                          manualInstallItem.acquisition.checkpointUrl ||
+                          manualInstallItem.localBuildSourceLabel ||
+                          manualInstallItem.acquisition.sourceUrl,
+                      })}
+                    </div>
+                  ) : null}
+                  <div className="pipelinesProvisionActions">
+                    {(manualLocalBuildActionable || manualInstallItem.artifactExists) && !selectedModelIncompatible ? (
+                      <button className="pillButton" type="button" onClick={() => openArtifactModal(manualInstallItem)}>
+                        {t(manualArtifactActionKey)}
+                      </button>
+                    ) : null}
+                    {manualInstallItem.artifactExists && manualInstallNeedsExport && manualLocalBuildActionable ? (
+                      <button
+                        className="pillButton"
+                        type="button"
+                        onClick={() => openLocalBuildConsent(manualInstallItem)}
+                        disabled={!!localBuildLoadingModelId || manualInstallBusy}
+                      >
+                        {localBuildLoadingModelId === manualInstallItem.modelId
+                          ? t("core.ui.pipelines.panels.yolo.local_build.starting")
+                          : t(manualLocalBuildActionKey)}
+                      </button>
+                    ) : null}
+                    {onOpenProcessingServers ? (
+                      <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
+                        {t("core.ui.pipelines.form.processing_server.manage")}
+                      </button>
+                    ) : null}
+                    <button className="pillButton" type="button" onClick={() => void reloadCatalog()} disabled={catalogLoading}>
+                      {t("core.ui.pipelines.panels.yolo.refresh_models")}
+                    </button>
+                  </div>
+                  {manualInstallItem.acquisition.checkpointUrl || manualInstallItem.acquisition.exportGuideUrl ? (
+                    <div className="pipelinesProvisionLinks">
+                      {manualInstallItem.acquisition.checkpointUrl ? (
+                        <a className="pillButton" href={manualInstallItem.acquisition.checkpointUrl} target="_blank" rel="noreferrer">
+                          {t("core.ui.pipelines.panels.yolo.artifact_modal.open_checkpoint_page")}
+                        </a>
+                      ) : null}
+                      {manualInstallItem.acquisition.exportGuideUrl ? (
+                        <a className="pillButton" href={manualInstallItem.acquisition.exportGuideUrl} target="_blank" rel="noreferrer">
+                          {t("core.ui.pipelines.panels.yolo.artifact_modal.open_export_guide")}
+                        </a>
+                      ) : null}
+                    </div>
                   ) : null}
                 </div>
               ) : null}
             </div>
           ) : null}
           {catalogError ? <div className="errorText">{catalogError}</div> : null}
-          {!showAdvanced && unavailableItems.length > 0 ? (
-            <div className="pipelinesStepHint">
-              {t("core.ui.pipelines.panels.yolo.hidden_unavailable_count", { count: unavailableItems.length })}
-            </div>
-          ) : null}
 
-          <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-            <button className="pillButton" type="button" onClick={() => void reloadCatalog()} disabled={catalogLoading}>
-              {t("core.ui.pipelines.panels.yolo.refresh_models")}
-            </button>
-            {showAdvanced ? (
+          {showAdvanced ? (
+            <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
               <button
                 className="pillButton"
                 type="button"
@@ -1518,8 +1400,8 @@ export function VisionConfigCard({
               >
                 {t("core.ui.pipelines.panels.yolo.import_manifest")}
               </button>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
 
           {showAdvanced && showImport ? (
             <div className="pipelinesOperatorConfigCard" style={{ marginTop: 10 }}>

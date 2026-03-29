@@ -692,6 +692,42 @@ def create_processing_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return dict(result or {})
 
+    @app.post("/api/processing/vision/models/{model_id}/cancel")
+    async def cancel_processing_vision_model(
+        model_id: str,
+        body: ProcessingVisionModelInstallRequest,
+    ) -> dict[str, Any]:
+        try:
+            result = await services.call(
+                "vision.model_install.cancel",
+                model_id=model_id,
+                requested_by=dict(body.requested_by or {}),
+                data_dir=config_store.paths.data_dir,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=500, detail=f"Vision install service unavailable: {exc}") from exc
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return dict(result or {})
+
+    @app.post("/api/processing/vision/models/{model_id}/retry")
+    async def retry_processing_vision_model(
+        model_id: str,
+        body: ProcessingVisionModelInstallRequest,
+    ) -> dict[str, Any]:
+        try:
+            result = await services.call(
+                "vision.model_install.retry",
+                model_id=model_id,
+                requested_by=dict(body.requested_by or {}),
+                data_dir=config_store.paths.data_dir,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=500, detail=f"Vision install service unavailable: {exc}") from exc
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return dict(result or {})
+
     @app.post("/api/processing/vision/models/{model_id}/artifact")
     async def upload_processing_vision_model_artifact(
         model_id: str,

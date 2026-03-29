@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .local_build import (
+    BuildCancelledError,
     accepted_upstream_sources,
     cleanup_local_builder_workspace,
     local_build_paths,
@@ -24,7 +25,11 @@ from .local_build import (
 from .manifests import ModelManifest, ModelRegistry, ModelRegistryError, build_default_model_registry
 
 
-InstallStatus = Literal["queued", "downloading", "verifying", "installing", "completed", "failed"]
+InstallStatus = Literal["queued", "downloading", "verifying", "installing", "canceling", "completed", "failed", "canceled"]
+
+
+class InstallCancelledError(RuntimeError):
+    pass
 
 
 def _default_data_dir() -> Path:
@@ -153,6 +158,7 @@ class VisionModelInstallManager:
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._cancel_flags: dict[str, threading.Event] = {}
 
     def snapshot_jobs(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -261,7 +267,7 @@ class VisionModelInstallManager:
 
         key = manifest.model_id
         existing_artifact = manifest.resolve_artifact_path().is_file()
-        active_statuses = {"queued", "downloading", "verifying", "installing"}
+        active_statuses = {"queued", "downloading", "verifying", "installing", "canceling"}
 
         with self._lock:
             existing = self._jobs.get(key)
@@ -312,6 +318,7 @@ class VisionModelInstallManager:
                 "finished_at": None,
             }
             self._jobs[key] = job
+            self._cancel_flags[key] = threading.Event()
             task = asyncio.create_task(
                 self._run_install(manifest=manifest, source_kind=source_kind, source_value=source_value),
                 name=f"vision-model-install:{manifest.model_id}",
@@ -326,7 +333,7 @@ class VisionModelInstallManager:
         source_url = str(getattr(getattr(manifest, "acquisition", None), "source_url", "") or "").strip()
         source_label = checkpoint_url or source_url
         existing_artifact = manifest.resolve_artifact_path().is_file()
-        active_statuses = {"queued", "downloading", "verifying", "installing"}
+        active_statuses = {"queued", "downloading", "verifying", "installing", "canceling"}
 
         with self._lock:
             existing = self._jobs.get(key)
@@ -391,6 +398,7 @@ class VisionModelInstallManager:
                 "finished_at": None,
             }
             self._jobs[key] = job
+            self._cancel_flags[key] = threading.Event()
             task = asyncio.create_task(
                 self._run_local_build(manifest=manifest, job_id=job["job_id"], requested_by=requested_by),
                 name=f"vision-model-local-build:{manifest.model_id}",
@@ -402,6 +410,67 @@ class VisionModelInstallManager:
     def _mark_task_finished(self, model_id: str) -> None:
         with self._lock:
             self._tasks.pop(str(model_id or "").strip().lower(), None)
+            self._cancel_flags.pop(str(model_id or "").strip().lower(), None)
+
+    def _cancel_flag(self, model_id: str) -> threading.Event | None:
+        key = str(model_id or "").strip().lower()
+        if not key:
+            return None
+        with self._lock:
+            return self._cancel_flags.get(key)
+
+    def cancel_install(
+        self,
+        *,
+        model_id: str,
+        requested_by: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        key = str(model_id or "").strip().lower()
+        if not key:
+            raise ModelRegistryError("model_id is required")
+        active_statuses = {"queued", "downloading", "verifying", "installing", "canceling"}
+        with self._lock:
+            job = dict(self._jobs.get(key) or {})
+            if not job:
+                raise ModelRegistryError(f"No install job exists for model '{model_id}'")
+            if str(job.get("status") or "") not in active_statuses:
+                raise ModelRegistryError(f"Model '{model_id}' has no active install job to cancel")
+            cancel_flag = self._cancel_flags.get(key)
+            if cancel_flag is not None:
+                cancel_flag.set()
+            job["status"] = "canceling"
+            job["phase"] = "cancel_requested"
+            job["requested_cancel_by"] = _normalize_requested_by(requested_by)
+            job["updated_at"] = float(time.time())
+            self._jobs[key] = job
+            return dict(job)
+
+    def retry_install(
+        self,
+        *,
+        model_id: str,
+        requested_by: dict[str, Any] | None = None,
+        model_registry: ModelRegistry | None = None,
+    ) -> dict[str, Any]:
+        registry = model_registry if isinstance(model_registry, ModelRegistry) else build_default_model_registry()
+        manifest = registry.get_manifest(model_id)
+        if manifest is None:
+            raise ModelRegistryError(f"Unknown vision model_id: {model_id}")
+        existing = self.get_job(model_id) or {}
+        status = str(existing.get("status") or "").strip()
+        if status in {"queued", "downloading", "verifying", "installing", "canceling"}:
+            raise ModelRegistryError(f"Model '{model_id}' already has an active install job")
+        retry_mode = "local_build" if str(existing.get("source_kind") or "").strip() == "local_build" else ""
+        if not retry_mode and str(getattr(getattr(manifest, "acquisition", None), "mode", "") or "").strip().lower() == "local_build_assisted":
+            retry_mode = "local_build"
+        return self.start_install(
+            model_id=model_id,
+            force=True,
+            mode=retry_mode,
+            acknowledge_upstream_terms=(retry_mode == "local_build"),
+            requested_by=_normalize_requested_by(requested_by) or dict(existing.get("requested_by") or {}),
+            model_registry=registry,
+        )
 
     def _update_job(self, model_id: str, **patch: Any) -> None:
         key = str(model_id or "").strip().lower()
@@ -413,10 +482,16 @@ class VisionModelInstallManager:
             current["updated_at"] = float(time.time())
             self._jobs[key] = current
 
+    def _ensure_not_cancelled(self, model_id: str) -> None:
+        flag = self._cancel_flag(model_id)
+        if flag is not None and flag.is_set():
+            raise InstallCancelledError(f"Install canceled for {model_id}")
+
     async def _run_install(self, *, manifest: ModelManifest, source_kind: str, source_value: str) -> None:
         target_path = manifest.resolve_artifact_path()
         temp_path = target_path.with_name(f"{target_path.name}.{uuid.uuid4().hex}.part")
         try:
+            self._ensure_not_cancelled(manifest.model_id)
             target_path.parent.mkdir(parents=True, exist_ok=True)
             self._update_job(
                 manifest.model_id,
@@ -429,6 +504,7 @@ class VisionModelInstallManager:
             else:
                 await asyncio.to_thread(self._copy_file, Path(source_value), temp_path, manifest.model_id)
 
+            self._ensure_not_cancelled(manifest.model_id)
             self._update_job(manifest.model_id, status="verifying", phase="verifying", progress_pct=85.0)
             digest = await asyncio.to_thread(self._sha256_file, temp_path, manifest.model_id)
             expected = str(manifest.sha256 or "").strip().lower()
@@ -437,6 +513,7 @@ class VisionModelInstallManager:
                     f"Checksum mismatch for {manifest.model_id}: expected {expected}, got {digest.lower()}"
                 )
 
+            self._ensure_not_cancelled(manifest.model_id)
             self._update_job(manifest.model_id, status="installing", phase="finalizing", progress_pct=97.0)
             os.replace(temp_path, target_path)
             self._update_job(
@@ -447,6 +524,19 @@ class VisionModelInstallManager:
                 finished_at=float(time.time()),
                 error=None,
             )
+        except InstallCancelledError:
+            self._update_job(
+                manifest.model_id,
+                status="canceled",
+                phase="canceled",
+                error="Canceled by user",
+                finished_at=float(time.time()),
+            )
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+            except Exception:
+                pass
         except Exception as exc:  # noqa: BLE001
             self._update_job(
                 manifest.model_id,
@@ -466,6 +556,7 @@ class VisionModelInstallManager:
         workspace_dir = ""
         provenance_path = ""
         try:
+            self._ensure_not_cancelled(manifest.model_id)
             target_path.parent.mkdir(parents=True, exist_ok=True)
 
             def _progress(patch: dict[str, Any]) -> None:
@@ -479,6 +570,7 @@ class VisionModelInstallManager:
                 job_id=job_id,
                 requested_by=requested_by,
                 on_progress=_progress,
+                cancel_check=lambda: bool(self._cancel_flag(manifest.model_id) and self._cancel_flag(manifest.model_id).is_set()),
             )
             workspace_dir = str(result.get("workspace_dir") or "").strip()
             existing_job = self.get_job(manifest.model_id) or {}
@@ -493,6 +585,7 @@ class VisionModelInstallManager:
             if not built_path.is_file():
                 raise FileNotFoundError(f"Local build output not found for {manifest.model_id}: {built_path}")
 
+            self._ensure_not_cancelled(manifest.model_id)
             self._update_job(manifest.model_id, status="verifying", phase="verifying_output", progress_pct=88.0)
             digest = await asyncio.to_thread(self._sha256_file, built_path, manifest.model_id)
             expected = str(manifest.sha256 or "").strip().lower()
@@ -512,6 +605,7 @@ class VisionModelInstallManager:
                     },
                 )
 
+            self._ensure_not_cancelled(manifest.model_id)
             self._update_job(manifest.model_id, status="installing", phase="registering_artifact", progress_pct=97.0)
             os.replace(built_path, target_path)
             self._update_job(manifest.model_id, status="installing", phase="cleaning_up", progress_pct=99.0)
@@ -535,6 +629,32 @@ class VisionModelInstallManager:
                 finished_at=float(time.time()),
                 error=None,
             )
+        except (InstallCancelledError, BuildCancelledError):
+            if provenance_path:
+                try:
+                    await asyncio.to_thread(
+                        update_local_build_provenance,
+                        provenance_path,
+                        {
+                            "status": "canceled",
+                            "error": "Canceled by user",
+                            "finished_at": float(time.time()),
+                        },
+                    )
+                except Exception:
+                    pass
+            self._update_job(
+                manifest.model_id,
+                status="canceled",
+                phase="canceled",
+                error="Canceled by user",
+                finished_at=float(time.time()),
+            )
+            if workspace_dir:
+                try:
+                    await asyncio.to_thread(cleanup_local_builder_workspace, workspace_dir)
+                except Exception:
+                    pass
         except Exception as exc:  # noqa: BLE001
             if provenance_path:
                 try:
@@ -572,6 +692,7 @@ class VisionModelInstallManager:
                 self._update_job(model_id, bytes_total=total, bytes_completed=0, progress_pct=2.0)
                 with target_path.open("wb") as handle:
                     async for chunk in response.aiter_bytes():
+                        self._ensure_not_cancelled(model_id)
                         if not chunk:
                             continue
                         handle.write(chunk)
@@ -594,6 +715,7 @@ class VisionModelInstallManager:
         self._update_job(model_id, bytes_total=total, bytes_completed=0, progress_pct=2.0)
         with source_path.open("rb") as src, target_path.open("wb") as dst:
             while True:
+                self._ensure_not_cancelled(model_id)
                 chunk = src.read(1024 * 1024)
                 if not chunk:
                     break
@@ -615,6 +737,7 @@ class VisionModelInstallManager:
         completed = 0
         with target_path.open("rb") as handle:
             while True:
+                self._ensure_not_cancelled(model_id)
                 chunk = handle.read(1024 * 1024)
                 if not chunk:
                     break

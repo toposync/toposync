@@ -178,6 +178,7 @@ class ProcessingServerVisionManifestImportResponse(BaseModel):
     custom: bool = True
     replaced: bool = False
     provenance: dict[str, Any] = Field(default_factory=dict)
+    provenance_diff: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProcessingServerVisionCustomOnnxRequest(BaseModel):
@@ -2017,6 +2018,124 @@ def create_app() -> FastAPI:
             payload = body.model_dump(mode="json")
             payload["requested_by"] = dict(body.requested_by or {}) or _processing_install_requested_by(request)
             result = await transport.install_vision_model(model_id=model_id, payload=payload)
+            return ProcessingServerVisionModelInstallResponse.model_validate(result)
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            try:
+                await transport.close()
+            except Exception:
+                pass
+
+    @app.post(
+        "/api/processing-servers/{server_id}/vision/models/{model_id}/cancel",
+        response_model=ProcessingServerVisionModelInstallResponse,
+    )
+    async def cancel_processing_server_vision_model(
+        request: Request,
+        server_id: str,
+        model_id: str,
+        body: ProcessingServerVisionModelInstallRequest,
+    ) -> ProcessingServerVisionModelInstallResponse:
+        _require(request, action="core:processing_servers:write")
+        config_store: ConfigStore = request.app.state.config_store
+        sid = str(server_id or "").strip().lower()
+        servers = await config_store.list_processing_servers()
+        server = next((item for item in servers if item.id == sid), None)
+        if server is None:
+            raise HTTPException(status_code=404, detail="Unknown processing server")
+
+        if server.kind != "http":
+            services = getattr(request.app.state, "services", None)
+            if services is None:
+                raise HTTPException(status_code=500, detail="Service registry unavailable")
+            try:
+                requested_by = dict(body.requested_by or {}) or _processing_install_requested_by(request)
+                result = await services.call(
+                    "vision.model_install.cancel",
+                    model_id=model_id,
+                    requested_by=requested_by,
+                    data_dir=config_store.paths.data_dir,
+                )
+            except KeyError as exc:
+                raise HTTPException(status_code=500, detail=f"Vision install service unavailable: {exc}") from exc
+            except (RuntimeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return ProcessingServerVisionModelInstallResponse.model_validate(result)
+
+        try:
+            transport = HttpProcessingTransport(
+                base_url=server.url,
+                username=getattr(server, "username", ""),
+                password=getattr(server, "password", ""),
+                timeout_s=20.0,
+            )
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            payload = body.model_dump(mode="json")
+            payload["requested_by"] = dict(body.requested_by or {}) or _processing_install_requested_by(request)
+            result = await transport.cancel_vision_model(model_id=model_id, payload=payload)
+            return ProcessingServerVisionModelInstallResponse.model_validate(result)
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            try:
+                await transport.close()
+            except Exception:
+                pass
+
+    @app.post(
+        "/api/processing-servers/{server_id}/vision/models/{model_id}/retry",
+        response_model=ProcessingServerVisionModelInstallResponse,
+    )
+    async def retry_processing_server_vision_model(
+        request: Request,
+        server_id: str,
+        model_id: str,
+        body: ProcessingServerVisionModelInstallRequest,
+    ) -> ProcessingServerVisionModelInstallResponse:
+        _require(request, action="core:processing_servers:write")
+        config_store: ConfigStore = request.app.state.config_store
+        sid = str(server_id or "").strip().lower()
+        servers = await config_store.list_processing_servers()
+        server = next((item for item in servers if item.id == sid), None)
+        if server is None:
+            raise HTTPException(status_code=404, detail="Unknown processing server")
+
+        if server.kind != "http":
+            services = getattr(request.app.state, "services", None)
+            if services is None:
+                raise HTTPException(status_code=500, detail="Service registry unavailable")
+            try:
+                requested_by = dict(body.requested_by or {}) or _processing_install_requested_by(request)
+                result = await services.call(
+                    "vision.model_install.retry",
+                    model_id=model_id,
+                    requested_by=requested_by,
+                    data_dir=config_store.paths.data_dir,
+                )
+            except KeyError as exc:
+                raise HTTPException(status_code=500, detail=f"Vision install service unavailable: {exc}") from exc
+            except (RuntimeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return ProcessingServerVisionModelInstallResponse.model_validate(result)
+
+        try:
+            transport = HttpProcessingTransport(
+                base_url=server.url,
+                username=getattr(server, "username", ""),
+                password=getattr(server, "password", ""),
+                timeout_s=20.0,
+            )
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            payload = body.model_dump(mode="json")
+            payload["requested_by"] = dict(body.requested_by or {}) or _processing_install_requested_by(request)
+            result = await transport.retry_vision_model(model_id=model_id, payload=payload)
             return ProcessingServerVisionModelInstallResponse.model_validate(result)
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc

@@ -203,6 +203,13 @@ def _export_log_path(base_dir: Path, job_id: str) -> Path:
     return base_dir / "logs" / job_id / "export.log"
 
 
+def _recipe_cache_dir(base_dir: Path, *, repo_id: str, revision: str, recipe_id: str) -> Path:
+    repo_token = str(repo_id or "").strip().lower().replace("/", "__")
+    revision_token = str(revision or "head").strip() or "head"
+    recipe_token = str(recipe_id or "recipe").strip()
+    return base_dir / "cache" / repo_token / revision_token / recipe_token
+
+
 def _write_builder_context(context_dir: Path) -> Path:
     context_dir.mkdir(parents=True, exist_ok=True)
     script_path = context_dir / "huggingface_optimum_export.py"
@@ -363,6 +370,35 @@ def export_huggingface_recipe_model(
     metadata_path = output_dir / "builder-metadata.json"
     build_log_path = _build_log_path(base_dir, job_id)
     export_log_path = _export_log_path(base_dir, job_id)
+    cache_dir = _recipe_cache_dir(base_dir, repo_id=repo_id, revision=resolved_revision, recipe_id=recipe_id)
+    cached_output_path = cache_dir / output_path.name
+    cached_metadata_path = cache_dir / metadata_path.name
+    if cached_output_path.is_file():
+        shutil.copy2(cached_output_path, output_path)
+        metadata: dict[str, Any] = {}
+        if cached_metadata_path.is_file():
+            try:
+                loaded = json.loads(cached_metadata_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    metadata = dict(loaded)
+            except Exception:
+                metadata = {}
+            try:
+                shutil.copy2(cached_metadata_path, metadata_path)
+            except Exception:
+                pass
+        return {
+            "artifact_path": str(output_path),
+            "uploaded_filename": output_path.name,
+            "recipe_id": recipe_id,
+            "recipe_label": _IMAGE_CLASSIFICATION_RECIPE.label,
+            "builder_runtime": f"{_IMAGE_CLASSIFICATION_RECIPE.runtime_label} ({_python_version_text(host_python_path) or 'python'})",
+            "build_log_path": str(export_log_path),
+            "builder_metadata_path": str(metadata_path),
+            "builder_metadata": metadata,
+            "guide_url": _IMAGE_CLASSIFICATION_RECIPE.guide_url,
+            "cache_hit": True,
+        }
     script_path = _write_builder_context(_context_dir(base_dir))
     venv_python = _ensure_optimum_builder_env(
         python_executable=host_python_path,
@@ -393,6 +429,10 @@ def export_huggingface_recipe_model(
     )
     if not output_path.is_file():
         raise FileNotFoundError(f"Hugging Face local export did not produce ONNX output: {output_path}")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(output_path, cached_output_path)
+    if metadata_path.is_file():
+        shutil.copy2(metadata_path, cached_metadata_path)
     metadata: dict[str, Any] = {}
     if metadata_path.is_file():
         try:

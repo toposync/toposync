@@ -352,6 +352,24 @@ class HttpProcessingTransport:
         body = res.json()
         return body if isinstance(body, dict) else {}
 
+    async def cancel_vision_model(self, *, model_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        client = await self._ensure_client()
+        url = f"{self._base}/api/processing/vision/models/{model_id}/cancel"
+        res = await client.post(url, json=payload, timeout=self._timeout_s)
+        if res.status_code >= 300:
+            raise ProcessingTransportError(f"Processing vision model cancel failed: {res.status_code} {res.text}")
+        body = res.json()
+        return body if isinstance(body, dict) else {}
+
+    async def retry_vision_model(self, *, model_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        client = await self._ensure_client()
+        url = f"{self._base}/api/processing/vision/models/{model_id}/retry"
+        res = await client.post(url, json=payload, timeout=self._timeout_s)
+        if res.status_code >= 300:
+            raise ProcessingTransportError(f"Processing vision model retry failed: {res.status_code} {res.text}")
+        body = res.json()
+        return body if isinstance(body, dict) else {}
+
     async def upload_vision_model_artifact(
         self,
         *,

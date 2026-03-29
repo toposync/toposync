@@ -14,6 +14,11 @@ from .manifests import ModelManifest
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
+CancelCheck = Callable[[], bool]
+
+
+class BuildCancelledError(RuntimeError):
+    pass
 
 _DEFAULT_IMAGE_REF = "toposync-vision-rtmdet-builder:20260328"
 _DEFAULT_MIN_DISK_FREE_BYTES = 8 * 1024**3
@@ -596,28 +601,51 @@ def _write_builder_context(context_dir: Path, *, family: str) -> None:
         (context_dir / "rfdetr_export.py").write_text(_RFDETR_EXPORT_SCRIPT, encoding="utf-8")
 
 
-def _run_logged_command(argv: list[str], *, cwd: Path | None, log_path: Path) -> None:
+def _run_logged_command(
+    argv: list[str],
+    *,
+    cwd: Path | None,
+    log_path: Path,
+    cancel_check: CancelCheck | None = None,
+) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(f"$ {' '.join(argv)}\n")
         handle.flush()
-        completed = subprocess.run(
+        process = subprocess.Popen(
             argv,
             cwd=str(cwd) if cwd is not None else None,
             stdout=handle,
             stderr=subprocess.STDOUT,
             text=True,
-            check=False,
         )
-        handle.write(f"\n[exit_code] {completed.returncode}\n")
-    if completed.returncode != 0:
+        while True:
+            returncode = process.poll()
+            if returncode is not None:
+                handle.write(f"\n[exit_code] {returncode}\n")
+                break
+            if cancel_check is not None and cancel_check():
+                handle.write("\n[canceled] top-level cancel requested\n")
+                handle.flush()
+                try:
+                    process.terminate()
+                    process.wait(timeout=5.0)
+                except Exception:
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
+                    process.wait(timeout=5.0)
+                raise BuildCancelledError(f"Builder command canceled: {' '.join(argv)}")
+            time.sleep(0.2)
+    if returncode != 0:
         tail = ""
         try:
             tail = "\n".join(log_path.read_text(encoding="utf-8").splitlines()[-20:])
         except Exception:
             tail = ""
         raise RuntimeError(
-            f"Builder command failed with exit code {completed.returncode}: {' '.join(argv)}"
+            f"Builder command failed with exit code {returncode}: {' '.join(argv)}"
             + (f"\n{tail}" if tail else "")
         )
 
@@ -653,7 +681,13 @@ def _venv_marker_path(env_dir: Path) -> Path:
     return env_dir / ".toposync-builder.json"
 
 
-def _ensure_host_python_env(*, python_executable: str, env_dir: Path, log_path: Path) -> str:
+def _ensure_host_python_env(
+    *,
+    python_executable: str,
+    env_dir: Path,
+    log_path: Path,
+    cancel_check: CancelCheck | None = None,
+) -> str:
     marker_path = _venv_marker_path(env_dir)
     venv_python = _venv_python_path(env_dir)
     if venv_python.is_file() and marker_path.is_file():
@@ -671,7 +705,12 @@ def _ensure_host_python_env(*, python_executable: str, env_dir: Path, log_path: 
     if env_dir.exists():
         shutil.rmtree(env_dir, ignore_errors=True)
     env_dir.parent.mkdir(parents=True, exist_ok=True)
-    _run_logged_command([python_executable, "-m", "venv", str(env_dir)], cwd=None, log_path=log_path)
+    _run_logged_command(
+        [python_executable, "-m", "venv", str(env_dir)],
+        cwd=None,
+        log_path=log_path,
+        cancel_check=cancel_check,
+    )
     venv_python = _venv_python_path(env_dir)
     if not venv_python.is_file():
         raise FileNotFoundError(f"Builder virtualenv python not found: {venv_python}")
@@ -679,11 +718,13 @@ def _ensure_host_python_env(*, python_executable: str, env_dir: Path, log_path: 
         [str(venv_python), "-m", "pip", "install", "--upgrade", "pip", "setuptools<81", "wheel"],
         cwd=None,
         log_path=log_path,
+        cancel_check=cancel_check,
     )
     _run_logged_command(
         [str(venv_python), "-m", "pip", "install", _rfdetr_pip_spec()],
         cwd=None,
         log_path=log_path,
+        cancel_check=cancel_check,
     )
     marker_path.write_text(
         json.dumps(
@@ -707,6 +748,7 @@ def run_local_builder(
     job_id: str,
     requested_by: dict[str, Any] | None = None,
     on_progress: ProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> dict[str, Any]:
     probe = probe_local_builder(manifest, data_dir=data_dir)
     if not bool(probe.get("supported")):
@@ -762,6 +804,7 @@ def run_local_builder(
                     [runtime_path, "build", "-t", image_ref, str(context_dir)],
                     cwd=context_dir,
                     log_path=build_log_path,
+                    cancel_check=cancel_check,
                 )
 
             _emit(on_progress, status="installing", phase="exporting_onnx", progress_pct=55.0)
@@ -784,6 +827,7 @@ def run_local_builder(
                 ],
                 cwd=workspace_dir,
                 log_path=export_log_path,
+                cancel_check=cancel_check,
             )
         elif family == "rfdetr":
             spec = _rfdetr_model_spec(manifest)
@@ -796,6 +840,7 @@ def run_local_builder(
                 python_executable=str(probe.get("host_python_path") or "").strip(),
                 env_dir=paths["env_dir"],
                 log_path=build_log_path,
+                cancel_check=cancel_check,
             )
             weights_dir = workspace_dir / "weights"
             output_dir = workspace_dir / "output"
@@ -822,6 +867,7 @@ def run_local_builder(
                 ],
                 cwd=workspace_dir,
                 log_path=export_log_path,
+                cancel_check=cancel_check,
             )
             if builder_metadata_path.is_file():
                 try:

@@ -102,6 +102,34 @@ def _validate_manifest_runtime(manifest: ModelManifest) -> None:
     raise ModelRegistryError(f"Unsupported custom manifest task: {manifest.task}")
 
 
+def _load_existing_manifest(path: Path) -> ModelManifest | None:
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return ModelManifest.model_validate(payload)
+    except Exception:
+        return None
+
+
+def _provenance_diff(previous: ModelManifest | None, current: ModelManifest) -> dict[str, Any]:
+    before = previous.provenance.model_dump(mode="json") if isinstance(previous, ModelManifest) else {}
+    after = current.provenance.model_dump(mode="json")
+    diff: dict[str, Any] = {}
+    for key in sorted(set(before) | set(after)):
+        old_value = before.get(key)
+        new_value = after.get(key)
+        if old_value == new_value:
+            continue
+        diff[key] = {"before": old_value, "after": new_value}
+    return diff
+
+
 def import_custom_manifest(
     *,
     manifest_text: str,
@@ -131,6 +159,7 @@ def import_custom_manifest(
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"{manifest.model_id}.json"
     existed_before = target_path.exists()
+    previous_manifest = _load_existing_manifest(target_path)
     if existed_before and not bool(replace_existing):
         raise ModelRegistryError(
             f"Custom manifest '{manifest.model_id}' already exists. Use replace_existing=true to overwrite it."
@@ -148,4 +177,7 @@ def import_custom_manifest(
         "custom": True,
         "replaced": bool(replace_existing and existed_before),
         "provenance": manifest.provenance.model_dump(mode="json"),
+        "provenance_diff": _provenance_diff(previous_manifest, manifest)
+        if replace_existing and existed_before
+        else {},
     }

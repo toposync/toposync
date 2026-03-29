@@ -118,6 +118,10 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     assert any("local_build_reason" in item for item in detection_items)
     assert vision["task_catalogs"]["pose"].get("items") == []
     assert isinstance(vision["install_jobs"], list)
+    assert isinstance(vision["origin_metrics"], dict)
+    assert isinstance(vision["origin_metrics"].get("jobs_by_source_kind"), dict)
+    assert isinstance(vision["origin_metrics"].get("models_by_origin"), dict)
+    assert int(vision["origin_metrics"]["models_by_origin"].get("unknown", {}).get("total", 0)) >= 1
     assert isinstance(vision["last_benchmark"], dict)
     assert vision["last_benchmark"]["model_id"] == "constant.detector"
     assert "legacy_yolo" not in diagnostics["cameras"]
@@ -131,5 +135,6 @@ def test_collect_vision_extension_diagnostics_keeps_local_builder_on_failure(mon
     diagnostics = collect_vision_extension_diagnostics()
     assert diagnostics["local_builder"] == {}
     assert diagnostics["install_jobs"] == []
+    assert diagnostics["origin_metrics"] == {}
     assert isinstance(diagnostics["runtime_upgrades"], dict)
     assert diagnostics["runtime_upgrades"]["suggestions"] == []

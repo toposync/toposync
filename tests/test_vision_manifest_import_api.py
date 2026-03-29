@@ -169,3 +169,79 @@ def test_import_custom_classification_manifest_appears_in_classification_catalog
         assert custom_item["availability"] == "available"
         assert custom_item["adapter_family"] == "image_classification_logits"
         assert custom_item["provenance"]["origin"] == "custom_manifest"
+
+
+def test_import_custom_manifest_replace_reports_provenance_diff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_path = _write_constant_detection_model(tmp_path / "custom_detector_replace.onnx")
+    initial_manifest = {
+        "model_id": "custom.detector.replaceable",
+        "display_name": "Custom Detector Replaceable",
+        "task": "detection",
+        "runtime": "onnxruntime",
+        "artifact_format": "onnx",
+        "artifact_path": str(model_path),
+        "input": {
+            "width": 4,
+            "height": 4,
+            "layout": "nchw",
+            "color_order": "rgb",
+            "tensor_name": "images",
+            "normalization": {"mean": [0.0, 0.0, 0.0], "std": [1.0, 1.0, 1.0]},
+        },
+        "postprocess": {
+            "type": "generic_boxes",
+            "output_name": "boxes",
+            "box_format": "xyxy01",
+        },
+        "classes": {"source": "test", "labels": ["person"]},
+        "provenance": {
+            "origin": "custom_manifest",
+            "source_url": "https://example.com/original.onnx",
+            "source_ref": "v1",
+        },
+    }
+    replacement_manifest = {
+        **initial_manifest,
+        "display_name": "Custom Detector Replaceable v2",
+        "provenance": {
+            "origin": "huggingface_hub",
+            "source_url": "https://huggingface.co/example/custom-detector",
+            "source_ref": "main",
+        },
+    }
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        first_res = client.post(
+            "/api/processing-servers/local/vision/manifests/import",
+            json={"manifest_text": json.dumps(initial_manifest)},
+        )
+        assert first_res.status_code == 200, first_res.text
+        assert first_res.json()["replaced"] is False
+        assert first_res.json()["provenance_diff"] == {}
+
+        replace_res = client.post(
+            "/api/processing-servers/local/vision/manifests/import",
+            json={
+                "manifest_text": json.dumps(replacement_manifest),
+                "replace_existing": True,
+            },
+        )
+        assert replace_res.status_code == 200, replace_res.text
+        body = replace_res.json()
+        assert body["replaced"] is True
+        assert body["provenance"]["origin"] == "huggingface_hub"
+        assert body["provenance_diff"]["origin"] == {
+            "before": "custom_manifest",
+            "after": "huggingface_hub",
+        }
+        assert body["provenance_diff"]["source_ref"] == {
+            "before": "v1",
+            "after": "main",
+        }
+        assert body["provenance_diff"]["source_url"] == {
+            "before": "https://example.com/original.onnx",
+            "after": "https://huggingface.co/example/custom-detector",
+        }

@@ -74,6 +74,33 @@ def _collect_local_builder_summary(
     }
 
 
+def _collect_origin_metrics(
+    *,
+    registry: ModelRegistry,
+    install_jobs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    jobs_by_source: dict[str, dict[str, int]] = {}
+    for job in list(install_jobs or []):
+        source_kind = str(job.get("source_kind") or "unknown").strip() or "unknown"
+        status = str(job.get("status") or "unknown").strip() or "unknown"
+        bucket = jobs_by_source.setdefault(source_kind, {"total": 0})
+        bucket["total"] += 1
+        bucket[status] = int(bucket.get(status, 0) or 0) + 1
+
+    models_by_origin: dict[str, dict[str, int]] = {}
+    for manifest in registry.list_manifests():
+        origin = str(manifest.provenance.origin or "unknown").strip() or "unknown"
+        bucket = models_by_origin.setdefault(origin, {"total": 0})
+        bucket["total"] += 1
+        task = str(manifest.task or "").strip() or "unknown"
+        bucket[task] = int(bucket.get(task, 0) or 0) + 1
+
+    return {
+        "jobs_by_source_kind": jobs_by_source,
+        "models_by_origin": models_by_origin,
+    }
+
+
 def collect_vision_diagnostics(
     model_registry: ModelRegistry | None = None,
     *,
@@ -196,6 +223,10 @@ def collect_vision_diagnostics(
             ),
         },
         "install_jobs": install_jobs,
+        "origin_metrics": _collect_origin_metrics(
+            registry=registry,
+            install_jobs=install_jobs,
+        ),
         "local_builder": _collect_local_builder_summary(
             registry=registry,
             install_jobs=install_jobs,

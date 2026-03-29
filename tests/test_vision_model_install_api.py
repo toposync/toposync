@@ -10,6 +10,7 @@ import pytest
 
 from toposync.app import create_app
 from toposync_ext_vision.plugin import VisionExtension
+from toposync_ext_vision.registry.local_build import BuildCancelledError
 import toposync.extensions.manager as ext_manager_mod
 
 
@@ -344,7 +345,15 @@ def test_install_processing_server_vision_model_local_build_uses_builder(
         },
     )
 
-    def _fake_run_local_builder(manifest, *, data_dir, job_id, requested_by=None, on_progress=None):  # noqa: ANN001
+    def _fake_run_local_builder(
+        manifest,
+        *,
+        data_dir,
+        job_id,
+        requested_by=None,
+        on_progress=None,
+        cancel_check=None,
+    ):  # noqa: ANN001
         workspace_dir = Path(data_dir) / "fake-local-builds" / job_id
         output_path = workspace_dir / "output" / "end2end.onnx"
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -426,7 +435,15 @@ def test_install_processing_server_vision_model_local_build_reuses_active_job(
         },
     )
 
-    def _fake_run_local_builder(manifest, *, data_dir, job_id, requested_by=None, on_progress=None):  # noqa: ANN001
+    def _fake_run_local_builder(
+        manifest,
+        *,
+        data_dir,
+        job_id,
+        requested_by=None,
+        on_progress=None,
+        cancel_check=None,
+    ):  # noqa: ANN001
         workspace_dir = Path(data_dir) / "fake-local-builds" / job_id
         output_path = workspace_dir / "output" / "end2end.onnx"
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -468,3 +485,110 @@ def test_install_processing_server_vision_model_local_build_reuses_active_job(
             time.sleep(0.05)
         else:
             raise AssertionError("reused local build job did not complete in time")
+
+
+def test_install_processing_server_vision_model_local_build_can_cancel_and_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_model = tmp_path / "source" / "custom_detector_localbuild_retry.onnx"
+    source_model.parent.mkdir(parents=True, exist_ok=True)
+    _write_constant_detection_model(source_model)
+    target_model = tmp_path / "installed" / "custom_detector_localbuild.onnx"
+    manifests_dir = tmp_path / "manifests"
+    manifests_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_build_manifest(
+        manifests_dir / "custom_detector_localbuild_retry.json",
+        artifact_path=target_model,
+        sha256=_sha256(source_model),
+    )
+
+    monkeypatch.setenv("TOPOSYNC_VISION_MANIFESTS_DIR", str(manifests_dir))
+    monkeypatch.setattr(
+        "toposync_ext_vision.registry.installer.probe_local_builder",
+        lambda manifest, **kwargs: {
+            "supported": True,
+            "reason": "ok",
+            "backend": "container_local",
+            "container_runtime": "docker",
+        },
+    )
+
+    attempts = {"count": 0}
+
+    def _fake_run_local_builder(
+        manifest,
+        *,
+        data_dir,
+        job_id,
+        requested_by=None,
+        on_progress=None,
+        cancel_check=None,
+    ):  # noqa: ANN001
+        attempts["count"] += 1
+        workspace_dir = Path(data_dir) / "fake-local-builds" / job_id
+        output_path = workspace_dir / "output" / "end2end.onnx"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if on_progress is not None:
+            on_progress({"status": "installing", "phase": "preflight", "progress_pct": 10.0})
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            if cancel_check is not None and cancel_check():
+                raise BuildCancelledError("canceled by test")
+            time.sleep(0.05)
+        _write_constant_detection_model(output_path)
+        return {
+            "workspace_dir": str(workspace_dir),
+            "output_path": str(output_path),
+        }
+
+    monkeypatch.setattr("toposync_ext_vision.registry.installer.run_local_builder", _fake_run_local_builder)
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        install_res = client.post(
+            "/api/processing-servers/local/vision/models/custom.detector.localbuild/install",
+            json={"mode": "local_build", "acknowledge_upstream_terms": True},
+        )
+        assert install_res.status_code == 200, install_res.text
+
+        cancel_res = client.post(
+            "/api/processing-servers/local/vision/models/custom.detector.localbuild/cancel",
+            json={},
+        )
+        assert cancel_res.status_code == 200, cancel_res.text
+        assert cancel_res.json()["status"] == "canceling"
+
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            status_res = client.get("/api/processing-servers/local/status")
+            assert status_res.status_code == 200, status_res.text
+            detection_items = status_res.json()["status"]["vision"]["task_catalogs"]["detection"]["items"]
+            model_item = next(item for item in detection_items if item["model_id"] == "custom.detector.localbuild")
+            install_job = model_item.get("install_job") or {}
+            if install_job.get("status") == "canceled":
+                assert install_job.get("error") == "Canceled by user"
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("cancel request did not complete in time")
+
+        retry_res = client.post(
+            "/api/processing-servers/local/vision/models/custom.detector.localbuild/retry",
+            json={},
+        )
+        assert retry_res.status_code == 200, retry_res.text
+        assert retry_res.json()["status"] in {"queued", "installing"}
+
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            status_res = client.get("/api/processing-servers/local/status")
+            assert status_res.status_code == 200, status_res.text
+            detection_items = status_res.json()["status"]["vision"]["task_catalogs"]["detection"]["items"]
+            model_item = next(item for item in detection_items if item["model_id"] == "custom.detector.localbuild")
+            if model_item["artifact_exists"] is True and model_item["availability"] == "available":
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("retry install did not complete in time")
+
+        assert attempts["count"] >= 2

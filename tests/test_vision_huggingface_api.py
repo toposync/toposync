@@ -73,7 +73,15 @@ def test_huggingface_probe_and_import_classification_model(
             ],
         )
 
-    def _fake_download_hf_file(*, repo_id: str, filename: str, revision: str = "") -> Path:
+    def _fake_download_hf_file(
+        *,
+        repo_id: str,
+        filename: str,
+        revision: str = "",
+        data_dir: str | Path | None = None,
+        use_local_cache: bool = False,
+    ) -> Path:
+        _ = (data_dir, use_local_cache)
         assert repo_id == "Falconsai/nsfw_image_detection"
         assert revision == "main"
         mapping = {
@@ -242,7 +250,15 @@ def test_huggingface_export_and_import_classification_model(
             ],
         )
 
-    def _fake_download_hf_file(*, repo_id: str, filename: str, revision: str = "") -> Path:
+    def _fake_download_hf_file(
+        *,
+        repo_id: str,
+        filename: str,
+        revision: str = "",
+        data_dir: str | Path | None = None,
+        use_local_cache: bool = False,
+    ) -> Path:
+        _ = (data_dir, use_local_cache)
         assert repo_id == "Falconsai/nsfw_image_detection"
         assert revision == "main"
         mapping = {

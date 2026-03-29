@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -36,15 +37,50 @@ def _import_huggingface_hub():
     return HfApi, hf_hub_download
 
 
+def _default_data_dir() -> Path:
+    raw = str(os.getenv("TOPOSYNC_DATA_DIR") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return (Path.cwd() / ".toposync-data").resolve()
+
+
+def _cache_root(*, data_dir: str | Path | None = None) -> Path:
+    base = Path(data_dir).expanduser().resolve() if data_dir is not None else _default_data_dir()
+    return base / "vision-huggingface-cache"
+
+
+def _cache_key(repo_id: str, revision: str, filename: str) -> Path:
+    repo_token = _slug_token(repo_id).replace("_", "__")
+    revision_token = _slug_token(revision or "head")
+    return Path(repo_token) / revision_token / Path(filename).name
+
+
 def _fetch_huggingface_model_info(*, repo_id: str, revision: str = "") -> Any:
     HfApi, _hf_hub_download = _import_huggingface_hub()
     api = HfApi()
     return api.model_info(repo_id=repo_id, revision=revision or None, files_metadata=True)
 
 
-def _download_huggingface_file(*, repo_id: str, filename: str, revision: str = "") -> Path:
+def _download_huggingface_file(
+    *,
+    repo_id: str,
+    filename: str,
+    revision: str = "",
+    data_dir: str | Path | None = None,
+    use_local_cache: bool = False,
+) -> Path:
     _HfApi, hf_hub_download = _import_huggingface_hub()
-    return Path(hf_hub_download(repo_id=repo_id, filename=filename, revision=revision or None))
+    if use_local_cache:
+        cache_path = _cache_root(data_dir=data_dir) / _cache_key(repo_id, revision, filename)
+        if cache_path.is_file():
+            return cache_path
+    downloaded = Path(hf_hub_download(repo_id=repo_id, filename=filename, revision=revision or None))
+    if not use_local_cache:
+        return downloaded
+    cache_path = _cache_root(data_dir=data_dir) / _cache_key(repo_id, revision, filename)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(downloaded, cache_path)
+    return cache_path
 
 
 def _normalize_card_data(value: Any) -> dict[str, Any]:
@@ -66,9 +102,15 @@ def _normalize_card_data(value: Any) -> dict[str, Any]:
         return {}
 
 
-def _safe_json_from_repo(*, repo_id: str, revision: str, filename: str) -> dict[str, Any]:
+def _safe_json_from_repo(*, repo_id: str, revision: str, filename: str, data_dir: str | Path | None = None) -> dict[str, Any]:
     try:
-        path = _download_huggingface_file(repo_id=repo_id, filename=filename, revision=revision)
+        path = _download_huggingface_file(
+            repo_id=repo_id,
+            filename=filename,
+            revision=revision,
+            data_dir=data_dir,
+            use_local_cache=True,
+        )
     except Exception:
         return {}
     try:
@@ -195,7 +237,7 @@ def _extract_huggingface_onnx_candidates(siblings: list[Any]) -> list[dict[str, 
     return candidates
 
 
-def probe_huggingface_repo(*, repo: str, revision: str = "") -> dict[str, Any]:
+def probe_huggingface_repo(*, repo: str, revision: str = "", data_dir: str | Path | None = None) -> dict[str, Any]:
     normalized = normalize_huggingface_repo_input(repo)
     requested_revision = str(revision or normalized["url_revision"] or "").strip()
     repo_id = normalized["repo_id"]
@@ -212,10 +254,15 @@ def probe_huggingface_repo(*, repo: str, revision: str = "") -> dict[str, Any]:
     pipeline_tag = str(getattr(info, "pipeline_tag", "") or card_data.get("pipeline_tag") or "").strip().lower()
     detected_task = PIPELINE_TAG_TO_TASK.get(pipeline_tag, "")
     declared_license = str(card_data.get("license") or "").strip()
-    config_payload = _safe_json_from_repo(repo_id=repo_id, revision=resolved_revision, filename="config.json")
+    config_payload = _safe_json_from_repo(repo_id=repo_id, revision=resolved_revision, filename="config.json", data_dir=data_dir)
     labels = _normalize_huggingface_labels(config_payload)
     preprocess_defaults = _normalize_huggingface_preprocess(
-        _safe_json_from_repo(repo_id=repo_id, revision=resolved_revision, filename="preprocessor_config.json")
+        _safe_json_from_repo(
+            repo_id=repo_id,
+            revision=resolved_revision,
+            filename="preprocessor_config.json",
+            data_dir=data_dir,
+        )
     )
     onnx_candidates = _extract_huggingface_onnx_candidates(siblings)
     export_recipe = resolve_huggingface_export_recipe(
@@ -268,9 +315,15 @@ def _stage_huggingface_onnx_download(
     repo_id: str,
     onnx_filename: str,
     revision: str,
-    data_dir: str | Path | None = None,
+        data_dir: str | Path | None = None,
 ) -> Path:
-    downloaded = _download_huggingface_file(repo_id=repo_id, filename=onnx_filename, revision=revision)
+    downloaded = _download_huggingface_file(
+        repo_id=repo_id,
+        filename=onnx_filename,
+        revision=revision,
+        data_dir=data_dir,
+        use_local_cache=True,
+    )
     staging_dir = default_custom_onnx_staging_dir(data_dir=data_dir)
     staging_dir.mkdir(parents=True, exist_ok=True)
     safe_name = _safe_filename(Path(onnx_filename).name, fallback="model.onnx")
@@ -287,7 +340,7 @@ def inspect_huggingface_onnx(
     task: str = "",
     data_dir: str | Path | None = None,
 ) -> dict[str, Any]:
-    probe = probe_huggingface_repo(repo=repo, revision=revision)
+    probe = probe_huggingface_repo(repo=repo, revision=revision, data_dir=data_dir)
     repo_id = str(probe["repo_id"])
     resolved_revision = str(probe["resolved_revision"])
     selected_file = str(onnx_filename or "").strip()
@@ -354,7 +407,7 @@ def export_huggingface_model(
     if not bool(acknowledge_upstream_terms):
         raise ModelRegistryError("Explicit consent is required before local export from Hugging Face")
 
-    probe = probe_huggingface_repo(repo=repo, revision=revision)
+    probe = probe_huggingface_repo(repo=repo, revision=revision, data_dir=data_dir)
     repo_id = str(probe["repo_id"])
     resolved_revision = str(probe["resolved_revision"])
     requested_task = str(task or probe.get("detected_task") or "").strip().lower()
@@ -450,7 +503,7 @@ def import_huggingface_onnx_model(
     imported_by: dict[str, Any] | None = None,
     data_dir: str | Path | None = None,
 ) -> dict[str, Any]:
-    probe = probe_huggingface_repo(repo=repo_id, revision=resolved_revision)
+    probe = probe_huggingface_repo(repo=repo_id, revision=resolved_revision, data_dir=data_dir)
     source_url = f"https://huggingface.co/{repo_id}"
     model_id = f"hf_{str(task or '').strip().lower()}_{_slug_token(repo_id)}_{_slug_token(Path(onnx_filename).stem)}"
     declared_license = str(probe.get("declared_license") or "").strip()

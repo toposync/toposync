@@ -138,6 +138,7 @@ def collect_vision_extension_diagnostics(
             "task_catalogs": {},
             "recommendations": {},
             "install_jobs": [],
+            "origin_metrics": {},
             "local_builder": {},
             "last_benchmark": None,
         }
@@ -165,6 +166,7 @@ def collect_vision_extension_diagnostics(
             "task_catalogs": {},
             "recommendations": {},
             "install_jobs": [],
+            "origin_metrics": {},
             "local_builder": {},
             "last_benchmark": None,
         }
@@ -226,6 +228,7 @@ async def collect_processing_server_diagnostics(*, data_dir: str | None = None) 
             "task_catalogs": vision_runtime.get("task_catalogs", {}),
             "recommendations": vision_runtime.get("recommendations", {}),
             "install_jobs": vision_runtime.get("install_jobs", []),
+            "origin_metrics": vision_runtime.get("origin_metrics", {}),
             "local_builder": vision_runtime.get("local_builder", {}),
             "last_benchmark": vision_runtime.get("last_benchmark"),
         },

@@ -64,6 +64,12 @@ class ProcessingTransport(Protocol):
 
     async def import_vision_custom_onnx(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
+    async def probe_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+    async def inspect_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+    async def import_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
     async def upload_vision_model_artifact(
         self,
         *,
@@ -132,6 +138,18 @@ class InProcessProcessingTransport:
     async def import_vision_custom_onnx(self, payload: dict[str, Any]) -> dict[str, Any]:
         _ = payload
         raise ProcessingTransportError("Custom ONNX import is not supported for in-process transport")
+
+    async def probe_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]:
+        _ = payload
+        raise ProcessingTransportError("Hugging Face probe is not supported for in-process transport")
+
+    async def inspect_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]:
+        _ = payload
+        raise ProcessingTransportError("Hugging Face inspect is not supported for in-process transport")
+
+    async def import_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]:
+        _ = payload
+        raise ProcessingTransportError("Hugging Face import is not supported for in-process transport")
 
     async def upload_vision_model_artifact(
         self,
@@ -280,6 +298,33 @@ class HttpProcessingTransport:
         res = await client.post(url, json=payload, timeout=max(self._timeout_s, 120.0))
         if res.status_code >= 300:
             raise ProcessingTransportError(f"Processing custom ONNX import failed: {res.status_code} {res.text}")
+        body = res.json()
+        return body if isinstance(body, dict) else {}
+
+    async def probe_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client = await self._ensure_client()
+        url = f"{self._base}/api/processing/vision/huggingface/probe"
+        res = await client.post(url, json=payload, timeout=max(self._timeout_s, 120.0))
+        if res.status_code >= 300:
+            raise ProcessingTransportError(f"Processing Hugging Face probe failed: {res.status_code} {res.text}")
+        body = res.json()
+        return body if isinstance(body, dict) else {}
+
+    async def inspect_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client = await self._ensure_client()
+        url = f"{self._base}/api/processing/vision/huggingface/inspect"
+        res = await client.post(url, json=payload, timeout=max(self._timeout_s, 120.0))
+        if res.status_code >= 300:
+            raise ProcessingTransportError(f"Processing Hugging Face inspect failed: {res.status_code} {res.text}")
+        body = res.json()
+        return body if isinstance(body, dict) else {}
+
+    async def import_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client = await self._ensure_client()
+        url = f"{self._base}/api/processing/vision/huggingface/import"
+        res = await client.post(url, json=payload, timeout=max(self._timeout_s, 120.0))
+        if res.status_code >= 300:
+            raise ProcessingTransportError(f"Processing Hugging Face import failed: {res.status_code} {res.text}")
         body = res.json()
         return body if isinstance(body, dict) else {}
 

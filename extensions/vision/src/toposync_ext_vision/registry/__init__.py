@@ -34,6 +34,12 @@ from .custom_onnx import (
     preview_custom_onnx_model,
     stage_custom_onnx_upload,
 )
+from .huggingface import (
+    import_huggingface_onnx_model,
+    inspect_huggingface_onnx,
+    normalize_huggingface_repo_input,
+    probe_huggingface_repo,
+)
 from .recommendations import (
     build_task_model_catalog,
     list_official_detection_shortlist,
@@ -65,7 +71,9 @@ __all__ = [
     "discover_manifest_paths",
     "import_custom_manifest",
     "import_custom_onnx_model",
+    "import_huggingface_onnx_model",
     "install_model_via_default_manager",
+    "inspect_huggingface_onnx",
     "inspect_custom_onnx_artifact",
     "is_official_model_id",
     "get_default_model_install_manager",
@@ -74,6 +82,8 @@ __all__ = [
     "list_official_segmentation_shortlist",
     "load_manifest_file",
     "parse_manifest_text",
+    "normalize_huggingface_repo_input",
+    "probe_huggingface_repo",
     "recommend_classification_models",
     "recommend_detection_models",
     "recommend_pose_models",

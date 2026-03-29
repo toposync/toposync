@@ -371,6 +371,74 @@ export type ProcessingServerVisionCustomOnnxPreviewResponse = {
   summary: Record<string, unknown>;
 };
 
+export type ProcessingServerVisionHuggingFaceProbeRequest = {
+  repo: string;
+  revision?: string;
+};
+
+export type ProcessingServerVisionHuggingFaceProbeResponse = {
+  repo_id: string;
+  source_url: string;
+  requested_revision: string;
+  resolved_revision: string;
+  pipeline_tag: string;
+  detected_task: string;
+  declared_license: string;
+  onnx_candidates: Array<{
+    path: string;
+    label: string;
+    size_bytes: number;
+  }>;
+  download_supported: boolean;
+  download_reason: string;
+  labels: string[];
+  preprocess_defaults: Record<string, unknown>;
+  suggested_display_name: string;
+};
+
+export type ProcessingServerVisionHuggingFaceInspectRequest = {
+  repo_id: string;
+  revision?: string;
+  onnx_filename: string;
+  task: "classification" | "detection";
+};
+
+export type ProcessingServerVisionHuggingFaceInspectResponse = ProcessingServerVisionCustomOnnxInspectResponse & {
+  repo_id: string;
+  source_url: string;
+  resolved_revision: string;
+  declared_license: string;
+  pipeline_tag: string;
+  detected_task: string;
+  labels: string[];
+  preprocess_defaults: Record<string, unknown>;
+  source_origin: string;
+};
+
+export type ProcessingServerVisionHuggingFaceImportRequest = {
+  artifact_path: string;
+  repo_id: string;
+  resolved_revision: string;
+  onnx_filename: string;
+  uploaded_filename?: string;
+  display_name: string;
+  task: "classification" | "detection";
+  adapter_family: string;
+  tensor_name?: string;
+  width?: number;
+  height?: number;
+  layout?: string;
+  color_order?: string;
+  resize_mode?: string;
+  rescale_factor?: number;
+  normalization_mean?: number[];
+  normalization_std?: number[];
+  output_name?: string;
+  box_format?: string;
+  class_labels?: string[];
+  replace_existing?: boolean;
+};
+
 export type CameraSummary = {
   id: string;
   name: string;
@@ -953,6 +1021,57 @@ export async function importProcessingServerCustomOnnx(
   if (!res.ok) {
     throw new Error(
       await _parseHttpError(res, `Failed to import custom ONNX on processing server ${serverId}: ${res.status}`),
+    );
+  }
+  return res.json();
+}
+
+export async function probeProcessingServerVisionHuggingFace(
+  serverId: string,
+  payload: ProcessingServerVisionHuggingFaceProbeRequest,
+): Promise<ProcessingServerVisionHuggingFaceProbeResponse> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/vision/huggingface/probe`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(
+      await _parseHttpError(res, `Failed to probe Hugging Face repo on processing server ${serverId}: ${res.status}`),
+    );
+  }
+  return res.json();
+}
+
+export async function inspectProcessingServerVisionHuggingFace(
+  serverId: string,
+  payload: ProcessingServerVisionHuggingFaceInspectRequest,
+): Promise<ProcessingServerVisionHuggingFaceInspectResponse> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/vision/huggingface/inspect`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(
+      await _parseHttpError(res, `Failed to inspect Hugging Face ONNX on processing server ${serverId}: ${res.status}`),
+    );
+  }
+  return res.json();
+}
+
+export async function importProcessingServerVisionHuggingFace(
+  serverId: string,
+  payload: ProcessingServerVisionHuggingFaceImportRequest,
+): Promise<ProcessingServerVisionManifestImportResponse> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/vision/huggingface/import`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(
+      await _parseHttpError(res, `Failed to import Hugging Face ONNX on processing server ${serverId}: ${res.status}`),
     );
   }
   return res.json();

@@ -78,6 +78,43 @@ class ProcessingVisionCustomOnnxRequest(BaseModel):
     imported_by: dict[str, Any] = Field(default_factory=dict)
 
 
+class ProcessingVisionHuggingFaceProbeRequest(BaseModel):
+    repo: str = ""
+    revision: str = ""
+
+
+class ProcessingVisionHuggingFaceInspectRequest(BaseModel):
+    repo_id: str = ""
+    revision: str = ""
+    onnx_filename: str = ""
+    task: Literal["classification", "detection"] = "detection"
+
+
+class ProcessingVisionHuggingFaceImportRequest(BaseModel):
+    artifact_path: str = ""
+    repo_id: str = ""
+    resolved_revision: str = ""
+    onnx_filename: str = ""
+    uploaded_filename: str = ""
+    display_name: str = ""
+    task: Literal["classification", "detection"] = "detection"
+    adapter_family: str = ""
+    tensor_name: str = ""
+    width: int = 640
+    height: int = 640
+    layout: str = "nchw"
+    color_order: str = "rgb"
+    resize_mode: str = "stretch"
+    rescale_factor: float = 1.0
+    normalization_mean: list[float] = Field(default_factory=list)
+    normalization_std: list[float] = Field(default_factory=list)
+    output_name: str = ""
+    box_format: str = "xyxy01"
+    class_labels: list[str] = Field(default_factory=list)
+    replace_existing: bool = False
+    imported_by: dict[str, Any] = Field(default_factory=dict)
+
+
 class ProcessingVisionModelInstallRequest(BaseModel):
     force: bool = False
     mode: str = ""
@@ -499,6 +536,84 @@ def create_processing_app() -> FastAPI:
                 box_format=body.box_format,
                 class_labels=body.class_labels,
                 source_url=body.source_url,
+                replace_existing=body.replace_existing,
+                imported_by=dict(body.imported_by or {}),
+                data_dir=config_store.paths.data_dir,
+            )
+        except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return dict(result or {})
+
+    @app.post("/api/processing/vision/huggingface/probe")
+    async def probe_processing_huggingface(body: ProcessingVisionHuggingFaceProbeRequest) -> dict[str, Any]:
+        try:
+            from toposync_ext_vision.registry.huggingface import probe_huggingface_repo
+            from toposync_ext_vision.registry.manifests import ModelRegistryError
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+
+        try:
+            result = await asyncio.to_thread(
+                probe_huggingface_repo,
+                repo=body.repo,
+                revision=body.revision,
+            )
+        except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return dict(result or {})
+
+    @app.post("/api/processing/vision/huggingface/inspect")
+    async def inspect_processing_huggingface(body: ProcessingVisionHuggingFaceInspectRequest) -> dict[str, Any]:
+        try:
+            from toposync_ext_vision.registry.huggingface import inspect_huggingface_onnx
+            from toposync_ext_vision.registry.manifests import ModelRegistryError
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+
+        try:
+            result = await asyncio.to_thread(
+                inspect_huggingface_onnx,
+                repo=body.repo_id,
+                revision=body.revision,
+                onnx_filename=body.onnx_filename,
+                task=body.task,
+                data_dir=config_store.paths.data_dir,
+            )
+        except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return dict(result or {})
+
+    @app.post("/api/processing/vision/huggingface/import")
+    async def import_processing_huggingface(body: ProcessingVisionHuggingFaceImportRequest) -> dict[str, Any]:
+        try:
+            from toposync_ext_vision.registry.huggingface import import_huggingface_onnx_model
+            from toposync_ext_vision.registry.manifests import ModelRegistryError
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+
+        try:
+            result = await asyncio.to_thread(
+                import_huggingface_onnx_model,
+                artifact_path=body.artifact_path,
+                repo_id=body.repo_id,
+                resolved_revision=body.resolved_revision,
+                onnx_filename=body.onnx_filename,
+                display_name=body.display_name,
+                task=body.task,
+                adapter_family=body.adapter_family,
+                uploaded_filename=body.uploaded_filename,
+                tensor_name=body.tensor_name,
+                width=body.width,
+                height=body.height,
+                layout=body.layout,
+                color_order=body.color_order,
+                resize_mode=body.resize_mode,
+                rescale_factor=body.rescale_factor,
+                normalization_mean=body.normalization_mean,
+                normalization_std=body.normalization_std,
+                output_name=body.output_name,
+                box_format=body.box_format,
+                class_labels=body.class_labels,
                 replace_existing=body.replace_existing,
                 imported_by=dict(body.imported_by or {}),
                 data_dir=config_store.paths.data_dir,

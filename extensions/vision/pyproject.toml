@@ -12,6 +12,7 @@ dependencies = [
   "numpy>=1.26,<3",
   "norfair>=2.2,<3",
   "onnx>=1.17",
+  "huggingface_hub>=0.34,<1",
   "pillow>=10,<13",
 ]
 [project.entry-points."toposync.extensions"]

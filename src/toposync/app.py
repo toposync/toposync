@@ -203,6 +203,79 @@ class ProcessingServerVisionCustomOnnxRequest(BaseModel):
     imported_by: dict[str, Any] = Field(default_factory=dict)
 
 
+class ProcessingServerVisionHuggingFaceProbeRequest(BaseModel):
+    repo: str = ""
+    revision: str = ""
+
+
+class ProcessingServerVisionHuggingFaceProbeResponse(BaseModel):
+    repo_id: str = ""
+    source_url: str = ""
+    requested_revision: str = ""
+    resolved_revision: str = ""
+    pipeline_tag: str = ""
+    detected_task: str = ""
+    declared_license: str = ""
+    onnx_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    download_supported: bool = False
+    download_reason: str = ""
+    labels: list[str] = Field(default_factory=list)
+    preprocess_defaults: dict[str, Any] = Field(default_factory=dict)
+    suggested_display_name: str = ""
+
+
+class ProcessingServerVisionHuggingFaceInspectRequest(BaseModel):
+    repo_id: str = ""
+    revision: str = ""
+    onnx_filename: str = ""
+    task: Literal["classification", "detection"] = "detection"
+
+
+class ProcessingServerVisionHuggingFaceInspectResponse(BaseModel):
+    artifact_path: str = ""
+    uploaded_filename: str = ""
+    file_size_bytes: int = 0
+    suggested_display_name: str = ""
+    input_tensors: list[dict[str, Any]] = Field(default_factory=list)
+    output_tensors: list[dict[str, Any]] = Field(default_factory=list)
+    task_suggestions: list[dict[str, Any]] = Field(default_factory=list)
+    supported_task_adapters: list[dict[str, Any]] = Field(default_factory=list)
+    repo_id: str = ""
+    source_url: str = ""
+    resolved_revision: str = ""
+    declared_license: str = ""
+    pipeline_tag: str = ""
+    detected_task: str = ""
+    labels: list[str] = Field(default_factory=list)
+    preprocess_defaults: dict[str, Any] = Field(default_factory=dict)
+    source_origin: str = ""
+
+
+class ProcessingServerVisionHuggingFaceImportRequest(BaseModel):
+    artifact_path: str = ""
+    repo_id: str = ""
+    resolved_revision: str = ""
+    onnx_filename: str = ""
+    uploaded_filename: str = ""
+    display_name: str = ""
+    task: Literal["classification", "detection"] = "detection"
+    adapter_family: str = ""
+    tensor_name: str = ""
+    width: int = 640
+    height: int = 640
+    layout: str = "nchw"
+    color_order: str = "rgb"
+    resize_mode: str = "stretch"
+    rescale_factor: float = 1.0
+    normalization_mean: list[float] = Field(default_factory=list)
+    normalization_std: list[float] = Field(default_factory=list)
+    output_name: str = ""
+    box_format: str = "xyxy01"
+    class_labels: list[str] = Field(default_factory=list)
+    replace_existing: bool = False
+    imported_by: dict[str, Any] = Field(default_factory=dict)
+
+
 class ProcessingServerVisionModelInstallRequest(BaseModel):
     force: bool = False
     mode: str = ""
@@ -1598,6 +1671,194 @@ def create_app() -> FastAPI:
             payload = body.model_dump(mode="json")
             payload["imported_by"] = dict(body.imported_by or {}) or _processing_install_requested_by(request)
             result = await transport.import_vision_custom_onnx(payload)
+            return ProcessingServerVisionManifestImportResponse.model_validate(result)
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            try:
+                await transport.close()
+            except Exception:
+                pass
+
+    @app.post(
+        "/api/processing-servers/{server_id}/vision/huggingface/probe",
+        response_model=ProcessingServerVisionHuggingFaceProbeResponse,
+    )
+    async def probe_processing_server_huggingface(
+        request: Request,
+        server_id: str,
+        body: ProcessingServerVisionHuggingFaceProbeRequest,
+    ) -> ProcessingServerVisionHuggingFaceProbeResponse:
+        _require(request, action="core:processing_servers:write")
+        config_store: ConfigStore = request.app.state.config_store
+        sid = str(server_id or "").strip().lower()
+        servers = await config_store.list_processing_servers()
+        server = next((item for item in servers if item.id == sid), None)
+        if server is None:
+            raise HTTPException(status_code=404, detail="Unknown processing server")
+
+        if server.kind != "http":
+            try:
+                from toposync_ext_vision.registry.huggingface import probe_huggingface_repo
+                from toposync_ext_vision.registry.manifests import ModelRegistryError
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            try:
+                result = await asyncio.to_thread(
+                    probe_huggingface_repo,
+                    repo=body.repo,
+                    revision=body.revision,
+                )
+            except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return ProcessingServerVisionHuggingFaceProbeResponse.model_validate(result)
+
+        try:
+            transport = HttpProcessingTransport(
+                base_url=server.url,
+                username=getattr(server, "username", ""),
+                password=getattr(server, "password", ""),
+                timeout_s=120.0,
+            )
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            result = await transport.probe_vision_huggingface(body.model_dump(mode="json"))
+            return ProcessingServerVisionHuggingFaceProbeResponse.model_validate(result)
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            try:
+                await transport.close()
+            except Exception:
+                pass
+
+    @app.post(
+        "/api/processing-servers/{server_id}/vision/huggingface/inspect",
+        response_model=ProcessingServerVisionHuggingFaceInspectResponse,
+    )
+    async def inspect_processing_server_huggingface(
+        request: Request,
+        server_id: str,
+        body: ProcessingServerVisionHuggingFaceInspectRequest,
+    ) -> ProcessingServerVisionHuggingFaceInspectResponse:
+        _require(request, action="core:processing_servers:write")
+        config_store: ConfigStore = request.app.state.config_store
+        sid = str(server_id or "").strip().lower()
+        servers = await config_store.list_processing_servers()
+        server = next((item for item in servers if item.id == sid), None)
+        if server is None:
+            raise HTTPException(status_code=404, detail="Unknown processing server")
+
+        if server.kind != "http":
+            try:
+                from toposync_ext_vision.registry.huggingface import inspect_huggingface_onnx
+                from toposync_ext_vision.registry.manifests import ModelRegistryError
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            try:
+                result = await asyncio.to_thread(
+                    inspect_huggingface_onnx,
+                    repo=body.repo_id,
+                    revision=body.revision,
+                    onnx_filename=body.onnx_filename,
+                    task=body.task,
+                    data_dir=config_store.paths.data_dir,
+                )
+            except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return ProcessingServerVisionHuggingFaceInspectResponse.model_validate(result)
+
+        try:
+            transport = HttpProcessingTransport(
+                base_url=server.url,
+                username=getattr(server, "username", ""),
+                password=getattr(server, "password", ""),
+                timeout_s=120.0,
+            )
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            result = await transport.inspect_vision_huggingface(body.model_dump(mode="json"))
+            return ProcessingServerVisionHuggingFaceInspectResponse.model_validate(result)
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            try:
+                await transport.close()
+            except Exception:
+                pass
+
+    @app.post(
+        "/api/processing-servers/{server_id}/vision/huggingface/import",
+        response_model=ProcessingServerVisionManifestImportResponse,
+    )
+    async def import_processing_server_huggingface(
+        request: Request,
+        server_id: str,
+        body: ProcessingServerVisionHuggingFaceImportRequest,
+    ) -> ProcessingServerVisionManifestImportResponse:
+        _require(request, action="core:processing_servers:write")
+        config_store: ConfigStore = request.app.state.config_store
+        sid = str(server_id or "").strip().lower()
+        servers = await config_store.list_processing_servers()
+        server = next((item for item in servers if item.id == sid), None)
+        if server is None:
+            raise HTTPException(status_code=404, detail="Unknown processing server")
+
+        if server.kind != "http":
+            try:
+                from toposync_ext_vision.registry.huggingface import import_huggingface_onnx_model
+                from toposync_ext_vision.registry.manifests import ModelRegistryError
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            try:
+                result = await asyncio.to_thread(
+                    import_huggingface_onnx_model,
+                    artifact_path=body.artifact_path,
+                    repo_id=body.repo_id,
+                    resolved_revision=body.resolved_revision,
+                    onnx_filename=body.onnx_filename,
+                    display_name=body.display_name,
+                    task=body.task,
+                    adapter_family=body.adapter_family,
+                    uploaded_filename=body.uploaded_filename,
+                    tensor_name=body.tensor_name,
+                    width=body.width,
+                    height=body.height,
+                    layout=body.layout,
+                    color_order=body.color_order,
+                    resize_mode=body.resize_mode,
+                    rescale_factor=body.rescale_factor,
+                    normalization_mean=body.normalization_mean,
+                    normalization_std=body.normalization_std,
+                    output_name=body.output_name,
+                    box_format=body.box_format,
+                    class_labels=body.class_labels,
+                    replace_existing=body.replace_existing,
+                    imported_by=dict(body.imported_by or {}) or _processing_install_requested_by(request),
+                    data_dir=config_store.paths.data_dir,
+                )
+            except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return ProcessingServerVisionManifestImportResponse.model_validate(result)
+
+        try:
+            transport = HttpProcessingTransport(
+                base_url=server.url,
+                username=getattr(server, "username", ""),
+                password=getattr(server, "password", ""),
+                timeout_s=120.0,
+            )
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            payload = body.model_dump(mode="json")
+            payload["imported_by"] = dict(body.imported_by or {}) or _processing_install_requested_by(request)
+            result = await transport.import_vision_huggingface(payload)
             return ProcessingServerVisionManifestImportResponse.model_validate(result)
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc

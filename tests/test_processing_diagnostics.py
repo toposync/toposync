@@ -77,6 +77,7 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     diagnostics = asyncio.run(collect_processing_server_diagnostics())
     vision = diagnostics["vision"]
     assert any(item.get("id") == "onnxruntime" for item in vision["backends"])
+    assert any("classification" in list(item.get("tasks") or []) for item in vision["backends"])
     assert any("segmentation" in list(item.get("tasks") or []) for item in vision["backends"])
     assert any(item.get("id") == "simple_iou_kalman" for item in vision["trackers_available"])
     assert any(item.get("id") == "norfair" for item in vision["trackers_available"])
@@ -88,13 +89,16 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     assert any(item.get("model_id") == "constant.detector" for item in vision["models_installed"])
     assert any(isinstance(item.get("capabilities"), list) for item in vision["models_installed"])
     assert vision["model_registry_errors"] == []
+    assert "classification" in vision["recommendations"]
     assert "detection" in vision["recommendations"]
     assert "segmentation" in vision["recommendations"]
     assert "pose" in vision["recommendations"]
+    assert isinstance(vision["official_shortlists"].get("classification"), list)
     assert isinstance(vision["official_shortlists"].get("detection"), list)
     assert any(item.get("model_id") == "rfdetr_det_small" for item in vision["official_shortlists"]["detection"])
     assert isinstance(vision["official_shortlists"].get("segmentation"), list)
     assert isinstance(vision["official_shortlists"].get("pose"), list)
+    assert isinstance(vision["task_catalogs"].get("classification"), dict)
     assert isinstance(vision["task_catalogs"].get("detection"), dict)
     assert isinstance(vision["task_catalogs"].get("segmentation"), dict)
     assert isinstance(vision["task_catalogs"].get("pose"), dict)

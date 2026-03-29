@@ -42,6 +42,25 @@ def _write_constant_detection_model(path: Path) -> Path:
     return path
 
 
+def _write_constant_classification_model(path: Path) -> Path:
+    import onnx
+    from onnx import TensorProto, helper
+
+    input_tensor = helper.make_tensor_value_info("pixel_values", TensorProto.FLOAT, [1, 3, 4, 4])
+    output_tensor = helper.make_tensor_value_info("logits", TensorProto.FLOAT, [1, 2])
+    constant_logits = helper.make_tensor("constant_logits", TensorProto.FLOAT, [1, 2], [0.1, 2.4])
+    graph = helper.make_graph(
+        [helper.make_node("Constant", inputs=[], outputs=["logits"], value=constant_logits)],
+        "toposync_custom_classifier",
+        [input_tensor],
+        [output_tensor],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid("", 13)])
+    model.ir_version = 10
+    onnx.save(model, path)
+    return path
+
+
 def test_import_custom_vision_manifest_persists_and_appears_in_catalog(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -103,4 +122,50 @@ def test_import_custom_vision_manifest_persists_and_appears_in_catalog(
         assert custom_item["artifact_exists"] is True
         assert custom_item["adapter_family"] == "generic_boxes"
         assert custom_item["input"]["rescale_factor"] == pytest.approx(1.0)
+        assert custom_item["provenance"]["origin"] == "custom_manifest"
+
+
+def test_import_custom_classification_manifest_appears_in_classification_catalog(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_path = _write_constant_classification_model(tmp_path / "custom_classifier.onnx")
+    manifest_payload = {
+        "model_id": "custom.classifier",
+        "display_name": "Custom Classifier",
+        "task": "classification",
+        "runtime": "onnxruntime",
+        "artifact_format": "onnx",
+        "artifact_path": str(model_path),
+        "input": {
+            "width": 4,
+            "height": 4,
+            "layout": "nchw",
+            "color_order": "rgb",
+            "tensor_name": "pixel_values",
+            "normalization": {"mean": [0.0, 0.0, 0.0], "std": [1.0, 1.0, 1.0]},
+        },
+        "postprocess": {
+            "adapter_family": "image_classification_logits",
+            "output_name": "logits",
+        },
+        "classes": {"source": "test", "labels": ["normal", "nsfw"]},
+    }
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        import_res = client.post(
+            "/api/processing-servers/local/vision/manifests/import",
+            json={"manifest_text": json.dumps(manifest_payload)},
+        )
+        assert import_res.status_code == 200
+        body = import_res.json()
+        assert body["task"] == "classification"
+
+        status_res = client.get("/api/processing-servers/local/status")
+        assert status_res.status_code == 200
+        status_body = status_res.json()
+        classification_catalog = status_body["status"]["vision"]["task_catalogs"]["classification"]["items"]
+        custom_item = next(item for item in classification_catalog if item["model_id"] == "custom.classifier")
+        assert custom_item["availability"] == "available"
+        assert custom_item["adapter_family"] == "image_classification_logits"
         assert custom_item["provenance"]["origin"] == "custom_manifest"

@@ -64,7 +64,7 @@ def validate_custom_manifest_payload(
         raise ModelRegistryError(
             f"Custom manifest cannot override first-party model_id '{manifest.model_id}'"
         )
-    if manifest.task not in {"detection", "segmentation"}:
+    if manifest.task not in {"detection", "segmentation", "classification"}:
         raise ModelRegistryError(
             f"Custom manifest task '{manifest.task}' is not supported by the current UI"
         )
@@ -93,6 +93,11 @@ def _validate_manifest_runtime(manifest: ModelManifest) -> None:
         from ..processing.runtime_backends import build_segmenter_backend
 
         build_segmenter_backend(manifest)
+        return
+    if manifest.task == "classification":
+        from ..processing.runtime_backends import build_classifier_backend
+
+        build_classifier_backend(manifest)
         return
     raise ModelRegistryError(f"Unsupported custom manifest task: {manifest.task}")
 

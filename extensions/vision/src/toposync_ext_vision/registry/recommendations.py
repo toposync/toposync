@@ -516,3 +516,25 @@ def recommend_pose_models(
         "task": "pose",
         "items": _recommended_items_from_catalog(catalog),
     }
+
+
+def recommend_classification_models(
+    *,
+    system_info: dict[str, Any] | None = None,
+    execution_providers: list[str] | None = None,
+    model_registry: ModelRegistry | None = None,
+    install_manager: VisionModelInstallManager | None = None,
+) -> dict[str, Any]:
+    catalog = build_task_model_catalog(
+        task="classification",
+        system_info=system_info,
+        execution_providers=execution_providers,
+        model_registry=model_registry,
+        install_manager=install_manager,
+    )
+    return {
+        "profile": catalog.get("profile"),
+        "reason": catalog.get("reason"),
+        "task": "classification",
+        "items": _recommended_items_from_catalog(catalog),
+    }

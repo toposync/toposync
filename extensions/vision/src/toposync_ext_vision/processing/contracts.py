@@ -204,6 +204,48 @@ class PoseObject:
         self.metadata = dict(self.metadata or {})
 
 
+@dataclass(slots=True)
+class ClassificationLabelScore:
+    label: str
+    label_id: int | None
+    score: float
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.label = normalize_label(self.label)
+        self.label_id = int(self.label_id) if self.label_id is not None else None
+        self.score = clamp01(self.score)
+        self.metadata = dict(self.metadata or {})
+
+
+@dataclass(slots=True)
+class ImageClassificationResult:
+    labels: list[ClassificationLabelScore]
+    model_id: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        normalized: list[ClassificationLabelScore] = []
+        for item in list(self.labels or []):
+            if isinstance(item, ClassificationLabelScore):
+                score = item
+            elif isinstance(item, dict):
+                score = ClassificationLabelScore(**item)
+            else:
+                continue
+            if not score.label:
+                continue
+            normalized.append(score)
+        normalized.sort(key=lambda item: item.score, reverse=True)
+        self.labels = normalized
+        self.model_id = str(self.model_id or "").strip()
+        self.metadata = dict(self.metadata or {})
+
+    @property
+    def top_label(self) -> ClassificationLabelScore | None:
+        return self.labels[0] if self.labels else None
+
+
 class DetectorBackend(Protocol):
     backend_id: str
 
@@ -259,6 +301,16 @@ class PoseBackend(Protocol):
         ...
 
 
+class ClassifierBackend(Protocol):
+    backend_id: str
+
+    def classify(
+        self,
+        frame: Any,
+    ) -> ImageClassificationResult:
+        ...
+
+
 class VisionRuntimeFactory(Protocol):
     def build_detector(self, manifest: Any) -> DetectorBackend:
         ...
@@ -267,4 +319,7 @@ class VisionRuntimeFactory(Protocol):
         ...
 
     def build_pose(self, manifest: Any) -> PoseBackend:
+        ...
+
+    def build_classifier(self, manifest: Any) -> ClassifierBackend:
         ...

@@ -4,8 +4,11 @@ import pytest
 
 from toposync.runtime.pipelines import OperatorRegistry
 from toposync_ext_vision.pipelines import (
+    ClassificationLabelScore,
     DetectionObject,
+    ImageClassificationResult,
     ModelRegistry,
+    VisionClassifyImageConfig,
     PoseObject,
     SegmentationInstance,
     TrackedObject,
@@ -165,6 +168,22 @@ def test_model_manifest_resolves_adapter_family_with_fallback_to_postprocess_typ
     assert explicit.resolved_adapter_family() == "image_classification_logits"
 
 
+def test_classification_result_normalizes_and_sorts_labels() -> None:
+    result = ImageClassificationResult(
+        labels=[
+            {"label": " Safe ", "label_id": 0, "score": 0.2},
+            ClassificationLabelScore(label=" NSFW ", label_id=1, score=1.4),
+        ],
+        model_id=" classifier.main ",
+    )
+
+    assert result.model_id == "classifier.main"
+    assert [item.label for item in result.labels] == ["nsfw", "safe"]
+    assert result.top_label is not None
+    assert result.top_label.label == "nsfw"
+    assert result.top_label.score == 1.0
+
+
 def test_vision_detect_config_defaults_to_filter_mode_and_normalizes_aliases() -> None:
     default_config = VisionDetectConfig.model_validate({})
     assert default_config.emit_mode == "events"
@@ -174,6 +193,20 @@ def test_vision_detect_config_defaults_to_filter_mode_and_normalizes_aliases() -
 
     annotate_config = VisionDetectConfig.model_validate({"emit_mode": "pass-through"})
     assert annotate_config.emit_mode == "annotate"
+
+
+def test_vision_classify_image_config_normalizes_defaults() -> None:
+    config = VisionClassifyImageConfig.model_validate(
+        {
+            "model_id": " classifier.main ",
+            "top_k": 3,
+            "input_with_fallback": " best_frame, treated , original ",
+        }
+    )
+
+    assert config.model_id == "classifier.main"
+    assert config.top_k == 3
+    assert config.input_with_fallback == "best_frame, treated , original"
 
 
 def test_tracked_object_normalizes_identity_score_and_bbox() -> None:
@@ -299,3 +332,14 @@ def test_register_vision_pipeline_operators_exposes_pose_estimate() -> None:
     assert operator is not None
     assert operator.owner == "com.toposync.vision"
     assert "pose" in list(operator.definition.capabilities or [])
+
+
+def test_register_vision_pipeline_operators_exposes_classification() -> None:
+    registry = OperatorRegistry()
+
+    register_vision_pipeline_operators(registry)
+    operator = registry.get("vision.classify_image")
+
+    assert operator is not None
+    assert operator.owner == "com.toposync.vision"
+    assert "classification" in list(operator.definition.capabilities or [])

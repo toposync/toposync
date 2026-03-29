@@ -67,6 +67,26 @@ class VisionDetectConfig(BaseModel):
         return self
 
 
+class VisionClassifyImageConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: str = ""
+    top_k: int = Field(default=5, ge=1, le=64)
+    input_with_fallback: str = "treated,original"
+    fallback_to_stream_frame: bool = True
+
+    @field_validator("model_id", "input_with_fallback")
+    @classmethod
+    def _trim_strings(cls, value: str) -> str:
+        return str(value or "").strip()
+
+    @model_validator(mode="after")
+    def _validate_defaults(self) -> "VisionClassifyImageConfig":
+        if not self.input_with_fallback:
+            self.input_with_fallback = "treated,original"
+        return self
+
+
 class VisionTrackConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

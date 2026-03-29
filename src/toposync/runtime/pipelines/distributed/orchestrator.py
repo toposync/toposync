@@ -262,6 +262,7 @@ class PipelinesOrchestrator:
             pipeline_snapshot_store=getattr(base, "pipeline_snapshot_store", None),
             notifications_upsert=self._notifications.upsert,
             origin_inbox=origin_inbox,
+            classifier_backend_factory=base.classifier_backend_factory,
             detector_backend_factory=base.detector_backend_factory,
             segmenter_backend_factory=base.segmenter_backend_factory,
             pose_backend_factory=base.pose_backend_factory,

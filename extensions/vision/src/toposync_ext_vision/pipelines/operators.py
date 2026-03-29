@@ -5,12 +5,14 @@ from typing import Any
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry, payload_path_hint
 
 from ..processing.tasks import (
+    VisionClassifyImageRuntime,
     VisionDetectRuntime,
     VisionPoseEstimateRuntime,
     VisionSegmentInstancesRuntime,
     VisionTrackRuntime,
 )
 from .schemas import (
+    VisionClassifyImageConfig,
     VisionDetectConfig,
     VisionPoseEstimateConfig,
     VisionSegmentInstancesConfig,
@@ -19,24 +21,41 @@ from .schemas import (
 
 
 def _vision_expression_hints(*, branch: str | None = None) -> list[Any]:
-    hints: list[Any] = [
-        payload_path_hint("payload.vision", value_type="object", description="Structured vision annotations attached to the packet."),
-        payload_path_hint("payload.event_id", value_type="string", description="Event identifier derived from the vision operator."),
-        payload_path_hint("payload.tracking_id", value_type="string", description="Tracking identifier associated with the current object stream."),
-        payload_path_hint("payload.tracker_track_id", value_type="string", description="Raw tracker-specific track identifier."),
-        payload_path_hint("payload.correlation_id", value_type="string", description="Correlation identifier connecting related packets."),
-        payload_path_hint("payload.source_stream_id", value_type="string", description="Source stream identifier emitted by the vision operator."),
-        payload_path_hint("payload.object_category_label", value_type="string", description="Primary detected object category label."),
-        payload_path_hint("payload.object_confidence", value_type="number", description="Confidence score for the primary detected object."),
-        payload_path_hint("payload.object_bbox01", value_type="array", description="Normalized bounding box for the primary detected object."),
-        payload_path_hint("payload.object_bbox01[0]", value_type="number", description="Normalized left coordinate of the primary bounding box."),
-        payload_path_hint("payload.object_bbox01[1]", value_type="number", description="Normalized top coordinate of the primary bounding box."),
-        payload_path_hint("payload.object_bbox01[2]", value_type="number", description="Normalized right coordinate of the primary bounding box."),
-        payload_path_hint("payload.object_bbox01[3]", value_type="number", description="Normalized bottom coordinate of the primary bounding box."),
-        payload_path_hint("payload.detected_object", value_type="object", description="Primary detected object payload."),
-        payload_path_hint("payload.detected_objects", value_type="array", description="All detected or tracked objects on the packet."),
-        payload_path_hint("payload.detected_objects[0]", value_type="object", description="First detected or tracked object on the packet."),
-    ]
+    hints: list[Any] = [payload_path_hint("payload.vision", value_type="object", description="Structured vision annotations attached to the packet.")]
+    if branch == "classification":
+        hints.extend(
+            [
+                payload_path_hint("payload.source_stream_id", value_type="string", description="Source stream identifier emitted by the vision operator."),
+                payload_path_hint("payload.classification_label", value_type="string", description="Top image-classification label selected by the model."),
+                payload_path_hint("payload.classification_score", value_type="number", description="Confidence score for the top image-classification label."),
+                payload_path_hint("payload.vision.classification", value_type="object", description="Structured image-classification payload."),
+                payload_path_hint("payload.vision.classification.top_label", value_type="string", description="Top label predicted by the classifier."),
+                payload_path_hint("payload.vision.classification.top_score", value_type="number", description="Score for the top classifier label."),
+                payload_path_hint("payload.vision.classification.labels", value_type="array", description="Ranked label scores kept on the packet."),
+                payload_path_hint("payload.vision.classification.labels[0]", value_type="object", description="Highest-confidence label score entry."),
+                payload_path_hint("payload.vision.classification.scores", value_type="object", description="Map of label -> score for the retained labels."),
+            ]
+        )
+        return hints
+    hints.extend(
+        [
+            payload_path_hint("payload.event_id", value_type="string", description="Event identifier derived from the vision operator."),
+            payload_path_hint("payload.tracking_id", value_type="string", description="Tracking identifier associated with the current object stream."),
+            payload_path_hint("payload.tracker_track_id", value_type="string", description="Raw tracker-specific track identifier."),
+            payload_path_hint("payload.correlation_id", value_type="string", description="Correlation identifier connecting related packets."),
+            payload_path_hint("payload.source_stream_id", value_type="string", description="Source stream identifier emitted by the vision operator."),
+            payload_path_hint("payload.object_category_label", value_type="string", description="Primary detected object category label."),
+            payload_path_hint("payload.object_confidence", value_type="number", description="Confidence score for the primary detected object."),
+            payload_path_hint("payload.object_bbox01", value_type="array", description="Normalized bounding box for the primary detected object."),
+            payload_path_hint("payload.object_bbox01[0]", value_type="number", description="Normalized left coordinate of the primary bounding box."),
+            payload_path_hint("payload.object_bbox01[1]", value_type="number", description="Normalized top coordinate of the primary bounding box."),
+            payload_path_hint("payload.object_bbox01[2]", value_type="number", description="Normalized right coordinate of the primary bounding box."),
+            payload_path_hint("payload.object_bbox01[3]", value_type="number", description="Normalized bottom coordinate of the primary bounding box."),
+            payload_path_hint("payload.detected_object", value_type="object", description="Primary detected object payload."),
+            payload_path_hint("payload.detected_objects", value_type="array", description="All detected or tracked objects on the packet."),
+            payload_path_hint("payload.detected_objects[0]", value_type="object", description="First detected or tracked object on the packet."),
+        ]
+    )
     if branch == "detections":
         hints.append(payload_path_hint("payload.vision.detections", value_type="array", description="Frame-level detection annotations."))
     if branch == "tracks":
@@ -47,6 +66,36 @@ def _vision_expression_hints(*, branch: str | None = None) -> list[Any]:
 
 
 def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
+    if registry.get("vision.classify_image") is None:
+        registry.register_operator(
+            operator_id="vision.classify_image",
+            description=(
+                "Image classification. Attaches ranked label scores to the frame so later steps "
+                "can filter, store, or notify according to semantic labels such as nsfw, scene, or quality."
+            ),
+            config_model=VisionClassifyImageConfig,
+            inputs=[{"name": "in", "required": True}],
+            outputs=[{"name": "out"}],
+            capabilities=["vision", "classification", "heavy_compute"],
+            defaults=VisionClassifyImageConfig().model_dump(),
+            execution_mode="thread_pool",
+            max_concurrency=1,
+            requires_artifacts=["frame_original"],
+            produces_payload_keys=[
+                "vision",
+                "source_stream_id",
+                "classification_label",
+                "classification_score",
+            ],
+            expression_hints=_vision_expression_hints(branch="classification"),
+            share_strategy="by_signature",
+            owner="com.toposync.vision",
+            runtime_factory=lambda config, deps: VisionClassifyImageRuntime(
+                config,
+                deps,
+                operator_id="vision.classify_image",
+            ),
+        )
     if registry.get("vision.pose_estimate") is None:
         registry.register_operator(
             operator_id="vision.pose_estimate",

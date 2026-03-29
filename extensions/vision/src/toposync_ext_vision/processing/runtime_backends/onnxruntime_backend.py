@@ -10,9 +10,10 @@ from typing import Any
 import numpy as np
 
 from ...registry.manifests import ModelManifest
-from ..contracts import DetectionObject, SegmentationInstance
+from ..contracts import DetectionObject, ImageClassificationResult, SegmentationInstance
 from ..parsers import (
     parse_generic_onnx_boxes,
+    parse_image_classification_logits,
     parse_rfdetr_outputs,
     parse_rtmdet_ins_outputs,
     parse_rtmdet_outputs,
@@ -396,6 +397,30 @@ class OnnxRuntimeSegmentationBackend(_OnnxRuntimeSessionBackend):
         )
 
 
+class OnnxRuntimeClassificationBackend(_OnnxRuntimeSessionBackend):
+    def __init__(self, manifest: ModelManifest) -> None:
+        super().__init__(
+            manifest,
+            task="classification",
+            supported_postprocess={"image_classification_logits"},
+        )
+
+    def classify(
+        self,
+        frame: Any,
+    ) -> ImageClassificationResult:
+        outputs_by_name, _preprocess_meta = self._run_outputs(frame)
+        adapter_family = self._manifest.resolved_adapter_family()
+        if adapter_family == "image_classification_logits":
+            return parse_image_classification_logits(
+                outputs_by_name,
+                manifest=self._manifest,
+            )
+        raise RuntimeError(
+            f"Unsupported ONNX classification parser for this phase: {adapter_family!r}"
+        )
+
+
 def build_detector_backend(manifest: ModelManifest) -> OnnxRuntimeDetectorBackend:
     if manifest.runtime == "onnxruntime":
         return OnnxRuntimeDetectorBackend(manifest)
@@ -406,6 +431,12 @@ def build_segmenter_backend(manifest: ModelManifest) -> OnnxRuntimeSegmentationB
     if manifest.runtime == "onnxruntime":
         return OnnxRuntimeSegmentationBackend(manifest)
     raise RuntimeError(f"Unsupported segmenter runtime: {manifest.runtime}")
+
+
+def build_classifier_backend(manifest: ModelManifest) -> OnnxRuntimeClassificationBackend:
+    if manifest.runtime == "onnxruntime":
+        return OnnxRuntimeClassificationBackend(manifest)
+    raise RuntimeError(f"Unsupported classifier runtime: {manifest.runtime}")
 
 
 def build_pose_backend(manifest: ModelManifest):

@@ -1,6 +1,9 @@
 from .contracts import (
+    ClassificationLabelScore,
+    ClassifierBackend,
     DetectionObject,
     DetectorBackend,
+    ImageClassificationResult,
     PoseBackend,
     PoseObject,
     SegmentationBackend,
@@ -13,12 +16,20 @@ from .contracts import (
     normalize_label,
 )
 from .diagnostics import collect_vision_diagnostics, get_last_benchmark, record_last_benchmark
-from .runtime_backends import build_detector_backend, build_pose_backend, build_segmenter_backend
+from .runtime_backends import (
+    build_classifier_backend,
+    build_detector_backend,
+    build_pose_backend,
+    build_segmenter_backend,
+)
 from .trackers import available_tracker_backends, build_tracker_backend
 
 __all__ = [
+    "ClassificationLabelScore",
+    "ClassifierBackend",
     "DetectionObject",
     "DetectorBackend",
+    "ImageClassificationResult",
     "PoseBackend",
     "PoseObject",
     "SegmentationBackend",
@@ -29,6 +40,7 @@ __all__ = [
     "clamp01",
     "collect_vision_diagnostics",
     "available_tracker_backends",
+    "build_classifier_backend",
     "build_tracker_backend",
     "get_last_benchmark",
     "normalize_bbox01",

@@ -10,6 +10,7 @@ from ..registry.recommendations import (
     list_official_detection_shortlist,
     list_official_pose_shortlist,
     list_official_segmentation_shortlist,
+    recommend_classification_models,
     recommend_detection_models,
     recommend_pose_models,
     recommend_segmentation_models,
@@ -113,7 +114,7 @@ def collect_vision_diagnostics(
             "id": "onnxruntime",
             "available": onnxruntime_installed,
             "version": onnxruntime_version,
-            "tasks": ["detection", "segmentation"],
+            "tasks": ["classification", "detection", "segmentation"],
             "error": backend_error or None,
         }
     ]
@@ -133,11 +134,19 @@ def collect_vision_diagnostics(
         "models_installed": models_installed,
         "model_registry_errors": list(getattr(registry, "load_errors", []) or []),
         "official_shortlists": {
+            "classification": [],
             "detection": list_official_detection_shortlist(model_registry=registry),
             "segmentation": list_official_segmentation_shortlist(model_registry=registry),
             "pose": list_official_pose_shortlist(model_registry=registry),
         },
         "task_catalogs": {
+            "classification": build_task_model_catalog(
+                task="classification",
+                system_info=system_info,
+                execution_providers=execution_providers,
+                model_registry=registry,
+                install_manager=install_manager,
+            ),
             "detection": build_task_model_catalog(
                 task="detection",
                 system_info=system_info,
@@ -161,6 +170,12 @@ def collect_vision_diagnostics(
             ),
         },
         "recommendations": {
+            "classification": recommend_classification_models(
+                system_info=system_info,
+                execution_providers=execution_providers,
+                model_registry=registry,
+                install_manager=install_manager,
+            ),
             "detection": recommend_detection_models(
                 system_info=system_info,
                 execution_providers=execution_providers,

@@ -35,6 +35,7 @@ class PipelineRuntimeDependencies:
     config_store: Any | None = None
     services: ServiceRegistry | None = None
     logger: logging.Logger | None = None
+    classifier_backend_factory: Callable[[Any], Any] | None = None
     detector_backend_factory: Callable[[Any], Any] | None = None
     segmenter_backend_factory: Callable[[Any], Any] | None = None
     pose_backend_factory: Callable[[Any], Any] | None = None

@@ -9,6 +9,7 @@ import pytest
 from toposync_ext_vision.processing import get_last_benchmark
 import toposync_ext_vision.processing.runtime_backends.onnxruntime_backend as ort_backend_mod
 from toposync_ext_vision.processing.runtime_backends import (
+    OnnxRuntimeClassificationBackend,
     OnnxRuntimeDetectorBackend,
     available_onnxruntime_execution_providers,
     resolve_onnxruntime_execution_providers,
@@ -64,6 +65,51 @@ def _write_manifest(path: Path, model_path: Path) -> Path:
             "iou_threshold_default": 0.6,
         },
         "classes": {"source": "test", "labels": ["person"]},
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _write_constant_classification_model(path: Path) -> Path:
+    import onnx
+    from onnx import TensorProto, helper
+
+    input_tensor = helper.make_tensor_value_info("pixel_values", TensorProto.FLOAT, [1, 3, 4, 4])
+    output_tensor = helper.make_tensor_value_info("logits", TensorProto.FLOAT, [1, 2])
+    constant_logits = helper.make_tensor("constant_logits", TensorProto.FLOAT, [1, 2], [0.1, 2.4])
+    graph = helper.make_graph(
+        [helper.make_node("Constant", inputs=[], outputs=["logits"], value=constant_logits)],
+        "toposync_constant_classifier",
+        [input_tensor],
+        [output_tensor],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid("", 13)])
+    model.ir_version = 10
+    onnx.save(model, path)
+    return path
+
+
+def _write_classification_manifest(path: Path, model_path: Path) -> Path:
+    payload = {
+        "model_id": "constant.classifier",
+        "display_name": "Constant Classifier",
+        "task": "classification",
+        "runtime": "onnxruntime",
+        "artifact_format": "onnx",
+        "artifact_path": str(model_path),
+        "input": {
+            "width": 4,
+            "height": 4,
+            "layout": "nchw",
+            "color_order": "rgb",
+            "tensor_name": "pixel_values",
+            "normalization": {"mean": [0.0, 0.0, 0.0], "std": [1.0, 1.0, 1.0]},
+        },
+        "postprocess": {
+            "adapter_family": "image_classification_logits",
+            "output_name": "logits",
+        },
+        "classes": {"source": "test", "labels": ["normal", "nsfw"]},
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -128,6 +174,24 @@ def test_prepare_onnx_input_applies_rescale_factor_before_normalization() -> Non
     assert tensor[0, 0, 0, 0] == pytest.approx(1.0, abs=1e-6)
     assert tensor[0, 1, 0, 0] == pytest.approx(0.0, abs=1e-6)
     assert tensor[0, 2, 0, 0] == pytest.approx(-1.0, abs=1e-6)
+
+
+def test_onnxruntime_classification_backend_runs_and_normalizes_logits(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+    model_path = _write_constant_classification_model(tmp_path / "constant_classifier.onnx")
+    _write_classification_manifest(tmp_path / "constant_classifier.json", model_path)
+    monkeypatch.setenv("TOPOSYNC_VISION_MANIFESTS_DIR", str(tmp_path))
+
+    registry = build_default_model_registry()
+    manifest = registry.resolve_classifier_manifest("constant.classifier")
+
+    backend = OnnxRuntimeClassificationBackend(manifest)
+    frame = np.zeros((4, 4, 3), dtype=np.float32)
+    result = backend.classify(frame)
+
+    assert result.top_label is not None
+    assert result.top_label.label == "nsfw"
+    assert result.top_label.score == pytest.approx(0.908877, abs=1e-5)
+    assert [item.label for item in result.labels] == ["nsfw", "normal"]
 
 
 def test_resolve_onnxruntime_execution_providers_defaults_to_cpu_first(monkeypatch) -> None:  # noqa: ANN001

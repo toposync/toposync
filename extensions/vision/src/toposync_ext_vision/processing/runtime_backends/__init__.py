@@ -1,8 +1,10 @@
 from .onnxruntime_backend import (
+    OnnxRuntimeClassificationBackend,
     OnnxRuntimeDetectorBackend,
     OnnxRuntimeSegmentationBackend,
     available_onnxruntime_execution_providers,
     build_benchmark_input,
+    build_classifier_backend,
     build_detector_backend,
     build_pose_backend,
     build_segmenter_backend,
@@ -11,10 +13,12 @@ from .onnxruntime_backend import (
 )
 
 __all__ = [
+    "OnnxRuntimeClassificationBackend",
     "OnnxRuntimeDetectorBackend",
     "OnnxRuntimeSegmentationBackend",
     "available_onnxruntime_execution_providers",
     "build_benchmark_input",
+    "build_classifier_backend",
     "build_detector_backend",
     "build_pose_backend",
     "build_segmenter_backend",

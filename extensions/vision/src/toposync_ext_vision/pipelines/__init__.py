@@ -3,11 +3,18 @@ from __future__ import annotations
 from importlib import import_module
 
 _EXPORTS: dict[str, tuple[str, str]] = {
+    "ClassificationLabelScore": ("toposync_ext_vision.processing", "ClassificationLabelScore"),
+    "ClassifierBackend": ("toposync_ext_vision.processing", "ClassifierBackend"),
     "DetectionObject": ("toposync_ext_vision.processing", "DetectionObject"),
     "DetectorBackend": ("toposync_ext_vision.processing", "DetectorBackend"),
+    "ImageClassificationResult": ("toposync_ext_vision.processing", "ImageClassificationResult"),
     "ModelManifest": ("toposync_ext_vision.registry", "ModelManifest"),
     "ModelRegistry": ("toposync_ext_vision.registry", "ModelRegistry"),
     "ModelRegistryError": ("toposync_ext_vision.registry", "ModelRegistryError"),
+    "OnnxRuntimeClassificationBackend": (
+        "toposync_ext_vision.processing.runtime_backends",
+        "OnnxRuntimeClassificationBackend",
+    ),
     "OnnxRuntimeDetectorBackend": (
         "toposync_ext_vision.processing.runtime_backends",
         "OnnxRuntimeDetectorBackend",
@@ -27,9 +34,17 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "toposync_ext_vision.processing",
         "build_segmenter_backend",
     ),
+    "build_classifier_backend": (
+        "toposync_ext_vision.processing.runtime_backends",
+        "build_classifier_backend",
+    ),
     "build_pose_backend": (
         "toposync_ext_vision.processing.runtime_backends",
         "build_pose_backend",
+    ),
+    "VisionClassifyImageConfig": (
+        "toposync_ext_vision.pipelines.schemas",
+        "VisionClassifyImageConfig",
     ),
     "VisionDetectConfig": ("toposync_ext_vision.pipelines.schemas", "VisionDetectConfig"),
     "VisionPoseEstimateConfig": (
@@ -41,6 +56,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "VisionSegmentInstancesConfig",
     ),
     "VisionTrackConfig": ("toposync_ext_vision.pipelines.schemas", "VisionTrackConfig"),
+    "VisionClassifyImageRuntime": (
+        "toposync_ext_vision.processing.tasks",
+        "VisionClassifyImageRuntime",
+    ),
     "VisionDetectRuntime": ("toposync_ext_vision.processing.tasks", "VisionDetectRuntime"),
     "VisionPoseEstimateRuntime": (
         "toposync_ext_vision.processing.tasks",

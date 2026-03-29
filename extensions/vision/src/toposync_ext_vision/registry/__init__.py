@@ -27,6 +27,13 @@ from .installer import (
     get_default_model_install_manager,
     install_model_via_default_manager,
 )
+from .custom_onnx import (
+    build_custom_onnx_manifest_payload,
+    import_custom_onnx_model,
+    inspect_custom_onnx_artifact,
+    preview_custom_onnx_model,
+    stage_custom_onnx_upload,
+)
 from .recommendations import (
     build_task_model_catalog,
     list_official_detection_shortlist,
@@ -52,11 +59,14 @@ __all__ = [
     "ModelRegistryError",
     "VisionTask",
     "build_default_model_registry",
+    "build_custom_onnx_manifest_payload",
     "build_task_model_catalog",
     "default_custom_manifest_dir",
     "discover_manifest_paths",
     "import_custom_manifest",
+    "import_custom_onnx_model",
     "install_model_via_default_manager",
+    "inspect_custom_onnx_artifact",
     "is_official_model_id",
     "get_default_model_install_manager",
     "list_official_detection_shortlist",
@@ -68,6 +78,8 @@ __all__ = [
     "recommend_detection_models",
     "recommend_pose_models",
     "recommend_segmentation_models",
+    "preview_custom_onnx_model",
+    "stage_custom_onnx_upload",
     "validate_custom_manifest_payload",
     "VisionModelInstallManager",
 ]

@@ -8,9 +8,9 @@ import logging
 import os
 from collections import deque
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from starlette.responses import Response, StreamingResponse
 
@@ -51,6 +51,29 @@ class ProcessingAck(BaseModel):
 class ProcessingVisionManifestImportRequest(BaseModel):
     manifest_text: str = ""
     artifact_path: str = ""
+    replace_existing: bool = False
+    imported_by: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProcessingVisionCustomOnnxRequest(BaseModel):
+    artifact_path: str = ""
+    uploaded_filename: str = ""
+    display_name: str = ""
+    task: Literal["classification", "detection"] = "detection"
+    adapter_family: str = ""
+    tensor_name: str = ""
+    width: int = 640
+    height: int = 640
+    layout: str = "nchw"
+    color_order: str = "rgb"
+    resize_mode: str = "stretch"
+    rescale_factor: float = 1.0
+    normalization_mean: list[float] = Field(default_factory=list)
+    normalization_std: list[float] = Field(default_factory=list)
+    output_name: str = ""
+    box_format: str = "xyxy01"
+    class_labels: list[str] = Field(default_factory=list)
+    source_url: str = ""
     replace_existing: bool = False
     imported_by: dict[str, Any] = Field(default_factory=dict)
 
@@ -377,6 +400,112 @@ def create_processing_app() -> FastAPI:
             )
         except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/processing/vision/custom-onnx/inspect")
+    async def inspect_processing_custom_onnx(
+        file: UploadFile = File(...),
+    ) -> dict[str, Any]:
+        try:
+            from toposync_ext_vision.registry.custom_onnx import stage_custom_onnx_upload
+            from toposync_ext_vision.registry.manifests import ModelRegistryError
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+
+        try:
+            result = await asyncio.to_thread(
+                stage_custom_onnx_upload,
+                stream=file.file,
+                filename=file.filename or "custom-model.onnx",
+                data_dir=config_store.paths.data_dir,
+            )
+        except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            await file.close()
+        return dict(result or {})
+
+    @app.post("/api/processing/vision/custom-onnx/preview")
+    async def preview_processing_custom_onnx(
+        config_json: str = Form("{}"),
+        image: UploadFile = File(...),
+    ) -> dict[str, Any]:
+        try:
+            from toposync_ext_vision.registry.custom_onnx import preview_custom_onnx_model
+            from toposync_ext_vision.registry.manifests import ModelRegistryError
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+
+        try:
+            body = ProcessingVisionCustomOnnxRequest.model_validate_json(config_json or "{}")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"Invalid custom ONNX preview config: {exc}") from exc
+
+        try:
+            image_bytes = await image.read()
+            result = await asyncio.to_thread(
+                preview_custom_onnx_model,
+                image_bytes=image_bytes,
+                artifact_path=body.artifact_path,
+                display_name=body.display_name,
+                task=body.task,
+                adapter_family=body.adapter_family,
+                uploaded_filename=body.uploaded_filename,
+                tensor_name=body.tensor_name,
+                width=body.width,
+                height=body.height,
+                layout=body.layout,
+                color_order=body.color_order,
+                resize_mode=body.resize_mode,
+                rescale_factor=body.rescale_factor,
+                normalization_mean=body.normalization_mean,
+                normalization_std=body.normalization_std,
+                output_name=body.output_name,
+                box_format=body.box_format,
+                class_labels=body.class_labels,
+                source_url=body.source_url,
+            )
+        except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            await image.close()
+        return dict(result or {})
+
+    @app.post("/api/processing/vision/custom-onnx/import")
+    async def import_processing_custom_onnx(body: ProcessingVisionCustomOnnxRequest) -> dict[str, Any]:
+        try:
+            from toposync_ext_vision.registry.custom_onnx import import_custom_onnx_model
+            from toposync_ext_vision.registry.manifests import ModelRegistryError
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+
+        try:
+            result = await asyncio.to_thread(
+                import_custom_onnx_model,
+                artifact_path=body.artifact_path,
+                display_name=body.display_name,
+                task=body.task,
+                adapter_family=body.adapter_family,
+                uploaded_filename=body.uploaded_filename,
+                tensor_name=body.tensor_name,
+                width=body.width,
+                height=body.height,
+                layout=body.layout,
+                color_order=body.color_order,
+                resize_mode=body.resize_mode,
+                rescale_factor=body.rescale_factor,
+                normalization_mean=body.normalization_mean,
+                normalization_std=body.normalization_std,
+                output_name=body.output_name,
+                box_format=body.box_format,
+                class_labels=body.class_labels,
+                source_url=body.source_url,
+                replace_existing=body.replace_existing,
+                imported_by=dict(body.imported_by or {}),
+                data_dir=config_store.paths.data_dir,
+            )
+        except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return dict(result or {})
 
     @app.post("/api/processing/vision/models/{model_id}/install")
     async def install_processing_vision_model(

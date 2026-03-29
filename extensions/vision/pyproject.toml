@@ -12,6 +12,7 @@ dependencies = [
   "numpy>=1.26,<3",
   "norfair>=2.2,<3",
   "onnx>=1.17",
+  "pillow>=10,<13",
 ]
 [project.entry-points."toposync.extensions"]
 vision = "toposync_ext_vision.plugin:VisionExtension"

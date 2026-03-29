@@ -45,6 +45,25 @@ class ProcessingTransport(Protocol):
 
     async def import_vision_manifest(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
+    async def inspect_vision_custom_onnx(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        content: bytes,
+    ) -> dict[str, Any]: ...
+
+    async def preview_vision_custom_onnx(
+        self,
+        *,
+        payload: dict[str, Any],
+        filename: str,
+        content_type: str,
+        content: bytes,
+    ) -> dict[str, Any]: ...
+
+    async def import_vision_custom_onnx(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
     async def upload_vision_model_artifact(
         self,
         *,
@@ -88,6 +107,31 @@ class InProcessProcessingTransport:
 
     async def import_vision_manifest(self, payload: dict[str, Any]) -> dict[str, Any]:
         raise ProcessingTransportError("Vision manifest import is not supported for in-process transport")
+
+    async def inspect_vision_custom_onnx(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        content: bytes,
+    ) -> dict[str, Any]:
+        _ = (filename, content_type, content)
+        raise ProcessingTransportError("Custom ONNX inspection is not supported for in-process transport")
+
+    async def preview_vision_custom_onnx(
+        self,
+        *,
+        payload: dict[str, Any],
+        filename: str,
+        content_type: str,
+        content: bytes,
+    ) -> dict[str, Any]:
+        _ = (payload, filename, content_type, content)
+        raise ProcessingTransportError("Custom ONNX preview is not supported for in-process transport")
+
+    async def import_vision_custom_onnx(self, payload: dict[str, Any]) -> dict[str, Any]:
+        _ = payload
+        raise ProcessingTransportError("Custom ONNX import is not supported for in-process transport")
 
     async def upload_vision_model_artifact(
         self,
@@ -193,6 +237,49 @@ class HttpProcessingTransport:
             raise ProcessingTransportError(
                 f"Processing vision manifest import failed: {res.status_code} {res.text}"
             )
+        body = res.json()
+        return body if isinstance(body, dict) else {}
+
+    async def inspect_vision_custom_onnx(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        content: bytes,
+    ) -> dict[str, Any]:
+        client = await self._ensure_client()
+        url = f"{self._base}/api/processing/vision/custom-onnx/inspect"
+        files = {"file": (filename or "custom-model.onnx", content, content_type or "application/octet-stream")}
+        res = await client.post(url, files=files, timeout=max(self._timeout_s, 120.0))
+        if res.status_code >= 300:
+            raise ProcessingTransportError(f"Processing custom ONNX inspect failed: {res.status_code} {res.text}")
+        body = res.json()
+        return body if isinstance(body, dict) else {}
+
+    async def preview_vision_custom_onnx(
+        self,
+        *,
+        payload: dict[str, Any],
+        filename: str,
+        content_type: str,
+        content: bytes,
+    ) -> dict[str, Any]:
+        client = await self._ensure_client()
+        url = f"{self._base}/api/processing/vision/custom-onnx/preview"
+        files = {"image": (filename or "preview-image.png", content, content_type or "application/octet-stream")}
+        data = {"config_json": json.dumps(payload)}
+        res = await client.post(url, data=data, files=files, timeout=max(self._timeout_s, 120.0))
+        if res.status_code >= 300:
+            raise ProcessingTransportError(f"Processing custom ONNX preview failed: {res.status_code} {res.text}")
+        body = res.json()
+        return body if isinstance(body, dict) else {}
+
+    async def import_vision_custom_onnx(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client = await self._ensure_client()
+        url = f"{self._base}/api/processing/vision/custom-onnx/import"
+        res = await client.post(url, json=payload, timeout=max(self._timeout_s, 120.0))
+        if res.status_code >= 300:
+            raise ProcessingTransportError(f"Processing custom ONNX import failed: {res.status_code} {res.text}")
         body = res.json()
         return body if isinstance(body, dict) else {}
 

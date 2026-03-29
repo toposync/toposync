@@ -1321,6 +1321,7 @@ dependencies = [
     { name = "numpy" },
     { name = "onnx", version = "1.19.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
     { name = "onnx", version = "1.20.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
+    { name = "pillow" },
     { name = "toposync-core" },
     { name = "toposync-ext-cameras" },
 ]
@@ -1330,6 +1331,7 @@ requires-dist = [
     { name = "norfair", specifier = ">=2.2,<3" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "onnx", specifier = ">=1.17" },
+    { name = "pillow", specifier = ">=10,<13" },
     { name = "toposync-core", specifier = ">=0.3.0" },
     { name = "toposync-ext-cameras", specifier = ">=0.1.0" },
 ]

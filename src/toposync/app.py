@@ -180,6 +180,29 @@ class ProcessingServerVisionManifestImportResponse(BaseModel):
     provenance: dict[str, Any] = Field(default_factory=dict)
 
 
+class ProcessingServerVisionCustomOnnxRequest(BaseModel):
+    artifact_path: str = ""
+    uploaded_filename: str = ""
+    display_name: str = ""
+    task: Literal["classification", "detection"] = "detection"
+    adapter_family: str = ""
+    tensor_name: str = ""
+    width: int = 640
+    height: int = 640
+    layout: str = "nchw"
+    color_order: str = "rgb"
+    resize_mode: str = "stretch"
+    rescale_factor: float = 1.0
+    normalization_mean: list[float] = Field(default_factory=list)
+    normalization_std: list[float] = Field(default_factory=list)
+    output_name: str = ""
+    box_format: str = "xyxy01"
+    class_labels: list[str] = Field(default_factory=list)
+    source_url: str = ""
+    replace_existing: bool = False
+    imported_by: dict[str, Any] = Field(default_factory=dict)
+
+
 class ProcessingServerVisionModelInstallRequest(BaseModel):
     force: bool = False
     mode: str = ""
@@ -1347,6 +1370,234 @@ def create_app() -> FastAPI:
             payload = body.model_dump(mode="json")
             payload["imported_by"] = dict(body.imported_by or {}) or _processing_install_requested_by(request)
             result = await transport.import_vision_manifest(payload)
+            return ProcessingServerVisionManifestImportResponse.model_validate(result)
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            try:
+                await transport.close()
+            except Exception:
+                pass
+
+    @app.post("/api/processing-servers/{server_id}/vision/custom-onnx/inspect")
+    async def inspect_processing_server_custom_onnx(
+        request: Request,
+        server_id: str,
+        file: UploadFile = File(...),
+    ) -> dict[str, Any]:
+        _require(request, action="core:processing_servers:write")
+        config_store: ConfigStore = request.app.state.config_store
+        sid = str(server_id or "").strip().lower()
+        servers = await config_store.list_processing_servers()
+        server = next((item for item in servers if item.id == sid), None)
+        if server is None:
+            raise HTTPException(status_code=404, detail="Unknown processing server")
+
+        if server.kind != "http":
+            try:
+                from toposync_ext_vision.registry.custom_onnx import stage_custom_onnx_upload
+                from toposync_ext_vision.registry.manifests import ModelRegistryError
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            try:
+                result = await asyncio.to_thread(
+                    stage_custom_onnx_upload,
+                    stream=file.file,
+                    filename=file.filename or "custom-model.onnx",
+                    data_dir=config_store.paths.data_dir,
+                )
+            except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            finally:
+                await file.close()
+            return dict(result or {})
+
+        try:
+            transport = HttpProcessingTransport(
+                base_url=server.url,
+                username=getattr(server, "username", ""),
+                password=getattr(server, "password", ""),
+                timeout_s=120.0,
+            )
+        except ProcessingTransportError as exc:
+            await file.close()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            file_bytes = await file.read()
+            result = await transport.inspect_vision_custom_onnx(
+                filename=file.filename or "custom-model.onnx",
+                content_type=file.content_type or "application/octet-stream",
+                content=file_bytes,
+            )
+            return dict(result or {})
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            try:
+                await file.close()
+            except Exception:
+                pass
+            try:
+                await transport.close()
+            except Exception:
+                pass
+
+    @app.post("/api/processing-servers/{server_id}/vision/custom-onnx/preview")
+    async def preview_processing_server_custom_onnx(
+        request: Request,
+        server_id: str,
+        config_json: str = Form("{}"),
+        image: UploadFile = File(...),
+    ) -> dict[str, Any]:
+        _require(request, action="core:processing_servers:write")
+        config_store: ConfigStore = request.app.state.config_store
+        sid = str(server_id or "").strip().lower()
+        servers = await config_store.list_processing_servers()
+        server = next((item for item in servers if item.id == sid), None)
+        if server is None:
+            raise HTTPException(status_code=404, detail="Unknown processing server")
+
+        try:
+            body = ProcessingServerVisionCustomOnnxRequest.model_validate_json(config_json or "{}")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"Invalid custom ONNX preview config: {exc}") from exc
+
+        if server.kind != "http":
+            try:
+                from toposync_ext_vision.registry.custom_onnx import preview_custom_onnx_model
+                from toposync_ext_vision.registry.manifests import ModelRegistryError
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            try:
+                image_bytes = await image.read()
+                result = await asyncio.to_thread(
+                    preview_custom_onnx_model,
+                    image_bytes=image_bytes,
+                    artifact_path=body.artifact_path,
+                    display_name=body.display_name,
+                    task=body.task,
+                    adapter_family=body.adapter_family,
+                    uploaded_filename=body.uploaded_filename,
+                    tensor_name=body.tensor_name,
+                    width=body.width,
+                    height=body.height,
+                    layout=body.layout,
+                    color_order=body.color_order,
+                    resize_mode=body.resize_mode,
+                    rescale_factor=body.rescale_factor,
+                    normalization_mean=body.normalization_mean,
+                    normalization_std=body.normalization_std,
+                    output_name=body.output_name,
+                    box_format=body.box_format,
+                    class_labels=body.class_labels,
+                    source_url=body.source_url,
+                )
+            except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            finally:
+                await image.close()
+            return dict(result or {})
+
+        try:
+            transport = HttpProcessingTransport(
+                base_url=server.url,
+                username=getattr(server, "username", ""),
+                password=getattr(server, "password", ""),
+                timeout_s=120.0,
+            )
+        except ProcessingTransportError as exc:
+            await image.close()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            image_bytes = await image.read()
+            payload = body.model_dump(mode="json")
+            result = await transport.preview_vision_custom_onnx(
+                payload=payload,
+                filename=image.filename or "preview-image.png",
+                content_type=image.content_type or "application/octet-stream",
+                content=image_bytes,
+            )
+            return dict(result or {})
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            try:
+                await image.close()
+            except Exception:
+                pass
+            try:
+                await transport.close()
+            except Exception:
+                pass
+
+    @app.post(
+        "/api/processing-servers/{server_id}/vision/custom-onnx/import",
+        response_model=ProcessingServerVisionManifestImportResponse,
+    )
+    async def import_processing_server_custom_onnx(
+        request: Request,
+        server_id: str,
+        body: ProcessingServerVisionCustomOnnxRequest,
+    ) -> ProcessingServerVisionManifestImportResponse:
+        _require(request, action="core:processing_servers:write")
+        config_store: ConfigStore = request.app.state.config_store
+        sid = str(server_id or "").strip().lower()
+        servers = await config_store.list_processing_servers()
+        server = next((item for item in servers if item.id == sid), None)
+        if server is None:
+            raise HTTPException(status_code=404, detail="Unknown processing server")
+
+        if server.kind != "http":
+            try:
+                from toposync_ext_vision.registry.custom_onnx import import_custom_onnx_model
+                from toposync_ext_vision.registry.manifests import ModelRegistryError
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            try:
+                result = await asyncio.to_thread(
+                    import_custom_onnx_model,
+                    artifact_path=body.artifact_path,
+                    display_name=body.display_name,
+                    task=body.task,
+                    adapter_family=body.adapter_family,
+                    uploaded_filename=body.uploaded_filename,
+                    tensor_name=body.tensor_name,
+                    width=body.width,
+                    height=body.height,
+                    layout=body.layout,
+                    color_order=body.color_order,
+                    resize_mode=body.resize_mode,
+                    rescale_factor=body.rescale_factor,
+                    normalization_mean=body.normalization_mean,
+                    normalization_std=body.normalization_std,
+                    output_name=body.output_name,
+                    box_format=body.box_format,
+                    class_labels=body.class_labels,
+                    source_url=body.source_url,
+                    replace_existing=body.replace_existing,
+                    imported_by=dict(body.imported_by or {}) or _processing_install_requested_by(request),
+                    data_dir=config_store.paths.data_dir,
+                )
+            except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return ProcessingServerVisionManifestImportResponse.model_validate(result)
+
+        try:
+            transport = HttpProcessingTransport(
+                base_url=server.url,
+                username=getattr(server, "username", ""),
+                password=getattr(server, "password", ""),
+                timeout_s=120.0,
+            )
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            payload = body.model_dump(mode="json")
+            payload["imported_by"] = dict(body.imported_by or {}) or _processing_install_requested_by(request)
+            result = await transport.import_vision_custom_onnx(payload)
             return ProcessingServerVisionManifestImportResponse.model_validate(result)
         except ProcessingTransportError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc

@@ -112,6 +112,12 @@ OFFICIAL_RTMDET_SEGMENTATION_MODEL_IDS: tuple[str, ...] = (
 
 OFFICIAL_RTMPOSE_MODEL_IDS: tuple[str, ...] = ()
 
+OFFICIAL_VISION_MODEL_IDS: tuple[str, ...] = (
+    *OFFICIAL_DETECTION_MODEL_IDS,
+    *OFFICIAL_RTMDET_SEGMENTATION_MODEL_IDS,
+    *OFFICIAL_RTMPOSE_MODEL_IDS,
+)
+
 
 def resolve_builtin_labels(source: str) -> list[str]:
     key = str(source or "").strip().lower()

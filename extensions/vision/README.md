@@ -27,6 +27,7 @@ The public surface is task-based, not vendor-based. The official first-party run
 - By default, the ONNX Runtime backend prefers `CPUExecutionProvider`. Optional acceleration is opt-in via the `toposync-vision-cuda` / `toposync-vision-directml` bundles or `TOPOSYNC_VISION_ONNXRUNTIME_PROVIDERS`.
 - Manifest files can be loaded from `TOPOSYNC_VISION_MANIFESTS_DIR` or `TOPOSYNC_VISION_MANIFEST_PATHS`.
 - Custom manifests imported from the UI are persisted under `.toposync-data/vision-manifests/` for the selected processing server.
+- Built-in first-party manifests ship inside the wheel, but their ONNX weights do not. When no checkout-local artifact exists, official model ids resolve to `TOPOSYNC_DATA_DIR/vision-models/...` (or `.toposync-data/vision-models/...` by default).
 - The extension now ships a built-in RTMDet detection shortlist in `extensions/vision/manifests/`:
   - `rtmdet_det_tiny`
   - `rtmdet_det_small`
@@ -35,8 +36,8 @@ The public surface is task-based, not vendor-based. The official first-party run
   - `rfdetr_det_nano`
   - `rfdetr_det_small`
   - `rfdetr_det_medium`
-- Their local ONNX artifacts live under `extensions/vision/models/rtmdet/` and are intentionally not versioned in git.
-- RF-DETR artifacts live under `extensions/vision/models/rfdetr/` and are also intentionally not versioned in git.
+- In a source checkout, existing local artifacts under `extensions/vision/models/...` are still honored.
+- In installed environments, official artifacts belong under the managed model store in `TOPOSYNC_DATA_DIR/vision-models/...` and are intentionally not bundled in the published package.
 - The validated manual provisioning flow is documented in `docs/VISION_MODEL_PROVISIONING.md`.
 - The initial assisted-provisioning foundation for RTMDet detection is already exposed in catalog metadata:
   - upstream checkpoint/config/metafile/paper links

@@ -39,7 +39,7 @@ Built-in first-party segmentation manifests currently target RTMDet-Ins:
 
 Their manifests are discovered automatically from `extensions/vision/manifests/`. Custom manifests can still be added with `TOPOSYNC_VISION_MANIFESTS_DIR` or `TOPOSYNC_VISION_MANIFEST_PATHS`, and manifests imported from the UI are stored under `.toposync-data/vision-manifests/` on that processing server.
 
-Official RTMDet detection artifacts are local files under `extensions/vision/models/rtmdet/`. A validated manual provisioning flow for `rtmdet_det_tiny`, `rtmdet_det_small`, and `rtmdet_det_medium` is documented in [VISION_MODEL_PROVISIONING.md](VISION_MODEL_PROVISIONING.md).
+The first-party manifests are bundled with the extension, but the official ONNX artifacts are not. In installed environments, Toposync expects them under `TOPOSYNC_DATA_DIR/vision-models/...` (or `.toposync-data/vision-models/...` by default). In a source checkout, existing files under `extensions/vision/models/...` are still honored. A validated manual provisioning flow for `rtmdet_det_tiny`, `rtmdet_det_small`, and `rtmdet_det_medium` is documented in [VISION_MODEL_PROVISIONING.md](VISION_MODEL_PROVISIONING.md).
 
 Experimental assisted local build is also available for RTMDet detection in this phase when all of these are true:
 - the processing server is Linux

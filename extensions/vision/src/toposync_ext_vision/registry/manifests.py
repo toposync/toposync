@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
+from .builtin_data import OFFICIAL_VISION_MODEL_IDS
+
 
 VisionTask = Literal["detection", "tracking", "segmentation", "pose", "classification"]
 
@@ -263,7 +265,14 @@ class ModelManifest(BaseModel):
         if artifact.is_absolute():
             return artifact.resolve()
         if self._source_path is not None:
-            return (self._source_path.parent / artifact).resolve()
+            candidate = (self._source_path.parent / artifact).resolve()
+            managed_subpath = _official_managed_model_subpath(self)
+            if managed_subpath is not None and not candidate.is_file():
+                return (_default_official_model_store_dir() / managed_subpath).resolve()
+            return candidate
+        managed_subpath = _official_managed_model_subpath(self)
+        if managed_subpath is not None:
+            return (_default_official_model_store_dir() / managed_subpath).resolve()
         return artifact.resolve()
 
     def resolved_adapter_family(self) -> str:
@@ -272,6 +281,29 @@ class ModelManifest(BaseModel):
 
 class ModelRegistryError(RuntimeError):
     pass
+
+
+def _default_official_model_store_dir() -> Path:
+    env_data_dir = str(os.getenv("TOPOSYNC_DATA_DIR") or "").strip()
+    if env_data_dir:
+        return Path(env_data_dir).expanduser().resolve() / "vision-models"
+    return (Path.cwd() / ".toposync-data" / "vision-models").resolve()
+
+
+def _official_managed_model_subpath(manifest: ModelManifest) -> Path | None:
+    model_id = str(manifest.model_id or "").strip().lower()
+    if model_id not in OFFICIAL_VISION_MODEL_IDS:
+        return None
+    artifact = Path(str(manifest.artifact_path or "").strip())
+    if artifact.is_absolute():
+        return None
+    parts = artifact.parts
+    if len(parts) < 3 or parts[0] != ".." or parts[1] != "models":
+        return None
+    tail = [part for part in parts[2:] if str(part or "").strip() not in {"", "."}]
+    if not tail:
+        return None
+    return Path(*tail)
 
 
 class ModelRegistry:

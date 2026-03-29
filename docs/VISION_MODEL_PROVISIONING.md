@@ -16,13 +16,21 @@ Current product policy:
 
 ## Where the files must end up
 
-Toposync expects these files:
+Toposync expects these files in its managed model store:
 
 ```text
-extensions/vision/models/rtmdet/rtmdet_det_tiny.end2end.onnx
-extensions/vision/models/rtmdet/rtmdet_det_small.end2end.onnx
-extensions/vision/models/rtmdet/rtmdet_det_medium.end2end.onnx
+$TOPOSYNC_DATA_DIR/vision-models/rtmdet/rtmdet_det_tiny.end2end.onnx
+$TOPOSYNC_DATA_DIR/vision-models/rtmdet/rtmdet_det_small.end2end.onnx
+$TOPOSYNC_DATA_DIR/vision-models/rtmdet/rtmdet_det_medium.end2end.onnx
 ```
+
+If `TOPOSYNC_DATA_DIR` is not set, the default location is:
+
+```text
+.toposync-data/vision-models/rtmdet/...
+```
+
+In a source checkout, existing files under `extensions/vision/models/...` are still accepted as a development convenience. The published `toposync-ext-vision` package does not bundle those ONNX artifacts.
 
 After the files exist there, the local processing server will automatically report them as `artifact_exists: true`.
 
@@ -82,19 +90,19 @@ orb bash -lc 'source /tmp/rtmexport251/bin/activate && export PYTHONPATH=/mnt/ma
 orb bash -lc 'source /tmp/rtmexport251/bin/activate && export PYTHONPATH=/mnt/mac/private/tmp/mmdeploy:/mnt/mac/private/tmp/mmdetection && python /mnt/mac/private/tmp/mmdeploy/tools/deploy.py /mnt/mac/private/tmp/mmdeploy/configs/mmdet/detection/detection_onnxruntime_static.py /mnt/mac/private/tmp/mmdetection/configs/rtmdet/rtmdet_m_8xb32-300e_coco.py /mnt/mac/private/tmp/rtmdet-export/checkpoints/rtmdet_m_8xb32-300e_coco_20220719_112220-229f527c.pth /mnt/mac/private/tmp/mmdeploy/demo/resources/det.jpg --work-dir /mnt/mac/private/tmp/rtmdet-export/work/rtmdet_det_medium --device cpu --log-level INFO'
 ```
 
-6. Copy the exported ONNX files into the repository:
+6. Copy the exported ONNX files into the managed model store:
 
 ```bash
-mkdir -p extensions/vision/models/rtmdet
+mkdir -p .toposync-data/vision-models/rtmdet
 
 cp /tmp/rtmdet-export/work/rtmdet_det_tiny/end2end.onnx \
-  extensions/vision/models/rtmdet/rtmdet_det_tiny.end2end.onnx
+  .toposync-data/vision-models/rtmdet/rtmdet_det_tiny.end2end.onnx
 
 cp /tmp/rtmdet-export/work/rtmdet_det_small/end2end.onnx \
-  extensions/vision/models/rtmdet/rtmdet_det_small.end2end.onnx
+  .toposync-data/vision-models/rtmdet/rtmdet_det_small.end2end.onnx
 
 cp /tmp/rtmdet-export/work/rtmdet_det_medium/end2end.onnx \
-  extensions/vision/models/rtmdet/rtmdet_det_medium.end2end.onnx
+  .toposync-data/vision-models/rtmdet/rtmdet_det_medium.end2end.onnx
 ```
 
 7. Verify from Toposync:

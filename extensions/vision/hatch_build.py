@@ -19,9 +19,3 @@ class CustomBuildHook(BuildHookInterface):
             raise TypeError("build_data.force_include must be a dictionary")
 
         force_include[str(manifests_dir)] = "toposync_ext_vision/manifests"
-
-        models_dir = root / "models"
-        if not models_dir.is_dir():
-            models_dir = root / "toposync_ext_vision" / "models"
-        if models_dir.is_dir():
-            force_include[str(models_dir)] = "toposync_ext_vision/models"

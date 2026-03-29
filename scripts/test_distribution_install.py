@@ -13,6 +13,7 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
 
@@ -150,6 +151,24 @@ def _build_wheelhouse(wheelhouse_dir: Path) -> None:
     ]
     for target in targets:
         _run(["uv", "build", "--wheel", "--out-dir", wheelhouse_dir, target])
+    _assert_vision_wheel_publishable(wheelhouse_dir)
+
+
+def _assert_vision_wheel_publishable(wheelhouse_dir: Path) -> None:
+    vision_wheels = sorted(wheelhouse_dir.glob("toposync_ext_vision-*.whl"))
+    if len(vision_wheels) != 1:
+        raise RuntimeError(f"Expected exactly one vision wheel in wheelhouse, found {len(vision_wheels)}")
+    vision_wheel = vision_wheels[0]
+    max_bytes = 100 * 1024 * 1024
+    size_bytes = vision_wheel.stat().st_size
+    if size_bytes >= max_bytes:
+        raise RuntimeError(
+            f"Vision wheel is too large for default PyPI limits: {vision_wheel.name} ({size_bytes} bytes)"
+        )
+    with zipfile.ZipFile(vision_wheel) as archive:
+        names = archive.namelist()
+    if any(name.startswith("toposync_ext_vision/models/") for name in names):
+        raise RuntimeError(f"Vision wheel unexpectedly packaged model artifacts: {vision_wheel.name}")
 
 
 def _install_distribution(*, wheelhouse_dir: Path, venv_dir: Path, constraints_path: Path) -> None:

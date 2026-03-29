@@ -80,6 +80,8 @@ O pacote `toposync` já instala o conjunto padrão:
 
 Esse é o bundle padrão em CPU.
 
+Observação para `vision`: os manifests first-party vão junto no pacote, mas os pesos ONNX oficiais não. Em ambiente instalado, eles ficam no store gerenciado em `TOPOSYNC_DATA_DIR/vision-models/` depois de upload, cópia administrada ou build local assistido.
+
 Para provisionar diretamente um ambiente com aceleração first-party:
 
 ```bash

@@ -49,7 +49,7 @@ EXTENSIONS: tuple[dict[str, object], ...] = (
         "package": "toposync_ext_vision",
         "required_files": ("toposync_ext_vision/extension.json",),
         "required_prefixes": ("toposync_ext_vision/manifests/",),
-        "optional_source_dirs": (("models", "toposync_ext_vision/models"),),
+        "forbidden_prefixes": ("toposync_ext_vision/models/",),
     },
     {
         "name": "streaming",
@@ -81,6 +81,7 @@ def _build_wheel(extension_name: str, out_dir: Path) -> Path:
 def _check_wheel(entry: dict[str, object], wheel_path: Path) -> None:
     required_files = tuple(str(item) for item in entry.get("required_files", ()))
     required_prefixes = tuple(str(item) for item in entry.get("required_prefixes", ()))
+    forbidden_prefixes = tuple(str(item) for item in entry.get("forbidden_prefixes", ()))
     optional_source_dirs = tuple(entry.get("optional_source_dirs", ()))
     extension_name = str(entry["name"])
     extension_root = ROOT / "extensions" / extension_name
@@ -95,6 +96,10 @@ def _check_wheel(entry: dict[str, object], wheel_path: Path) -> None:
     for prefix in required_prefixes:
         if not any(name.startswith(prefix) for name in names):
             raise RuntimeError(f"{wheel_path.name} is missing packaged assets under {prefix}")
+
+    for prefix in forbidden_prefixes:
+        if any(name.startswith(prefix) for name in names):
+            raise RuntimeError(f"{wheel_path.name} unexpectedly packaged files under {prefix}")
 
     for source_rel, wheel_prefix in optional_source_dirs:
         source_dir = extension_root / str(source_rel)

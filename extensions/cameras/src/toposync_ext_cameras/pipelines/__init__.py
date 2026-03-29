@@ -12,6 +12,7 @@ from .operators import (
 )
 from .postprocess import (
     AreaRestrictionConfig,
+    ArtifactPrivacyConfig,
     BestFrameSelectorConfig,
     CameraMappingConfig,
     ImageCropConfig,
@@ -44,6 +45,7 @@ __all__ = [
     "YoloBackend",
     "YoloBackendConfig",
     "ObjectCropConfig",
+    "ArtifactPrivacyConfig",
     "ImageCropConfig",
     "ImagePrivacyConfig",
     "ImagePerspectiveCropConfig",

@@ -88,8 +88,10 @@ class VisionClassifyImageRuntime(TransformOperatorRuntime):
     ) -> Packet:
         labels = result.labels[: max(1, int(self._parsed.top_k))]
         top = labels[0] if labels else None
+        top_label_normalized = str(top.label or "").strip().lower() if top is not None and str(top.label or "").strip() else None
         classification = {
             "top_label": top.label if top is not None else None,
+            "top_label_normalized": top_label_normalized,
             "top_label_id": top.label_id if top is not None else None,
             "top_score": float(top.score) if top is not None else 0.0,
             "labels": [self._serialize_label_score(item) for item in labels],
@@ -113,6 +115,7 @@ class VisionClassifyImageRuntime(TransformOperatorRuntime):
             {
                 "source_stream_id": packet.stream_id,
                 "classification_label": classification["top_label"],
+                "classification_label_normalized": top_label_normalized,
                 "classification_score": classification["top_score"],
             }
         )
@@ -123,6 +126,7 @@ class VisionClassifyImageRuntime(TransformOperatorRuntime):
                 "operator_id": self._operator_id,
                 "source_stream_id": packet.stream_id,
                 "classification_label": classification["top_label"],
+                "classification_label_normalized": top_label_normalized,
                 "classification_score": classification["top_score"],
                 "vision_task": "classification",
                 "vision_model_id": manifest.model_id,

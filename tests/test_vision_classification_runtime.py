@@ -71,7 +71,9 @@ def test_vision_classify_image_attaches_ranked_payload() -> None:
         assert isinstance(labels, list)
         assert labels[0]["label"] == "nsfw"
         assert out.payload.get("classification_label") == "nsfw"
+        assert out.payload.get("classification_label_normalized") == "nsfw"
         assert out.payload.get("classification_score") == 0.92
+        assert classification.get("top_label_normalized") == "nsfw"
         assert out.metadata.get("vision_task") == "classification"
 
     asyncio.run(scenario())

@@ -24,6 +24,7 @@ from toposync.runtime.pipelines.operator_registry import (
 )
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts, resolve_source_device_id
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
+from toposync.runtime.pipelines.safe_expression import SafeExpression
 from toposync.runtime.services import ServiceRegistry
 
 from ..processing.mapping import (
@@ -85,6 +86,16 @@ def _frame_privacy_expression_hints() -> list[Any]:
         payload_path_hint("payload.frame_privacy.effect", value_type="string", description="Privacy effect applied inside the region."),
         payload_path_hint("payload.frame_privacy.output_artifact_name", value_type="string", description="Artifact name emitted by the privacy operator."),
         payload_path_hint("payload.frame_privacy.set_stream_frame", value_type="boolean", description="Whether the privacy artifact becomes the stream frame."),
+    ]
+
+
+def _artifact_privacy_expression_hints() -> list[Any]:
+    return [
+        payload_path_hint("payload.artifact_privacy", value_type="object", description="Artifact-sanitization metadata attached when privacy stripping matches."),
+        payload_path_hint("payload.artifact_privacy.applied", value_type="boolean", description="Whether image-artifact stripping ran for the current packet."),
+        payload_path_hint("payload.artifact_privacy.mode", value_type="string", description="Privacy action applied to the packet artifacts."),
+        payload_path_hint("payload.artifact_privacy.removed_artifact_names", value_type="array", description="Artifact names removed from the packet to reduce image exposure."),
+        payload_path_hint("payload.artifact_privacy.requested_artifact_names", value_type="array", description="Configured artifact names the privacy operator tried to sanitize."),
     ]
 
 
@@ -267,6 +278,35 @@ class ImagePrivacyConfig(BaseModel):
         if not name:
             raise ValueError("output_artifact_name is required")
         return name
+
+
+class ArtifactPrivacyConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = True
+    expression: str = Field(
+        default="",
+        description="Boolean expression evaluated against payload/metadata. When it matches, selected image artifacts are removed from the packet.",
+    )
+    invert: bool = False
+    artifact_names: list[str] = Field(default_factory=lambda: ["best_frame", "original", "treated", "segmented"])
+
+    @field_validator("expression")
+    @classmethod
+    def _trim_expression(cls, value: str) -> str:
+        return str(value or "").strip()
+
+    @field_validator("expression")
+    @classmethod
+    def _validate_expression_is_safe(cls, value: str) -> str:
+        if not value:
+            return value
+        SafeExpression.compile(value)
+        return value
+
+    @field_validator("artifact_names", mode="after")
+    @classmethod
+    def _normalize_config_artifact_names(cls, value: list[str]) -> list[str]:
+        return _normalize_artifact_names(value)
 
 
 class ImagePerspectiveCropConfig(BaseModel):
@@ -1331,6 +1371,112 @@ class ImagePrivacyRuntime(TransformOperatorRuntime):
             latest_artifact_name=self._config.output_artifact_name,
         )
         return [replace(out, payload=payload)]
+
+
+class ArtifactPrivacyRuntime(TransformOperatorRuntime):
+    def __init__(self, config: dict[str, Any]) -> None:
+        parsed = ArtifactPrivacyConfig.model_validate(config)
+        self._config = parsed
+        self._expr = SafeExpression.compile(parsed.expression) if parsed.expression else None
+
+    def _matches(self, packet: Packet) -> bool:
+        if not self._config.enabled:
+            return False
+        ok = True
+        if self._expr is not None:
+            ok = self._expr.evaluate(
+                payload=packet.payload,
+                metadata=packet.metadata,
+                stream_id=packet.stream_id,
+                lifecycle=packet.lifecycle.value,
+                artifacts=set(packet.artifacts.keys()),
+            )
+        if self._config.invert:
+            return not bool(ok)
+        return bool(ok)
+
+    def _resolve_requested_artifacts(self, packet: Packet) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw_name in self._config.artifact_names:
+            resolved = resolve_image_artifact_name(packet, raw_name)
+            artifact_name = resolved[1] if resolved is not None else str(raw_name or "").strip()
+            artifact_name = str(artifact_name or "").strip()
+            if not artifact_name or artifact_name in seen:
+                continue
+            seen.add(artifact_name)
+            out.append(artifact_name)
+        return out
+
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        packet = ensure_packet_image_keys(packet)
+        if not self._matches(packet):
+            return [packet]
+
+        requested_artifact_names = self._resolve_requested_artifacts(packet)
+        if not requested_artifact_names:
+            return [packet]
+
+        artifacts = dict(packet.artifacts)
+        removed_artifact_names: list[str] = []
+        for artifact_name in requested_artifact_names:
+            if artifact_name not in artifacts:
+                continue
+            artifacts.pop(artifact_name, None)
+            removed_artifact_names.append(artifact_name)
+
+        payload = dict(packet.payload)
+        payload.pop("frame", None)
+
+        images_raw = payload.get("images")
+        if isinstance(images_raw, dict):
+            sanitized_images: dict[str, str] = {}
+            for raw_key, raw_name in images_raw.items():
+                key = str(raw_key or "").strip()
+                name = str(raw_name or "").strip()
+                if not key or not name or name not in artifacts:
+                    continue
+                sanitized_images[key] = name
+            payload["images"] = sanitized_images
+
+        contract_raw = payload.get("artifact_contract")
+        preferred_input_artifact_names = (
+            _normalize_artifact_names(list(contract_raw.get("preferred_input_artifact_names") or []))
+            if isinstance(contract_raw, dict)
+            else []
+        )
+        selected_input_artifact_name = (
+            str(contract_raw.get("selected_input_artifact_name") or "").strip()
+            if isinstance(contract_raw, dict)
+            else ""
+        )
+        latest_artifact_name = (
+            str(contract_raw.get("latest_artifact_name") or "").strip()
+            if isinstance(contract_raw, dict)
+            else ""
+        )
+        payload = _annotate_artifact_contract(
+            payload,
+            packet=replace(packet, artifacts=artifacts),
+            preferred_input_artifact_names=[name for name in preferred_input_artifact_names if name in artifacts],
+            selected_input_artifact_name=selected_input_artifact_name if selected_input_artifact_name in artifacts else None,
+            latest_artifact_name=latest_artifact_name if latest_artifact_name in artifacts else None,
+        )
+        payload["artifact_privacy"] = {
+            "applied": True,
+            "matched": True,
+            "mode": "strip",
+            "requested_artifact_names": requested_artifact_names,
+            "removed_artifact_names": removed_artifact_names,
+        }
+
+        metadata = dict(packet.metadata)
+        metadata["artifact_privacy"] = {
+            "applied": True,
+            "mode": "strip",
+            "removed_artifact_names": removed_artifact_names,
+        }
+        return [replace(packet, payload=payload, artifacts=artifacts, metadata=metadata)]
 
 
 class ImagePerspectiveCropRuntime(TransformOperatorRuntime):
@@ -3884,6 +4030,23 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: ImagePrivacyRuntime(config),
+    )
+    registry.register_operator(
+        operator_id="camera.artifact_privacy",
+        description="Removes selected image artifacts from the packet when a privacy expression matches, keeping metadata but reducing downstream image exposure.",
+        config_model=ArtifactPrivacyConfig,
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["camera", "artifact", "privacy", "expression"],
+        defaults=ArtifactPrivacyConfig().model_dump(),
+        produces_payload_keys=["artifact_privacy", "artifact_contract", "artifact_names"],
+        expression_hints=[
+            *_artifact_contract_expression_hints(),
+            *_artifact_privacy_expression_hints(),
+        ],
+        share_strategy="by_signature",
+        owner="com.toposync.cameras",
+        runtime_factory=lambda config, _deps: ArtifactPrivacyRuntime(config),
     )
     registry.register_operator(
         operator_id="camera.image_perspective_crop",

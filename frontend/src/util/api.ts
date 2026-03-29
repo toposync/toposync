@@ -391,6 +391,12 @@ export type ProcessingServerVisionHuggingFaceProbeResponse = {
   }>;
   download_supported: boolean;
   download_reason: string;
+  export_supported: boolean;
+  export_reason: string;
+  recipe_id: string;
+  recipe_label: string;
+  export_runtime: string;
+  export_guide_url: string;
   labels: string[];
   preprocess_defaults: Record<string, unknown>;
   suggested_display_name: string;
@@ -403,6 +409,14 @@ export type ProcessingServerVisionHuggingFaceInspectRequest = {
   task: "classification" | "detection";
 };
 
+export type ProcessingServerVisionHuggingFaceExportRequest = {
+  repo_id: string;
+  revision?: string;
+  task: "classification" | "detection";
+  recipe_id?: string;
+  acknowledge_upstream_terms: boolean;
+};
+
 export type ProcessingServerVisionHuggingFaceInspectResponse = ProcessingServerVisionCustomOnnxInspectResponse & {
   repo_id: string;
   source_url: string;
@@ -413,6 +427,11 @@ export type ProcessingServerVisionHuggingFaceInspectResponse = ProcessingServerV
   labels: string[];
   preprocess_defaults: Record<string, unknown>;
   source_origin: string;
+  artifact_source_kind: string;
+  recipe_id: string;
+  recipe_label: string;
+  builder_runtime: string;
+  build_log_path: string;
 };
 
 export type ProcessingServerVisionHuggingFaceImportRequest = {
@@ -424,6 +443,7 @@ export type ProcessingServerVisionHuggingFaceImportRequest = {
   display_name: string;
   task: "classification" | "detection";
   adapter_family: string;
+  artifact_source_kind?: string;
   tensor_name?: string;
   width?: number;
   height?: number;
@@ -436,6 +456,7 @@ export type ProcessingServerVisionHuggingFaceImportRequest = {
   output_name?: string;
   box_format?: string;
   class_labels?: string[];
+  recipe_id?: string;
   replace_existing?: boolean;
 };
 
@@ -1055,6 +1076,23 @@ export async function inspectProcessingServerVisionHuggingFace(
   if (!res.ok) {
     throw new Error(
       await _parseHttpError(res, `Failed to inspect Hugging Face ONNX on processing server ${serverId}: ${res.status}`),
+    );
+  }
+  return res.json();
+}
+
+export async function exportProcessingServerVisionHuggingFace(
+  serverId: string,
+  payload: ProcessingServerVisionHuggingFaceExportRequest,
+): Promise<ProcessingServerVisionHuggingFaceInspectResponse> {
+  const res = await fetch(`/api/processing-servers/${encodeURIComponent(serverId)}/vision/huggingface/export`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(
+      await _parseHttpError(res, `Failed to export Hugging Face model on processing server ${serverId}: ${res.status}`),
     );
   }
   return res.json();

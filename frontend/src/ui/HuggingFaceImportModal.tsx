@@ -3,12 +3,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type {
   ProcessingServerVisionCustomOnnxPreviewResponse,
   ProcessingServerVisionCustomOnnxRequest,
+  ProcessingServerVisionHuggingFaceExportRequest,
   ProcessingServerVisionHuggingFaceImportRequest,
   ProcessingServerVisionHuggingFaceInspectResponse,
   ProcessingServerVisionHuggingFaceProbeResponse,
   ProcessingServerVisionManifestImportResponse,
 } from "../util/api";
 import {
+  exportProcessingServerVisionHuggingFace,
   importProcessingServerVisionHuggingFace,
   inspectProcessingServerVisionHuggingFace,
   previewProcessingServerCustomOnnx,
@@ -60,6 +62,17 @@ function downloadReasonLabel(reason: string, t: (key: string, vars?: Record<stri
   return reason || t("core.ui.vision.huggingface_modal.reason.unknown");
 }
 
+function exportReasonLabel(reason: string, t: (key: string, vars?: Record<string, any>, fallback?: string) => string): string {
+  if (reason === "recipe_ready") return t("core.ui.vision.huggingface_modal.export_reason.recipe_ready");
+  if (reason === "onnx_preferred") return t("core.ui.vision.huggingface_modal.export_reason.onnx_preferred");
+  if (reason === "remote_code_required") return t("core.ui.vision.huggingface_modal.export_reason.remote_code_required");
+  if (reason === "architecture_unsupported") return t("core.ui.vision.huggingface_modal.export_reason.architecture_unsupported");
+  if (reason === "python_runtime_missing") return t("core.ui.vision.huggingface_modal.export_reason.python_runtime_missing");
+  if (reason === "python_version_unsupported") return t("core.ui.vision.huggingface_modal.export_reason.python_version_unsupported");
+  if (reason === "task_unsupported") return t("core.ui.vision.huggingface_modal.reason.task_unsupported");
+  return reason || t("core.ui.vision.huggingface_modal.reason.unknown");
+}
+
 export function HuggingFaceImportModal({
   open,
   serverId,
@@ -78,6 +91,9 @@ export function HuggingFaceImportModal({
   const [inspectLoading, setInspectLoading] = useState(false);
   const [inspectError, setInspectError] = useState<string | null>(null);
   const [inspectResult, setInspectResult] = useState<ProcessingServerVisionHuggingFaceInspectResponse | null>(null);
+  const [exportConsentChecked, setExportConsentChecked] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [tensorName, setTensorName] = useState("");
   const [outputName, setOutputName] = useState("");
@@ -130,6 +146,9 @@ export function HuggingFaceImportModal({
     setInspectLoading(false);
     setInspectError(null);
     setInspectResult(null);
+    setExportConsentChecked(false);
+    setExportLoading(false);
+    setExportError(null);
     setDisplayName("");
     setTensorName("");
     setOutputName("");
@@ -202,13 +221,14 @@ export function HuggingFaceImportModal({
       artifact_path: inspectResult.artifact_path,
       repo_id: inspectResult.repo_id,
       resolved_revision: inspectResult.resolved_revision,
-      onnx_filename: selectedOnnxFile,
+      onnx_filename: selectedOnnxFile || inspectResult.uploaded_filename || "model.onnx",
       uploaded_filename: inspectResult.uploaded_filename,
       display_name: displayName,
       task,
       adapter_family:
         inspectResult.task_suggestions.find((item) => item.task === task)?.adapter_family ||
         (task === "classification" ? "image_classification_logits" : "generic_boxes"),
+      artifact_source_kind: inspectResult.artifact_source_kind || "hub_onnx",
       tensor_name: tensorName,
       output_name: outputName,
       width: Math.max(1, Number(width || 0) || 640),
@@ -221,6 +241,7 @@ export function HuggingFaceImportModal({
       normalization_std: parseNumberList(normalizationStd),
       box_format: "xyxy01",
       class_labels: parseLabelList(classLabels),
+      recipe_id: inspectResult.recipe_id || "",
       replace_existing: replaceExisting,
     };
   }, [
@@ -252,6 +273,9 @@ export function HuggingFaceImportModal({
     setSelectedOnnxFile("");
     setInspectError(null);
     setInspectResult(null);
+    setExportConsentChecked(false);
+    setExportLoading(false);
+    setExportError(null);
     setSaveError(null);
     try {
       const result = await probeProcessingServerVisionHuggingFace(serverId, {
@@ -275,6 +299,7 @@ export function HuggingFaceImportModal({
     setPreviewFile(null);
     setPreviewResult(null);
     setPreviewError(null);
+    setExportError(null);
     setSaveError(null);
     try {
       const result = await inspectProcessingServerVisionHuggingFace(serverId, {
@@ -291,6 +316,35 @@ export function HuggingFaceImportModal({
       setInspectLoading(false);
     }
   }, [applyInspectDefaults, probeResult, selectedOnnxFile, serverId, task]);
+
+  const handleExport = useCallback(async () => {
+    if (!probeResult) return;
+    const payload: ProcessingServerVisionHuggingFaceExportRequest = {
+      repo_id: probeResult.repo_id,
+      revision: probeResult.resolved_revision,
+      task,
+      recipe_id: probeResult.recipe_id || "",
+      acknowledge_upstream_terms: true,
+    };
+    setExportLoading(true);
+    setExportError(null);
+    setInspectError(null);
+    setInspectResult(null);
+    setPreviewFile(null);
+    setPreviewResult(null);
+    setPreviewError(null);
+    setSaveError(null);
+    try {
+      const result = await exportProcessingServerVisionHuggingFace(serverId, payload);
+      setInspectResult(result);
+      setSelectedOnnxFile(result.uploaded_filename || "");
+      applyInspectDefaults(result);
+    } catch (error: any) {
+      setExportError(String(error?.message ?? error));
+    } finally {
+      setExportLoading(false);
+    }
+  }, [applyInspectDefaults, probeResult, serverId, task]);
 
   const handlePreview = useCallback(async () => {
     if (!customPreviewPayload || !previewFile) return;
@@ -326,13 +380,13 @@ export function HuggingFaceImportModal({
   return (
     <Modal
       open={open}
-      title={t(
+        title={t(
         task === "classification"
           ? "core.ui.vision.huggingface_modal.title_classification"
           : "core.ui.vision.huggingface_modal.title_detection",
       )}
       onClose={() => {
-        if (probeLoading || inspectLoading || previewLoading || saveLoading) return;
+        if (probeLoading || inspectLoading || exportLoading || previewLoading || saveLoading) return;
         onClose();
       }}
       panelClassName="customOnnxWizardModal"
@@ -394,6 +448,11 @@ export function HuggingFaceImportModal({
                 reason: downloadReasonLabel(probeResult.download_reason, t),
               })}
             </div>
+            <div className="pipelinesStepHint">
+              {t("core.ui.vision.huggingface_modal.export_reason_summary", {
+                reason: exportReasonLabel(probeResult.export_reason, t),
+              })}
+            </div>
             {taskMismatch ? (
               <div className="errorText">
                 {t("core.ui.vision.huggingface_modal.task_mismatch", {
@@ -427,6 +486,11 @@ export function HuggingFaceImportModal({
                 <a className="pillButton" href={probeResult.source_url} target="_blank" rel="noreferrer">
                   {t("core.ui.vision.huggingface_modal.open_repo")}
                 </a>
+                {probeResult.export_guide_url ? (
+                  <a className="pillButton" href={probeResult.export_guide_url} target="_blank" rel="noreferrer">
+                    {t("core.ui.vision.huggingface_modal.open_export_guide")}
+                  </a>
+                ) : null}
               </div>
             ) : null}
             {probeResult.download_supported && !taskMismatch && selectedOnnxFile ? (
@@ -438,11 +502,46 @@ export function HuggingFaceImportModal({
                 </button>
               </div>
             ) : null}
+            {!probeResult.download_supported && probeResult.export_supported && !taskMismatch ? (
+              <>
+                <div className="pipelinesStepHint">
+                  {t("core.ui.vision.huggingface_modal.export_ready", {
+                    recipe: probeResult.recipe_label || probeResult.recipe_id,
+                    runtime: probeResult.export_runtime || "Python + Optimum",
+                  })}
+                </div>
+                <div className="pipelinesStepHint">
+                  {t("core.ui.vision.huggingface_modal.export_local_only")}
+                </div>
+                <label className="pipelinesCheckboxLabel">
+                  <input
+                    type="checkbox"
+                    checked={exportConsentChecked}
+                    onChange={(event) => setExportConsentChecked(event.target.checked)}
+                    disabled={exportLoading}
+                  />
+                  <span>{t("core.ui.vision.huggingface_modal.export_acknowledge")}</span>
+                </label>
+                <div className="pipelinesProvisionActions">
+                  <button
+                    className="pillButton pillButtonPrimary"
+                    type="button"
+                    onClick={() => void handleExport()}
+                    disabled={exportLoading || !exportConsentChecked}
+                  >
+                    {exportLoading
+                      ? t("core.ui.vision.huggingface_modal.exporting")
+                      : t("core.ui.vision.huggingface_modal.export_locally")}
+                  </button>
+                </div>
+              </>
+            ) : null}
           </div>
         </div>
       ) : null}
 
       {inspectError ? <div className="errorText">{inspectError}</div> : null}
+      {exportError ? <div className="errorText">{exportError}</div> : null}
 
       {inspectResult ? (
         <>
@@ -615,7 +714,7 @@ export function HuggingFaceImportModal({
       {saveError ? <div className="errorText">{saveError}</div> : null}
 
       <div className="modalFooter">
-        <button className="pillButton" type="button" onClick={onClose} disabled={probeLoading || inspectLoading || previewLoading || saveLoading}>
+        <button className="pillButton" type="button" onClick={onClose} disabled={probeLoading || inspectLoading || exportLoading || previewLoading || saveLoading}>
           {t("core.actions.cancel")}
         </button>
         {inspectResult ? (
@@ -623,7 +722,7 @@ export function HuggingFaceImportModal({
             className="pillButton pillButtonPrimary"
             type="button"
             onClick={() => void handleSave()}
-            disabled={!importPayload || saveLoading || probeLoading || inspectLoading || previewLoading}
+            disabled={!importPayload || saveLoading || probeLoading || inspectLoading || exportLoading || previewLoading}
           >
             {saveLoading
               ? t("core.ui.vision.huggingface_modal.importing")

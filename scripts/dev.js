@@ -90,8 +90,8 @@ function killProcessTree(child, signal) {
   return Promise.resolve();
 }
 
-const backendDataDir = String(process.env.TOPOSYNC_DATA_DIR ?? "").trim();
-const backendArgs = backendDataDir ? ["--", "--data-dir", backendDataDir] : [];
+const backendDataDir = String(process.env.TOPOSYNC_DATA_DIR ?? ".toposync-data").trim() || ".toposync-data";
+const backendArgs = ["--", "--data-dir", backendDataDir];
 
 const backend = spawnScript("backend", "dev:backend", backendArgs);
 const frontend = spawnScript("frontend", "dev:frontend");

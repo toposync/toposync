@@ -37,7 +37,7 @@ npm --workspace @toposync/extension-images-ui run build
 Separado:
 
 ```bash
-uv run toposync serve --data-dir .toposync-data
+uv run python -m toposync serve --data-dir .toposync-data
 npm --workspace @toposync/frontend run dev
 ```
 
@@ -94,7 +94,7 @@ Nesse caso, abra `http://localhost:5174`.
 
 ## Quando rodar o quê (atalho mental)
 
-- Alterou código Python do core ou da extensão → reinicie `uv run toposync serve` (use o mesmo `--data-dir`, se estiver usando)
+- Alterou código Python do core ou da extensão → reinicie `uv run python -m toposync serve` (use o mesmo `--data-dir`, se estiver usando)
 - Alterou UI do host → o `webpack-dev-server` recarrega (HMR)
 - Alterou UI de uma extensão → rode `npm --workspace <ext-ui> run build` (ou use `--watch`) e dê refresh
 

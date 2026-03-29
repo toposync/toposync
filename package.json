@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "dev": "node scripts/dev.js",
-    "dev:backend": "uv run --group extensions toposync serve --data-dir .toposync-data",
+    "dev:backend": "uv run --group extensions python -m toposync serve",
     "dev:frontend": "npm --workspace @toposync/frontend run dev",
     "build:frontend": "npm --workspace @toposync/frontend run build",
     "typecheck:plugin-api": "npm --workspace @toposync/plugin-api run typecheck",

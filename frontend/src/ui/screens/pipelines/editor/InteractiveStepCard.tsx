@@ -68,6 +68,7 @@ function shouldHideScalarGrid(operatorId: string): boolean {
     operatorId === "core.category_gate" ||
     operatorId === "core.filter" ||
     operatorId === "vision.track" ||
+    operatorId === "vision.classify_image" ||
     operatorId === "vision.detect" ||
     operatorId === "vision.segment_instances"
   );
@@ -90,7 +91,10 @@ function telemetryMetricForConfigField(operatorId: string, configKey: string): s
   if (operator === "camera.motion_sample_bg" && key === "threshold") return "motion.score";
   if (operator === "camera.motion_gate" && key === "threshold") return "motion.score";
   if (
-    (operator === "vision.track" || operator === "vision.detect" || operator === "vision.segment_instances") &&
+    (operator === "vision.track" ||
+      operator === "vision.classify_image" ||
+      operator === "vision.detect" ||
+      operator === "vision.segment_instances") &&
     key === "confidence_threshold"
   ) {
     return "vision.confidence";

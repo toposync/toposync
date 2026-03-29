@@ -93,6 +93,7 @@ export function OperatorConfigPanel({
     );
   }
   if (
+    operatorId === "vision.classify_image" ||
     operatorId === "vision.track" ||
     operatorId === "vision.detect" ||
     operatorId === "vision.segment_instances"

@@ -458,6 +458,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.camera.global_stabilize": "Frame stabilization",
     "core.ui.pipelines.operator_name.camera.lens_undistort": "Lens undistort",
     "core.ui.pipelines.operator_name.vision.track": "Object tracking",
+    "core.ui.pipelines.operator_name.vision.classify_image": "Image classification",
     "core.ui.pipelines.operator_name.vision.detect": "Object detection",
     "core.ui.pipelines.operator_name.vision.segment_instances": "Instance segmentation",
     "core.ui.pipelines.operator_name.vision.pose_estimate": "Pose estimation",
@@ -508,6 +509,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Reduces small frame-to-frame camera shake before downstream analysis.",
     "core.ui.pipelines.operator_description.camera.lens_undistort":
       "Corrects lens distortion using the camera calibration matrix and coefficients.",
+    "core.ui.pipelines.operator_description.vision.classify_image":
+      "Scores the full image against semantic labels such as nsfw, scene, or quality and attaches the ranked labels to the packet.",
     "core.ui.pipelines.operator_description.vision.detect":
       "Finds supported objects in the frame and can either filter empty frames or keep every frame annotated for later steps.",
     "core.ui.pipelines.operator_description.vision.track":
@@ -1094,6 +1097,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.model_id": "Model",
     "core.ui.pipelines.panels.yolo.model_id_hint":
       "Choose the detection model. This quick list favors models that fit the selected machine.",
+    "core.ui.pipelines.panels.yolo.classification_model_id_hint":
+      "Choose the image classification model. This operator attaches ranked labels to the frame so later steps can filter, notify, or store more selectively.",
+    "core.ui.pipelines.panels.yolo.classification_empty_catalog_hint":
+      "No image-classification models are registered on this machine yet. Use advanced mode to import a custom ONNX manifest for now.",
     "core.ui.pipelines.panels.yolo.segmentation_model_id_hint":
       "Choose the segmentation model. This quick list favors models that fit the selected machine.",
     "core.ui.pipelines.panels.yolo.model_shortlist_hint":
@@ -1390,6 +1397,13 @@ const translationsByLocale: Record<Locale, Translations> = {
       "vision.detect keeps results attached to the frame. Add vision.track when you need object lifecycle events.",
     "core.ui.pipelines.panels.yolo.segmentation_input_with_fallback_hint":
       "Comma-separated internal image keys or artifact names. Use treated,original in most pipelines so masks follow the same preprocessed frame used upstream.",
+    "core.ui.pipelines.panels.yolo.classification_top_k": "Labels kept on packet",
+    "core.ui.pipelines.panels.yolo.classification_top_k_hint":
+      "Keep only the highest-confidence labels in payload. Use a later core.filter if you want to allow or block specific labels.",
+    "core.ui.pipelines.panels.yolo.classification_filter_hint":
+      "Use core.filter after this step with payload.classification_label or payload.vision.classification.scores.<label> when you want to keep or block semantic labels.",
+    "core.ui.pipelines.panels.yolo.classification_input_with_fallback_hint":
+      "Comma-separated internal image keys or artifact names. Use treated,original in most pipelines, or best_frame first when classifying a selected snapshot.",
     "core.ui.pipelines.panels.yolo.max_instances_per_frame": "Max instances per frame",
     "core.ui.pipelines.panels.yolo.max_instances_per_frame_hint":
       "Hard cap after segmentation and optional upstream reconciliation. Lower values reduce downstream artifact/storage pressure.",
@@ -1958,6 +1972,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.camera.global_stabilize": "Estabilização do frame",
     "core.ui.pipelines.operator_name.camera.lens_undistort": "Correção de distorção da lente",
     "core.ui.pipelines.operator_name.vision.track": "Rastreamento de objetos",
+    "core.ui.pipelines.operator_name.vision.classify_image": "Classificação de imagem",
     "core.ui.pipelines.operator_name.vision.detect": "Detecção de objetos",
     "core.ui.pipelines.operator_name.vision.segment_instances": "Segmentação de instâncias",
     "core.ui.pipelines.operator_name.vision.pose_estimate": "Estimativa de pose",
@@ -2008,6 +2023,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Reduz pequenas tremidas entre frames antes da análise das próximas etapas.",
     "core.ui.pipelines.operator_description.camera.lens_undistort":
       "Corrige a distorção da lente usando a calibração da câmera.",
+    "core.ui.pipelines.operator_description.vision.classify_image":
+      "Pontua a imagem inteira contra rótulos semânticos como nsfw, cena ou qualidade e anexa os rótulos ordenados ao pacote.",
     "core.ui.pipelines.operator_description.vision.detect":
       "Encontra objetos suportados no frame e pode filtrar frames vazios ou manter todos anotados para as etapas seguintes.",
     "core.ui.pipelines.operator_description.vision.track":
@@ -2598,6 +2615,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.model_id": "Modelo",
     "core.ui.pipelines.panels.yolo.model_id_hint":
       "Escolha o modelo de detecção. Esta lista rápida prioriza opções que cabem na máquina selecionada.",
+    "core.ui.pipelines.panels.yolo.classification_model_id_hint":
+      "Escolha o modelo de classificação de imagem. Este operador anexa rótulos ordenados ao frame para que os próximos passos possam filtrar, notificar ou armazenar com mais critério.",
+    "core.ui.pipelines.panels.yolo.classification_empty_catalog_hint":
+      "Ainda não há modelos de classificação de imagem registrados nesta máquina. Por enquanto, use o modo avançado para importar um manifest ONNX customizado.",
     "core.ui.pipelines.panels.yolo.segmentation_model_id_hint":
       "Escolha o modelo de segmentação. Esta lista rápida prioriza opções que cabem na máquina selecionada.",
     "core.ui.pipelines.panels.yolo.model_shortlist_hint":
@@ -2897,6 +2918,13 @@ const translationsByLocale: Record<Locale, Translations> = {
       "vision.detect mantém os resultados anexados ao frame. Adicione vision.track quando precisar de eventos de ciclo de vida por objeto.",
     "core.ui.pipelines.panels.yolo.segmentation_input_with_fallback_hint":
       "Lista separada por vírgulas de image keys ou artifact names internos. Em geral use treated,original para que as máscaras sigam o mesmo frame pré-processado usado a montante.",
+    "core.ui.pipelines.panels.yolo.classification_top_k": "Rótulos mantidos no pacote",
+    "core.ui.pipelines.panels.yolo.classification_top_k_hint":
+      "Mantém só os rótulos com maior confiança no payload. Use um core.filter depois se quiser permitir ou bloquear rótulos específicos.",
+    "core.ui.pipelines.panels.yolo.classification_filter_hint":
+      "Use core.filter depois desta etapa com payload.classification_label ou payload.vision.classification.scores.<label> quando quiser manter ou bloquear rótulos semânticos.",
+    "core.ui.pipelines.panels.yolo.classification_input_with_fallback_hint":
+      "Lista separada por vírgulas de image keys ou artifact names internos. Em geral use treated,original, ou best_frame primeiro quando for classificar um snapshot escolhido.",
     "core.ui.pipelines.panels.yolo.max_instances_per_frame": "Máximo de instâncias por frame",
     "core.ui.pipelines.panels.yolo.max_instances_per_frame_hint":
       "Limite rígido após a segmentação e a conciliação opcional com upstream. Valores menores reduzem pressão de artifacts/armazenamento.",

@@ -222,7 +222,7 @@ function parseCatalogItem(raw: unknown): VisionModelCatalogItem | null {
 
 function readTaskCatalog(
   status: Record<string, unknown> | undefined,
-  task: "detection" | "segmentation",
+  task: "classification" | "detection" | "segmentation",
 ): VisionTaskCatalog | null {
   if (!status || !isRecord(status)) return null;
   const vision = isRecord(status.vision) ? status.vision : null;
@@ -547,6 +547,10 @@ function segmentationFallbackItems(): VisionModelCatalogItem[] {
   ];
 }
 
+function classificationFallbackItems(): VisionModelCatalogItem[] {
+  return [];
+}
+
 function normalizeArtifactUploadError(
   error: unknown,
   t: (key: string, vars?: Record<string, unknown>, fallback?: string) => string,
@@ -626,11 +630,14 @@ export function VisionConfigCard({
   const attachPolygons = Boolean((config as any).attach_polygons ?? false);
   const maxInstancesRaw = Number((config as any).max_instances_per_frame ?? 16);
   const maxInstances = Number.isFinite(maxInstancesRaw) ? Math.max(1, Math.min(512, maxInstancesRaw)) : 16;
+  const topKRaw = Number((config as any).top_k ?? 5);
+  const topK = Number.isFinite(topKRaw) ? Math.max(1, Math.min(64, topKRaw)) : 5;
 
   const isTracking = String(operatorId || "").trim() === "vision.track";
+  const isClassification = String(operatorId || "").trim() === "vision.classify_image";
   const isSegmentation = String(operatorId || "").trim() === "vision.segment_instances";
-  const isDetection = !isTracking && !isSegmentation;
-  const task = isSegmentation ? "segmentation" : "detection";
+  const isDetection = !isTracking && !isClassification && !isSegmentation;
+  const task = isSegmentation ? "segmentation" : isClassification ? "classification" : "detection";
   const resolvedProcessingServerId = String(processingServerId || "").trim() || "local";
 
   const [serverStatus, setServerStatus] = useState<ProcessingServerStatus | null>(null);
@@ -725,7 +732,10 @@ export function VisionConfigCard({
     return values.slice(0, 12);
   }, [categories]);
 
-  const fallbackCatalogItems = useMemo(() => (isSegmentation ? segmentationFallbackItems() : detectionFallbackItems()), [isSegmentation]);
+  const fallbackCatalogItems = useMemo(
+    () => (isSegmentation ? segmentationFallbackItems() : isClassification ? classificationFallbackItems() : detectionFallbackItems()),
+    [isClassification, isSegmentation],
+  );
 
   const catalogItems = useMemo(() => {
     const rawItems = taskCatalog?.items ?? [];
@@ -912,7 +922,11 @@ export function VisionConfigCard({
           `Imported ${result.model_id}`,
         ),
       );
-      if ((isSegmentation && result.task === "segmentation") || (isDetection && result.task === "detection")) {
+      if (
+        (isSegmentation && result.task === "segmentation") ||
+        (isDetection && result.task === "detection") ||
+        (isClassification && result.task === "classification")
+      ) {
         onUpdateConfig((prev) => ({
           ...prev,
           model_id: result.model_id,
@@ -926,6 +940,7 @@ export function VisionConfigCard({
     }
   }, [
     artifactPath,
+    isClassification,
     isDetection,
     isSegmentation,
     manifestText,
@@ -1218,10 +1233,15 @@ export function VisionConfigCard({
             )}
           </label>
           <div className="pipelinesStepHint">
-            {isSegmentation
+            {isClassification
+              ? t("core.ui.pipelines.panels.yolo.classification_model_id_hint")
+              : isSegmentation
               ? t("core.ui.pipelines.panels.yolo.segmentation_model_id_hint")
               : t("core.ui.pipelines.panels.yolo.model_id_hint")}
           </div>
+          {isClassification && catalogItems.length === 0 ? (
+            <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.classification_empty_catalog_hint")}</div>
+          ) : null}
           {manualInstallItem ? (
             <div className="pipelinesOperatorConfigCard pipelinesProvisionCard" style={{ marginTop: 10 }}>
               <div className="cardHeaderRow">
@@ -1632,7 +1652,7 @@ export function VisionConfigCard({
         </>
       ) : null}
 
-      {!isTracking ? (
+      {!isTracking && !isClassification ? (
         <>
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.yolo.categories")}</span>
@@ -1853,6 +1873,70 @@ export function VisionConfigCard({
                 />
               </label>
               <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.input_with_fallback_hint")}</div>
+            </>
+          ) : null}
+        </>
+      ) : null}
+
+      {isClassification ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.yolo.input_source")}</span>
+            <select
+              className="pipelinesInput"
+              value={inputWithFallback}
+              onChange={(event) => {
+                onUpdateConfig((prev) => ({
+                  ...prev,
+                  input_with_fallback: String(event.target.value || "treated,original").trim() || "treated,original",
+                }));
+              }}
+            >
+              {inputPresetOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.input_source_hint")}</div>
+          {selectedInputPresetHintKey ? <div className="pipelinesStepHint">{t(selectedInputPresetHintKey)}</div> : null}
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.classification_filter_hint")}</div>
+          {showAdvanced ? (
+            <>
+              <label className="pipelinesLabel">
+                <span>{t("core.ui.pipelines.panels.yolo.classification_top_k")}</span>
+                <PipelinesNumberInput
+                  className="pipelinesInput"
+                  min={1}
+                  max={64}
+                  step={1}
+                  value={topK}
+                  onChange={(nextValue) => {
+                    onUpdateConfig((prev) => ({
+                      ...prev,
+                      top_k: Math.max(1, Math.min(64, nextValue)),
+                    }));
+                  }}
+                />
+              </label>
+              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.classification_top_k_hint")}</div>
+
+              <label className="pipelinesLabel">
+                <span>{t("core.ui.pipelines.panels.yolo.input_with_fallback")}</span>
+                <input
+                  className="pipelinesInput"
+                  type="text"
+                  value={inputWithFallback}
+                  onChange={(event) => {
+                    onUpdateConfig((prev) => ({
+                      ...prev,
+                      input_with_fallback: event.target.value,
+                    }));
+                  }}
+                />
+              </label>
+              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.classification_input_with_fallback_hint")}</div>
             </>
           ) : null}
         </>

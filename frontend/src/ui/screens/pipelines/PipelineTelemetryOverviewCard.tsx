@@ -460,6 +460,7 @@ export function PipelineTelemetryOverviewCard({
       }
       if (
         step.operatorId === "vision.track" ||
+        step.operatorId === "vision.classify_image" ||
         step.operatorId === "vision.detect" ||
         step.operatorId === "vision.segment_instances"
       ) {

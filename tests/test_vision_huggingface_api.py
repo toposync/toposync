@@ -100,6 +100,8 @@ def test_huggingface_probe_and_import_classification_model(
         assert probe_body["download_supported"] is True
         assert probe_body["onnx_candidates"][0]["path"] == "onnx/model.onnx"
         assert probe_body["labels"] == ["normal", "nsfw"]
+        assert probe_body["export_supported"] is False
+        assert probe_body["export_reason"] == "onnx_preferred"
 
         inspect_res = client.post(
             "/api/processing-servers/local/vision/huggingface/inspect",
@@ -128,6 +130,7 @@ def test_huggingface_probe_and_import_classification_model(
                 "display_name": "Falconsai NSFW",
                 "task": "classification",
                 "adapter_family": "image_classification_logits",
+                "artifact_source_kind": "hub_onnx",
                 "tensor_name": "pixel_values",
                 "output_name": "logits",
                 "width": 224,
@@ -160,6 +163,17 @@ def test_huggingface_probe_reports_missing_onnx(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "model_type": "vit",
+                "architectures": ["ViTForImageClassification"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
     def _fake_fetch_model_info(*, repo_id: str, revision: str = ""):
         _ = (repo_id, revision)
         return SimpleNamespace(
@@ -170,7 +184,7 @@ def test_huggingface_probe_reports_missing_onnx(
         )
 
     monkeypatch.setattr(hf_mod, "_fetch_huggingface_model_info", _fake_fetch_model_info)
-    monkeypatch.setattr(hf_mod, "_download_huggingface_file", lambda **kwargs: tmp_path / "missing.json")
+    monkeypatch.setattr(hf_mod, "_download_huggingface_file", lambda **kwargs: config_path)
 
     with _create_client(tmp_path, monkeypatch) as client:
         probe_res = client.post(
@@ -181,3 +195,140 @@ def test_huggingface_probe_reports_missing_onnx(
         body = probe_res.json()
         assert body["download_supported"] is False
         assert body["download_reason"] == "onnx_missing"
+        assert body["export_supported"] is True
+        assert body["export_reason"] == "recipe_ready"
+        assert body["recipe_id"] == "hf_optimum_image_classification"
+
+
+def test_huggingface_export_and_import_classification_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exported_model_path = _write_constant_classification_model(tmp_path / "exported-model.onnx")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "model_type": "vit",
+                "architectures": ["ViTForImageClassification"],
+                "id2label": {"0": "normal", "1": "nsfw"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    preprocessor_path = tmp_path / "preprocessor_config.json"
+    preprocessor_path.write_text(
+        json.dumps(
+            {
+                "size": {"width": 224, "height": 224},
+                "rescale_factor": 1.0 / 255.0,
+                "image_mean": [0.5, 0.5, 0.5],
+                "image_std": [0.5, 0.5, 0.5],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _fake_fetch_model_info(*, repo_id: str, revision: str = ""):
+        assert repo_id == "Falconsai/nsfw_image_detection"
+        assert revision == "main"
+        return SimpleNamespace(
+            sha="cafebabe",
+            pipeline_tag="image-classification",
+            cardData={"license": "apache-2.0"},
+            siblings=[
+                SimpleNamespace(rfilename="config.json", size=config_path.stat().st_size),
+                SimpleNamespace(rfilename="preprocessor_config.json", size=preprocessor_path.stat().st_size),
+            ],
+        )
+
+    def _fake_download_hf_file(*, repo_id: str, filename: str, revision: str = "") -> Path:
+        assert repo_id == "Falconsai/nsfw_image_detection"
+        assert revision == "main"
+        mapping = {
+            "config.json": config_path,
+            "preprocessor_config.json": preprocessor_path,
+        }
+        return mapping[filename]
+
+    def _fake_export_hf_recipe_model(*, repo_id: str, resolved_revision: str, recipe_id: str, data_dir: str | Path | None = None):
+        _ = data_dir
+        assert repo_id == "Falconsai/nsfw_image_detection"
+        assert resolved_revision == "main"
+        assert recipe_id == "hf_optimum_image_classification"
+        return {
+            "artifact_path": str(exported_model_path),
+            "uploaded_filename": "falconsai_nsfw_image_detection.onnx",
+            "recipe_id": recipe_id,
+            "recipe_label": "Optimum image classification export",
+            "builder_runtime": "Python + Optimum (3.12.0)",
+            "build_log_path": str(tmp_path / "builder.log"),
+            "guide_url": "https://huggingface.co/docs/optimum-onnx/onnx/usage_guides/export_a_model",
+        }
+
+    monkeypatch.setattr(hf_mod, "_fetch_huggingface_model_info", _fake_fetch_model_info)
+    monkeypatch.setattr(hf_mod, "_download_huggingface_file", _fake_download_hf_file)
+    monkeypatch.setattr(hf_mod, "export_huggingface_recipe_model", _fake_export_hf_recipe_model)
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        probe_res = client.post(
+            "/api/processing-servers/local/vision/huggingface/probe",
+            json={"repo": "Falconsai/nsfw_image_detection", "revision": "main"},
+        )
+        assert probe_res.status_code == 200
+        probe_body = probe_res.json()
+        assert probe_body["export_supported"] is True
+        assert probe_body["recipe_id"] == "hf_optimum_image_classification"
+
+        export_res = client.post(
+            "/api/processing-servers/local/vision/huggingface/export",
+            json={
+                "repo_id": "Falconsai/nsfw_image_detection",
+                "revision": "main",
+                "task": "classification",
+                "recipe_id": "hf_optimum_image_classification",
+                "acknowledge_upstream_terms": True,
+            },
+        )
+        assert export_res.status_code == 200
+        export_body = export_res.json()
+        assert export_body["artifact_source_kind"] == "local_export"
+        assert export_body["recipe_id"] == "hf_optimum_image_classification"
+        assert export_body["builder_runtime"].startswith("Python + Optimum")
+        assert Path(export_body["artifact_path"]).is_file()
+
+        import_res = client.post(
+            "/api/processing-servers/local/vision/huggingface/import",
+            json={
+                "artifact_path": export_body["artifact_path"],
+                "repo_id": "Falconsai/nsfw_image_detection",
+                "resolved_revision": "main",
+                "onnx_filename": "falconsai_nsfw_image_detection.onnx",
+                "uploaded_filename": "falconsai_nsfw_image_detection.onnx",
+                "display_name": "Falconsai NSFW Exported",
+                "task": "classification",
+                "adapter_family": "image_classification_logits",
+                "artifact_source_kind": "local_export",
+                "tensor_name": "pixel_values",
+                "output_name": "logits",
+                "width": 224,
+                "height": 224,
+                "layout": "nchw",
+                "color_order": "rgb",
+                "resize_mode": "stretch",
+                "rescale_factor": 1.0 / 255.0,
+                "normalization_mean": [0.5, 0.5, 0.5],
+                "normalization_std": [0.5, 0.5, 0.5],
+                "class_labels": ["normal", "nsfw"],
+                "recipe_id": "hf_optimum_image_classification",
+            },
+        )
+        assert import_res.status_code == 200
+        imported = import_res.json()
+        manifest_path = Path(imported["manifest_path"])
+        saved_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert saved_manifest["acquisition"]["mode"] == "local_build_assisted"
+        assert saved_manifest["acquisition"]["artifact_source"] == "checkpoint_export_required"
+        assert saved_manifest["acquisition"]["builder_backend"] == "host_python"
+        assert saved_manifest["provenance"]["origin"] == "huggingface_hub_export"
+        assert "recipe used" in " ".join(saved_manifest["notes"]).lower()

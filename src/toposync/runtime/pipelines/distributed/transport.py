@@ -68,6 +68,8 @@ class ProcessingTransport(Protocol):
 
     async def inspect_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
+    async def export_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
     async def import_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
     async def upload_vision_model_artifact(
@@ -146,6 +148,10 @@ class InProcessProcessingTransport:
     async def inspect_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]:
         _ = payload
         raise ProcessingTransportError("Hugging Face inspect is not supported for in-process transport")
+
+    async def export_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]:
+        _ = payload
+        raise ProcessingTransportError("Hugging Face export is not supported for in-process transport")
 
     async def import_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]:
         _ = payload
@@ -316,6 +322,15 @@ class HttpProcessingTransport:
         res = await client.post(url, json=payload, timeout=max(self._timeout_s, 120.0))
         if res.status_code >= 300:
             raise ProcessingTransportError(f"Processing Hugging Face inspect failed: {res.status_code} {res.text}")
+        body = res.json()
+        return body if isinstance(body, dict) else {}
+
+    async def export_vision_huggingface(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client = await self._ensure_client()
+        url = f"{self._base}/api/processing/vision/huggingface/export"
+        res = await client.post(url, json=payload, timeout=max(self._timeout_s, 1200.0))
+        if res.status_code >= 300:
+            raise ProcessingTransportError(f"Processing Hugging Face export failed: {res.status_code} {res.text}")
         body = res.json()
         return body if isinstance(body, dict) else {}
 

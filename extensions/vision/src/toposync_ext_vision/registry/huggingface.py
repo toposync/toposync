@@ -14,6 +14,7 @@ from .custom_onnx import (
     import_custom_onnx_model,
     inspect_custom_onnx_artifact,
 )
+from .huggingface_recipes import export_huggingface_recipe_model, resolve_huggingface_export_recipe
 from .manifests import ModelRegistryError
 
 
@@ -210,11 +211,18 @@ def probe_huggingface_repo(*, repo: str, revision: str = "") -> dict[str, Any]:
     pipeline_tag = str(getattr(info, "pipeline_tag", "") or card_data.get("pipeline_tag") or "").strip().lower()
     detected_task = PIPELINE_TAG_TO_TASK.get(pipeline_tag, "")
     declared_license = str(card_data.get("license") or "").strip()
-    labels = _normalize_huggingface_labels(_safe_json_from_repo(repo_id=repo_id, revision=resolved_revision, filename="config.json"))
+    config_payload = _safe_json_from_repo(repo_id=repo_id, revision=resolved_revision, filename="config.json")
+    labels = _normalize_huggingface_labels(config_payload)
     preprocess_defaults = _normalize_huggingface_preprocess(
         _safe_json_from_repo(repo_id=repo_id, revision=resolved_revision, filename="preprocessor_config.json")
     )
     onnx_candidates = _extract_huggingface_onnx_candidates(siblings)
+    export_recipe = resolve_huggingface_export_recipe(
+        pipeline_tag=pipeline_tag,
+        detected_task=detected_task,
+        onnx_candidates=onnx_candidates,
+        config_payload=config_payload,
+    )
     repo_tail = repo_id.split("/")[-1].replace("_", " ").replace("-", " ").strip().title() or repo_id
     display_name = str(getattr(info, "id", "") or "").strip() or repo_tail
 
@@ -242,6 +250,12 @@ def probe_huggingface_repo(*, repo: str, revision: str = "") -> dict[str, Any]:
         "onnx_candidates": onnx_candidates,
         "download_supported": download_supported,
         "download_reason": download_reason,
+        "export_supported": bool(export_recipe.get("export_supported")),
+        "export_reason": str(export_recipe.get("export_reason") or "").strip(),
+        "recipe_id": str(export_recipe.get("recipe_id") or "").strip(),
+        "recipe_label": str(export_recipe.get("recipe_label") or "").strip(),
+        "export_runtime": str(export_recipe.get("runtime_label") or "").strip(),
+        "export_guide_url": str(export_recipe.get("guide_url") or "").strip(),
         "labels": labels,
         "preprocess_defaults": preprocess_defaults,
         "suggested_display_name": repo_tail if repo_tail else display_name,
@@ -318,6 +332,88 @@ def inspect_huggingface_onnx(
     inspected["labels"] = labels
     inspected["preprocess_defaults"] = preprocess_defaults
     inspected["source_origin"] = "huggingface_hub"
+    inspected["artifact_source_kind"] = "hub_onnx"
+    inspected["recipe_id"] = ""
+    inspected["recipe_label"] = ""
+    inspected["builder_runtime"] = ""
+    inspected["build_log_path"] = ""
+    inspected["suggested_display_name"] = str(probe.get("suggested_display_name") or inspected.get("suggested_display_name") or "")
+    return inspected
+
+
+def export_huggingface_model(
+    *,
+    repo: str,
+    revision: str = "",
+    task: str = "",
+    recipe_id: str = "",
+    acknowledge_upstream_terms: bool = False,
+    data_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    if not bool(acknowledge_upstream_terms):
+        raise ModelRegistryError("Explicit consent is required before local export from Hugging Face")
+
+    probe = probe_huggingface_repo(repo=repo, revision=revision)
+    repo_id = str(probe["repo_id"])
+    resolved_revision = str(probe["resolved_revision"])
+    requested_task = str(task or probe.get("detected_task") or "").strip().lower()
+    if requested_task != str(probe.get("detected_task") or "").strip().lower():
+        raise ModelRegistryError(
+            f"Hugging Face repo '{repo_id}' declares task '{probe.get('detected_task')}', not '{requested_task}'"
+        )
+    if requested_task != "classification":
+        raise ModelRegistryError(f"Hugging Face local export recipe is not available for task '{requested_task}'")
+    supported_recipe_id = str(probe.get("recipe_id") or "").strip()
+    if not bool(probe.get("export_supported")) or not supported_recipe_id:
+        raise ModelRegistryError(
+            f"Hugging Face local export is not available for repo '{repo_id}': {probe.get('export_reason') or 'recipe_unavailable'}"
+        )
+    selected_recipe_id = str(recipe_id or supported_recipe_id).strip()
+    if selected_recipe_id != supported_recipe_id:
+        raise ModelRegistryError(
+            f"Requested Hugging Face export recipe '{selected_recipe_id}' is not available for repo '{repo_id}'"
+        )
+
+    export_result = export_huggingface_recipe_model(
+        repo_id=repo_id,
+        resolved_revision=resolved_revision,
+        recipe_id=selected_recipe_id,
+        data_dir=data_dir,
+    )
+    inspected = inspect_custom_onnx_artifact(
+        artifact_path=str(export_result["artifact_path"]),
+        uploaded_filename=str(export_result["uploaded_filename"]),
+    )
+
+    preprocess_defaults = dict(probe.get("preprocess_defaults") or {})
+    labels = list(probe.get("labels") or [])
+    task_suggestions: list[dict[str, Any]] = []
+    for suggestion in list(inspected.get("task_suggestions") or []):
+        item = dict(suggestion)
+        defaults = dict(item.get("defaults") or {})
+        if item.get("task") == requested_task:
+            defaults.update({key: value for key, value in preprocess_defaults.items() if value not in (None, "", [], {})})
+            if labels:
+                defaults["labels_count_hint"] = len(labels)
+            item["confidence"] = "high"
+        item["defaults"] = defaults
+        task_suggestions.append(item)
+
+    inspected["task_suggestions"] = task_suggestions
+    inspected["repo_id"] = repo_id
+    inspected["source_url"] = probe["source_url"]
+    inspected["resolved_revision"] = resolved_revision
+    inspected["declared_license"] = probe["declared_license"]
+    inspected["pipeline_tag"] = probe["pipeline_tag"]
+    inspected["detected_task"] = probe["detected_task"]
+    inspected["labels"] = labels
+    inspected["preprocess_defaults"] = preprocess_defaults
+    inspected["source_origin"] = "huggingface_hub_export"
+    inspected["artifact_source_kind"] = "local_export"
+    inspected["recipe_id"] = str(export_result.get("recipe_id") or selected_recipe_id)
+    inspected["recipe_label"] = str(export_result.get("recipe_label") or probe.get("recipe_label") or "")
+    inspected["builder_runtime"] = str(export_result.get("builder_runtime") or probe.get("export_runtime") or "")
+    inspected["build_log_path"] = str(export_result.get("build_log_path") or "")
     inspected["suggested_display_name"] = str(probe.get("suggested_display_name") or inspected.get("suggested_display_name") or "")
     return inspected
 
@@ -331,6 +427,7 @@ def import_huggingface_onnx_model(
     display_name: str,
     task: str,
     adapter_family: str,
+    artifact_source_kind: str = "hub_onnx",
     uploaded_filename: str = "",
     tensor_name: str = "",
     width: int = 640,
@@ -344,6 +441,7 @@ def import_huggingface_onnx_model(
     output_name: str = "",
     box_format: str = "xyxy01",
     class_labels: list[str] | None = None,
+    recipe_id: str = "",
     replace_existing: bool = False,
     imported_by: dict[str, Any] | None = None,
     data_dir: str | Path | None = None,
@@ -352,10 +450,35 @@ def import_huggingface_onnx_model(
     source_url = f"https://huggingface.co/{repo_id}"
     model_id = f"hf_{str(task or '').strip().lower()}_{_slug_token(repo_id)}_{_slug_token(Path(onnx_filename).stem)}"
     declared_license = str(probe.get("declared_license") or "").strip()
-    notes = [
-        f"Downloaded from Hugging Face Hub repo '{repo_id}' at revision '{resolved_revision}'.",
-        "Imported through the TopoSync Hugging Face origin.",
-    ]
+    source_kind = str(artifact_source_kind or "hub_onnx").strip().lower() or "hub_onnx"
+    selected_recipe_id = str(recipe_id or "").strip()
+    if source_kind == "local_export":
+        notes = [
+            f"Exported locally from Hugging Face Hub repo '{repo_id}' at revision '{resolved_revision}'.",
+            f"Recipe used: '{selected_recipe_id or probe.get('recipe_id') or 'unknown'}'.",
+            "Imported through the TopoSync Hugging Face origin.",
+        ]
+        acquisition_mode = "local_build_assisted"
+        artifact_source = "checkpoint_export_required"
+        provenance_origin = "huggingface_hub_export"
+        guide_url = source_url
+        export_guide_url = str(probe.get("export_guide_url") or "").strip()
+        builder_backend = "host_python"
+        supported_platforms = ["linux", "darwin", "windows"]
+        explicit_consent_required = True
+    else:
+        notes = [
+            f"Downloaded from Hugging Face Hub repo '{repo_id}' at revision '{resolved_revision}'.",
+            "Imported through the TopoSync Hugging Face origin.",
+        ]
+        acquisition_mode = "auto_download"
+        artifact_source = "onnx_ready"
+        provenance_origin = "huggingface_hub"
+        guide_url = source_url
+        export_guide_url = ""
+        builder_backend = ""
+        supported_platforms: list[str] = []
+        explicit_consent_required = False
     return import_custom_onnx_model(
         artifact_path=artifact_path,
         display_name=display_name,
@@ -376,8 +499,14 @@ def import_huggingface_onnx_model(
         box_format=box_format,
         class_labels=class_labels,
         source_url=source_url,
-        acquisition_mode="auto_download",
-        provenance_origin="huggingface_hub",
+        acquisition_mode=acquisition_mode,
+        artifact_source=artifact_source,
+        guide_url=guide_url,
+        export_guide_url=export_guide_url,
+        builder_backend=builder_backend,
+        supported_platforms=supported_platforms,
+        explicit_consent_required=explicit_consent_required,
+        provenance_origin=provenance_origin,
         provenance_source_ref=resolved_revision,
         code_license=declared_license,
         weights_license=declared_license,

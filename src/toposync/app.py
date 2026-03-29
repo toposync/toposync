@@ -219,6 +219,12 @@ class ProcessingServerVisionHuggingFaceProbeResponse(BaseModel):
     onnx_candidates: list[dict[str, Any]] = Field(default_factory=list)
     download_supported: bool = False
     download_reason: str = ""
+    export_supported: bool = False
+    export_reason: str = ""
+    recipe_id: str = ""
+    recipe_label: str = ""
+    export_runtime: str = ""
+    export_guide_url: str = ""
     labels: list[str] = Field(default_factory=list)
     preprocess_defaults: dict[str, Any] = Field(default_factory=dict)
     suggested_display_name: str = ""
@@ -229,6 +235,14 @@ class ProcessingServerVisionHuggingFaceInspectRequest(BaseModel):
     revision: str = ""
     onnx_filename: str = ""
     task: Literal["classification", "detection"] = "detection"
+
+
+class ProcessingServerVisionHuggingFaceExportRequest(BaseModel):
+    repo_id: str = ""
+    revision: str = ""
+    task: Literal["classification", "detection"] = "detection"
+    recipe_id: str = ""
+    acknowledge_upstream_terms: bool = False
 
 
 class ProcessingServerVisionHuggingFaceInspectResponse(BaseModel):
@@ -249,6 +263,11 @@ class ProcessingServerVisionHuggingFaceInspectResponse(BaseModel):
     labels: list[str] = Field(default_factory=list)
     preprocess_defaults: dict[str, Any] = Field(default_factory=dict)
     source_origin: str = ""
+    artifact_source_kind: str = ""
+    recipe_id: str = ""
+    recipe_label: str = ""
+    builder_runtime: str = ""
+    build_log_path: str = ""
 
 
 class ProcessingServerVisionHuggingFaceImportRequest(BaseModel):
@@ -260,6 +279,7 @@ class ProcessingServerVisionHuggingFaceImportRequest(BaseModel):
     display_name: str = ""
     task: Literal["classification", "detection"] = "detection"
     adapter_family: str = ""
+    artifact_source_kind: str = "hub_onnx"
     tensor_name: str = ""
     width: int = 640
     height: int = 640
@@ -272,6 +292,7 @@ class ProcessingServerVisionHuggingFaceImportRequest(BaseModel):
     output_name: str = ""
     box_format: str = "xyxy01"
     class_labels: list[str] = Field(default_factory=list)
+    recipe_id: str = ""
     replace_existing: bool = False
     imported_by: dict[str, Any] = Field(default_factory=dict)
 
@@ -1792,6 +1813,64 @@ def create_app() -> FastAPI:
                 pass
 
     @app.post(
+        "/api/processing-servers/{server_id}/vision/huggingface/export",
+        response_model=ProcessingServerVisionHuggingFaceInspectResponse,
+    )
+    async def export_processing_server_huggingface(
+        request: Request,
+        server_id: str,
+        body: ProcessingServerVisionHuggingFaceExportRequest,
+    ) -> ProcessingServerVisionHuggingFaceInspectResponse:
+        _require(request, action="core:processing_servers:write")
+        config_store: ConfigStore = request.app.state.config_store
+        sid = str(server_id or "").strip().lower()
+        servers = await config_store.list_processing_servers()
+        server = next((item for item in servers if item.id == sid), None)
+        if server is None:
+            raise HTTPException(status_code=404, detail="Unknown processing server")
+
+        if server.kind != "http":
+            try:
+                from toposync_ext_vision.registry.huggingface import export_huggingface_model
+                from toposync_ext_vision.registry.manifests import ModelRegistryError
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            try:
+                result = await asyncio.to_thread(
+                    export_huggingface_model,
+                    repo=body.repo_id,
+                    revision=body.revision,
+                    task=body.task,
+                    recipe_id=body.recipe_id,
+                    acknowledge_upstream_terms=bool(body.acknowledge_upstream_terms),
+                    data_dir=config_store.paths.data_dir,
+                )
+            except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return ProcessingServerVisionHuggingFaceInspectResponse.model_validate(result)
+
+        try:
+            transport = HttpProcessingTransport(
+                base_url=server.url,
+                username=getattr(server, "username", ""),
+                password=getattr(server, "password", ""),
+                timeout_s=1200.0,
+            )
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            result = await transport.export_vision_huggingface(body.model_dump(mode="json"))
+            return ProcessingServerVisionHuggingFaceInspectResponse.model_validate(result)
+        except ProcessingTransportError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            try:
+                await transport.close()
+            except Exception:
+                pass
+
+    @app.post(
         "/api/processing-servers/{server_id}/vision/huggingface/import",
         response_model=ProcessingServerVisionManifestImportResponse,
     )
@@ -1824,6 +1903,7 @@ def create_app() -> FastAPI:
                     display_name=body.display_name,
                     task=body.task,
                     adapter_family=body.adapter_family,
+                    artifact_source_kind=body.artifact_source_kind,
                     uploaded_filename=body.uploaded_filename,
                     tensor_name=body.tensor_name,
                     width=body.width,
@@ -1837,6 +1917,7 @@ def create_app() -> FastAPI:
                     output_name=body.output_name,
                     box_format=body.box_format,
                     class_labels=body.class_labels,
+                    recipe_id=body.recipe_id,
                     replace_existing=body.replace_existing,
                     imported_by=dict(body.imported_by or {}) or _processing_install_requested_by(request),
                     data_dir=config_store.paths.data_dir,

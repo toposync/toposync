@@ -35,6 +35,7 @@ from .custom_onnx import (
     stage_custom_onnx_upload,
 )
 from .huggingface import (
+    export_huggingface_model,
     import_huggingface_onnx_model,
     inspect_huggingface_onnx,
     normalize_huggingface_repo_input,
@@ -69,6 +70,7 @@ __all__ = [
     "build_task_model_catalog",
     "default_custom_manifest_dir",
     "discover_manifest_paths",
+    "export_huggingface_model",
     "import_custom_manifest",
     "import_custom_onnx_model",
     "import_huggingface_onnx_model",

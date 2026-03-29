@@ -17,7 +17,7 @@ from .manifests import ModelManifest, ModelRegistryError
 from .model_store import import_custom_manifest
 
 
-SupportedCustomOnnxTask = Literal["classification", "detection"]
+SupportedCustomOnnxTask = Literal["classification", "detection", "segmentation"]
 
 
 def _default_data_dir() -> Path:
@@ -144,6 +144,45 @@ def _suggest_tasks(
     shape = list(primary_output.get("shape") or [])
     rank = int(primary_output.get("rank") or len(shape))
     last_dim = shape[-1] if shape else None
+    mask_output = next(
+        (
+            item
+            for item in output_tensors
+            if int(item.get("rank") or len(item.get("shape") or [])) >= 3
+            and any(token in str(item.get("name") or "").strip().lower() for token in ("mask", "segm"))
+        ),
+        None,
+    )
+    detection_output = next(
+        (
+            item
+            for item in output_tensors
+            if int(item.get("rank") or len(item.get("shape") or [])) in {2, 3}
+            and isinstance((item.get("shape") or [None])[-1], int)
+            and int((item.get("shape") or [0])[-1] or 0) >= 5
+        ),
+        None,
+    )
+
+    if detection_output is not None and mask_output is not None:
+        suggestions.append(
+            {
+                "task": "segmentation",
+                "adapter_family": "generic_segmentation_masks",
+                "label": "Instance segmentation",
+                "reason": "The graph exposes detection rows plus a mask tensor.",
+                "confidence": "high",
+                "defaults": {
+                    **input_defaults,
+                    "output_name": str(detection_output.get("name") or "").strip(),
+                    "label_output_name": "",
+                    "mask_output_name": str(mask_output.get("name") or "").strip(),
+                    "box_format": "xyxy01",
+                    "mask_format": "full_frame_binary",
+                    "labels_count_hint": 0,
+                },
+            }
+        )
 
     if rank in {1, 2} and isinstance(last_dim, int) and int(last_dim) >= 2:
         suggestions.append(
@@ -156,7 +195,10 @@ def _suggest_tasks(
                 "defaults": {
                     **input_defaults,
                     "output_name": str(primary_output.get("name") or "").strip(),
+                    "label_output_name": "",
+                    "mask_output_name": "",
                     "box_format": "xyxy01",
+                    "mask_format": "full_frame_binary",
                     "labels_count_hint": int(last_dim),
                 },
             }
@@ -173,7 +215,10 @@ def _suggest_tasks(
                 "defaults": {
                     **input_defaults,
                     "output_name": str(primary_output.get("name") or "").strip(),
+                    "label_output_name": "",
+                    "mask_output_name": "",
                     "box_format": "xyxy01",
+                    "mask_format": "full_frame_binary",
                     "labels_count_hint": 0,
                 },
             }
@@ -192,7 +237,10 @@ def _suggest_tasks(
             "defaults": {
                 **input_defaults,
                 "output_name": str(primary_output.get("name") or "").strip(),
+                "label_output_name": "",
+                "mask_output_name": "",
                 "box_format": "xyxy01",
+                "mask_format": "full_frame_binary",
                 "labels_count_hint": int(last_dim) if isinstance(last_dim, int) and int(last_dim) > 0 else 0,
             },
         },
@@ -205,7 +253,26 @@ def _suggest_tasks(
             "defaults": {
                 **input_defaults,
                 "output_name": str(primary_output.get("name") or "").strip(),
+                "label_output_name": "",
+                "mask_output_name": "",
                 "box_format": "xyxy01",
+                "mask_format": "full_frame_binary",
+                "labels_count_hint": 0,
+            },
+        },
+        {
+            "task": "segmentation",
+            "adapter_family": "generic_segmentation_masks",
+            "label": "Instance segmentation",
+            "reason": "Use this when the ONNX returns boxes plus masks in separate outputs.",
+            "confidence": "low",
+            "defaults": {
+                **input_defaults,
+                "output_name": str((detection_output or primary_output).get("name") or "").strip(),
+                "label_output_name": "",
+                "mask_output_name": str((mask_output or {}).get("name") or "").strip(),
+                "box_format": "xyxy01",
+                "mask_format": "full_frame_binary",
                 "labels_count_hint": 0,
             },
         },
@@ -254,6 +321,11 @@ def inspect_custom_onnx_artifact(
                 "task": "detection",
                 "adapter_family": "generic_boxes",
                 "label": "Object detection",
+            },
+            {
+                "task": "segmentation",
+                "adapter_family": "generic_segmentation_masks",
+                "label": "Instance segmentation",
             },
         ],
     }
@@ -318,7 +390,10 @@ def build_custom_onnx_manifest_payload(
     normalization_mean: list[float] | None = None,
     normalization_std: list[float] | None = None,
     output_name: str = "",
+    label_output_name: str = "",
+    mask_output_name: str = "",
     box_format: str = "xyxy01",
+    mask_format: str = "full_frame_binary",
     class_labels: list[str] | None = None,
     source_url: str = "",
     acquisition_mode: str = "guided_upload",
@@ -341,12 +416,14 @@ def build_custom_onnx_manifest_payload(
 ) -> dict[str, Any]:
     clean_task = str(task or "").strip().lower()
     clean_adapter = str(adapter_family or "").strip().lower()
-    if clean_task not in {"classification", "detection"}:
+    if clean_task not in {"classification", "detection", "segmentation"}:
         raise ModelRegistryError(f"Unsupported custom ONNX task: {clean_task}")
     if clean_task == "classification" and clean_adapter != "image_classification_logits":
         raise ModelRegistryError(f"Unsupported classification adapter family: {clean_adapter}")
     if clean_task == "detection" and clean_adapter != "generic_boxes":
         raise ModelRegistryError(f"Unsupported detection adapter family: {clean_adapter}")
+    if clean_task == "segmentation" and clean_adapter != "generic_segmentation_masks":
+        raise ModelRegistryError(f"Unsupported segmentation adapter family: {clean_adapter}")
 
     name = str(display_name or "").strip()
     if not name:
@@ -380,7 +457,10 @@ def build_custom_onnx_manifest_payload(
         "postprocess": {
             "adapter_family": clean_adapter,
             "output_name": str(output_name or "").strip(),
+            "label_output_name": str(label_output_name or "").strip(),
+            "mask_output_name": str(mask_output_name or "").strip(),
             "box_format": "xyxy01" if clean_task == "classification" else str(box_format or "xyxy01").strip().lower(),
+            "mask_format": str(mask_format or "full_frame_binary").strip().lower(),
         },
         "classes": {
             "source": "custom",
@@ -459,7 +539,10 @@ def import_custom_onnx_model(
     normalization_mean: list[float] | None = None,
     normalization_std: list[float] | None = None,
     output_name: str = "",
+    label_output_name: str = "",
+    mask_output_name: str = "",
     box_format: str = "xyxy01",
+    mask_format: str = "full_frame_binary",
     class_labels: list[str] | None = None,
     source_url: str = "",
     acquisition_mode: str = "guided_upload",
@@ -499,7 +582,10 @@ def import_custom_onnx_model(
         normalization_mean=normalization_mean,
         normalization_std=normalization_std,
         output_name=output_name,
+        label_output_name=label_output_name,
+        mask_output_name=mask_output_name,
         box_format=box_format,
+        mask_format=mask_format,
         class_labels=class_labels,
         source_url=source_url,
         acquisition_mode=acquisition_mode,
@@ -565,7 +651,10 @@ def preview_custom_onnx_model(
     normalization_mean: list[float] | None = None,
     normalization_std: list[float] | None = None,
     output_name: str = "",
+    label_output_name: str = "",
+    mask_output_name: str = "",
     box_format: str = "xyxy01",
+    mask_format: str = "full_frame_binary",
     class_labels: list[str] | None = None,
     source_url: str = "",
 ) -> dict[str, Any]:
@@ -585,7 +674,10 @@ def preview_custom_onnx_model(
         normalization_mean=normalization_mean,
         normalization_std=normalization_std,
         output_name=output_name,
+        label_output_name=label_output_name,
+        mask_output_name=mask_output_name,
         box_format=box_format,
+        mask_format=mask_format,
         class_labels=class_labels,
         source_url=source_url,
     )
@@ -624,6 +716,27 @@ def preview_custom_onnx_model(
                         "bbox01": [float(value) for value in item.bbox01],
                     }
                     for item in detections[:5]
+                ],
+            },
+        }
+
+    if task == "segmentation":
+        from ..processing.runtime_backends import build_segmenter_backend
+
+        segmentations = build_segmenter_backend(manifest).segment(frame)
+        return {
+            "task": "segmentation",
+            "summary": {
+                "count": len(segmentations),
+                "segmentations": [
+                    {
+                        "label": item.label,
+                        "label_id": item.label_id,
+                        "score": float(item.score),
+                        "bbox01": [float(value) for value in item.bbox01],
+                        "mask_artifact_name": item.mask_artifact_name,
+                    }
+                    for item in segmentations[:5]
                 ],
             },
         }

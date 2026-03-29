@@ -184,7 +184,7 @@ class ProcessingServerVisionCustomOnnxRequest(BaseModel):
     artifact_path: str = ""
     uploaded_filename: str = ""
     display_name: str = ""
-    task: Literal["classification", "detection"] = "detection"
+    task: Literal["classification", "detection", "segmentation"] = "detection"
     adapter_family: str = ""
     tensor_name: str = ""
     width: int = 640
@@ -196,7 +196,10 @@ class ProcessingServerVisionCustomOnnxRequest(BaseModel):
     normalization_mean: list[float] = Field(default_factory=list)
     normalization_std: list[float] = Field(default_factory=list)
     output_name: str = ""
+    label_output_name: str = ""
+    mask_output_name: str = ""
     box_format: str = "xyxy01"
+    mask_format: str = "full_frame_binary"
     class_labels: list[str] = Field(default_factory=list)
     source_url: str = ""
     replace_existing: bool = False
@@ -234,13 +237,13 @@ class ProcessingServerVisionHuggingFaceInspectRequest(BaseModel):
     repo_id: str = ""
     revision: str = ""
     onnx_filename: str = ""
-    task: Literal["classification", "detection"] = "detection"
+    task: Literal["classification", "detection", "segmentation"] = "detection"
 
 
 class ProcessingServerVisionHuggingFaceExportRequest(BaseModel):
     repo_id: str = ""
     revision: str = ""
-    task: Literal["classification", "detection"] = "detection"
+    task: Literal["classification", "detection", "segmentation"] = "detection"
     recipe_id: str = ""
     acknowledge_upstream_terms: bool = False
 
@@ -277,7 +280,7 @@ class ProcessingServerVisionHuggingFaceImportRequest(BaseModel):
     onnx_filename: str = ""
     uploaded_filename: str = ""
     display_name: str = ""
-    task: Literal["classification", "detection"] = "detection"
+    task: Literal["classification", "detection", "segmentation"] = "detection"
     adapter_family: str = ""
     artifact_source_kind: str = "hub_onnx"
     tensor_name: str = ""
@@ -290,7 +293,10 @@ class ProcessingServerVisionHuggingFaceImportRequest(BaseModel):
     normalization_mean: list[float] = Field(default_factory=list)
     normalization_std: list[float] = Field(default_factory=list)
     output_name: str = ""
+    label_output_name: str = ""
+    mask_output_name: str = ""
     box_format: str = "xyxy01"
+    mask_format: str = "full_frame_binary"
     class_labels: list[str] = Field(default_factory=list)
     recipe_id: str = ""
     replace_existing: bool = False
@@ -1583,7 +1589,10 @@ def create_app() -> FastAPI:
                     normalization_mean=body.normalization_mean,
                     normalization_std=body.normalization_std,
                     output_name=body.output_name,
+                    label_output_name=body.label_output_name,
+                    mask_output_name=body.mask_output_name,
                     box_format=body.box_format,
+                    mask_format=body.mask_format,
                     class_labels=body.class_labels,
                     source_url=body.source_url,
                 )
@@ -1667,7 +1676,10 @@ def create_app() -> FastAPI:
                     normalization_mean=body.normalization_mean,
                     normalization_std=body.normalization_std,
                     output_name=body.output_name,
+                    label_output_name=body.label_output_name,
+                    mask_output_name=body.mask_output_name,
                     box_format=body.box_format,
+                    mask_format=body.mask_format,
                     class_labels=body.class_labels,
                     source_url=body.source_url,
                     replace_existing=body.replace_existing,
@@ -1915,7 +1927,10 @@ def create_app() -> FastAPI:
                     normalization_mean=body.normalization_mean,
                     normalization_std=body.normalization_std,
                     output_name=body.output_name,
+                    label_output_name=body.label_output_name,
+                    mask_output_name=body.mask_output_name,
                     box_format=body.box_format,
+                    mask_format=body.mask_format,
                     class_labels=body.class_labels,
                     recipe_id=body.recipe_id,
                     replace_existing=body.replace_existing,

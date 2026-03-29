@@ -11,6 +11,7 @@ import toposync_ext_vision.processing.runtime_backends.onnxruntime_backend as or
 from toposync_ext_vision.processing.runtime_backends import (
     OnnxRuntimeClassificationBackend,
     OnnxRuntimeDetectorBackend,
+    OnnxRuntimeSegmentationBackend,
     available_onnxruntime_execution_providers,
     resolve_onnxruntime_execution_providers,
 )
@@ -89,6 +90,57 @@ def _write_constant_classification_model(path: Path) -> Path:
     return path
 
 
+def _write_constant_segmentation_model(path: Path) -> Path:
+    import onnx
+    from onnx import TensorProto, helper
+
+    input_tensor = helper.make_tensor_value_info("images", TensorProto.FLOAT, [1, 3, 4, 4])
+    boxes_tensor = helper.make_tensor_value_info("boxes", TensorProto.FLOAT, [1, 1, 6])
+    masks_tensor = helper.make_tensor_value_info("masks", TensorProto.FLOAT, [1, 1, 4, 4])
+    constant_boxes = helper.make_tensor(
+        "constant_boxes",
+        TensorProto.FLOAT,
+        [1, 1, 6],
+        [0.1, 0.2, 0.8, 0.9, 0.95, 0.0],
+    )
+    constant_masks = helper.make_tensor(
+        "constant_masks",
+        TensorProto.FLOAT,
+        [1, 1, 4, 4],
+        [
+            0.0,
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            0.0,
+        ],
+    )
+    graph = helper.make_graph(
+        [
+            helper.make_node("Constant", inputs=[], outputs=["boxes"], value=constant_boxes),
+            helper.make_node("Constant", inputs=[], outputs=["masks"], value=constant_masks),
+        ],
+        "toposync_constant_segmenter",
+        [input_tensor],
+        [boxes_tensor, masks_tensor],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid("", 13)])
+    model.ir_version = 10
+    onnx.save(model, path)
+    return path
+
+
 def _write_classification_manifest(path: Path, model_path: Path) -> Path:
     payload = {
         "model_id": "constant.classifier",
@@ -110,6 +162,35 @@ def _write_classification_manifest(path: Path, model_path: Path) -> Path:
             "output_name": "logits",
         },
         "classes": {"source": "test", "labels": ["normal", "nsfw"]},
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _write_segmentation_manifest(path: Path, model_path: Path) -> Path:
+    payload = {
+        "model_id": "constant.segmenter",
+        "display_name": "Constant Segmenter",
+        "task": "segmentation",
+        "runtime": "onnxruntime",
+        "artifact_format": "onnx",
+        "artifact_path": str(model_path),
+        "input": {
+            "width": 4,
+            "height": 4,
+            "layout": "nchw",
+            "color_order": "rgb",
+            "tensor_name": "images",
+            "normalization": {"mean": [0.0, 0.0, 0.0], "std": [1.0, 1.0, 1.0]},
+        },
+        "postprocess": {
+            "adapter_family": "generic_segmentation_masks",
+            "output_name": "boxes",
+            "mask_output_name": "masks",
+            "box_format": "xyxy01",
+            "mask_format": "full_frame_binary",
+        },
+        "classes": {"source": "test", "labels": ["person"]},
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -192,6 +273,25 @@ def test_onnxruntime_classification_backend_runs_and_normalizes_logits(tmp_path:
     assert result.top_label.label == "nsfw"
     assert result.top_label.score == pytest.approx(0.908877, abs=1e-5)
     assert [item.label for item in result.labels] == ["nsfw", "normal"]
+
+
+def test_onnxruntime_segmentation_backend_runs_generic_masks(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+    model_path = _write_constant_segmentation_model(tmp_path / "constant_segmenter.onnx")
+    _write_segmentation_manifest(tmp_path / "constant_segmenter.json", model_path)
+    monkeypatch.setenv("TOPOSYNC_VISION_MANIFESTS_DIR", str(tmp_path))
+
+    registry = build_default_model_registry()
+    manifest = registry.resolve_segmenter_manifest("constant.segmenter")
+
+    backend = OnnxRuntimeSegmentationBackend(manifest)
+    frame = np.zeros((4, 4, 3), dtype=np.float32)
+    result = backend.segment(frame)
+
+    assert len(result) == 1
+    assert result[0].label == "person"
+    assert result[0].mask_artifact_name == "mask_0"
+    assert result[0].bbox01 == pytest.approx((0.1, 0.2, 0.8, 0.9), abs=1e-6)
+    assert result[0].metadata["parser"] == "generic_segmentation_masks"
 
 
 def test_resolve_onnxruntime_execution_providers_defaults_to_cpu_first(monkeypatch) -> None:  # noqa: ANN001

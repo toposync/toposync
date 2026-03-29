@@ -13,6 +13,7 @@ from ...registry.manifests import ModelManifest
 from ..contracts import DetectionObject, ImageClassificationResult, SegmentationInstance
 from ..parsers import (
     parse_generic_onnx_boxes,
+    parse_generic_segmentation_masks,
     parse_image_classification_logits,
     parse_rfdetr_outputs,
     parse_rtmdet_ins_outputs,
@@ -373,7 +374,7 @@ class OnnxRuntimeSegmentationBackend(_OnnxRuntimeSessionBackend):
         super().__init__(
             manifest,
             task="segmentation",
-            supported_postprocess={"mmdet_rtmdet_ins"},
+            supported_postprocess={"generic_segmentation_masks", "mmdet_rtmdet_ins"},
         )
 
     def segment(
@@ -385,6 +386,13 @@ class OnnxRuntimeSegmentationBackend(_OnnxRuntimeSessionBackend):
     ) -> list[SegmentationInstance]:
         outputs_by_name, preprocess_meta = self._run_outputs(frame)
         adapter_family = self._manifest.resolved_adapter_family()
+        if adapter_family == "generic_segmentation_masks":
+            return parse_generic_segmentation_masks(
+                outputs_by_name,
+                manifest=self._manifest,
+                preprocess_meta=preprocess_meta,
+                categories=categories,
+            )
         if adapter_family == "mmdet_rtmdet_ins":
             return parse_rtmdet_ins_outputs(
                 outputs_by_name,

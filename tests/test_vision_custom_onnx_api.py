@@ -63,6 +63,57 @@ def _write_constant_classification_model(path: Path) -> Path:
     return path
 
 
+def _write_constant_segmentation_model(path: Path) -> Path:
+    import onnx
+    from onnx import TensorProto, helper
+
+    input_tensor = helper.make_tensor_value_info("images", TensorProto.FLOAT, [1, 3, 4, 4])
+    boxes_tensor = helper.make_tensor_value_info("boxes", TensorProto.FLOAT, [1, 1, 6])
+    masks_tensor = helper.make_tensor_value_info("masks", TensorProto.FLOAT, [1, 1, 4, 4])
+    constant_boxes = helper.make_tensor(
+        "constant_boxes",
+        TensorProto.FLOAT,
+        [1, 1, 6],
+        [0.1, 0.2, 0.7, 0.9, 0.95, 0.0],
+    )
+    constant_masks = helper.make_tensor(
+        "constant_masks",
+        TensorProto.FLOAT,
+        [1, 1, 4, 4],
+        [
+            0.0,
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            0.0,
+        ],
+    )
+    graph = helper.make_graph(
+        [
+            helper.make_node("Constant", inputs=[], outputs=["boxes"], value=constant_boxes),
+            helper.make_node("Constant", inputs=[], outputs=["masks"], value=constant_masks),
+        ],
+        "toposync_custom_segmenter",
+        [input_tensor],
+        [boxes_tensor, masks_tensor],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid("", 13)])
+    model.ir_version = 10
+    onnx.save(model, path)
+    return path
+
+
 def _png_bytes() -> bytes:
     image = Image.new("RGB", (4, 4), (16, 32, 64))
     buffer = io.BytesIO()
@@ -196,3 +247,68 @@ def test_custom_onnx_wizard_classification_flow(tmp_path: Path, monkeypatch: pyt
         assert item["source_kind"] == "custom"
         assert item["availability"] == "available"
         assert item["adapter_family"] == "image_classification_logits"
+
+
+def test_custom_onnx_wizard_segmentation_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    model_path = _write_constant_segmentation_model(tmp_path / "segmenter.onnx")
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        inspect_res = client.post(
+            "/api/processing-servers/local/vision/custom-onnx/inspect",
+            files={"file": ("instance-segmenter.onnx", model_path.read_bytes(), "application/octet-stream")},
+        )
+        assert inspect_res.status_code == 200
+        inspected = inspect_res.json()
+        segmentation_suggestion = next(item for item in inspected["task_suggestions"] if item["task"] == "segmentation")
+        assert segmentation_suggestion["adapter_family"] == "generic_segmentation_masks"
+        assert segmentation_suggestion["defaults"]["mask_output_name"] == "masks"
+
+        preview_payload = {
+            "artifact_path": inspected["artifact_path"],
+            "uploaded_filename": inspected["uploaded_filename"],
+            "display_name": "Instance Segmenter",
+            "task": "segmentation",
+            "adapter_family": "generic_segmentation_masks",
+            "tensor_name": "images",
+            "output_name": "boxes",
+            "mask_output_name": "masks",
+            "width": 4,
+            "height": 4,
+            "layout": "nchw",
+            "color_order": "rgb",
+            "resize_mode": "stretch",
+            "rescale_factor": 1.0,
+            "normalization_mean": [0.0, 0.0, 0.0],
+            "normalization_std": [1.0, 1.0, 1.0],
+            "box_format": "xyxy01",
+            "mask_format": "full_frame_binary",
+            "class_labels": ["person"],
+            "source_url": "https://example.com/custom-segmenter",
+        }
+        preview_res = client.post(
+            "/api/processing-servers/local/vision/custom-onnx/preview",
+            data={"config_json": json.dumps(preview_payload)},
+            files={"image": ("sample.png", _png_bytes(), "image/png")},
+        )
+        assert preview_res.status_code == 200
+        preview_body = preview_res.json()
+        assert preview_body["task"] == "segmentation"
+        assert preview_body["summary"]["count"] == 1
+        assert preview_body["summary"]["segmentations"][0]["label"] == "person"
+
+        import_res = client.post(
+            "/api/processing-servers/local/vision/custom-onnx/import",
+            json=preview_payload,
+        )
+        assert import_res.status_code == 200
+        imported = import_res.json()
+        assert imported["model_id"] == "custom_segmentation_instance_segmenter"
+        assert imported["task"] == "segmentation"
+
+        status_res = client.get("/api/processing-servers/local/status")
+        assert status_res.status_code == 200
+        segmentation_catalog = status_res.json()["status"]["vision"]["task_catalogs"]["segmentation"]["items"]
+        item = next(item for item in segmentation_catalog if item["model_id"] == imported["model_id"])
+        assert item["source_kind"] == "custom"
+        assert item["availability"] == "available"
+        assert item["adapter_family"] == "generic_segmentation_masks"

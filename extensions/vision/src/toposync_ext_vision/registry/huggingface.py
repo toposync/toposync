@@ -18,10 +18,11 @@ from .huggingface_recipes import export_huggingface_recipe_model, resolve_huggin
 from .manifests import ModelRegistryError
 
 
-SUPPORTED_HUGGINGFACE_TASKS = {"classification", "detection"}
+SUPPORTED_HUGGINGFACE_TASKS = {"classification", "detection", "segmentation"}
 PIPELINE_TAG_TO_TASK = {
     "image-classification": "classification",
     "object-detection": "detection",
+    "image-segmentation": "segmentation",
 }
 
 
@@ -439,7 +440,10 @@ def import_huggingface_onnx_model(
     normalization_mean: list[float] | None = None,
     normalization_std: list[float] | None = None,
     output_name: str = "",
+    label_output_name: str = "",
+    mask_output_name: str = "",
     box_format: str = "xyxy01",
+    mask_format: str = "full_frame_binary",
     class_labels: list[str] | None = None,
     recipe_id: str = "",
     replace_existing: bool = False,
@@ -496,7 +500,10 @@ def import_huggingface_onnx_model(
         normalization_mean=normalization_mean,
         normalization_std=normalization_std,
         output_name=output_name,
+        label_output_name=label_output_name,
+        mask_output_name=mask_output_name,
         box_format=box_format,
+        mask_format=mask_format,
         class_labels=class_labels,
         source_url=source_url,
         acquisition_mode=acquisition_mode,

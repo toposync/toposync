@@ -3,6 +3,8 @@ name = "toposync-core"
 version = "0.3.0"
 description = "Toposync core runtime (Python backend + extension host)."
 readme = "readme.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115",

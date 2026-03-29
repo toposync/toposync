@@ -2,6 +2,7 @@
   "name": "@toposync/plugin-api",
   "version": "0.3.0",
   "description": "Public TypeScript contract for Toposync frontend extensions.",
+  "license": "MIT",
   "sideEffects": false,
   "main": "./index.js",
   "types": "./index.d.ts",

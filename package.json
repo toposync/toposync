@@ -1,5 +1,6 @@
 {
   "name": "toposync",
+  "license": "MIT",
   "private": true,
   "workspaces": [
     "frontend",

@@ -3,6 +3,8 @@ name = "toposync-ext-vision"
 version = "0.1.0"
 description = "Toposync first-party extension: task-oriented vision operators."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
   "toposync-core>=0.3.0",

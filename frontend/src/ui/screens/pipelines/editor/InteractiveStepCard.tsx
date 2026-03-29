@@ -38,6 +38,7 @@ type Props = {
   onRemoveStep: (uid: string) => void;
   onUpdateStepScalar: (uid: string, key: string, value: string | number | boolean) => void;
   onUpdateStepConfig: (uid: string, updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
+  onInsertStepAfter: (afterUid: string, operatorId: string, defaultsOverride?: Record<string, unknown>) => void;
   onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
 };
 
@@ -46,6 +47,7 @@ function shouldHideScalarGrid(operatorId: string): boolean {
     operatorId === "core.schedule_gate" ||
     operatorId === "camera.source" ||
     operatorId === "camera.image_crop" ||
+    operatorId === "camera.artifact_privacy" ||
     operatorId === "camera.image_privacy" ||
     operatorId === "camera.image_perspective_crop" ||
     operatorId === "camera.image_adjust" ||
@@ -127,6 +129,7 @@ export function InteractiveStepCard({
   onRemoveStep,
   onUpdateStepScalar,
   onUpdateStepConfig,
+  onInsertStepAfter,
   onOpenTelemetryField,
 }: Props): React.ReactElement {
   const { t, locale } = i18n.useI18n();
@@ -261,11 +264,11 @@ export function InteractiveStepCard({
             </div>
           ) : null}
 
-          <OperatorConfigPanel
-            step={step}
-            index={index}
-            steps={steps}
-            operatorsById={operatorsById}
+            <OperatorConfigPanel
+              step={step}
+              index={index}
+              steps={steps}
+              operatorsById={operatorsById}
             config={config}
             pipelineName={pipelineName}
             processingServerId={processingServerId}
@@ -276,10 +279,11 @@ export function InteractiveStepCard({
             activeCameraContexts={activeCameraContexts}
             activeCameraContextsError={activeCameraContextsError}
             cameraAreaOptions={cameraAreaOptions}
-            showAdvanced={step.showAdvanced}
-            onUpdateConfig={(updater) => onUpdateStepConfig(step.uid, updater)}
-            onOpenTelemetryField={onOpenTelemetryField}
-          />
+              showAdvanced={step.showAdvanced}
+              onUpdateConfig={(updater) => onUpdateStepConfig(step.uid, updater)}
+              onInsertStepAfter={onInsertStepAfter}
+              onOpenTelemetryField={onOpenTelemetryField}
+            />
 
           {shouldShowScalarGrid ? (
             <div className="pipelinesScalarGrid">

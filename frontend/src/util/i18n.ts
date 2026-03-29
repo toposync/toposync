@@ -449,6 +449,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.lifecycle_from_boolean": "Lifecycle from state",
     "core.ui.pipelines.operator_name.core.fps_reducer": "Frame rate reducer",
     "core.ui.pipelines.operator_name.camera.image_crop": "Frame crop",
+    "core.ui.pipelines.operator_name.camera.artifact_privacy": "Image privacy guard",
     "core.ui.pipelines.operator_name.camera.image_privacy": "Privacy region",
     "core.ui.pipelines.operator_name.camera.image_perspective_crop": "Perspective crop",
     "core.ui.pipelines.operator_name.camera.local_contrast_clahe": "Local contrast",
@@ -493,6 +494,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Lowers the frame rate before heavier steps to reduce compute cost.",
     "core.ui.pipelines.operator_description.camera.image_crop":
       "Cuts a fixed rectangular region from the frame and can replace the working image for downstream steps.",
+    "core.ui.pipelines.operator_description.camera.artifact_privacy":
+      "Removes selected image artifacts when a privacy expression matches, keeping metadata but preventing downstream image exposure.",
     "core.ui.pipelines.operator_description.camera.image_privacy":
       "Applies a fixed privacy region with solid fill or blur, useful for windows, neighboring areas, or sensitive zones.",
     "core.ui.pipelines.operator_description.camera.image_perspective_crop":
@@ -990,6 +993,18 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_privacy.apply_stream_frame": "Apply to stream frame",
     "core.ui.pipelines.panels.image_privacy.fallback_stream_frame": "Fallback to stream frame",
     "core.ui.pipelines.panels.image_privacy.preserve_alpha": "Preserve alpha channel",
+    "core.ui.pipelines.panels.artifact_privacy.hint":
+      "Use this after image classification when the packet should continue without carrying image artifacts to store, notify, or publish steps.",
+    "core.ui.pipelines.panels.artifact_privacy.expression": "When to strip images",
+    "core.ui.pipelines.panels.artifact_privacy.expression_hint":
+      "Typical rule: payload.classification_label_normalized in [\"nsfw\"] and payload.classification_score >= 0.85",
+    "core.ui.pipelines.panels.artifact_privacy.artifacts": "Image artifacts to strip",
+    "core.ui.pipelines.panels.artifact_privacy.artifacts_placeholder": "Best frame, Original, Treated, Segmented",
+    "core.ui.pipelines.panels.artifact_privacy.artifacts_hint":
+      "Remove every image artifact that should stop before store, notify, or publish steps.",
+    "core.ui.pipelines.panels.artifact_privacy.invert": "Invert rule",
+    "core.ui.pipelines.panels.artifact_privacy.invert_hint":
+      "Use this only when the expression describes the safe path and you want the opposite behavior.",
 
     "core.ui.pipelines.panels.image_draw.button": "Draw on snapshot…",
     "core.ui.pipelines.panels.image_draw.unavailable.no_source": "Add Camera source before this step to enable drawing.",
@@ -1404,6 +1419,24 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Keep only the highest-confidence labels in payload. Use a later core.filter if you want to allow or block specific labels.",
     "core.ui.pipelines.panels.yolo.classification_filter_hint":
       "Use core.filter after this step with payload.classification_label or payload.vision.classification.scores.<label> when you want to keep or block semantic labels.",
+    "core.ui.pipelines.panels.yolo.classification_privacy.title": "Privacy workflow",
+    "core.ui.pipelines.panels.yolo.classification_privacy.hint":
+      "Add a downstream rule now when sensitive labels should block the packet or keep only metadata before image sinks.",
+    "core.ui.pipelines.panels.yolo.classification_privacy.downstream_needs_guard":
+      "Downstream image steps still expose pixels before a privacy guard runs: {{steps}}.",
+    "core.ui.pipelines.panels.yolo.classification_privacy.downstream_protected":
+      "A downstream guard already appears before the next image-exposing step: {{steps}}.",
+    "core.ui.pipelines.panels.yolo.classification_privacy.downstream_none":
+      "No image sink appears after this step yet. Insert the policy now if you plan to add storage or notifications later.",
+    "core.ui.pipelines.panels.yolo.classification_privacy.labels": "Sensitive labels",
+    "core.ui.pipelines.panels.yolo.classification_privacy.labels_placeholder": "nsfw, explicit",
+    "core.ui.pipelines.panels.yolo.classification_privacy.labels_hint":
+      "Use lower-case labels separated by commas. The preset matches payload.classification_label_normalized.",
+    "core.ui.pipelines.panels.yolo.classification_privacy.threshold": "Min score",
+    "core.ui.pipelines.panels.yolo.classification_privacy.insert_filter": "Insert block step",
+    "core.ui.pipelines.panels.yolo.classification_privacy.insert_strip": "Insert metadata-only step",
+    "core.ui.pipelines.panels.yolo.classification_privacy.action_hint":
+      "The first preset inserts core.filter. The second inserts image-artifact stripping right after this classification step.",
     "core.ui.pipelines.panels.yolo.classification_input_with_fallback_hint":
       "Comma-separated internal image keys or artifact names. Use treated,original in most pipelines, or best_frame first when classifying a selected snapshot.",
     "core.ui.pipelines.panels.yolo.max_instances_per_frame": "Max instances per frame",
@@ -2037,6 +2070,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.lifecycle_from_boolean": "Lifecycle por estado",
     "core.ui.pipelines.operator_name.core.fps_reducer": "Redutor de FPS",
     "core.ui.pipelines.operator_name.camera.image_crop": "Recorte do frame",
+    "core.ui.pipelines.operator_name.camera.artifact_privacy": "Proteção de artefatos de imagem",
     "core.ui.pipelines.operator_name.camera.image_privacy": "Região de privacidade",
     "core.ui.pipelines.operator_name.camera.image_perspective_crop": "Recorte por perspectiva",
     "core.ui.pipelines.operator_name.camera.local_contrast_clahe": "Contraste local",
@@ -2081,6 +2115,8 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Reduz o FPS antes de etapas mais pesadas para economizar processamento.",
     "core.ui.pipelines.operator_description.camera.image_crop":
       "Recorta uma região retangular fixa do frame e pode substituir a imagem usada pelas próximas etapas.",
+    "core.ui.pipelines.operator_description.camera.artifact_privacy":
+      "Remove artefatos de imagem selecionados quando uma expressão de privacidade casa, mantendo metadados mas evitando exposição de pixels nas etapas seguintes.",
     "core.ui.pipelines.operator_description.camera.image_privacy":
       "Aplica uma região fixa de privacidade com preenchimento sólido ou blur, útil para janelas, vizinhança e zonas sensíveis.",
     "core.ui.pipelines.operator_description.camera.image_perspective_crop":
@@ -2579,6 +2615,18 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_privacy.apply_stream_frame": "Aplicar no frame do stream",
     "core.ui.pipelines.panels.image_privacy.fallback_stream_frame": "Fallback para o frame do stream",
     "core.ui.pipelines.panels.image_privacy.preserve_alpha": "Preservar canal alpha",
+    "core.ui.pipelines.panels.artifact_privacy.hint":
+      "Use isto depois da classificação de imagem quando o pacote deve seguir adiante sem carregar artefatos de imagem para store, notify ou publish.",
+    "core.ui.pipelines.panels.artifact_privacy.expression": "Quando remover imagens",
+    "core.ui.pipelines.panels.artifact_privacy.expression_hint":
+      "Regra típica: payload.classification_label_normalized in [\"nsfw\"] and payload.classification_score >= 0.85",
+    "core.ui.pipelines.panels.artifact_privacy.artifacts": "Artefatos de imagem para remover",
+    "core.ui.pipelines.panels.artifact_privacy.artifacts_placeholder": "Melhor frame, Original, Tratado, Segmentado",
+    "core.ui.pipelines.panels.artifact_privacy.artifacts_hint":
+      "Remova todo artefato de imagem que deve parar antes de store, notify ou publish.",
+    "core.ui.pipelines.panels.artifact_privacy.invert": "Inverter regra",
+    "core.ui.pipelines.panels.artifact_privacy.invert_hint":
+      "Use isso só quando a expressão descreve o caminho seguro e você quer o comportamento oposto.",
 
     "core.ui.pipelines.panels.image_draw.button": "Desenhar no snapshot…",
     "core.ui.pipelines.panels.image_draw.unavailable.no_source":
@@ -2999,6 +3047,24 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Mantém só os rótulos com maior confiança no payload. Use um core.filter depois se quiser permitir ou bloquear rótulos específicos.",
     "core.ui.pipelines.panels.yolo.classification_filter_hint":
       "Use core.filter depois desta etapa com payload.classification_label ou payload.vision.classification.scores.<label> quando quiser manter ou bloquear rótulos semânticos.",
+    "core.ui.pipelines.panels.yolo.classification_privacy.title": "Fluxo de privacidade",
+    "core.ui.pipelines.panels.yolo.classification_privacy.hint":
+      "Adicione uma regra seguinte agora quando rótulos sensíveis devem bloquear o pacote ou manter só metadados antes de etapas que usam imagem.",
+    "core.ui.pipelines.panels.yolo.classification_privacy.downstream_needs_guard":
+      "Ainda existem etapas seguintes que expõem pixels antes de uma proteção rodar: {{steps}}.",
+    "core.ui.pipelines.panels.yolo.classification_privacy.downstream_protected":
+      "Já existe uma proteção antes da próxima etapa que expõe imagem: {{steps}}.",
+    "core.ui.pipelines.panels.yolo.classification_privacy.downstream_none":
+      "Ainda não há etapa que use imagem depois desta. Insira a política agora se você pretende adicionar armazenamento ou notificações depois.",
+    "core.ui.pipelines.panels.yolo.classification_privacy.labels": "Rótulos sensíveis",
+    "core.ui.pipelines.panels.yolo.classification_privacy.labels_placeholder": "nsfw, explicit",
+    "core.ui.pipelines.panels.yolo.classification_privacy.labels_hint":
+      "Use rótulos em minúsculas separados por vírgula. O preset casa com payload.classification_label_normalized.",
+    "core.ui.pipelines.panels.yolo.classification_privacy.threshold": "Score mínimo",
+    "core.ui.pipelines.panels.yolo.classification_privacy.insert_filter": "Inserir bloqueio",
+    "core.ui.pipelines.panels.yolo.classification_privacy.insert_strip": "Inserir só metadados",
+    "core.ui.pipelines.panels.yolo.classification_privacy.action_hint":
+      "O primeiro preset insere um core.filter. O segundo insere a remoção de artefatos de imagem logo após esta classificação.",
     "core.ui.pipelines.panels.yolo.classification_input_with_fallback_hint":
       "Lista separada por vírgulas de image keys ou artifact names internos. Em geral use treated,original, ou best_frame primeiro quando for classificar um snapshot escolhido.",
     "core.ui.pipelines.panels.yolo.max_instances_per_frame": "Máximo de instâncias por frame",

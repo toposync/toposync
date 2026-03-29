@@ -152,6 +152,28 @@ export function InteractivePipelineEditor({
     [setInteractiveSteps],
   );
 
+  const insertInteractiveStepAfter = useCallback(
+    (afterUid: string, operatorId: string, defaultsOverride?: Record<string, unknown>) => {
+      const operator = operatorsById[operatorId];
+      if (!operator) return;
+      setInteractiveSteps((prev) => {
+        const used = new Set(prev.map((item) => item.nodeId));
+        const next = createInteractiveStep(
+          operatorId,
+          { ...(operator.defaults ?? {}), ...(defaultsOverride ?? {}) },
+          used,
+        );
+        const targetIndex = prev.findIndex((item) => item.uid === afterUid);
+        if (targetIndex < 0) return [...prev, next];
+        const copy = prev.slice();
+        copy.splice(targetIndex + 1, 0, next);
+        return copy;
+      });
+      setInteractiveWarning(null);
+    },
+    [operatorsById, setInteractiveSteps, setInteractiveWarning],
+  );
+
   const beginStepDrag = useCallback((event: React.DragEvent, uid: string) => {
     setDraggingStepUid(uid);
     setDragOverStep(null);
@@ -232,6 +254,7 @@ export function InteractivePipelineEditor({
         onRemoveStep={removeInteractiveStep}
         onUpdateStepScalar={updateInteractiveStepScalar}
         onUpdateStepConfig={updateInteractiveStepConfig}
+        onInsertStepAfter={insertInteractiveStepAfter}
         onOpenTelemetryField={onOpenTelemetryField}
       />
     </div>

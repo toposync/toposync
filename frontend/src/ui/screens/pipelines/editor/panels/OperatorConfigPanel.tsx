@@ -19,6 +19,7 @@ import {
 } from "./CorePanels";
 import {
   AreaRestrictionConfigCard,
+  ArtifactPrivacyConfigCard,
   CameraMappingConfigCard,
   CameraSourceConfigCard,
   ImageAdjustConfigCard,
@@ -55,6 +56,7 @@ type Props = {
 
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
+  onInsertStepAfter: (afterUid: string, operatorId: string, defaultsOverride?: Record<string, unknown>) => void;
   onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
 };
 
@@ -75,6 +77,7 @@ export function OperatorConfigPanel({
   cameraAreaOptions,
   showAdvanced,
   onUpdateConfig,
+  onInsertStepAfter,
   onOpenTelemetryField,
 }: Props): React.ReactElement | null {
   const operatorId = step.operatorId;
@@ -107,6 +110,10 @@ export function OperatorConfigPanel({
         processingServerId={processingServerId}
         showAdvanced={showAdvanced}
         onUpdateConfig={onUpdateConfig}
+        steps={steps}
+        index={index}
+        operatorsById={operatorsById}
+        onInsertStepAfter={onInsertStepAfter}
         onOpenTelemetryField={onOpenTelemetryField}
         onOpenProcessingServers={onOpenProcessingServers}
       />
@@ -236,6 +243,17 @@ export function OperatorConfigPanel({
         operatorsById={operatorsById}
         index={index}
         showAdvanced={showAdvanced}
+        onUpdateConfig={onUpdateConfig}
+      />
+    );
+  }
+  if (operatorId === "camera.artifact_privacy") {
+    return (
+      <ArtifactPrivacyConfigCard
+        config={config}
+        steps={steps}
+        index={index}
+        operatorsById={operatorsById}
         onUpdateConfig={onUpdateConfig}
       />
     );

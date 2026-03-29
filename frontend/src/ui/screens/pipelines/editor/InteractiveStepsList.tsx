@@ -34,6 +34,7 @@ type Props = {
   onRemoveStep: (uid: string) => void;
   onUpdateStepScalar: (uid: string, key: string, value: string | number | boolean) => void;
   onUpdateStepConfig: (uid: string, updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
+  onInsertStepAfter: (afterUid: string, operatorId: string, defaultsOverride?: Record<string, unknown>) => void;
   onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
 };
 

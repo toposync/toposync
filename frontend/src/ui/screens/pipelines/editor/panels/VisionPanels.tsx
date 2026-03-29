@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Select, { type MultiValue, type SingleValue } from "react-select";
 
 import type {
+  PipelineOperatorDefinition,
   ProcessingServerStatus,
   ProcessingServerVisionModelArtifactUploadResponse,
   ProcessingServerVisionManifestImportResponse,
@@ -17,7 +18,7 @@ import { i18n } from "../../../../../util/i18n";
 import { LocalBuildConsentModal } from "../../../../LocalBuildConsentModal";
 import { Modal } from "../../../../Modal";
 import { pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constants";
-import type { SelectOption, TelemetryFieldInspectorRequest } from "../../types";
+import type { InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
@@ -26,10 +27,14 @@ type Props = {
   operatorId: string;
   stepUid: string;
   nodeId: string;
+  index: number;
+  steps: InteractiveStep[];
+  operatorsById: Record<string, PipelineOperatorDefinition>;
   config: Record<string, unknown>;
   processingServerId: string;
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
+  onInsertStepAfter: (afterUid: string, operatorId: string, defaultsOverride?: Record<string, unknown>) => void;
   onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
   onOpenProcessingServers?: () => void;
 };
@@ -593,14 +598,39 @@ function pickSuggestedAvailableModel(items: VisionModelCatalogItem[]): VisionMod
   return items[0] ?? null;
 }
 
+function parsePrivacyPolicyLabels(raw: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const part of String(raw || "").split(",")) {
+    const value = String(part || "").trim().toLowerCase();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
+}
+
+function buildClassificationPrivacyMatchExpression(labels: string[], minScore: number): string {
+  const normalizedScore = Number.isFinite(minScore) ? Math.max(0, Math.min(1, minScore)) : 0.85;
+  return `payload.classification_label_normalized in ${JSON.stringify(labels)} and payload.classification_score is not None and payload.classification_score >= ${normalizedScore.toFixed(2)}`;
+}
+
+function buildClassificationPrivacyAllowExpression(labels: string[], minScore: number): string {
+  return `not (${buildClassificationPrivacyMatchExpression(labels, minScore)})`;
+}
+
 export function VisionConfigCard({
   operatorId,
   stepUid,
   nodeId,
+  index,
+  steps,
+  operatorsById,
   config,
   processingServerId,
   showAdvanced,
   onUpdateConfig,
+  onInsertStepAfter,
   onOpenTelemetryField,
   onOpenProcessingServers,
 }: Props): React.ReactElement {
@@ -667,6 +697,8 @@ export function VisionConfigCard({
   const [localBuildConsentSubmitting, setLocalBuildConsentSubmitting] = useState(false);
   const [localBuildConsentError, setLocalBuildConsentError] = useState<string | null>(null);
   const [showProvisionDetails, setShowProvisionDetails] = useState(false);
+  const [privacyPolicyLabelsText, setPrivacyPolicyLabelsText] = useState("nsfw");
+  const [privacyPolicyThreshold, setPrivacyPolicyThreshold] = useState(0.85);
   const artifactFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const reloadCatalog = useCallback(async () => {
@@ -899,6 +931,53 @@ export function VisionConfigCard({
     () => inputPresetChoices.find((item) => item.value === inputWithFallback)?.hintKey ?? "",
     [inputPresetChoices, inputWithFallback],
   );
+  const privacyPolicyLabels = useMemo(() => parsePrivacyPolicyLabels(privacyPolicyLabelsText), [privacyPolicyLabelsText]);
+  const privacyPolicyMatchExpression = useMemo(
+    () => (privacyPolicyLabels.length > 0 ? buildClassificationPrivacyMatchExpression(privacyPolicyLabels, privacyPolicyThreshold) : ""),
+    [privacyPolicyLabels, privacyPolicyThreshold],
+  );
+  const privacyPolicyAllowExpression = useMemo(
+    () => (privacyPolicyLabels.length > 0 ? buildClassificationPrivacyAllowExpression(privacyPolicyLabels, privacyPolicyThreshold) : ""),
+    [privacyPolicyLabels, privacyPolicyThreshold],
+  );
+  const downstreamImageExposureSteps = useMemo(
+    () =>
+      steps
+        .slice(index + 1)
+        .filter((step) =>
+          ["core.store_images", "core.notify", "home_assistant.notify", "stream.publish_video"].includes(
+            String(step.operatorId || "").trim(),
+          ),
+        ),
+    [index, steps],
+  );
+  const downstreamPrivacyGuardIndex = useMemo(
+    () =>
+      steps
+        .slice(index + 1)
+        .findIndex((step) => ["core.filter", "camera.artifact_privacy"].includes(String(step.operatorId || "").trim())),
+    [index, steps],
+  );
+  const downstreamExposureIndex = useMemo(
+    () =>
+      steps
+        .slice(index + 1)
+        .findIndex((step) =>
+          ["core.store_images", "core.notify", "home_assistant.notify", "stream.publish_video"].includes(
+            String(step.operatorId || "").trim(),
+          ),
+        ),
+    [index, steps],
+  );
+  const downstreamExposureProtected =
+    downstreamExposureIndex >= 0 && downstreamPrivacyGuardIndex >= 0 && downstreamPrivacyGuardIndex < downstreamExposureIndex;
+  const downstreamExposureLabels = useMemo(
+    () =>
+      downstreamImageExposureSteps.map((step) =>
+        t(`core.ui.pipelines.operator_name.${step.operatorId}`, {}, String(step.operatorId || "").trim()),
+      ),
+    [downstreamImageExposureSteps, t],
+  );
 
   const handleCustomOnnxSaved = useCallback(
     async (result: ProcessingServerVisionManifestImportResponse) => {
@@ -920,6 +999,29 @@ export function VisionConfigCard({
     },
     [isClassification, isDetection, onUpdateConfig, reloadCatalog, t],
   );
+
+  const insertClassificationFilterStep = useCallback(() => {
+    if (!isClassification || !privacyPolicyAllowExpression || !operatorsById["core.filter"]) return;
+    onInsertStepAfter(stepUid, "core.filter", {
+      enabled: true,
+      preset_id: "",
+      expression: privacyPolicyAllowExpression,
+      invert: false,
+      categories: [],
+      lifecycles: [],
+      artifact_names: [],
+    });
+  }, [isClassification, onInsertStepAfter, operatorsById, privacyPolicyAllowExpression, stepUid]);
+
+  const insertClassificationArtifactPrivacyStep = useCallback(() => {
+    if (!isClassification || !privacyPolicyMatchExpression || !operatorsById["camera.artifact_privacy"]) return;
+    onInsertStepAfter(stepUid, "camera.artifact_privacy", {
+      enabled: true,
+      expression: privacyPolicyMatchExpression,
+      invert: false,
+      artifact_names: ["best_frame", "original", "treated", "segmented"],
+    });
+  }, [isClassification, onInsertStepAfter, operatorsById, privacyPolicyMatchExpression, stepUid]);
 
   const applySuggestedAvailableModel = useCallback(() => {
     if (!suggestedAvailableItem) return;
@@ -1842,6 +1944,72 @@ export function VisionConfigCard({
           <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.input_source_hint")}</div>
           {selectedInputPresetHintKey ? <div className="pipelinesStepHint">{t(selectedInputPresetHintKey)}</div> : null}
           <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.classification_filter_hint")}</div>
+          <div className="pipelinesOperatorConfigCard" style={{ marginTop: 10 }}>
+            <div className="cardHeaderRow">
+              <div className="cardTitle">{t("core.ui.pipelines.panels.yolo.classification_privacy.title")}</div>
+            </div>
+            <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.classification_privacy.hint")}</div>
+            {downstreamExposureLabels.length > 0 ? (
+              <div className={downstreamExposureProtected ? "pipelinesStepHint" : "pipelinesInlineError"} style={{ marginTop: 8 }}>
+                {downstreamExposureProtected
+                  ? t("core.ui.pipelines.panels.yolo.classification_privacy.downstream_protected", {
+                      steps: downstreamExposureLabels.join(", "),
+                    })
+                  : t("core.ui.pipelines.panels.yolo.classification_privacy.downstream_needs_guard", {
+                      steps: downstreamExposureLabels.join(", "),
+                    })}
+              </div>
+            ) : (
+              <div className="pipelinesStepHint" style={{ marginTop: 8 }}>
+                {t("core.ui.pipelines.panels.yolo.classification_privacy.downstream_none")}
+              </div>
+            )}
+            <div className="pipelinesScalarGrid" style={{ marginTop: 10 }}>
+              <label className="pipelinesLabel pipelinesScalarLabel">
+                <span>{t("core.ui.pipelines.panels.yolo.classification_privacy.labels")}</span>
+                <input
+                  className="pipelinesInput"
+                  type="text"
+                  value={privacyPolicyLabelsText}
+                  placeholder={t("core.ui.pipelines.panels.yolo.classification_privacy.labels_placeholder")}
+                  onChange={(event) => setPrivacyPolicyLabelsText(event.target.value)}
+                />
+              </label>
+              <label className="pipelinesLabel pipelinesScalarLabel">
+                <span>{t("core.ui.pipelines.panels.yolo.classification_privacy.threshold")}</span>
+                <PipelinesNumberInput
+                  className="pipelinesInput"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={Number.isFinite(privacyPolicyThreshold) ? Math.max(0, Math.min(1, privacyPolicyThreshold)) : 0.85}
+                  onChange={(nextValue) => setPrivacyPolicyThreshold(Math.max(0, Math.min(1, nextValue)))}
+                />
+              </label>
+            </div>
+            <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.classification_privacy.labels_hint")}</div>
+            <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+              <button
+                className="pillButton"
+                type="button"
+                disabled={privacyPolicyLabels.length === 0 || !operatorsById["core.filter"]}
+                onClick={insertClassificationFilterStep}
+              >
+                {t("core.ui.pipelines.panels.yolo.classification_privacy.insert_filter")}
+              </button>
+              <button
+                className="pillButton"
+                type="button"
+                disabled={privacyPolicyLabels.length === 0 || !operatorsById["camera.artifact_privacy"]}
+                onClick={insertClassificationArtifactPrivacyStep}
+              >
+                {t("core.ui.pipelines.panels.yolo.classification_privacy.insert_strip")}
+              </button>
+            </div>
+            <div className="pipelinesStepHint" style={{ marginTop: 8 }}>
+              {t("core.ui.pipelines.panels.yolo.classification_privacy.action_hint")}
+            </div>
+          </div>
           {showAdvanced ? (
             <>
               <label className="pipelinesLabel">

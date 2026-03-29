@@ -17,6 +17,8 @@ import {
   PrivacyRegionDrawModal,
   type SnapshotSource,
 } from "./ImageDrawModals";
+import { FilterExpressionEditor } from "./FilterExpressionEditor";
+import { buildFilterExpressionUpstreamContext } from "./filterExpressionContext";
 import { buildPipelineStepPreviewRequest } from "./pipelineStepSnapshots";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
@@ -2507,6 +2509,105 @@ export function ImagePrivacyConfigCard({
           }))
         }
       />
+    </div>
+  );
+}
+
+type ArtifactPrivacyProps = {
+  config: Record<string, unknown>;
+  steps: InteractiveStep[];
+  index: number;
+  operatorsById: Record<string, PipelineOperatorDefinition>;
+  onUpdateConfig: UpdateConfig;
+};
+
+export function ArtifactPrivacyConfigCard({
+  config,
+  steps,
+  index,
+  operatorsById,
+  onUpdateConfig,
+}: ArtifactPrivacyProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const expression = String((config as any).expression ?? "").trim();
+  const invert = Boolean((config as any).invert ?? false);
+  const artifactNamesRaw = (config as any).artifact_names;
+  const artifactNames = Array.isArray(artifactNamesRaw)
+    ? artifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
+    : ["best_frame", "original", "treated", "segmented"];
+
+  const upstreamContext = React.useMemo(
+    () => buildFilterExpressionUpstreamContext(steps, index, operatorsById),
+    [steps, index, operatorsById],
+  );
+  const artifactSuggestions = React.useMemo(() => {
+    const defaults = buildArtifactSuggestions(t);
+    const optionByValue = new Map(defaults.map((option) => [String(option.value || "").trim(), option] as const));
+    const orderedValues = [
+      ...upstreamContext.artifactNames,
+      ...defaults.map((option) => String(option.value || "").trim()),
+    ];
+    const merged: SelectOption[] = [];
+    const seen = new Set<string>();
+    for (const rawValue of orderedValues) {
+      const value = String(rawValue || "").trim();
+      if (!value || seen.has(value)) continue;
+      seen.add(value);
+      merged.push(optionByValue.get(value) ?? { value, label: value });
+    }
+    return merged;
+  }, [t, upstreamContext.artifactNames]);
+  const selectedArtifactOptions = artifactNames.map(
+    (value) => artifactSuggestions.find((option) => option.value === value) ?? { value, label: value },
+  );
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.artifact_privacy.hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.artifact_privacy.expression")}</span>
+        <FilterExpressionEditor
+          value={expression}
+          artifactSuggestions={artifactSuggestions}
+          payloadPathSuggestions={upstreamContext.payloadPathSuggestions}
+          metadataPathSuggestions={upstreamContext.metadataPathSuggestions}
+          onChange={(nextValue) => {
+            onUpdateConfig((prev) => ({ ...prev, expression: nextValue }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.artifact_privacy.expression_hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.artifact_privacy.artifacts")}</span>
+        <CreatableSelect<SelectOption, true>
+          isMulti
+          styles={pipelinesReactSelectStyles}
+          options={artifactSuggestions}
+          value={selectedArtifactOptions}
+          placeholder={t("core.ui.pipelines.panels.artifact_privacy.artifacts_placeholder")}
+          onChange={(value: MultiValue<SelectOption>) => {
+            onUpdateConfig((prev) => ({
+              ...prev,
+              artifact_names: value.map((item) => item.value),
+            }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.artifact_privacy.artifacts_hint")}</div>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.artifact_privacy.invert")}</span>
+        <input
+          type="checkbox"
+          checked={invert}
+          onChange={(event) => {
+            onUpdateConfig((prev) => ({ ...prev, invert: event.target.checked }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.artifact_privacy.invert_hint")}</div>
     </div>
   );
 }

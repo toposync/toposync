@@ -10,7 +10,9 @@ class CustomBuildHook(BuildHookInterface):
         root = Path(self.root)
         manifests_dir = root / "manifests"
         if not manifests_dir.is_dir():
-            raise RuntimeError("Missing built-in manifest directory: extensions/vision/manifests")
+            manifests_dir = root / "toposync_ext_vision" / "manifests"
+        if not manifests_dir.is_dir():
+            raise RuntimeError("Missing built-in manifest directory for toposync-ext-vision")
 
         force_include = build_data.setdefault("force_include", {})
         if not isinstance(force_include, dict):
@@ -19,5 +21,7 @@ class CustomBuildHook(BuildHookInterface):
         force_include[str(manifests_dir)] = "toposync_ext_vision/manifests"
 
         models_dir = root / "models"
+        if not models_dir.is_dir():
+            models_dir = root / "toposync_ext_vision" / "models"
         if models_dir.is_dir():
             force_include[str(models_dir)] = "toposync_ext_vision/models"

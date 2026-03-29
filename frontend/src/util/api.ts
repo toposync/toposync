@@ -307,6 +307,8 @@ export type ProcessingServerVisionCustomOnnxTensor = {
 export type ProcessingServerVisionCustomOnnxSuggestionDefaults = {
   tensor_name: string;
   output_name: string;
+  label_output_name?: string;
+  mask_output_name?: string;
   width: number;
   height: number;
   layout: string;
@@ -317,11 +319,12 @@ export type ProcessingServerVisionCustomOnnxSuggestionDefaults = {
   normalization_mean: number[];
   normalization_std: number[];
   box_format: string;
+  mask_format?: string;
   labels_count_hint: number;
 };
 
 export type ProcessingServerVisionCustomOnnxTaskSuggestion = {
-  task: "classification" | "detection";
+  task: "classification" | "detection" | "segmentation";
   adapter_family: string;
   label: string;
   reason: string;
@@ -338,7 +341,7 @@ export type ProcessingServerVisionCustomOnnxInspectResponse = {
   output_tensors: ProcessingServerVisionCustomOnnxTensor[];
   task_suggestions: ProcessingServerVisionCustomOnnxTaskSuggestion[];
   supported_task_adapters: Array<{
-    task: "classification" | "detection";
+    task: "classification" | "detection" | "segmentation";
     adapter_family: string;
     label: string;
   }>;
@@ -348,7 +351,7 @@ export type ProcessingServerVisionCustomOnnxRequest = {
   artifact_path: string;
   uploaded_filename?: string;
   display_name: string;
-  task: "classification" | "detection";
+  task: "classification" | "detection" | "segmentation";
   adapter_family: string;
   tensor_name?: string;
   width?: number;
@@ -360,14 +363,17 @@ export type ProcessingServerVisionCustomOnnxRequest = {
   normalization_mean?: number[];
   normalization_std?: number[];
   output_name?: string;
+  label_output_name?: string;
+  mask_output_name?: string;
   box_format?: string;
+  mask_format?: string;
   class_labels?: string[];
   source_url?: string;
   replace_existing?: boolean;
 };
 
 export type ProcessingServerVisionCustomOnnxPreviewResponse = {
-  task: "classification" | "detection";
+  task: "classification" | "detection" | "segmentation";
   summary: Record<string, unknown>;
 };
 
@@ -406,13 +412,13 @@ export type ProcessingServerVisionHuggingFaceInspectRequest = {
   repo_id: string;
   revision?: string;
   onnx_filename: string;
-  task: "classification" | "detection";
+  task: "classification" | "detection" | "segmentation";
 };
 
 export type ProcessingServerVisionHuggingFaceExportRequest = {
   repo_id: string;
   revision?: string;
-  task: "classification" | "detection";
+  task: "classification" | "detection" | "segmentation";
   recipe_id?: string;
   acknowledge_upstream_terms: boolean;
 };
@@ -441,7 +447,7 @@ export type ProcessingServerVisionHuggingFaceImportRequest = {
   onnx_filename: string;
   uploaded_filename?: string;
   display_name: string;
-  task: "classification" | "detection";
+  task: "classification" | "detection" | "segmentation";
   adapter_family: string;
   artifact_source_kind?: string;
   tensor_name?: string;
@@ -454,7 +460,10 @@ export type ProcessingServerVisionHuggingFaceImportRequest = {
   normalization_mean?: number[];
   normalization_std?: number[];
   output_name?: string;
+  label_output_name?: string;
+  mask_output_name?: string;
   box_format?: string;
+  mask_format?: string;
   class_labels?: string[];
   recipe_id?: string;
   replace_existing?: boolean;

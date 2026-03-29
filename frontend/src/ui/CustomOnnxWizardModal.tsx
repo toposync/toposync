@@ -17,7 +17,7 @@ import { Modal } from "./Modal";
 type Props = {
   open: boolean;
   serverId: string;
-  task: "classification" | "detection";
+  task: "classification" | "detection" | "segmentation";
   onClose: () => void;
   onSaved: (result: ProcessingServerVisionManifestImportResponse) => void | Promise<void>;
 };
@@ -67,11 +67,14 @@ export function CustomOnnxWizardModal({
   const [sourceUrl, setSourceUrl] = useState("");
   const [tensorName, setTensorName] = useState("");
   const [outputName, setOutputName] = useState("");
+  const [labelOutputName, setLabelOutputName] = useState("");
+  const [maskOutputName, setMaskOutputName] = useState("");
   const [width, setWidth] = useState("640");
   const [height, setHeight] = useState("640");
   const [layout, setLayout] = useState("nchw");
   const [colorOrder, setColorOrder] = useState("rgb");
   const [resizeMode, setResizeMode] = useState("stretch");
+  const [maskFormat, setMaskFormat] = useState("full_frame_binary");
   const [rescaleFactor, setRescaleFactor] = useState("1");
   const [normalizationMean, setNormalizationMean] = useState("0, 0, 0");
   const [normalizationStd, setNormalizationStd] = useState("1, 1, 1");
@@ -93,11 +96,14 @@ export function CustomOnnxWizardModal({
       setDisplayName(result.suggested_display_name || "");
       setTensorName(String(suggestion?.defaults?.tensor_name || ""));
       setOutputName(String(suggestion?.defaults?.output_name || ""));
+      setLabelOutputName(String(suggestion?.defaults?.label_output_name || ""));
+      setMaskOutputName(String(suggestion?.defaults?.mask_output_name || ""));
       setWidth(String(suggestion?.defaults?.width || 640));
       setHeight(String(suggestion?.defaults?.height || 640));
       setLayout(String(suggestion?.defaults?.layout || "nchw"));
       setColorOrder(String(suggestion?.defaults?.color_order || "rgb"));
       setResizeMode(String(suggestion?.defaults?.resize_mode || "stretch"));
+      setMaskFormat(String(suggestion?.defaults?.mask_format || "full_frame_binary"));
       setRescaleFactor(String(suggestion?.defaults?.rescale_factor ?? 1));
       setNormalizationMean((suggestion?.defaults?.normalization_mean || [0, 0, 0]).join(", "));
       setNormalizationStd((suggestion?.defaults?.normalization_std || [1, 1, 1]).join(", "));
@@ -120,11 +126,14 @@ export function CustomOnnxWizardModal({
     setSourceUrl("");
     setTensorName("");
     setOutputName("");
+    setLabelOutputName("");
+    setMaskOutputName("");
     setWidth("640");
     setHeight("640");
     setLayout("nchw");
     setColorOrder("rgb");
     setResizeMode("stretch");
+    setMaskFormat("full_frame_binary");
     setRescaleFactor("1");
     setNormalizationMean("0, 0, 0");
     setNormalizationStd("1, 1, 1");
@@ -152,9 +161,17 @@ export function CustomOnnxWizardModal({
       uploaded_filename: inspectResult.uploaded_filename,
       display_name: cleanName,
       task,
-      adapter_family: suggestion?.adapter_family || (task === "classification" ? "image_classification_logits" : "generic_boxes"),
+      adapter_family:
+        suggestion?.adapter_family ||
+        (task === "classification"
+          ? "image_classification_logits"
+          : task === "segmentation"
+            ? "generic_segmentation_masks"
+            : "generic_boxes"),
       tensor_name: String(tensorName || "").trim(),
       output_name: String(outputName || "").trim(),
+      label_output_name: String(labelOutputName || "").trim(),
+      mask_output_name: String(maskOutputName || "").trim(),
       width: Math.max(1, Number(width || 0) || 640),
       height: Math.max(1, Number(height || 0) || 640),
       layout: String(layout || "nchw").trim().toLowerCase() || "nchw",
@@ -164,6 +181,7 @@ export function CustomOnnxWizardModal({
       normalization_mean: parseNumberList(normalizationMean),
       normalization_std: parseNumberList(normalizationStd),
       box_format: "xyxy01",
+      mask_format: String(maskFormat || "full_frame_binary").trim().toLowerCase() || "full_frame_binary",
       class_labels: parseLabelList(classLabels),
       source_url: String(sourceUrl || "").trim(),
       replace_existing: replaceExisting,
@@ -174,7 +192,10 @@ export function CustomOnnxWizardModal({
     displayName,
     height,
     inspectResult,
+    labelOutputName,
     layout,
+    maskFormat,
+    maskOutputName,
     normalizationMean,
     normalizationStd,
     outputName,
@@ -258,7 +279,9 @@ export function CustomOnnxWizardModal({
       title={t(
         task === "classification"
           ? "core.ui.vision.custom_onnx_modal.title_classification"
-          : "core.ui.vision.custom_onnx_modal.title_detection",
+          : task === "segmentation"
+            ? "core.ui.vision.custom_onnx_modal.title_segmentation"
+            : "core.ui.vision.custom_onnx_modal.title_detection",
       )}
       onClose={() => {
         if (inspectLoading || previewLoading || saveLoading) return;
@@ -270,7 +293,9 @@ export function CustomOnnxWizardModal({
         {t(
           task === "classification"
             ? "core.ui.vision.custom_onnx_modal.intro_classification"
-            : "core.ui.vision.custom_onnx_modal.intro_detection",
+            : task === "segmentation"
+              ? "core.ui.vision.custom_onnx_modal.intro_segmentation"
+              : "core.ui.vision.custom_onnx_modal.intro_detection",
         )}
       </div>
 
@@ -347,6 +372,8 @@ export function CustomOnnxWizardModal({
                     task:
                       task === "classification"
                         ? t("core.ui.vision.custom_onnx_modal.task_classification")
+                        : task === "segmentation"
+                          ? t("core.ui.vision.custom_onnx_modal.task_segmentation")
                         : t("core.ui.vision.custom_onnx_modal.task_detection"),
                   },
                   `${inspectResult.input_tensors.length} inputs • ${inspectResult.output_tensors.length} outputs`,
@@ -401,6 +428,28 @@ export function CustomOnnxWizardModal({
                 <span>{t("core.ui.vision.custom_onnx_modal.output_tensor")}</span>
                 <input className="pipelinesInput" type="text" value={outputName} onChange={(event) => setOutputName(event.target.value)} />
               </label>
+              {task === "segmentation" ? (
+                <label className="pipelinesLabel">
+                  <span>{t("core.ui.vision.custom_onnx_modal.label_output_tensor")}</span>
+                  <input
+                    className="pipelinesInput"
+                    type="text"
+                    value={labelOutputName}
+                    onChange={(event) => setLabelOutputName(event.target.value)}
+                  />
+                </label>
+              ) : null}
+              {task === "segmentation" ? (
+                <label className="pipelinesLabel">
+                  <span>{t("core.ui.vision.custom_onnx_modal.mask_output_tensor")}</span>
+                  <input
+                    className="pipelinesInput"
+                    type="text"
+                    value={maskOutputName}
+                    onChange={(event) => setMaskOutputName(event.target.value)}
+                  />
+                </label>
+              ) : null}
               <label className="pipelinesLabel">
                 <span>{t("core.ui.vision.custom_onnx_modal.width")}</span>
                 <input className="pipelinesInput" type="number" min={1} value={width} onChange={(event) => setWidth(event.target.value)} />
@@ -430,6 +479,17 @@ export function CustomOnnxWizardModal({
                   <option value="letterbox">letterbox</option>
                 </select>
               </label>
+              {task === "segmentation" ? (
+                <label className="pipelinesLabel">
+                  <span>{t("core.ui.vision.custom_onnx_modal.mask_format")}</span>
+                  <select className="pipelinesInput" value={maskFormat} onChange={(event) => setMaskFormat(event.target.value)}>
+                    <option value="full_frame_binary">full_frame_binary</option>
+                    <option value="full_frame_logits">full_frame_logits</option>
+                    <option value="bbox_crop_binary">bbox_crop_binary</option>
+                    <option value="bbox_crop_logits">bbox_crop_logits</option>
+                  </select>
+                </label>
+              ) : null}
               <label className="pipelinesLabel">
                 <span>{t("core.ui.vision.custom_onnx_modal.rescale_factor")}</span>
                 <input
@@ -552,6 +612,22 @@ export function CustomOnnxWizardModal({
                     ? previewResult.summary.detections.map((item: any, index: number) => (
                         <div key={`${item?.label || index}-${index}`} className="pipelinesStepHint">
                           {String(item?.label || `detection_${index}`)} • {Number(item?.score || 0).toFixed(3)}
+                        </div>
+                      ))
+                    : null}
+                </div>
+              ) : null}
+              {previewResult?.task === "segmentation" ? (
+                <div className="customOnnxWizardPreviewList">
+                  <div className="pipelinesStepHint">
+                    {t("core.ui.vision.custom_onnx_modal.preview_segmentation_count", {
+                      count: Number(previewResult.summary.count || 0),
+                    })}
+                  </div>
+                  {Array.isArray((previewResult.summary as any).segmentations)
+                    ? (previewResult.summary as any).segmentations.map((item: any, index: number) => (
+                        <div key={`${item?.label || index}-${index}`} className="pipelinesStepHint">
+                          {String(item?.label || `segmentation_${index}`)} • {Number(item?.score || 0).toFixed(3)}
                         </div>
                       ))
                     : null}

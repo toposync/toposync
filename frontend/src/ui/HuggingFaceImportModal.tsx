@@ -22,7 +22,7 @@ import { Modal } from "./Modal";
 type Props = {
   open: boolean;
   serverId: string;
-  task: "classification" | "detection";
+  task: "classification" | "detection" | "segmentation";
   onClose: () => void;
   onSaved: (result: ProcessingServerVisionManifestImportResponse) => void | Promise<void>;
 };
@@ -97,11 +97,14 @@ export function HuggingFaceImportModal({
   const [displayName, setDisplayName] = useState("");
   const [tensorName, setTensorName] = useState("");
   const [outputName, setOutputName] = useState("");
+  const [labelOutputName, setLabelOutputName] = useState("");
+  const [maskOutputName, setMaskOutputName] = useState("");
   const [width, setWidth] = useState("640");
   const [height, setHeight] = useState("640");
   const [layout, setLayout] = useState("nchw");
   const [colorOrder, setColorOrder] = useState("rgb");
   const [resizeMode, setResizeMode] = useState("stretch");
+  const [maskFormat, setMaskFormat] = useState("full_frame_binary");
   const [rescaleFactor, setRescaleFactor] = useState("1");
   const [normalizationMean, setNormalizationMean] = useState("0, 0, 0");
   const [normalizationStd, setNormalizationStd] = useState("1, 1, 1");
@@ -120,11 +123,14 @@ export function HuggingFaceImportModal({
     setDisplayName(result.suggested_display_name || result.repo_id || "");
     setTensorName(String(suggestion?.defaults?.tensor_name || ""));
     setOutputName(String(suggestion?.defaults?.output_name || ""));
+    setLabelOutputName(String(suggestion?.defaults?.label_output_name || ""));
+    setMaskOutputName(String(suggestion?.defaults?.mask_output_name || ""));
     setWidth(String((preprocess.width as number) || suggestion?.defaults?.width || 640));
     setHeight(String((preprocess.height as number) || suggestion?.defaults?.height || 640));
     setLayout(String(suggestion?.defaults?.layout || "nchw"));
     setColorOrder(String((preprocess.color_order as string) || suggestion?.defaults?.color_order || "rgb"));
     setResizeMode(String((preprocess.resize_mode as string) || suggestion?.defaults?.resize_mode || "stretch"));
+    setMaskFormat(String(suggestion?.defaults?.mask_format || "full_frame_binary"));
     setRescaleFactor(String((preprocess.rescale_factor as number) ?? suggestion?.defaults?.rescale_factor ?? 1));
     setNormalizationMean(
       ((preprocess.normalization_mean as number[]) || suggestion?.defaults?.normalization_mean || [0, 0, 0]).join(", "),
@@ -152,11 +158,14 @@ export function HuggingFaceImportModal({
     setDisplayName("");
     setTensorName("");
     setOutputName("");
+    setLabelOutputName("");
+    setMaskOutputName("");
     setWidth("640");
     setHeight("640");
     setLayout("nchw");
     setColorOrder("rgb");
     setResizeMode("stretch");
+    setMaskFormat("full_frame_binary");
     setRescaleFactor("1");
     setNormalizationMean("0, 0, 0");
     setNormalizationStd("1, 1, 1");
@@ -181,9 +190,15 @@ export function HuggingFaceImportModal({
       task,
       adapter_family:
         inspectResult.task_suggestions.find((item) => item.task === task)?.adapter_family ||
-        (task === "classification" ? "image_classification_logits" : "generic_boxes"),
+        (task === "classification"
+          ? "image_classification_logits"
+          : task === "segmentation"
+            ? "generic_segmentation_masks"
+            : "generic_boxes"),
       tensor_name: tensorName,
       output_name: outputName,
+      label_output_name: labelOutputName,
+      mask_output_name: maskOutputName,
       width: Math.max(1, Number(width || 0) || 640),
       height: Math.max(1, Number(height || 0) || 640),
       layout,
@@ -193,6 +208,7 @@ export function HuggingFaceImportModal({
       normalization_mean: parseNumberList(normalizationMean),
       normalization_std: parseNumberList(normalizationStd),
       box_format: "xyxy01",
+      mask_format: maskFormat,
       class_labels: parseLabelList(classLabels),
       source_url: inspectResult.source_url,
       replace_existing: replaceExisting,
@@ -227,10 +243,16 @@ export function HuggingFaceImportModal({
       task,
       adapter_family:
         inspectResult.task_suggestions.find((item) => item.task === task)?.adapter_family ||
-        (task === "classification" ? "image_classification_logits" : "generic_boxes"),
+        (task === "classification"
+          ? "image_classification_logits"
+          : task === "segmentation"
+            ? "generic_segmentation_masks"
+            : "generic_boxes"),
       artifact_source_kind: inspectResult.artifact_source_kind || "hub_onnx",
       tensor_name: tensorName,
       output_name: outputName,
+      label_output_name: labelOutputName,
+      mask_output_name: maskOutputName,
       width: Math.max(1, Number(width || 0) || 640),
       height: Math.max(1, Number(height || 0) || 640),
       layout,
@@ -240,6 +262,7 @@ export function HuggingFaceImportModal({
       normalization_mean: parseNumberList(normalizationMean),
       normalization_std: parseNumberList(normalizationStd),
       box_format: "xyxy01",
+      mask_format: maskFormat,
       class_labels: parseLabelList(classLabels),
       recipe_id: inspectResult.recipe_id || "",
       replace_existing: replaceExisting,
@@ -250,7 +273,10 @@ export function HuggingFaceImportModal({
     displayName,
     height,
     inspectResult,
+    labelOutputName,
     layout,
+    maskFormat,
+    maskOutputName,
     normalizationMean,
     normalizationStd,
     outputName,
@@ -383,6 +409,8 @@ export function HuggingFaceImportModal({
         title={t(
         task === "classification"
           ? "core.ui.vision.huggingface_modal.title_classification"
+          : task === "segmentation"
+            ? "core.ui.vision.huggingface_modal.title_segmentation"
           : "core.ui.vision.huggingface_modal.title_detection",
       )}
       onClose={() => {
@@ -395,6 +423,8 @@ export function HuggingFaceImportModal({
         {t(
           task === "classification"
             ? "core.ui.vision.huggingface_modal.intro_classification"
+            : task === "segmentation"
+              ? "core.ui.vision.huggingface_modal.intro_segmentation"
             : "core.ui.vision.huggingface_modal.intro_detection",
         )}
       </div>
@@ -460,6 +490,8 @@ export function HuggingFaceImportModal({
                   currentTask:
                     task === "classification"
                       ? t("core.ui.vision.custom_onnx_modal.task_classification")
+                      : task === "segmentation"
+                        ? t("core.ui.vision.custom_onnx_modal.task_segmentation")
                       : t("core.ui.vision.custom_onnx_modal.task_detection"),
                 })}
               </div>
@@ -572,6 +604,18 @@ export function HuggingFaceImportModal({
                 <span>{t("core.ui.vision.custom_onnx_modal.output_tensor")}</span>
                 <input className="pipelinesInput" type="text" value={outputName} onChange={(event) => setOutputName(event.target.value)} />
               </label>
+              {task === "segmentation" ? (
+                <label className="pipelinesLabel">
+                  <span>{t("core.ui.vision.custom_onnx_modal.label_output_tensor")}</span>
+                  <input className="pipelinesInput" type="text" value={labelOutputName} onChange={(event) => setLabelOutputName(event.target.value)} />
+                </label>
+              ) : null}
+              {task === "segmentation" ? (
+                <label className="pipelinesLabel">
+                  <span>{t("core.ui.vision.custom_onnx_modal.mask_output_tensor")}</span>
+                  <input className="pipelinesInput" type="text" value={maskOutputName} onChange={(event) => setMaskOutputName(event.target.value)} />
+                </label>
+              ) : null}
               <label className="pipelinesLabel">
                 <span>{t("core.ui.vision.custom_onnx_modal.width")}</span>
                 <input className="pipelinesInput" type="number" min={1} value={width} onChange={(event) => setWidth(event.target.value)} />
@@ -601,6 +645,17 @@ export function HuggingFaceImportModal({
                   <option value="letterbox">letterbox</option>
                 </select>
               </label>
+              {task === "segmentation" ? (
+                <label className="pipelinesLabel">
+                  <span>{t("core.ui.vision.custom_onnx_modal.mask_format")}</span>
+                  <select className="pipelinesInput" value={maskFormat} onChange={(event) => setMaskFormat(event.target.value)}>
+                    <option value="full_frame_binary">full_frame_binary</option>
+                    <option value="full_frame_logits">full_frame_logits</option>
+                    <option value="bbox_crop_binary">bbox_crop_binary</option>
+                    <option value="bbox_crop_logits">bbox_crop_logits</option>
+                  </select>
+                </label>
+              ) : null}
               <label className="pipelinesLabel">
                 <span>{t("core.ui.vision.custom_onnx_modal.rescale_factor")}</span>
                 <input className="pipelinesInput" type="number" step="0.0001" value={rescaleFactor} onChange={(event) => setRescaleFactor(event.target.value)} />
@@ -701,6 +756,22 @@ export function HuggingFaceImportModal({
                     ? previewResult.summary.detections.map((item: any, index: number) => (
                         <div key={`${item?.label || index}-${index}`} className="pipelinesStepHint">
                           {String(item?.label || `detection_${index}`)} • {Number(item?.score || 0).toFixed(3)}
+                        </div>
+                      ))
+                    : null}
+                </div>
+              ) : null}
+              {previewResult?.task === "segmentation" ? (
+                <div className="customOnnxWizardPreviewList">
+                  <div className="pipelinesStepHint">
+                    {t("core.ui.vision.custom_onnx_modal.preview_segmentation_count", {
+                      count: Number(previewResult.summary.count || 0),
+                    })}
+                  </div>
+                  {Array.isArray((previewResult.summary as any).segmentations)
+                    ? (previewResult.summary as any).segmentations.map((item: any, index: number) => (
+                        <div key={`${item?.label || index}-${index}`} className="pipelinesStepHint">
+                          {String(item?.label || `segmentation_${index}`)} • {Number(item?.score || 0).toFixed(3)}
                         </div>
                       ))
                     : null}

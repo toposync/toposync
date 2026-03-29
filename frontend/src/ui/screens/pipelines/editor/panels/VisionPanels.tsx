@@ -668,7 +668,7 @@ export function VisionConfigCard({
   const isClassification = String(operatorId || "").trim() === "vision.classify_image";
   const isSegmentation = String(operatorId || "").trim() === "vision.segment_instances";
   const isDetection = !isTracking && !isClassification && !isSegmentation;
-  const customOnnxSupported = isDetection || isClassification;
+  const customOnnxSupported = isDetection || isClassification || isSegmentation;
   const task = isSegmentation ? "segmentation" : isClassification ? "classification" : "detection";
   const resolvedProcessingServerId = String(processingServerId || "").trim() || "local";
 

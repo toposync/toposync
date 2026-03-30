@@ -1116,6 +1116,12 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Choose the image classification model. This operator attaches ranked labels to the frame so later steps can filter, notify, or store more selectively.",
     "core.ui.pipelines.panels.yolo.classification_empty_catalog_hint":
       "No image-classification models are registered on this machine yet. Use advanced mode to import a custom ONNX manifest for now.",
+    "core.ui.pipelines.panels.yolo.classification_empty_state.title_empty": "Bring a classification model to continue",
+    "core.ui.pipelines.panels.yolo.classification_empty_state.body_empty":
+      "This machine does not have any image-classification model yet. Import one from Hugging Face or send a custom ONNX to unlock the rest of this step.",
+    "core.ui.pipelines.panels.yolo.classification_empty_state.title_select": "Choose a model to continue",
+    "core.ui.pipelines.panels.yolo.classification_empty_state.body_select":
+      "Select the model for this step first. Image source, retained labels, and privacy shortcuts appear after the model is chosen.",
     "core.ui.pipelines.panels.yolo.segmentation_model_id_hint":
       "Choose the segmentation model. This quick list favors models that fit the selected machine.",
     "core.ui.pipelines.panels.yolo.model_shortlist_hint":
@@ -2793,6 +2799,12 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Escolha o modelo de classificação de imagem. Este operador anexa rótulos ordenados ao frame para que os próximos passos possam filtrar, notificar ou armazenar com mais critério.",
     "core.ui.pipelines.panels.yolo.classification_empty_catalog_hint":
       "Ainda não há modelos de classificação de imagem registrados nesta máquina. Por enquanto, use o modo avançado para importar um manifest ONNX customizado.",
+    "core.ui.pipelines.panels.yolo.classification_empty_state.title_empty": "Traga um modelo de classificação para continuar",
+    "core.ui.pipelines.panels.yolo.classification_empty_state.body_empty":
+      "Esta máquina ainda não tem nenhum modelo de classificação de imagem. Importe um modelo do Hugging Face ou envie um ONNX personalizado para destravar o restante desta etapa.",
+    "core.ui.pipelines.panels.yolo.classification_empty_state.title_select": "Escolha um modelo para continuar",
+    "core.ui.pipelines.panels.yolo.classification_empty_state.body_select":
+      "Selecione primeiro o modelo desta etapa. Fonte da imagem, rótulos mantidos e atalhos de privacidade aparecem depois da escolha.",
     "core.ui.pipelines.panels.yolo.segmentation_model_id_hint":
       "Escolha o modelo de segmentação. Esta lista rápida prioriza opções que cabem na máquina selecionada.",
     "core.ui.pipelines.panels.yolo.model_shortlist_hint":

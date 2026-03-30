@@ -853,6 +853,9 @@ export function VisionConfigCard({
   const selectedModelMeta = [selectedBadgeText, selectedProfileLabel].filter(Boolean).join(" • ");
   const selectedModelHintKey = useMemo(() => modelHintTranslationKey(modelId), [modelId]);
   const manualInstallFailed = !!manualInstallItem?.installJob?.error || !!localBuildError;
+  const classificationNeedsModelSetup = isClassification && !manualInstallItem;
+  const classificationEmptyCatalog = isClassification && catalogItems.length === 0;
+  const showBasicModelPicker = showAdvanced ? modelOptions.length > 0 : basicModelItems.length > 0;
   const provisionStatusTone = selectedModelIncompatible
     ? "unavailable"
     : manualInstallFailed
@@ -1265,45 +1268,50 @@ export function VisionConfigCard({
             })}
           </div>
 
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.yolo.model_id")}</span>
-            {showAdvanced ? (
-              <Select<VisionModelOption, false>
-                styles={pipelinesReactSelectStyles as any}
-                options={modelOptions}
-                value={selectedModelOption}
-                isLoading={catalogLoading}
-                isOptionDisabled={(option) => !!option.isDisabled}
-                placeholder={t("core.ui.pipelines.panels.yolo.model_select_placeholder")}
-                onChange={(value: SingleValue<VisionModelOption>) => {
-                  const nextModelId = String(value?.value || "").trim();
-                  onUpdateConfig((prev) => ({
-                    ...prev,
-                    model_id: nextModelId,
-                  }));
-                }}
-              />
-            ) : (
-              <select
-                className="pipelinesInput"
-                value={modelId}
-                onChange={(event) => {
-                  const nextModelId = String(event.target.value || "").trim();
-                  onUpdateConfig((prev) => ({
-                    ...prev,
-                    model_id: nextModelId,
-                  }));
-                }}
-              >
-                {basicModelItems.map((item) => (
-                  <option key={item.modelId} value={item.modelId}>
-                    {item.displayName}
-                    {item.badgeIds.includes("recommended") ? ` • ${t("core.ui.processing_servers.vision_recommendations.badge.recommended")}` : ""}
-                  </option>
-                ))}
-              </select>
-            )}
-          </label>
+          {showBasicModelPicker ? (
+            <label className="pipelinesLabel">
+              <span>{t("core.ui.pipelines.panels.yolo.model_id")}</span>
+              {showAdvanced ? (
+                <Select<VisionModelOption, false>
+                  styles={pipelinesReactSelectStyles as any}
+                  options={modelOptions}
+                  value={selectedModelOption}
+                  isLoading={catalogLoading}
+                  isOptionDisabled={(option) => !!option.isDisabled}
+                  placeholder={t("core.ui.pipelines.panels.yolo.model_select_placeholder")}
+                  onChange={(value: SingleValue<VisionModelOption>) => {
+                    const nextModelId = String(value?.value || "").trim();
+                    onUpdateConfig((prev) => ({
+                      ...prev,
+                      model_id: nextModelId,
+                    }));
+                  }}
+                />
+              ) : (
+                <select
+                  className="pipelinesInput"
+                  value={basicModelItems.some((item) => item.modelId === modelId) ? modelId : ""}
+                  onChange={(event) => {
+                    const nextModelId = String(event.target.value || "").trim();
+                    onUpdateConfig((prev) => ({
+                      ...prev,
+                      model_id: nextModelId,
+                    }));
+                  }}
+                >
+                  <option value="">{t("core.ui.pipelines.panels.yolo.model_select_placeholder")}</option>
+                  {basicModelItems.map((item) => (
+                    <option key={item.modelId} value={item.modelId}>
+                      {item.displayName}
+                      {item.badgeIds.includes("recommended")
+                        ? ` • ${t("core.ui.processing_servers.vision_recommendations.badge.recommended")}`
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </label>
+          ) : null}
           <div className="pipelinesStepHint">
             {isClassification
               ? t("core.ui.pipelines.panels.yolo.classification_model_id_hint")
@@ -1311,8 +1319,63 @@ export function VisionConfigCard({
               ? t("core.ui.pipelines.panels.yolo.segmentation_model_id_hint")
               : t("core.ui.pipelines.panels.yolo.model_id_hint")}
           </div>
-          {isClassification && catalogItems.length === 0 ? (
-            <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.classification_empty_catalog_hint")}</div>
+          {classificationNeedsModelSetup ? (
+            <div className="pipelinesOperatorConfigCard pipelinesProvisionCard" style={{ marginTop: 10 }}>
+              <div className="cardHeaderRow">
+                <div className="cardTitle">
+                  {t(
+                    classificationEmptyCatalog
+                      ? "core.ui.pipelines.panels.yolo.classification_empty_state.title_empty"
+                      : "core.ui.pipelines.panels.yolo.classification_empty_state.title_select",
+                  )}
+                </div>
+              </div>
+              <div className="cardBody">
+                {t(
+                  classificationEmptyCatalog
+                    ? "core.ui.pipelines.panels.yolo.classification_empty_state.body_empty"
+                    : "core.ui.pipelines.panels.yolo.classification_empty_state.body_select",
+                )}
+              </div>
+              {classificationEmptyCatalog ? (
+                <div className="pipelinesProvisionActions">
+                  {customOnnxSupported ? (
+                    <button
+                      className="pillButton pillButtonPrimary"
+                      type="button"
+                      onClick={() => {
+                        setCustomOnnxSuccess(null);
+                        setShowHuggingFaceWizard(true);
+                      }}
+                    >
+                      {t("core.ui.pipelines.panels.yolo.huggingface")}
+                    </button>
+                  ) : null}
+                  {customOnnxSupported ? (
+                    <button
+                      className="pillButton"
+                      type="button"
+                      onClick={() => {
+                        setCustomOnnxSuccess(null);
+                        setShowCustomOnnxWizard(true);
+                      }}
+                    >
+                      {t("core.ui.pipelines.panels.yolo.custom_onnx")}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+              <div className="pipelinesProvisionActions pipelinesProvisionSecondaryActions">
+                <button className="pillButton" type="button" onClick={() => void reloadCatalog()} disabled={catalogLoading}>
+                  {t("core.ui.pipelines.panels.yolo.refresh_models")}
+                </button>
+                {onOpenProcessingServers ? (
+                  <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
+                    {t("core.ui.pipelines.form.processing_server.manage")}
+                  </button>
+                ) : null}
+              </div>
+            </div>
           ) : null}
           {manualInstallItem ? (
             <div className="pipelinesOperatorConfigCard pipelinesProvisionCard" style={{ marginTop: 10 }}>
@@ -1479,7 +1542,7 @@ export function VisionConfigCard({
           ) : null}
           {catalogError ? <div className="errorText">{catalogError}</div> : null}
 
-          {showAdvanced ? (
+          {showAdvanced && !classificationEmptyCatalog ? (
             <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
               {customOnnxSupported ? (
                 <button
@@ -1920,7 +1983,7 @@ export function VisionConfigCard({
         </>
       ) : null}
 
-      {isClassification ? (
+      {isClassification && !classificationNeedsModelSetup ? (
         <>
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.yolo.input_source")}</span>

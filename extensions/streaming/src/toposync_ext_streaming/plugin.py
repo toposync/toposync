@@ -5,7 +5,7 @@ import os
 
 from fastapi import FastAPI
 
-from toposync.extensions import BaseExtension
+from toposync.extensions import BaseExtension, register_extension_shutdown_callback
 from toposync.runtime.config_store import ConfigStore
 from toposync.runtime.event_bus import EventBus
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
@@ -170,7 +170,7 @@ class StreamingExtension(BaseExtension):
                 await writer_bridge.stop()
                 await engine_manager.stop()
 
-            app.add_event_handler("shutdown", _shutdown_streaming)
+            register_extension_shutdown_callback(app, _shutdown_streaming)
         else:
             set_streaming_runtime_bindings(None)
 

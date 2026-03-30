@@ -18,6 +18,7 @@ from starlette.responses import StreamingResponse
 from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from toposync.extensions import run_extension_shutdown_callbacks
 from toposync.extensions.manager import ExtensionManager
 from toposync.runtime.auth import AuthContext, AuthRuntime
 from toposync.runtime.device_store import DeviceStore
@@ -761,6 +762,7 @@ async def _lifespan(app: FastAPI):
     services.register("devices.toggle", store.toggle)
     services.register("pipelines.register_operator", operator_registry.register_operator)
     services.register("pipelines.list_operators", operator_registry.list_operators)
+    app.state._toposync_extension_shutdown_callbacks = []
 
     async def _default_device_action(payload: dict[str, Any]) -> dict[str, Any]:
         device_id = str(payload.get("device_id", ""))
@@ -857,6 +859,10 @@ async def _lifespan(app: FastAPI):
     finally:
         try:
             await orchestrator.stop()
+        except Exception:
+            pass
+        try:
+            await run_extension_shutdown_callbacks(app)
         except Exception:
             pass
         if pipeline_telemetry_checkpoint is not None:

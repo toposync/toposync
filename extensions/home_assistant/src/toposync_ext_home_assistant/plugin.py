@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 from urllib.parse import urlparse
 
-from toposync.extensions import BaseExtension
+from toposync.extensions import BaseExtension, register_extension_shutdown_callback
 from toposync.runtime.event_bus import EventBus
 from toposync.runtime.config_store import ConfigStore
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
@@ -229,7 +229,7 @@ class HomeAssistantExtension(BaseExtension):
     async def setup(self, app: FastAPI, *, bus: EventBus, services: ServiceRegistry) -> None:  # noqa: ARG002
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=8.0))
         state_cache_ttl_s = 1.5
-        app.add_event_handler("shutdown", self.shutdown)
+        register_extension_shutdown_callback(app, self.shutdown)
 
         def _config_store() -> ConfigStore:
             store = getattr(app.state, "config_store", None)

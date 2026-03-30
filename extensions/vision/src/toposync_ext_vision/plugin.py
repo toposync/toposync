@@ -9,7 +9,7 @@ from toposync.runtime.event_bus import EventBus
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.services import ServiceRegistry
 
-from .pipelines import register_vision_pipeline_operators
+from .pipelines.operators import register_vision_pipeline_operators
 from .registry import build_default_model_registry, get_default_model_install_manager
 
 

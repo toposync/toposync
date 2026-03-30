@@ -98,6 +98,12 @@ def _read_json(url: str, *, timeout: float = 5.0) -> object:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _read_text(url: str, *, timeout: float = 5.0) -> str:
+    request = urllib.request.Request(url, headers={"Accept": "text/html, text/plain;q=0.9, */*;q=0.1"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+
 def _tail_lines(path: Path, *, limit: int = 120) -> str:
     if not path.is_file():
         return ""
@@ -151,7 +157,23 @@ def _build_wheelhouse(wheelhouse_dir: Path) -> None:
     ]
     for target in targets:
         _run(["uv", "build", "--wheel", "--out-dir", wheelhouse_dir, target])
+    _assert_core_wheel_has_bundled_frontend(wheelhouse_dir)
     _assert_vision_wheel_publishable(wheelhouse_dir)
+
+
+def _assert_core_wheel_has_bundled_frontend(wheelhouse_dir: Path) -> None:
+    core_wheels = sorted(wheelhouse_dir.glob("toposync_core-*.whl"))
+    if len(core_wheels) != 1:
+        raise RuntimeError(f"Expected exactly one core wheel in wheelhouse, found {len(core_wheels)}")
+    core_wheel = core_wheels[0]
+    with zipfile.ZipFile(core_wheel) as archive:
+        names = archive.namelist()
+    required_files = {
+        "toposync/_frontend/dist/index.html",
+    }
+    missing = sorted(required_files.difference(names))
+    if missing:
+        raise RuntimeError(f"Core wheel is missing bundled frontend assets: {', '.join(missing)}")
 
 
 def _assert_vision_wheel_publishable(wheelhouse_dir: Path) -> None:
@@ -244,6 +266,13 @@ def _assert_extensions(payload: object) -> list[str]:
     return sorted(remote_urls)
 
 
+def _assert_host_frontend(base_url: str) -> None:
+    payload = _read_text(f"{base_url}/")
+    lowered = payload.lower()
+    if "<!doctype html" not in lowered and "<html" not in lowered:
+        raise RuntimeError("Installed server did not serve the bundled frontend at '/'.")
+
+
 def _run_playwright(*, base_url: str, remote_urls: list[str]) -> None:
     _print_step("Running distribution browser smoke test")
     env = os.environ.copy()
@@ -308,6 +337,9 @@ def main() -> int:
         )
         try:
             _wait_for_server(base_url=base_url, process=process, log_path=log_path)
+
+            _print_step("Checking bundled frontend from installed server")
+            _assert_host_frontend(base_url)
 
             _print_step("Checking /api/extensions from installed server")
             payload = _read_json(f"{base_url}/api/extensions")

@@ -1,12 +1,12 @@
 [project]
 name = "toposync-ext-streaming"
-version = "0.1.0"
+version = "0.1.1"
 description = "Toposync first-party extension: streaming settings, API surface, and pipeline sink bootstrap."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
-dependencies = ["toposync-core>=0.3.0", "numpy>=1.26", "opencv-python-headless>=4.10"]
+dependencies = ["toposync-core>=0.3.3", "numpy>=1.26", "opencv-python-headless>=4.10"]
 
 [project.entry-points."toposync.extensions"]
 streaming = "toposync_ext_streaming.plugin:StreamingExtension"

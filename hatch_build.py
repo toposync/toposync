@@ -12,11 +12,13 @@ class CustomBuildHook(BuildHookInterface):
         root = Path(self.root)
         frontend_dist = root / "frontend" / "dist"
         frontend_index = frontend_dist / "index.html"
-        packaged_frontend_dist = root / "src" / "toposync" / "_frontend" / "dist"
-        packaged_frontend_index = packaged_frontend_dist / "index.html"
+        source_packaged_frontend_dist = root / "src" / "toposync" / "_frontend" / "dist"
+        source_packaged_frontend_index = source_packaged_frontend_dist / "index.html"
+        sdist_packaged_frontend_dist = root / "toposync" / "_frontend" / "dist"
+        sdist_packaged_frontend_index = sdist_packaged_frontend_dist / "index.html"
 
         if not frontend_index.is_file():
-            if packaged_frontend_index.is_file():
+            if source_packaged_frontend_index.is_file() or sdist_packaged_frontend_index.is_file():
                 return
 
             npm = shutil.which("npm")
@@ -33,7 +35,6 @@ class CustomBuildHook(BuildHookInterface):
                 "Run `npm run build:frontend` and try again."
             )
 
-        force_include = build_data.setdefault("force_include", {})
-        if not isinstance(force_include, dict):
-            raise TypeError("build_data.force_include must be a dictionary")
-        force_include[str(frontend_dist)] = "src/toposync/_frontend/dist"
+        shutil.rmtree(source_packaged_frontend_dist, ignore_errors=True)
+        source_packaged_frontend_dist.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(frontend_dist, source_packaged_frontend_dist, dirs_exist_ok=True)

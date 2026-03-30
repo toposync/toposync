@@ -11,13 +11,23 @@ from pathlib import Path
 from typing import Any, BinaryIO, Literal
 
 import numpy as np
-import onnx
 
 from .manifests import ModelManifest, ModelRegistryError
 from .model_store import import_custom_manifest
 
 
 SupportedCustomOnnxTask = Literal["classification", "detection", "segmentation"]
+
+
+def _import_onnx() -> Any:
+    try:
+        import onnx
+    except Exception as exc:  # noqa: BLE001
+        raise ModelRegistryError(
+            "ONNX inspection tooling is unavailable in this environment. "
+            "Install a compatible `onnx` + `ml_dtypes` combination for your Python version."
+        ) from exc
+    return onnx
 
 
 def _default_data_dir() -> Path:
@@ -66,6 +76,7 @@ def _copy_stream(source: BinaryIO, target_path: Path) -> int:
 
 def _tensor_dtype_name(elem_type: int) -> str:
     try:
+        onnx = _import_onnx()
         return str(onnx.TensorProto.DataType.Name(int(elem_type))).lower()
     except Exception:
         return str(int(elem_type))
@@ -290,6 +301,7 @@ def inspect_custom_onnx_artifact(
     if path.suffix.lower() != ".onnx":
         raise ModelRegistryError("The custom ONNX wizard only accepts .onnx files")
 
+    onnx = _import_onnx()
     model = onnx.load(str(path), load_external_data=False)
     graph = model.graph
     input_tensors = [_tensor_summary(item) for item in list(graph.input or [])]

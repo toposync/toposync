@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import io
 from pathlib import Path
 import threading
 import time
 from typing import Any
 
 import pytest
+from PIL import Image
 
 from toposync.runtime.config_store import ConfigStore, Pipeline, UserDataPaths
 from toposync.runtime.pipelines import (
@@ -35,6 +37,36 @@ def test_frame_grabber_uses_ffmpeg_when_opencv_missing(monkeypatch: pytest.Monke
     monkeypatch.setattr(grabber.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
     fg = grabber.FrameGrabber("rtsp://example", backend="auto")
     assert fg.backend_name == "ffmpeg"
+
+
+def test_frame_grabber_uses_ffmpeg_when_cv2_is_partially_broken(monkeypatch: pytest.MonkeyPatch) -> None:
+    import toposync_ext_cameras.processing.frame_grabber as grabber
+
+    class _BrokenCv2:
+        pass
+
+    monkeypatch.setattr(grabber, "cv2", _BrokenCv2())
+    monkeypatch.setattr(grabber.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    fg = grabber.FrameGrabber("rtsp://example", backend="auto")
+    assert fg.backend_name == "ffmpeg"
+
+
+def test_decode_jpeg_frame_falls_back_to_pillow_when_cv2_decoder_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import toposync_ext_cameras.processing.frame_grabber as grabber
+
+    buf = io.BytesIO()
+    Image.new("RGB", (2, 1), color=(12, 34, 56)).save(buf, format="JPEG")
+
+    class _CaptureOnlyCv2:
+        VideoCapture = object
+
+    monkeypatch.setattr(grabber, "cv2", _CaptureOnlyCv2())
+    frame = grabber._decode_jpeg_frame(buf.getvalue())
+    assert frame is not None
+    assert frame.shape == (1, 2, 3)
+    assert int(frame[0, 0, 0]) != int(frame[0, 0, 2])
 
 
 def test_camera_source_passes_backend_to_frame_grabber(monkeypatch: pytest.MonkeyPatch) -> None:

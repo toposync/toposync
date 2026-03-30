@@ -70,7 +70,12 @@ class CameraHub:
                 # holding the hub lock while this runs.
                 started_task = asyncio.to_thread(grabber.start)
                 if self._start_timeout_s is not None and self._start_timeout_s > 0.0:
-                    started = await asyncio.wait_for(started_task, timeout=self._start_timeout_s)
+                    try:
+                        started = await asyncio.wait_for(started_task, timeout=self._start_timeout_s)
+                    except TimeoutError as exc:
+                        raise RuntimeError(
+                            f"Camera grabber start timed out after {self._start_timeout_s:.2f}s"
+                        ) from exc
                 else:
                     started = await started_task
             except Exception:

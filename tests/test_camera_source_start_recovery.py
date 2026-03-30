@@ -85,6 +85,7 @@ def test_camera_source_treats_capture_start_timeout_as_transient(monkeypatch) ->
         return _SlowFrameGrabber.start_calls, list(_SlowFrameGrabber.init_backends), {
             "node": (snapshot.get("nodes") or {}).get("camera") or {},
             "backend_override": getattr(runtime_obj, "_backend_override", None),
+            "last_start_error": getattr(runtime_obj, "_last_start_error", ""),
         }
 
     start_calls, init_backends, details = asyncio.run(scenario())
@@ -93,3 +94,4 @@ def test_camera_source_treats_capture_start_timeout_as_transient(monkeypatch) ->
     assert int(details["node"].get("error_count") or 0) == 0
     assert int(details["node"].get("emitted_packets") or 0) == 0
     assert details["backend_override"] == "ffmpeg"
+    assert "timed out after 0.05s" in str(details["last_start_error"])

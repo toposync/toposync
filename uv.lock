@@ -1463,6 +1463,7 @@ source = { editable = "extensions/cameras" }
 dependencies = [
     { name = "numpy" },
     { name = "opencv-python-headless" },
+    { name = "pillow" },
     { name = "toposync-core" },
 ]
 
@@ -1470,6 +1471,7 @@ dependencies = [
 requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "opencv-python-headless", specifier = ">=4.10" },
+    { name = "pillow", specifier = ">=10,<13" },
     { name = "toposync-core", specifier = ">=0.3.0" },
 ]
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import io
 import logging
 import os
 import shutil
@@ -20,6 +21,12 @@ except Exception:  # noqa: BLE001
 
 import numpy as np
 
+try:
+    from PIL import Image, UnidentifiedImageError
+except Exception:  # noqa: BLE001
+    Image = None  # type: ignore[assignment]
+    UnidentifiedImageError = Exception  # type: ignore[misc,assignment]
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,6 +42,79 @@ def _read_env_int(name: str, fallback: int) -> int:
 
 def _clamp_int(v: int, *, min_value: int, max_value: int) -> int:
     return max(min_value, min(max_value, int(v)))
+
+
+def _opencv_install_hint() -> str:
+    return (
+        "Install with: `uv pip install opencv-python-headless` (recommended) "
+        "or `uv pip install opencv-python` (then restart Toposync)."
+    )
+
+
+def _opencv_missing_detail(*required_attrs: str) -> str:
+    if cv2 is None:
+        return "module 'cv2' is not importable"
+    missing = [name for name in required_attrs if not hasattr(cv2, name)]
+    if missing:
+        return f"module 'cv2' is missing required attributes: {', '.join(missing)}"
+    return "module 'cv2' is available"
+
+
+def _opencv_capture_available() -> bool:
+    return cv2 is not None and hasattr(cv2, "VideoCapture")
+
+
+def _opencv_decode_available() -> bool:
+    return cv2 is not None and hasattr(cv2, "imdecode") and hasattr(cv2, "IMREAD_COLOR")
+
+
+def _raise_opencv_capture_unavailable() -> None:
+    raise RuntimeError(
+        "OpenCV (cv2) is required for the OpenCV camera backend, but "
+        f"{_opencv_missing_detail('VideoCapture')}. {_opencv_install_hint()}"
+    )
+
+
+def _jpeg_decoder_available() -> bool:
+    return _opencv_decode_available() or Image is not None
+
+
+def _jpeg_decoder_missing_detail() -> str:
+    parts: list[str] = []
+    if not _opencv_decode_available():
+        parts.append(_opencv_missing_detail("imdecode", "IMREAD_COLOR"))
+    if Image is None:
+        parts.append("Pillow (PIL.Image) is not importable")
+    return "; ".join(parts) or "JPEG decoder is available"
+
+
+def _decode_jpeg_frame(jpg: bytes) -> Any | None:
+    if _opencv_decode_available():
+        try:
+            arr = np.frombuffer(jpg, dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)  # type: ignore[union-attr]
+            if frame is not None:
+                return frame
+        except Exception:
+            pass
+
+    if Image is None:
+        return None
+
+    try:
+        with Image.open(io.BytesIO(jpg)) as image:
+            rgb = image.convert("RGB")
+            frame_rgb = np.asarray(rgb, dtype=np.uint8)
+    except (UnidentifiedImageError, OSError, ValueError):
+        return None
+    except Exception:
+        return None
+
+    if frame_rgb.ndim != 3 or frame_rgb.shape[2] != 3:
+        return None
+
+    # Pipeline image operators expect OpenCV-style BGR frames.
+    return np.ascontiguousarray(frame_rgb[:, :, ::-1])
 
 
 def _rtsp_stream2_fallback(rtsp_url: str) -> str | None:
@@ -119,11 +199,8 @@ class OpenCvFrameGrabber:
         open_timeout_ms: int | None = None,
         read_timeout_ms: int | None = None,
     ) -> None:
-        if cv2 is None:
-            raise RuntimeError(
-                "OpenCV (cv2) is required for camera processing. Install with: "
-                "`uv pip install opencv-python-headless` (recommended) or `uv pip install opencv-python` (then restart Toposync)."
-            )
+        if not _opencv_capture_available():
+            _raise_opencv_capture_unavailable()
 
         self.original_rtsp_url = rtsp_url
         self.rtsp_url = rtsp_url
@@ -161,11 +238,8 @@ class OpenCvFrameGrabber:
         self.thread = threading.Thread(target=self._reader_loop, daemon=True)
 
     def _open_capture(self, url: str) -> Any:
-        if cv2 is None:
-            raise RuntimeError(
-                "OpenCV (cv2) is required for camera processing. Install with: "
-                "`uv pip install opencv-python-headless` (recommended) or `uv pip install opencv-python` (then restart Toposync)."
-            )
+        if not _opencv_capture_available():
+            _raise_opencv_capture_unavailable()
 
         cap = cv2.VideoCapture()
 
@@ -409,6 +483,12 @@ class FfmpegFrameGrabber:
         ffmpeg_path = shutil.which("ffmpeg")
         if ffmpeg_path is None:
             raise RuntimeError("ffmpeg is required for the ffmpeg capture backend, but was not found in PATH.")
+        if not _jpeg_decoder_available():
+            raise RuntimeError(
+                "ffmpeg capture requires a JPEG decoder, but "
+                f"{_jpeg_decoder_missing_detail()}. "
+                "Install OpenCV or Pillow, then restart Toposync."
+            )
 
         self._ffmpeg_path = ffmpeg_path
         self.original_rtsp_url = rtsp_url
@@ -626,14 +706,12 @@ class FfmpegFrameGrabber:
                 jpg = bytes(buffer[start : end + 2])
                 del buffer[: end + 2]
 
-                try:
-                    arr = np.frombuffer(jpg, dtype=np.uint8)
-                    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR) if cv2 is not None else None
-                except Exception:
-                    frame = None
+                frame = _decode_jpeg_frame(jpg)
 
                 if frame is None:
                     self._decode_failures += 1
+                    if self._last_error is None and not _jpeg_decoder_available():
+                        self._last_error = _jpeg_decoder_missing_detail()
                     continue
 
                 self._frames_captured += 1
@@ -678,7 +756,8 @@ class FrameGrabber:
         last_error: Exception | None = None
         for candidate in preferred:
             if candidate == "opencv":
-                if cv2 is None:
+                if not _opencv_capture_available():
+                    last_error = RuntimeError(_opencv_missing_detail("VideoCapture"))
                     continue
                 try:
                     self._backend = OpenCvFrameGrabber(

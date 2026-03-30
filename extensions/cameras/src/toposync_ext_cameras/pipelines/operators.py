@@ -44,6 +44,13 @@ from ..settings import get_camera_device, get_primary_video_channel, normalize_c
 from .postprocess import register_camera_postprocess_operators
 
 
+def _exception_detail(exc: Exception) -> str:
+    detail = str(exc).strip()
+    if detail:
+        return detail
+    return exc.__class__.__name__
+
+
 def _camera_hub_key(*, camera_id: str, rtsp_url: str, backend: str) -> str:
     cid = str(camera_id or "").strip()
     backend_key = str(backend or "").strip().lower() or "auto"
@@ -851,7 +858,8 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             )
             self._last_start_error = (
                 "Camera capture startup failed "
-                f"(camera_id={resolved.camera_id or '-'} path={transport_path} backend={selected_backend}): {exc}."
+                f"(camera_id={resolved.camera_id or '-'} path={transport_path} backend={selected_backend}): "
+                f"{_exception_detail(exc)}."
                 f"{direct_note}{backend_note}"
             )
             raise _CameraSourceTransientError(self._last_start_error) from exc

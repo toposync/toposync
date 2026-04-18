@@ -1,4 +1,4 @@
-import type { TopoSyncHost } from "@toposync/plugin-api";
+import { resolveToposyncUrl, type TopoSyncHost } from "@toposync/plugin-api";
 
 declare const __webpack_init_sharing__: (scope: string) => Promise<void>;
 declare const __webpack_share_scopes__: { default: unknown };
@@ -15,7 +15,7 @@ function loadRemoteEntry(remoteEntryUrl: string): Promise<void> {
 
   const p = new Promise<void>((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = remoteEntryUrl;
+    script.src = resolveToposyncUrl(remoteEntryUrl);
     script.type = "text/javascript";
     script.async = true;
     script.onload = () => resolve();

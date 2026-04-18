@@ -1,4 +1,5 @@
 import React from "react";
+import { resolveToposyncUrl } from "@toposync/plugin-api";
 
 import type {
   Notification,
@@ -65,7 +66,7 @@ function resolveArtifacts(payload: Record<string, unknown>): Record<string, stri
 }
 
 function toFileUrl(relPath: string): string {
-  return `/files/${encodeURI(relPath)}`;
+  return resolveToposyncUrl(`/files/${encodeURI(relPath)}`);
 }
 
 function resolveThumbnailFromArtifacts(artifacts: Record<string, string>): { artifactName: string; url: string } | null {

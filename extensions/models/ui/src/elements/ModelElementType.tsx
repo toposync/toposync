@@ -1,6 +1,6 @@
 import React, { useMemo } from "react";
 
-import type { CompositionElement, CompositionElementPatch, ElementType, HostI18n } from "@toposync/plugin-api";
+import { resolveToposyncUrl, type CompositionElement, type CompositionElementPatch, type ElementType, type HostI18n } from "@toposync/plugin-api";
 
 import { MAXIMUM_MODEL_SCALE, MINIMUM_MODEL_SCALE, MODEL_ELEMENT_TYPE_ID } from "../constants";
 import { clamp, readNumber, readScale, readString, readVector3 } from "../parsing";
@@ -14,7 +14,7 @@ export function createModelElementType(i18n: HostI18n): ElementType {
     const dir = readString((element.props as any).dir, "");
     const preview = readString((element.props as any).preview, "");
     if (!dir || !preview) return null;
-    return `/files/${encodeURIComponent(dir)}/${encodeURIComponent(preview)}`;
+    return resolveToposyncUrl(`/files/${encodeURIComponent(dir)}/${encodeURIComponent(preview)}`);
   }
 
   return {
@@ -127,7 +127,9 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
   const heightMeters = readNumber((element.position as any).y, 0);
 
   const previewUrl =
-    directory && previewFilename ? `/files/${encodeURIComponent(directory)}/${encodeURIComponent(previewFilename)}` : "";
+    directory && previewFilename
+      ? resolveToposyncUrl(`/files/${encodeURIComponent(directory)}/${encodeURIComponent(previewFilename)}`)
+      : "";
   const finalSize = useMemo(
     () => ({ x: size.x * scale, y: size.y * scale, z: size.z * scale }),
     [scale, size.x, size.y, size.z],

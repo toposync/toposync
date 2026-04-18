@@ -1,5 +1,6 @@
 import type * as ThreeTypes from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { resolveToposyncUrl } from "@toposync/plugin-api";
 
 import { readNumber, readScale, readString, readVector3 } from "../parsing";
 import type { Vector3 } from "../types";
@@ -154,7 +155,7 @@ export function createGltfModelRuntime(
 
     group.scale.setScalar(scale);
 
-    const url = dir && model ? `/files/${encodeURIComponent(dir)}/${encodeURIComponent(model)}` : "";
+    const url = dir && model ? resolveToposyncUrl(`/files/${encodeURIComponent(dir)}/${encodeURIComponent(model)}`) : "";
     if (!url) {
       lastUrl = "";
       if (current) {

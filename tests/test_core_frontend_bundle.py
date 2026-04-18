@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from fastapi.testclient import TestClient
 import pytest
 
 import toposync.app as app_mod
+from toposync.app import create_app
 
 
 def test_resolve_frontend_dir_uses_bundled_frontend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -43,3 +45,25 @@ def test_resolve_frontend_dir_prefers_override_over_bundled(
     monkeypatch.setattr(app_mod, "__file__", str(app_file))
 
     assert app_mod._resolve_frontend_dir() == override_dir.resolve()
+
+
+def test_frontend_root_injects_ingress_base_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    frontend_dir = tmp_path / "frontend-dist"
+    frontend_dir.mkdir(parents=True)
+    (frontend_dir / "index.html").write_text(
+        '<!doctype html><html><head><title>Toposync</title><script src="/main.js"></script></head><body></body></html>',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TOPOSYNC_FRONTEND_DIR", str(frontend_dir))
+    monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "bypass")
+    monkeypatch.delenv("TOPOSYNC_NO_FRONTEND", raising=False)
+
+    with TestClient(create_app()) as client:
+        response = client.get("/", headers={"accept": "text/html", "x-ingress-path": "/api/hassio_ingress/test123"})
+
+    assert response.status_code == 200
+    body = response.text
+    assert 'window.__TOPOSYNC_PUBLIC_BASE_PATH__="/api/hassio_ingress/test123"' in body
+    assert 'src="/api/hassio_ingress/test123/main.js"' in body

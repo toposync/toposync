@@ -271,3 +271,6 @@ export type TopoSyncHost = {
   i18n: HostI18n;
   ui: HostUi;
 };
+
+export function getToposyncBasePath(): string;
+export function resolveToposyncUrl(url: string): string;

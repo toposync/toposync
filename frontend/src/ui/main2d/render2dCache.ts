@@ -1,4 +1,4 @@
-import type { CompositionElement, Element3DInstance, ElementType, ViewSettings } from "@toposync/plugin-api";
+import { resolveToposyncUrl, type CompositionElement, type Element3DInstance, type ElementType, type ViewSettings } from "@toposync/plugin-api";
 import * as THREE from "three";
 
 const RENDER_DIR_ID = "render2d";
@@ -503,7 +503,8 @@ async function uploadBlob(dir: string, filename: string, blob: Blob): Promise<Up
   form.append("file", blob, filename);
   const response = await fetch("/api/files/upload", { method: "POST", body: form });
   if (!response.ok) throw new Error(`Failed to upload ${filename}: ${response.status}`);
-  return response.json();
+  const data = (await response.json()) as UploadFileResponse;
+  return { ...data, url: resolveToposyncUrl(data.url) };
 }
 
 async function dataUrlToBlob(dataUrl: string): Promise<Blob> {

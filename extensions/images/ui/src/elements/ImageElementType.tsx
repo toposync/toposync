@@ -1,7 +1,7 @@
 import React from "react";
 import type * as ThreeTypes from "three";
 
-import type { CompositionElement, ElementType, HostI18n } from "@toposync/plugin-api";
+import { resolveToposyncUrl, type CompositionElement, type ElementType, type HostI18n } from "@toposync/plugin-api";
 
 import {
   DEFAULT_IMAGE_OPACITY_OVERLAY,
@@ -29,7 +29,7 @@ type ImageProps = {
 };
 
 function imageUrl(props: { dir: string; file: string }): string {
-  return `/files/${encodeURIComponent(props.dir)}/${encodeURIComponent(props.file)}`;
+  return resolveToposyncUrl(`/files/${encodeURIComponent(props.dir)}/${encodeURIComponent(props.file)}`);
 }
 
 function parseImageProps(props: Record<string, unknown>): ImageProps {

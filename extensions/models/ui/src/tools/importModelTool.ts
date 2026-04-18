@@ -1,4 +1,4 @@
-import type { EditorTool, HostI18n, PlanePoint } from "@toposync/plugin-api";
+import { resolveToposyncUrl, type EditorTool, type HostI18n, type PlanePoint } from "@toposync/plugin-api";
 
 import { uploadToFilesDir } from "../api/filesApi";
 import { debugLog } from "../debug";
@@ -81,7 +81,7 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
           await uploadToFilesDir(file, { dir, filename: file.name });
         }
 
-        const modelUrl = `/files/${encodeURIComponent(dir)}/${encodeURIComponent(entryName)}`;
+        const modelUrl = resolveToposyncUrl(`/files/${encodeURIComponent(dir)}/${encodeURIComponent(entryName)}`);
 
         activityState = "processing";
         invalidateViewport();

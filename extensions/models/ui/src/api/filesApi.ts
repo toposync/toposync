@@ -1,3 +1,4 @@
+import { resolveToposyncUrl } from "@toposync/plugin-api";
 import { debugLog } from "../debug";
 import type { UploadFileResponse } from "../types";
 
@@ -18,6 +19,6 @@ export async function uploadToFilesDir(
   const response = await fetch("/api/files/upload", { method: "POST", body: form });
   debugLog("[models:tool] upload response", { status: response.status, ok: response.ok });
   if (!response.ok) throw new Error(`Upload failed: ${response.status}`);
-  return response.json();
+  const data = (await response.json()) as UploadFileResponse;
+  return { ...data, url: resolveToposyncUrl(data.url) };
 }
-

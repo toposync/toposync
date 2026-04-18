@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 
-import type { CompositionElement, CompositionElementPatch, HostI18n } from "@toposync/plugin-api";
+import { resolveToposyncUrl, type CompositionElement, type CompositionElementPatch, type HostI18n } from "@toposync/plugin-api";
 
 import { uploadToFilesDir } from "../api/filesApi";
 import { DEFAULT_IMAGE_WIDTH_METERS, IMAGE_LAYER_Y } from "../constants";
@@ -38,7 +38,7 @@ export function ImageEditorModal({ element, update, remove, close, i18n }: Props
 
   const rotationDeg = useMemo(() => (element.rotation.y * 180) / Math.PI, [element.rotation.y]);
 
-  const imageUrl = dir && file ? `/files/${encodeURIComponent(dir)}/${encodeURIComponent(file)}` : "";
+  const imageUrl = dir && file ? resolveToposyncUrl(`/files/${encodeURIComponent(dir)}/${encodeURIComponent(file)}`) : "";
   const pixelWidth = readNumber(props["pixel_width"], NaN);
   const pixelHeight = readNumber(props["pixel_height"], NaN);
 

@@ -145,6 +145,8 @@ def _parse_mode(raw: str | None) -> str:
     mode = str(raw or "").strip().lower()
     if mode in {"bypass", "off", "disabled"}:
         return "bypass"
+    if mode in {"ingress", "ha-ingress", "ha_ingress", "home-assistant-ingress", "home_assistant_ingress"}:
+        return "ingress"
     return "enforced"
 
 
@@ -196,6 +198,23 @@ def _parse_json_list(raw: str) -> list[str]:
             continue
         out.append(text)
     return out
+
+
+def _parse_text_list_env(raw: str | None, default: list[str] | None = None) -> list[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return list(default or [])
+    if text.startswith("["):
+        parsed = _parse_json_list(text)
+        if parsed:
+            return parsed
+    out: list[str] = []
+    for item in text.split(","):
+        value = str(item or "").strip()
+        if not value:
+            continue
+        out.append(value)
+    return out or list(default or [])
 
 
 def _normalize_selector(selector: str) -> str:
@@ -1100,6 +1119,31 @@ class AuthRuntime:
         )
         self.store = AuthStore(data_dir / "auth" / "auth.sqlite3")
         self._access_secret = self.store.get_or_create_secret("access_secret")
+        self._ingress_user_id_header = str(
+            os.getenv("TOPOSYNC_AUTH_INGRESS_USER_ID_HEADER") or "x-remote-user-id"
+        ).strip().lower()
+        self._ingress_username_header = str(
+            os.getenv("TOPOSYNC_AUTH_INGRESS_USERNAME_HEADER") or "x-remote-user-name"
+        ).strip().lower()
+        self._ingress_display_name_header = str(
+            os.getenv("TOPOSYNC_AUTH_INGRESS_DISPLAY_NAME_HEADER") or "x-remote-user-display-name"
+        ).strip().lower()
+        ingress_role_raw = str(os.getenv("TOPOSYNC_AUTH_INGRESS_ROLE") or "owner").strip().lower()
+        self._ingress_role: RoleName = (
+            ingress_role_raw
+            if ingress_role_raw in {"owner", "admin", "member", "guest", "service"}
+            else "owner"
+        )
+        self._ingress_trusted_ips = set(
+            _parse_text_list_env(
+                os.getenv("TOPOSYNC_AUTH_INGRESS_TRUSTED_IPS"),
+                default=["127.0.0.1", "::1", "172.30.32.2", "testclient"],
+            )
+        )
+        self._ingress_enforce_trusted = _parse_bool_env(
+            os.getenv("TOPOSYNC_AUTH_INGRESS_ENFORCE_TRUSTED"),
+            default=True,
+        )
         # Optional credentials for service-to-service authentication (e.g. extension sync).
         self._streaming_sync_username = str(os.getenv("TOPOSYNC_STREAMING_SYNC_USERNAME") or "").strip()
         self._streaming_sync_password = str(os.getenv("TOPOSYNC_STREAMING_SYNC_PASSWORD") or "").strip()
@@ -1115,6 +1159,8 @@ class AuthRuntime:
         )
 
     def requires_setup(self) -> bool:
+        if self.mode == "ingress":
+            return False
         return self.store.count_users() == 0
 
     def _sign_access_payload(self, payload: dict[str, Any]) -> str:
@@ -1220,10 +1266,73 @@ class AuthRuntime:
         username, password = decoded.split(":", 1)
         return username, password
 
+    def _request_client_host(self, request: Request) -> str:
+        try:
+            host = str(getattr(request.client, "host", "") or "").strip()
+        except Exception:
+            host = ""
+        return host
+
+    def _is_trusted_ingress_request(self, request: Request) -> bool:
+        host = self._request_client_host(request)
+        if not host:
+            return False
+        if "*" in self._ingress_trusted_ips:
+            return True
+        return host in self._ingress_trusted_ips
+
+    def _principal_from_ingress_headers(self, request: Request) -> AuthPrincipal | None:
+        if not self._is_trusted_ingress_request(request):
+            return None
+
+        headers = request.headers
+        user_id = str(headers.get(self._ingress_user_id_header) or "").strip()
+        username = str(headers.get(self._ingress_username_header) or "").strip()
+        display_name = str(headers.get(self._ingress_display_name_header) or "").strip()
+
+        if not user_id and not username:
+            return None
+
+        normalized_user_id = user_id or username
+        normalized_username = username or user_id or "home-assistant"
+        normalized_display_name = display_name or normalized_username
+        return AuthPrincipal(
+            user_id=normalized_user_id,
+            username=normalized_username,
+            display_name=normalized_display_name,
+            role=self._ingress_role,
+            bypass=False,
+        )
+
+    def is_trusted_ingress_request(self, request: Request) -> bool:
+        return self._is_trusted_ingress_request(request)
+
+    def ingress_network_guard_enabled(self) -> bool:
+        return self.mode == "ingress" and self._ingress_enforce_trusted
+
+    def serialize_ingress_principal(self, principal: AuthPrincipal) -> dict[str, Any]:
+        return {
+            "id": principal.user_id,
+            "username": principal.username,
+            "display_name": principal.display_name,
+            "role": principal.role,
+            "sessions": 0,
+            "grants": [],
+            "created_at": 0.0,
+            "updated_at": 0.0,
+            "is_disabled": False,
+        }
+
     def resolve_request(self, request: Request) -> AuthContext:
         if self.mode == "bypass":
             return AuthContext(
                 principal=self.bypass_principal, mode=self.mode, requires_setup=False
+            )
+        if self.mode == "ingress":
+            return AuthContext(
+                principal=self._principal_from_ingress_headers(request),
+                mode=self.mode,
+                requires_setup=False,
             )
 
         requires_setup = self.requires_setup()
@@ -1335,6 +1444,8 @@ class AuthRuntime:
     ) -> tuple[AuthPrincipal, str, str]:
         if self.mode == "bypass":
             raise HTTPException(status_code=400, detail="Login is disabled in bypass mode")
+        if self.mode == "ingress":
+            raise HTTPException(status_code=400, detail="Login is disabled in ingress mode")
         user = self.store.verify_credentials(username, password)
         if user is None:
             raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -1373,6 +1484,8 @@ class AuthRuntime:
     def setup_owner(self, *, username: str, display_name: str, password: str) -> AuthUser:
         if self.mode == "bypass":
             raise HTTPException(status_code=400, detail="Setup is disabled in bypass mode")
+        if self.mode == "ingress":
+            raise HTTPException(status_code=400, detail="Setup is disabled in ingress mode")
         if not self.requires_setup():
             raise HTTPException(status_code=409, detail="Auth is already configured")
         try:

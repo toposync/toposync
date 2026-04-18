@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Awaitable, Callable, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.responses import StreamingResponse
 from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -730,6 +730,38 @@ def _resolve_frontend_dir() -> Path | None:
     return None
 
 
+def _normalize_public_base_path(value: str | None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "/"
+    if not text.startswith("/"):
+        text = "/" + text
+    text = text.rstrip("/")
+    return text or "/"
+
+
+def _public_base_path_for_request(request: Request) -> str:
+    return _normalize_public_base_path(request.headers.get("x-ingress-path"))
+
+
+def _render_frontend_index(index_path: Path, request: Request) -> HTMLResponse:
+    base_path = _public_base_path_for_request(request)
+    html = index_path.read_text(encoding="utf-8")
+    runtime_script = (
+        "<script>"
+        f"window.__TOPOSYNC_PUBLIC_BASE_PATH__={json.dumps(base_path, ensure_ascii=False)};"
+        "</script>"
+    )
+    if base_path != "/":
+        html = html.replace(' src="/', f' src="{base_path}/')
+        html = html.replace(' href="/', f' href="{base_path}/')
+    if "<head>" in html:
+        html = html.replace("<head>", f"<head>{runtime_script}", 1)
+    else:
+        html = runtime_script + html
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     store = DeviceStore()
@@ -852,7 +884,7 @@ async def _lifespan(app: FastAPI):
     # is loaded.
     frontend_dir = getattr(app.state, "frontend_dir", None)
     if frontend_dir:
-        app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
+        app.mount("/", StaticFiles(directory=str(frontend_dir), html=False), name="frontend")
 
     try:
         yield
@@ -933,6 +965,10 @@ def create_app() -> FastAPI:
         is_protected_file_route = path.startswith("/files/")
         is_protected_extension_asset = path.startswith("/extensions/")
 
+        if auth.ingress_network_guard_enabled() and path != "/api/health":
+            if not auth.is_trusted_ingress_request(request):
+                return JSONResponse(status_code=403, content={"detail": "Ingress access is restricted to Home Assistant"})
+
         if auth.mode != "bypass":
             if context.requires_setup and (is_api or is_protected_file_route or is_protected_extension_asset):
                 setup_allowed = is_setup_api and request.method == "POST"
@@ -1008,6 +1044,8 @@ def create_app() -> FastAPI:
                 updated_at=0.0,
                 is_disabled=False,
             )
+        if principal is not None and not principal.bypass and user is None and auth.mode == "ingress":
+            user = AuthUserPublic.model_validate(auth.serialize_ingress_principal(principal))
         return AuthStatusResponse(
             mode=auth.mode,
             requires_setup=context.requires_setup,
@@ -3399,6 +3437,9 @@ def create_app() -> FastAPI:
             request: Request,
             call_next: Callable[[Request], Awaitable[Response]],
         ) -> Response:
+            if request.method in {"GET", "HEAD"} and request.url.path in {"/", "/index.html"}:
+                return _render_frontend_index(index_path, request)
+
             response = await call_next(request)
             if response.status_code != 404:
                 return response
@@ -3414,6 +3455,6 @@ def create_app() -> FastAPI:
             if "text/html" not in accept:
                 return response
 
-            return FileResponse(index_path, media_type="text/html", headers={"Cache-Control": "no-store"})
+            return _render_frontend_index(index_path, request)
 
     return app

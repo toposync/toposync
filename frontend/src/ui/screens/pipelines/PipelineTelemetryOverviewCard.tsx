@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import Select, { type MultiValue } from "react-select";
+import { resolveToposyncUrl } from "@toposync/plugin-api";
 
 import {
   getPipelineTelemetryImageMarkers,
@@ -801,13 +802,13 @@ export function PipelineTelemetryOverviewCard({
                 <a
                   key={markerKey}
                   className="pipelinesTelemetryClusterTile"
-                  href={`/files/${encodeURI(String(marker.rel_path || ""))}`}
+                  href={resolveToposyncUrl(`/files/${encodeURI(String(marker.rel_path || ""))}`)}
                   target={pinnedClusterKey ? "_blank" : undefined}
                   rel={pinnedClusterKey ? "noreferrer" : undefined}
                   title={timeFormatter.format(new Date(Number(marker.ts || 0) * 1000))}
                 >
                   <img
-                    src={`/files/${encodeURI(String(marker.rel_path || ""))}`}
+                    src={resolveToposyncUrl(`/files/${encodeURI(String(marker.rel_path || ""))}`)}
                     alt="marker preview"
                     className="pipelinesTelemetryClusterTileImage"
                     loading="lazy"

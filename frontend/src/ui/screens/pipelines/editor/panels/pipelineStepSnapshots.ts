@@ -3,6 +3,7 @@ import type {
   PipelineOperatorDefinition,
   PipelinePreviewFrameRequest,
 } from "../../../../../util/api";
+import { resolveToposyncUrl } from "@toposync/plugin-api";
 import type { InteractiveStep } from "../../types";
 import { buildGraphFromInteractiveSteps, isRecord, safeJsonParse } from "../../utils";
 
@@ -64,7 +65,7 @@ export function buildPipelineStepSnapshotRelPath(key: PipelineStepSnapshotKey): 
 export function buildPipelineStepSnapshotUrl(key: PipelineStepSnapshotKey, nonce?: number): string {
   const relPath = buildPipelineStepSnapshotRelPath(key);
   const query = nonce ? `?t=${encodeURIComponent(String(nonce))}` : "";
-  return `/files/${relPath}${query}`;
+  return resolveToposyncUrl(`/files/${relPath}${query}`);
 }
 
 export function buildPipelineStepPreviewRequest(

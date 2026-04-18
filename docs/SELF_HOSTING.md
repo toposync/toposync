@@ -18,6 +18,20 @@ Se você estiver servindo o Toposync atrás de um reverse proxy com TLS (Nginx/C
 
 Pré‑requisitos: Docker + Docker Compose.
 
+O Docker agora é organizado em:
+
+- uma imagem CPU de produção (`runtime-cpu`)
+- uma variante CUDA separada (`runtime-cuda`)
+- extras opcionais por build args, sem multiplicar imagens first-party para cada combinação pequena
+
+No runtime de produção, o `toposync-core` já leva o frontend host embutido. Isso significa que, no container final, a UI e a API são atendidas pelo mesmo processo e pela mesma porta:
+
+- `/` serve a UI
+- `/api/*` serve a API
+- `/extensions/*` continua exposto pelo mesmo backend
+
+### CPU padrão
+
 1) Copie `docker-compose.yml` e `Dockerfile` (na raiz do repo) para uma pasta no servidor, ou clone o repo.
 2) Suba:
 
@@ -29,14 +43,89 @@ docker compose up -d --build
 
 - `http://<ip-do-servidor>:8000`
 
-**Persistência**: o diretório `./toposync-data/` é montado no container como `/data` e guarda `config.json`, uploads e notificações.
+**Persistência**: o diretório `./toposync-data/` é montado no container como `/data` e guarda `config.json`, uploads, notificações e o cache/runtime do MediaMTX quando o stack de streaming estiver ativo.
+
+Verificações rápidas:
+
+```bash
+curl -I http://localhost:8000/
+curl http://localhost:8000/api/health
+curl http://localhost:8000/api/extensions
+```
+
+O esperado é:
+
+- `/` responder `200` com `Content-Type: text/html`
+- `/api/health` responder `200`
+- `/api/extensions` listar as extensões carregadas no ambiente
+
+### Ativar extras na mesma imagem CPU
+
+Extras first-party podem ser ativados por build args.
+
+Exemplo: streaming na imagem CPU:
+
+```bash
+TOPOSYNC_APT_PACKAGES=ffmpeg \
+TOPOSYNC_EXTRA_WHEELS="/wheelhouse/toposync_ext_streaming-*.whl" \
+docker compose up -d --build
+```
+
+Nesse caso:
+
+- `ffmpeg` entra como dependência de sistema da imagem
+- `toposync-ext-streaming` entra como wheel adicional no mesmo container
+- o runtime do MediaMTX passa a persistir em `/data/runtime`
+
+Para uma extensão extra distribuída por pacote Python:
+
+```bash
+TOPOSYNC_EXTRA_PIP_PACKAGES="toposync-ext-<nome>" \
+docker compose up -d --build
+```
+
+### CUDA (Linux + NVIDIA)
+
+Para GPU NVIDIA em container, use o override CUDA:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build
+```
+
+Para CUDA + streaming:
+
+```bash
+TOPOSYNC_APT_PACKAGES=ffmpeg \
+TOPOSYNC_EXTRA_WHEELS="/wheelhouse/toposync_ext_streaming-*.whl" \
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build
+```
+
+Pré‑requisitos do host para CUDA:
+
+- Linux com GPU NVIDIA
+- driver NVIDIA instalado no host
+- NVIDIA Container Toolkit / suporte a GPU no Docker
+
+Referências:
+
+- Docker Compose GPU support: https://docs.docker.com/compose/how-tos/gpu-support/
+- ONNX Runtime CUDA EP requirements: https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html
+
+Observação: para Windows, a recomendação do projeto continua sendo instalação nativa com `toposync-vision-directml`, não container CUDA.
 
 ### Instalar extensões no Docker
 
-Extensões são pacotes Python com entry point em `toposync.extensions`. Para adicionar/remover:
+Extensões são pacotes Python com entry point em `toposync.extensions`.
 
-- **Recomendado (imagem customizada)**: edite o `Dockerfile` e adicione `RUN pip install <pacote>` (depois do `uv sync`), depois rode `docker compose up -d --build`.
-- **Rápido (em runtime)**: `docker compose exec toposync pip install <pacote>` e reinicie o container (não persiste se recriar a imagem).
+Para first-party já presentes neste repo, a forma recomendada é habilitar o wheel local via build args.
+
+Para pacotes extras publicados separadamente, use:
+
+- `TOPOSYNC_EXTRA_PIP_PACKAGES="toposync-ext-<nome>"`
+
+Depois rode `docker compose up -d --build`.
+
+Evite instalar extensões manualmente dentro do container em runtime, porque isso não fica reprodutível quando a imagem for recriada.
 
 Verificação rápida:
 
@@ -44,11 +133,29 @@ Verificação rápida:
 curl http://localhost:8000/api/extensions
 ```
 
+## O que foi validado neste fluxo
+
+Os cenários abaixo já foram validados no ambiente de build do projeto:
+
+- install do bundle padrão `toposync` a partir dos wheels de release locais
+- startup do app instalado com frontend embutido respondendo em `/`
+- healthcheck em `/api/health`
+- install do extra `toposync-ext-streaming` no mesmo ambiente
+- carregamento da extensão `com.toposync.streaming` em `/api/extensions`
+
+Limite conhecido:
+
+- a variante CUDA foi validada por metadata e dependências do wheel, mas não por execução real neste ambiente de desenvolvimento, porque o host de validação não tinha daemon Docker ativo nem GPU NVIDIA disponível
+
 ## Opção B) Python (uv/pip)
 
 Serve para rodar direto em uma VM/host Linux/macOS.
 
 Pré‑requisitos: Python 3.11+ e `uv`.
+
+Se você estiver no Windows, veja o guia dedicado:
+
+- [Instalação no Windows](/Users/c/Projects/toposync-2/docs/WINDOWS.md)
 
 ### 1) Instalar o backend
 

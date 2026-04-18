@@ -1,4 +1,6 @@
-import { resolveToposyncUrl } from "@toposync/plugin-api";
+// Import the helper directly from package source so this file can run before
+// webpack module sharing is initialized in development.
+import { resolveToposyncUrl } from "../../packages/plugin-api/basePath";
 
 declare global {
   interface Window {

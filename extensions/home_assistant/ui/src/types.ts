@@ -23,6 +23,8 @@ export type HomeAssistantServerPublic = {
   id: string;
   name: string;
   host: string;
+  managed: boolean;
+  source: "manual" | "supervisor";
 };
 
 export type HomeAssistantRegistryEntity = {

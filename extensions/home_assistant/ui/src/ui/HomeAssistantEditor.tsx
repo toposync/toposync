@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import Select from "react-select";
 import type { FilterOptionOption, GroupBase, StylesConfig } from "react-select";
 
-import type { CompositionElement, CompositionElementPatch, HostI18n } from "@toposync/plugin-api";
+import { resolveToposyncUrl, type CompositionElement, type CompositionElementPatch, type HostI18n } from "@toposync/plugin-api";
 
 import {
   BUILT_IN_FONT_AWESOME_SOLID_SVG_BY_NAME,
@@ -93,7 +93,9 @@ export function HomeAssistantEditor({
   const modelPreviewFile = readModelString(model3d.preview, "").trim();
   const modelScale = readModelScale(model3d.scale, 1);
   const modelPreviewUrl =
-    modelDir && modelPreviewFile ? `/files/${encodeURIComponent(modelDir)}/${encodeURIComponent(modelPreviewFile)}` : "";
+    modelDir && modelPreviewFile
+      ? resolveToposyncUrl(`/files/${encodeURIComponent(modelDir)}/${encodeURIComponent(modelPreviewFile)}`)
+      : "";
 
   const [servers, setServers] = useState<HomeAssistantServerPublic[]>([]);
   const [registry, setRegistry] = useState<HomeAssistantRegistryResponse | null>(null);
@@ -488,7 +490,7 @@ export function HomeAssistantEditor({
         await uploadToFilesDir(file, { dir, filename: file.name });
       }
 
-      const modelUrl = `/files/${encodeURIComponent(dir)}/${encodeURIComponent(entryName)}`;
+      const modelUrl = resolveToposyncUrl(`/files/${encodeURIComponent(dir)}/${encodeURIComponent(entryName)}`);
 
       setModelBusy("processing");
       const preview = await generateModelTopDownPreview(modelUrl);

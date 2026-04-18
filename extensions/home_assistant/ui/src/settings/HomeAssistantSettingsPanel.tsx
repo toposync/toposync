@@ -3,13 +3,14 @@ import React, { useEffect, useMemo, useState } from "react";
 import type { SettingsPanel, TopoSyncHost } from "@toposync/plugin-api";
 
 import { HOME_ASSISTANT_EXTENSION_ID } from "../constants";
+import { fetchHomeAssistantServers } from "../api/homeAssistantApi";
 import {
   createUniqueId,
   isValidUrl,
   readHomeAssistantNotificationRoutes,
   readHomeAssistantServers,
 } from "../parsing";
-import type { HomeAssistantNotificationRoute, HomeAssistantServer } from "../types";
+import type { HomeAssistantNotificationRoute, HomeAssistantServer, HomeAssistantServerPublic } from "../types";
 
 export function createHomeAssistantSettingsPanel(): SettingsPanel {
   return {
@@ -50,7 +51,7 @@ function formatNotificationTypesInput(value: string[]): string {
   return value.join(", ");
 }
 
-function serverLabel(server: HomeAssistantServer): string {
+function serverLabel(server: { id: string; name: string; host: string }): string {
   return server.name.trim() || server.host.trim() || server.id;
 }
 
@@ -58,7 +59,45 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
   const { t } = i18n.useI18n();
   const servers = useMemo(() => readHomeAssistantServers(settings), [settings]);
   const routes = useMemo(() => readHomeAssistantNotificationRoutes(settings), [settings]);
-  const serversById = useMemo(() => new Map(servers.map((server) => [server.id, server])), [servers]);
+  const [backendServers, setBackendServers] = useState<HomeAssistantServerPublic[]>([]);
+  const [backendServersError, setBackendServersError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchHomeAssistantServers()
+      .then((next) => {
+        if (cancelled) return;
+        setBackendServers(Array.isArray(next) ? next : []);
+        setBackendServersError(null);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setBackendServers([]);
+        setBackendServersError(String(error?.message ?? error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const managedServers = useMemo(() => backendServers.filter((server) => server.managed), [backendServers]);
+  const routeServers = useMemo(() => {
+    const combined: Array<{ id: string; name: string; host: string }> = [];
+    const seen = new Set<string>();
+    for (const server of managedServers) {
+      if (seen.has(server.id)) continue;
+      seen.add(server.id);
+      combined.push(server);
+    }
+    for (const server of servers) {
+      if (seen.has(server.id)) continue;
+      seen.add(server.id);
+      combined.push(server);
+    }
+    return combined;
+  }, [managedServers, servers]);
+  const serversById = useMemo(() => new Map(routeServers.map((server) => [server.id, server])), [routeServers]);
+  const supervisorManaged = managedServers.length > 0;
 
   const [serverQuery, setServerQuery] = useState("");
   const [activeServerId, setActiveServerId] = useState<string | null>(null);
@@ -146,7 +185,7 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
           id,
           name: "",
           enabled: true,
-          serverId: servers[0]?.id ?? "",
+          serverId: routeServers[0]?.id ?? "",
           notifyService: "",
           notificationTypes: ["pipelines.event"],
           closeAction: "ignore",
@@ -207,12 +246,50 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
               type="button"
               aria-label={t("ext.home_assistant.settings.add")}
               onClick={addServer}
+              disabled={supervisorManaged}
+              title={
+                supervisorManaged
+                  ? t(
+                      "ext.home_assistant.settings.supervisor_managed_button_disabled",
+                      {},
+                      "Managed by Home Assistant Supervisor",
+                    )
+                  : undefined
+              }
             >
               <i className="fa-solid fa-plus" aria-hidden="true" />
             </button>
           </div>
 
-          {filteredServers.length === 0 ? (
+          {supervisorManaged ? (
+            <div className="card" style={{ marginTop: 10 }}>
+              <div className="cardBody">
+                <div style={{ marginBottom: 10 }}>
+                  {t(
+                    "ext.home_assistant.settings.supervisor_managed",
+                    {},
+                    "This connection is managed by Home Assistant Supervisor. Toposync uses the internal Core API automatically.",
+                  )}
+                </div>
+                <div className="settingsList">
+                  {managedServers.map((server) => (
+                    <div key={server.id} className="choiceItem isSelected">
+                      <div className="settingsListItemRow">
+                        <div className="settingsListItemMain">
+                          <div className="settingsListItemTitle" title={serverLabel(server)}>
+                            {serverLabel(server)}
+                          </div>
+                          <div className="settingsListItemMeta" title={server.host}>
+                            {server.host}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : filteredServers.length === 0 ? (
             <div className="card" style={{ marginTop: 10 }}>
               <div className="cardBody">
                 <div style={{ marginBottom: 10 }}>{t("ext.home_assistant.settings.empty")}</div>
@@ -255,7 +332,17 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
         </div>
 
         <div className="settingsSplitMain">
-          {!activeServer ? (
+          {supervisorManaged ? (
+            <div className="card">
+              <div className="cardBody">
+                {t(
+                  "ext.home_assistant.settings.supervisor_managed_readonly",
+                  {},
+                  "No manual server setup is required in this environment. Notification routes can target the managed Home Assistant connection below.",
+                )}
+              </div>
+            </div>
+          ) : !activeServer ? (
             <div className="card">
               <div className="cardBody">
                 <div style={{ marginBottom: 10 }}>
@@ -366,6 +453,15 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
       <div className="card">
         <div className="cardBody">{t("ext.home_assistant.settings.routes_notice")}</div>
       </div>
+
+      {backendServersError ? (
+        <>
+          <div className="sectionDivider" />
+          <div className="card">
+            <div className="cardBody">{backendServersError}</div>
+          </div>
+        </>
+      ) : null}
 
       <div className="sectionDivider" />
 
@@ -517,7 +613,7 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
                       onChange={(event) => updateRoute(activeRoute.id, { serverId: event.target.value })}
                     >
                       <option value="">{t("ext.home_assistant.settings.missing_route_server", {}, "Server not selected")}</option>
-                      {servers.map((server) => (
+                      {routeServers.map((server) => (
                         <option key={server.id} value={server.id}>
                           {serverLabel(server)}
                         </option>

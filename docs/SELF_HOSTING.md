@@ -113,6 +113,34 @@ Referências:
 
 Observação: para Windows, a recomendação do projeto continua sendo instalação nativa com `toposync-vision-directml`, não container CUDA.
 
+## Opção A.1) Home Assistant add-on
+
+Se o objetivo é rodar o Toposync dentro do ecossistema do Home Assistant, com:
+
+- instalação/distribuição via add-on
+- app na sidebar
+- ingress
+- execução supervisionada
+- acesso interno ao Core API
+
+use a estrutura em [homeassistant-addon/](/Users/c/Projects/toposync-2/homeassistant-addon).
+
+Guia e detalhes:
+
+- [Home Assistant add-on](/Users/c/Projects/toposync-2/docs/HOME_ASSISTANT_ADDON.md)
+
+Resumo do funcionamento:
+
+- o add-on executa o mesmo `toposync serve`
+- frontend e API continuam na mesma porta interna
+- auth passa para modo ingress do Home Assistant
+- a extensão `home_assistant` usa o `SUPERVISOR_TOKEN` e o proxy interno do Core API, sem pedir `host`/`apiKey` manualmente
+
+Observação importante:
+
+- o add-on atual foi fechado no caminho CPU
+- CUDA continua como variante separada futura
+
 ### Instalar extensões no Docker
 
 Extensões são pacotes Python com entry point em `toposync.extensions`.

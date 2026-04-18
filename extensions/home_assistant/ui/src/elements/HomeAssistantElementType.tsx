@@ -1,7 +1,7 @@
 import React from "react";
 import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
 
-import type { CompositionElement, ElementType, HostI18n } from "@toposync/plugin-api";
+import { resolveToposyncUrl, type CompositionElement, type ElementType, type HostI18n } from "@toposync/plugin-api";
 
 import { readScale as readModelScale, readVector3 as readModelVector3 } from "../../../../models/ui/src/parsing";
 import { createGltfModelRuntime } from "../../../../models/ui/src/runtime/gltfModel";
@@ -983,7 +983,8 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
         const modelProps = readRecord(p.model3d);
         const dir = readString(modelProps.dir).trim();
         const preview = readString(modelProps.preview).trim();
-        const previewUrl = dir && preview ? `/files/${encodeURIComponent(dir)}/${encodeURIComponent(preview)}` : "";
+        const previewUrl =
+          dir && preview ? resolveToposyncUrl(`/files/${encodeURIComponent(dir)}/${encodeURIComponent(preview)}`) : "";
         const size = readModelVector3(modelProps.size, { x: 1, y: 1, z: 1 });
         const scale = readModelScale(modelProps.scale, 1);
         const rotationY = element.rotation?.y ?? 0;

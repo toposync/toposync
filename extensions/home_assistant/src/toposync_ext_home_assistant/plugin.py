@@ -13,31 +13,18 @@ import websockets
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
-from urllib.parse import urlparse
 
 from toposync.extensions import BaseExtension, register_extension_shutdown_callback
 from toposync.runtime.event_bus import EventBus
 from toposync.runtime.config_store import ConfigStore
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.services import ServiceRegistry
+from .connection import HomeAssistantServer, HomeAssistantServerPublic, resolve_home_assistant_servers
 from .pipelines import register_home_assistant_pipeline_operators
 
 
 EXTENSION_ID = "com.toposync.home_assistant"
 logger = logging.getLogger("toposync.ext.home_assistant")
-
-
-class HomeAssistantServer(BaseModel):
-    id: str
-    name: str = ""
-    host: str
-    apiKey: str
-
-
-class HomeAssistantServerPublic(BaseModel):
-    id: str
-    name: str = ""
-    host: str
 
 
 class RegistryResponse(BaseModel):
@@ -78,24 +65,6 @@ class HomeAssistantNotificationRoute(BaseModel):
     notificationTypes: list[str] = Field(default_factory=lambda: ["pipelines.event"])
     closeAction: Literal["ignore", "clear"] = "ignore"
     sendUpdates: bool = False
-
-
-def _normalize_host(host: str) -> str:
-    value = host.strip().rstrip("/")
-    if not value:
-        raise ValueError("Empty host")
-    u = urlparse(value)
-    if u.scheme not in {"http", "https"} or not u.netloc:
-        raise ValueError("Invalid host")
-    return value
-
-
-def _ws_url(host: str) -> str:
-    u = urlparse(host)
-    scheme = "wss" if u.scheme == "https" else "ws"
-    return u._replace(scheme=scheme, path="/api/websocket", params="", query="", fragment="").geturl()
-
-
 @dataclass(slots=True)
 class _RegistryCacheEntry:
     at: float
@@ -212,7 +181,7 @@ class HomeAssistantExtension(BaseExtension):
         self._state_lock = asyncio.Lock()
         self._state_tracked: dict[str, set[str]] = {}
         self._state_stop: dict[str, asyncio.Event] = {}
-        self._state_server_sig: dict[str, tuple[str, str]] = {}
+        self._state_server_sig: dict[str, tuple[str, str, str]] = {}
         self._notification_bridge_task: asyncio.Task[None] | None = None
         self._notification_bridge_queue: asyncio.Queue[dict[str, Any]] | None = None
         self._notification_broadcaster: Any = None
@@ -240,32 +209,8 @@ class HomeAssistantExtension(BaseExtension):
         async def list_servers() -> list[HomeAssistantServer]:
             settings = await _config_store().get_settings()
             ext = settings.extensions.get(EXTENSION_ID, {})
-            raw = ext.get("servers", [])
-            if not isinstance(raw, list):
-                return []
-            servers: list[HomeAssistantServer] = []
-            for item in raw:
-                if not isinstance(item, dict):
-                    continue
-                try:
-                    host = _normalize_host(str(item.get("host", "")))
-                except Exception:
-                    continue
-                sid = str(item.get("id", "")).strip()
-                if not sid:
-                    continue
-                api_key = str(item.get("apiKey", "")).strip()
-                if not api_key:
-                    continue
-                servers.append(
-                    HomeAssistantServer(
-                        id=sid,
-                        name=str(item.get("name", "")).strip(),
-                        host=host,
-                        apiKey=api_key,
-                    )
-                )
-            return servers
+            ext_settings = ext if isinstance(ext, dict) else {}
+            return resolve_home_assistant_servers(ext_settings)
 
         async def list_notification_routes() -> list[HomeAssistantNotificationRoute]:
             settings = await _config_store().get_settings()
@@ -315,7 +260,7 @@ class HomeAssistantExtension(BaseExtension):
             if cached and now - cached.at < 10:
                 return cached.data
 
-            ws_url = _ws_url(server.host)
+            ws_url = server.websocketUrl
             try:
                 async with websockets.connect(ws_url, open_timeout=8, close_timeout=2, max_size=2**23) as ws:
                     hello_raw = await asyncio.wait_for(ws.recv(), timeout=8)
@@ -417,7 +362,7 @@ class HomeAssistantExtension(BaseExtension):
         @app.get("/api/home_assistant/servers", response_model=list[HomeAssistantServerPublic])
         async def ha_servers() -> list[HomeAssistantServerPublic]:
             servers = await list_servers()
-            return [HomeAssistantServerPublic(id=s.id, name=s.name, host=s.host) for s in servers]
+            return [s.public() for s in servers]
 
         @app.get("/api/home_assistant/{server_id}/registry", response_model=RegistryResponse)
         async def ha_registry(server_id: str) -> RegistryResponse:
@@ -436,7 +381,7 @@ class HomeAssistantExtension(BaseExtension):
 
             async def _fetch_one(entity_id: str) -> tuple[str, Any | None]:
                 try:
-                    url = f"{server.host}/api/states/{entity_id}"
+                    url = f"{server.apiBase}/states/{entity_id}"
                     res = await client.get(url, headers={"Authorization": f"Bearer {server.apiKey}"})
                     if res.status_code >= 400:
                         return entity_id, None
@@ -480,7 +425,7 @@ class HomeAssistantExtension(BaseExtension):
                 raise HTTPException(status_code=500, detail="HA client not ready")
             try:
                 res = await client.get(
-                    f"{server.host}/api/services",
+                    f"{server.apiBase}/services",
                     headers={"Authorization": f"Bearer {server.apiKey}"},
                 )
             except Exception as exc:  # noqa: BLE001
@@ -530,7 +475,7 @@ class HomeAssistantExtension(BaseExtension):
             client = self._http
             if client is None:
                 raise RuntimeError("HA client not ready")
-            url = f"{server.host}/api/services/{domain}/{service}"
+            url = f"{server.apiBase}/services/{domain}/{service}"
             res = await client.post(
                 url,
                 headers={"Authorization": f"Bearer {server.apiKey}"},
@@ -561,7 +506,7 @@ class HomeAssistantExtension(BaseExtension):
             client = self._http
             if client is None:
                 raise HTTPException(status_code=500, detail="HA client not ready")
-            url = f"{server.host}/api/states/{entity_id}"
+            url = f"{server.apiBase}/states/{entity_id}"
             try:
                 res = await client.get(url, headers={"Authorization": f"Bearer {server.apiKey}"})
                 if res.status_code == 401:
@@ -599,7 +544,7 @@ class HomeAssistantExtension(BaseExtension):
 
         async def _ensure_state_listener(server: HomeAssistantServer) -> None:
             async with self._state_lock:
-                sig = (server.host, server.apiKey)
+                sig = server.cache_signature()
                 prev_sig = self._state_server_sig.get(server.id)
                 task = self._state_tasks.get(server.id)
                 if task and not task.done() and prev_sig == sig:
@@ -630,7 +575,7 @@ class HomeAssistantExtension(BaseExtension):
 
         async def _state_listener(server: HomeAssistantServer, stop: asyncio.Event) -> None:
             backoff = 1.0
-            ws_url = _ws_url(server.host)
+            ws_url = server.websocketUrl
             while not stop.is_set():
                 try:
                     async with websockets.connect(

@@ -39,6 +39,30 @@ def test_frame_grabber_uses_ffmpeg_when_opencv_missing(monkeypatch: pytest.Monke
     assert fg.backend_name == "ffmpeg"
 
 
+def test_frame_grabber_prefers_ffmpeg_for_rtsp_auto_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    import toposync_ext_cameras.processing.frame_grabber as grabber
+
+    class _CaptureCapableCv2:
+        VideoCapture = object
+
+    monkeypatch.setattr(grabber, "cv2", _CaptureCapableCv2())
+    monkeypatch.setattr(grabber.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    fg = grabber.FrameGrabber("rtsp://example", backend="auto")
+    assert fg.backend_name == "ffmpeg"
+
+
+def test_frame_grabber_keeps_opencv_first_for_non_rtsp_auto(monkeypatch: pytest.MonkeyPatch) -> None:
+    import toposync_ext_cameras.processing.frame_grabber as grabber
+
+    class _CaptureCapableCv2:
+        VideoCapture = object
+
+    monkeypatch.setattr(grabber, "cv2", _CaptureCapableCv2())
+    monkeypatch.setattr(grabber.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    fg = grabber.FrameGrabber("http://example/video.mjpg", backend="auto")
+    assert fg.backend_name == "opencv"
+
+
 def test_frame_grabber_uses_ffmpeg_when_cv2_is_partially_broken(monkeypatch: pytest.MonkeyPatch) -> None:
     import toposync_ext_cameras.processing.frame_grabber as grabber
 

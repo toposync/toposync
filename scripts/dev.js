@@ -99,6 +99,27 @@ const frontend = spawnScript("frontend", "dev:frontend");
 let shuttingDown = false;
 let desiredExitCode = 0;
 
+function describeExit(code, signal) {
+  if (signal) return `signal ${signal}`;
+  if (typeof code === "number") return `code ${code}`;
+  return "unknown status";
+}
+
+function handleChildExit(label, code, signal) {
+  const unexpected = !shuttingDown;
+  if (unexpected) {
+    console.error(`[dev] ${label} exited unexpectedly (${describeExit(code, signal)}). Shutting down the rest.`);
+  }
+
+  if (typeof code === "number" && code !== 0) {
+    desiredExitCode ||= code;
+  } else if (signal && unexpected) {
+    desiredExitCode ||= 1;
+  }
+
+  void shutdown("SIGINT");
+}
+
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -112,14 +133,12 @@ async function shutdown(signal) {
   await killProcessTree(backend, backendSignal);
 }
 
-backend.on("exit", (code) => {
-  if (typeof code === "number" && code !== 0) desiredExitCode ||= code;
-  void shutdown("SIGINT");
+backend.on("exit", (code, signal) => {
+  handleChildExit("backend", code, signal);
 });
 
-frontend.on("exit", (code) => {
-  if (typeof code === "number" && code !== 0) desiredExitCode ||= code;
-  void shutdown("SIGINT");
+frontend.on("exit", (code, signal) => {
+  handleChildExit("frontend", code, signal);
 });
 
 process.on("SIGINT", () => {

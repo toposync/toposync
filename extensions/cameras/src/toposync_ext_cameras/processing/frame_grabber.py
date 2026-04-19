@@ -134,6 +134,16 @@ def _rtsp_stream2_fallback(rtsp_url: str) -> str | None:
     return urllib.parse.urlunsplit(parsed._replace(path=new_path))
 
 
+def _is_rtsp_url(url: str) -> bool:
+    raw = str(url or "").strip()
+    if not raw:
+        return False
+    try:
+        return urllib.parse.urlsplit(raw).scheme.lower() == "rtsp"
+    except Exception:
+        return raw.lower().startswith("rtsp://")
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class CaptureBackendMetrics:
     backend: str
@@ -750,7 +760,10 @@ class FrameGrabber:
         elif backend_key == "opencv":
             preferred = ["opencv", "ffmpeg"]
         else:
-            preferred = ["opencv", "ffmpeg"]
+            # Prefer the subprocess-backed FFmpeg path for RTSP streams so decoder faults stay
+            # isolated from the main Python process. Non-RTSP sources keep the lower-overhead
+            # OpenCV-first path.
+            preferred = ["ffmpeg", "opencv"] if _is_rtsp_url(rtsp_url) else ["opencv", "ffmpeg"]
 
         self._backend: CaptureBackend | None = None
         last_error: Exception | None = None

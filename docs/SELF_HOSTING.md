@@ -140,8 +140,9 @@ Guia e detalhes:
 Resumo do funcionamento:
 
 - o add-on executa o mesmo `toposync serve`
-- frontend e API continuam na mesma porta interna
-- auth passa para modo ingress do Home Assistant
+- frontend e API continuam juntos na porta interna de ingress
+- auth passa para modo híbrido do Home Assistant
+- a porta direta opcional usa usuários locais do Toposync e remove headers de ingress antes de encaminhar requisições
 - a extensão `home_assistant` usa o `SUPERVISOR_TOKEN` e o proxy interno do Core API, sem pedir `host`/`apiKey` manualmente
 
 Observação importante:

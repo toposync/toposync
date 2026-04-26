@@ -1072,7 +1072,7 @@ def create_app() -> FastAPI:
                 updated_at=0.0,
                 is_disabled=False,
             )
-        if principal is not None and not principal.bypass and user is None and auth.mode == "ingress":
+        if principal is not None and not principal.bypass and user is None and auth.mode in {"ingress", "hybrid"}:
             user = AuthUserPublic.model_validate(auth.serialize_ingress_principal(principal))
         return AuthStatusResponse(
             mode=auth.mode,

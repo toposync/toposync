@@ -147,6 +147,16 @@ def _parse_mode(raw: str | None) -> str:
         return "bypass"
     if mode in {"ingress", "ha-ingress", "ha_ingress", "home-assistant-ingress", "home_assistant_ingress"}:
         return "ingress"
+    if mode in {
+        "hybrid",
+        "ha-hybrid",
+        "ha_hybrid",
+        "home-assistant-hybrid",
+        "home_assistant_hybrid",
+        "home-assistant-mixed",
+        "home_assistant_mixed",
+    }:
+        return "hybrid"
     return "enforced"
 
 
@@ -1159,9 +1169,12 @@ class AuthRuntime:
         )
 
     def requires_setup(self) -> bool:
-        if self.mode == "ingress":
+        if self.mode in {"ingress", "hybrid"}:
             return False
         return self.store.count_users() == 0
+
+    def local_auth_configured(self) -> bool:
+        return self.store.count_users() > 0
 
     def _sign_access_payload(self, payload: dict[str, Any]) -> str:
         blob = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -1334,6 +1347,14 @@ class AuthRuntime:
                 mode=self.mode,
                 requires_setup=False,
             )
+        if self.mode == "hybrid":
+            ingress_principal = self._principal_from_ingress_headers(request)
+            if ingress_principal is not None:
+                return AuthContext(
+                    principal=ingress_principal,
+                    mode=self.mode,
+                    requires_setup=False,
+                )
 
         requires_setup = self.requires_setup()
         path = request.url.path
@@ -1486,6 +1507,8 @@ class AuthRuntime:
             raise HTTPException(status_code=400, detail="Setup is disabled in bypass mode")
         if self.mode == "ingress":
             raise HTTPException(status_code=400, detail="Setup is disabled in ingress mode")
+        if self.mode == "hybrid":
+            raise HTTPException(status_code=400, detail="Setup is disabled in hybrid mode")
         if not self.requires_setup():
             raise HTTPException(status_code=409, detail="Auth is already configured")
         try:

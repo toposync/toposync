@@ -208,6 +208,8 @@ Formato do item público (resumo):
 O modo vem de `TOPOSYNC_AUTH_MODE`:
 
 - `enforced` (default): auth obrigatória para APIs e assets protegidos.
+- `ingress`/`home_assistant_ingress`: auth delegada ao Home Assistant ingress; login/setup local ficam desabilitados.
+- `hybrid`/`home_assistant_hybrid`: requisições ingress usam o usuário do Home Assistant; acesso direto usa usuários locais do Toposync. A criação inicial de usuário local fica desabilitada nesse modo.
 - `bypass`: desliga auth (dev). Nesse modo:
   - o principal é sempre “owner” (`bypass`)
   - `POST /api/auth/login` e `POST /api/auth/setup` são desabilitados.

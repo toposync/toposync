@@ -14,10 +14,11 @@ def _create_ingress_client(
     monkeypatch: pytest.MonkeyPatch,
     *,
     trusted_ips: str = "testclient,127.0.0.1,::1",
+    mode: str = "home_assistant_ingress",
 ) -> TestClient:
     monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("TOPOSYNC_NO_FRONTEND", "1")
-    monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "home_assistant_ingress")
+    monkeypatch.setenv("TOPOSYNC_AUTH_MODE", mode)
     monkeypatch.setenv("TOPOSYNC_AUTH_INGRESS_TRUSTED_IPS", trusted_ips)
     monkeypatch.setattr(ext_manager_mod, "_iter_entry_points", lambda _group: [])
     return TestClient(create_app())
@@ -52,3 +53,73 @@ def test_ingress_mode_rejects_untrusted_requests_except_health(tmp_path: Path, m
     assert health.status_code == 200
     assert blocked.status_code == 403
     assert blocked.json()["detail"] == "Ingress access is restricted to Home Assistant"
+
+
+def test_hybrid_auth_uses_ingress_headers_for_trusted_requests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    headers = {
+        "x-remote-user-id": "ha-user-1",
+        "x-remote-user-name": "mateus",
+        "x-remote-user-display-name": "Mateus Calza",
+    }
+
+    with _create_ingress_client(tmp_path, monkeypatch, mode="home_assistant_hybrid") as client:
+        response = client.get("/api/auth/status", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "hybrid"
+    assert payload["authenticated"] is True
+    assert payload["requires_setup"] is False
+    assert payload["user"]["id"] == "ha-user-1"
+
+
+def test_hybrid_auth_blocks_first_setup_from_direct_access(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_ingress_client(tmp_path, monkeypatch, mode="home_assistant_hybrid") as client:
+        status = client.get("/api/auth/status")
+        setup = client.post(
+            "/api/auth/setup",
+            json={
+                "username": "owner",
+                "display_name": "Owner",
+                "password": "password123",
+                "device_label": "pytest",
+            },
+        )
+        pipelines = client.get("/api/pipelines")
+
+    assert status.status_code == 200
+    assert status.json()["mode"] == "hybrid"
+    assert status.json()["requires_setup"] is False
+    assert status.json()["authenticated"] is False
+    assert setup.status_code == 400
+    assert setup.json()["detail"] == "Setup is disabled in hybrid mode"
+    assert pipelines.status_code == 401
+
+
+def test_hybrid_auth_allows_direct_login_when_local_user_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from toposync.runtime.auth import AuthRuntime
+
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("TOPOSYNC_NO_FRONTEND", "1")
+    monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "enforced")
+    AuthRuntime(data_dir=data_dir).setup_owner(
+        username="owner",
+        display_name="Owner",
+        password="password123",
+    )
+
+    with _create_ingress_client(tmp_path, monkeypatch, mode="home_assistant_hybrid") as client:
+        login = client.post(
+            "/api/auth/login",
+            json={"username": "owner", "password": "password123", "device_label": "pytest"},
+        )
+        pipelines = client.get("/api/pipelines")
+
+    assert login.status_code == 200
+    assert login.json()["user"]["username"] == "owner"
+    assert pipelines.status_code == 200

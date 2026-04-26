@@ -435,11 +435,39 @@ async function warmupCapture(
 }
 
 async function sha256Hex(text: string): Promise<string> {
-  const data = new TextEncoder().encode(text);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle && typeof subtle.digest === "function") {
+    try {
+      const data = new TextEncoder().encode(text);
+      const hash = await subtle.digest("SHA-256", data);
+      return Array.from(new Uint8Array(hash))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+    } catch {
+      // Fall through to the deterministic local hash when Web Crypto is unavailable
+      // in the current browser context.
+    }
+  }
+  return fallbackHashHex(text);
+}
+
+function fallbackHashHex(text: string): string {
+  let h1 = 0xdeadbeef ^ text.length;
+  let h2 = 0x41c6ce57 ^ text.length;
+  let h3 = 0x9e3779b9 ^ text.length;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+    h3 = Math.imul(h3 ^ ch, 2246822507);
+  }
+
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h3 ^ (h3 >>> 13), 3266489909);
+  h3 = Math.imul(h3 ^ (h3 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+
+  return [h1, h2, h3].map((part) => (part >>> 0).toString(16).padStart(8, "0")).join("");
 }
 
 type SignatureElement = {

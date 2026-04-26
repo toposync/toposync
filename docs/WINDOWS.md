@@ -52,7 +52,7 @@ Para instalar a partir do TestPyPI:
 uv pip install --upgrade --refresh `
   --index-url https://test.pypi.org/simple/ `
   --extra-index-url https://pypi.org/simple/ `
-  toposync==0.3.4
+  toposync==0.3.5
 ```
 
 Depois rode:
@@ -87,7 +87,7 @@ Para máquinas Windows com GPU compatível via DirectML:
 uv pip install --upgrade --refresh `
   --index-url https://test.pypi.org/simple/ `
   --extra-index-url https://pypi.org/simple/ `
-  toposync-vision-directml==0.3.4
+  toposync-vision-directml==0.3.5
 ```
 
 ### CUDA
@@ -98,7 +98,7 @@ Para NVIDIA:
 uv pip install --upgrade --refresh `
   --index-url https://test.pypi.org/simple/ `
   --extra-index-url https://pypi.org/simple/ `
-  toposync-vision-cuda==0.3.4
+  toposync-vision-cuda==0.3.5
 ```
 
 Observação:

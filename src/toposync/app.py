@@ -744,6 +744,36 @@ def _public_base_path_for_request(request: Request) -> str:
     return _normalize_public_base_path(request.headers.get("x-ingress-path"))
 
 
+_FRONTEND_INDEX_ASSET_RE = re.compile(r'(?P<prefix>\s(?:src|href)=["\'])(?P<url>[^"\']+)(?P<suffix>["\'])')
+
+
+def _prefix_frontend_index_assets(html: str, base_path: str) -> str:
+    if base_path == "/":
+        return html
+
+    def replace(match: re.Match[str]) -> str:
+        url = match.group("url")
+        lowered = url.lower()
+        if (
+            not url
+            or url.startswith(("#", "//"))
+            or lowered.startswith(("data:", "blob:", "mailto:", "tel:"))
+            or re.match(r"^[a-z][a-z0-9+.-]*:", url, flags=re.IGNORECASE)
+            or url == base_path
+            or url.startswith(f"{base_path}/")
+        ):
+            return match.group(0)
+        if url.startswith("/"):
+            prefixed = f"{base_path}{url}"
+        elif url.startswith("./"):
+            prefixed = f"{base_path}/{url[2:]}"
+        else:
+            prefixed = f"{base_path}/{url}"
+        return f"{match.group('prefix')}{prefixed}{match.group('suffix')}"
+
+    return _FRONTEND_INDEX_ASSET_RE.sub(replace, html)
+
+
 def _render_frontend_index(index_path: Path, request: Request) -> HTMLResponse:
     base_path = _public_base_path_for_request(request)
     html = index_path.read_text(encoding="utf-8")
@@ -752,9 +782,7 @@ def _render_frontend_index(index_path: Path, request: Request) -> HTMLResponse:
         f"window.__TOPOSYNC_PUBLIC_BASE_PATH__={json.dumps(base_path, ensure_ascii=False)};"
         "</script>"
     )
-    if base_path != "/":
-        html = html.replace(' src="/', f' src="{base_path}/')
-        html = html.replace(' href="/', f' href="{base_path}/')
+    html = _prefix_frontend_index_assets(html, base_path)
     if "<head>" in html:
         html = html.replace("<head>", f"<head>{runtime_script}", 1)
     else:

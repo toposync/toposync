@@ -1,13 +1,13 @@
 [project]
 name = "toposync-streaming"
-version = "0.3.4"
+version = "0.3.5"
 description = "Toposync application bundle with the optional first-party streaming stack."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
-  "toposync==0.3.4",
+  "toposync==0.3.5",
   "toposync-ext-streaming==0.1.1",
 ]
 

@@ -51,7 +51,7 @@ def test_frontend_root_injects_ingress_base_path(tmp_path: Path, monkeypatch: py
     frontend_dir = tmp_path / "frontend-dist"
     frontend_dir.mkdir(parents=True)
     (frontend_dir / "index.html").write_text(
-        '<!doctype html><html><head><title>Toposync</title><script src="/main.js"></script></head><body></body></html>',
+        '<!doctype html><html><head><title>Toposync</title><script src="main.js"></script><link href="/style.css"></head><body></body></html>',
         encoding="utf-8",
     )
 
@@ -61,9 +61,13 @@ def test_frontend_root_injects_ingress_base_path(tmp_path: Path, monkeypatch: py
     monkeypatch.delenv("TOPOSYNC_NO_FRONTEND", raising=False)
 
     with TestClient(create_app()) as client:
-        response = client.get("/", headers={"accept": "text/html", "x-ingress-path": "/api/hassio_ingress/test123"})
+        response = client.get(
+            "/settings/pipelines",
+            headers={"accept": "text/html", "x-ingress-path": "/api/hassio_ingress/test123"},
+        )
 
     assert response.status_code == 200
     body = response.text
     assert 'window.__TOPOSYNC_PUBLIC_BASE_PATH__="/api/hassio_ingress/test123"' in body
     assert 'src="/api/hassio_ingress/test123/main.js"' in body
+    assert 'href="/api/hassio_ingress/test123/style.css"' in body

@@ -4,13 +4,8 @@ import type { SettingsPanel, TopoSyncHost } from "@toposync/plugin-api";
 
 import { HOME_ASSISTANT_EXTENSION_ID } from "../constants";
 import { fetchHomeAssistantServers } from "../api/homeAssistantApi";
-import {
-  createUniqueId,
-  isValidUrl,
-  readHomeAssistantNotificationRoutes,
-  readHomeAssistantServers,
-} from "../parsing";
-import type { HomeAssistantNotificationRoute, HomeAssistantServer, HomeAssistantServerPublic } from "../types";
+import { createUniqueId, isValidUrl, readHomeAssistantServers } from "../parsing";
+import type { HomeAssistantServer, HomeAssistantServerPublic } from "../types";
 
 export function createHomeAssistantSettingsPanel(): SettingsPanel {
   return {
@@ -40,17 +35,6 @@ function includesQuery(value: string, query: string): boolean {
   return normalized.includes(query);
 }
 
-function parseNotificationTypesInput(value: string): string[] {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function formatNotificationTypesInput(value: string[]): string {
-  return value.join(", ");
-}
-
 function serverLabel(server: { id: string; name: string; host: string }): string {
   return server.name.trim() || server.host.trim() || server.id;
 }
@@ -58,7 +42,6 @@ function serverLabel(server: { id: string; name: string; host: string }): string
 function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistantSettingsProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const servers = useMemo(() => readHomeAssistantServers(settings), [settings]);
-  const routes = useMemo(() => readHomeAssistantNotificationRoutes(settings), [settings]);
   const [backendServers, setBackendServers] = useState<HomeAssistantServerPublic[]>([]);
   const [backendServersError, setBackendServersError] = useState<string | null>(null);
 
@@ -81,22 +64,6 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
   }, []);
 
   const managedServers = useMemo(() => backendServers.filter((server) => server.managed), [backendServers]);
-  const routeServers = useMemo(() => {
-    const combined: Array<{ id: string; name: string; host: string }> = [];
-    const seen = new Set<string>();
-    for (const server of managedServers) {
-      if (seen.has(server.id)) continue;
-      seen.add(server.id);
-      combined.push(server);
-    }
-    for (const server of servers) {
-      if (seen.has(server.id)) continue;
-      seen.add(server.id);
-      combined.push(server);
-    }
-    return combined;
-  }, [managedServers, servers]);
-  const serversById = useMemo(() => new Map(routeServers.map((server) => [server.id, server])), [routeServers]);
   const supervisorManaged = managedServers.length > 0;
 
   const [serverQuery, setServerQuery] = useState("");
@@ -104,26 +71,10 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
   const [confirmDeleteServerId, setConfirmDeleteServerId] = useState<string | null>(null);
   const [showTokensByServerId, setShowTokensByServerId] = useState<Record<string, boolean>>({});
 
-  const [routeQuery, setRouteQuery] = useState("");
-  const [activeRouteId, setActiveRouteId] = useState<string | null>(null);
-  const [confirmDeleteRouteId, setConfirmDeleteRouteId] = useState<string | null>(null);
-
   useEffect(() => {
     if (activeServerId && servers.some((server) => server.id === activeServerId)) return;
     setActiveServerId(servers[0]?.id ?? null);
   }, [activeServerId, servers]);
-
-  useEffect(() => {
-    if (activeRouteId && routes.some((route) => route.id === activeRouteId)) return;
-    setActiveRouteId(routes[0]?.id ?? null);
-  }, [activeRouteId, routes]);
-
-  useEffect(() => {
-    if (!routes.some((route) => route.closeAction !== "ignore")) return;
-    updateSettings({
-      notificationRoutes: routes.map((route) => (route.closeAction === "ignore" ? route : { ...route, closeAction: "ignore" })),
-    });
-  }, [routes, updateSettings]);
 
   const filteredServers = useMemo(() => {
     const q = normalizeQuery(serverQuery);
@@ -132,22 +83,6 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
       (server) => includesQuery(server.name || "", q) || includesQuery(server.id, q) || includesQuery(server.host, q),
     );
   }, [serverQuery, servers]);
-
-  const filteredRoutes = useMemo(() => {
-    const q = normalizeQuery(routeQuery);
-    if (!q) return routes;
-    return routes.filter((route) => {
-      const server = serversById.get(route.serverId);
-      return (
-        includesQuery(route.name || "", q) ||
-        includesQuery(route.notifyService, q) ||
-        includesQuery(route.id, q) ||
-        includesQuery(route.notificationTypes.join(","), q) ||
-        includesQuery(server?.name || "", q) ||
-        includesQuery(server?.host || "", q)
-      );
-    });
-  }, [routeQuery, routes, serversById]);
 
   const hasInvalidHosts = useMemo(
     () => servers.some((server) => server.host.trim() !== "" && !isValidUrl(server.host.trim())),
@@ -177,39 +112,7 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
     });
   }
 
-  function addRoute(): void {
-    const id = createUniqueId();
-    updateSettings({
-      notificationRoutes: [
-        {
-          id,
-          name: "",
-          enabled: true,
-          serverId: routeServers[0]?.id ?? "",
-          notifyService: "",
-          notificationTypes: ["pipelines.event"],
-          closeAction: "ignore",
-          sendUpdates: false,
-        },
-        ...routes,
-      ],
-    });
-    setActiveRouteId(id);
-    setConfirmDeleteRouteId(null);
-  }
-
-  function updateRoute(routeId: string, patch: Partial<HomeAssistantNotificationRoute>): void {
-    updateSettings({ notificationRoutes: routes.map((route) => (route.id === routeId ? { ...route, ...patch } : route)) });
-  }
-
-  function deleteRoute(routeId: string): void {
-    updateSettings({ notificationRoutes: routes.filter((route) => route.id !== routeId) });
-    setConfirmDeleteRouteId(null);
-    if (activeRouteId === routeId) setActiveRouteId(null);
-  }
-
   const activeServer = activeServerId ? servers.find((server) => server.id === activeServerId) ?? null : null;
-  const activeRoute = activeRouteId ? routes.find((route) => route.id === activeRouteId) ?? null : null;
 
   return (
     <div>
@@ -223,6 +126,15 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
         <>
           <div className="card">
             <div className="cardBody">{t("ext.home_assistant.settings.invalid_host")}</div>
+          </div>
+          <div className="sectionDivider" />
+        </>
+      ) : null}
+
+      {backendServersError ? (
+        <>
+          <div className="card">
+            <div className="cardBody">{backendServersError}</div>
           </div>
           <div className="sectionDivider" />
         </>
@@ -338,7 +250,7 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
                 {t(
                   "ext.home_assistant.settings.supervisor_managed_readonly",
                   {},
-                  "No manual server setup is required in this environment. Notification routes can target the managed Home Assistant connection below.",
+                  "No manual server setup is required in this environment. Toposync uses the managed Home Assistant connection automatically.",
                 )}
               </div>
             </div>
@@ -440,235 +352,6 @@ function HomeAssistantSettings({ i18n, settings, updateSettings }: HomeAssistant
                         />
                       </button>
                     </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="sectionDivider" />
-
-      <div className="card">
-        <div className="cardBody">{t("ext.home_assistant.settings.routes_notice")}</div>
-      </div>
-
-      {backendServersError ? (
-        <>
-          <div className="sectionDivider" />
-          <div className="card">
-            <div className="cardBody">{backendServersError}</div>
-          </div>
-        </>
-      ) : null}
-
-      <div className="sectionDivider" />
-
-      <div className="modalSectionTitle" style={{ marginBottom: 10 }}>
-        {t("ext.home_assistant.settings.routes")}
-      </div>
-
-      <div className="settingsSplit">
-        <div className="settingsSplitSidebar">
-          <div className="settingsSplitToolbar">
-            <input
-              className="input"
-              placeholder={t("ext.home_assistant.settings.search_routes", {}, "Search routes…")}
-              value={routeQuery}
-              onChange={(event) => setRouteQuery(event.target.value)}
-            />
-            <button
-              className="iconButton iconButtonPrimary"
-              type="button"
-              aria-label={t("ext.home_assistant.settings.add_route")}
-              onClick={addRoute}
-            >
-              <i className="fa-solid fa-plus" aria-hidden="true" />
-            </button>
-          </div>
-
-          {filteredRoutes.length === 0 ? (
-            <div className="card" style={{ marginTop: 10 }}>
-              <div className="cardBody">
-                <div style={{ marginBottom: 10 }}>{t("ext.home_assistant.settings.empty_routes")}</div>
-                <button className="primaryButton" type="button" onClick={addRoute}>
-                  <i className="fa-solid fa-plus" aria-hidden="true" /> {t("ext.home_assistant.settings.add_route")}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="settingsList">
-              {filteredRoutes.map((route) => {
-                const selected = route.id === activeRouteId;
-                const name = route.name.trim() || t("ext.home_assistant.settings.unnamed_route", {}, "Untitled route");
-                const server = serversById.get(route.serverId);
-                const serverText = server ? serverLabel(server) : t("ext.home_assistant.settings.missing_route_server", {}, "Server not selected");
-                const notifyText =
-                  route.notifyService.trim() || t("ext.home_assistant.settings.missing_notify_service", {}, "Notify service missing");
-                const meta = `${serverText} -> ${notifyText}`;
-                return (
-                  <button
-                    key={route.id}
-                    type="button"
-                    className={["choiceItem", selected ? "isSelected" : ""].filter(Boolean).join(" ")}
-                    onClick={() => {
-                      setActiveRouteId(route.id);
-                      setConfirmDeleteRouteId(null);
-                    }}
-                  >
-                    <div className="settingsListItemRow">
-                      <div className="settingsListItemMain">
-                        <div className="settingsListItemTitle" title={name}>
-                          {name}
-                        </div>
-                        <div className="settingsListItemMeta" title={meta}>
-                          {meta}
-                        </div>
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        <div className="settingsSplitMain">
-          {!activeRoute ? (
-            <div className="card">
-              <div className="cardBody">
-                <div style={{ marginBottom: 10 }}>
-                  {t("ext.home_assistant.settings.select_route", {}, "Select a route to edit.")}
-                </div>
-                <button className="primaryButton" type="button" onClick={addRoute}>
-                  <i className="fa-solid fa-plus" aria-hidden="true" /> {t("ext.home_assistant.settings.add_route")}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="settingsDetail">
-              <div className="settingsDetailHeader">
-                <div>
-                  <div className="modalSectionTitle" style={{ marginBottom: 4 }}>
-                    {activeRoute.name.trim() || t("ext.home_assistant.settings.unnamed_route", {}, "Untitled route")}
-                  </div>
-                  <div className="cardMeta">
-                    {activeRoute.notifyService.trim() || t("ext.home_assistant.settings.missing_notify_service", {}, "Notify service missing")}
-                  </div>
-                </div>
-
-                <div className="rowWrap" style={{ gap: 10, justifyContent: "flex-end" }}>
-                  <button
-                    className={confirmDeleteRouteId === activeRoute.id ? "dangerButton" : "iconButton iconButtonDanger"}
-                    type="button"
-                    aria-label={t("core.actions.delete")}
-                    title={t("core.actions.delete")}
-                    onClick={() => {
-                      if (confirmDeleteRouteId === activeRoute.id) {
-                        deleteRoute(activeRoute.id);
-                        return;
-                      }
-                      setConfirmDeleteRouteId(activeRoute.id);
-                    }}
-                  >
-                    {confirmDeleteRouteId === activeRoute.id ? (
-                      t("core.actions.delete")
-                    ) : (
-                      <i className="fa-solid fa-trash" aria-hidden="true" />
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              <div className="sectionDivider" />
-
-              <div className="card">
-                <div className="cardBody">
-                  <div className="field">
-                    <label className="row" style={{ gap: 10, alignItems: "center" }}>
-                      <input
-                        type="checkbox"
-                        checked={activeRoute.enabled}
-                        onChange={(event) => updateRoute(activeRoute.id, { enabled: event.target.checked })}
-                      />
-                      <span>{t("ext.home_assistant.settings.route_enabled")}</span>
-                    </label>
-                  </div>
-
-                  <div className="field">
-                    <div className="label">{t("ext.home_assistant.settings.route_name")}</div>
-                    <input
-                      className="input"
-                      value={activeRoute.name}
-                      onChange={(event) => updateRoute(activeRoute.id, { name: event.target.value.slice(0, 64) })}
-                    />
-                  </div>
-
-                  <div className="field">
-                    <div className="label">{t("ext.home_assistant.settings.route_server")}</div>
-                    <select
-                      className="input"
-                      value={activeRoute.serverId}
-                      onChange={(event) => updateRoute(activeRoute.id, { serverId: event.target.value })}
-                    >
-                      <option value="">{t("ext.home_assistant.settings.missing_route_server", {}, "Server not selected")}</option>
-                      {routeServers.map((server) => (
-                        <option key={server.id} value={server.id}>
-                          {serverLabel(server)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="field">
-                    <div className="label">{t("ext.home_assistant.settings.route_notify_service")}</div>
-                    <input
-                      className="input"
-                      value={activeRoute.notifyService}
-                      placeholder="notify.mobile_app_phone"
-                      onChange={(event) =>
-                        updateRoute(activeRoute.id, { notifyService: event.target.value.slice(0, 128) })
-                      }
-                    />
-                    <div className="cardMeta" style={{ marginTop: 6 }}>
-                      {t("ext.home_assistant.settings.route_notify_service_hint")}
-                    </div>
-                  </div>
-
-                  <div className="field">
-                    <div className="label">{t("ext.home_assistant.settings.route_notification_types")}</div>
-                    <input
-                      className="input"
-                      value={formatNotificationTypesInput(activeRoute.notificationTypes)}
-                      onChange={(event) =>
-                        updateRoute(activeRoute.id, {
-                          notificationTypes: parseNotificationTypesInput(event.target.value),
-                        })
-                      }
-                    />
-                    <div className="cardMeta" style={{ marginTop: 6 }}>
-                      {t("ext.home_assistant.settings.route_notification_types_hint")}
-                    </div>
-                  </div>
-
-                  <div className="field">
-                    <div className="label">{t("ext.home_assistant.settings.route_close_action")}</div>
-                    <div className="cardMeta">{t("ext.home_assistant.settings.route_close_action.fixed_ignore")}</div>
-                    <div className="cardMeta" style={{ marginTop: 6 }}>
-                      {t("ext.home_assistant.settings.route_close_action_hint")}
-                    </div>
-                  </div>
-
-                  <div className="field">
-                    <label className="row" style={{ gap: 10, alignItems: "center" }}>
-                      <input
-                        type="checkbox"
-                        checked={activeRoute.sendUpdates}
-                        onChange={(event) => updateRoute(activeRoute.id, { sendUpdates: event.target.checked })}
-                      />
-                      <span>{t("ext.home_assistant.settings.route_send_updates")}</span>
-                    </label>
                   </div>
                 </div>
               </div>

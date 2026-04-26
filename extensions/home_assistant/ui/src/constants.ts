@@ -13,7 +13,9 @@ export const PRIMARY_TOGGLE_DOMAINS = new Set([
   "humidifier",
 ]);
 
-export const LAMP_COMPATIBLE_DOMAINS = new Set(["light", "switch", "fan", "input_boolean", "humidifier"]);
+export const BOOLEAN_STATE_DOMAINS = new Set([...PRIMARY_TOGGLE_DOMAINS, "binary_sensor"]);
+
+export const LAMP_COMPATIBLE_DOMAINS = new Set(["light", "switch", "fan", "input_boolean", "humidifier", "binary_sensor"]);
 export const DEFAULT_LAMP_COLOR = "#ffe8b0";
 export const DEFAULT_LAMP_INTENSITY = 1.0;
 
@@ -26,4 +28,3 @@ export const HOME_ASSISTANT_STREAM_REFRESH_DELAY_MS = 180;
 export const HOME_ASSISTANT_REST_REFRESH_DELAY_MS = 60;
 export const HOME_ASSISTANT_RECONNECT_INITIAL_DELAY_MS = 500;
 export const HOME_ASSISTANT_RECONNECT_MAX_DELAY_MS = 10_000;
-

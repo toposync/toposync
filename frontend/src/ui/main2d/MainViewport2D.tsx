@@ -24,6 +24,7 @@ function clamp(value: number, min: number, max: number): number {
 const HOME_ASSISTANT_ELEMENT_TYPE_ID = "com.toposync.home_assistant.item";
 const HOME_ASSISTANT_BUTTON_SIZE_PX = 44;
 const HOME_ASSISTANT_CLUSTER_THRESHOLD_PX = HOME_ASSISTANT_BUTTON_SIZE_PX * 0.92;
+const HOME_ASSISTANT_REST_POLL_INTERVAL_MS = 1000;
 
 type HomeAssistantLiveState = { entity_id?: string; state?: string; attributes?: Record<string, unknown> };
 
@@ -64,6 +65,15 @@ function readNumber(value: unknown, fallback: number): number {
 function readSpecialView(value: unknown): "none" | "lamp" | "airflow" {
   const v = readString(value).trim().toLowerCase();
   return v === "lamp" || v === "airflow" ? v : "none";
+}
+
+function readPrimaryEntityId(props: Record<string, unknown>): string {
+  const configured = readString(props.primary_entity_id).trim();
+  if (configured) return configured;
+  const items = Array.isArray(props.items) ? props.items : [];
+  if (items.length !== 1) return "";
+  const item = asRecord(items[0]);
+  return readString(item.kind) === "entity" ? readString(item.id).trim() : "";
 }
 
 function domainFromEntityId(entityId: string): string {
@@ -110,6 +120,14 @@ type HomeAssistantButtonEntry =
     };
 
 type AirflowMode = "off" | "neutral" | "cool" | "heat";
+
+function liveStateSignature(state: HomeAssistantLiveState | null | undefined): string {
+  if (!state || typeof state !== "object") return "";
+  return JSON.stringify({
+    state: typeof state.state === "string" ? state.state : "",
+    attributes: state.attributes && typeof state.attributes === "object" ? state.attributes : null,
+  });
+}
 
 function climateFlowFromLiveState(
   live: HomeAssistantLiveState | null,
@@ -188,7 +206,7 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
       elements.filter((element) => element.type === HOME_ASSISTANT_ELEMENT_TYPE_ID).map((element) => {
         const props = asRecord(element.props);
         const serverId = readString(props.server_id).trim();
-        const entityId = readString(props.primary_entity_id).trim();
+        const entityId = readPrimaryEntityId(props);
         const icon = readString(props.icon).trim() || "house";
         const specialView = readSpecialView(props.special_view);
         const fallbackState = readString(props.primary_state).trim().toLowerCase();
@@ -276,6 +294,7 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
 
   useEffect(() => {
     const sources: EventSource[] = [];
+    const pollTimers: number[] = [];
     let cancelled = false;
 
     setHomeAssistantLiveStates({});
@@ -283,18 +302,22 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
     const upsertSnapshot = (serverId: string, data: unknown) => {
       if (!data || typeof data !== "object") return;
       setHomeAssistantLiveStates((prev) => {
+        let changed = false;
         const next = { ...prev };
         for (const [entityId, state] of Object.entries(data as Record<string, any>)) {
           if (!state || typeof state !== "object") continue;
           const key = `${serverId}|${entityId}`;
-          next[key] = {
+          const entry = {
             entity_id: readString((state as any).entity_id) || entityId,
             state: readString((state as any).state),
             attributes:
               (state as any).attributes && typeof (state as any).attributes === "object" ? (state as any).attributes : undefined,
           };
+          if (liveStateSignature(prev[key]) === liveStateSignature(entry)) continue;
+          next[key] = entry;
+          changed = true;
         }
-        return next;
+        return changed ? next : prev;
       });
     };
 
@@ -343,14 +366,13 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
 
           setHomeAssistantLiveStates((prev) => {
             const key = `${target.serverId}|${entityId}`;
-            return {
-              ...prev,
-              [key]: {
-                entity_id: readString((state as any).entity_id) || entityId,
-                state: readString((state as any).state),
-                attributes: (state as any).attributes && typeof (state as any).attributes === "object" ? (state as any).attributes : undefined,
-              },
+            const entry = {
+              entity_id: readString((state as any).entity_id) || entityId,
+              state: readString((state as any).state),
+              attributes: (state as any).attributes && typeof (state as any).attributes === "object" ? (state as any).attributes : undefined,
             };
+            if (liveStateSignature(prev[key]) === liveStateSignature(entry)) return prev;
+            return { ...prev, [key]: entry };
           });
         } catch {
           // ignore
@@ -359,6 +381,10 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
 
       eventSource.addEventListener("snapshot", handleSnapshot);
       eventSource.addEventListener("state_changed", handleStateChanged);
+
+      pollTimers.push(window.setInterval(() => {
+        void fetchInitialStates(target.serverId, target.entityIds);
+      }, HOME_ASSISTANT_REST_POLL_INTERVAL_MS));
     }
 
     return () => {
@@ -370,6 +396,7 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
           // ignore
         }
       }
+      for (const timer of pollTimers) window.clearInterval(timer);
     };
   }, [homeAssistantWatchKey]);
 

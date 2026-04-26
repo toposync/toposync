@@ -19,6 +19,7 @@ import {
   boolStateForDomain,
   climateFlowFromLiveState,
   domainFromEntityId,
+  isBooleanStateDomain,
   isToggleDomain,
   readHomeAssistantSpecialView,
   readHomeAssistantViewMode,
@@ -28,12 +29,13 @@ import {
   normalizeFontAwesomeSvgName,
   resolveFontAwesomeSvg,
   sanitizeFontAwesomeIconName,
-} from "../fontAwesome";
+} from "../fontawesome";
 import {
   clamp,
   readAirflowIntensity,
   readAirflowWidth,
   readHexColor,
+  readHomeAssistantItemRefs,
   readLampIntensity,
   readOptionalFiniteNumber,
   readRecord,
@@ -50,6 +52,13 @@ const CEILING_FAN_HUB_RADIUS = 0.09;
 const CEILING_FAN_BLADE_LENGTH = 0.55;
 const CEILING_FAN_BLADE_ROOT_INSET = 0.07;
 const CEILING_FAN_RADIUS_WORLD = CEILING_FAN_HUB_RADIUS + CEILING_FAN_BLADE_LENGTH - CEILING_FAN_BLADE_ROOT_INSET;
+
+function resolvePrimaryEntityId(props: Record<string, unknown>): string {
+  const configured = readString(props.primary_entity_id).trim();
+  if (configured) return configured;
+  const items = readHomeAssistantItemRefs(props.items);
+  return items.length === 1 && items[0].kind === "entity" ? items[0].id : "";
+}
 
 export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
   const iconGeometryCache = new Map<string, { geometry: any; scale: number }>();
@@ -80,7 +89,7 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
     primaryAction: async ({ element, api, update }) => {
       const props = readRecord(element.props);
       const serverId = readString(props.server_id).trim();
-      const entityId = readString(props.primary_entity_id).trim();
+      const entityId = resolvePrimaryEntityId(props);
       if (!serverId || !entityId) return false;
       const domain = domainFromEntityId(entityId);
       if (!isToggleDomain(domain)) return false;
@@ -454,7 +463,7 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
       let watchedServer = "";
       let watchedEntity = "";
       let watchedDomain = "";
-      let watchedIsToggle = false;
+      let watchedHasBooleanState = false;
       let lastLiveSig = "";
 
       type FanFlow = {
@@ -609,7 +618,7 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
           return;
         }
 
-        const neon = watchedIsToggle
+        const neon = watchedHasBooleanState
           ? boolState === true
             ? neonOn
             : boolState === false
@@ -621,14 +630,14 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
         iconMaterial.color.set(neon);
         light.color.set(neon);
 
-        sphereMaterial.emissiveIntensity = watchedIsToggle
+        sphereMaterial.emissiveIntensity = watchedHasBooleanState
           ? boolState === true
             ? 0.55
             : boolState === false
               ? 0.35
               : 0.42
           : 0.42;
-        light.intensity = watchedIsToggle
+        light.intensity = watchedHasBooleanState
           ? boolState === true
             ? 0.25
             : boolState === false
@@ -667,9 +676,9 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
         const icon = sanitizeFontAwesomeIconName(readString(p.icon, "house")) || "house";
         const viewMode = readHomeAssistantViewMode(p.view_mode);
         const specialView = readHomeAssistantSpecialView(p.special_view);
-        const itemsRaw = p.items;
-        const itemCount = Array.isArray(itemsRaw) ? itemsRaw.length : 0;
-        const primaryEntityId = readString(p.primary_entity_id).trim();
+        const items = readHomeAssistantItemRefs(p.items);
+        const itemCount = items.length;
+        const primaryEntityId = resolvePrimaryEntityId(p);
         const serverId = readString(p.server_id).trim();
 
         if (serverId !== watchedServer || primaryEntityId !== watchedEntity) {
@@ -678,7 +687,7 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
           watchedServer = serverId;
           watchedEntity = primaryEntityId;
           watchedDomain = primaryEntityId ? domainFromEntityId(primaryEntityId) : "";
-          watchedIsToggle = watchedDomain ? isToggleDomain(watchedDomain) : false;
+          watchedHasBooleanState = watchedDomain ? isBooleanStateDomain(watchedDomain) : false;
           lastLiveSig = "";
           if (serverId && primaryEntityId) unwatch = watchHomeAssistantLiveStates(serverId, [primaryEntityId]);
         }
@@ -953,25 +962,25 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
     render2D: ({ ctx, element, viewport }) => {
       const p = readRecord(element.props);
       const specialView = readHomeAssistantSpecialView(p.special_view);
-      const primaryEntityId = readString(p.primary_entity_id).trim();
+      const primaryEntityId = resolvePrimaryEntityId(p);
       const serverId = readString(p.server_id).trim();
       const live = serverId && primaryEntityId ? getHomeAssistantLiveState(serverId, primaryEntityId) : null;
       const primaryState = readString(live?.state ?? p.primary_state).trim().toLowerCase();
       const domain = primaryEntityId ? domainFromEntityId(primaryEntityId) : "";
-      const isToggle = primaryEntityId ? isToggleDomain(domain) : false;
+      const hasBooleanState = primaryEntityId ? isBooleanStateDomain(domain) : false;
       const boolState = primaryEntityId ? boolStateForDomain(domain, primaryState) : null;
 
       const center = viewport.worldToScreen({ x: element.position.x, z: element.position.z });
       const radius = 11;
 
-      const fill = isToggle
+      const fill = hasBooleanState
         ? boolState === true
           ? "rgba(34,197,94,0.22)"
           : boolState === false
             ? "rgba(239,68,68,0.18)"
             : "rgba(56,189,248,0.14)"
         : "rgba(56,189,248,0.14)";
-      const stroke = isToggle
+      const stroke = hasBooleanState
         ? boolState === true
           ? "rgba(34,197,94,0.72)"
           : boolState === false

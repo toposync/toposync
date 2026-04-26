@@ -16,11 +16,14 @@ type HomeAssistantLiveServerStream = {
   listeners: Set<() => void>;
   eventSource: EventSource | null;
   refreshTimer: number | null;
+  restPollTimer: number | null;
   restRefreshTimer: number | null;
   reconnectTimer: number | null;
   reconnectDelayMs: number;
   lastUrl: string;
 };
+
+const HOME_ASSISTANT_REST_POLL_INTERVAL_MS = 1000;
 
 const liveServers = new Map<string, HomeAssistantLiveServerStream>();
 
@@ -42,6 +45,7 @@ function getLiveServerStream(serverId: string): HomeAssistantLiveServerStream {
     listeners: new Set(),
     eventSource: null,
     refreshTimer: null,
+    restPollTimer: null,
     restRefreshTimer: null,
     reconnectTimer: null,
     reconnectDelayMs: HOME_ASSISTANT_RECONNECT_INITIAL_DELAY_MS,
@@ -73,28 +77,64 @@ function buildStreamUrl(serverId: string, entityIds: Set<string>): string {
   return `/api/home_assistant/${encodeURIComponent(serverId)}/stream?entity_ids=${encodeURIComponent(ids.join(","))}`;
 }
 
+function liveStateSignature(state: HomeAssistantLiveState | null | undefined): string {
+  if (!state || typeof state !== "object") return "";
+  return JSON.stringify({
+    state: typeof state.state === "string" ? state.state : "",
+    attributes: state.attributes && typeof state.attributes === "object" ? state.attributes : null,
+  });
+}
+
+function upsertLiveState(stream: HomeAssistantLiveServerStream, entityId: string, state: unknown): boolean {
+  if (!entityId || !state || typeof state !== "object") return false;
+  const next = state as HomeAssistantLiveState;
+  const previous = stream.states.get(entityId) ?? null;
+  if (liveStateSignature(previous) === liveStateSignature(next)) return false;
+  stream.states.set(entityId, next);
+  return true;
+}
+
+async function refreshStatesFromRest(serverId: string): Promise<void> {
+  const stream = liveServers.get(serverId);
+  if (!stream) return;
+  const ids = Array.from(stream.wanted);
+  if (ids.length === 0) return;
+  const data = await fetchHomeAssistantStates(serverId, ids);
+  let changed = false;
+  for (const [entityId, state] of Object.entries(data)) {
+    if (upsertLiveState(stream, entityId, state)) changed = true;
+  }
+  if (changed) notifyLiveServer(serverId);
+}
+
 function scheduleRestRefresh(serverId: string): void {
   const stream = liveServers.get(serverId);
   if (!stream) return;
   if (stream.restRefreshTimer) return;
   stream.restRefreshTimer = window.setTimeout(() => {
     stream.restRefreshTimer = null;
-    const ids = Array.from(stream.wanted);
-    if (ids.length === 0) return;
-    fetchHomeAssistantStates(serverId, ids)
-      .then((data) => {
-        let changed = false;
-        for (const [entityId, state] of Object.entries(data)) {
-          if (!state || typeof state !== "object") continue;
-          stream.states.set(entityId, state as HomeAssistantLiveState);
-          changed = true;
-        }
-        if (changed) notifyLiveServer(serverId);
-      })
+    void refreshStatesFromRest(serverId)
       .catch(() => {
         // ignore
       });
   }, HOME_ASSISTANT_REST_REFRESH_DELAY_MS);
+}
+
+function scheduleRestPoll(serverId: string): void {
+  const stream = liveServers.get(serverId);
+  if (!stream) return;
+  if (stream.restPollTimer) return;
+  stream.restPollTimer = window.setTimeout(() => {
+    stream.restPollTimer = null;
+    void refreshStatesFromRest(serverId)
+      .catch(() => {
+        // ignore
+      })
+      .finally(() => {
+        const current = liveServers.get(serverId);
+        if (current && current.wanted.size > 0) scheduleRestPoll(serverId);
+      });
+  }, HOME_ASSISTANT_REST_POLL_INTERVAL_MS);
 }
 
 function scheduleLiveReconnect(serverId: string): void {
@@ -122,6 +162,10 @@ function openLiveStream(serverId: string): void {
     }
     stream.eventSource = null;
     stream.lastUrl = "";
+    if (stream.restPollTimer) {
+      window.clearTimeout(stream.restPollTimer);
+      stream.restPollTimer = null;
+    }
     return;
   }
 
@@ -164,11 +208,12 @@ function openLiveStream(serverId: string): void {
     try {
       const data = JSON.parse((evt as MessageEvent).data);
       if (!data || typeof data !== "object") return;
+      let changed = false;
       for (const [entityId, state] of Object.entries(data as Record<string, any>)) {
-        if (state && typeof state === "object") stream.states.set(entityId, state as HomeAssistantLiveState);
+        if (upsertLiveState(stream, entityId, state)) changed = true;
       }
       stream.reconnectDelayMs = HOME_ASSISTANT_RECONNECT_INITIAL_DELAY_MS;
-      notifyLiveServer(serverId);
+      if (changed) notifyLiveServer(serverId);
     } catch {
       // ignore
     }
@@ -180,8 +225,7 @@ function openLiveStream(serverId: string): void {
       const entityId = typeof data?.entity_id === "string" ? data.entity_id : "";
       if (!entityId) return;
       const state = data?.state;
-      if (state && typeof state === "object") stream.states.set(entityId, state as HomeAssistantLiveState);
-      notifyLiveServer(serverId);
+      if (upsertLiveState(stream, entityId, state)) notifyLiveServer(serverId);
     } catch {
       // ignore
     }
@@ -210,6 +254,7 @@ export function watchHomeAssistantLiveStates(serverId: string, entityIds: string
   }
   scheduleLiveStreamRefresh(serverId);
   scheduleRestRefresh(serverId);
+  scheduleRestPoll(serverId);
 
   return () => {
     const current = liveServers.get(serverId);
@@ -223,6 +268,10 @@ export function watchHomeAssistantLiveStates(serverId: string, entityIds: string
       } else {
         current.counts.set(id, next);
       }
+    }
+    if (current.wanted.size === 0 && current.restPollTimer) {
+      window.clearTimeout(current.restPollTimer);
+      current.restPollTimer = null;
     }
     scheduleLiveStreamRefresh(serverId);
   };
@@ -248,6 +297,5 @@ export function setHomeAssistantLiveState(serverId: string, entityId: string, pa
   if (!serverId || !entityId) return;
   const stream = getLiveServerStream(serverId);
   const prev = stream.states.get(entityId) ?? { entity_id: entityId };
-  stream.states.set(entityId, { ...prev, entity_id: entityId, ...patch });
-  notifyLiveServer(serverId);
+  if (upsertLiveState(stream, entityId, { ...prev, entity_id: entityId, ...patch })) notifyLiveServer(serverId);
 }

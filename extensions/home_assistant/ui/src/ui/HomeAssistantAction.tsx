@@ -27,7 +27,9 @@ export function HomeAssistantAction({
   const props = readRecord(element.props);
   const serverId = readString(props.server_id).trim();
   const items = useMemo(() => readHomeAssistantItemRefs(props.items), [props.items]);
-  const primaryEntityId = readString(props.primary_entity_id).trim();
+  const configuredPrimaryEntityId = readString(props.primary_entity_id).trim();
+  const primaryEntityId =
+    configuredPrimaryEntityId || (items.length === 1 && items[0].kind === "entity" ? items[0].id : "");
 
   const [registry, setRegistry] = useState<HomeAssistantRegistryResponse | null>(null);
   const [states, setStates] = useState<Record<string, any>>({});

@@ -1,6 +1,6 @@
 import type { AirflowMode } from "./airflow";
 
-import { PRIMARY_TOGGLE_DOMAINS } from "./constants";
+import { BOOLEAN_STATE_DOMAINS, PRIMARY_TOGGLE_DOMAINS } from "./constants";
 import type { HomeAssistantLiveState, HomeAssistantSpecialView, HomeAssistantViewMode } from "./types";
 import { readString } from "./parsing";
 
@@ -79,6 +79,10 @@ export function suggestIconForDomain(domain: string): string {
 
 export function isToggleDomain(domain: string): boolean {
   return PRIMARY_TOGGLE_DOMAINS.has(domain.toLowerCase());
+}
+
+export function isBooleanStateDomain(domain: string): boolean {
+  return BOOLEAN_STATE_DOMAINS.has(domain.toLowerCase());
 }
 
 export function boolStateForDomain(domain: string, rawState: string): boolean | null {

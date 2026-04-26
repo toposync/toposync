@@ -12,10 +12,10 @@ import {
   loadFontAwesomeIconFamilies,
   normalizeFontAwesomeSvgName,
   sanitizeFontAwesomeIconName,
-} from "../fontAwesome";
+} from "../fontawesome";
 import {
   domainFromEntityId,
-  isToggleDomain,
+  isBooleanStateDomain,
   readHomeAssistantSpecialView,
   readHomeAssistantViewMode,
   suggestIconForDomain,
@@ -80,13 +80,15 @@ export function HomeAssistantEditor({
       : specialView === "ceiling_fan"
         ? "ceiling"
         : viewModeRaw;
-  const primaryEntityId = readString(props.primary_entity_id).trim();
   const lampIntensityValue = readLampIntensity(props.lamp_intensity);
   const lampColorValue = readHexColor(props.lamp_color, DEFAULT_LAMP_COLOR);
   const airflowIntensityValue = readAirflowIntensity(props.airflow_intensity);
   const airflowWidthValue = readAirflowWidth(props.airflow_width, viewMode === "ceiling" ? 0.62 : 0.72);
   const airflowMountYValue = readOptionalFiniteNumber(props.airflow_mount_y);
   const items = useMemo(() => readHomeAssistantItemRefs(props.items), [props.items]);
+  const configuredPrimaryEntityId = readString(props.primary_entity_id).trim();
+  const primaryEntityId =
+    configuredPrimaryEntityId || (items.length === 1 && items[0].kind === "entity" ? items[0].id : "");
   const model3d = useMemo(() => readRecord(props.model3d), [props.model3d]);
   const modelDir = readModelString(model3d.dir, "").trim();
   const modelFile = readModelString(model3d.model, "").trim();
@@ -443,10 +445,10 @@ export function HomeAssistantEditor({
       const one = refs[0];
       if (one.kind === "entity") {
         const domain = one.domain || domainFromEntityId(one.id);
-        if (isToggleDomain(domain)) nextPrimaryEntityId = one.id;
+        if (isBooleanStateDomain(domain)) nextPrimaryEntityId = one.id;
       } else if (one.kind === "device" && registry?.device_entities?.[one.id]) {
         const candidates = registry.device_entities[one.id] ?? [];
-        const best = candidates.find((entityId) => isToggleDomain(domainFromEntityId(entityId))) ?? "";
+        const best = candidates.find((entityId) => isBooleanStateDomain(domainFromEntityId(entityId))) ?? "";
         if (best) nextPrimaryEntityId = best;
       }
     }

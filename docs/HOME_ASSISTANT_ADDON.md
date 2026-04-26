@@ -1,11 +1,14 @@
 # Home Assistant add-on
 
-TopoSync agora tem uma estrutura dedicada de add-on em:
+TopoSync tem um repositório dedicado para o add-on do Home Assistant:
 
-- [homeassistant-addon/repository.yaml](/Users/c/Projects/toposync-2/homeassistant-addon/repository.yaml)
-- [homeassistant-addon/toposync/config.yaml](/Users/c/Projects/toposync-2/homeassistant-addon/toposync/config.yaml)
-- [homeassistant-addon/toposync/Dockerfile](/Users/c/Projects/toposync-2/homeassistant-addon/toposync/Dockerfile)
-- [homeassistant-addon/toposync/run_addon.py](/Users/c/Projects/toposync-2/homeassistant-addon/toposync/run_addon.py)
+- https://github.com/toposync/toposync-homeassistant-addon
+
+Adicione esse repositório no Add-on Store do Home Assistant:
+
+```text
+https://github.com/toposync/toposync-homeassistant-addon
+```
 
 ## O que esse add-on faz
 
@@ -62,6 +65,8 @@ Para testar contra outro índice, ajuste os build args:
 - `TOPOSYNC_PIP_INDEX_URL`
 - `TOPOSYNC_EXTRA_INDEX_URL`
 - `TOPOSYNC_PIP_SPEC`
+
+O código do add-on vive fora deste repo para manter o formato esperado pelo Home Assistant: `repository.yaml` na raiz e uma pasta por add-on.
 
 ## Escopo atual
 

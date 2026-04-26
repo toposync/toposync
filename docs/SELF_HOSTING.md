@@ -123,7 +123,15 @@ Se o objetivo é rodar o Toposync dentro do ecossistema do Home Assistant, com:
 - execução supervisionada
 - acesso interno ao Core API
 
-use a estrutura em [homeassistant-addon/](/Users/c/Projects/toposync-2/homeassistant-addon).
+use o repositório dedicado:
+
+- https://github.com/toposync/toposync-homeassistant-addon
+
+No Home Assistant, adicione este repositório no Add-on Store:
+
+```text
+https://github.com/toposync/toposync-homeassistant-addon
+```
 
 Guia e detalhes:
 

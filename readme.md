@@ -1,5 +1,7 @@
 # Toposync
 
+![Toposync](frontend/src/assets/toposync-icon-256.png)
+
 A local-first platform (Python + React + ThreeJS) for a home automation “digital twin” — built on an **extensions runtime**.
 
 This repo’s main goal is to solve the “biggest knot”: **extensions with a Python backend + TypeScript frontend installable via wheel** (without requiring a build toolchain on the user’s machine).

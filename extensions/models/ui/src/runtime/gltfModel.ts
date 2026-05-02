@@ -21,6 +21,17 @@ export function createGltfModelRuntime(
   options?: { autoplay?: boolean; onInvalidate?: () => void },
 ): GltfModelRuntime {
   const group = new THREE.Group();
+  const placeholderGeometry = new THREE.BoxGeometry(1, 1, 1);
+  const placeholderMaterial = new THREE.MeshBasicMaterial({
+    color: 0x38bdf8,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.22,
+    depthWrite: false,
+  });
+  const placeholder = new THREE.Mesh(placeholderGeometry, placeholderMaterial);
+  placeholder.visible = false;
+  group.add(placeholder);
 
   const loader = new GLTFLoader();
   let disposed = false;
@@ -162,6 +173,7 @@ export function createGltfModelRuntime(
 
       current = model;
       group.add(model);
+      placeholder.visible = false;
 
       if (Array.isArray(gltf.animations) && gltf.animations.length > 0) {
         mixer = new THREE.AnimationMixer(model);
@@ -185,14 +197,22 @@ export function createGltfModelRuntime(
     const dir = readString(rec.dir, "");
     const model = readString(rec.model, "");
     const scale = readScale(rec.scale, 1);
+    const size = readVector3(rec.size, { x: 1, y: 1, z: 1 });
     const center = readVector3(rec.center, { x: 0, y: 0, z: 0 });
     const minY = readNumber(rec.min_y, 0);
 
     group.scale.setScalar(scale);
+    placeholder.scale.set(
+      Math.max(0.05, Math.abs(size.x)),
+      Math.max(0.05, Math.abs(size.y)),
+      Math.max(0.05, Math.abs(size.z)),
+    );
+    placeholder.position.y = placeholder.scale.y / 2;
 
     const url = dir && model ? resolveToposyncUrl(`/files/${encodeURIComponent(dir)}/${encodeURIComponent(model)}`) : "";
     if (!url) {
       lastUrl = "";
+      placeholder.visible = false;
       if (current) {
         group.remove(current);
         disposeMixer();
@@ -203,6 +223,7 @@ export function createGltfModelRuntime(
     }
     if (url && url !== lastUrl) {
       lastUrl = url;
+      placeholder.visible = !current;
       void load(url, { center, minY });
     }
   }
@@ -226,6 +247,8 @@ export function createGltfModelRuntime(
       disposed = true;
       disposeMixer();
       if (current) disposeObject(current);
+      placeholderGeometry.dispose();
+      placeholderMaterial.dispose();
     },
     getHasAnimations: () => hasAnimations,
   };

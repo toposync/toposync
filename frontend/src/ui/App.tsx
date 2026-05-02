@@ -274,6 +274,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const [compositions, setCompositions] = useState<Array<{ id: string; name: string }>>([]);
   const [activeCompositionId, setActiveCompositionId] = useState<string>("ground");
   const [compositionLoaded, setCompositionLoaded] = useState(false);
+  const [extensionsLoaded, setExtensionsLoaded] = useState(false);
   const [backendAvailable, setBackendAvailable] = useState(false);
   const [wallHeightPreset, setWallHeightPreset] = useState<WallHeightPreset>(() => loadWallHeightPreset());
   const [ghostWalls, setGhostWalls] = useState<boolean>(() => loadGhostWalls());
@@ -866,20 +867,32 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     let cancelled = false;
 
     async function run() {
-      const exts: ExtensionRecord[] = await fetchExtensions();
-      for (const ext of exts) {
-        if (!ext.frontend || ext.frontend.kind !== "module-federation") continue;
-        try {
-          const activate = await loadRemoteActivate(
-            ext.frontend.remote_entry_url,
-            ext.frontend.scope,
-            ext.frontend.module,
-          );
-          await activate(host);
-        } catch (err) {
-          if (cancelled) return;
-          console.error(`[extension:${ext.id}]`, err);
-        }
+      setExtensionsLoaded(false);
+      try {
+        const exts: ExtensionRecord[] = await fetchExtensions();
+        const frontendExts = exts.filter((ext) => ext.frontend && ext.frontend.kind === "module-federation");
+        await Promise.all(
+          frontendExts.map(async (ext) => {
+            const frontend = ext.frontend;
+            if (!frontend) return;
+            try {
+              const activate = await loadRemoteActivate(
+                frontend.remote_entry_url,
+                frontend.scope,
+                frontend.module,
+              );
+              if (cancelled) return;
+              await activate(host);
+            } catch (err) {
+              if (cancelled) return;
+              console.error(`[extension:${ext.id}]`, err);
+            }
+          }),
+        );
+      } catch (err) {
+        if (!cancelled) console.error("Failed to load extensions", err);
+      } finally {
+        if (!cancelled) setExtensionsLoaded(true);
       }
     }
 
@@ -1107,6 +1120,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           compositionName={composition.name}
           compositions={compositions}
           activeCompositionId={activeCompositionId}
+          compositionLoaded={compositionLoaded}
+          extensionsLoaded={extensionsLoaded}
           elements={composition.elements}
           elementTypesById={elementTypesById}
           viewSettings={viewSettings}

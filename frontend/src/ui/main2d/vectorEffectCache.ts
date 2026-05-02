@@ -332,10 +332,10 @@ async function captureEffectOverlay(args: {
     ghostWalls: true,
     graphicsQuality: "detailed",
   };
+  const renderer = createRenderer(args.renderWidth, args.renderHeight);
+  const camera = buildCamera(args.bounds, args.renderWidth, args.renderHeight);
   const renderScene = async (targetElement: CompositionElement | null): Promise<ImageData | null> => {
     const scene = new THREE.Scene();
-    const renderer = createRenderer(args.renderWidth, args.renderHeight);
-    const camera = buildCamera(args.bounds, args.renderWidth, args.renderHeight);
     addDefaultLights(scene);
     const elements = targetElement ? [...args.environmentElements, targetElement] : args.environmentElements;
     const hideIds = args.target.hideNonLightRenderables && targetElement ? new Set([targetElement.id]) : undefined;
@@ -359,25 +359,28 @@ async function captureEffectOverlay(args: {
       return captureImageData(renderer, args.renderWidth, args.renderHeight);
     } finally {
       disposeInstances(scene, instances);
-      renderer.dispose();
     }
   };
 
-  const baseData = await renderScene(args.target.baseElement ?? null);
-  const activeData = await renderScene(args.target.element);
-  if (!baseData || !activeData) return null;
+  try {
+    const baseData = await renderScene(args.target.baseElement ?? null);
+    const activeData = await renderScene(args.target.element);
+    if (!baseData || !activeData) return null;
 
-  const diff = diffAndCrop(baseData, activeData);
-  if (!diff) return null;
+    const diff = diffAndCrop(baseData, activeData);
+    if (!diff) return null;
 
-  const spanX = Math.max(1e-6, args.bounds.maxX - args.bounds.minX);
-  const spanZ = Math.max(1e-6, args.bounds.maxZ - args.bounds.minZ);
-  const x = args.bounds.minX + (diff.crop.x / args.renderWidth) * spanX;
-  const z = args.bounds.minZ + (diff.crop.y / args.renderHeight) * spanZ;
-  const width = (diff.crop.width / args.renderWidth) * spanX;
-  const height = (diff.crop.height / args.renderHeight) * spanZ;
-  const blob = await canvasToBlob(diff.canvas);
-  return { id: args.target.id, x, z, width, height, blob };
+    const spanX = Math.max(1e-6, args.bounds.maxX - args.bounds.minX);
+    const spanZ = Math.max(1e-6, args.bounds.maxZ - args.bounds.minZ);
+    const x = args.bounds.minX + (diff.crop.x / args.renderWidth) * spanX;
+    const z = args.bounds.minZ + (diff.crop.y / args.renderHeight) * spanZ;
+    const width = (diff.crop.width / args.renderWidth) * spanX;
+    const height = (diff.crop.height / args.renderHeight) * spanZ;
+    const blob = await canvasToBlob(diff.canvas);
+    return { id: args.target.id, x, z, width, height, blob };
+  } finally {
+    renderer.dispose();
+  }
 }
 
 const inflight = new Map<string, Promise<Main2DEffectRenderManifest>>();

@@ -280,12 +280,29 @@ export function clusterMain2DMarkers(args: {
     if (ra !== rb) parent[rb] = ra;
   };
 
+  const cellSize = Math.max(1, args.thresholdPx);
+  const cells = new Map<string, number[]>();
+  const cellKey = (x: number, y: number) => `${x}:${y}`;
   for (let i = 0; i < markersWithScreen.length; i += 1) {
-    for (let j = i + 1; j < markersWithScreen.length; j += 1) {
-      const dx = Math.abs(markersWithScreen[i].screenX - markersWithScreen[j].screenX);
-      const dy = Math.abs(markersWithScreen[i].screenY - markersWithScreen[j].screenY);
-      if (dx < args.thresholdPx && dy < args.thresholdPx) union(i, j);
+    const marker = markersWithScreen[i];
+    const cx = Math.floor(marker.screenX / cellSize);
+    const cy = Math.floor(marker.screenY / cellSize);
+    for (let oy = -1; oy <= 1; oy += 1) {
+      for (let ox = -1; ox <= 1; ox += 1) {
+        const indices = cells.get(cellKey(cx + ox, cy + oy));
+        if (!indices) continue;
+        for (const j of indices) {
+          const other = markersWithScreen[j];
+          const dx = Math.abs(marker.screenX - other.screenX);
+          const dy = Math.abs(marker.screenY - other.screenY);
+          if (dx < args.thresholdPx && dy < args.thresholdPx) union(i, j);
+        }
+      }
     }
+    const key = cellKey(cx, cy);
+    const bucket = cells.get(key) ?? [];
+    bucket.push(i);
+    cells.set(key, bucket);
   }
 
   const groups = new Map<number, number[]>();

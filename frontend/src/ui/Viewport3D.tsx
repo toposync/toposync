@@ -557,6 +557,7 @@ export function Viewport3D({
     let raf = 0;
     let needsRender = true;
     let lastFrameTs = 0;
+    let lastSize = { width: 0, height: 0 };
     const autoFitSize = new THREE.Vector3();
 
     function scheduleFrame() {
@@ -582,6 +583,8 @@ export function Viewport3D({
     function resize() {
       const w = containerEl.clientWidth;
       const h = containerEl.clientHeight;
+      if (w === lastSize.width && h === lastSize.height) return;
+      lastSize = { width: w, height: h };
       renderer.setSize(w, h);
       labelRenderer.setSize(w, h);
       camera.aspect = h > 0 ? w / h : 1;
@@ -678,7 +681,6 @@ export function Viewport3D({
     document.addEventListener("visibilitychange", handleVisibilityChange, { capture: true });
     window.addEventListener("toposync:invalidate", handleInvalidate as EventListener);
     window.addEventListener("pointerdown", handleUserActivity, activityListenerOptions);
-    window.addEventListener("pointermove", handleUserActivity, activityListenerOptions);
     window.addEventListener("keydown", handleUserActivity, { capture: true });
     window.addEventListener("wheel", handleUserActivity, activityListenerOptions);
     window.addEventListener("touchstart", handleUserActivity, activityListenerOptions);
@@ -865,7 +867,6 @@ export function Viewport3D({
       document.removeEventListener("visibilitychange", handleVisibilityChange, { capture: true });
       window.removeEventListener("toposync:invalidate", handleInvalidate as EventListener);
       window.removeEventListener("pointerdown", handleUserActivity, activityListenerOptions);
-      window.removeEventListener("pointermove", handleUserActivity, activityListenerOptions);
       window.removeEventListener("keydown", handleUserActivity, { capture: true });
       window.removeEventListener("wheel", handleUserActivity, activityListenerOptions);
       window.removeEventListener("touchstart", handleUserActivity, activityListenerOptions);

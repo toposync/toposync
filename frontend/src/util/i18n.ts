@@ -323,6 +323,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.render_modal.option_streams.title": "Streams",
     "core.ui.render_modal.option_streams.desc": "Display configured streams in a paged live dashboard.",
     "core.ui.main2d.vector.effects_error": "Some effects could not be rendered.",
+    "core.ui.main2d.vector.effects_loading": "Preparing effects...",
+    "core.ui.viewport_loading.composition": "Loading composition...",
+    "core.ui.viewport_loading.extensions": "Loading extensions...",
 
     "core.ui.streams.unavailable": "Streaming extension unavailable.",
     "core.ui.streams.empty": "No enabled streams. Create one in Settings > Streams.",
@@ -2038,6 +2041,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.render_modal.option_streams.title": "Transmissões",
     "core.ui.render_modal.option_streams.desc": "Exibe transmissões configuradas em um dashboard ao vivo com paginação.",
     "core.ui.main2d.vector.effects_error": "Alguns efeitos não puderam ser renderizados.",
+    "core.ui.main2d.vector.effects_loading": "Preparando efeitos...",
+    "core.ui.viewport_loading.composition": "Carregando composição...",
+    "core.ui.viewport_loading.extensions": "Carregando extensões...",
 
     "core.ui.streams.unavailable": "Extensão de streaming indisponível.",
     "core.ui.streams.empty": "Nenhuma transmissão ativa. Crie uma em Configurações > Transmissões.",

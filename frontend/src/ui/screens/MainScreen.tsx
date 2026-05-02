@@ -26,6 +26,8 @@ type Props = {
   compositionName: string;
   compositions: CompositionSummary[];
   activeCompositionId: string;
+  compositionLoaded: boolean;
+  extensionsLoaded: boolean;
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
   viewSettings: ViewSettings;
@@ -173,6 +175,8 @@ export function MainScreen({
   compositionName,
   compositions,
   activeCompositionId,
+  compositionLoaded,
+  extensionsLoaded,
   elements,
   elementTypesById,
   viewSettings,
@@ -502,10 +506,25 @@ export function MainScreen({
         : renderMode === "vector2d"
           ? t("core.ui.render_modal.option_vector2d.title", {}, "2D (Vector)")
           : t("core.ui.render_modal.option_streams.title", {}, "Streams");
+  const viewportLoadingMessage =
+    renderMode === "streams"
+      ? null
+      : !compositionLoaded
+        ? t("core.ui.viewport_loading.composition", {}, "Loading composition...")
+        : !extensionsLoaded
+          ? t("core.ui.viewport_loading.extensions", {}, "Loading extensions...")
+          : null;
 
   return (
     <div className="screenRoot">
-      {renderMode === "3d" ? (
+      {viewportLoadingMessage ? (
+        <div className="viewportRoot mainViewportLoadingRoot">
+          <div className="mainViewportLoadingCard">
+            <div className="mainViewportLoadingSpinner" aria-hidden="true" />
+            <div className="mainViewportLoadingText">{viewportLoadingMessage}</div>
+          </div>
+        </div>
+      ) : renderMode === "3d" ? (
         <Viewport3D
           elements={elements}
           elementTypesById={elementTypesById}
@@ -739,7 +758,7 @@ export function MainScreen({
         )}
       </div>
 
-      {renderMode !== "streams" && elements.length === 0 ? (
+      {renderMode !== "streams" && !viewportLoadingMessage && elements.length === 0 ? (
         <div className="emptyHint">
           <div className="card">
             <div className="cardTitle">{t("core.ui.empty_title")}</div>

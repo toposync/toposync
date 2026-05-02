@@ -30,6 +30,11 @@ const MARKER_BUTTON_SIZE_PX = 44;
 const MARKER_CLUSTER_THRESHOLD_PX = MARKER_BUTTON_SIZE_PX * 0.92;
 const STAGE_PX_PER_METER = 96;
 
+type WindowWithIdleCallback = Window & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+  cancelIdleCallback?: (id: number) => void;
+};
+
 function markerKey(marker: Main2DMarker, fallbackElementId: string): string {
   return marker.id || marker.elementId || fallbackElementId;
 }
@@ -62,6 +67,9 @@ export function MainViewportVector2D({
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const clickTimersRef = useRef<Map<string, number>>(new Map());
   const invalidateRafRef = useRef<number | null>(null);
+  const transformRef = useRef<ViewTransform>({ scale: 1, x: 0, y: 0 });
+  const pendingTransformRef = useRef<ViewTransform | null>(null);
+  const transformRafRef = useRef<number | null>(null);
 
   const [transform, setTransform] = useState<ViewTransform>({ scale: 1, x: 0, y: 0 });
   const [stateVersion, setStateVersion] = useState(0);
@@ -69,6 +77,32 @@ export function MainViewportVector2D({
   const [effectLoading, setEffectLoading] = useState(false);
   const [effectError, setEffectError] = useState<string | null>(null);
   const [clusterModalMarkers, setClusterModalMarkers] = useState<Main2DMarkerStage[] | null>(null);
+
+  const flushTransform = useCallback(() => {
+    transformRafRef.current = null;
+    const next = pendingTransformRef.current;
+    pendingTransformRef.current = null;
+    if (!next) return;
+    transformRef.current = next;
+    setTransform(next);
+  }, []);
+
+  const scheduleTransform = useCallback(
+    (updater: (prev: ViewTransform) => ViewTransform) => {
+      const base = pendingTransformRef.current ?? transformRef.current;
+      pendingTransformRef.current = updater(base);
+      if (transformRafRef.current == null) transformRafRef.current = window.requestAnimationFrame(flushTransform);
+    },
+    [flushTransform],
+  );
+
+  const setTransformImmediately = useCallback((next: ViewTransform) => {
+    if (transformRafRef.current != null) window.cancelAnimationFrame(transformRafRef.current);
+    transformRafRef.current = null;
+    pendingTransformRef.current = null;
+    transformRef.current = next;
+    setTransform(next);
+  }, []);
 
   const invalidate = useCallback(() => {
     if (invalidateRafRef.current != null) return;
@@ -81,7 +115,9 @@ export function MainViewportVector2D({
   useEffect(() => {
     return () => {
       if (invalidateRafRef.current != null) window.cancelAnimationFrame(invalidateRafRef.current);
+      if (transformRafRef.current != null) window.cancelAnimationFrame(transformRafRef.current);
       invalidateRafRef.current = null;
+      transformRafRef.current = null;
     };
   }, []);
 
@@ -143,8 +179,8 @@ export function MainViewportVector2D({
     if (!container) return;
     const next = computeFitTransform(container.clientWidth, container.clientHeight, stageWidth, stageHeight);
     fitTransformRef.current = next;
-    setTransform(next);
-  }, [stageHeight, stageWidth]);
+    setTransformImmediately(next);
+  }, [setTransformImmediately, stageHeight, stageWidth]);
 
   useEffect(() => {
     recomputeFit();
@@ -159,9 +195,9 @@ export function MainViewportVector2D({
   }, [recomputeFit]);
 
   const markersStage = useMemo<Main2DMarkerStage[]>(() => {
-    const out = rawMarkers.map(({ elementId, marker }) => {
+    const out = rawMarkers.map(({ elementId, marker }, index) => {
       const stage = projectWorldToStage({ x: marker.x, z: marker.z }, bounds, stageWidth, stageHeight);
-      const id = markerKey(marker, elementId);
+      const id = `${markerKey(marker, elementId)}:${index}`;
       return {
         ...marker,
         id,
@@ -216,27 +252,36 @@ export function MainViewportVector2D({
     }
 
     setEffectLoading(true);
-    void getOrCreateMain2DEffectManifest({
-      compositionId,
-      elements,
-      elementTypesById,
-      bounds,
-      targets: effectTargets,
-    })
-      .then((manifest) => {
-        if (cancelled) return;
-        setEffectManifest(manifest);
-        setEffectLoading(false);
+    const win = window as WindowWithIdleCallback;
+    let timeoutId: number | null = null;
+    let idleId: number | null = null;
+    const run = () => {
+      void getOrCreateMain2DEffectManifest({
+        compositionId,
+        elements,
+        elementTypesById,
+        bounds,
+        targets: effectTargets,
       })
-      .catch((err) => {
-        if (cancelled) return;
-        console.warn("[vector2d:effects]", err);
-        setEffectError(err instanceof Error ? err.message : String(err));
-        setEffectLoading(false);
-      });
+        .then((manifest) => {
+          if (cancelled) return;
+          setEffectManifest(manifest);
+          setEffectLoading(false);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          console.warn("[vector2d:effects]", err);
+          setEffectError(err instanceof Error ? err.message : String(err));
+          setEffectLoading(false);
+        });
+    };
+    if (typeof win.requestIdleCallback === "function") idleId = win.requestIdleCallback(run, { timeout: 1000 });
+    else timeoutId = window.setTimeout(run, 250);
 
     return () => {
       cancelled = true;
+      if (idleId != null && typeof win.cancelIdleCallback === "function") win.cancelIdleCallback(idleId);
+      if (timeoutId != null) window.clearTimeout(timeoutId);
     };
   }, [bounds, compositionId, effectCacheKey, elementTypesById, elements]);
 
@@ -258,7 +303,7 @@ export function MainViewportVector2D({
       const zoomSpeed = event.ctrlKey ? 0.0042 : 0.0024;
       const zoomFactor = Math.exp(-event.deltaY * zoomSpeed);
 
-      setTransform((prev) => {
+      scheduleTransform((prev) => {
         const baseMin = fitTransformRef.current.scale;
         const minScale = Math.max(0.05, baseMin * 0.5);
         const maxScale = Math.max(minScale * 1.5, baseMin * 10);
@@ -268,7 +313,7 @@ export function MainViewportVector2D({
         return { scale: nextScale, x: cursorX - stageX * nextScale, y: cursorY - stageY * nextScale };
       });
     },
-    [],
+    [scheduleTransform],
   );
 
   const handlePointerDown = useCallback((event: React.PointerEvent) => {
@@ -303,8 +348,8 @@ export function MainViewportVector2D({
     const dx = event.clientX - last.x;
     const dy = event.clientY - last.y;
     lastPointerRef.current = { x: event.clientX, y: event.clientY };
-    setTransform((prev) => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
-  }, []);
+    scheduleTransform((prev) => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
+  }, [scheduleTransform]);
 
   useEffect(() => {
     return () => {
@@ -340,11 +385,27 @@ export function MainViewportVector2D({
     [onElementActivated],
   );
 
-  const renderFallbackVector = (element: CompositionElement): React.ReactNode => (
-    <g key={element.id} className="mainVector2dFallback">
+  const renderFallbackVector = (element: CompositionElement, key: string): React.ReactNode => (
+    <g key={key} className="mainVector2dFallback">
       <circle cx={element.position.x} cy={element.position.z} r={0.16} />
       <title>{element.name || element.type}</title>
     </g>
+  );
+
+  const vectorElements = useMemo(
+    () =>
+      orderedElements.map((element, index) => {
+        const key = `${element.id}:${index}`;
+        const def = elementTypesById[element.type];
+        if (!def?.renderMain2DVector) return renderFallbackVector(element, key);
+        try {
+          return <React.Fragment key={key}>{def.renderMain2DVector({ element, ctx: { bounds, scale: 1 } })}</React.Fragment>;
+        } catch (err) {
+          console.warn(`[vector2d:renderMain2DVector:${element.type}]`, err);
+          return renderFallbackVector(element, key);
+        }
+      }),
+    [bounds, elementTypesById, orderedElements, stateVersion],
   );
 
   return (
@@ -376,18 +437,7 @@ export function MainViewportVector2D({
               <feDropShadow dx="0" dy="0.035" stdDeviation="0.04" floodColor="rgba(0,0,0,0.24)" />
             </filter>
           </defs>
-          <g className="mainVector2dElements">
-            {orderedElements.map((element) => {
-              const def = elementTypesById[element.type];
-              if (!def?.renderMain2DVector) return renderFallbackVector(element);
-              try {
-                return <React.Fragment key={element.id}>{def.renderMain2DVector({ element, ctx: { bounds, scale: transform.scale } })}</React.Fragment>;
-              } catch (err) {
-                console.warn(`[vector2d:renderMain2DVector:${element.type}]`, err);
-                return renderFallbackVector(element);
-              }
-            })}
-          </g>
+          <g className="mainVector2dElements">{vectorElements}</g>
           {effectManifest ? (
             <g className="mainVector2dEffects">
               {effectManifest.effects.map((effect) => {
@@ -457,7 +507,7 @@ export function MainViewportVector2D({
 
       {(effectLoading || effectError) && effectTargets.length > 0 ? (
         <div className="mainVector2dStatus">
-          {effectError ? t("core.ui.main2d.vector.effects_error", {}, "Some effects could not be rendered.") : t("core.ui.loading")}
+          {effectError ? t("core.ui.main2d.vector.effects_error", {}, "Some effects could not be rendered.") : t("core.ui.main2d.vector.effects_loading", {}, "Preparing effects...")}
         </div>
       ) : null}
 

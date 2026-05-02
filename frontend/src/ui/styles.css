@@ -4592,6 +4592,43 @@ textarea {
   background: var(--color-canvas2d-background);
 }
 
+.mainViewportLoadingRoot {
+  display: grid;
+  place-items: center;
+  background: var(--color-canvas2d-background);
+}
+
+.mainViewportLoadingCard {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-frost);
+  color: var(--color-text-muted);
+  box-shadow: var(--shadow-elevation-1);
+}
+
+.mainViewportLoadingSpinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid color-mix(in srgb, var(--color-text-muted) 24%, transparent);
+  border-top-color: var(--color-accent-blue);
+  border-radius: 50%;
+  animation: topoSpin 0.85s linear infinite;
+}
+
+.mainViewportLoadingText {
+  font-size: var(--font-size-13);
+}
+
+@keyframes topoSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .mainVector2dRoot {
   overflow: hidden;
   touch-action: none;

@@ -4,15 +4,17 @@ import asyncio
 import importlib
 import re
 import sys
+import tempfile
 from importlib import metadata as importlib_metadata
+from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
+from pydantic import BaseModel, Field
 
 from toposync.extensions.manifest import ExtensionManifest
-from toposync.extensions.manager import ExtensionManager, _iter_entry_points
+from toposync.extensions.manager import ExtensionManager, _current_core_version, _iter_entry_points
 from toposync.runtime.config_store import AppSettings, ConfigStore
 
 
@@ -37,7 +39,7 @@ RECOMMENDED_EXTENSIONS: tuple[RecommendedExtension, ...] = (
         name="Structural",
         description="Adiciona paredes, areas e ferramentas estruturais de desenho.",
         package="toposync-ext-structural",
-        pip_spec="toposync-ext-structural==0.1.0",
+        pip_spec="toposync-ext-structural",
         category="visual",
     ),
     RecommendedExtension(
@@ -45,7 +47,7 @@ RECOMMENDED_EXTENSIONS: tuple[RecommendedExtension, ...] = (
         name="Models",
         description="Importa modelos GLB/GLTF para composicoes 2D/3D.",
         package="toposync-ext-models",
-        pip_spec="toposync-ext-models==0.1.0",
+        pip_spec="toposync-ext-models",
         category="visual",
     ),
     RecommendedExtension(
@@ -53,7 +55,7 @@ RECOMMENDED_EXTENSIONS: tuple[RecommendedExtension, ...] = (
         name="Images",
         description="Importa imagens como sobreposicao ou referencia de desenho.",
         package="toposync-ext-images",
-        pip_spec="toposync-ext-images==0.1.0",
+        pip_spec="toposync-ext-images",
         category="visual",
     ),
     RecommendedExtension(
@@ -61,7 +63,7 @@ RECOMMENDED_EXTENSIONS: tuple[RecommendedExtension, ...] = (
         name="Home Assistant",
         description="Integra entidades e servicos do Home Assistant.",
         package="toposync-ext-home-assistant",
-        pip_spec="toposync-ext-home-assistant==0.1.1",
+        pip_spec="toposync-ext-home-assistant",
         category="integration",
     ),
     RecommendedExtension(
@@ -69,7 +71,7 @@ RECOMMENDED_EXTENSIONS: tuple[RecommendedExtension, ...] = (
         name="Cameras",
         description="Adiciona cameras RTSP/ONVIF e operadores de camera.",
         package="toposync-ext-cameras",
-        pip_spec="toposync-ext-cameras==0.1.1",
+        pip_spec="toposync-ext-cameras",
         category="camera",
     ),
     RecommendedExtension(
@@ -77,7 +79,7 @@ RECOMMENDED_EXTENSIONS: tuple[RecommendedExtension, ...] = (
         name="Vision",
         description="Adiciona deteccao, tracking e segmentacao para pipelines.",
         package="toposync-ext-vision",
-        pip_spec="toposync-ext-vision==0.1.3",
+        pip_spec="toposync-ext-vision",
         category="pipeline",
     ),
     RecommendedExtension(
@@ -85,7 +87,7 @@ RECOMMENDED_EXTENSIONS: tuple[RecommendedExtension, ...] = (
         name="Streaming",
         description="Cria transmissoes RTSP/HLS/WebRTC a partir de cameras e pipelines.",
         package="toposync-ext-streaming",
-        pip_spec="toposync-ext-streaming==0.1.1",
+        pip_spec="toposync-ext-streaming",
         category="streaming",
     ),
 )
@@ -193,9 +195,10 @@ async def ensure_desired_extensions_installed(
     results: list[PipOperationResult] = []
     for item in config.desired:
         package = _package_name_from_spec(item.pip_spec) or item.package
-        if package and _installed_distribution_version(package) is not None:
+        upgrade = _tracks_updates_requirement(item.pip_spec)
+        if package and _installed_distribution_version(package) is not None and not upgrade:
             continue
-        result = await run_pip_install(item.pip_spec)
+        result = await run_pip_install(item.pip_spec, upgrade=upgrade)
         results.append(result)
     return results
 
@@ -209,8 +212,9 @@ async def install_recommended_extension(
         raise ValueError("Unknown recommended extension")
 
     result = PipOperationResult(ok=True)
-    if _installed_distribution_version(rec.package) is None:
-        result = await run_pip_install(rec.pip_spec)
+    upgrade = _tracks_updates_requirement(rec.pip_spec)
+    if _installed_distribution_version(rec.package) is None or upgrade:
+        result = await run_pip_install(rec.pip_spec, upgrade=upgrade)
         if not result.ok:
             return result
 
@@ -238,7 +242,7 @@ async def install_manual_extension(config_store: ConfigStore, pip_spec: str) -> 
     if not package:
         raise ValueError("Invalid package spec")
 
-    result = await run_pip_install(spec)
+    result = await run_pip_install(spec, upgrade=_tracks_updates_requirement(spec))
     if not result.ok:
         return result
 
@@ -526,8 +530,23 @@ def discover_installed_extensions() -> dict[str, InstalledExtensionProbe]:
     return out
 
 
-async def run_pip_install(pip_spec: str) -> PipOperationResult:
-    return await _run_pip(["install", "--disable-pip-version-check", "--no-input", pip_spec])
+async def run_pip_install(pip_spec: str, *, upgrade: bool = False) -> PipOperationResult:
+    args = ["install", "--disable-pip-version-check", "--no-input"]
+    if upgrade:
+        args.append("--upgrade")
+
+    constraint_file = _write_current_core_constraint_file()
+    try:
+        if constraint_file is not None:
+            args.extend(["--constraint", str(constraint_file)])
+        args.append(pip_spec)
+        return await _run_pip(args)
+    finally:
+        if constraint_file is not None:
+            try:
+                constraint_file.unlink()
+            except OSError:
+                pass
 
 
 async def run_pip_uninstall(package: str) -> PipOperationResult:
@@ -652,6 +671,39 @@ def _installed_distribution_version(package: str) -> str | None:
         return importlib_metadata.version(name)
     except importlib_metadata.PackageNotFoundError:
         return None
+
+
+def _tracks_updates_requirement(pip_spec: str) -> bool:
+    raw = str(pip_spec or "").strip()
+    if not raw:
+        return False
+    try:
+        req = Requirement(raw)
+    except InvalidRequirement:
+        return False
+
+    for specifier in req.specifier:
+        if specifier.operator == "===":
+            return False
+        if specifier.operator == "==" and "*" not in specifier.version:
+            return False
+    return True
+
+
+def _write_current_core_constraint_file() -> Path | None:
+    version = str(_current_core_version() or "").strip()
+    if not version:
+        return None
+
+    with tempfile.NamedTemporaryFile(
+        "w",
+        delete=False,
+        encoding="utf-8",
+        prefix="toposync-extension-constraints-",
+        suffix=".txt",
+    ) as handle:
+        handle.write(f"toposync-core=={version}\n")
+        return Path(handle.name)
 
 
 def _normalize_extension_id(value: Any) -> str:

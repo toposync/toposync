@@ -831,6 +831,7 @@ export function SettingsScreen({
               placeholder={t("core.ui.settings.extensions.manual_placeholder")}
               disabled={!backendAvailable || Boolean(extensionActionId)}
             />
+            <span className="extensionManualHint">{t("core.ui.settings.extensions.manual_hint")}</span>
           </label>
           <button
             className="primaryButton"

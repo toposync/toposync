@@ -3601,6 +3601,12 @@ textarea {
   margin: 0;
 }
 
+.extensionManualHint {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .extensionsSearch {
   flex: 1;
   min-width: 0;

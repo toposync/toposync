@@ -2,7 +2,15 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import type { GraphicsQuality, HostApi, SettingsPanel, ThemeDefinition, WallHeightPreset } from "@toposync/plugin-api";
 
-import type { AppSettings, AuthUser } from "../../util/api";
+import {
+  disableManagedExtension,
+  enableManagedExtension,
+  fetchExtensionManagementCatalog,
+  installManualManagedExtension,
+  installRecommendedManagedExtension,
+  removeManagedExtension,
+} from "../../util/api";
+import type { AppSettings, AuthUser, ExtensionManagementCatalog, ExtensionManagementItem } from "../../util/api";
 import { i18n, resolveLocalizedString } from "../../util/i18n";
 import type { AccentIntensity, TransparencyLevel, Viewport3DBackground } from "../../util/theme";
 
@@ -40,6 +48,7 @@ type Props = {
 
 const VIEW_PANEL_ID = "__view__";
 const CORE_PANEL_ID = "__core__";
+const EXTENSIONS_PANEL_ID = "__extensions__";
 const ACTIVE_PANEL_STORAGE_KEY = "toposync.settings.active_panel.v3";
 
 type SettingsEntry =
@@ -68,6 +77,19 @@ function loadActivePanelId(defaultId: string): string {
     // ignore
   }
   return defaultId;
+}
+
+function extensionStatusRank(status: ExtensionManagementItem["status"]): number {
+  if (status === "active") return 0;
+  if (status === "pending_restart") return 1;
+  if (status === "disabled") return 2;
+  if (status === "error") return 3;
+  if (status === "not_installed") return 4;
+  return 5;
+}
+
+function packageLabel(item: ExtensionManagementItem): string {
+  return item.package || item.pip_spec || item.extension_id;
 }
 
 export function SettingsScreen({
@@ -107,10 +129,59 @@ export function SettingsScreen({
   const [saving, setSaving] = useState(false);
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
   const [confirmExitOpen, setConfirmExitOpen] = useState(false);
+  const [extensionCatalog, setExtensionCatalog] = useState<ExtensionManagementCatalog | null>(null);
+  const [extensionCatalogLoading, setExtensionCatalogLoading] = useState(false);
+  const [extensionQuery, setExtensionQuery] = useState("");
+  const [extensionManualSpec, setExtensionManualSpec] = useState("");
+  const [extensionActionId, setExtensionActionId] = useState<string | null>(null);
+  const [extensionError, setExtensionError] = useState<string | null>(null);
+  const [extensionNotice, setExtensionNotice] = useState<string | null>(null);
   const [pendingExitAction, setPendingExitAction] = useState<
     null | "close" | "pipelines" | "processing_servers" | "access" | "logout"
   >(null);
   const lastSettingsRef = useRef<AppSettings>(settings);
+
+  async function loadExtensionCatalog(): Promise<void> {
+    if (!backendAvailable) {
+      setExtensionCatalog(null);
+      return;
+    }
+    setExtensionCatalogLoading(true);
+    setExtensionError(null);
+    try {
+      setExtensionCatalog(await fetchExtensionManagementCatalog());
+    } catch (err) {
+      setExtensionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExtensionCatalogLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!backendAvailable) {
+      setExtensionCatalog(null);
+      return;
+    }
+    let cancelled = false;
+
+    async function run(): Promise<void> {
+      setExtensionCatalogLoading(true);
+      setExtensionError(null);
+      try {
+        const catalog = await fetchExtensionManagementCatalog();
+        if (!cancelled) setExtensionCatalog(catalog);
+      } catch (err) {
+        if (!cancelled) setExtensionError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setExtensionCatalogLoading(false);
+      }
+    }
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [backendAvailable]);
 
   const orderedPanels = useMemo(() => {
     const list = [...panels];
@@ -400,6 +471,15 @@ export function SettingsScreen({
       ),
     };
 
+    const extensionsEntry: SettingsEntry = {
+      kind: "core",
+      id: EXTENSIONS_PANEL_ID,
+      icon: "puzzle-piece",
+      title: t("core.ui.settings.sections.extensions"),
+      desc: t("core.ui.settings.sections.extensions_desc"),
+      render: () => null,
+    };
+
     const extEntries: SettingsEntry[] = orderedPanels.map((panel) => ({
       kind: "extension",
       id: panel.id,
@@ -408,7 +488,7 @@ export function SettingsScreen({
       desc: panel.description ? resolveLocalizedString(panel.description) : "",
       panel,
     }));
-    return [viewEntry, coreEntry, ...extEntries];
+    return [viewEntry, coreEntry, extensionsEntry, ...extEntries];
   }, [
     backendAvailable,
     accentIntensity,
@@ -570,6 +650,257 @@ export function SettingsScreen({
     return t("core.ui.settings.discard_and_close");
   }, [pendingExitAction, t]);
 
+  const filteredExtensionItems = useMemo(() => {
+    const query = extensionQuery.trim().toLowerCase();
+    const items = [...(extensionCatalog?.items ?? [])].sort((a, b) => {
+      const rank = extensionStatusRank(a.status) - extensionStatusRank(b.status);
+      if (rank !== 0) return rank;
+      const rec = Number(b.recommended) - Number(a.recommended);
+      if (rec !== 0) return rec;
+      return a.name.localeCompare(b.name, locale);
+    });
+    if (!query) return items;
+    return items.filter((item) => {
+      const haystack = [item.name, item.description, item.extension_id, item.package, item.pip_spec, item.category]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [extensionCatalog, extensionQuery, locale]);
+
+  function extensionStatusLabel(status: ExtensionManagementItem["status"]): string {
+    return t(`core.ui.settings.extensions.status.${status}`, {}, status);
+  }
+
+  function extensionSourceLabel(source: ExtensionManagementItem["source"]): string {
+    return t(`core.ui.settings.extensions.source.${source}`, {}, source);
+  }
+
+  async function runExtensionAction(actionId: string, action: () => Promise<{ ok: boolean; catalog: ExtensionManagementCatalog; error: string | null }>): Promise<void> {
+    if (!backendAvailable || extensionActionId) return;
+    setExtensionActionId(actionId);
+    setExtensionError(null);
+    setExtensionNotice(null);
+    try {
+      const result = await action();
+      setExtensionCatalog(result.catalog);
+      if (!result.ok) {
+        setExtensionError(result.error || t("core.ui.settings.extensions.error.operation_failed"));
+      } else {
+        setExtensionNotice(t("core.ui.settings.extensions.operation_done"));
+      }
+    } catch (err) {
+      setExtensionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExtensionActionId(null);
+    }
+  }
+
+  async function submitManualExtension(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const spec = extensionManualSpec.trim();
+    if (!spec) return;
+    const confirmed = window.confirm(t("core.ui.settings.extensions.confirm_install_manual", { spec }));
+    if (!confirmed) return;
+    await runExtensionAction("__manual__", async () => {
+      const result = await installManualManagedExtension(spec);
+      if (result.ok) setExtensionManualSpec("");
+      return result;
+    });
+  }
+
+  function renderExtensionActions(item: ExtensionManagementItem): React.ReactNode {
+    const busy = extensionActionId === item.extension_id || extensionActionId === `${item.extension_id}:remove`;
+    const disabled = !backendAvailable || Boolean(extensionActionId);
+    const installAction = item.recommended
+      ? () => installRecommendedManagedExtension(item.extension_id)
+      : () => installManualManagedExtension(item.pip_spec || item.package);
+
+    return (
+      <div className="extensionItemActions">
+        {item.status === "not_installed" || item.status === "error" ? (
+          item.pip_spec || item.recommended ? (
+            <button
+              className="primaryButton"
+              type="button"
+              disabled={disabled || busy}
+              onClick={() => {
+                const confirmed = window.confirm(
+                  t("core.ui.settings.extensions.confirm_install", { name: item.name || item.extension_id }),
+                );
+                if (!confirmed) return;
+                void runExtensionAction(item.extension_id, installAction);
+              }}
+            >
+              <Icon name="download" />
+              <span>{busy ? t("core.ui.settings.extensions.installing") : t("core.ui.settings.extensions.install")}</span>
+            </button>
+          ) : null
+        ) : item.enabled ? (
+          <button
+            className="chipButton"
+            type="button"
+            disabled={disabled || busy}
+            onClick={() => void runExtensionAction(item.extension_id, () => disableManagedExtension(item.extension_id))}
+          >
+            <Icon name="power-off" />
+            <span>{t("core.ui.settings.extensions.disable")}</span>
+          </button>
+        ) : (
+          <button
+            className="primaryButton"
+            type="button"
+            disabled={disabled || busy}
+            onClick={() => void runExtensionAction(item.extension_id, () => enableManagedExtension(item.extension_id))}
+          >
+            <Icon name="power-off" />
+            <span>{t("core.ui.settings.extensions.enable")}</span>
+          </button>
+        )}
+
+        {item.removable ? (
+          <button
+            className="dangerButton"
+            type="button"
+            disabled={disabled || busy}
+            onClick={() => {
+              const confirmed = window.confirm(
+                t("core.ui.settings.extensions.confirm_remove", { name: item.name || item.extension_id }),
+              );
+              if (!confirmed) return;
+              void runExtensionAction(`${item.extension_id}:remove`, () => removeManagedExtension(item.extension_id));
+            }}
+          >
+            <Icon name="trash" />
+            <span>{t("core.ui.settings.extensions.remove")}</span>
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderExtensionsManagementPanel(): React.ReactNode {
+    const activeCount = extensionCatalog?.items.filter((item) => item.status === "active").length ?? 0;
+    const disabledCount = extensionCatalog?.items.filter((item) => item.status === "disabled").length ?? 0;
+    const recommendedCount = extensionCatalog?.items.filter((item) => item.recommended).length ?? 0;
+
+    return (
+      <div className="extensionsSettingsPanel">
+        {!backendAvailable ? (
+          <div className="card">
+            <div className="cardTitle">{t("core.ui.settings.backend_offline_title")}</div>
+            <div className="cardBody">{t("core.ui.settings.backend_offline_desc")}</div>
+          </div>
+        ) : null}
+
+        {extensionCatalog?.restart_required ? (
+          <div className="extensionStatusBanner">
+            <Icon name="rotate-right" />
+            <div>
+              <div className="extensionStatusBannerTitle">{t("core.ui.settings.extensions.restart_required")}</div>
+              <div className="extensionStatusBannerDesc">{t("core.ui.settings.extensions.restart_required_desc")}</div>
+            </div>
+          </div>
+        ) : null}
+
+        {extensionError ? <div className="errorText">{extensionError}</div> : null}
+        {extensionNotice ? <div className="extensionNotice">{extensionNotice}</div> : null}
+
+        <div className="extensionSummaryGrid">
+          <div className="extensionSummaryItem">
+            <span>{t("core.ui.settings.extensions.summary.active")}</span>
+            <strong>{activeCount}</strong>
+          </div>
+          <div className="extensionSummaryItem">
+            <span>{t("core.ui.settings.extensions.summary.disabled")}</span>
+            <strong>{disabledCount}</strong>
+          </div>
+          <div className="extensionSummaryItem">
+            <span>{t("core.ui.settings.extensions.summary.recommended")}</span>
+            <strong>{recommendedCount}</strong>
+          </div>
+        </div>
+
+        <form className="extensionManualForm" onSubmit={(event) => void submitManualExtension(event)}>
+          <label className="field">
+            <span className="label">{t("core.ui.settings.extensions.manual_label")}</span>
+            <input
+              className="input"
+              value={extensionManualSpec}
+              onChange={(event) => setExtensionManualSpec(event.target.value)}
+              placeholder={t("core.ui.settings.extensions.manual_placeholder")}
+              disabled={!backendAvailable || Boolean(extensionActionId)}
+            />
+          </label>
+          <button
+            className="primaryButton"
+            type="submit"
+            disabled={!backendAvailable || Boolean(extensionActionId) || !extensionManualSpec.trim()}
+          >
+            <Icon name="download" />
+            <span>{extensionActionId === "__manual__" ? t("core.ui.settings.extensions.installing") : t("core.ui.settings.extensions.install")}</span>
+          </button>
+        </form>
+
+        <div className="extensionsToolbar">
+          <div className="extensionsSearch">
+            <Icon name="magnifying-glass" />
+            <input
+              className="input"
+              value={extensionQuery}
+              onChange={(event) => setExtensionQuery(event.target.value)}
+              placeholder={t("core.ui.settings.extensions.search_placeholder")}
+            />
+          </div>
+          <button className="chipButton" type="button" disabled={!backendAvailable || extensionCatalogLoading} onClick={() => void loadExtensionCatalog()}>
+            <Icon name="rotate-right" />
+            <span>{t("core.actions.refresh")}</span>
+          </button>
+        </div>
+
+        {extensionCatalogLoading ? <div className="settingsStatusMuted">{t("core.ui.settings.extensions.loading")}</div> : null}
+
+        <div className="extensionItemsList">
+          {filteredExtensionItems.map((item) => (
+            <div className="extensionItem" key={item.extension_id}>
+              <div className="extensionItemHeader">
+                <div className="extensionItemTitleBlock">
+                  <div className="extensionItemTitle">{item.name || item.extension_id}</div>
+                  {item.description ? <div className="extensionItemDescription">{item.description}</div> : null}
+                </div>
+                <div className={["extensionStatusBadge", `is-${item.status}`].join(" ")}>
+                  {extensionStatusLabel(item.status)}
+                </div>
+              </div>
+
+              <div className="extensionItemMeta">
+                <span>{packageLabel(item)}</span>
+                {item.package_version ? <span>{item.package_version}</span> : null}
+                <span>{extensionSourceLabel(item.source)}</span>
+                {item.category ? <span>{item.category}</span> : null}
+              </div>
+
+              {item.status_detail ? <div className="extensionItemDetail">{item.status_detail}</div> : null}
+
+              <div className="extensionItemFooter">
+                <div className="extensionItemBadges">
+                  {item.recommended ? <span className="extensionMiniBadge">{t("core.ui.settings.extensions.recommended")}</span> : null}
+                  {item.managed ? <span className="extensionMiniBadge">{t("core.ui.settings.extensions.managed")}</span> : null}
+                  {item.installed ? <span className="extensionMiniBadge">{t("core.ui.settings.extensions.installed")}</span> : null}
+                </div>
+                {renderExtensionActions(item)}
+              </div>
+            </div>
+          ))}
+
+          {!extensionCatalogLoading && filteredExtensionItems.length === 0 ? (
+            <div className="settingsStatusMuted">{t("core.ui.settings.extensions.no_results")}</div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="settingsRoot screenRoot">
       <div className="settingsTopbar">
@@ -664,7 +995,9 @@ export function SettingsScreen({
           </div>
 
           <div className="settingsContent">
-            {activeEntry.kind === "core" ? (
+            {activeEntry.id === EXTENSIONS_PANEL_ID ? (
+              renderExtensionsManagementPanel()
+            ) : activeEntry.kind === "core" ? (
               activeEntry.render()
             ) : activeEntry.kind === "extension" ? (
               <div>{renderExtensionPanel(activeEntry.panel)}</div>

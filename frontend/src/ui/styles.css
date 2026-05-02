@@ -3515,6 +3515,230 @@ textarea {
   justify-content: center;
 }
 
+.extensionsSettingsPanel {
+  display: grid;
+  gap: 12px;
+}
+
+.extensionStatusBanner,
+.extensionNotice {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-frost);
+  padding: 12px;
+  box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
+}
+
+.extensionStatusBanner {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border-color: color-mix(in srgb, var(--color-warning) 46%, var(--color-border-subtle));
+}
+
+.extensionStatusBanner > i {
+  margin-top: 2px;
+  color: var(--color-warning);
+}
+
+.extensionStatusBannerTitle {
+  font-weight: 850;
+}
+
+.extensionStatusBannerDesc,
+.extensionItemDescription,
+.extensionItemDetail {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.extensionNotice {
+  color: color-mix(in srgb, var(--color-success) 82%, var(--color-text-primary));
+  border-color: color-mix(in srgb, var(--color-success) 36%, var(--color-border-subtle));
+}
+
+.extensionSummaryGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.extensionSummaryItem {
+  min-width: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-frost);
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.extensionSummaryItem span {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.extensionSummaryItem strong {
+  font-size: 16px;
+}
+
+.extensionManualForm,
+.extensionsToolbar {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+}
+
+.extensionManualForm .field {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.extensionsSearch {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+
+.extensionsSearch > i {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+
+.extensionsSearch .input {
+  width: 100%;
+  padding-left: 32px;
+}
+
+.extensionItemsList {
+  display: grid;
+  gap: 10px;
+}
+
+.extensionItem {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-frost);
+  padding: 12px;
+  box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
+}
+
+.extensionItemHeader,
+.extensionItemFooter {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.extensionItemTitleBlock {
+  min-width: 0;
+}
+
+.extensionItemTitle {
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.extensionItemDescription {
+  margin-top: 4px;
+}
+
+.extensionItemMeta,
+.extensionItemBadges,
+.extensionItemActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.extensionItemMeta {
+  margin-top: 10px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.extensionItemMeta span,
+.extensionMiniBadge {
+  min-height: 22px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-frost-ultra);
+  padding: 3px 8px;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.extensionItemDetail {
+  margin-top: 10px;
+}
+
+.extensionItemFooter {
+  margin-top: 12px;
+  align-items: center;
+}
+
+.extensionMiniBadge {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.extensionStatusBadge {
+  flex: 0 0 auto;
+  min-height: 24px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 4px 9px;
+  background: var(--color-surface-frost-ultra);
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.extensionStatusBadge.is-active {
+  border-color: color-mix(in srgb, var(--color-success) 48%, var(--color-border-subtle));
+  color: color-mix(in srgb, var(--color-success) 82%, var(--color-text-primary));
+}
+
+.extensionStatusBadge.is-disabled,
+.extensionStatusBadge.is-not_installed {
+  color: var(--color-text-muted);
+}
+
+.extensionStatusBadge.is-pending_restart {
+  border-color: color-mix(in srgb, var(--color-warning) 48%, var(--color-border-subtle));
+  color: color-mix(in srgb, var(--color-warning) 82%, var(--color-text-primary));
+}
+
+.extensionStatusBadge.is-error {
+  border-color: color-mix(in srgb, var(--color-danger) 48%, var(--color-border-subtle));
+  color: color-mix(in srgb, var(--color-danger) 82%, var(--color-text-primary));
+}
+
+.extensionManualForm .primaryButton,
+.extensionsToolbar .chipButton,
+.extensionItemActions .chipButton,
+.extensionItemActions .primaryButton,
+.extensionItemActions .dangerButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 @media (max-width: 1280px) {
   .streamingFormGridTransmissionSecondary {
     grid-template-columns: repeat(2, minmax(180px, 1fr));
@@ -3537,6 +3761,18 @@ textarea {
 }
 
 @media (max-width: 900px) {
+  .extensionSummaryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .extensionManualForm,
+  .extensionsToolbar,
+  .extensionItemHeader,
+  .extensionItemFooter {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .streamingFormGridEnginePorts,
   .streamingFormGridTransmissionPrimary,
   .streamingFormGridTransmissionSecondary,
@@ -3545,6 +3781,38 @@ textarea {
   .streamingFormGridCreatePrimary,
   .streamingFormGridCreateOutput {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .settingsLayout {
+    flex-direction: column;
+  }
+
+  .settingsSidebar {
+    width: 100%;
+    min-width: 0;
+    max-height: 42vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  .settingsMain {
+    flex: 1 1 58vh;
+  }
+
+  .settingsFooter {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settingsFooterStatus,
+  .settingsFooter > .row {
+    width: 100%;
+  }
+
+  .settingsFooter > .row {
+    justify-content: flex-end;
   }
 }
 

@@ -36,6 +36,66 @@ export type AppSettings = {
   extensions: Record<string, Record<string, unknown>>;
 };
 
+export type RecommendedExtension = {
+  extension_id: string;
+  name: string;
+  description: string;
+  package: string;
+  pip_spec: string;
+  category: string;
+};
+
+export type ManagedExtensionSpec = {
+  pip_spec: string;
+  package: string;
+  extension_id: string | null;
+  source: "recommended" | "manual";
+};
+
+export type PipOperationResult = {
+  ok: boolean;
+  command: string[];
+  return_code: number;
+  stdout: string;
+  stderr: string;
+};
+
+export type ExtensionManagementItem = {
+  extension_id: string;
+  name: string;
+  description: string;
+  package: string;
+  pip_spec: string;
+  category: string;
+  status: "active" | "disabled" | "not_installed" | "installing" | "pending_restart" | "error";
+  status_detail: string;
+  installed: boolean;
+  loaded: boolean;
+  enabled: boolean;
+  recommended: boolean;
+  managed: boolean;
+  removable: boolean;
+  installed_version: string | null;
+  loaded_version: string | null;
+  package_version: string | null;
+  source: "recommended" | "manual" | "installed" | "bundle";
+};
+
+export type ExtensionManagementCatalog = {
+  items: ExtensionManagementItem[];
+  recommendations: RecommendedExtension[];
+  disabled_extension_ids: string[];
+  desired: ManagedExtensionSpec[];
+  restart_required: boolean;
+};
+
+export type ExtensionOperationResponse = {
+  ok: boolean;
+  pip: PipOperationResult | null;
+  catalog: ExtensionManagementCatalog;
+  error: string | null;
+};
+
 export type AuthRole = "owner" | "admin" | "member" | "guest" | "service";
 
 export type AuthUser = {
@@ -854,6 +914,48 @@ export async function deleteAccessGrant(userId: string, action: string, resource
 export async function fetchExtensions(): Promise<any[]> {
   const res = await fetch("/api/extensions");
   if (!res.ok) throw new Error(`Failed to list extensions: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchExtensionManagementCatalog(): Promise<ExtensionManagementCatalog> {
+  const res = await fetch("/api/extensions/manage");
+  if (!res.ok) throw new Error(await _parseHttpError(res, `Failed to list managed extensions: ${res.status}`));
+  return res.json();
+}
+
+export async function installManualManagedExtension(pipSpec: string): Promise<ExtensionOperationResponse> {
+  const res = await fetch("/api/extensions/manage/install", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pip_spec: pipSpec }),
+  });
+  if (!res.ok) throw new Error(await _parseHttpError(res, `Failed to install extension: ${res.status}`));
+  return res.json();
+}
+
+export async function installRecommendedManagedExtension(extensionId: string): Promise<ExtensionOperationResponse> {
+  const res = await fetch(`/api/extensions/manage/recommended/${encodeURIComponent(extensionId)}/install`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(await _parseHttpError(res, `Failed to install extension ${extensionId}: ${res.status}`));
+  return res.json();
+}
+
+export async function enableManagedExtension(extensionId: string): Promise<ExtensionOperationResponse> {
+  const res = await fetch(`/api/extensions/manage/${encodeURIComponent(extensionId)}/enable`, { method: "POST" });
+  if (!res.ok) throw new Error(await _parseHttpError(res, `Failed to enable extension ${extensionId}: ${res.status}`));
+  return res.json();
+}
+
+export async function disableManagedExtension(extensionId: string): Promise<ExtensionOperationResponse> {
+  const res = await fetch(`/api/extensions/manage/${encodeURIComponent(extensionId)}/disable`, { method: "POST" });
+  if (!res.ok) throw new Error(await _parseHttpError(res, `Failed to disable extension ${extensionId}: ${res.status}`));
+  return res.json();
+}
+
+export async function removeManagedExtension(extensionId: string): Promise<ExtensionOperationResponse> {
+  const res = await fetch(`/api/extensions/manage/${encodeURIComponent(extensionId)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await _parseHttpError(res, `Failed to remove extension ${extensionId}: ${res.status}`));
   return res.json();
 }
 

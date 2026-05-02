@@ -112,6 +112,21 @@ export type SettingsPanel = {
   }) => import("react").ReactNode;
 };
 
+export type PipelineOperatorPanel = {
+  id: string;
+  operatorId: string;
+  render: (args: {
+    i18n: HostI18n;
+    operatorId: string;
+    stepUid: string;
+    nodeId: string;
+    config: Record<string, unknown>;
+    showAdvanced: boolean;
+    updateConfig: (patch: Record<string, unknown>) => void;
+    replaceConfig: (next: Record<string, unknown>) => void;
+  }) => import("react").ReactNode;
+};
+
 export type ThemeDefinition = {
   id: string;
   name: LocalizedString;
@@ -327,6 +342,7 @@ export type TopoSyncHost = {
   registerEditorTool: (tool: EditorTool) => void;
   registerFileDropHandler: (handler: FileDropHandler) => void;
   registerSettingsPanel: (panel: SettingsPanel) => void;
+  registerPipelineOperatorPanel: (panel: PipelineOperatorPanel) => void;
   registerTheme: (theme: ThemeDefinition) => void;
   api: HostApi;
   i18n: HostI18n;

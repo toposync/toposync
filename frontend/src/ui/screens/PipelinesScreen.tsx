@@ -1,5 +1,6 @@
 import Editor from "@monaco-editor/react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 
 import { i18n } from "../../util/i18n";
 import { replace, usePathname } from "../router";
@@ -45,6 +46,7 @@ import {
 type Props = {
   onClose: () => void;
   onOpenProcessingServers?: () => void;
+  operatorPanels?: Record<string, PipelineOperatorPanel>;
 };
 
 const PIPELINES_BASE_PATH = "/settings/pipelines";
@@ -69,7 +71,7 @@ function buildPipelinesPath(pipelineName: string | null): string {
   return `${PIPELINES_BASE_PATH}/${encodeURIComponent(String(pipelineName))}`;
 }
 
-export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): React.ReactElement {
+export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPanels = {} }: Props): React.ReactElement {
   const { t } = i18n.useI18n();
   const pathname = usePathname();
   const routePipelineName = pipelineNameFromPipelinesPath(pathname);
@@ -825,6 +827,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
                       interactiveWarning={interactiveWarning}
                       setInteractiveWarning={setInteractiveWarning}
                       interactiveGraph={interactiveGraph}
+                      operatorPanels={operatorPanels}
                       onOpenTelemetryField={openTelemetryFieldInspector}
                     />
                   ) : (

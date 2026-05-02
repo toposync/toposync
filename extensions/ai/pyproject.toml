@@ -1,0 +1,24 @@
+[project]
+name = "toposync-ext-ai"
+version = "0.1.0"
+description = "Toposync first-party extension: AI-assisted image operators and provider routing."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+  "toposync-core>=0.3.6",
+  "httpx>=0.27",
+  "litellm>=1.74,<2",
+  "pillow>=10,<13",
+]
+
+[project.entry-points."toposync.extensions"]
+ai = "toposync_ext_ai.plugin:AiExtension"
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/toposync_ext_ai"]

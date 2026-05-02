@@ -8,6 +8,7 @@ import type {
   FileDropHandler,
   Notification,
   NotificationRenderer,
+  PipelineOperatorPanel,
   SettingsPanel,
   ThemeDefinition,
   TopoSyncHost,
@@ -261,6 +262,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const [editorToolsById, setEditorToolsById] = useState<Record<string, EditorTool>>({});
   const [fileDropHandlers, setFileDropHandlers] = useState<FileDropHandler[]>([]);
   const [settingsPanelsById, setSettingsPanelsById] = useState<Record<string, SettingsPanel>>({});
+  const [pipelineOperatorPanelsByOperatorId, setPipelineOperatorPanelsByOperatorId] = useState<Record<string, PipelineOperatorPanel>>({});
   const [themesById, setThemesById] = useState<Record<string, ThemeDefinition>>({});
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [notificationsCursor, setNotificationsCursor] = useState<number | null>(null);
@@ -457,6 +459,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       },
       registerSettingsPanel(panel) {
         setSettingsPanelsById((prev) => ({ ...prev, [panel.id]: panel }));
+      },
+      registerPipelineOperatorPanel(panel) {
+        setPipelineOperatorPanelsByOperatorId((prev) => ({ ...prev, [panel.operatorId]: panel }));
       },
       registerTheme(theme) {
         setThemesById((prev) => ({ ...prev, [theme.id]: theme }));
@@ -1072,7 +1077,11 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   return (
     <div className="appShell">
       {normalizedPathname.startsWith("/settings/pipelines") ? (
-        <PipelinesScreen onClose={closeSettingsChild} onOpenProcessingServers={openProcessingServersSettings} />
+        <PipelinesScreen
+          onClose={closeSettingsChild}
+          onOpenProcessingServers={openProcessingServersSettings}
+          operatorPanels={pipelineOperatorPanelsByOperatorId}
+        />
       ) : normalizedPathname.startsWith("/settings/processing-servers") ? (
         <ProcessingServersScreen
           onClose={closeSettingsChild}

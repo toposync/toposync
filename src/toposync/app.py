@@ -866,8 +866,11 @@ _FRONTEND_INDEX_ASSET_RE = re.compile(
 
 
 def _prefix_frontend_index_assets(html: str, base_path: str) -> str:
-    if base_path == "/":
-        return html
+    def join_public_path(path: str) -> str:
+        asset_path = path.lstrip("/")
+        if base_path == "/":
+            return f"/{asset_path}"
+        return f"{base_path}/{asset_path}"
 
     def replace(match: re.Match[str]) -> str:
         url = match.group("url")
@@ -882,11 +885,11 @@ def _prefix_frontend_index_assets(html: str, base_path: str) -> str:
         ):
             return match.group(0)
         if url.startswith("/"):
-            prefixed = f"{base_path}{url}"
+            prefixed = url if base_path == "/" else f"{base_path}{url}"
         elif url.startswith("./"):
-            prefixed = f"{base_path}/{url[2:]}"
+            prefixed = join_public_path(url[2:])
         else:
-            prefixed = f"{base_path}/{url}"
+            prefixed = join_public_path(url)
         return f"{match.group('prefix')}{prefixed}{match.group('suffix')}"
 
     return _FRONTEND_INDEX_ASSET_RE.sub(replace, html)

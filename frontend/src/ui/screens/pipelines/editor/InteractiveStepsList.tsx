@@ -1,4 +1,5 @@
 import React from "react";
+import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 
 import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../../../util/api";
 import { i18n } from "../../../../util/i18n";
@@ -21,6 +22,7 @@ type Props = {
   activeCameraContextsError: string | null;
   cameraAreaOptions: CameraAreaOption[];
   stepOutputsByNodeId: Record<string, number> | null;
+  operatorPanels?: Record<string, PipelineOperatorPanel>;
 
   draggingStepUid: string | null;
   dragOverStep: { uid: string; position: DragInsertPosition } | null;

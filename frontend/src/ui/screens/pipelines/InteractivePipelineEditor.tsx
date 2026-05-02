@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useState } from "react";
+import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 
 import type { CamerasIndexResponse, PipelineOperatorDefinition } from "../../../util/api";
 
@@ -22,6 +23,7 @@ type Props = {
   interactiveWarning: string | null;
   setInteractiveWarning: React.Dispatch<React.SetStateAction<string | null>>;
   interactiveGraph: InteractiveBuildResult;
+  operatorPanels?: Record<string, PipelineOperatorPanel>;
   onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
 };
 
@@ -37,6 +39,7 @@ export function InteractivePipelineEditor({
   interactiveWarning,
   setInteractiveWarning,
   interactiveGraph,
+  operatorPanels = {},
   onOpenTelemetryField,
 }: Props): React.ReactElement {
   const [draggingStepUid, setDraggingStepUid] = useState<string | null>(null);
@@ -52,8 +55,24 @@ export function InteractivePipelineEditor({
   );
 
   const presetOperators = useMemo(
-    () => PIPELINE_PRESET_OPERATOR_IDS.map((id) => operatorsById[id]).filter(Boolean) as PipelineOperatorDefinition[],
-    [operatorsById],
+    () => {
+      const seen = new Set<string>();
+      const out: PipelineOperatorDefinition[] = [];
+      for (const id of PIPELINE_PRESET_OPERATOR_IDS) {
+        const operator = operatorsById[id];
+        if (!operator) continue;
+        seen.add(id);
+        out.push(operator);
+      }
+      for (const id of Object.keys(operatorPanels).sort()) {
+        const operator = operatorsById[id];
+        if (!operator || seen.has(id)) continue;
+        seen.add(id);
+        out.push(operator);
+      }
+      return out;
+    },
+    [operatorPanels, operatorsById],
   );
 
   const interactiveCameraId = useMemo(() => {
@@ -244,6 +263,7 @@ export function InteractivePipelineEditor({
         activeCameraContextsError={activeCameraContextsError}
         cameraAreaOptions={cameraAreaOptions}
         stepOutputsByNodeId={stepOutputsByNodeId}
+        operatorPanels={operatorPanels}
         draggingStepUid={draggingStepUid}
         dragOverStep={dragOverStep}
         onBeginDrag={beginStepDrag}

@@ -31,6 +31,7 @@ extensions = [
   "toposync-ext-cameras",
   "toposync-ext-vision",
   "toposync-ext-streaming",
+  "toposync-ext-ai",
 ]
 
 [tool.uv]
@@ -44,6 +45,7 @@ toposync-ext-images = { path = "extensions/images", editable = true }
 toposync-ext-cameras = { path = "extensions/cameras", editable = true }
 toposync-ext-vision = { path = "extensions/vision", editable = true }
 toposync-ext-streaming = { path = "extensions/streaming", editable = true }
+toposync-ext-ai = { path = "extensions/ai", editable = true }
 
 [build-system]
 requires = ["hatchling>=1.25"]

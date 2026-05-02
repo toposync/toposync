@@ -1,6 +1,8 @@
 import React from "react";
+import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 
 import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../../../../util/api";
+import { i18n } from "../../../../../util/i18n";
 
 import type { CameraAreaOption, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
 
@@ -53,6 +55,7 @@ type Props = {
   activeCameraContexts: CameraContextsResponse | null;
   activeCameraContextsError: string | null;
   cameraAreaOptions: CameraAreaOption[];
+  operatorPanels?: Record<string, PipelineOperatorPanel>;
 
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
@@ -75,12 +78,30 @@ export function OperatorConfigPanel({
   activeCameraContexts,
   activeCameraContextsError,
   cameraAreaOptions,
+  operatorPanels = {},
   showAdvanced,
   onUpdateConfig,
   onInsertStepAfter,
   onOpenTelemetryField,
 }: Props): React.ReactElement | null {
   const operatorId = step.operatorId;
+  const extensionPanel = operatorPanels[operatorId];
+  if (extensionPanel) {
+    return (
+      <>
+        {extensionPanel.render({
+          i18n,
+          operatorId,
+          stepUid: step.uid,
+          nodeId: step.nodeId,
+          config,
+          showAdvanced,
+          updateConfig: (patch) => onUpdateConfig((prev) => ({ ...prev, ...patch })),
+          replaceConfig: (next) => onUpdateConfig(() => next),
+        })}
+      </>
+    );
+  }
 
   if (operatorId === "core.schedule_gate") {
     return <ScheduleGateConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;

@@ -1,4 +1,5 @@
 import React from "react";
+import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 
 import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../../../util/api";
 import { i18n } from "../../../../util/i18n";
@@ -25,6 +26,7 @@ type Props = {
   activeCameraContextsError: string | null;
   cameraAreaOptions: CameraAreaOption[];
   stepOutputsByNodeId: Record<string, number> | null;
+  operatorPanels?: Record<string, PipelineOperatorPanel>;
 
   draggingStepUid: string | null;
   dragOverStep: { uid: string; position: DragInsertPosition } | null;
@@ -119,6 +121,7 @@ export function InteractiveStepCard({
   activeCameraContextsError,
   cameraAreaOptions,
   stepOutputsByNodeId,
+  operatorPanels = {},
   draggingStepUid,
   dragOverStep,
   onBeginDrag,
@@ -161,7 +164,8 @@ export function InteractiveStepCard({
       return true;
     });
 
-  const shouldShowScalarGrid = scalarEntries.length > 0 && (!shouldHideScalarGrid(step.operatorId) || step.showAdvanced);
+  const hasOperatorPanel = Boolean(operatorPanels[step.operatorId]);
+  const shouldShowScalarGrid = scalarEntries.length > 0 && ((!hasOperatorPanel && !shouldHideScalarGrid(step.operatorId)) || step.showAdvanced);
   const shouldShowConfigJson = step.showAdvanced;
 
   const rowClass = ["pipelinesStepCard"];
@@ -278,7 +282,8 @@ export function InteractiveStepCard({
             cameraSelectOptionById={cameraSelectOptionById}
             activeCameraContexts={activeCameraContexts}
             activeCameraContextsError={activeCameraContextsError}
-            cameraAreaOptions={cameraAreaOptions}
+              cameraAreaOptions={cameraAreaOptions}
+              operatorPanels={operatorPanels}
               showAdvanced={step.showAdvanced}
               onUpdateConfig={(updater) => onUpdateStepConfig(step.uid, updater)}
               onInsertStepAfter={onInsertStepAfter}

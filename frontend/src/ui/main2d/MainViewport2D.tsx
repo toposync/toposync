@@ -768,7 +768,7 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
                 return (
                   <button
                     key={`cluster:${entry.id}`}
-                    className="main2dHaButton main2dHaCluster"
+                    className="main2dMarkerButton main2dMarkerCluster"
                     type="button"
                     title={entry.title}
                     style={{ left: entry.screenX, top: entry.screenY }}
@@ -780,7 +780,7 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
                     }}
                   >
                     <Icon name="layer-group" />
-                    <span className="main2dHaClusterCount">{entry.buttons.length}</span>
+                    <span className="main2dMarkerClusterCount">{entry.buttons.length}</span>
                   </button>
                 );
               }
@@ -789,7 +789,7 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
                 <button
                   key={entry.id}
                   className={[
-                    "main2dHaButton",
+                    "main2dMarkerButton",
                     entry.boolState === true ? "isOn" : "",
                     entry.boolState === false ? "isOff" : "",
                   ]

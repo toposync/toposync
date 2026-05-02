@@ -500,7 +500,7 @@ export function MainViewportVector2D({
             return (
               <button
                 key={`cluster:${entry.id}`}
-                className="main2dHaButton main2dHaCluster"
+                className="main2dMarkerButton main2dMarkerCluster"
                 type="button"
                 title={entry.title}
                 style={{ left: entry.screenX, top: entry.screenY }}
@@ -510,7 +510,7 @@ export function MainViewportVector2D({
                 }}
               >
                 <Icon name="layer-group" />
-                <span className="main2dHaClusterCount">{entry.markers.length}</span>
+                <span className="main2dMarkerClusterCount">{entry.markers.length}</span>
               </button>
             );
           }
@@ -518,7 +518,7 @@ export function MainViewportVector2D({
             <button
               key={entry.id}
               className={[
-                "main2dHaButton",
+                "main2dMarkerButton",
                 entry.className ?? "",
                 entry.state === "on" ? "isOn" : "",
                 entry.state === "off" ? "isOff" : "",

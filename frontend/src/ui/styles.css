@@ -139,11 +139,11 @@ textarea {
   pointer-events: none;
 }
 
-.main2dButtonsOverlay .main2dHaButton {
+.main2dButtonsOverlay .main2dMarkerButton {
   pointer-events: auto;
 }
 
-.main2dHaButton {
+.main2dMarkerButton {
   position: absolute;
   transform: translate(-50%, -50%);
   width: 44px;
@@ -158,17 +158,17 @@ textarea {
   box-shadow: 0 14px 30px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
-.main2dHaButton:hover {
+.main2dMarkerButton:hover {
   border-color: var(--borderStrong);
   background: rgba(15, 23, 48, 0.85);
 }
 
-.main2dHaButton.isOn {
+.main2dMarkerButton.isOn {
   border-color: rgba(34, 197, 94, 0.55);
   background: rgba(34, 197, 94, 0.12);
 }
 
-.main2dHaButton.isOff {
+.main2dMarkerButton.isOff {
   border-color: rgba(239, 68, 68, 0.55);
   background: rgba(239, 68, 68, 0.12);
 }
@@ -1564,21 +1564,21 @@ textarea {
   }
 }
 
-.main2dHaButton i {
+.main2dMarkerButton i {
   font-size: 16px;
 }
 
-.main2dHaCluster {
+.main2dMarkerCluster {
   border-color: rgba(251, 191, 36, 0.55);
   background: rgba(251, 191, 36, 0.10);
 }
 
-.main2dHaCluster:hover {
+.main2dMarkerCluster:hover {
   border-color: rgba(251, 191, 36, 0.72);
   background: rgba(251, 191, 36, 0.15);
 }
 
-.main2dHaClusterCount {
+.main2dMarkerClusterCount {
   position: absolute;
   top: -4px;
   right: -4px;
@@ -5204,14 +5204,14 @@ select {
 }
 
 .notificationsToggleBadge,
-.main2dHaClusterCount,
+.main2dMarkerClusterCount,
 .pillBadge {
   border: 1px solid color-mix(in srgb, var(--color-accent-border) 55%, transparent);
   background: linear-gradient(135deg, var(--color-accent-teal), var(--color-accent-blue));
   color: var(--color-text-inverted);
 }
 
-.main2dHaButton {
+.main2dMarkerButton {
   width: 44px;
   height: 44px;
   border-radius: var(--radius-panel);
@@ -5220,29 +5220,29 @@ select {
   box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
 }
 
-.main2dHaButton:hover {
+.main2dMarkerButton:hover {
   border-color: var(--color-border-strong);
   background: var(--color-surface-frost-strong);
 }
 
-.main2dHaButton.isOn {
+.main2dMarkerButton.isOn {
   border-color: color-mix(in srgb, var(--color-success) 65%, transparent);
   background: color-mix(in srgb, var(--color-success) 14%, var(--color-surface-frost));
 }
 
-.main2dHaButton.isOff {
+.main2dMarkerButton.isOff {
   border-color: color-mix(in srgb, var(--color-danger) 65%, transparent);
   background: color-mix(in srgb, var(--color-danger) 14%, var(--color-surface-frost));
 }
 
-.main2dHaButton.isUnknown,
+.main2dMarkerButton.isUnknown,
 .main2dClusterPrimary.isUnknown {
   border-color: color-mix(in srgb, var(--color-accent-blue) 45%, transparent);
   background: color-mix(in srgb, var(--color-accent-blue) 10%, var(--color-surface-frost));
 }
 
-.main2dHaCluster,
-.main2dHaCluster:hover {
+.main2dMarkerCluster,
+.main2dMarkerCluster:hover {
   border-color: var(--color-accent-border);
   background: linear-gradient(135deg, var(--color-accent-background-strong), var(--color-accent-background-strong-2));
 }

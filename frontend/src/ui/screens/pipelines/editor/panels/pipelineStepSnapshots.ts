@@ -110,7 +110,6 @@ export function buildPipelineStepPreviewRequest(
 
   const previewPipeline: Pipeline = {
     name: `${safePipelineName}__editor_preview`,
-    type: "final",
     enabled: false,
     processing_server_id: "local",
     editor_mode: "interactive",

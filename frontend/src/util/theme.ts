@@ -2,18 +2,16 @@ import type { ThemeDefinition } from "@toposync/plugin-api";
 
 const THEME_STORAGE_KEY = "toposync.theme";
 const STYLE_ELEMENT_ID = "toposync-theme-overrides";
-const TRANSPARENCY_STORAGE_KEY = "toposync.transparency";
-const ACCENT_STORAGE_KEY = "toposync.accentIntensity";
 const VIEWPORT3D_STORAGE_KEY = "toposync.viewport3dBackground";
 
 export const BUILTIN_THEME_IDS = ["topo-day", "topo-night"] as const;
 export type BuiltinThemeId = (typeof BUILTIN_THEME_IDS)[number];
 
-export const TRANSPARENCY_LEVELS = ["normal", "high", "reduced"] as const;
-export type TransparencyLevel = (typeof TRANSPARENCY_LEVELS)[number];
+export const THEME_DEFAULT_TRANSPARENCY = "normal";
+export type TransparencyLevel = typeof THEME_DEFAULT_TRANSPARENCY;
 
-export const ACCENT_INTENSITIES = ["subtle", "normal", "vivid"] as const;
-export type AccentIntensity = (typeof ACCENT_INTENSITIES)[number];
+export const THEME_DEFAULT_ACCENT_INTENSITY = "normal";
+export type AccentIntensity = typeof THEME_DEFAULT_ACCENT_INTENSITY;
 
 export const VIEWPORT3D_BACKGROUNDS = ["paper", "pure", "night"] as const;
 export type Viewport3DBackground = (typeof VIEWPORT3D_BACKGROUNDS)[number];
@@ -58,22 +56,6 @@ export function loadThemeId(): string {
 
 export function saveThemeId(themeId: string): void {
   safeSetStorage(THEME_STORAGE_KEY, themeId);
-}
-
-export function loadTransparencyLevel(): TransparencyLevel {
-  return normalizeByList(safeGetStorage(TRANSPARENCY_STORAGE_KEY), TRANSPARENCY_LEVELS, "normal");
-}
-
-export function saveTransparencyLevel(value: TransparencyLevel): void {
-  safeSetStorage(TRANSPARENCY_STORAGE_KEY, value);
-}
-
-export function loadAccentIntensity(): AccentIntensity {
-  return normalizeByList(safeGetStorage(ACCENT_STORAGE_KEY), ACCENT_INTENSITIES, "normal");
-}
-
-export function saveAccentIntensity(value: AccentIntensity): void {
-  safeSetStorage(ACCENT_STORAGE_KEY, value);
 }
 
 export function loadViewport3DBackground(): Viewport3DBackground {

@@ -63,7 +63,9 @@ def _create_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClien
     return TestClient(create_app())
 
 
-def test_extension_operator_registration_and_graph_validation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_extension_operator_registration_and_graph_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         operators_res = client.get("/api/pipelines/operators")
         assert operators_res.status_code == 200
@@ -85,7 +87,6 @@ def test_extension_operator_registration_and_graph_validation(tmp_path: Path, mo
 
         valid_pipeline = {
             "name": "camera_pipeline",
-            "type": "reuse",
             "graph": {
                 "schema_version": 1,
                 "nodes": [
@@ -100,7 +101,6 @@ def test_extension_operator_registration_and_graph_validation(tmp_path: Path, mo
 
         invalid_pipeline = {
             "name": "camera_pipeline_invalid",
-            "type": "reuse",
             "graph": {
                 "schema_version": 1,
                 "nodes": [
@@ -114,7 +114,6 @@ def test_extension_operator_registration_and_graph_validation(tmp_path: Path, mo
 
         unknown_operator_pipeline = {
             "name": "unknown_operator_pipeline",
-            "type": "reuse",
             "graph": {
                 "schema_version": 1,
                 "nodes": [

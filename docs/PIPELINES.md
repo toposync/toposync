@@ -8,14 +8,12 @@ Este documento descreve o sistema de **Pipelines globais** do Toposync: modelo d
 
 ## 1) O que é um Pipeline
 
-Um **Pipeline** é uma entidade global da plataforma que define um **DAG** (grafo acíclico dirigido) de operadores.
-
-- **`type=reuse`**: pipeline parcial (subgrafo reutilizável). Não é executado automaticamente.
-- **`type=final`**: pipeline executável. Quando `enabled=true`, o orquestrador inicia o runtime (local ou remoto).
+Um **Pipeline** é uma entidade global executável da plataforma que define um **DAG** (grafo acíclico dirigido) de operadores. Quando `enabled=true`, o orquestrador inicia o runtime (local ou remoto).
 
 Cada pipeline tem:
 - **`name`**: obrigatório, único e **compatível com identificador Python** (ex.: `carro_na_frente`, `alertaPortao` não).
-- **`processing_server_id`**: onde executar o pipeline final (`local` por padrão).
+- **`enabled`**: controla se o orquestrador executa o pipeline.
+- **`processing_server_id`**: onde executar o pipeline (`local` por padrão).
 - **`graph`**: JSON com `schema_version` + `nodes` + `edges`.
 - **`editor_mode`**: `interactive|json|python` (Python é “one-way”; ver UI).
 
@@ -144,9 +142,15 @@ Formato atual (v1):
       "maxsize": 1,
       "drop_policy": "latest_only"
     }
-  ]
+  ],
+  "interfaces": {},
+  "limits": {},
+  "layout": {},
+  "meta": {}
 }
 ```
+
+`interfaces`, `limits`, `layout` e `meta` são opcionais e reservados para evolução do graph (ex.: redes/subfluxos com entradas e saídas explícitas). O runtime atual compila `nodes` e `edges`.
 
 Implementação/validação: `src/toposync/runtime/pipelines/compiler.py` (`PipelineGraphSpec`).
 
@@ -169,11 +173,11 @@ Implementação: `src/toposync/runtime/pipelines/compiler.py`.
 
 ### Por que funciona
 
-Nós “pesados” (ex.: `vision.detect` / `vision.track` / `vision.segment_instances`) têm `share_strategy="by_signature"`. Se dois pipelines finais têm o **mesmo subgrafo** (mesmo operador+config+upstream), o compilador gera a mesma assinatura e o runtime pode executar **uma única instância** alimentando múltiplos consumidores.
+Nós “pesados” (ex.: `vision.detect` / `vision.track` / `vision.segment_instances`) têm `share_strategy="by_signature"`. Se dois pipelines têm o **mesmo subgrafo** (mesmo operador+config+upstream), o compilador gera a mesma assinatura e o runtime pode executar **uma única instância** alimentando múltiplos consumidores.
 
 ### Como é executado localmente
 
-Quando há múltiplos pipelines finais locais habilitados, o orquestrador tenta:
+Quando há múltiplos pipelines locais habilitados, o orquestrador tenta:
 - compilar todos em conjunto;
 - montar um **`PipelineBundleRuntime`** (um DAG “merged”);
 - compartilhar nós `shareable` por assinatura;
@@ -194,7 +198,7 @@ Observação importante: o sharing é **node-level**.
 
 ## 6) Execução distribuída (origin vs processing)
 
-Um pipeline final pode rodar em um **processing server** remoto, mas:
+Um pipeline pode rodar em um **processing server** remoto, mas:
 - **Storage de imagens** e **registro de notificações** ocorrem na **origem** (origin).
 
 ### Como o corte é feito hoje
@@ -501,9 +505,9 @@ Endpoints:
 - `POST /api/pipelines/compile-python` (retorna `graph` + output compilado + alerts)
 - `PUT/POST /api/pipelines` em `editor_mode=python` recompila o `python_source` e persiste o `graph`
 
-### Templates (instanciação multi-câmera)
+### Templates por graph (instanciação multi-câmera)
 
-Pipelines `type=reuse` podem ser usados como **templates** para criar N pipelines finais (um por câmera) sem redesenhar.
+O endpoint de template usa o `graph` de um pipeline existente para criar N pipelines (um por câmera) sem redesenhar. Como pipelines são executáveis, mantenha pipelines usados apenas como base com `enabled=false`.
 
 - Endpoint: `POST /api/pipelines/templates/apply-cameras`
 - Regras:
@@ -511,7 +515,7 @@ Pipelines `type=reuse` podem ser usados como **templates** para criar N pipeline
   - para cada `camera_id`, o sistema clona o graph e injeta `camera.source.config.camera_id=<camera_id>` (limpando `rtsp_url/username/password`)
   - nomes são determinísticos: `<template_name>__<camera_id>` (sanitizado para identificador Python)
 
-UI: ao abrir um pipeline `reuse`, existe a ação **Apply template** para selecionar múltiplas câmeras e gerar pipelines finais.
+Observação: reuso avançado/subfluxos com interfaces explícitas não fazem parte do contrato atual de Pipeline. Quando existir, deve ser modelado como uma entidade de graph/subflow própria, não como um campo `type` do pipeline executável.
 
 ---
 
@@ -543,7 +547,7 @@ Conforme `current-plan.ignore.md`, ainda faltam/estão parciais:
    O modo Python compila para graph de forma determinística via backend e permanece “one-way”.
 
 4) **Templates/instanciação multi-câmera** (Etapa 18) ✅  
-   Aplicar um pipeline `reuse` como template em N câmeras via endpoint e UI (“Apply template”).
+   Aplicar o graph de um pipeline como template em N câmeras via endpoint.
 
 5) **Pipelines finitos / self-destruct + lixeira** (Etapa 19)  
    Para casos assistidos por LLM (pipelines temporários e auto-removíveis).

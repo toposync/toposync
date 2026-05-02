@@ -13,7 +13,7 @@ async function openSettings(page) {
 async function openViewSettings(page) {
   await page.goto("/settings");
   await expect(page.getByText("Settings", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /^View options\b/ }).click();
+  await page.getByRole("button", { name: /^View\b/ }).click();
   await expect(page.getByText("Wall height")).toBeVisible();
   return page;
 }
@@ -50,7 +50,7 @@ test("wall height preset persists across reload", async ({ page }) => {
 
   await page.reload();
 
-  await page.getByRole("button", { name: /^View options\b/ }).click();
+  await page.getByRole("button", { name: /^View\b/ }).click();
   const low = page.getByRole("button", { name: /^Low\b/ });
   await expect(low).toHaveClass(/isSelected/);
 });
@@ -72,14 +72,14 @@ test("ghost walls persists across reload", async ({ page }) => {
 
   await page.reload();
 
-  await page.getByRole("button", { name: /^View options\b/ }).click();
+  await page.getByRole("button", { name: /^View\b/ }).click();
   const ghost = page.getByRole("button", { name: /^Ghost walls\b/ });
   await expect(ghost).toHaveClass(/isSelected/);
 });
 
 test("theme can be selected from settings", async ({ page }) => {
   const dialog = await openSettings(page);
-  await dialog.getByRole("button", { name: /^Core\b/ }).click();
+  await dialog.getByRole("button", { name: /^View\b/ }).click();
 
   await page.waitForFunction(() => document.documentElement.dataset.toposyncBaseTheme === "topo-day");
 
@@ -97,6 +97,23 @@ test("theme can be selected from settings", async ({ page }) => {
     getComputedStyle(document.documentElement).getPropertyValue("--color-application-background").trim(),
   );
   expect(bgAfter.toLowerCase()).toBe("#060914");
+});
+
+test("visual settings hide theme-internal appearance controls", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("toposync.transparency", "high");
+    localStorage.setItem("toposync.accentIntensity", "vivid");
+  });
+
+  const dialog = await openViewSettings(page);
+
+  await expect(dialog.getByText("Transparency", { exact: true })).toHaveCount(0);
+  await expect(dialog.getByText("Accent intensity", { exact: true })).toHaveCount(0);
+  await page.waitForFunction(
+    () =>
+      document.documentElement.dataset.toposyncTransparency === "normal" &&
+      document.documentElement.dataset.toposyncAccent === "normal",
+  );
 });
 
 test("compositions can be created, renamed, and deleted", async ({ page, request }) => {

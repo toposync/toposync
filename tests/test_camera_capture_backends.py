@@ -22,7 +22,9 @@ from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 
 
-def test_frame_grabber_falls_back_to_opencv_when_ffmpeg_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_frame_grabber_falls_back_to_opencv_when_ffmpeg_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import toposync_ext_cameras.processing.frame_grabber as grabber
 
     monkeypatch.setattr(grabber.shutil, "which", lambda _name: None)
@@ -39,7 +41,9 @@ def test_frame_grabber_uses_ffmpeg_when_opencv_missing(monkeypatch: pytest.Monke
     assert fg.backend_name == "ffmpeg"
 
 
-def test_frame_grabber_prefers_ffmpeg_for_rtsp_auto_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_frame_grabber_prefers_ffmpeg_for_rtsp_auto_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import toposync_ext_cameras.processing.frame_grabber as grabber
 
     class _CaptureCapableCv2:
@@ -51,7 +55,9 @@ def test_frame_grabber_prefers_ffmpeg_for_rtsp_auto_when_available(monkeypatch: 
     assert fg.backend_name == "ffmpeg"
 
 
-def test_frame_grabber_keeps_opencv_first_for_non_rtsp_auto(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_frame_grabber_keeps_opencv_first_for_non_rtsp_auto(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import toposync_ext_cameras.processing.frame_grabber as grabber
 
     class _CaptureCapableCv2:
@@ -63,7 +69,9 @@ def test_frame_grabber_keeps_opencv_first_for_non_rtsp_auto(monkeypatch: pytest.
     assert fg.backend_name == "opencv"
 
 
-def test_frame_grabber_uses_ffmpeg_when_cv2_is_partially_broken(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_frame_grabber_uses_ffmpeg_when_cv2_is_partially_broken(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import toposync_ext_cameras.processing.frame_grabber as grabber
 
     class _BrokenCv2:
@@ -99,7 +107,9 @@ def test_camera_source_passes_backend_to_frame_grabber(monkeypatch: pytest.Monke
     class _FakeFrameGrabber:
         last_backend: str | None = None
 
-        def __init__(self, rtsp_url: str, *, target_fps: float = 15.0, backend: str = "auto", **_kwargs: Any) -> None:
+        def __init__(
+            self, rtsp_url: str, *, target_fps: float = 15.0, backend: str = "auto", **_kwargs: Any
+        ) -> None:
             _ = rtsp_url
             _ = target_fps
             type(self).last_backend = backend
@@ -123,12 +133,18 @@ def test_camera_source_passes_backend_to_frame_grabber(monkeypatch: pytest.Monke
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "camera", "operator": "camera.source", "config": {"rtsp_url": "rtsp://example", "fps": 5.0, "backend": "ffmpeg"}},
+                {
+                    "id": "camera",
+                    "operator": "camera.source",
+                    "config": {"rtsp_url": "rtsp://example", "fps": 5.0, "backend": "ffmpeg"},
+                },
                 {"id": "sink", "operator": "core.sink", "config": {}},
             ],
-            "edges": [{"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"}}],
+            "edges": [
+                {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"}}
+            ],
         }
-        pipeline = Pipeline(name="camera_source_backend_passthrough", type="final", graph=graph)
+        pipeline = Pipeline(name="camera_source_backend_passthrough", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         await runtime.run_for(0.05)
@@ -146,7 +162,9 @@ def test_camera_source_waits_for_camera_settings_without_crashing(
     class _FakeFrameGrabber:
         start_calls = 0
 
-        def __init__(self, rtsp_url: str, *, target_fps: float = 15.0, backend: str = "auto", **_kwargs: Any) -> None:
+        def __init__(
+            self, rtsp_url: str, *, target_fps: float = 15.0, backend: str = "auto", **_kwargs: Any
+        ) -> None:
             _ = rtsp_url
             _ = target_fps
             _ = backend
@@ -182,12 +200,18 @@ def test_camera_source_waits_for_camera_settings_without_crashing(
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "camera", "operator": "camera.source", "config": {"camera_id": "cam-wait-settings"}},
+                {
+                    "id": "camera",
+                    "operator": "camera.source",
+                    "config": {"camera_id": "cam-wait-settings"},
+                },
                 {"id": "sink", "operator": "core.sink", "config": {}},
             ],
-            "edges": [{"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"}}],
+            "edges": [
+                {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"}}
+            ],
         }
-        pipeline = Pipeline(name="camera_source_wait_for_settings", type="final", graph=graph)
+        pipeline = Pipeline(name="camera_source_wait_for_settings", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(
             compiled=compiled,
@@ -293,7 +317,9 @@ def test_camera_hub_starts_different_keys_without_global_lock_serialization() ->
         def start(self) -> "_FakeFrameGrabber":
             with type(self)._lock:
                 type(self).concurrent_starts += 1
-                type(self).max_concurrent_starts = max(type(self).max_concurrent_starts, type(self).concurrent_starts)
+                type(self).max_concurrent_starts = max(
+                    type(self).max_concurrent_starts, type(self).concurrent_starts
+                )
             time.sleep(0.12)
             with type(self)._lock:
                 type(self).concurrent_starts -= 1
@@ -321,7 +347,9 @@ def test_camera_hub_starts_different_keys_without_global_lock_serialization() ->
     assert max_concurrent_starts >= 2
 
 
-def test_camera_source_disables_ffmpeg_failover_override_after_hard_open_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_camera_source_disables_ffmpeg_failover_override_after_hard_open_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import toposync_ext_cameras.pipelines.operators as camera_ops
 
     class _Logger:
@@ -367,7 +395,11 @@ def test_camera_source_disables_ffmpeg_failover_override_after_hard_open_error(m
             },
         )
 
-        return runtime._backend_override, float(runtime._backend_override_until_monotonic), stop_calls
+        return (
+            runtime._backend_override,
+            float(runtime._backend_override_until_monotonic),
+            stop_calls,
+        )
 
     backend_override, backend_override_until, stop_calls = asyncio.run(scenario())
     assert backend_override is None

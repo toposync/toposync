@@ -73,10 +73,22 @@ class SequenceSourceRuntime(SourceOperatorRuntime):
             "area_label": area_label,
         }
         artifacts = {
-            "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "demo"}),
-            "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "demo", "derived_from": "frame_original"}),
+            "frame_original": Artifact(
+                name="frame_original",
+                data=frame,
+                mime_type="image/raw",
+                metadata={"source": "demo"},
+            ),
+            "frame": Artifact(
+                name="frame",
+                data=frame,
+                mime_type="image/raw",
+                metadata={"source": "demo", "derived_from": "frame_original"},
+            ),
         }
-        return Packet.create(stream_id=self._stream_id, lifecycle=lifecycle, payload=payload, artifacts=artifacts)
+        return Packet.create(
+            stream_id=self._stream_id, lifecycle=lifecycle, payload=payload, artifacts=artifacts
+        )
 
 
 def _edge(from_node: str, to_node: str, *, maxsize: int, drop_policy: str) -> dict[str, Any]:
@@ -92,7 +104,11 @@ def build_graph(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "nodes": [
-            {"id": "source", "operator": "demo.sequence_source", "config": {"stream_id": "camera:stage7"}},
+            {
+                "id": "source",
+                "operator": "demo.sequence_source",
+                "config": {"stream_id": "camera:stage7"},
+            },
             {
                 "id": "store",
                 "operator": "core.store_images",
@@ -120,8 +136,12 @@ def build_graph(args: argparse.Namespace) -> dict[str, Any]:
             },
         ],
         "edges": [
-            _edge("source", "store", maxsize=int(args.queue_size), drop_policy=str(args.drop_policy)),
-            _edge("store", "notify", maxsize=int(args.queue_size), drop_policy=str(args.drop_policy)),
+            _edge(
+                "source", "store", maxsize=int(args.queue_size), drop_policy=str(args.drop_policy)
+            ),
+            _edge(
+                "store", "notify", maxsize=int(args.queue_size), drop_policy=str(args.drop_policy)
+            ),
         ],
     }
 
@@ -159,7 +179,7 @@ async def run_demo(args: argparse.Namespace) -> int:
 
     graph = build_graph(args)
     compiled = PipelineGraphCompiler(registry).compile_pipeline(
-        Pipeline(name="stage7_origin_sinks_demo", type="final", graph=graph),
+        Pipeline(name="stage7_origin_sinks_demo", graph=graph),
     )
     deps = PipelineRuntimeDependencies(
         config_store=config_store,
@@ -209,7 +229,8 @@ async def run_demo(args: argparse.Namespace) -> int:
         "no_frame_in_payload": isinstance(payload, dict)
         and isinstance(payload.get("data"), dict)
         and "frame" not in payload.get("data"),
-        "has_image_url": isinstance(notif, dict) and str(notif.get("imageUrl") or "").startswith("/files/"),
+        "has_image_url": isinstance(notif, dict)
+        and str(notif.get("imageUrl") or "").startswith("/files/"),
         "no_spam": len([e for e in events if e.get("op") == "update"]) <= 3,
     }
 
@@ -244,7 +265,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="pipelines-stage7-origin-sinks-demo")
     parser.add_argument("--duration-s", type=float, default=0.6)
     parser.add_argument("--queue-size", type=int, default=16)
-    parser.add_argument("--drop-policy", type=str, choices=[p.value for p in DropPolicy], default=DropPolicy.DROP_OLDEST.value)
+    parser.add_argument(
+        "--drop-policy",
+        type=str,
+        choices=[p.value for p in DropPolicy],
+        default=DropPolicy.DROP_OLDEST.value,
+    )
     parser.add_argument("--update-interval-s", type=float, default=0.15)
     parser.add_argument("--data-dir", type=str, default="")
     parser.add_argument("--json", action="store_true")

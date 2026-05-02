@@ -99,7 +99,11 @@ def build_graph(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "nodes": [
-            {"id": "source", "operator": "demo.sequence_source", "config": {"stream_id": "camera:stage6"}},
+            {
+                "id": "source",
+                "operator": "demo.sequence_source",
+                "config": {"stream_id": "camera:stage6"},
+            },
             {
                 "id": "segment",
                 "operator": "camera.object_crop",
@@ -233,8 +237,18 @@ def build_sequence() -> list[Packet]:
                     "object_bbox01": bbox_by_index[index - 1],
                 },
                 artifacts={
-                    "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "demo"}),
-                    "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "demo", "derived_from": "frame_original"}),
+                    "frame_original": Artifact(
+                        name="frame_original",
+                        data=frame,
+                        mime_type="image/raw",
+                        metadata={"source": "demo"},
+                    ),
+                    "frame": Artifact(
+                        name="frame",
+                        data=frame,
+                        mime_type="image/raw",
+                        metadata={"source": "demo", "derived_from": "frame_original"},
+                    ),
                     "face": Artifact(name="face", data=face, mime_type="image/raw"),
                 },
             ),
@@ -252,7 +266,7 @@ async def run_demo(args: argparse.Namespace) -> int:
 
     graph = build_graph(args)
     compiled = PipelineGraphCompiler(registry).compile_pipeline(
-        Pipeline(name="stage6_postprocess_demo", type="final", graph=graph),
+        Pipeline(name="stage6_postprocess_demo", graph=graph),
     )
     runtime = PipelineRuntime(compiled=compiled, registry=registry)
     snapshot = await runtime.run_for(float(args.duration_s))
@@ -283,8 +297,7 @@ async def run_demo(args: argparse.Namespace) -> int:
 
     channels = snapshot["channels"]
     bounded_channels = all(
-        int(channel["max_depth_seen"]) <= int(channel["maxsize"])
-        for channel in channels.values()
+        int(channel["max_depth_seen"]) <= int(channel["maxsize"]) for channel in channels.values()
     )
     checks = {
         "bounded_channels": bounded_channels,

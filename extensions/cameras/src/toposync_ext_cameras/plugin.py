@@ -17,7 +17,12 @@ from pydantic import BaseModel, Field
 
 from toposync.extensions import BaseExtension
 from toposync.runtime.auth import AuthContext, AuthRuntime
-from toposync.runtime.config_store import ConfigStore, Pipeline, PipelineAlreadyExistsError, PipelineValidationError
+from toposync.runtime.config_store import (
+    ConfigStore,
+    Pipeline,
+    PipelineAlreadyExistsError,
+    PipelineValidationError,
+)
 from toposync.runtime.event_bus import EventBus
 from toposync.runtime.pipelines.compiler import GraphCompileError, PipelineGraphCompiler
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
@@ -443,13 +448,17 @@ class CamerasExtension(BaseExtension):
         snapshot_cache: dict[str, SnapshotCacheEntry] = {}
         snapshot_locks: dict[str, asyncio.Lock] = {}
         snapshot_cache_ttl_s = float(os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_TTL_S", "0.8") or "0.8")
-        snapshot_ffmpeg_concurrency = int(os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_FFMPEG_CONCURRENCY", "2") or "2")
+        snapshot_ffmpeg_concurrency = int(
+            os.getenv("TOPOSYNC_CAMERA_SNAPSHOT_FFMPEG_CONCURRENCY", "2") or "2"
+        )
         snapshot_ffmpeg_sema = asyncio.Semaphore(max(1, snapshot_ffmpeg_concurrency))
 
         onvif_discover_lock = asyncio.Lock()
         onvif_discover_cache_at = 0.0
         onvif_discover_cache: list[OnvifDiscoveredDevice] = []
-        onvif_discover_cache_ttl_s = float(os.getenv("TOPOSYNC_ONVIF_DISCOVERY_TTL_S", "60") or "60")
+        onvif_discover_cache_ttl_s = float(
+            os.getenv("TOPOSYNC_ONVIF_DISCOVERY_TTL_S", "60") or "60"
+        )
 
         @dataclass(slots=True)
         class _OnvifPtzContextCacheEntry:
@@ -463,7 +472,9 @@ class CamerasExtension(BaseExtension):
         onvif_ptz_cache: dict[str, _OnvifPtzContextCacheEntry] = {}
         onvif_ptz_locks: dict[str, asyncio.Lock] = {}
         try:
-            onvif_ptz_cache_ttl_s = float(os.getenv("TOPOSYNC_CAMERA_ONVIF_PTZ_CONTEXT_TTL_S", "600") or "600")
+            onvif_ptz_cache_ttl_s = float(
+                os.getenv("TOPOSYNC_CAMERA_ONVIF_PTZ_CONTEXT_TTL_S", "600") or "600"
+            )
         except Exception:
             onvif_ptz_cache_ttl_s = 600.0
         onvif_ptz_cache_ttl_s = max(1.0, min(3600.0, onvif_ptz_cache_ttl_s))
@@ -542,10 +553,14 @@ class CamerasExtension(BaseExtension):
 
             channel = get_primary_video_channel(camera)
             if not isinstance(channel, dict):
-                raise HTTPException(status_code=409, detail="Camera has no video channel configured")
+                raise HTTPException(
+                    status_code=409, detail="Camera has no video channel configured"
+                )
 
             if str(channel.get("connection_type") or "rtsp").strip().lower() != "onvif":
-                raise HTTPException(status_code=409, detail="Camera controls are only supported for ONVIF cameras")
+                raise HTTPException(
+                    status_code=409, detail="Camera controls are only supported for ONVIF cameras"
+                )
 
             onvif_raw = channel.get("onvif")
             onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
@@ -579,7 +594,9 @@ class CamerasExtension(BaseExtension):
                     xaddr=xaddr,
                     username=username,
                     password=password,
-                    timeout_s=_env_float("TOPOSYNC_CAMERA_ONVIF_TIMEOUT_S", 3.5, min_value=0.5, max_value=20.0),
+                    timeout_s=_env_float(
+                        "TOPOSYNC_CAMERA_ONVIF_TIMEOUT_S", 3.5, min_value=0.5, max_value=20.0
+                    ),
                     auth_mode="auto",
                 )
                 return client, cached.ptz_xaddr, cached.profile_token
@@ -633,18 +650,28 @@ class CamerasExtension(BaseExtension):
                         ptz_xaddr = str(cap_ptz or "").strip()
 
                 if not ptz_xaddr:
-                    raise HTTPException(status_code=502, detail="ONVIF did not report a PTZ service address (ptz_xaddr)")
+                    raise HTTPException(
+                        status_code=502,
+                        detail="ONVIF did not report a PTZ service address (ptz_xaddr)",
+                    )
 
                 if not profile_token:
                     if not media_xaddr:
-                        raise HTTPException(status_code=502, detail="ONVIF did not report a Media service address (media_xaddr)")
+                        raise HTTPException(
+                            status_code=502,
+                            detail="ONVIF did not report a Media service address (media_xaddr)",
+                        )
                     try:
                         profiles = await client.get_profiles(media_xaddr)
                     except OnvifError as exc:
                         raise HTTPException(status_code=502, detail=str(exc)) from exc
-                    selected = _pick_best_ptz_profile(profiles) or (profiles[0] if profiles else None)
+                    selected = _pick_best_ptz_profile(profiles) or (
+                        profiles[0] if profiles else None
+                    )
                     if selected is None or not str(selected.token or "").strip():
-                        raise HTTPException(status_code=502, detail="ONVIF returned no usable profiles for PTZ")
+                        raise HTTPException(
+                            status_code=502, detail="ONVIF returned no usable profiles for PTZ"
+                        )
                     profile_token = str(selected.token or "").strip()
 
                 prev = onvif_ptz_cache.get(cid)
@@ -667,7 +694,9 @@ class CamerasExtension(BaseExtension):
             return max(minimum, min(maximum, float(value)))
 
         async def _svc_ptz_list_presets(*, camera_id: str) -> list[dict[str, Any]]:
-            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(camera_id=str(camera_id or "").strip())
+            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(
+                camera_id=str(camera_id or "").strip()
+            )
             try:
                 presets = await client.get_ptz_presets(ptz_xaddr, profile_token=profile_token)
             except OnvifError as exc:
@@ -688,7 +717,9 @@ class CamerasExtension(BaseExtension):
             token = str(preset_token or "").strip()
             if not token:
                 raise HTTPException(status_code=400, detail="preset_token is required")
-            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(camera_id=str(camera_id or "").strip())
+            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(
+                camera_id=str(camera_id or "").strip()
+            )
             try:
                 await client.goto_preset(ptz_xaddr, profile_token=profile_token, preset_token=token)
             except OnvifError as exc:
@@ -696,7 +727,9 @@ class CamerasExtension(BaseExtension):
             return {"ok": True}
 
         async def _svc_ptz_get_status(*, camera_id: str) -> dict[str, Any]:
-            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(camera_id=str(camera_id or "").strip())
+            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(
+                camera_id=str(camera_id or "").strip()
+            )
             try:
                 status = await client.get_ptz_status(ptz_xaddr, profile_token=profile_token)
             except OnvifError as exc:
@@ -783,9 +816,13 @@ class CamerasExtension(BaseExtension):
             pan_tilt: bool = True,
             zoom: bool = True,
         ) -> dict[str, Any]:
-            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(camera_id=str(camera_id or "").strip())
+            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(
+                camera_id=str(camera_id or "").strip()
+            )
             try:
-                await client.stop(ptz_xaddr, profile_token=profile_token, pan_tilt=bool(pan_tilt), zoom=bool(zoom))
+                await client.stop(
+                    ptz_xaddr, profile_token=profile_token, pan_tilt=bool(pan_tilt), zoom=bool(zoom)
+                )
             except OnvifError as exc:
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
             return {"ok": True}
@@ -818,7 +855,8 @@ class CamerasExtension(BaseExtension):
                     {
                         "id": cid,
                         "name": str(flattened.get("name") or "").strip(),
-                        "connection_type": str(flattened.get("connection_type") or "rtsp").strip() or "rtsp",
+                        "connection_type": str(flattened.get("connection_type") or "rtsp").strip()
+                        or "rtsp",
                     }
                 )
 
@@ -839,7 +877,9 @@ class CamerasExtension(BaseExtension):
             return host
 
         @app.post("/api/cameras/onvif/discover", response_model=OnvifDiscoverResponse)
-        async def onvif_discover(request: Request, body: OnvifDiscoverRequest) -> OnvifDiscoverResponse:
+        async def onvif_discover(
+            request: Request, body: OnvifDiscoverRequest
+        ) -> OnvifDiscoverResponse:
             nonlocal onvif_discover_cache_at, onvif_discover_cache
 
             timeout_s = max(0.2, float(body.timeout_ms) / 1000.0)
@@ -900,7 +940,9 @@ class CamerasExtension(BaseExtension):
             out: list[OnvifDiscoveredDeviceInfo] = []
             for item in devices:
                 xaddr = str(item.xaddr or "").strip()
-                host = _normalized_host(xaddr) if xaddr else str(item.source_ip or "").strip().lower()
+                host = (
+                    _normalized_host(xaddr) if xaddr else str(item.source_ip or "").strip().lower()
+                )
                 if bool(body.exclude_known):
                     if item.device_id and item.device_id in known_device_ids:
                         continue
@@ -1001,7 +1043,9 @@ class CamerasExtension(BaseExtension):
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
 
             if not media_xaddr:
-                raise HTTPException(status_code=502, detail="ONVIF device did not report a Media service URL")
+                raise HTTPException(
+                    status_code=502, detail="ONVIF device did not report a Media service URL"
+                )
 
             try:
                 uri = await client.get_stream_uri(media_xaddr, profile_token=token)
@@ -1072,7 +1116,9 @@ class CamerasExtension(BaseExtension):
                 return {"image": None, "quality": mapper.quality.as_dict()}
             return {"image": {"x": u, "y": v}, "quality": mapper.quality.as_dict()}
 
-        @app.get("/api/cameras/cameras/{camera_id}/ptz/presets", response_model=CameraPtzPresetsResponse)
+        @app.get(
+            "/api/cameras/cameras/{camera_id}/ptz/presets", response_model=CameraPtzPresetsResponse
+        )
         async def camera_ptz_presets(request: Request, camera_id: str) -> CameraPtzPresetsResponse:
             _require_auth(request, action="core:settings:read")
             cid = str(camera_id or "").strip()
@@ -1083,7 +1129,9 @@ class CamerasExtension(BaseExtension):
             try:
                 raw_presets = await services.call("cameras.ptz.list_presets", camera_id=cid)
             except KeyError:
-                raise HTTPException(status_code=503, detail="Camera PTZ controls are not available") from None
+                raise HTTPException(
+                    status_code=503, detail="Camera PTZ controls are not available"
+                ) from None
 
             presets: list[CameraPtzPreset] = []
             if isinstance(raw_presets, list):
@@ -1097,7 +1145,10 @@ class CamerasExtension(BaseExtension):
 
             return CameraPtzPresetsResponse(camera_id=cid, presets=presets)
 
-        @app.post("/api/cameras/cameras/{camera_id}/ptz/goto-preset", response_model=CameraPtzActionResponse)
+        @app.post(
+            "/api/cameras/cameras/{camera_id}/ptz/goto-preset",
+            response_model=CameraPtzActionResponse,
+        )
         async def camera_ptz_goto_preset(
             request: Request,
             camera_id: str,
@@ -1110,13 +1161,19 @@ class CamerasExtension(BaseExtension):
 
             services = _services(request)
             try:
-                await services.call("cameras.ptz.goto_preset", camera_id=cid, preset_token=body.preset_token)
+                await services.call(
+                    "cameras.ptz.goto_preset", camera_id=cid, preset_token=body.preset_token
+                )
             except KeyError:
-                raise HTTPException(status_code=503, detail="Camera PTZ controls are not available") from None
+                raise HTTPException(
+                    status_code=503, detail="Camera PTZ controls are not available"
+                ) from None
 
             return CameraPtzActionResponse(ok=True)
 
-        @app.get("/api/cameras/cameras/{camera_id}/ptz/status", response_model=CameraPtzStatusResponse)
+        @app.get(
+            "/api/cameras/cameras/{camera_id}/ptz/status", response_model=CameraPtzStatusResponse
+        )
         async def camera_ptz_status(request: Request, camera_id: str) -> CameraPtzStatusResponse:
             _require_auth(request, action="core:settings:read")
             cid = str(camera_id or "").strip()
@@ -1127,14 +1184,20 @@ class CamerasExtension(BaseExtension):
             try:
                 raw_status = await services.call("cameras.ptz.get_status", camera_id=cid)
             except KeyError:
-                raise HTTPException(status_code=503, detail="Camera PTZ controls are not available") from None
+                raise HTTPException(
+                    status_code=503, detail="Camera PTZ controls are not available"
+                ) from None
 
             return CameraPtzStatusResponse(
                 camera_id=cid,
-                status=CameraPtzStatus.model_validate(raw_status if isinstance(raw_status, dict) else {}),
+                status=CameraPtzStatus.model_validate(
+                    raw_status if isinstance(raw_status, dict) else {}
+                ),
             )
 
-        @app.post("/api/cameras/cameras/{camera_id}/ptz/move", response_model=CameraPtzActionResponse)
+        @app.post(
+            "/api/cameras/cameras/{camera_id}/ptz/move", response_model=CameraPtzActionResponse
+        )
         async def camera_ptz_move(
             request: Request,
             camera_id: str,
@@ -1156,11 +1219,15 @@ class CamerasExtension(BaseExtension):
                     timeout_s=body.timeout_s,
                 )
             except KeyError:
-                raise HTTPException(status_code=503, detail="Camera PTZ controls are not available") from None
+                raise HTTPException(
+                    status_code=503, detail="Camera PTZ controls are not available"
+                ) from None
 
             return CameraPtzActionResponse(ok=True)
 
-        @app.post("/api/cameras/cameras/{camera_id}/ptz/stop", response_model=CameraPtzActionResponse)
+        @app.post(
+            "/api/cameras/cameras/{camera_id}/ptz/stop", response_model=CameraPtzActionResponse
+        )
         async def camera_ptz_stop(
             request: Request,
             camera_id: str,
@@ -1180,7 +1247,9 @@ class CamerasExtension(BaseExtension):
                     zoom=bool(body.zoom),
                 )
             except KeyError:
-                raise HTTPException(status_code=503, detail="Camera PTZ controls are not available") from None
+                raise HTTPException(
+                    status_code=503, detail="Camera PTZ controls are not available"
+                ) from None
 
             return CameraPtzActionResponse(ok=True)
 
@@ -1198,7 +1267,9 @@ class CamerasExtension(BaseExtension):
                 now = time.time()
                 cached = snapshot_cache.get(cache_key)
                 if cached and (now - cached.created_ts) <= snapshot_cache_ttl_s:
-                    return Response(content=cached.blob, media_type="image/jpeg", headers=cached.headers)
+                    return Response(
+                        content=cached.blob, media_type="image/jpeg", headers=cached.headers
+                    )
 
                 async with snapshot_ffmpeg_sema:
                     result = await _ffmpeg_snapshot(url, timeout_ms=body.timeout_ms)
@@ -1240,7 +1311,9 @@ class CamerasExtension(BaseExtension):
                 now = time.time()
                 cached = snapshot_cache.get(cache_key)
                 if cached and (now - cached.created_ts) <= snapshot_cache_ttl_s:
-                    return Response(content=cached.blob, media_type="image/jpeg", headers=cached.headers)
+                    return Response(
+                        content=cached.blob, media_type="image/jpeg", headers=cached.headers
+                    )
 
                 url_raw = str(channel.get("rtsp_url", "")).strip()
                 username = str(channel.get("username", "")).strip()
@@ -1289,8 +1362,12 @@ class CamerasExtension(BaseExtension):
                         {
                             "id": element.id,
                             "name": str(element.name or "").strip() or element.id,
-                            "control_points_pairs": sum(len(item.control_points) for item in control_point_sets),
-                            "has_mapping": any(len(item.control_points) >= 4 for item in control_point_sets),
+                            "control_points_pairs": sum(
+                                len(item.control_points) for item in control_point_sets
+                            ),
+                            "has_mapping": any(
+                                len(item.control_points) >= 4 for item in control_point_sets
+                            ),
                         }
                     )
 
@@ -1364,7 +1441,9 @@ class CamerasExtension(BaseExtension):
                 return None
             for composition in getattr(cfg, "compositions", []):
                 for element in getattr(composition, "elements", []):
-                    props = element.props if isinstance(getattr(element, "props", None), dict) else {}
+                    props = (
+                        element.props if isinstance(getattr(element, "props", None), dict) else {}
+                    )
                     if str(props.get("camera_id", "")).strip() != cid:
                         continue
                     control_point_sets = _parse_control_point_sets(props.get("control_point_sets"))
@@ -1372,7 +1451,9 @@ class CamerasExtension(BaseExtension):
                         return str(getattr(composition, "id", "") or "").strip() or None
             return None
 
-        def _resolve_area_polygon(cfg: Any, *, composition_id: str, area_id: str) -> tuple[str, list[dict[str, float]]]:
+        def _resolve_area_polygon(
+            cfg: Any, *, composition_id: str, area_id: str
+        ) -> tuple[str, list[dict[str, float]]]:
             comp_id = str(composition_id or "").strip()
             aid = str(area_id or "").strip()
             if not comp_id or not aid:
@@ -1384,9 +1465,14 @@ class CamerasExtension(BaseExtension):
                 for element in getattr(composition, "elements", []):
                     if str(getattr(element, "id", "") or "").strip() != aid:
                         continue
-                    if str(getattr(element, "type", "") or "").strip() != "com.toposync.structural.area":
+                    if (
+                        str(getattr(element, "type", "") or "").strip()
+                        != "com.toposync.structural.area"
+                    ):
                         raise ValueError("Selected element is not an area")
-                    props = element.props if isinstance(getattr(element, "props", None), dict) else {}
+                    props = (
+                        element.props if isinstance(getattr(element, "props", None), dict) else {}
+                    )
                     vertices = props.get("vertices")
                     if not isinstance(vertices, list) or len(vertices) < 3:
                         raise ValueError("Area is missing vertices")
@@ -1459,12 +1545,20 @@ class CamerasExtension(BaseExtension):
                         },
                     },
                     {"id": "map", "operator": "camera.camera_mapping", "config": {}},
-                    {"id": "throttle", "operator": "core.throttle", "config": {"interval_seconds": 5.0}},
+                    {
+                        "id": "throttle",
+                        "operator": "core.throttle",
+                        "config": {"interval_seconds": 5.0},
+                    },
                     {"id": "segment", "operator": "camera.object_crop", "config": {}},
                     {
                         "id": "store",
                         "operator": "core.store_images",
-                        "config": {"image_with_fallback": "best_frame,original,treated,segmented", "subdir": "pipelines", "format": "png"},
+                        "config": {
+                            "image_with_fallback": "best_frame,original,treated,segmented",
+                            "subdir": "pipelines",
+                            "format": "png",
+                        },
                     },
                     {
                         "id": "notify",
@@ -1474,19 +1568,64 @@ class CamerasExtension(BaseExtension):
                             "title": notification_title or "{{camera_name}}: Person detected",
                             "description": notification_description or "{{camera_name}}",
                             "priority": "medium",
-                            "thumbnail_with_fallback": ["best_frame", "original", "treated", "segmented"],
+                            "thumbnail_with_fallback": [
+                                "best_frame",
+                                "original",
+                                "treated",
+                                "segmented",
+                            ],
                         },
                     },
                 ]
                 edges = [
-                    {"from": {"node": "source", "port": "out"}, "to": {"node": "motion", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "motion", "port": "out"}, "to": {"node": "detect", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "track", "port": "out"}, "to": {"node": "map", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "map", "port": "out"}, "to": {"node": "throttle", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "throttle", "port": "out"}, "to": {"node": "segment", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "segment", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 16, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}, "maxsize": 16, "drop_policy": "drop_oldest"},
+                    {
+                        "from": {"node": "source", "port": "out"},
+                        "to": {"node": "motion", "port": "in"},
+                        "maxsize": 2,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "motion", "port": "out"},
+                        "to": {"node": "detect", "port": "in"},
+                        "maxsize": 2,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "detect", "port": "out"},
+                        "to": {"node": "track", "port": "in"},
+                        "maxsize": 2,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "track", "port": "out"},
+                        "to": {"node": "map", "port": "in"},
+                        "maxsize": 8,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "map", "port": "out"},
+                        "to": {"node": "throttle", "port": "in"},
+                        "maxsize": 8,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "throttle", "port": "out"},
+                        "to": {"node": "segment", "port": "in"},
+                        "maxsize": 8,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "segment", "port": "out"},
+                        "to": {"node": "store", "port": "in"},
+                        "maxsize": 16,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "store", "port": "out"},
+                        "to": {"node": "notify", "port": "in"},
+                        "maxsize": 16,
+                        "drop_policy": "drop_oldest",
+                    },
                 ]
                 return {"schema_version": 1, "nodes": nodes, "edges": edges}
 
@@ -1511,12 +1650,24 @@ class CamerasExtension(BaseExtension):
                         },
                     },
                     {"id": "map", "operator": "camera.camera_mapping", "config": {}},
-                    {"id": "throttle", "operator": "core.throttle", "config": {"interval_seconds": 8.0}},
-                    {"id": "segment", "operator": "camera.object_crop", "config": {"padding_ratio": 0.12}},
+                    {
+                        "id": "throttle",
+                        "operator": "core.throttle",
+                        "config": {"interval_seconds": 8.0},
+                    },
+                    {
+                        "id": "segment",
+                        "operator": "camera.object_crop",
+                        "config": {"padding_ratio": 0.12},
+                    },
                     {
                         "id": "store",
                         "operator": "core.store_images",
-                        "config": {"image_with_fallback": "best_frame,original,treated,segmented", "subdir": "pipelines", "format": "png"},
+                        "config": {
+                            "image_with_fallback": "best_frame,original,treated,segmented",
+                            "subdir": "pipelines",
+                            "format": "png",
+                        },
                     },
                     {
                         "id": "notify",
@@ -1526,19 +1677,64 @@ class CamerasExtension(BaseExtension):
                             "title": notification_title or "{{camera_name}}: Pet detected",
                             "description": notification_description or "{{camera_name}}",
                             "priority": "medium",
-                            "thumbnail_with_fallback": ["best_frame", "original", "treated", "segmented"],
+                            "thumbnail_with_fallback": [
+                                "best_frame",
+                                "original",
+                                "treated",
+                                "segmented",
+                            ],
                         },
                     },
                 ]
                 edges = [
-                    {"from": {"node": "source", "port": "out"}, "to": {"node": "motion", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "motion", "port": "out"}, "to": {"node": "detect", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "track", "port": "out"}, "to": {"node": "map", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "map", "port": "out"}, "to": {"node": "throttle", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "throttle", "port": "out"}, "to": {"node": "segment", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "segment", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 16, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}, "maxsize": 16, "drop_policy": "drop_oldest"},
+                    {
+                        "from": {"node": "source", "port": "out"},
+                        "to": {"node": "motion", "port": "in"},
+                        "maxsize": 2,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "motion", "port": "out"},
+                        "to": {"node": "detect", "port": "in"},
+                        "maxsize": 2,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "detect", "port": "out"},
+                        "to": {"node": "track", "port": "in"},
+                        "maxsize": 2,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "track", "port": "out"},
+                        "to": {"node": "map", "port": "in"},
+                        "maxsize": 8,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "map", "port": "out"},
+                        "to": {"node": "throttle", "port": "in"},
+                        "maxsize": 8,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "throttle", "port": "out"},
+                        "to": {"node": "segment", "port": "in"},
+                        "maxsize": 8,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "segment", "port": "out"},
+                        "to": {"node": "store", "port": "in"},
+                        "maxsize": 16,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "store", "port": "out"},
+                        "to": {"node": "notify", "port": "in"},
+                        "maxsize": 16,
+                        "drop_policy": "drop_oldest",
+                    },
                 ]
                 return {"schema_version": 1, "nodes": nodes, "edges": edges}
 
@@ -1570,7 +1766,11 @@ class CamerasExtension(BaseExtension):
                             "max_paused_seconds": 900.0,
                         },
                     },
-                    {"id": "map", "operator": "camera.camera_mapping", "config": {"composition_id": composition_id}},
+                    {
+                        "id": "map",
+                        "operator": "camera.camera_mapping",
+                        "config": {"composition_id": composition_id},
+                    },
                     {
                         "id": "area",
                         "operator": "camera.area_restriction",
@@ -1593,12 +1793,27 @@ class CamerasExtension(BaseExtension):
                             "stopped_speed_threshold": 0.07,
                         },
                     },
-                    {"id": "throttle", "operator": "core.velocity_throttle", "config": {"moving_interval_seconds": 2.5, "stopped_interval_seconds": 120.0}},
-                    {"id": "segment", "operator": "camera.object_crop", "config": {"padding_ratio": 0.16}},
+                    {
+                        "id": "throttle",
+                        "operator": "core.velocity_throttle",
+                        "config": {
+                            "moving_interval_seconds": 2.5,
+                            "stopped_interval_seconds": 120.0,
+                        },
+                    },
+                    {
+                        "id": "segment",
+                        "operator": "camera.object_crop",
+                        "config": {"padding_ratio": 0.16},
+                    },
                     {
                         "id": "store",
                         "operator": "core.store_images",
-                        "config": {"image_with_fallback": "best_frame,original,treated,segmented", "subdir": "pipelines", "format": "png"},
+                        "config": {
+                            "image_with_fallback": "best_frame,original,treated,segmented",
+                            "subdir": "pipelines",
+                            "format": "png",
+                        },
                     },
                     {
                         "id": "notify",
@@ -1608,27 +1823,85 @@ class CamerasExtension(BaseExtension):
                             "title": notification_title or "{{camera_name}}: Vehicle stopped",
                             "description": notification_description or "{{camera_name}}",
                             "priority": "high",
-                            "thumbnail_with_fallback": ["best_frame", "original", "treated", "segmented"],
+                            "thumbnail_with_fallback": [
+                                "best_frame",
+                                "original",
+                                "treated",
+                                "segmented",
+                            ],
                         },
                     },
                 ]
                 edges = [
-                    {"from": {"node": "source", "port": "out"}, "to": {"node": "motion", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "motion", "port": "out"}, "to": {"node": "detect", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}, "maxsize": 2, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "track", "port": "out"}, "to": {"node": "map", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "map", "port": "out"}, "to": {"node": "area", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "area", "port": "out"}, "to": {"node": "velocity", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "velocity", "port": "out"}, "to": {"node": "throttle", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "throttle", "port": "out"}, "to": {"node": "segment", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "segment", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 16, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}, "maxsize": 16, "drop_policy": "drop_oldest"},
+                    {
+                        "from": {"node": "source", "port": "out"},
+                        "to": {"node": "motion", "port": "in"},
+                        "maxsize": 2,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "motion", "port": "out"},
+                        "to": {"node": "detect", "port": "in"},
+                        "maxsize": 2,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "detect", "port": "out"},
+                        "to": {"node": "track", "port": "in"},
+                        "maxsize": 2,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "track", "port": "out"},
+                        "to": {"node": "map", "port": "in"},
+                        "maxsize": 8,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "map", "port": "out"},
+                        "to": {"node": "area", "port": "in"},
+                        "maxsize": 8,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "area", "port": "out"},
+                        "to": {"node": "velocity", "port": "in"},
+                        "maxsize": 8,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "velocity", "port": "out"},
+                        "to": {"node": "throttle", "port": "in"},
+                        "maxsize": 8,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "throttle", "port": "out"},
+                        "to": {"node": "segment", "port": "in"},
+                        "maxsize": 8,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "segment", "port": "out"},
+                        "to": {"node": "store", "port": "in"},
+                        "maxsize": 16,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "store", "port": "out"},
+                        "to": {"node": "notify", "port": "in"},
+                        "maxsize": 16,
+                        "drop_policy": "drop_oldest",
+                    },
                 ]
                 return {"schema_version": 1, "nodes": nodes, "edges": edges}
 
             raise ValueError("Unknown preset")
 
-        @app.post("/api/cameras/cameras/{camera_id}/pipeline-wizard", response_model=CameraPipelineWizardResponse)
+        @app.post(
+            "/api/cameras/cameras/{camera_id}/pipeline-wizard",
+            response_model=CameraPipelineWizardResponse,
+        )
         async def create_camera_pipeline_from_wizard(
             request: Request,
             camera_id: str,
@@ -1641,7 +1914,9 @@ class CamerasExtension(BaseExtension):
 
             preset = str(body.preset or "").strip()
             if preset not in {"people", "vehicles_stopped", "pets"}:
-                raise HTTPException(status_code=400, detail="preset must be one of: people, vehicles_stopped, pets")
+                raise HTTPException(
+                    status_code=400, detail="preset must be one of: people, vehicles_stopped, pets"
+                )
 
             store = _config_store(request)
             compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
@@ -1669,11 +1944,15 @@ class CamerasExtension(BaseExtension):
                     request,
                     action="core:area:edit",
                     resource_type="core:area",
-                    resource_selector=f"{composition_id}.{area_id}" if area_id else f"{composition_id}.*",
+                    resource_selector=f"{composition_id}.{area_id}"
+                    if area_id
+                    else f"{composition_id}.*",
                 )
                 if area_id:
                     try:
-                        area_name, area_points = _resolve_area_polygon(cfg, composition_id=composition_id, area_id=area_id)
+                        area_name, area_points = _resolve_area_polygon(
+                            cfg, composition_id=composition_id, area_id=area_id
+                        )
                     except ValueError as exc:
                         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1683,9 +1962,13 @@ class CamerasExtension(BaseExtension):
             if requested_name:
                 pipeline_name = safe_pipeline_name(requested_name)
                 if pipeline_name in existing_names:
-                    raise HTTPException(status_code=409, detail=f"Pipeline already exists: {pipeline_name}")
+                    raise HTTPException(
+                        status_code=409, detail=f"Pipeline already exists: {pipeline_name}"
+                    )
             else:
-                pipeline_name = _unique_pipeline_name(f"camera_{cid}__{preset}", existing_names=existing_names)
+                pipeline_name = _unique_pipeline_name(
+                    f"camera_{cid}__{preset}", existing_names=existing_names
+                )
 
             try:
                 graph = _build_wizard_graph(
@@ -1703,7 +1986,6 @@ class CamerasExtension(BaseExtension):
             processing_server_id = str(body.processing_server_id or "").strip() or "local"
             pipeline = Pipeline(
                 name=pipeline_name,
-                type="final",
                 enabled=bool(body.enabled),
                 processing_server_id=processing_server_id,
                 editor_mode="interactive",
@@ -1719,7 +2001,9 @@ class CamerasExtension(BaseExtension):
             try:
                 await store.create_pipeline(pipeline)
             except PipelineAlreadyExistsError:
-                raise HTTPException(status_code=409, detail=f"Pipeline already exists: {pipeline_name}") from None
+                raise HTTPException(
+                    status_code=409, detail=f"Pipeline already exists: {pipeline_name}"
+                ) from None
             except PipelineValidationError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 

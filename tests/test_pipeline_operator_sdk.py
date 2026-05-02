@@ -64,7 +64,9 @@ def test_pipeline_compiler_detects_reusable_signatures_across_pipelines() -> Non
             {"id": "source_a", "operator": "test.source", "config": {"threshold": 0.4}},
             {"id": "filter_a", "operator": "test.filter", "config": {"threshold": 0.8}},
         ],
-        "edges": [{"from": {"node": "source_a", "port": "out"}, "to": {"node": "filter_a", "port": "in"}}],
+        "edges": [
+            {"from": {"node": "source_a", "port": "out"}, "to": {"node": "filter_a", "port": "in"}}
+        ],
     }
     graph_two = {
         "schema_version": 1,
@@ -72,11 +74,13 @@ def test_pipeline_compiler_detects_reusable_signatures_across_pipelines() -> Non
             {"id": "source_b", "operator": "test.source", "config": {"threshold": 0.4}},
             {"id": "filter_b", "operator": "test.filter", "config": {"threshold": 0.8}},
         ],
-        "edges": [{"from": {"node": "source_b", "port": "out"}, "to": {"node": "filter_b", "port": "in"}}],
+        "edges": [
+            {"from": {"node": "source_b", "port": "out"}, "to": {"node": "filter_b", "port": "in"}}
+        ],
     }
     pipelines = [
-        Pipeline(name="pipeline_a", type="reuse", graph=graph_one),
-        Pipeline(name="pipeline_b", type="final", graph=graph_two),
+        Pipeline(name="pipeline_a", graph=graph_one),
+        Pipeline(name="pipeline_b", graph=graph_two),
     ]
     report = compiler.compile_many(pipelines)
     assert len(report.pipelines) == 2
@@ -101,7 +105,7 @@ def test_pipeline_compiler_rejects_unknown_operator_and_cycle() -> None:
         "edges": [],
     }
     with pytest.raises(GraphCompileError):
-        compiler.compile_pipeline(Pipeline(name="missing_op", type="reuse", graph=unknown_operator_graph))
+        compiler.compile_pipeline(Pipeline(name="missing_op", graph=unknown_operator_graph))
 
     cycle_graph = {
         "schema_version": 1,
@@ -115,7 +119,7 @@ def test_pipeline_compiler_rejects_unknown_operator_and_cycle() -> None:
         ],
     }
     with pytest.raises(GraphCompileError):
-        compiler.compile_pipeline(Pipeline(name="cyclic_graph", type="reuse", graph=cycle_graph))
+        compiler.compile_pipeline(Pipeline(name="cyclic_graph", graph=cycle_graph))
 
 
 def test_operator_registry_adds_purity_capability() -> None:

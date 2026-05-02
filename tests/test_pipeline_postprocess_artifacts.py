@@ -24,7 +24,10 @@ from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 from toposync_ext_cameras.processing.mapping import ControlPointMapper, ControlPointPair
-from toposync_ext_cameras.pipelines.postprocess import BestFrameSelectorRuntime, VelocityEstimationRuntime
+from toposync_ext_cameras.pipelines.postprocess import (
+    BestFrameSelectorRuntime,
+    VelocityEstimationRuntime,
+)
 
 
 class _SequenceSourceConfig(BaseModel):
@@ -105,7 +108,7 @@ def _pipeline_runtime(
     register_camera_pipeline_operators(registry)
     _register_test_source_and_sink(registry, sequence, collector)
     compiled = PipelineGraphCompiler(registry).compile_pipeline(
-        Pipeline(name="stage6_postprocess_test", type="final", graph=graph),
+        Pipeline(name="stage6_postprocess_test", graph=graph),
     )
     return PipelineRuntime(
         compiled=compiled,
@@ -117,7 +120,12 @@ def _pipeline_runtime(
 def _frame_artifacts(frame: Any) -> dict[str, Artifact]:
     return {
         "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw"),
-        "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"derived_from": "frame_original"}),
+        "frame": Artifact(
+            name="frame",
+            data=frame,
+            mime_type="image/raw",
+            metadata={"derived_from": "frame_original"},
+        ),
     }
 
 
@@ -167,7 +175,11 @@ def test_segmentation_and_best_frame_selection_are_deterministic() -> None:
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "segment",
                     "operator": "camera.object_crop",
@@ -191,9 +203,24 @@ def test_segmentation_and_best_frame_selection_are_deterministic() -> None:
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "segment", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
-                {"from": {"node": "segment", "port": "out"}, "to": {"node": "best", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
-                {"from": {"node": "best", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "segment", "port": "in"},
+                    "maxsize": 4,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "segment", "port": "out"},
+                    "to": {"node": "best", "port": "in"},
+                    "maxsize": 4,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "best", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
@@ -260,7 +287,11 @@ def test_segmentation_reprojects_bbox_for_cropped_stream_frame() -> None:
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "segment",
                     "operator": "camera.object_crop",
@@ -276,8 +307,18 @@ def test_segmentation_reprojects_bbox_for_cropped_stream_frame() -> None:
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "segment", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
-                {"from": {"node": "segment", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "segment", "port": "in"},
+                    "maxsize": 4,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "segment", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
@@ -343,7 +384,11 @@ def test_segmentation_reprojects_bbox_for_perspective_warped_stream_frame() -> N
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "segment",
                     "operator": "camera.object_crop",
@@ -359,8 +404,18 @@ def test_segmentation_reprojects_bbox_for_perspective_warped_stream_frame() -> N
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "segment", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
-                {"from": {"node": "segment", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "segment", "port": "in"},
+                    "maxsize": 4,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "segment", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
@@ -431,7 +486,11 @@ def test_segmentation_uses_bbox_from_best_frame_metadata() -> None:
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "best",
                     "operator": "camera.best_frame_selector",
@@ -458,9 +517,24 @@ def test_segmentation_uses_bbox_from_best_frame_metadata() -> None:
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "best", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
-                {"from": {"node": "best", "port": "out"}, "to": {"node": "segment", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
-                {"from": {"node": "segment", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "best", "port": "in"},
+                    "maxsize": 4,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "best", "port": "out"},
+                    "to": {"node": "segment", "port": "in"},
+                    "maxsize": 4,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "segment", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
@@ -504,7 +578,11 @@ def test_image_resize_downscales_selected_artifacts_in_place() -> None:
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "resize",
                     "operator": "camera.image_resize",
@@ -516,8 +594,18 @@ def test_image_resize_downscales_selected_artifacts_in_place() -> None:
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "resize", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                {"from": {"node": "resize", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "resize", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "resize", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
@@ -580,7 +668,11 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "mapping",
                     "operator": "camera.camera_mapping",
@@ -594,7 +686,10 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
                                 "control_points": [
                                     {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
                                     {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
-                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
+                                    {
+                                        "image": {"x": 1.0, "y": 1.0},
+                                        "world": {"x": 10.0, "z": 10.0},
+                                    },
                                     {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
                                 ],
                             }
@@ -630,10 +725,30 @@ def test_mapping_area_and_velocity_chain_filters_on_stopped_object() -> None:
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "mapping", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                {"from": {"node": "mapping", "port": "out"}, "to": {"node": "area", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                {"from": {"node": "area", "port": "out"}, "to": {"node": "velocity", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                {"from": {"node": "velocity", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "mapping", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "mapping", "port": "out"},
+                    "to": {"node": "area", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "area", "port": "out"},
+                    "to": {"node": "velocity", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "velocity", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
@@ -692,7 +807,11 @@ def test_velocity_stopped_now_drops_close_when_first_valid_world_sample_arrives_
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "velocity",
                     "operator": "camera.velocity_estimation",
@@ -705,8 +824,18 @@ def test_velocity_stopped_now_drops_close_when_first_valid_world_sample_arrives_
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "velocity", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                {"from": {"node": "velocity", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "velocity", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "velocity", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
@@ -728,7 +857,12 @@ def test_mapping_selects_pose_bound_set_when_ptz_state_matches() -> None:
                 "payload": {
                     "camera_id": "camera-main",
                     "image_uv": {"u": 0.5, "v": 0.5},
-                    "pan_tilt_zoom_state": {"pan": 0.12, "tilt": -0.08, "zoom": 0.33, "move_status": "IDLE"},
+                    "pan_tilt_zoom_state": {
+                        "pan": 0.12,
+                        "tilt": -0.08,
+                        "zoom": 0.33,
+                        "move_status": "IDLE",
+                    },
                 },
                 "artifacts": _frame_artifacts(frame),
             }
@@ -736,7 +870,11 @@ def test_mapping_selects_pose_bound_set_when_ptz_state_matches() -> None:
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "mapping",
                     "operator": "camera.camera_mapping",
@@ -749,7 +887,10 @@ def test_mapping_selects_pose_bound_set_when_ptz_state_matches() -> None:
                                 "control_points": [
                                     {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
                                     {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
-                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
+                                    {
+                                        "image": {"x": 1.0, "y": 1.0},
+                                        "world": {"x": 10.0, "z": 10.0},
+                                    },
                                     {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
                                 ],
                             },
@@ -758,10 +899,22 @@ def test_mapping_selects_pose_bound_set_when_ptz_state_matches() -> None:
                                 "label": "Door",
                                 "pose_reference": {"pan": 0.12, "tilt": -0.08, "zoom": 0.33},
                                 "control_points": [
-                                    {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 100.0, "z": 100.0}},
-                                    {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 110.0, "z": 100.0}},
-                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 110.0, "z": 110.0}},
-                                    {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 100.0, "z": 110.0}},
+                                    {
+                                        "image": {"x": 0.0, "y": 0.0},
+                                        "world": {"x": 100.0, "z": 100.0},
+                                    },
+                                    {
+                                        "image": {"x": 1.0, "y": 0.0},
+                                        "world": {"x": 110.0, "z": 100.0},
+                                    },
+                                    {
+                                        "image": {"x": 1.0, "y": 1.0},
+                                        "world": {"x": 110.0, "z": 110.0},
+                                    },
+                                    {
+                                        "image": {"x": 0.0, "y": 1.0},
+                                        "world": {"x": 100.0, "z": 110.0},
+                                    },
                                 ],
                             },
                         ]
@@ -770,8 +923,18 @@ def test_mapping_selects_pose_bound_set_when_ptz_state_matches() -> None:
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "mapping", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
-                {"from": {"node": "mapping", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "mapping", "port": "in"},
+                    "maxsize": 4,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "mapping", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 4,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
@@ -809,7 +972,11 @@ def test_mapping_fetches_ptz_state_from_service_when_payload_missing() -> None:
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "mapping",
                     "operator": "camera.camera_mapping",
@@ -822,7 +989,10 @@ def test_mapping_fetches_ptz_state_from_service_when_payload_missing() -> None:
                                 "control_points": [
                                     {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
                                     {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
-                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
+                                    {
+                                        "image": {"x": 1.0, "y": 1.0},
+                                        "world": {"x": 10.0, "z": 10.0},
+                                    },
                                     {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
                                 ],
                             },
@@ -831,20 +1001,42 @@ def test_mapping_fetches_ptz_state_from_service_when_payload_missing() -> None:
                                 "label": "Door",
                                 "pose_reference": {"pan": 0.12, "tilt": -0.08, "zoom": 0.33},
                                 "control_points": [
-                                    {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 100.0, "z": 100.0}},
-                                    {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 110.0, "z": 100.0}},
-                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 110.0, "z": 110.0}},
-                                    {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 100.0, "z": 110.0}},
+                                    {
+                                        "image": {"x": 0.0, "y": 0.0},
+                                        "world": {"x": 100.0, "z": 100.0},
+                                    },
+                                    {
+                                        "image": {"x": 1.0, "y": 0.0},
+                                        "world": {"x": 110.0, "z": 100.0},
+                                    },
+                                    {
+                                        "image": {"x": 1.0, "y": 1.0},
+                                        "world": {"x": 110.0, "z": 110.0},
+                                    },
+                                    {
+                                        "image": {"x": 0.0, "y": 1.0},
+                                        "world": {"x": 100.0, "z": 110.0},
+                                    },
                                 ],
-                            }
+                            },
                         ]
                     },
                 },
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "mapping", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
-                {"from": {"node": "mapping", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "mapping", "port": "in"},
+                    "maxsize": 4,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "mapping", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 4,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
@@ -901,7 +1093,11 @@ def test_mapping_caches_fetched_ptz_state_between_packets() -> None:
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "mapping",
                     "operator": "camera.camera_mapping",
@@ -915,7 +1111,10 @@ def test_mapping_caches_fetched_ptz_state_between_packets() -> None:
                                 "control_points": [
                                     {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
                                     {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
-                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
+                                    {
+                                        "image": {"x": 1.0, "y": 1.0},
+                                        "world": {"x": 10.0, "z": 10.0},
+                                    },
                                     {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
                                 ],
                             },
@@ -924,20 +1123,42 @@ def test_mapping_caches_fetched_ptz_state_between_packets() -> None:
                                 "label": "Door",
                                 "pose_reference": {"pan": 0.12, "tilt": -0.08, "zoom": 0.33},
                                 "control_points": [
-                                    {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 100.0, "z": 100.0}},
-                                    {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 110.0, "z": 100.0}},
-                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 110.0, "z": 110.0}},
-                                    {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 100.0, "z": 110.0}},
+                                    {
+                                        "image": {"x": 0.0, "y": 0.0},
+                                        "world": {"x": 100.0, "z": 100.0},
+                                    },
+                                    {
+                                        "image": {"x": 1.0, "y": 0.0},
+                                        "world": {"x": 110.0, "z": 100.0},
+                                    },
+                                    {
+                                        "image": {"x": 1.0, "y": 1.0},
+                                        "world": {"x": 110.0, "z": 110.0},
+                                    },
+                                    {
+                                        "image": {"x": 0.0, "y": 1.0},
+                                        "world": {"x": 100.0, "z": 110.0},
+                                    },
                                 ],
-                            }
+                            },
                         ],
                     },
                 },
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "mapping", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
-                {"from": {"node": "mapping", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "mapping", "port": "in"},
+                    "maxsize": 4,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "mapping", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 4,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
@@ -977,7 +1198,12 @@ def test_mapping_skips_when_ptz_state_reports_moving() -> None:
                 "payload": {
                     "camera_id": "camera-main",
                     "image_uv": {"u": 0.5, "v": 0.5},
-                    "pan_tilt_zoom_state": {"pan": 0.12, "tilt": -0.08, "zoom": 0.33, "move_status": "MOVING"},
+                    "pan_tilt_zoom_state": {
+                        "pan": 0.12,
+                        "tilt": -0.08,
+                        "zoom": 0.33,
+                        "move_status": "MOVING",
+                    },
                 },
                 "artifacts": _frame_artifacts(frame),
             }
@@ -985,7 +1211,11 @@ def test_mapping_skips_when_ptz_state_reports_moving() -> None:
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "mapping",
                     "operator": "camera.camera_mapping",
@@ -996,10 +1226,22 @@ def test_mapping_skips_when_ptz_state_reports_moving() -> None:
                                 "label": "Door",
                                 "pose_reference": {"pan": 0.12, "tilt": -0.08, "zoom": 0.33},
                                 "control_points": [
-                                    {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 100.0, "z": 100.0}},
-                                    {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 110.0, "z": 100.0}},
-                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 110.0, "z": 110.0}},
-                                    {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 100.0, "z": 110.0}},
+                                    {
+                                        "image": {"x": 0.0, "y": 0.0},
+                                        "world": {"x": 100.0, "z": 100.0},
+                                    },
+                                    {
+                                        "image": {"x": 1.0, "y": 0.0},
+                                        "world": {"x": 110.0, "z": 100.0},
+                                    },
+                                    {
+                                        "image": {"x": 1.0, "y": 1.0},
+                                        "world": {"x": 110.0, "z": 110.0},
+                                    },
+                                    {
+                                        "image": {"x": 0.0, "y": 1.0},
+                                        "world": {"x": 100.0, "z": 110.0},
+                                    },
                                 ],
                             }
                         ]
@@ -1008,8 +1250,18 @@ def test_mapping_skips_when_ptz_state_reports_moving() -> None:
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "mapping", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
-                {"from": {"node": "mapping", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 4, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "mapping", "port": "in"},
+                    "maxsize": 4,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "mapping", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 4,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
@@ -1075,16 +1327,24 @@ def test_best_frame_selector_keeps_bounded_buffer_per_tracking_id() -> None:
                     "object_confidence": confidence,
                     "object_bbox01": [0.2, 0.2, 0.8, 0.8],
                 },
-                artifacts={"segmented": Artifact(name="segmented", data=frame, mime_type="image/raw")},
+                artifacts={
+                    "segmented": Artifact(name="segmented", data=frame, mime_type="image/raw")
+                },
             )
 
         sequence = [
             make_packet(tracking_id="a", lifecycle=Lifecycle.OPEN, frame_value=1, confidence=0.95),
             make_packet(tracking_id="b", lifecycle=Lifecycle.OPEN, frame_value=10, confidence=0.90),
-            make_packet(tracking_id="a", lifecycle=Lifecycle.UPDATE, frame_value=2, confidence=0.20),
-            make_packet(tracking_id="b", lifecycle=Lifecycle.UPDATE, frame_value=11, confidence=0.80),
+            make_packet(
+                tracking_id="a", lifecycle=Lifecycle.UPDATE, frame_value=2, confidence=0.20
+            ),
+            make_packet(
+                tracking_id="b", lifecycle=Lifecycle.UPDATE, frame_value=11, confidence=0.80
+            ),
             make_packet(tracking_id="a", lifecycle=Lifecycle.CLOSE, frame_value=3, confidence=0.10),
-            make_packet(tracking_id="b", lifecycle=Lifecycle.CLOSE, frame_value=12, confidence=0.10),
+            make_packet(
+                tracking_id="b", lifecycle=Lifecycle.CLOSE, frame_value=12, confidence=0.10
+            ),
         ]
 
         outputs: list[Packet] = []
@@ -1095,8 +1355,7 @@ def test_best_frame_selector_keeps_bounded_buffer_per_tracking_id() -> None:
         close_outputs = [packet for packet in outputs if packet.lifecycle == Lifecycle.CLOSE]
         assert len(close_outputs) == 2
         close_by_tracking = {
-            str(packet.payload.get("tracking_id")): packet
-            for packet in close_outputs
+            str(packet.payload.get("tracking_id")): packet for packet in close_outputs
         }
         assert int(close_by_tracking["a"].artifacts["best_frame"].data[0, 0, 0]) == 2
         assert int(close_by_tracking["b"].artifacts["best_frame"].data[0, 0, 0]) == 11
@@ -1207,17 +1466,55 @@ def test_best_frame_selector_state_is_namespaced_when_tracking_id_repeats_across
                     "object_confidence": confidence,
                     "object_bbox01": [0.2, 0.2, 0.8, 0.8],
                 },
-                artifacts={"segmented": Artifact(name="segmented", data=frame, mime_type="image/raw")},
+                artifacts={
+                    "segmented": Artifact(name="segmented", data=frame, mime_type="image/raw")
+                },
             )
 
         # Two independent streams that happen to share the same tracking_id.
         sequence = [
-            make_packet(stream_id="obj:cam1", tracking_id="1", lifecycle=Lifecycle.OPEN, frame_value=1, confidence=0.9),
-            make_packet(stream_id="obj:cam2", tracking_id="1", lifecycle=Lifecycle.OPEN, frame_value=9, confidence=1.0),
-            make_packet(stream_id="obj:cam2", tracking_id="1", lifecycle=Lifecycle.UPDATE, frame_value=10, confidence=0.8),
-            make_packet(stream_id="obj:cam1", tracking_id="1", lifecycle=Lifecycle.UPDATE, frame_value=2, confidence=0.1),
-            make_packet(stream_id="obj:cam1", tracking_id="1", lifecycle=Lifecycle.CLOSE, frame_value=3, confidence=0.1),
-            make_packet(stream_id="obj:cam2", tracking_id="1", lifecycle=Lifecycle.CLOSE, frame_value=11, confidence=0.2),
+            make_packet(
+                stream_id="obj:cam1",
+                tracking_id="1",
+                lifecycle=Lifecycle.OPEN,
+                frame_value=1,
+                confidence=0.9,
+            ),
+            make_packet(
+                stream_id="obj:cam2",
+                tracking_id="1",
+                lifecycle=Lifecycle.OPEN,
+                frame_value=9,
+                confidence=1.0,
+            ),
+            make_packet(
+                stream_id="obj:cam2",
+                tracking_id="1",
+                lifecycle=Lifecycle.UPDATE,
+                frame_value=10,
+                confidence=0.8,
+            ),
+            make_packet(
+                stream_id="obj:cam1",
+                tracking_id="1",
+                lifecycle=Lifecycle.UPDATE,
+                frame_value=2,
+                confidence=0.1,
+            ),
+            make_packet(
+                stream_id="obj:cam1",
+                tracking_id="1",
+                lifecycle=Lifecycle.CLOSE,
+                frame_value=3,
+                confidence=0.1,
+            ),
+            make_packet(
+                stream_id="obj:cam2",
+                tracking_id="1",
+                lifecycle=Lifecycle.CLOSE,
+                frame_value=11,
+                confidence=0.2,
+            ),
         ]
 
         outputs: list[Packet] = []

@@ -76,8 +76,18 @@ class FrameSourceRuntime(SourceOperatorRuntime):
             lifecycle=Lifecycle.UPDATE,
             payload={"frame_index": self._sequence},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="application/json", metadata={"source": "demo"}),
-                "frame": Artifact(name="frame", data=frame, mime_type="application/json", metadata={"source": "demo", "derived_from": "frame_original"}),
+                "frame_original": Artifact(
+                    name="frame_original",
+                    data=frame,
+                    mime_type="application/json",
+                    metadata={"source": "demo"},
+                ),
+                "frame": Artifact(
+                    name="frame",
+                    data=frame,
+                    mime_type="application/json",
+                    metadata={"source": "demo", "derived_from": "frame_original"},
+                ),
             },
         )
         self._sequence += 1
@@ -180,9 +190,24 @@ def build_graph(
             {"id": sink_id, "operator": "demo.collect_sink", "config": {"sink_name": sink_name}},
         ],
         "edges": [
-            {"from": {"node": source_id, "port": "out"}, "to": {"node": detect_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
-            {"from": {"node": detect_id, "port": "out"}, "to": {"node": track_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
-            {"from": {"node": track_id, "port": "out"}, "to": {"node": sink_id, "port": "in"}, "maxsize": int(args.branch_queue_size), "drop_policy": str(args.branch_drop_policy)},
+            {
+                "from": {"node": source_id, "port": "out"},
+                "to": {"node": detect_id, "port": "in"},
+                "maxsize": 1,
+                "drop_policy": "latest_only",
+            },
+            {
+                "from": {"node": detect_id, "port": "out"},
+                "to": {"node": track_id, "port": "in"},
+                "maxsize": 1,
+                "drop_policy": "latest_only",
+            },
+            {
+                "from": {"node": track_id, "port": "out"},
+                "to": {"node": sink_id, "port": "in"},
+                "maxsize": int(args.branch_queue_size),
+                "drop_policy": str(args.branch_drop_policy),
+            },
         ],
     }
 
@@ -267,7 +292,6 @@ async def run_demo(args: argparse.Namespace) -> int:
         [
             Pipeline(
                 name="stage5_final_a",
-                type="final",
                 graph=build_graph(
                     source_id="source_a",
                     detect_id="detect_a",
@@ -279,7 +303,6 @@ async def run_demo(args: argparse.Namespace) -> int:
             ),
             Pipeline(
                 name="stage5_final_b",
-                type="final",
                 graph=build_graph(
                     source_id="source_b",
                     detect_id="detect_b",

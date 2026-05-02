@@ -67,19 +67,33 @@ def test_execution_scheduler_respects_max_concurrency_across_pipelines() -> None
             return {
                 "schema_version": 1,
                 "nodes": [
-                    {"id": "source", "operator": "core.synthetic_source", "config": {"rate_hz": 120.0, "stream_id": f"synthetic:{name}"}},
+                    {
+                        "id": "source",
+                        "operator": "core.synthetic_source",
+                        "config": {"rate_hz": 120.0, "stream_id": f"synthetic:{name}"},
+                    },
                     {"id": "heavy", "operator": "test.heavy", "config": {}},
                     {"id": "sink", "operator": "core.sink", "config": {}},
                 ],
                 "edges": [
-                    {"from": {"node": "source", "port": "out"}, "to": {"node": "heavy", "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
-                    {"from": {"node": "heavy", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 1, "drop_policy": "drop_oldest"},
+                    {
+                        "from": {"node": "source", "port": "out"},
+                        "to": {"node": "heavy", "port": "in"},
+                        "maxsize": 1,
+                        "drop_policy": "latest_only",
+                    },
+                    {
+                        "from": {"node": "heavy", "port": "out"},
+                        "to": {"node": "sink", "port": "in"},
+                        "maxsize": 1,
+                        "drop_policy": "drop_oldest",
+                    },
                 ],
             }
 
         compiler = PipelineGraphCompiler(registry)
-        p1 = Pipeline(name="pipeline_one", type="final", graph=_graph("one"))
-        p2 = Pipeline(name="pipeline_two", type="final", graph=_graph("two"))
+        p1 = Pipeline(name="pipeline_one", graph=_graph("one"))
+        p2 = Pipeline(name="pipeline_two", graph=_graph("two"))
         compiled1 = compiler.compile_pipeline(p1)
         compiled2 = compiler.compile_pipeline(p2)
 
@@ -96,4 +110,3 @@ def test_execution_scheduler_respects_max_concurrency_across_pipelines() -> None
         assert int(counters.get("max_active", 0)) <= 1
 
     asyncio.run(scenario())
-

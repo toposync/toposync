@@ -172,11 +172,21 @@ def test_pipeline_runtime_collects_numeric_and_image_telemetry() -> None:
                 {"id": "sink", "operator": "test.telemetry_sink", "config": {"expected": 6}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "tap", "port": "in"}, "maxsize": 2, "drop_policy": "block"},
-                {"from": {"node": "tap", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 2, "drop_policy": "block"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "tap", "port": "in"},
+                    "maxsize": 2,
+                    "drop_policy": "block",
+                },
+                {
+                    "from": {"node": "tap", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 2,
+                    "drop_policy": "block",
+                },
             ],
         }
-        pipeline = Pipeline(name="telemetry_runtime_pipeline", type="final", graph=graph)
+        pipeline = Pipeline(name="telemetry_runtime_pipeline", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
 
         telemetry_store = PipelineTelemetryStore(
@@ -250,14 +260,20 @@ def test_pipeline_telemetry_store_filters_image_markers_by_window() -> None:
         ts_s=195.0,
     )
 
-    recent = store.list_image_markers("pipe", metric_id="test.image", window_seconds=60, now_s=200.0)
+    recent = store.list_image_markers(
+        "pipe", metric_id="test.image", window_seconds=60, now_s=200.0
+    )
     assert [str(item.get("rel_path") or "") for item in recent] == [
         "pipelines/test/frame_1.png",
         "pipelines/test/frame_2.png",
     ]
 
-    newest_only = store.list_image_markers("pipe", metric_id="test.image", window_seconds=10, now_s=200.0)
-    assert [str(item.get("rel_path") or "") for item in newest_only] == ["pipelines/test/frame_2.png"]
+    newest_only = store.list_image_markers(
+        "pipe", metric_id="test.image", window_seconds=10, now_s=200.0
+    )
+    assert [str(item.get("rel_path") or "") for item in newest_only] == [
+        "pipelines/test/frame_2.png"
+    ]
 
 
 def test_pipeline_telemetry_store_filters_aggregate_queries_by_pipeline_names() -> None:
@@ -280,18 +296,36 @@ def test_pipeline_telemetry_store_filters_aggregate_queries_by_pipeline_names() 
 
     assert store.observe_numeric("pipe_a", "node", "test.score", 0.2, now_s=100.0)
     assert store.observe_numeric("pipe_b", "node", "test.score", 0.8, now_s=100.0)
-    assert store.record_image_marker("pipe_a", node_id="node", rel_path="pipelines/a/frame.png", metric_id="test.image", ts_s=100.0)
-    assert store.record_image_marker("pipe_b", node_id="node", rel_path="pipelines/b/frame.png", metric_id="test.image", ts_s=100.0)
+    assert store.record_image_marker(
+        "pipe_a",
+        node_id="node",
+        rel_path="pipelines/a/frame.png",
+        metric_id="test.image",
+        ts_s=100.0,
+    )
+    assert store.record_image_marker(
+        "pipe_b",
+        node_id="node",
+        rel_path="pipelines/b/frame.png",
+        metric_id="test.image",
+        ts_s=100.0,
+    )
 
-    filtered_numeric = store.snapshot_numeric_metric_aggregate("test.score", pipeline_names=["pipe_a"], now_s=105.0)
+    filtered_numeric = store.snapshot_numeric_metric_aggregate(
+        "test.score", pipeline_names=["pipe_a"], now_s=105.0
+    )
     assert filtered_numeric is not None
     assert int(filtered_numeric["pipeline_count"]) == 1
     assert int(filtered_numeric["series_count"]) == 1
     assert [float(item["avg"]) for item in filtered_numeric["points"]] == [0.2]
 
-    filtered_markers = store.list_all_image_markers(metric_id="test.image", pipeline_names=["pipe_b"], now_s=105.0)
+    filtered_markers = store.list_all_image_markers(
+        metric_id="test.image", pipeline_names=["pipe_b"], now_s=105.0
+    )
     assert [str(item.get("pipeline_name") or "") for item in filtered_markers] == ["pipe_b"]
-    assert [str(item.get("rel_path") or "") for item in filtered_markers] == ["pipelines/b/frame.png"]
+    assert [str(item.get("rel_path") or "") for item in filtered_markers] == [
+        "pipelines/b/frame.png"
+    ]
 
 
 def test_pipeline_telemetry_store_roundtrips_checkpoint_bytes() -> None:
@@ -369,14 +403,20 @@ def test_default_pipeline_telemetry_store_supports_ui_range_presets(monkeypatch)
     now = 1_700_000_000.0
     assert store.observe_numeric("pipe", "node", "motion.score", 0.10, now_s=now)
 
-    short = store.snapshot_numeric_metric("pipe", "node", "motion.score", now_s=now, window_seconds=2 * 60 * 60)
+    short = store.snapshot_numeric_metric(
+        "pipe", "node", "motion.score", now_s=now, window_seconds=2 * 60 * 60
+    )
     assert short is not None
     assert int(short["window_seconds"]) == 2 * 60 * 60
 
-    default = store.snapshot_numeric_metric("pipe", "node", "motion.score", now_s=now, window_seconds=24 * 60 * 60)
+    default = store.snapshot_numeric_metric(
+        "pipe", "node", "motion.score", now_s=now, window_seconds=24 * 60 * 60
+    )
     assert default is not None
     assert int(default["window_seconds"]) == 24 * 60 * 60
 
-    long = store.snapshot_numeric_metric("pipe", "node", "motion.score", now_s=now, window_seconds=3 * 24 * 60 * 60)
+    long = store.snapshot_numeric_metric(
+        "pipe", "node", "motion.score", now_s=now, window_seconds=3 * 24 * 60 * 60
+    )
     assert long is not None
     assert int(long["window_seconds"]) == 3 * 24 * 60 * 60

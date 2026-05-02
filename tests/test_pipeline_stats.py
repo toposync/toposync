@@ -109,14 +109,23 @@ def test_pipeline_runtime_records_step_output_counts() -> None:
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.finite_source", "config": {"stream_id": "stream:test", "frames": 10}},
+                {
+                    "id": "source",
+                    "operator": "test.finite_source",
+                    "config": {"stream_id": "stream:test", "frames": 10},
+                },
                 {"id": "sink", "operator": "test.collect_sink", "config": {"expected": 10}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 1, "drop_policy": "block"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 1,
+                    "drop_policy": "block",
+                },
             ],
         }
-        pipeline = Pipeline(name="stats_runtime_pipeline", type="final", graph=graph)
+        pipeline = Pipeline(name="stats_runtime_pipeline", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
 
         stats_store = PipelineStatsStore(window_seconds=24 * 60 * 60, bucket_seconds=60)

@@ -94,7 +94,11 @@ def _build_graph(args: argparse.Namespace) -> dict[str, Any]:
                     "emit_when_idle": bool(args.motion_emit_when_idle),
                 },
             },
-            {"id": "fps", "operator": "core.fps_reducer", "config": {"target_fps": float(args.target_fps)}},
+            {
+                "id": "fps",
+                "operator": "core.fps_reducer",
+                "config": {"target_fps": float(args.target_fps)},
+            },
             {
                 "id": "throttle",
                 "operator": "core.throttle",
@@ -105,7 +109,11 @@ def _build_graph(args: argparse.Namespace) -> dict[str, Any]:
                 "operator": "core.debounce",
                 "config": {"quiet_period_seconds": float(args.debounce_s), "mode": "first"},
             },
-            {"id": "sink", "operator": "demo.slow_sink", "config": {"delay_ms": float(args.sink_delay_ms)}},
+            {
+                "id": "sink",
+                "operator": "demo.slow_sink",
+                "config": {"delay_ms": float(args.sink_delay_ms)},
+            },
         ]
         chain = ["source", "motion", "fps", "throttle", "debounce", "sink"]
     else:
@@ -113,9 +121,16 @@ def _build_graph(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "id": "source",
                 "operator": "core.synthetic_source",
-                "config": {"rate_hz": float(args.synthetic_rate_hz), "stream_id": str(args.synthetic_stream_id)},
+                "config": {
+                    "rate_hz": float(args.synthetic_rate_hz),
+                    "stream_id": str(args.synthetic_stream_id),
+                },
             },
-            {"id": "fps", "operator": "core.fps_reducer", "config": {"target_fps": float(args.target_fps)}},
+            {
+                "id": "fps",
+                "operator": "core.fps_reducer",
+                "config": {"target_fps": float(args.target_fps)},
+            },
             {
                 "id": "throttle",
                 "operator": "core.throttle",
@@ -126,11 +141,18 @@ def _build_graph(args: argparse.Namespace) -> dict[str, Any]:
                 "operator": "core.debounce",
                 "config": {"quiet_period_seconds": float(args.debounce_s), "mode": "first"},
             },
-            {"id": "sink", "operator": "demo.slow_sink", "config": {"delay_ms": float(args.sink_delay_ms)}},
+            {
+                "id": "sink",
+                "operator": "demo.slow_sink",
+                "config": {"delay_ms": float(args.sink_delay_ms)},
+            },
         ]
         chain = ["source", "fps", "throttle", "debounce", "sink"]
 
-    edges = [_edge(chain[index], chain[index + 1], maxsize=maxsize, drop_policy=drop_policy) for index in range(len(chain) - 1)]
+    edges = [
+        _edge(chain[index], chain[index + 1], maxsize=maxsize, drop_policy=drop_policy)
+        for index in range(len(chain) - 1)
+    ]
     return {"schema_version": 1, "nodes": nodes, "edges": edges}
 
 
@@ -160,7 +182,7 @@ async def _run(args: argparse.Namespace) -> int:
     _register_demo_operators(registry, counters)
 
     graph = _build_graph(args)
-    pipeline = Pipeline(name="stage4_demo_pipeline", type="final", graph=graph)
+    pipeline = Pipeline(name="stage4_demo_pipeline", graph=graph)
     compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
     dependencies = await _load_runtime_dependencies(args)
     runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
@@ -173,7 +195,9 @@ async def _run(args: argparse.Namespace) -> int:
 
     channels = snapshot["channels"]
     total_drops = int(sum(int(channel["dropped_total"]) for channel in channels.values()))
-    bounded_ok = all(int(channel["max_depth_seen"]) <= int(channel["maxsize"]) for channel in channels.values())
+    bounded_ok = all(
+        int(channel["max_depth_seen"]) <= int(channel["maxsize"]) for channel in channels.values()
+    )
     growth_kib = (float(end_current) - float(start_current)) / 1024.0
     max_p95_queue_wait_ms = _max_channel_p95(channels)
 

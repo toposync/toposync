@@ -65,7 +65,6 @@ export function PipelineTemplateApplyModal({
 
   const canApply = useMemo(() => {
     if (!template) return false;
-    if (template.type !== "reuse") return false;
     if (selectedCameras.length === 0) return false;
     return true;
   }, [template, selectedCameras.length]);
@@ -80,7 +79,6 @@ export function PipelineTemplateApplyModal({
       const payload: PipelineTemplateApplyCamerasRequest = {
         template_pipeline_name: template.name,
         camera_ids: selectedCameras.map((opt) => opt.value),
-        instance_type: "final",
         enabled,
         processing_server_id: processingServerId,
         conflict,
@@ -111,10 +109,6 @@ export function PipelineTemplateApplyModal({
 
       {!template ? <div className="pipelinesHint">{t("core.ui.pipelines.template_apply.select_first")}</div> : null}
 
-      {template && template.type !== "reuse" ? (
-        <div className="pipelinesInlineError">{t("core.ui.pipelines.template_apply.only_reuse")}</div>
-      ) : null}
-
       <div className="pipelinesOperatorConfigCard">
         <label className="pipelinesLabel">
           <span>{t("core.ui.pipelines.template_apply.cameras")}</span>
@@ -123,7 +117,7 @@ export function PipelineTemplateApplyModal({
             styles={pipelinesReactSelectStyles}
             options={cameraOptions}
             value={selectedCameras}
-            isDisabled={!template || template.type !== "reuse"}
+            isDisabled={!template}
             placeholder={cameraOptions.length ? t("core.ui.pipelines.template_apply.cameras.placeholder") : t("core.ui.pipelines.template_apply.cameras.empty")}
             onChange={(value: MultiValue<SelectOption>) => setSelectedCameras(value as SelectOption[])}
           />
@@ -136,7 +130,7 @@ export function PipelineTemplateApplyModal({
             className="pipelinesSelect"
             value={processingServerId}
             onChange={(event) => setProcessingServerId(String(event.target.value || "local"))}
-            disabled={!template || template.type !== "reuse"}
+            disabled={!template}
           >
             {servers.map((server) => (
               <option key={server.id} value={server.id}>
@@ -152,7 +146,7 @@ export function PipelineTemplateApplyModal({
             type="checkbox"
             checked={enabled}
             onChange={(event) => setEnabled(event.target.checked)}
-            disabled={!template || template.type !== "reuse"}
+            disabled={!template}
           />
         </label>
 
@@ -162,7 +156,7 @@ export function PipelineTemplateApplyModal({
             className="pipelinesSelect"
             value={conflict}
             onChange={(event) => setConflict(event.target.value as any)}
-            disabled={!template || template.type !== "reuse"}
+            disabled={!template}
           >
             <option value="skip">{t("core.ui.pipelines.template_apply.conflict.skip")}</option>
             <option value="replace">{t("core.ui.pipelines.template_apply.conflict.replace")}</option>

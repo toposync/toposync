@@ -195,7 +195,7 @@ def test_runtime_respects_bounded_channels_and_drop_control() -> None:
                 },
             ],
         }
-        pipeline = Pipeline(name="stage4_drop_control", type="final", graph=graph)
+        pipeline = Pipeline(name="stage4_drop_control", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         snapshot = await runtime.run_for(1.5)
@@ -270,7 +270,7 @@ def test_throttle_and_debounce_preserve_open_and_close_packets() -> None:
                 {"from": {"node": "debounce", "port": "out"}, "to": {"node": "sink", "port": "in"}},
             ],
         }
-        pipeline = Pipeline(name="stage4_lifecycle_flow", type="final", graph=graph)
+        pipeline = Pipeline(name="stage4_lifecycle_flow", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         await runtime.run_for(0.35)
@@ -548,9 +548,7 @@ def test_motion_sample_bg_uses_hold_and_filters_when_inactive(
         def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401, ARG002
             self._calls = 0
 
-        def process(
-            self, frame: object, *, roi_mask=None, roi_total=None
-        ) -> SimpleNamespace:  # noqa: ARG002
+        def process(self, frame: object, *, roi_mask=None, roi_total=None) -> SimpleNamespace:  # noqa: ARG002
             _ = roi_mask, roi_total
             self._calls += 1
             detected = self._calls == 1
@@ -633,9 +631,7 @@ def test_motion_sample_bg_can_emit_idle_packets(monkeypatch: pytest.MonkeyPatch)
         def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401, ARG002
             pass
 
-        def process(
-            self, frame: object, *, roi_mask=None, roi_total=None
-        ) -> SimpleNamespace:  # noqa: ARG002
+        def process(self, frame: object, *, roi_mask=None, roi_total=None) -> SimpleNamespace:  # noqa: ARG002
             _ = frame, roi_mask, roi_total
             return SimpleNamespace(
                 detected=False,
@@ -699,9 +695,7 @@ def test_motion_sample_bg_requires_activation_frames(
         def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401, ARG002
             self._calls = 0
 
-        def process(
-            self, frame: object, *, roi_mask=None, roi_total=None
-        ) -> SimpleNamespace:  # noqa: ARG002
+        def process(self, frame: object, *, roi_mask=None, roi_total=None) -> SimpleNamespace:  # noqa: ARG002
             _ = frame, roi_mask, roi_total
             self._calls += 1
             return SimpleNamespace(

@@ -12,7 +12,7 @@ import {
 } from "../../util/api";
 import type { AppSettings, AuthUser, ExtensionManagementCatalog, ExtensionManagementItem } from "../../util/api";
 import { i18n, resolveLocalizedString } from "../../util/i18n";
-import type { AccentIntensity, TransparencyLevel, Viewport3DBackground } from "../../util/theme";
+import type { Viewport3DBackground } from "../../util/theme";
 
 import { Icon } from "../Icon";
 
@@ -29,10 +29,6 @@ type Props = {
   themes: ThemeDefinition[];
   themeId: string;
   onSetThemeId: (themeId: string) => void;
-  transparencyLevel: TransparencyLevel;
-  onSetTransparencyLevel: (value: TransparencyLevel) => void;
-  accentIntensity: AccentIntensity;
-  onSetAccentIntensity: (value: AccentIntensity) => void;
   viewport3dBackground: Viewport3DBackground;
   onSetViewport3dBackground: (value: Viewport3DBackground) => void;
   settings: AppSettings;
@@ -105,10 +101,6 @@ export function SettingsScreen({
   themes,
   themeId,
   onSetThemeId,
-  transparencyLevel,
-  onSetTransparencyLevel,
-  accentIntensity,
-  onSetAccentIntensity,
   viewport3dBackground,
   onSetViewport3dBackground,
   settings,
@@ -198,6 +190,32 @@ export function SettingsScreen({
       desc: t("core.ui.settings.sections.view_desc"),
       render: () => (
         <div>
+          <div className="modalSectionTitle">{t("core.ui.settings.theme")}</div>
+          <div className="choiceList">
+            {themes.map((opt) => {
+              const selected = themeId === opt.id;
+              const title = resolveLocalizedString(opt.name);
+              const desc = opt.description ? resolveLocalizedString(opt.description) : "";
+              return (
+                <div
+                  key={opt.id}
+                  className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSetThemeId(opt.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") onSetThemeId(opt.id);
+                  }}
+                >
+                  <div className="choiceTitle">{title}</div>
+                  {desc ? <div className="choiceDesc">{desc}</div> : null}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="sectionDivider" />
+
           <div className="modalSectionTitle">{t("core.ui.view_settings.wall_height")}</div>
           <div className="choiceList">
             {(
@@ -269,66 +287,6 @@ export function SettingsScreen({
                   onClick={() => onSetGraphicsQuality(opt.id)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") onSetGraphicsQuality(opt.id);
-                  }}
-                >
-                  <div className="choiceTitle">{opt.title}</div>
-                  <div className="choiceDesc">{opt.desc}</div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="sectionDivider" />
-
-          <div className="modalSectionTitle">{t("core.ui.settings.transparency")}</div>
-          <div className="choiceList">
-            {(
-              [
-                { id: "normal", title: t("core.ui.settings.transparency.normal"), desc: t("core.ui.settings.transparency.normal_desc") },
-                { id: "high", title: t("core.ui.settings.transparency.high"), desc: t("core.ui.settings.transparency.high_desc") },
-                { id: "reduced", title: t("core.ui.settings.transparency.reduced"), desc: t("core.ui.settings.transparency.reduced_desc") },
-              ] as const
-            ).map((opt) => {
-              const selected = transparencyLevel === opt.id;
-              return (
-                <div
-                  key={opt.id}
-                  className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onSetTransparencyLevel(opt.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") onSetTransparencyLevel(opt.id);
-                  }}
-                >
-                  <div className="choiceTitle">{opt.title}</div>
-                  <div className="choiceDesc">{opt.desc}</div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="sectionDivider" />
-
-          <div className="modalSectionTitle">{t("core.ui.settings.accent")}</div>
-          <div className="choiceList">
-            {(
-              [
-                { id: "subtle", title: t("core.ui.settings.accent.subtle"), desc: t("core.ui.settings.accent.subtle_desc") },
-                { id: "normal", title: t("core.ui.settings.accent.normal"), desc: t("core.ui.settings.accent.normal_desc") },
-                { id: "vivid", title: t("core.ui.settings.accent.vivid"), desc: t("core.ui.settings.accent.vivid_desc") },
-              ] as const
-            ).map((opt) => {
-              const selected = accentIntensity === opt.id;
-              return (
-                <div
-                  key={opt.id}
-                  className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onSetAccentIntensity(opt.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") onSetAccentIntensity(opt.id);
                   }}
                 >
                   <div className="choiceTitle">{opt.title}</div>
@@ -429,44 +387,18 @@ export function SettingsScreen({
 
           <div className="sectionDivider" />
 
-          <div className="modalSectionTitle">{t("core.ui.settings.theme")}</div>
-          <div className="choiceList">
-            {themes.map((opt) => {
-              const selected = themeId === opt.id;
-              const title = resolveLocalizedString(opt.name);
-              const desc = opt.description ? resolveLocalizedString(opt.description) : "";
-              return (
-                <div
-                  key={opt.id}
-                  className={["choiceItem", selected ? "isSelected" : ""].join(" ")}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onSetThemeId(opt.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") onSetThemeId(opt.id);
-                  }}
-                >
-                  <div className="choiceTitle">{title}</div>
-                  {desc ? <div className="choiceDesc">{desc}</div> : null}
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="sectionDivider" />
-
           <div className="modalSectionTitle">{t("core.ui.auth.session.title")}</div>
-            <div className="card">
-              <div className="cardTitle">
-                {authUser?.display_name || authUser?.username || t("core.ui.auth.session.current_user_fallback")}
-              </div>
-              {authUser ? <div className="cardBody">{authUser.username} · {authUser.role}</div> : null}
-              <div className="cardFooter">
-                <button className="chipButton" type="button" onClick={() => requestExit("logout")}>
-                  {t("core.actions.sign_out")}
-                </button>
-              </div>
+          <div className="card">
+            <div className="cardTitle">
+              {authUser?.display_name || authUser?.username || t("core.ui.auth.session.current_user_fallback")}
             </div>
+            {authUser ? <div className="cardBody">{authUser.username} · {authUser.role}</div> : null}
+            <div className="cardFooter">
+              <button className="chipButton" type="button" onClick={() => requestExit("logout")}>
+                {t("core.actions.sign_out")}
+              </button>
+            </div>
+          </div>
         </div>
       ),
     };
@@ -491,15 +423,12 @@ export function SettingsScreen({
     return [viewEntry, coreEntry, extensionsEntry, ...extEntries];
   }, [
     backendAvailable,
-    accentIntensity,
     ghostWalls,
     graphicsQuality,
     locale,
-    onSetAccentIntensity,
     onSetGhostWalls,
     onSetGraphicsQuality,
     onSetThemeId,
-    onSetTransparencyLevel,
     onSetViewport3dBackground,
     onSetWallHeightPreset,
     onLogout,
@@ -507,7 +436,6 @@ export function SettingsScreen({
     orderedPanels,
     t,
     themeId,
-    transparencyLevel,
     themes,
     viewport3dBackground,
     wallHeightPreset,

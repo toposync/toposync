@@ -90,10 +90,9 @@ export function emptyGraph(): Record<string, unknown> {
   return { schema_version: 1, nodes: [], edges: [] };
 }
 
-export function defaultPipeline(name: string, type: "reuse" | "final"): Pipeline {
+export function defaultPipeline(name: string): Pipeline {
   return {
     name,
-    type,
     enabled: true,
     processing_server_id: "local",
     editor_mode: "interactive",

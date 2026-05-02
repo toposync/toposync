@@ -147,7 +147,6 @@ export type AccessOptionsPayload = {
 
 export type Pipeline = {
   name: string;
-  type: "reuse" | "final";
   enabled?: boolean;
   processing_server_id?: string;
   editor_mode?: "interactive" | "json" | "python";
@@ -269,7 +268,6 @@ export type PipelinesTelemetryImageMarkers = {
 export type PipelineTemplateApplyCamerasRequest = {
   template_pipeline_name: string;
   camera_ids: string[];
-  instance_type?: "reuse" | "final";
   enabled?: boolean;
   processing_server_id?: string;
   conflict?: "skip" | "replace" | "error";

@@ -78,7 +78,9 @@ class _FrameSourceRuntime(SourceOperatorRuntime):
             lifecycle=Lifecycle.UPDATE,
             payload={"frame_index": self._sequence},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="application/json"),
+                "frame_original": Artifact(
+                    name="frame_original", data=frame, mime_type="application/json"
+                ),
                 "frame": Artifact(
                     name="frame",
                     data=frame,
@@ -112,9 +114,7 @@ class _SequenceDetectorBackend:
         self._counters = counters
         self._index = 0
 
-    def detect(
-        self, frame: Any, *, categories: set[str] | None = None
-    ) -> list[DetectionObject]:  # noqa: ARG002
+    def detect(self, frame: Any, *, categories: set[str] | None = None) -> list[DetectionObject]:  # noqa: ARG002
         self._counters["detect_calls"] = int(self._counters.get("detect_calls", 0)) + 1
         if not self._sequence:
             return []
@@ -144,7 +144,9 @@ def _build_detection_sequence(
     ]
 
 
-def _tracking_pipeline_graph(*, source_id: str, detect_id: str, track_id: str, sink_id: str, sink_name: str) -> dict[str, Any]:
+def _tracking_pipeline_graph(
+    *, source_id: str, detect_id: str, track_id: str, sink_id: str, sink_name: str
+) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "nodes": [
@@ -175,9 +177,24 @@ def _tracking_pipeline_graph(*, source_id: str, detect_id: str, track_id: str, s
             {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
         ],
         "edges": [
-            {"from": {"node": source_id, "port": "out"}, "to": {"node": detect_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
-            {"from": {"node": detect_id, "port": "out"}, "to": {"node": track_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
-            {"from": {"node": track_id, "port": "out"}, "to": {"node": sink_id, "port": "in"}, "maxsize": 64, "drop_policy": "drop_oldest"},
+            {
+                "from": {"node": source_id, "port": "out"},
+                "to": {"node": detect_id, "port": "in"},
+                "maxsize": 1,
+                "drop_policy": "latest_only",
+            },
+            {
+                "from": {"node": detect_id, "port": "out"},
+                "to": {"node": track_id, "port": "in"},
+                "maxsize": 1,
+                "drop_policy": "latest_only",
+            },
+            {
+                "from": {"node": track_id, "port": "out"},
+                "to": {"node": sink_id, "port": "in"},
+                "maxsize": 64,
+                "drop_policy": "drop_oldest",
+            },
         ],
     }
 
@@ -222,7 +239,9 @@ def test_orchestrator_runs_local_bundle_and_shares_detect_and_track(tmp_path: Pa
         )
         stats_store = PipelineStatsStore(window_seconds=24 * 60 * 60, bucket_seconds=60)
         deps = PipelineRuntimeDependencies(
-            detector_backend_factory=lambda manifest: _SequenceDetectorBackend(detection_sequence, counters),
+            detector_backend_factory=lambda manifest: _SequenceDetectorBackend(
+                detection_sequence, counters
+            ),
             vision_model_registry=_build_registry(),
             pipeline_stats_store=stats_store,
         )
@@ -248,8 +267,8 @@ def test_orchestrator_runs_local_bundle_and_shares_detect_and_track(tmp_path: Pa
             sink_id="sink_b",
             sink_name="sink_b",
         )
-        await store.create_pipeline(Pipeline(name="final_a", type="final", graph=graph_a))
-        await store.create_pipeline(Pipeline(name="final_b", type="final", graph=graph_b))
+        await store.create_pipeline(Pipeline(name="final_a", graph=graph_a))
+        await store.create_pipeline(Pipeline(name="final_b", graph=graph_b))
 
         notifications = NotificationsRuntime(data_dir=tmp_path / "data" / "notifications")
         compiler = PipelineGraphCompiler(registry)
@@ -268,7 +287,9 @@ def test_orchestrator_runs_local_bundle_and_shares_detect_and_track(tmp_path: Pa
         status = orchestrator.status()
 
         assert status.get("local_bundle") is not None
-        pipeline_status = {item["name"]: item for item in status.get("pipelines", []) if isinstance(item, dict)}
+        pipeline_status = {
+            item["name"]: item for item in status.get("pipelines", []) if isinstance(item, dict)
+        }
         assert pipeline_status.get("final_a", {}).get("mode") == "bundle"
         assert pipeline_status.get("final_b", {}).get("mode") == "bundle"
 

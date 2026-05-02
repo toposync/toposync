@@ -69,17 +69,25 @@ def build_pipeline() -> Pipeline:
             _edge("store", "notify", maxsize=8, drop_policy="drop_oldest"),
         ],
     }
-    return Pipeline(name="stage8_distributed_demo", type="final", graph=graph)
+    return Pipeline(name="stage8_distributed_demo", graph=graph)
 
 
 async def _load_paths(data_dir: str | None) -> UserDataPaths:
     if data_dir:
         root = Path(data_dir).expanduser().resolve()
-        return UserDataPaths(data_dir=root, config_path=root / "config.json", files_dir=root / "files")
+        return UserDataPaths(
+            data_dir=root, config_path=root / "config.json", files_dir=root / "files"
+        )
     return UserDataPaths.resolve()
 
 
-async def run_local(pipeline: Pipeline, *, deps: PipelineRuntimeDependencies, registry: OperatorRegistry, duration_s: float) -> dict[str, Any]:
+async def run_local(
+    pipeline: Pipeline,
+    *,
+    deps: PipelineRuntimeDependencies,
+    registry: OperatorRegistry,
+    duration_s: float,
+) -> dict[str, Any]:
     compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
     runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
     return await runtime.run_for(duration_s)
@@ -98,13 +106,19 @@ async def run_inprocess_distributed(
         raise RuntimeError("pipeline did not produce distributed graphs")
 
     compiler = PipelineGraphCompiler(registry)
-    origin_compiled = compiler.compile_pipeline(Pipeline(name=pipeline.name, type="final", graph=graphs.origin_graph))
+    origin_compiled = compiler.compile_pipeline(
+        Pipeline(name=pipeline.name, graph=graphs.origin_graph)
+    )
     processing_compiled = compiler.compile_pipeline(
-        Pipeline(name=f"{pipeline.name}__processing", type="final", graph=graphs.processing_graph),
+        Pipeline(name=f"{pipeline.name}__processing", graph=graphs.processing_graph),
     )
 
-    origin_runtime = PipelineRuntime(compiled=origin_compiled, registry=registry, dependencies=deps_origin)
-    processing_runtime = PipelineRuntime(compiled=processing_compiled, registry=registry, dependencies=deps_processing)
+    origin_runtime = PipelineRuntime(
+        compiled=origin_compiled, registry=registry, dependencies=deps_origin
+    )
+    processing_runtime = PipelineRuntime(
+        compiled=processing_compiled, registry=registry, dependencies=deps_processing
+    )
 
     await origin_runtime.start()
     await processing_runtime.start()
@@ -127,8 +141,12 @@ async def run_http_distributed(
         raise RuntimeError("pipeline did not produce origin graph")
 
     compiler = PipelineGraphCompiler(registry)
-    origin_compiled = compiler.compile_pipeline(Pipeline(name=pipeline.name, type="final", graph=graphs.origin_graph))
-    origin_runtime = PipelineRuntime(compiled=origin_compiled, registry=registry, dependencies=deps_origin)
+    origin_compiled = compiler.compile_pipeline(
+        Pipeline(name=pipeline.name, graph=graphs.origin_graph)
+    )
+    origin_runtime = PipelineRuntime(
+        compiled=origin_compiled, registry=registry, dependencies=deps_origin
+    )
 
     transport = HttpProcessingTransport(base_url=processing_url)
     inbox = deps_origin.origin_inbox
@@ -178,7 +196,9 @@ async def run(args: argparse.Namespace) -> int:
     register_builtin_operators(registry)
 
     pipeline = build_pipeline()
-    inbox = BoundedChannel[dict[str, Any]](name="origin_inbox", maxsize=64, drop_policy=DropPolicy.DROP_OLDEST)
+    inbox = BoundedChannel[dict[str, Any]](
+        name="origin_inbox", maxsize=64, drop_policy=DropPolicy.DROP_OLDEST
+    )
 
     deps_origin = PipelineRuntimeDependencies(
         config_store=config_store,
@@ -190,14 +210,18 @@ async def run(args: argparse.Namespace) -> int:
     async def emit(event: dict[str, Any]) -> None:
         await inbox.put(event, timeout_s=0.05, cancel_event=None)
 
-    deps_processing = PipelineRuntimeDependencies(config_store=config_store, processing_emit_projected_event=emit)
+    deps_processing = PipelineRuntimeDependencies(
+        config_store=config_store, processing_emit_projected_event=emit
+    )
 
     started = time.time()
     mode: Literal["local", "inprocess", "http"] = args.mode
     snapshot: Any = None
 
     if mode == "local":
-        snapshot = await run_local(pipeline, deps=deps_origin, registry=registry, duration_s=float(args.duration_s))
+        snapshot = await run_local(
+            pipeline, deps=deps_origin, registry=registry, duration_s=float(args.duration_s)
+        )
     elif mode == "inprocess":
         snapshot = await run_inprocess_distributed(
             pipeline,
@@ -224,7 +248,8 @@ async def run(args: argparse.Namespace) -> int:
         if isinstance(item, dict)
         and str(item.get("type") or "") == "pipelines.tracking"
         and isinstance(item.get("payload"), dict)
-        and str((item.get("payload") or {}).get("pipeline_name") or "") in {pipeline.name, "stage8_distributed_demo"}
+        and str((item.get("payload") or {}).get("pipeline_name") or "")
+        in {pipeline.name, "stage8_distributed_demo"}
     ]
 
     notif = matching[0] if matching else None
@@ -233,7 +258,8 @@ async def run(args: argparse.Namespace) -> int:
     checks = {
         "has_notification": bool(notif),
         "closed": isinstance(payload, dict) and payload.get("status") == "closed",
-        "has_image": isinstance(notif, dict) and str(notif.get("imageUrl") or "").startswith("/files/"),
+        "has_image": isinstance(notif, dict)
+        and str(notif.get("imageUrl") or "").startswith("/files/"),
     }
 
     output = {
@@ -270,4 +296,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

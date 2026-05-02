@@ -10,7 +10,13 @@ from typing import Any
 from toposync.runtime.config_store import ConfigStore, Pipeline, ProcessingServer
 from toposync.runtime.notifications import NotificationsRuntime
 
-from ..compiler import CompilationReport, CompiledPipeline, GraphCompileError, PipelineGraphCompiler, SharedNodeOccurrence
+from ..compiler import (
+    CompilationReport,
+    CompiledPipeline,
+    GraphCompileError,
+    PipelineGraphCompiler,
+    SharedNodeOccurrence,
+)
 from ..execution import PipelineRuntime, PipelineRuntimeDependencies
 from ..operator_registry import OperatorRegistry
 from ..runtime import BoundedChannel, DropPolicy
@@ -112,7 +118,9 @@ class PipelinesOrchestrator:
                         "mode": "bundle",
                         "processing_server_id": "local",
                         "started_at": self._local_bundle.started_at,
-                        "bundle_name": getattr(self._local_bundle.runtime, "bundle_name", "local_bundle"),
+                        "bundle_name": getattr(
+                            self._local_bundle.runtime, "bundle_name", "local_bundle"
+                        ),
                     },
                 )
 
@@ -121,7 +129,9 @@ class PipelinesOrchestrator:
                 {
                     "name": name,
                     "mode": handle.mode,
-                    "processing_server_id": getattr(handle.pipeline, "processing_server_id", "local"),
+                    "processing_server_id": getattr(
+                        handle.pipeline, "processing_server_id", "local"
+                    ),
                     "started_at": handle.started_at,
                     "snapshot": handle.runtime.snapshot(),
                 }
@@ -158,7 +168,10 @@ class PipelinesOrchestrator:
                 self._reload.clear()
                 await asyncio.wait_for(
                     asyncio.wait(
-                        [asyncio.create_task(self._stop.wait()), asyncio.create_task(self._reload.wait())],
+                        [
+                            asyncio.create_task(self._stop.wait()),
+                            asyncio.create_task(self._reload.wait()),
+                        ],
                         return_when=asyncio.FIRST_COMPLETED,
                     ),
                     timeout=self._poll_interval_s,
@@ -172,7 +185,7 @@ class PipelinesOrchestrator:
         pipelines = await self._config_store.list_pipelines()
         servers = await self._config_store.list_processing_servers()
 
-        desired = [p for p in pipelines if p.type == "final" and getattr(p, "enabled", True) is not False]
+        desired = [p for p in pipelines if getattr(p, "enabled", True) is not False]
         desired_sig = json.dumps(
             {
                 "pipelines": [p.model_dump(mode="json") for p in desired],
@@ -209,7 +222,11 @@ class PipelinesOrchestrator:
         for sid, group in remote_groups.items():
             server = servers_by_id.get(sid)
             if server is None:
-                logger.warning("unknown processing server id=%s (skipping pipelines=%s)", sid, [p.name for p in group])
+                logger.warning(
+                    "unknown processing server id=%s (skipping pipelines=%s)",
+                    sid,
+                    [p.name for p in group],
+                )
                 continue
             for p in group:
                 await self._start_origin_pipeline_for_remote(p)
@@ -336,7 +353,9 @@ class PipelinesOrchestrator:
             logger.warning("local bundle start failed: %s", exc)
             return False
 
-        self._local_bundle = _BundleHandle(pipelines=valid_pipelines, runtime=runtime, started_at=time.time())
+        self._local_bundle = _BundleHandle(
+            pipelines=valid_pipelines, runtime=runtime, started_at=time.time()
+        )
         return True
 
     async def _start_local_pipeline(self, pipeline: Pipeline) -> None:
@@ -349,7 +368,9 @@ class PipelinesOrchestrator:
         deps = self._build_runtime_dependencies(origin_inbox=None)
         runtime = PipelineRuntime(compiled=compiled, registry=self._registry, dependencies=deps)
         await runtime.start()
-        self._pipelines[pipeline.name] = _PipelineHandle(pipeline=pipeline, runtime=runtime, started_at=time.time(), mode="local")
+        self._pipelines[pipeline.name] = _PipelineHandle(
+            pipeline=pipeline, runtime=runtime, started_at=time.time(), mode="local"
+        )
 
     async def _start_origin_pipeline_for_remote(self, pipeline: Pipeline) -> None:
         graphs = build_distributed_graphs(pipeline, self._registry)
@@ -363,7 +384,7 @@ class PipelinesOrchestrator:
             drop_policy=DropPolicy.DROP_OLDEST,
         )
         self._inboxes[pipeline.name] = inbox
-        origin_pipeline = Pipeline(name=pipeline.name, type="final", graph=graphs.origin_graph)
+        origin_pipeline = Pipeline(name=pipeline.name, graph=graphs.origin_graph)
         try:
             compiled = self._compiler.compile_pipeline(origin_pipeline)
         except GraphCompileError as exc:
@@ -373,11 +394,17 @@ class PipelinesOrchestrator:
         deps = self._build_runtime_dependencies(origin_inbox=inbox)
         runtime = PipelineRuntime(compiled=compiled, registry=self._registry, dependencies=deps)
         await runtime.start()
-        self._pipelines[pipeline.name] = _PipelineHandle(pipeline=pipeline, runtime=runtime, started_at=time.time(), mode="origin")
+        self._pipelines[pipeline.name] = _PipelineHandle(
+            pipeline=pipeline, runtime=runtime, started_at=time.time(), mode="origin"
+        )
 
-    async def _start_remote_server(self, server: ProcessingServer, pipelines: list[Pipeline]) -> None:
+    async def _start_remote_server(
+        self, server: ProcessingServer, pipelines: list[Pipeline]
+    ) -> None:
         if server.kind != "http":
-            logger.warning("processing server kind=%s not supported yet (id=%s)", server.kind, server.id)
+            logger.warning(
+                "processing server kind=%s not supported yet (id=%s)", server.kind, server.id
+            )
             return
         transport = HttpProcessingTransport(
             base_url=server.url,
@@ -425,7 +452,9 @@ class PipelinesOrchestrator:
                     handle.last_event_id = last_event_id
 
         pump_task = asyncio.create_task(pump(), name=f"processing_pump[{server.id}]")
-        self._servers[server.id] = _ServerHandle(server=server, transport=transport, pump_task=pump_task)
+        self._servers[server.id] = _ServerHandle(
+            server=server, transport=transport, pump_task=pump_task
+        )
 
         payload = {"pipelines": [p.model_dump(mode="json") for p in pipelines]}
         await transport.push_config(payload)

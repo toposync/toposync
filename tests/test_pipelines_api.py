@@ -50,7 +50,9 @@ def test_pipeline_preview_frame_replays_upstream_slice_and_skips_filters(
         start_calls = 0
         stop_calls = 0
 
-        def __init__(self, rtsp_url: str, *, target_fps: float = 15.0, backend: str = "auto", **_kwargs: Any) -> None:
+        def __init__(
+            self, rtsp_url: str, *, target_fps: float = 15.0, backend: str = "auto", **_kwargs: Any
+        ) -> None:
             self.rtsp_url = rtsp_url
             self.target_fps = float(target_fps)
             self.backend = str(backend)
@@ -79,7 +81,6 @@ def test_pipeline_preview_frame_replays_upstream_slice_and_skips_filters(
         payload = {
             "pipeline": {
                 "name": "preview_crop_runtime",
-                "type": "final",
                 "graph": {
                     "schema_version": 1,
                     "nodes": [
@@ -114,9 +115,18 @@ def test_pipeline_preview_frame_replays_upstream_slice_and_skips_filters(
                         },
                     ],
                     "edges": [
-                        {"from": {"node": "source", "port": "out"}, "to": {"node": "filter", "port": "in"}},
-                        {"from": {"node": "filter", "port": "out"}, "to": {"node": "throttle", "port": "in"}},
-                        {"from": {"node": "throttle", "port": "out"}, "to": {"node": "crop", "port": "in"}},
+                        {
+                            "from": {"node": "source", "port": "out"},
+                            "to": {"node": "filter", "port": "in"},
+                        },
+                        {
+                            "from": {"node": "filter", "port": "out"},
+                            "to": {"node": "throttle", "port": "in"},
+                        },
+                        {
+                            "from": {"node": "throttle", "port": "out"},
+                            "to": {"node": "crop", "port": "in"},
+                        },
                     ],
                 },
             },
@@ -162,14 +172,16 @@ def test_pipeline_preview_frame_falls_back_to_stored_snapshot_for_upstream_segme
         payload = {
             "pipeline": {
                 "name": "preview_segmentation_runtime",
-                "type": "final",
                 "graph": {
                     "schema_version": 1,
                     "nodes": [
                         {
                             "id": "source",
                             "operator": "camera.source",
-                            "config": {"rtsp_url": "rtsp://preview-segmentation-fallback", "fps": 5.0},
+                            "config": {
+                                "rtsp_url": "rtsp://preview-segmentation-fallback",
+                                "fps": 5.0,
+                            },
                         },
                         {
                             "id": "segment",
@@ -178,7 +190,10 @@ def test_pipeline_preview_frame_falls_back_to_stored_snapshot_for_upstream_segme
                         },
                     ],
                     "edges": [
-                        {"from": {"node": "source", "port": "out"}, "to": {"node": "segment", "port": "in"}},
+                        {
+                            "from": {"node": "source", "port": "out"},
+                            "to": {"node": "segment", "port": "in"},
+                        },
                     ],
                 },
             },
@@ -205,14 +220,16 @@ def test_pipeline_preview_frame_returns_guided_message_when_fallback_is_missing(
         payload = {
             "pipeline": {
                 "name": "preview_segmentation_missing",
-                "type": "final",
                 "graph": {
                     "schema_version": 1,
                     "nodes": [
                         {
                             "id": "source",
                             "operator": "camera.source",
-                            "config": {"rtsp_url": "rtsp://preview-segmentation-missing", "fps": 5.0},
+                            "config": {
+                                "rtsp_url": "rtsp://preview-segmentation-missing",
+                                "fps": 5.0,
+                            },
                         },
                         {
                             "id": "segment",
@@ -221,7 +238,10 @@ def test_pipeline_preview_frame_returns_guided_message_when_fallback_is_missing(
                         },
                     ],
                     "edges": [
-                        {"from": {"node": "source", "port": "out"}, "to": {"node": "segment", "port": "in"}},
+                        {
+                            "from": {"node": "source", "port": "out"},
+                            "to": {"node": "segment", "port": "in"},
+                        },
                     ],
                 },
             },
@@ -249,7 +269,6 @@ def test_pipelines_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
         payload = Pipeline(
             name="camera1_tracking",
-            type="reuse",
             graph={"schema_version": 1, "nodes": [], "edges": []},
         ).model_dump()
         res = client.post("/api/pipelines", json=payload)
@@ -267,13 +286,12 @@ def test_pipelines_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
         replacement_payload = Pipeline(
             name="camera1_alerts",
-            type="final",
             graph={"schema_version": 2, "nodes": [], "edges": []},
         ).model_dump()
         res = client.put("/api/pipelines/camera1_tracking", json=replacement_payload)
         assert res.status_code == 200
         assert res.json()["name"] == "camera1_alerts"
-        assert res.json()["type"] == "final"
+        assert "type" not in res.json()
 
         res = client.get("/api/pipelines/camera1_alerts")
         assert res.status_code == 200
@@ -292,16 +310,17 @@ def test_pipelines_api_duplicate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     with _create_client(tmp_path, monkeypatch) as client:
         payload = Pipeline(
             name="camera1_tracking",
-            type="reuse",
             graph={"schema_version": 1, "nodes": [], "edges": []},
         ).model_dump()
         res = client.post("/api/pipelines", json=payload)
         assert res.status_code == 201
 
-        res = client.post("/api/pipelines/camera1_tracking/duplicate", json={"new_name": "camera1_tracking_2"})
+        res = client.post(
+            "/api/pipelines/camera1_tracking/duplicate", json={"new_name": "camera1_tracking_2"}
+        )
         assert res.status_code == 201
         assert res.json()["name"] == "camera1_tracking_2"
-        assert res.json()["type"] == "reuse"
+        assert "type" not in res.json()
         assert res.json()["graph"]["schema_version"] == 1
 
         res = client.post("/api/pipelines/camera1_tracking/duplicate")
@@ -313,18 +332,23 @@ def test_pipelines_api_duplicate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         names = {item["name"] for item in res.json()["pipelines"]}
         assert names == {"camera1_tracking", "camera1_tracking_2", "camera1_tracking_3"}
 
-        res = client.post("/api/pipelines/camera1_tracking/duplicate", json={"new_name": "camera1_tracking_2"})
+        res = client.post(
+            "/api/pipelines/camera1_tracking/duplicate", json={"new_name": "camera1_tracking_2"}
+        )
         assert res.status_code == 409
 
-        res = client.post("/api/pipelines/unknown_pipeline/duplicate", json={"new_name": "unknown_pipeline_2"})
+        res = client.post(
+            "/api/pipelines/unknown_pipeline/duplicate", json={"new_name": "unknown_pipeline_2"}
+        )
         assert res.status_code == 404
 
 
-def test_pipelines_api_duplicate_python_pipeline_adds_pipeline_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pipelines_api_duplicate_python_pipeline_adds_pipeline_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         payload = Pipeline(
             name="dsl_pipeline",
-            type="final",
             editor_mode="python",
             python_source='dsl_pipeline = core.demo_frame_sequence_source(_id="source") | core.notify(_id="notify")',
             graph={"schema_version": 1, "nodes": [], "edges": []},
@@ -332,7 +356,9 @@ def test_pipelines_api_duplicate_python_pipeline_adds_pipeline_alias(tmp_path: P
         res = client.post("/api/pipelines", json=payload)
         assert res.status_code == 201
 
-        res = client.post("/api/pipelines/dsl_pipeline/duplicate", json={"new_name": "dsl_pipeline_2"})
+        res = client.post(
+            "/api/pipelines/dsl_pipeline/duplicate", json={"new_name": "dsl_pipeline_2"}
+        )
         assert res.status_code == 201
         duplicated = res.json()
         assert duplicated["name"] == "dsl_pipeline_2"
@@ -350,7 +376,6 @@ def test_pipeline_payload_validation(tmp_path: Path, monkeypatch: pytest.MonkeyP
     with _create_client(tmp_path, monkeypatch) as client:
         invalid_name = {
             "name": "bad-name",
-            "type": "reuse",
             "graph": {"schema_version": 1},
         }
         res = client.post("/api/pipelines", json=invalid_name)
@@ -358,18 +383,18 @@ def test_pipeline_payload_validation(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
         missing_graph_schema_version = {
             "name": "camera1_tracking",
-            "type": "reuse",
             "graph": {"nodes": []},
         }
         res = client.post("/api/pipelines", json=missing_graph_schema_version)
         assert res.status_code == 422
 
 
-def test_pipeline_rejects_edges_from_sink_operators(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pipeline_rejects_edges_from_sink_operators(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         payload = {
             "name": "invalid_notify_chain",
-            "type": "final",
             "graph": {
                 "schema_version": 1,
                 "nodes": [
@@ -378,8 +403,14 @@ def test_pipeline_rejects_edges_from_sink_operators(tmp_path: Path, monkeypatch:
                     {"id": "debug", "operator": "core.debug", "config": {}},
                 ],
                 "edges": [
-                    {"from": {"node": "source", "port": "out"}, "to": {"node": "notify", "port": "in"}},
-                    {"from": {"node": "notify", "port": "out"}, "to": {"node": "debug", "port": "in"}},
+                    {
+                        "from": {"node": "source", "port": "out"},
+                        "to": {"node": "notify", "port": "in"},
+                    },
+                    {
+                        "from": {"node": "notify", "port": "out"},
+                        "to": {"node": "debug", "port": "in"},
+                    },
                 ],
             },
         }
@@ -389,7 +420,9 @@ def test_pipeline_rejects_edges_from_sink_operators(tmp_path: Path, monkeypatch:
         assert "has no output port 'out'" in str(res.json().get("detail") or "")
 
 
-def test_pipeline_publish_video_host_mismatch_returns_400(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pipeline_publish_video_host_mismatch_returns_400(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         patch_res = client.patch(
             "/api/settings/extensions/com.toposync.streaming",
@@ -409,7 +442,6 @@ def test_pipeline_publish_video_host_mismatch_returns_400(tmp_path: Path, monkey
 
         payload = {
             "name": "pipeline_with_publish_video",
-            "type": "final",
             "processing_server_id": "local",
             "graph": {
                 "schema_version": 1,
@@ -428,7 +460,9 @@ def test_pipeline_publish_video_host_mismatch_returns_400(tmp_path: Path, monkey
         assert "stream.publish_video host mismatch" in str(res.json().get("detail") or "")
 
 
-def test_pipelines_telemetry_aggregate_endpoints_filter_by_pipeline_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pipelines_telemetry_aggregate_endpoints_filter_by_pipeline_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         telemetry_store = getattr(client.app.state, "pipeline_telemetry_store", None)
         assert telemetry_store is not None
@@ -436,12 +470,28 @@ def test_pipelines_telemetry_aggregate_endpoints_filter_by_pipeline_name(tmp_pat
 
         telemetry_store.observe_numeric("pipe_a", "node", "motion.score", 0.2, now_s=now_s)
         telemetry_store.observe_numeric("pipe_b", "node", "motion.score", 0.9, now_s=now_s)
-        telemetry_store.record_image_marker("pipe_a", node_id="node", rel_path="pipelines/a/frame.png", metric_id="store.image", ts_s=now_s)
-        telemetry_store.record_image_marker("pipe_b", node_id="node", rel_path="pipelines/b/frame.png", metric_id="store.image", ts_s=now_s)
+        telemetry_store.record_image_marker(
+            "pipe_a",
+            node_id="node",
+            rel_path="pipelines/a/frame.png",
+            metric_id="store.image",
+            ts_s=now_s,
+        )
+        telemetry_store.record_image_marker(
+            "pipe_b",
+            node_id="node",
+            rel_path="pipelines/b/frame.png",
+            metric_id="store.image",
+            ts_s=now_s,
+        )
 
         numeric_res = client.get(
             "/api/pipelines/telemetry/all/numeric",
-            params=[("metric_id", "motion.score"), ("pipeline_name", "pipe_a"), ("window_seconds", "3600")],
+            params=[
+                ("metric_id", "motion.score"),
+                ("pipeline_name", "pipe_a"),
+                ("window_seconds", "3600"),
+            ],
         )
         assert numeric_res.status_code == 200
         numeric_body = numeric_res.json()
@@ -453,7 +503,11 @@ def test_pipelines_telemetry_aggregate_endpoints_filter_by_pipeline_name(tmp_pat
 
         markers_res = client.get(
             "/api/pipelines/telemetry/all/image-markers",
-            params=[("metric_id", "store.image"), ("pipeline_name", "pipe_b"), ("window_seconds", "3600")],
+            params=[
+                ("metric_id", "store.image"),
+                ("pipeline_name", "pipe_b"),
+                ("window_seconds", "3600"),
+            ],
         )
         assert markers_res.status_code == 200
         markers_body = markers_res.json()
@@ -504,11 +558,12 @@ def test_processing_servers_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyP
         assert res.json()["id"] == "remote_gpu"
 
 
-def test_pipeline_compile_returns_recommendations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pipeline_compile_returns_recommendations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         pipeline = Pipeline(
             name="demo_pipeline",
-            type="final",
             graph={
                 "schema_version": 1,
                 "nodes": [
@@ -516,7 +571,10 @@ def test_pipeline_compile_returns_recommendations(tmp_path: Path, monkeypatch: p
                     {"id": "notify", "operator": "core.notify", "config": {}},
                 ],
                 "edges": [
-                    {"from": {"node": "source", "port": "out"}, "to": {"node": "notify", "port": "in"}},
+                    {
+                        "from": {"node": "source", "port": "out"},
+                        "to": {"node": "notify", "port": "in"},
+                    },
                 ],
             },
         ).model_dump(mode="json")
@@ -527,11 +585,12 @@ def test_pipeline_compile_returns_recommendations(tmp_path: Path, monkeypatch: p
         assert any(item.get("code") == "notify_missing_store_images" for item in body["alerts"])
 
 
-def test_pipeline_telemetry_endpoints_return_numeric_and_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pipeline_telemetry_endpoints_return_numeric_and_markers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         payload = Pipeline(
             name="telemetry_pipeline",
-            type="final",
             graph={
                 "schema_version": 1,
                 "nodes": [],
@@ -544,8 +603,12 @@ def test_pipeline_telemetry_endpoints_return_numeric_and_markers(tmp_path: Path,
         telemetry_store = getattr(client.app.state, "pipeline_telemetry_store", None)
         assert telemetry_store is not None
         now = time.time()
-        telemetry_store.observe_numeric("telemetry_pipeline", "gate", "motion.score", 0.021, now_s=now)
-        telemetry_store.observe_numeric("telemetry_pipeline", "gate", "motion.score", 0.037, now_s=now + 1.0)
+        telemetry_store.observe_numeric(
+            "telemetry_pipeline", "gate", "motion.score", 0.021, now_s=now
+        )
+        telemetry_store.observe_numeric(
+            "telemetry_pipeline", "gate", "motion.score", 0.037, now_s=now + 1.0
+        )
         telemetry_store.record_image_marker(
             "telemetry_pipeline",
             node_id="store",
@@ -595,12 +658,13 @@ def test_pipeline_telemetry_endpoints_return_numeric_and_markers(tmp_path: Path,
         ]
 
 
-def test_pipelines_telemetry_overview_endpoints_aggregate_all_pipelines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pipelines_telemetry_overview_endpoints_aggregate_all_pipelines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         for pipeline_name in ("alpha_pipeline", "beta_pipeline"):
             payload = Pipeline(
                 name=pipeline_name,
-                type="final",
                 graph={"schema_version": 1, "nodes": [], "edges": []},
             ).model_dump(mode="json")
             created = client.post("/api/pipelines", json=payload)
@@ -610,10 +674,18 @@ def test_pipelines_telemetry_overview_endpoints_aggregate_all_pipelines(tmp_path
         assert telemetry_store is not None
         now = time.time()
 
-        telemetry_store.observe_numeric("alpha_pipeline", "motion_a", "motion.score", 0.22, now_s=now - 120.0)
-        telemetry_store.observe_numeric("beta_pipeline", "motion_b", "motion.score", 0.81, now_s=now - 120.0)
-        telemetry_store.observe_numeric("alpha_pipeline", "yolo_a", "vision.confidence", 0.33, now_s=now - 30.0)
-        telemetry_store.observe_numeric("beta_pipeline", "yolo_b", "vision.confidence", 0.67, now_s=now - 30.0)
+        telemetry_store.observe_numeric(
+            "alpha_pipeline", "motion_a", "motion.score", 0.22, now_s=now - 120.0
+        )
+        telemetry_store.observe_numeric(
+            "beta_pipeline", "motion_b", "motion.score", 0.81, now_s=now - 120.0
+        )
+        telemetry_store.observe_numeric(
+            "alpha_pipeline", "yolo_a", "vision.confidence", 0.33, now_s=now - 30.0
+        )
+        telemetry_store.observe_numeric(
+            "beta_pipeline", "yolo_b", "vision.confidence", 0.67, now_s=now - 30.0
+        )
 
         telemetry_store.record_image_marker(
             "alpha_pipeline",
@@ -632,14 +704,25 @@ def test_pipelines_telemetry_overview_endpoints_aggregate_all_pipelines(tmp_path
 
         numeric_res = client.get(
             "/api/pipelines/telemetry/all/numeric",
-            params=[("metric_id", "motion.score"), ("metric_id", "vision.confidence"), ("point_limit", "200")],
+            params=[
+                ("metric_id", "motion.score"),
+                ("metric_id", "vision.confidence"),
+                ("point_limit", "200"),
+            ],
         )
         assert numeric_res.status_code == 200
         numeric_body = numeric_res.json()
         assert numeric_body["aggregation"] == "max"
-        assert [item["metric_id"] for item in numeric_body["series"]] == ["motion.score", "vision.confidence"]
-        motion_series = next(item for item in numeric_body["series"] if item["metric_id"] == "motion.score")
-        yolo_series = next(item for item in numeric_body["series"] if item["metric_id"] == "vision.confidence")
+        assert [item["metric_id"] for item in numeric_body["series"]] == [
+            "motion.score",
+            "vision.confidence",
+        ]
+        motion_series = next(
+            item for item in numeric_body["series"] if item["metric_id"] == "motion.score"
+        )
+        yolo_series = next(
+            item for item in numeric_body["series"] if item["metric_id"] == "vision.confidence"
+        )
         assert motion_series["pipeline_count"] == 2
         assert motion_series["series_count"] == 2
         assert motion_series["points"][-1]["avg"] == pytest.approx(0.81)
@@ -650,7 +733,10 @@ def test_pipelines_telemetry_overview_endpoints_aggregate_all_pipelines(tmp_path
         markers_body = markers_res.json()
         assert markers_body["aggregation"] == "max"
         assert markers_body["pipeline_count"] == 2
-        assert [item["pipeline_name"] for item in markers_body["markers"]] == ["alpha_pipeline", "beta_pipeline"]
+        assert [item["pipeline_name"] for item in markers_body["markers"]] == [
+            "alpha_pipeline",
+            "beta_pipeline",
+        ]
         assert [item["rel_path"] for item in markers_body["markers"]] == [
             "pipelines/alpha_pipeline/frame_1.png",
             "pipelines/beta_pipeline/frame_2.png",

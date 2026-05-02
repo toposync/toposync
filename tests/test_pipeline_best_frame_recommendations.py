@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from toposync.runtime.config_store import Pipeline
-from toposync.runtime.pipelines import OperatorRegistry, PipelineGraphCompiler, register_builtin_operators
+from toposync.runtime.pipelines import (
+    OperatorRegistry,
+    PipelineGraphCompiler,
+    register_builtin_operators,
+)
 from toposync.runtime.pipelines.recommendations import analyze_compiled_pipeline
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 
@@ -13,14 +17,17 @@ def test_best_frame_selector_is_not_marked_unused_when_store_images_uses_fallbac
 
     pipeline = Pipeline(
         name="best_frame_store_images_fallback_usage",
-        type="final",
         graph={
             "schema_version": 1,
             "nodes": [
                 {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
                 {"id": "detect", "operator": "vision.detect", "config": {"emit_mode": "annotate"}},
                 {"id": "bf", "operator": "camera.best_frame_selector", "config": {}},
-                {"id": "store", "operator": "core.store_images", "config": {"image_with_fallback": "best_frame,treated,original"}},
+                {
+                    "id": "store",
+                    "operator": "core.store_images",
+                    "config": {"image_with_fallback": "best_frame,treated,original"},
+                },
                 {"id": "sink", "operator": "core.sink", "config": {}},
             ],
             "edges": [
@@ -44,7 +51,6 @@ def test_best_frame_selector_default_inputs_do_not_trigger_missing_inputs_alert(
 
     pipeline = Pipeline(
         name="best_frame_default_inputs_no_missing_alert",
-        type="final",
         graph={
             "schema_version": 1,
             "nodes": [
@@ -61,5 +67,6 @@ def test_best_frame_selector_default_inputs_do_not_trigger_missing_inputs_alert(
     compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
     alerts = analyze_compiled_pipeline(pipeline=compiled, registry=registry)
 
-    assert not any(alert.code == "best_frame_missing_inputs" and alert.node_id == "bf" for alert in alerts)
-
+    assert not any(
+        alert.code == "best_frame_missing_inputs" and alert.node_id == "bf" for alert in alerts
+    )

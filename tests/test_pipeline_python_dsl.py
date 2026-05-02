@@ -8,7 +8,10 @@ import pytest
 from toposync.app import create_app
 from toposync.runtime.config_store import Pipeline
 from toposync.runtime.pipelines import OperatorRegistry
-from toposync.runtime.pipelines.python_dsl import PythonDslCompileError, compile_python_source_to_graph
+from toposync.runtime.pipelines.python_dsl import (
+    PythonDslCompileError,
+    compile_python_source_to_graph,
+)
 import toposync.extensions.manager as ext_manager_mod
 
 
@@ -32,8 +35,12 @@ def test_python_dsl_compiles_to_graph_deterministically() -> None:
 PIPELINE = test.source(_id="source") | test.transform(_id="transform")
 """.strip()
 
-    graph1 = compile_python_source_to_graph(python_source=source, pipeline_name="demo", registry=registry)
-    graph2 = compile_python_source_to_graph(python_source=source, pipeline_name="demo", registry=registry)
+    graph1 = compile_python_source_to_graph(
+        python_source=source, pipeline_name="demo", registry=registry
+    )
+    graph2 = compile_python_source_to_graph(
+        python_source=source, pipeline_name="demo", registry=registry
+    )
     assert graph1 == graph2
     assert graph1["schema_version"] == 1
     assert {node["id"] for node in graph1["nodes"]} == {"source", "transform"}
@@ -60,7 +67,9 @@ def test_python_dsl_supports_pipeline_name_variable() -> None:
 my_pipeline = test.source(_id="source") | test.transform(_id="transform")
 """.strip()
 
-    graph = compile_python_source_to_graph(python_source=source, pipeline_name="my_pipeline", registry=registry)
+    graph = compile_python_source_to_graph(
+        python_source=source, pipeline_name="my_pipeline", registry=registry
+    )
     assert graph["nodes"]
 
 
@@ -75,7 +84,9 @@ def test_python_dsl_requires_pipeline_root() -> None:
     )
 
     with pytest.raises(PythonDslCompileError):
-        compile_python_source_to_graph(python_source="x = test.source()", pipeline_name="demo", registry=registry)
+        compile_python_source_to_graph(
+            python_source="x = test.source()", pipeline_name="demo", registry=registry
+        )
 
 
 def _create_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
@@ -86,11 +97,12 @@ def _create_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClien
     return TestClient(create_app())
 
 
-def test_compile_python_endpoint_returns_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_compile_python_endpoint_returns_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         pipeline = Pipeline(
             name="demo_pipeline",
-            type="final",
             editor_mode="python",
             python_source='PIPELINE = core.demo_frame_sequence_source(_id="source") | core.notify(_id="notify")',
             graph={"schema_version": 1, "nodes": [], "edges": []},
@@ -103,11 +115,12 @@ def test_compile_python_endpoint_returns_graph(tmp_path: Path, monkeypatch: pyte
         assert {node["id"] for node in body["graph"]["nodes"]} == {"source", "notify"}
 
 
-def test_python_pipeline_save_compiles_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_python_pipeline_save_compiles_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         payload = Pipeline(
             name="dsl_pipeline",
-            type="final",
             editor_mode="python",
             python_source='PIPELINE = core.demo_frame_sequence_source(_id="source") | core.notify(_id="notify")',
             graph={"schema_version": 1, "nodes": [], "edges": []},

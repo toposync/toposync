@@ -93,9 +93,7 @@ class _SequenceDetectorBackend:
         self._sequence = sequence
         self._index = 0
 
-    def detect(
-        self, frame: Any, *, categories: set[str] | None = None
-    ) -> list[DetectionObject]:  # noqa: ARG002
+    def detect(self, frame: Any, *, categories: set[str] | None = None) -> list[DetectionObject]:  # noqa: ARG002
         if not self._sequence:
             return []
         idx = min(self._index, len(self._sequence) - 1)
@@ -147,7 +145,7 @@ def _pipeline_runtime(
         share_strategy="never",
         runtime_factory=lambda config, _deps: _CollectSinkRuntime(config, collector),
     )
-    pipeline = Pipeline(name="vision_track_integration", type="final", graph=graph)
+    pipeline = Pipeline(name="vision_track_integration", graph=graph)
     compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
     return PipelineRuntime(
         compiled=compiled,
@@ -217,8 +215,16 @@ def test_best_frame_selector_continues_working_after_vision_track_decoupling() -
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
-                {"id": "detect", "operator": "vision.detect", "config": {"model_id": "fake.detector", "emit_mode": "annotate"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
+                {
+                    "id": "detect",
+                    "operator": "vision.detect",
+                    "config": {"model_id": "fake.detector", "emit_mode": "annotate"},
+                },
                 {
                     "id": "track",
                     "operator": "vision.track",
@@ -335,8 +341,16 @@ def test_velocity_estimation_continues_working_after_vision_track_decoupling() -
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
-                {"id": "detect", "operator": "vision.detect", "config": {"model_id": "fake.detector", "emit_mode": "annotate"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
+                {
+                    "id": "detect",
+                    "operator": "vision.detect",
+                    "config": {"model_id": "fake.detector", "emit_mode": "annotate"},
+                },
                 {
                     "id": "track",
                     "operator": "vision.track",
@@ -360,7 +374,10 @@ def test_velocity_estimation_continues_working_after_vision_track_decoupling() -
                                 "control_points": [
                                     {"image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
                                     {"image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
-                                    {"image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
+                                    {
+                                        "image": {"x": 1.0, "y": 1.0},
+                                        "world": {"x": 10.0, "z": 10.0},
+                                    },
                                     {"image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
                                 ],
                             }
@@ -381,7 +398,10 @@ def test_velocity_estimation_continues_working_after_vision_track_decoupling() -
                 {"from": {"node": "source", "port": "out"}, "to": {"node": "detect", "port": "in"}},
                 {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}},
                 {"from": {"node": "track", "port": "out"}, "to": {"node": "mapping", "port": "in"}},
-                {"from": {"node": "mapping", "port": "out"}, "to": {"node": "velocity", "port": "in"}},
+                {
+                    "from": {"node": "mapping", "port": "out"},
+                    "to": {"node": "velocity", "port": "in"},
+                },
                 {"from": {"node": "velocity", "port": "out"}, "to": {"node": "sink", "port": "in"}},
             ],
         }
@@ -470,8 +490,16 @@ def test_vision_track_annotate_mode_fills_future_multicamera_fields_from_packet(
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
-                {"id": "detect", "operator": "vision.detect", "config": {"model_id": "fake.detector", "emit_mode": "annotate"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
+                {
+                    "id": "detect",
+                    "operator": "vision.detect",
+                    "config": {"model_id": "fake.detector", "emit_mode": "annotate"},
+                },
                 {
                     "id": "track",
                     "operator": "vision.track",

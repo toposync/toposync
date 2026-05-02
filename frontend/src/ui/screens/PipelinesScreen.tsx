@@ -5,8 +5,6 @@ import { i18n } from "../../util/i18n";
 import { replace, usePathname } from "../router";
 import type {
   CamerasIndexResponse,
-  PipelineTemplateApplyCamerasRequest,
-  PipelineTemplateApplyCamerasResponse,
   Pipeline,
   PipelineAlert,
   PipelineCompileOutput,
@@ -16,7 +14,6 @@ import type {
   ProcessingServer,
 } from "../../util/api";
 import {
-  applyPipelineTemplateToCameras,
   compilePipeline,
   compilePipelinePython,
   createPipeline,
@@ -34,7 +31,6 @@ import { InteractivePipelineEditor } from "./pipelines/InteractivePipelineEditor
 import { PipelineDuplicateModal } from "./pipelines/PipelineDuplicateModal";
 import { PipelineTelemetryFieldModal } from "./pipelines/PipelineTelemetryFieldModal";
 import { PipelineTelemetryOverviewCard } from "./pipelines/PipelineTelemetryOverviewCard";
-import { PipelineTemplateApplyModal } from "./pipelines/PipelineTemplateApplyModal";
 import type { EditorMode, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "./pipelines/types";
 import {
   buildGraphFromInteractiveSteps,
@@ -91,7 +87,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
     }
   });
   const [sidebarOpen, setSidebarOpen] = useState(() => !compactLayout);
-  const [templateApplyOpen, setTemplateApplyOpen] = useState(false);
   const [duplicateOpen, setDuplicateOpen] = useState(false);
   const [operators, setOperators] = useState<PipelineOperatorDefinition[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(() => {
@@ -439,7 +434,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
     if (!name) return;
     setError(null);
     try {
-      const created = await createPipeline(defaultPipeline(name, "final"));
+      const created = await createPipeline(defaultPipeline(name));
       setPipelines((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
       setSelectedName(created.name);
       if (compactLayout) setSidebarOpen(false);
@@ -560,16 +555,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
     }
   };
 
-  const handleApplyTemplate = async (
-    payload: PipelineTemplateApplyCamerasRequest,
-  ): Promise<PipelineTemplateApplyCamerasResponse> => {
-    const res = await applyPipelineTemplateToCameras(payload);
-    await reload();
-    const next = (res.created ?? [])[0] ?? (res.updated ?? [])[0] ?? null;
-    if (next) setSelectedName(next);
-    return res;
-  };
-
   return (
     <div className="pipelinesRoot screenRoot">
       <div className="pipelinesTopbar">
@@ -646,7 +631,9 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
               >
                 <div className="pipelinesListItemName">{pipeline.name}</div>
                 <div className="pipelinesListItemMeta">
-                  {pipeline.type === "reuse" ? t("core.ui.pipelines.type.reuse") : t("core.ui.pipelines.type.final")}
+                  {pipeline.enabled === false ? t("core.ui.pipelines.status.disabled") : t("core.ui.pipelines.status.enabled")}
+                  {" · "}
+                  {pipeline.processing_server_id ?? "local"}
                 </div>
               </button>
             ))}
@@ -691,12 +678,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
               <div className="pipelinesEditorHeader">
                 <div className="pipelinesEditorTitle">{draft.name}</div>
                 <div className="pipelinesEditorActions">
-                  {draft.type === "reuse" ? (
-                    <button className="pillButton" type="button" onClick={() => setTemplateApplyOpen(true)}>
-                      <i className="fa-solid fa-wand-magic-sparkles" aria-hidden="true" />
-                      {t("core.ui.pipelines.actions.apply_template")}
-                    </button>
-                  ) : null}
                   <button className="pillButton" type="button" onClick={() => void handleCompile()}>
                     <i className="fa-solid fa-gears" aria-hidden="true" />
                     {t("core.ui.pipelines.actions.compile")}
@@ -753,54 +734,37 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
               <div className="pipelinesEditorGrid">
                 <div className="pipelinesForm">
                   <label className="pipelinesLabel">
-                    <span>{t("core.ui.pipelines.form.type")}</span>
-                    <select
-                      className="pipelinesSelect"
-                      value={draft.type}
-                      onChange={(event) => setDraft((prev) => (prev ? { ...prev, type: event.target.value as any } : prev))}
-                      disabled={isPythonLocked}
-                    >
-                      <option value="final">{t("core.ui.pipelines.type.final")}</option>
-                      <option value="reuse">{t("core.ui.pipelines.type.reuse")}</option>
-                    </select>
+                    <span>{t("core.ui.pipelines.form.enabled")}</span>
+                    <input
+                      type="checkbox"
+                      checked={draft.enabled !== false}
+                      onChange={(event) => setDraft((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))}
+                    />
                   </label>
 
-                  {draft.type === "final" ? (
-                    <>
-                      <label className="pipelinesLabel">
-                        <span>{t("core.ui.pipelines.form.enabled")}</span>
-                        <input
-                          type="checkbox"
-                          checked={draft.enabled !== false}
-                          onChange={(event) => setDraft((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))}
-                        />
-                      </label>
-
-                      <label className="pipelinesLabel">
-                        <span>{t("core.ui.pipelines.form.processing_server")}</span>
-                        <div className="row">
-                          <select
-                            className="pipelinesSelect"
-                            value={draft.processing_server_id ?? "local"}
-                            onChange={(event) =>
-                              setDraft((prev) => (prev ? { ...prev, processing_server_id: event.target.value } : prev))
-                            }
-                          >
-                            {servers.map((server) => (
-                              <option key={server.id} value={server.id}>
-                                {server.id}
-                              </option>
-                            ))}
-                          </select>
-                          {onOpenProcessingServers ? (
-                            <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
-                              {t("core.ui.pipelines.form.processing_server.manage")}
-                            </button>
-                          ) : null}
-                        </div>
-                      </label>
-                    </>
-                  ) : null}
+                  <label className="pipelinesLabel">
+                    <span>{t("core.ui.pipelines.form.processing_server")}</span>
+                    <div className="row">
+                      <select
+                        className="pipelinesSelect"
+                        value={draft.processing_server_id ?? "local"}
+                        onChange={(event) =>
+                          setDraft((prev) => (prev ? { ...prev, processing_server_id: event.target.value } : prev))
+                        }
+                      >
+                        {servers.map((server) => (
+                          <option key={server.id} value={server.id}>
+                            {server.id}
+                          </option>
+                        ))}
+                      </select>
+                      {onOpenProcessingServers ? (
+                        <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
+                          {t("core.ui.pipelines.form.processing_server.manage")}
+                        </button>
+                      ) : null}
+                    </div>
+                  </label>
 
                   <div className="pipelinesModes">
                     <button
@@ -921,14 +885,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers }: Props): Re
         onDuplicate={handleDuplicate}
       />
 
-      <PipelineTemplateApplyModal
-        open={templateApplyOpen}
-        template={draft?.type === "reuse" ? draft : null}
-        cameras={camerasIndex.cameras}
-        servers={servers}
-        onClose={() => setTemplateApplyOpen(false)}
-        onApply={handleApplyTemplate}
-      />
     </div>
   );
 }

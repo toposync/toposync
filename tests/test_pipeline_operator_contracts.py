@@ -17,7 +17,6 @@ def test_contract_alerts_when_required_payload_keys_are_missing() -> None:
 
     pipeline = Pipeline(
         name="contract_missing_payload_keys",
-        type="final",
         graph={
             "schema_version": 1,
             "nodes": [
@@ -49,7 +48,6 @@ def test_contract_alerts_when_required_artifacts_are_missing() -> None:
 
     pipeline = Pipeline(
         name="contract_missing_artifacts",
-        type="final",
         graph={
             "schema_version": 1,
             "nodes": [
@@ -81,7 +79,6 @@ def test_contract_alerts_when_adaptive_motion_required_artifacts_are_missing() -
 
     pipeline = Pipeline(
         name="contract_missing_artifacts_adaptive_motion",
-        type="final",
         graph={
             "schema_version": 1,
             "nodes": [
@@ -113,7 +110,6 @@ def test_contract_alerts_when_sample_motion_required_artifacts_are_missing() -> 
 
     pipeline = Pipeline(
         name="contract_missing_artifacts_sample_motion",
-        type="final",
         graph={
             "schema_version": 1,
             "nodes": [

@@ -25,7 +25,9 @@ class MergedNodeOccurrence:
 class MergedPipelinePlan:
     merged_pipeline: CompiledPipeline
     occurrence_to_merged_node_id: dict[tuple[str, str], str] = field(default_factory=dict)
-    merged_node_occurrences: dict[str, tuple[MergedNodeOccurrence, ...]] = field(default_factory=dict)
+    merged_node_occurrences: dict[str, tuple[MergedNodeOccurrence, ...]] = field(
+        default_factory=dict
+    )
 
 
 def build_merged_pipeline_plan(
@@ -55,7 +57,10 @@ def build_merged_pipeline_plan(
                         (
                             edge.target_port,
                             edge.source_port,
-                            occurrence_to_merged.get((pipeline.name, edge.source_node_id), f"unmerged:{pipeline.name}:{edge.source_node_id}"),
+                            occurrence_to_merged.get(
+                                (pipeline.name, edge.source_node_id),
+                                f"unmerged:{pipeline.name}:{edge.source_node_id}",
+                            ),
                             int(edge.channel_maxsize),
                             str(edge.channel_drop_policy.value),
                         )
@@ -113,15 +118,23 @@ def build_merged_pipeline_plan(
 
     merged_pipeline = CompiledPipeline(
         name=bundle_name,
-        pipeline_type="bundle",
         schema_version=max(pipeline.schema_version for pipeline in pipelines),
         nodes=tuple(ordered_nodes),
-        edges=tuple(sorted(merged_edges, key=lambda item: (item.source_node_id, item.source_port, item.target_node_id, item.target_port))),
+        edges=tuple(
+            sorted(
+                merged_edges,
+                key=lambda item: (
+                    item.source_node_id,
+                    item.source_port,
+                    item.target_node_id,
+                    item.target_port,
+                ),
+            )
+        ),
         topological_order=tuple(topological_order),
     )
     normalized_occurrences = {
-        merged_node_id: tuple(items)
-        for merged_node_id, items in occurrences_by_merged_id.items()
+        merged_node_id: tuple(items) for merged_node_id, items in occurrences_by_merged_id.items()
     }
     return MergedPipelinePlan(
         merged_pipeline=merged_pipeline,
@@ -144,7 +157,9 @@ class PipelineBundleRuntime:
         # Even if stats are disabled, this map is useful for sink operators
         # (e.g. store_images) to resolve the logical pipeline name when
         # execution is running inside a bundle (compiled.name=bundle_name).
-        self.dependencies.pipeline_stats_node_occurrences = _build_bundle_stats_node_occurrences(plan=self.plan)
+        self.dependencies.pipeline_stats_node_occurrences = _build_bundle_stats_node_occurrences(
+            plan=self.plan
+        )
         self._runtime = PipelineRuntime(
             compiled=self.plan.merged_pipeline,
             registry=self.registry,
@@ -185,14 +200,18 @@ def _merged_node_id_for_key(*, node: CompiledNode, merge_key: tuple[Any, ...]) -
     if merge_key[0] == "shared":
         base = node.operator_id.replace(".", "_").replace("-", "_")
         incoming_key = merge_key[2] if len(merge_key) > 2 else ()
-        incoming_encoded = json.dumps(incoming_key, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+        incoming_encoded = json.dumps(
+            incoming_key, sort_keys=True, ensure_ascii=True, separators=(",", ":")
+        )
         incoming_digest = hashlib.sha256(incoming_encoded.encode("utf-8")).hexdigest()[:8]
         return f"shared_{base}_{node.signature[:12]}_{incoming_digest}"
     isolated_suffix = str(merge_key[1]).replace(":", "__").replace(".", "_").replace("-", "_")
     return f"isolated_{isolated_suffix}"
 
 
-def _topological_order(*, merged_nodes: list[CompiledNode], merged_edges: list[CompiledEdge]) -> list[str]:
+def _topological_order(
+    *, merged_nodes: list[CompiledNode], merged_edges: list[CompiledEdge]
+) -> list[str]:
     node_ids = {node.node_id for node in merged_nodes}
     indegree: dict[str, int] = {node_id: 0 for node_id in node_ids}
     adjacency: dict[str, set[str]] = defaultdict(set)
@@ -220,7 +239,9 @@ def _topological_order(*, merged_nodes: list[CompiledNode], merged_edges: list[C
     if len(order) != len(node_ids):
         cyc_nodes = sorted(node_id for node_id, degree in indegree.items() if degree > 0)
         raise SharedRuntimeBuildError(
-            "Merged runtime graph must be acyclic (cycle detected in nodes: " + ", ".join(cyc_nodes) + ")",
+            "Merged runtime graph must be acyclic (cycle detected in nodes: "
+            + ", ".join(cyc_nodes)
+            + ")",
         )
     return order
 

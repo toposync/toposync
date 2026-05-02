@@ -44,17 +44,13 @@ import {
   applyTheme,
   applyUserVisualPreferences,
   isBuiltinThemeId,
-  loadAccentIntensity,
   loadThemeId,
-  loadTransparencyLevel,
   loadViewport3DBackground,
-  saveAccentIntensity,
   saveThemeId,
-  saveTransparencyLevel,
   saveViewport3DBackground,
-  type AccentIntensity,
+  THEME_DEFAULT_ACCENT_INTENSITY,
+  THEME_DEFAULT_TRANSPARENCY,
   type BuiltinThemeId,
-  type TransparencyLevel,
   type Viewport3DBackground,
 } from "../util/theme";
 import { getPreviousPathname, navigate, replace, usePathname } from "./router";
@@ -282,8 +278,6 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const [ghostWalls, setGhostWalls] = useState<boolean>(() => loadGhostWalls());
   const [graphicsQuality, setGraphicsQuality] = useState<GraphicsQuality>(() => loadGraphicsQuality());
   const [themeId, setThemeId] = useState<string>(() => loadThemeId());
-  const [transparencyLevel, setTransparencyLevel] = useState<TransparencyLevel>(() => loadTransparencyLevel());
-  const [accentIntensity, setAccentIntensity] = useState<AccentIntensity>(() => loadAccentIntensity());
   const [viewport3dBackground, setViewport3dBackground] = useState<Viewport3DBackground>(() => loadViewport3DBackground());
   const [settings, setSettings] = useState<AppSettings>({ core: {}, extensions: {} });
 
@@ -352,24 +346,16 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   }, [themeId]);
 
   useEffect(() => {
-    saveTransparencyLevel(transparencyLevel);
-  }, [transparencyLevel]);
-
-  useEffect(() => {
-    saveAccentIntensity(accentIntensity);
-  }, [accentIntensity]);
-
-  useEffect(() => {
     saveViewport3DBackground(viewport3dBackground);
   }, [viewport3dBackground]);
 
   useEffect(() => {
     applyUserVisualPreferences({
-      transparency: transparencyLevel,
-      accentIntensity,
+      transparency: THEME_DEFAULT_TRANSPARENCY,
+      accentIntensity: THEME_DEFAULT_ACCENT_INTENSITY,
       viewport3dBackground,
     });
-  }, [accentIntensity, transparencyLevel, viewport3dBackground]);
+  }, [viewport3dBackground]);
 
   const resolvedTheme = useMemo((): { baseThemeId: BuiltinThemeId; overridesTheme: ThemeDefinition | null } => {
     if (isBuiltinThemeId(themeId)) {
@@ -1103,10 +1089,6 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           themes={themeOptions}
           themeId={themeId}
           onSetThemeId={setThemeId}
-          transparencyLevel={transparencyLevel}
-          onSetTransparencyLevel={setTransparencyLevel}
-          accentIntensity={accentIntensity}
-          onSetAccentIntensity={setAccentIntensity}
           viewport3dBackground={viewport3dBackground}
           onSetViewport3dBackground={setViewport3dBackground}
           settings={settings}

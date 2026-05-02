@@ -18,12 +18,16 @@ from toposync.runtime.pipelines import (
 from toposync.runtime.pipelines.distributed import build_distributed_graphs
 
 
-def test_distributed_projection_runs_processing_and_origin_with_same_definition(tmp_path: Path) -> None:
+def test_distributed_projection_runs_processing_and_origin_with_same_definition(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
         files_dir = tmp_path / "files"
         notifications = NotificationsRuntime(data_dir=tmp_path / "data")
 
-        inbox = BoundedChannel[dict[str, Any]](name="origin_inbox", maxsize=64, drop_policy=DropPolicy.DROP_OLDEST)
+        inbox = BoundedChannel[dict[str, Any]](
+            name="origin_inbox", maxsize=64, drop_policy=DropPolicy.DROP_OLDEST
+        )
 
         async def emit(event: dict[str, Any]) -> None:
             await inbox.put(event, timeout_s=0.05, cancel_event=None)
@@ -42,7 +46,12 @@ def test_distributed_projection_runs_processing_and_origin_with_same_definition(
                 {
                     "id": "store",
                     "operator": "core.store_images",
-                    "config": {"artifact_names": ["frame_original"], "subdir": "pipelines", "format": "png", "keep_data": False},
+                    "config": {
+                        "artifact_names": ["frame_original"],
+                        "subdir": "pipelines",
+                        "format": "png",
+                        "keep_data": False,
+                    },
                 },
                 {
                     "id": "notify",
@@ -58,21 +67,31 @@ def test_distributed_projection_runs_processing_and_origin_with_same_definition(
                 },
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "store", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "store", "port": "out"},
+                    "to": {"node": "notify", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
-        pipeline = Pipeline(name="stage8_distributed", type="final", graph=base_graph)
+        pipeline = Pipeline(name="stage8_distributed", graph=base_graph)
         graphs = build_distributed_graphs(pipeline, registry)
         assert graphs.processing_graph is not None
         assert graphs.origin_graph is not None
 
         compiler = PipelineGraphCompiler(registry)
         processing_compiled = compiler.compile_pipeline(
-            Pipeline(name="stage8_distributed__processing", type="final", graph=graphs.processing_graph),
+            Pipeline(name="stage8_distributed__processing", graph=graphs.processing_graph),
         )
         origin_compiled = compiler.compile_pipeline(
-            Pipeline(name="stage8_distributed", type="final", graph=graphs.origin_graph),
+            Pipeline(name="stage8_distributed", graph=graphs.origin_graph),
         )
 
         processing_deps = PipelineRuntimeDependencies(processing_emit_projected_event=emit)
@@ -82,8 +101,12 @@ def test_distributed_projection_runs_processing_and_origin_with_same_definition(
             notifications_upsert=notifications.upsert,
         )
 
-        processing_runtime = PipelineRuntime(compiled=processing_compiled, registry=registry, dependencies=processing_deps)
-        origin_runtime = PipelineRuntime(compiled=origin_compiled, registry=registry, dependencies=origin_deps)
+        processing_runtime = PipelineRuntime(
+            compiled=processing_compiled, registry=registry, dependencies=processing_deps
+        )
+        origin_runtime = PipelineRuntime(
+            compiled=origin_compiled, registry=registry, dependencies=origin_deps
+        )
 
         await origin_runtime.start()
         await processing_runtime.start()

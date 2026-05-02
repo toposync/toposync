@@ -50,7 +50,11 @@ def _as_str(v: Any) -> str:
 
 def extract_legacy_camera_rules(settings: dict[str, Any]) -> list[LegacyCameraRule]:
     extensions = settings.get("extensions") if isinstance(settings.get("extensions"), dict) else {}
-    ext = extensions.get(CAMERAS_EXTENSION_ID) if isinstance(extensions.get(CAMERAS_EXTENSION_ID), dict) else {}
+    ext = (
+        extensions.get(CAMERAS_EXTENSION_ID)
+        if isinstance(extensions.get(CAMERAS_EXTENSION_ID), dict)
+        else {}
+    )
     cameras_raw = _as_list(ext.get("cameras"))
 
     rules: list[LegacyCameraRule] = []
@@ -86,7 +90,9 @@ def extract_legacy_camera_rules(settings: dict[str, Any]) -> list[LegacyCameraRu
     return rules
 
 
-def build_pipeline_from_legacy_camera_rule(rule: LegacyCameraRule, *, existing_names: set[str]) -> Pipeline | None:
+def build_pipeline_from_legacy_camera_rule(
+    rule: LegacyCameraRule, *, existing_names: set[str]
+) -> Pipeline | None:
     trigger_kind = str(rule.trigger_kind or "").strip().lower() or "motion"
     base_name = _safe_pipeline_name(f"legacy_{rule.camera_id}_{rule.rule_id}")
     name = base_name
@@ -179,7 +185,6 @@ def build_pipeline_from_legacy_camera_rule(rule: LegacyCameraRule, *, existing_n
 
         return Pipeline(
             name=name,
-            type="final",
             enabled=True,
             processing_server_id=rule.processing_server_id or "local",
             editor_mode="json",
@@ -226,14 +231,14 @@ def build_pipeline_from_legacy_camera_rule(rule: LegacyCameraRule, *, existing_n
             },
             {
                 "id": "store",
-                    "operator": "core.store_images",
-                    "config": {
-                        "artifact_names": ["best_frame", "frame_original"],
-                        "subdir": "pipelines",
-                        "format": "png",
-                        "drop_data_after_store": True,
-                    },
+                "operator": "core.store_images",
+                "config": {
+                    "artifact_names": ["best_frame", "frame_original"],
+                    "subdir": "pipelines",
+                    "format": "png",
+                    "drop_data_after_store": True,
                 },
+            },
             {
                 "id": "notify",
                 "operator": "core.notify",
@@ -289,7 +294,6 @@ def build_pipeline_from_legacy_camera_rule(rule: LegacyCameraRule, *, existing_n
 
     return Pipeline(
         name=name,
-        type="final",
         enabled=True,
         processing_server_id=rule.processing_server_id or "local",
         editor_mode="json",

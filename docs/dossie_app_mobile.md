@@ -725,7 +725,7 @@ Mesmo que o app não exponha pipelines agora, elas impactam:
 
 Conceitos:
 
-- pipeline é um DAG de operadores; tipos: `reuse` (subgrafo) e `final` (executável).
+- pipeline é um DAG executável de operadores, controlado por `enabled`.
 - runtime trafega `Packet` com `lifecycle: open|update|close`, `payload` e `artifacts` (frames/imagens vão em artifacts).
 - execução pode ser local ou remota (processing server).
 

@@ -72,6 +72,10 @@ class PipelineGraphSpec(BaseModel):
     schema_version: int = Field(ge=1)
     nodes: list[PipelineGraphNode] = Field(default_factory=list)
     edges: list[PipelineGraphEdge] = Field(default_factory=list)
+    interfaces: dict[str, Any] = Field(default_factory=dict)
+    limits: dict[str, Any] = Field(default_factory=dict)
+    layout: dict[str, Any] = Field(default_factory=dict)
+    meta: dict[str, Any] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +100,6 @@ class CompiledEdge:
 @dataclass(frozen=True, slots=True)
 class CompiledPipeline:
     name: str
-    pipeline_type: str
     schema_version: int
     nodes: tuple[CompiledNode, ...]
     edges: tuple[CompiledEdge, ...]
@@ -167,7 +170,9 @@ class PipelineGraphCompiler:
                 raise GraphCompileError(f"Unknown operator id: {node.operator_id}")
 
             try:
-                normalized_config_by_node[node.id] = self._registry.normalize_config(node.operator_id, node.config)
+                normalized_config_by_node[node.id] = self._registry.normalize_config(
+                    node.operator_id, node.config
+                )
             except Exception as exc:  # noqa: BLE001
                 raise GraphCompileError(
                     f"Invalid config for operator '{node.operator_id}' in node '{node.id}': {exc}",
@@ -176,7 +181,9 @@ class PipelineGraphCompiler:
             input_ports_by_node[node.id] = {port.name for port in operator.definition.inputs}
             output_ports_by_node[node.id] = {port.name for port in operator.definition.outputs}
 
-            required_input_ports = {port.name for port in operator.definition.inputs if port.required}
+            required_input_ports = {
+                port.name for port in operator.definition.inputs if port.required
+            }
             available_inputs = {edge.target.port for edge in incoming_edges.get(node.id, [])}
             missing_required = sorted(required_input_ports - available_inputs)
             if missing_required:
@@ -196,7 +203,9 @@ class PipelineGraphCompiler:
                     f"Node '{edge.target.node}' has no input port '{edge.target.port}'",
                 )
 
-        topological_order = _topological_sort(node_map=node_map, adjacency=adjacency, indegree=indegree)
+        topological_order = _topological_sort(
+            node_map=node_map, adjacency=adjacency, indegree=indegree
+        )
         signature_by_node: dict[str, str] = {}
         compiled_nodes: list[CompiledNode] = []
         compiled_edges: list[CompiledEdge] = []
@@ -255,7 +264,6 @@ class PipelineGraphCompiler:
 
         return CompiledPipeline(
             name=pipeline.name,
-            pipeline_type=pipeline.type,
             schema_version=graph.schema_version,
             nodes=tuple(compiled_nodes),
             edges=tuple(compiled_edges),
@@ -307,7 +315,9 @@ def _topological_sort(
 
     if len(order) != len(node_map):
         cycle_nodes = sorted([node_id for node_id, degree in local_indegree.items() if degree > 0])
-        raise GraphCompileError(f"Graph must be a DAG (cycle detected in nodes: {', '.join(cycle_nodes)})")
+        raise GraphCompileError(
+            f"Graph must be a DAG (cycle detected in nodes: {', '.join(cycle_nodes)})"
+        )
 
     return order
 

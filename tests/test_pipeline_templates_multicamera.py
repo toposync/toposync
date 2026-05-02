@@ -29,21 +29,29 @@ def _create_client_with_cameras(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     return TestClient(create_app())
 
 
-def test_apply_template_to_multiple_cameras_creates_pipelines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_apply_template_to_multiple_cameras_creates_pipelines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with _create_client_with_cameras(tmp_path, monkeypatch) as client:
         template = Pipeline(
             name="alerts_template",
-            type="reuse",
             enabled=True,
             editor_mode="interactive",
             graph={
                 "schema_version": 1,
                 "nodes": [
-                    {"id": "source", "operator": "camera.source", "config": {"camera_id": "template"}},
+                    {
+                        "id": "source",
+                        "operator": "camera.source",
+                        "config": {"camera_id": "template"},
+                    },
                     {"id": "sink", "operator": "core.sink", "config": {}},
                 ],
                 "edges": [
-                    {"from": {"node": "source", "port": "out"}, "to": {"node": "sink", "port": "in"}},
+                    {
+                        "from": {"node": "source", "port": "out"},
+                        "to": {"node": "sink", "port": "in"},
+                    },
                 ],
             },
         ).model_dump(mode="json")
@@ -55,7 +63,6 @@ def test_apply_template_to_multiple_cameras_creates_pipelines(tmp_path: Path, mo
             json={
                 "template_pipeline_name": "alerts_template",
                 "camera_ids": ["cam-a", "cam-b"],
-                "instance_type": "final",
                 "enabled": False,
                 "processing_server_id": "local",
                 "conflict": "skip",
@@ -63,14 +70,17 @@ def test_apply_template_to_multiple_cameras_creates_pipelines(tmp_path: Path, mo
         )
         assert res.status_code == 200, res.text
         body = res.json()
-        assert sorted(body.get("created", [])) == ["alerts_template__cam_a", "alerts_template__cam_b"]
+        assert sorted(body.get("created", [])) == [
+            "alerts_template__cam_a",
+            "alerts_template__cam_b",
+        ]
         assert body.get("updated", []) == []
         assert body.get("skipped", []) == []
 
         res = client.get("/api/pipelines/alerts_template__cam_a")
         assert res.status_code == 200
         pipeline = res.json()
-        assert pipeline["type"] == "final"
+        assert "type" not in pipeline
         nodes = pipeline["graph"]["nodes"]
         source_node = next(node for node in nodes if node.get("operator") == "camera.source")
         assert source_node["config"]["camera_id"] == "cam-a"
@@ -90,17 +100,23 @@ def test_apply_template_conflict_skip(tmp_path: Path, monkeypatch: pytest.Monkey
     with _create_client_with_cameras(tmp_path, monkeypatch) as client:
         template = Pipeline(
             name="alerts_template",
-            type="reuse",
             enabled=True,
             editor_mode="interactive",
             graph={
                 "schema_version": 1,
                 "nodes": [
-                    {"id": "source", "operator": "camera.source", "config": {"camera_id": "template"}},
+                    {
+                        "id": "source",
+                        "operator": "camera.source",
+                        "config": {"camera_id": "template"},
+                    },
                     {"id": "sink", "operator": "core.sink", "config": {}},
                 ],
                 "edges": [
-                    {"from": {"node": "source", "port": "out"}, "to": {"node": "sink", "port": "in"}},
+                    {
+                        "from": {"node": "source", "port": "out"},
+                        "to": {"node": "sink", "port": "in"},
+                    },
                 ],
             },
         ).model_dump(mode="json")
@@ -109,13 +125,21 @@ def test_apply_template_conflict_skip(tmp_path: Path, monkeypatch: pytest.Monkey
 
         res = client.post(
             "/api/pipelines/templates/apply-cameras",
-            json={"template_pipeline_name": "alerts_template", "camera_ids": ["cam-a"], "conflict": "skip"},
+            json={
+                "template_pipeline_name": "alerts_template",
+                "camera_ids": ["cam-a"],
+                "conflict": "skip",
+            },
         )
         assert res.status_code == 200
 
         res = client.post(
             "/api/pipelines/templates/apply-cameras",
-            json={"template_pipeline_name": "alerts_template", "camera_ids": ["cam-a"], "conflict": "skip"},
+            json={
+                "template_pipeline_name": "alerts_template",
+                "camera_ids": ["cam-a"],
+                "conflict": "skip",
+            },
         )
         assert res.status_code == 200
         body = res.json()

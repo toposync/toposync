@@ -60,7 +60,6 @@ class AppSettings(BaseModel):
 
 class Pipeline(BaseModel):
     name: str
-    type: Literal["reuse", "final"]
     enabled: bool = True
     processing_server_id: str = "local"
     editor_mode: Literal["interactive", "json", "python"] = "json"

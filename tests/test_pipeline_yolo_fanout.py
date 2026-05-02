@@ -82,7 +82,9 @@ class _FrameSourceRuntime(SourceOperatorRuntime):
             lifecycle=Lifecycle.UPDATE,
             payload={"frame_index": self._sequence},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="application/json"),
+                "frame_original": Artifact(
+                    name="frame_original", data=frame, mime_type="application/json"
+                ),
                 "frame": Artifact(
                     name="frame",
                     data=frame,
@@ -126,9 +128,7 @@ class _SequenceDetectorBackend:
         self._counters = counters
         self._index = 0
 
-    def detect(
-        self, frame: Any, *, categories: set[str] | None = None
-    ) -> list[DetectionObject]:  # noqa: ARG002
+    def detect(self, frame: Any, *, categories: set[str] | None = None) -> list[DetectionObject]:  # noqa: ARG002
         self._counters["detect_calls"] = int(self._counters.get("detect_calls", 0)) + 1
         if not self._sequence:
             return []
@@ -175,7 +175,9 @@ def _register_test_source_and_sink(
     )
 
 
-def _tracking_pipeline_graph(*, source_id: str, detect_id: str, track_id: str, sink_id: str, sink_name: str) -> dict[str, Any]:
+def _tracking_pipeline_graph(
+    *, source_id: str, detect_id: str, track_id: str, sink_id: str, sink_name: str
+) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "nodes": [
@@ -206,9 +208,24 @@ def _tracking_pipeline_graph(*, source_id: str, detect_id: str, track_id: str, s
             {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
         ],
         "edges": [
-            {"from": {"node": source_id, "port": "out"}, "to": {"node": detect_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
-            {"from": {"node": detect_id, "port": "out"}, "to": {"node": track_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
-            {"from": {"node": track_id, "port": "out"}, "to": {"node": sink_id, "port": "in"}, "maxsize": 64, "drop_policy": "drop_oldest"},
+            {
+                "from": {"node": source_id, "port": "out"},
+                "to": {"node": detect_id, "port": "in"},
+                "maxsize": 1,
+                "drop_policy": "latest_only",
+            },
+            {
+                "from": {"node": detect_id, "port": "out"},
+                "to": {"node": track_id, "port": "in"},
+                "maxsize": 1,
+                "drop_policy": "latest_only",
+            },
+            {
+                "from": {"node": track_id, "port": "out"},
+                "to": {"node": sink_id, "port": "in"},
+                "maxsize": 64,
+                "drop_policy": "drop_oldest",
+            },
         ],
     }
 
@@ -254,20 +271,37 @@ def _tracking_pipeline_graph_with_shareable_transform(
             {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
         ],
         "edges": [
-            {"from": {"node": source_id, "port": "out"}, "to": {"node": detect_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
-            {"from": {"node": detect_id, "port": "out"}, "to": {"node": track_id, "port": "in"}, "maxsize": 1, "drop_policy": "latest_only"},
+            {
+                "from": {"node": source_id, "port": "out"},
+                "to": {"node": detect_id, "port": "in"},
+                "maxsize": 1,
+                "drop_policy": "latest_only",
+            },
+            {
+                "from": {"node": detect_id, "port": "out"},
+                "to": {"node": track_id, "port": "in"},
+                "maxsize": 1,
+                "drop_policy": "latest_only",
+            },
             {
                 "from": {"node": track_id, "port": "out"},
                 "to": {"node": transform_id, "port": "in"},
                 "maxsize": int(track_to_transform_maxsize),
                 "drop_policy": "drop_oldest",
             },
-            {"from": {"node": transform_id, "port": "out"}, "to": {"node": sink_id, "port": "in"}, "maxsize": 64, "drop_policy": "drop_oldest"},
+            {
+                "from": {"node": transform_id, "port": "out"},
+                "to": {"node": sink_id, "port": "in"},
+                "maxsize": 64,
+                "drop_policy": "drop_oldest",
+            },
         ],
     }
 
 
-def _build_detection_sequence(sequence: list[list[tuple[str, float, tuple[float, float, float, float]]]]) -> list[list[DetectionObject]]:
+def _build_detection_sequence(
+    sequence: list[list[tuple[str, float, tuple[float, float, float, float]]]],
+) -> list[list[DetectionObject]]:
     return [
         [
             DetectionObject(
@@ -320,7 +354,7 @@ def test_vision_track_splits_two_objects_and_closes_lifecycle() -> None:
             sink_id="sink",
             sink_name="tracking_sink",
         )
-        pipeline = Pipeline(name="stage5_tracking_split", type="final", graph=graph)
+        pipeline = Pipeline(name="stage5_tracking_split", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
         await runtime.run_for(0.6)
@@ -335,7 +369,8 @@ def test_vision_track_splits_two_objects_and_closes_lifecycle() -> None:
         grouped_by_tracking.pop("", None)
         assert len(grouped_by_tracking) == 2
         source_tracking_ids = {
-            str(items[0].payload.get("tracker_track_id") or "") for items in grouped_by_tracking.values()
+            str(items[0].payload.get("tracker_track_id") or "")
+            for items in grouped_by_tracking.values()
         }
         assert len(source_tracking_ids) == 2
         for tracking_id, tracking_packets in grouped_by_tracking.items():
@@ -344,7 +379,9 @@ def test_vision_track_splits_two_objects_and_closes_lifecycle() -> None:
             assert any(item.lifecycle == Lifecycle.CLOSE for item in tracking_packets), tracking_id
             stream_ids = {item.stream_id for item in tracking_packets}
             assert len(stream_ids) == 1
-            correlation_ids = {str(item.payload.get("correlation_id") or "") for item in tracking_packets}
+            correlation_ids = {
+                str(item.payload.get("correlation_id") or "") for item in tracking_packets
+            }
             assert len(correlation_ids) == 1
             assert all(item.payload.get("event_id") == tracking_id for item in tracking_packets)
 
@@ -385,7 +422,7 @@ def test_vision_track_matches_fast_non_overlapping_boxes() -> None:
             sink_id="sink",
             sink_name="tracking_sink",
         )
-        pipeline = Pipeline(name="stage5_tracking_non_overlap", type="final", graph=graph)
+        pipeline = Pipeline(name="stage5_tracking_non_overlap", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
         await runtime.run_for(0.35)
@@ -429,7 +466,6 @@ def test_vision_track_keeps_same_identity_across_a_short_gap() -> None:
         )
         pipeline = Pipeline(
             name="stage5_tracking_gap",
-            type="final",
             graph={
                 **graph,
                 "nodes": [
@@ -453,7 +489,11 @@ def test_vision_track_keeps_same_identity_across_a_short_gap() -> None:
         await runtime.run_for(0.35)
 
         packets = [record["packet"] for record in counters.get("packets", [])]
-        tracking_ids = [str(packet.payload.get("tracking_id") or "") for packet in packets if packet.payload.get("tracking_id")]
+        tracking_ids = [
+            str(packet.payload.get("tracking_id") or "")
+            for packet in packets
+            if packet.payload.get("tracking_id")
+        ]
         assert tracking_ids
         assert len(set(tracking_ids)) == 1
 
@@ -497,7 +537,11 @@ def test_vision_track_annotate_mode_passes_through_frames_with_tracks() -> None:
                     "operator": "vision.track",
                     "config": {"tracker_id": "simple_iou_kalman", "emit_mode": "annotate"},
                 },
-                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "tracking_sink"}},
+                {
+                    "id": "sink",
+                    "operator": "test.collect_sink",
+                    "config": {"sink_name": "tracking_sink"},
+                },
             ],
             "edges": [
                 {"from": {"node": "source", "port": "out"}, "to": {"node": "detect", "port": "in"}},
@@ -505,7 +549,7 @@ def test_vision_track_annotate_mode_passes_through_frames_with_tracks() -> None:
                 {"from": {"node": "track", "port": "out"}, "to": {"node": "sink", "port": "in"}},
             ],
         }
-        pipeline = Pipeline(name="stage5_tracking_annotate", type="final", graph=graph)
+        pipeline = Pipeline(name="stage5_tracking_annotate", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
         await runtime.run_for(0.25)
@@ -569,11 +613,13 @@ def test_bundle_runtime_shares_single_detect_and_track_across_two_final_pipeline
         )
         report = PipelineGraphCompiler(registry).compile_many(
             [
-                Pipeline(name="final_a", type="final", graph=graph_one),
-                Pipeline(name="final_b", type="final", graph=graph_two),
+                Pipeline(name="final_a", graph=graph_one),
+                Pipeline(name="final_b", graph=graph_two),
             ],
         )
-        bundle_runtime = PipelineBundleRuntime(report=report, registry=registry, dependencies=dependencies)
+        bundle_runtime = PipelineBundleRuntime(
+            report=report, registry=registry, dependencies=dependencies
+        )
         snapshot = await bundle_runtime.run_for(0.35)
 
         detect_node_count = sum(
@@ -602,7 +648,9 @@ def test_bundle_runtime_shares_single_detect_and_track_across_two_final_pipeline
     asyncio.run(scenario())
 
 
-def test_bundle_runtime_shares_detect_and_track_even_when_downstream_channel_policies_differ() -> None:
+def test_bundle_runtime_shares_detect_and_track_even_when_downstream_channel_policies_differ() -> (
+    None
+):
     async def scenario() -> None:
         counters: dict[str, Any] = {}
         registry = OperatorRegistry()
@@ -646,11 +694,13 @@ def test_bundle_runtime_shares_detect_and_track_even_when_downstream_channel_pol
         )
         report = PipelineGraphCompiler(registry).compile_many(
             [
-                Pipeline(name="final_a", type="final", graph=graph_one),
-                Pipeline(name="final_b", type="final", graph=graph_two),
+                Pipeline(name="final_a", graph=graph_one),
+                Pipeline(name="final_b", graph=graph_two),
             ],
         )
-        bundle_runtime = PipelineBundleRuntime(report=report, registry=registry, dependencies=dependencies)
+        bundle_runtime = PipelineBundleRuntime(
+            report=report, registry=registry, dependencies=dependencies
+        )
         snapshot = await bundle_runtime.run_for(0.35)
 
         detect_node_count = sum(

@@ -31,7 +31,10 @@ from ..streaming.camera_ingest import (
 )
 from ..streaming.mediamtx_binary import extract_mediamtx_binary, find_installed_mediamtx_binary
 from ..streaming.platform import detect_mediamtx_platform
-from ..streaming.mediamtx_processes import find_mediamtx_pids_for_config_path, kill_mediamtx_processes_for_config_path
+from ..streaming.mediamtx_processes import (
+    find_mediamtx_pids_for_config_path,
+    kill_mediamtx_processes_for_config_path,
+)
 from ..streaming.publisher_manager import PublisherManager
 from ..streaming.runtime_state import TransmissionRuntimeState
 from ..wizard import build_streaming_wizard_graph, suggested_streaming_wizard_pipeline_name
@@ -157,7 +160,9 @@ def _status_host(request: Request, settings: StreamingExtensionSettings) -> str:
 
 
 def _current_server_id(request: Request) -> str:
-    return normalize_server_id(getattr(request.app.state, "streaming_server_id", "local"), fallback="local")
+    return normalize_server_id(
+        getattr(request.app.state, "streaming_server_id", "local"), fallback="local"
+    )
 
 
 def _engine_orphan_pids(config_store: ConfigStore, *, current_pid: int | None = None) -> list[int]:
@@ -168,10 +173,7 @@ def _engine_orphan_pids(config_store: ConfigStore, *, current_pid: int | None = 
 
 async def _processing_servers_by_id(config_store: ConfigStore) -> dict[str, ProcessingServer]:
     servers = await config_store.list_processing_servers()
-    return {
-        normalize_server_id(server.id): server
-        for server in servers
-    }
+    return {normalize_server_id(server.id): server for server in servers}
 
 
 async def _validate_host_server_id(config_store: ConfigStore, host_server_id: str) -> str:
@@ -270,7 +272,9 @@ def _rewrite_url_host(url: str, *, host: str) -> str:
     netloc = target_host
     if parsed.port:
         netloc = f"{netloc}:{parsed.port}"
-    return urllib_parse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    return urllib_parse.urlunsplit(
+        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+    )
 
 
 async def _resolve_local_transmission_urls(
@@ -292,9 +296,17 @@ async def _resolve_local_transmission_urls(
     engine_status = await manager.get_status()
     host = _status_host(request, settings)
 
-    rtsp_port = engine_status.ports.rtsp if engine_status.running else settings.engine.preferred_ports.rtsp
-    hls_port = engine_status.ports.hls if engine_status.running else settings.engine.preferred_ports.hls
-    webrtc_port = engine_status.ports.webrtc if engine_status.running else settings.engine.preferred_ports.webrtc
+    rtsp_port = (
+        engine_status.ports.rtsp if engine_status.running else settings.engine.preferred_ports.rtsp
+    )
+    hls_port = (
+        engine_status.ports.hls if engine_status.running else settings.engine.preferred_ports.hls
+    )
+    webrtc_port = (
+        engine_status.ports.webrtc
+        if engine_status.running
+        else settings.engine.preferred_ports.webrtc
+    )
 
     warnings: list[str] = list(getattr(engine_status, "warnings", ()) or ())
     if not engine_status.running:
@@ -353,7 +365,9 @@ async def _resolve_remote_transmission_urls(
 
     base_url = str(server.url or "").strip().rstrip("/")
     if not base_url:
-        raise HTTPException(status_code=400, detail=f"host_server_id '{host_server_id}' has an empty URL.")
+        raise HTTPException(
+            status_code=400, detail=f"host_server_id '{host_server_id}' has an empty URL."
+        )
     host_override = _extract_hostname(base_url)
 
     transmission_id = urllib_parse.quote(transmission.id, safe="")
@@ -432,7 +446,9 @@ async def _load_settings(config_store: ConfigStore) -> StreamingExtensionSetting
     return StreamingExtensionSettings.model_validate(current)
 
 
-async def _save_settings(config_store: ConfigStore, settings: StreamingExtensionSettings) -> StreamingExtensionSettings:
+async def _save_settings(
+    config_store: ConfigStore, settings: StreamingExtensionSettings
+) -> StreamingExtensionSettings:
     dumped = settings.model_dump(mode="json")
     saved = await config_store.patch_extension_settings(EXTENSION_ID, dumped)
     return StreamingExtensionSettings.model_validate(normalize_streaming_settings(saved))
@@ -476,7 +492,9 @@ def _slugify(value: str) -> str:
     return out.strip("-")
 
 
-def _iter_enabled_outputs(transmission: Transmission) -> list[tuple[str, Literal["hls", "rtsp", "webrtc"], str]]:
+def _iter_enabled_outputs(
+    transmission: Transmission,
+) -> list[tuple[str, Literal["hls", "rtsp", "webrtc"], str]]:
     outputs: list[tuple[str, Literal["hls", "rtsp", "webrtc"], str]] = []
     enabled_outputs = [item for item in transmission.outputs if item.enabled]
     if not enabled_outputs:
@@ -551,13 +569,17 @@ def create_streaming_router() -> APIRouter:
 
         settings = await config_store.get_settings()
         raw_current = settings.extensions.get(EXTENSION_ID, None)
-        previous = StreamingExtensionSettings.model_validate(normalize_streaming_settings(raw_current))
+        previous = StreamingExtensionSettings.model_validate(
+            normalize_streaming_settings(raw_current)
+        )
         merged = apply_streaming_settings_patch(raw_current, patch)
         candidate = StreamingExtensionSettings.model_validate(normalize_streaming_settings(merged))
 
         validated_transmissions: list[Transmission] = []
         for transmission in candidate.transmissions:
-            normalized_host = await _validate_host_server_id_for_request(request, transmission.host_server_id)
+            normalized_host = await _validate_host_server_id_for_request(
+                request, transmission.host_server_id
+            )
             payload = transmission.model_dump(mode="python")
             payload["host_server_id"] = normalized_host
             validated_transmissions.append(Transmission.model_validate(payload))
@@ -578,8 +600,13 @@ def create_streaming_router() -> APIRouter:
                 ingest_settings=updated.camera_ingest,
             )
             ingest_paths = [item.path_slug for item in camera_ingest_by_id.values()]
-            engine_paths = list_engine_paths_for_host(updated, host_server_id=_current_server_id(request)) + ingest_paths
-            path_auth = list_path_read_auth_for_host(updated, host_server_id=_current_server_id(request))
+            engine_paths = (
+                list_engine_paths_for_host(updated, host_server_id=_current_server_id(request))
+                + ingest_paths
+            )
+            path_auth = list_path_read_auth_for_host(
+                updated, host_server_id=_current_server_id(request)
+            )
             path_configs = build_camera_ingest_path_configs(camera_ingest_by_id)
             if patch.engine is not None:
                 await manager.apply_settings(
@@ -597,7 +624,9 @@ def create_streaming_router() -> APIRouter:
                     path_configs=path_configs,
                 )
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to apply streaming settings: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to apply streaming settings: {exc}"
+            ) from exc
 
         return updated
 
@@ -689,7 +718,9 @@ def create_streaming_router() -> APIRouter:
                 version=settings.engine.mediamtx_version,
             )
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to download MediaMTX engine: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to download MediaMTX engine: {exc}"
+            ) from exc
 
         return await engine_status(request)
 
@@ -716,13 +747,19 @@ def create_streaming_router() -> APIRouter:
             )
             await manager.ensure_running(
                 settings.engine,
-                engine_paths=list_engine_paths_for_host(settings, host_server_id=_current_server_id(request))
+                engine_paths=list_engine_paths_for_host(
+                    settings, host_server_id=_current_server_id(request)
+                )
                 + [item.path_slug for item in camera_ingest_by_id.values()],
-                path_auth=list_path_read_auth_for_host(settings, host_server_id=_current_server_id(request)),
+                path_auth=list_path_read_auth_for_host(
+                    settings, host_server_id=_current_server_id(request)
+                ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to start streaming engine: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to start streaming engine: {exc}"
+            ) from exc
         return await engine_status(request)
 
     @router.post("/engine/stop", response_model=StreamingEngineStatusResponse)
@@ -743,7 +780,9 @@ def create_streaming_router() -> APIRouter:
         try:
             await manager.stop()
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to stop streaming engine: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to stop streaming engine: {exc}"
+            ) from exc
         return await engine_status(request)
 
     @router.post("/engine/restart", response_model=StreamingEngineStatusResponse)
@@ -765,13 +804,19 @@ def create_streaming_router() -> APIRouter:
             )
             await manager.restart(
                 settings.engine,
-                engine_paths=list_engine_paths_for_host(settings, host_server_id=_current_server_id(request))
+                engine_paths=list_engine_paths_for_host(
+                    settings, host_server_id=_current_server_id(request)
+                )
                 + [item.path_slug for item in camera_ingest_by_id.values()],
-                path_auth=list_path_read_auth_for_host(settings, host_server_id=_current_server_id(request)),
+                path_auth=list_path_read_auth_for_host(
+                    settings, host_server_id=_current_server_id(request)
+                ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to restart streaming engine: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to restart streaming engine: {exc}"
+            ) from exc
         return await engine_status(request)
 
     @router.post("/engine/reclaim", response_model=StreamingEngineStatusResponse)
@@ -790,10 +835,14 @@ def create_streaming_router() -> APIRouter:
         try:
             await manager.stop()
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to stop streaming engine: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to stop streaming engine: {exc}"
+            ) from exc
 
         config_path = config_store.paths.data_dir / "runtime" / "streaming" / "mediamtx.yml"
-        killed_pids = await asyncio.to_thread(kill_mediamtx_processes_for_config_path, str(config_path))
+        killed_pids = await asyncio.to_thread(
+            kill_mediamtx_processes_for_config_path, str(config_path)
+        )
         if killed_pids:
             # Allow sockets to be released before re-starting.
             await asyncio.sleep(0.4)
@@ -807,14 +856,20 @@ def create_streaming_router() -> APIRouter:
                 )
                 await manager.ensure_running(
                     settings.engine,
-                    engine_paths=list_engine_paths_for_host(settings, host_server_id=_current_server_id(request))
+                    engine_paths=list_engine_paths_for_host(
+                        settings, host_server_id=_current_server_id(request)
+                    )
                     + [item.path_slug for item in camera_ingest_by_id.values()],
-                    path_auth=list_path_read_auth_for_host(settings, host_server_id=_current_server_id(request)),
+                    path_auth=list_path_read_auth_for_host(
+                        settings, host_server_id=_current_server_id(request)
+                    ),
                     path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
                 )
             except Exception as exc:
                 suffix = f" (killed {len(killed_pids)} stale process(es))" if killed_pids else ""
-                raise HTTPException(status_code=500, detail=f"Failed to reclaim streaming engine: {exc}{suffix}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Failed to reclaim streaming engine: {exc}{suffix}"
+                ) from exc
 
         payload = await engine_status(request)
         if killed_pids:
@@ -829,7 +884,9 @@ def create_streaming_router() -> APIRouter:
         return list(settings.transmissions)
 
     @router.post("/transmissions", response_model=Transmission)
-    async def create_transmission(request: Request, body: TransmissionCreateRequest) -> Transmission:
+    async def create_transmission(
+        request: Request, body: TransmissionCreateRequest
+    ) -> Transmission:
         _require_auth(
             request,
             action="core:extension:settings:write",
@@ -852,7 +909,10 @@ def create_streaming_router() -> APIRouter:
         )
 
         next_settings = StreamingExtensionSettings.model_validate(
-            {**settings.model_dump(mode="python"), "transmissions": [created, *settings.transmissions]}
+            {
+                **settings.model_dump(mode="python"),
+                "transmissions": [created, *settings.transmissions],
+            }
         )
         saved = await _save_settings(config_store, next_settings)
 
@@ -865,18 +925,26 @@ def create_streaming_router() -> APIRouter:
             )
             await manager.ensure_running(
                 saved.engine,
-                engine_paths=list_engine_paths_for_host(saved, host_server_id=_current_server_id(request))
+                engine_paths=list_engine_paths_for_host(
+                    saved, host_server_id=_current_server_id(request)
+                )
                 + [item.path_slug for item in camera_ingest_by_id.values()],
-                path_auth=list_path_read_auth_for_host(saved, host_server_id=_current_server_id(request)),
+                path_auth=list_path_read_auth_for_host(
+                    saved, host_server_id=_current_server_id(request)
+                ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to apply streaming settings: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to apply streaming settings: {exc}"
+            ) from exc
 
         return created
 
     @router.put("/transmissions/{transmission_id}", response_model=Transmission)
-    async def update_transmission(request: Request, transmission_id: str, body: Transmission) -> Transmission:
+    async def update_transmission(
+        request: Request, transmission_id: str, body: Transmission
+    ) -> Transmission:
         _require_auth(
             request,
             action="core:extension:settings:write",
@@ -897,12 +965,16 @@ def create_streaming_router() -> APIRouter:
         payload["id"] = transmission_id
         payload["created_at"] = existing.created_at
         payload["updated_at"] = existing.updated_at
-        payload["host_server_id"] = await _validate_host_server_id_for_request(request, body.host_server_id)
+        payload["host_server_id"] = await _validate_host_server_id_for_request(
+            request, body.host_server_id
+        )
         # Update updated_at on the server for consistency.
         payload["updated_at"] = datetime.now(timezone.utc)
         updated = Transmission.model_validate(payload)
 
-        next_transmissions = [updated if t.id == transmission_id else t for t in settings.transmissions]
+        next_transmissions = [
+            updated if t.id == transmission_id else t for t in settings.transmissions
+        ]
         next_settings = StreamingExtensionSettings.model_validate(
             {**settings.model_dump(mode="python"), "transmissions": next_transmissions}
         )
@@ -917,13 +989,19 @@ def create_streaming_router() -> APIRouter:
             )
             await manager.ensure_running(
                 saved.engine,
-                engine_paths=list_engine_paths_for_host(saved, host_server_id=_current_server_id(request))
+                engine_paths=list_engine_paths_for_host(
+                    saved, host_server_id=_current_server_id(request)
+                )
                 + [item.path_slug for item in camera_ingest_by_id.values()],
-                path_auth=list_path_read_auth_for_host(saved, host_server_id=_current_server_id(request)),
+                path_auth=list_path_read_auth_for_host(
+                    saved, host_server_id=_current_server_id(request)
+                ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to apply streaming settings: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to apply streaming settings: {exc}"
+            ) from exc
 
         return updated
 
@@ -956,20 +1034,28 @@ def create_streaming_router() -> APIRouter:
             )
             await manager.ensure_running(
                 saved.engine,
-                engine_paths=list_engine_paths_for_host(saved, host_server_id=_current_server_id(request))
+                engine_paths=list_engine_paths_for_host(
+                    saved, host_server_id=_current_server_id(request)
+                )
                 + [item.path_slug for item in camera_ingest_by_id.values()],
-                path_auth=list_path_read_auth_for_host(saved, host_server_id=_current_server_id(request)),
+                path_auth=list_path_read_auth_for_host(
+                    saved, host_server_id=_current_server_id(request)
+                ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to apply streaming settings: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to apply streaming settings: {exc}"
+            ) from exc
 
         return {"deleted": True}
 
     def _services(request: Request) -> ServiceRegistry:
         registry = getattr(request.app.state, "services", None)
         if not isinstance(registry, ServiceRegistry):
-            raise HTTPException(status_code=500, detail="Toposync services registry is not available")
+            raise HTTPException(
+                status_code=500, detail="Toposync services registry is not available"
+            )
         return registry
 
     async def _require_transmission_camera_controls(
@@ -984,23 +1070,40 @@ def create_streaming_router() -> APIRouter:
 
         controls = getattr(transmission, "camera_controls", None)
         enabled = bool(getattr(controls, "enabled", False)) if controls is not None else False
-        camera_id = str(getattr(controls, "camera_id", "") or "").strip() if controls is not None else ""
+        camera_id = (
+            str(getattr(controls, "camera_id", "") or "").strip() if controls is not None else ""
+        )
         if not enabled:
-            raise HTTPException(status_code=409, detail="Camera controls are not enabled for this transmission")
+            raise HTTPException(
+                status_code=409, detail="Camera controls are not enabled for this transmission"
+            )
         if not camera_id:
-            raise HTTPException(status_code=500, detail="Transmission camera controls are misconfigured (missing camera_id)")
+            raise HTTPException(
+                status_code=500,
+                detail="Transmission camera controls are misconfigured (missing camera_id)",
+            )
         return transmission, camera_id
 
-    @router.get("/transmissions/{transmission_id}/camera/presets", response_model=TransmissionCameraPresetsResponse)
-    async def transmission_camera_presets(request: Request, transmission_id: str) -> TransmissionCameraPresetsResponse:
+    @router.get(
+        "/transmissions/{transmission_id}/camera/presets",
+        response_model=TransmissionCameraPresetsResponse,
+    )
+    async def transmission_camera_presets(
+        request: Request, transmission_id: str
+    ) -> TransmissionCameraPresetsResponse:
         _require_auth(request, action="core:settings:read")
-        _transmission, camera_id = await _require_transmission_camera_controls(request, transmission_id=transmission_id)
+        _transmission, camera_id = await _require_transmission_camera_controls(
+            request, transmission_id=transmission_id
+        )
 
         services = _services(request)
         try:
             raw_presets = await services.call("cameras.ptz.list_presets", camera_id=camera_id)
         except KeyError:
-            raise HTTPException(status_code=503, detail="Camera controls are not available (cameras extension not loaded)") from None
+            raise HTTPException(
+                status_code=503,
+                detail="Camera controls are not available (cameras extension not loaded)",
+            ) from None
 
         presets: list[CameraPtzPreset] = []
         if isinstance(raw_presets, list):
@@ -1018,33 +1121,53 @@ def create_streaming_router() -> APIRouter:
             presets=presets,
         )
 
-    @router.post("/transmissions/{transmission_id}/camera/goto-preset", response_model=TransmissionCameraActionResponse)
+    @router.post(
+        "/transmissions/{transmission_id}/camera/goto-preset",
+        response_model=TransmissionCameraActionResponse,
+    )
     async def transmission_camera_goto_preset(
         request: Request,
         transmission_id: str,
         body: TransmissionCameraGotoPresetRequest,
     ) -> TransmissionCameraActionResponse:
         _require_auth(request, action="core:settings:read")
-        _transmission, camera_id = await _require_transmission_camera_controls(request, transmission_id=transmission_id)
+        _transmission, camera_id = await _require_transmission_camera_controls(
+            request, transmission_id=transmission_id
+        )
 
         services = _services(request)
         try:
-            await services.call("cameras.ptz.goto_preset", camera_id=camera_id, preset_token=body.preset_token)
+            await services.call(
+                "cameras.ptz.goto_preset", camera_id=camera_id, preset_token=body.preset_token
+            )
         except KeyError:
-            raise HTTPException(status_code=503, detail="Camera controls are not available (cameras extension not loaded)") from None
+            raise HTTPException(
+                status_code=503,
+                detail="Camera controls are not available (cameras extension not loaded)",
+            ) from None
 
         return TransmissionCameraActionResponse(ok=True)
 
-    @router.get("/transmissions/{transmission_id}/camera/status", response_model=TransmissionCameraStatusResponse)
-    async def transmission_camera_status(request: Request, transmission_id: str) -> TransmissionCameraStatusResponse:
+    @router.get(
+        "/transmissions/{transmission_id}/camera/status",
+        response_model=TransmissionCameraStatusResponse,
+    )
+    async def transmission_camera_status(
+        request: Request, transmission_id: str
+    ) -> TransmissionCameraStatusResponse:
         _require_auth(request, action="core:settings:read")
-        _transmission, camera_id = await _require_transmission_camera_controls(request, transmission_id=transmission_id)
+        _transmission, camera_id = await _require_transmission_camera_controls(
+            request, transmission_id=transmission_id
+        )
 
         services = _services(request)
         try:
             raw_status = await services.call("cameras.ptz.get_status", camera_id=camera_id)
         except KeyError:
-            raise HTTPException(status_code=503, detail="Camera controls are not available (cameras extension not loaded)") from None
+            raise HTTPException(
+                status_code=503,
+                detail="Camera controls are not available (cameras extension not loaded)",
+            ) from None
 
         status = CameraPtzStatus.model_validate(raw_status if isinstance(raw_status, dict) else {})
         return TransmissionCameraStatusResponse(
@@ -1053,14 +1176,19 @@ def create_streaming_router() -> APIRouter:
             status=status,
         )
 
-    @router.post("/transmissions/{transmission_id}/camera/move", response_model=TransmissionCameraActionResponse)
+    @router.post(
+        "/transmissions/{transmission_id}/camera/move",
+        response_model=TransmissionCameraActionResponse,
+    )
     async def transmission_camera_move(
         request: Request,
         transmission_id: str,
         body: TransmissionCameraMoveRequest,
     ) -> TransmissionCameraActionResponse:
         _require_auth(request, action="core:settings:read")
-        _transmission, camera_id = await _require_transmission_camera_controls(request, transmission_id=transmission_id)
+        _transmission, camera_id = await _require_transmission_camera_controls(
+            request, transmission_id=transmission_id
+        )
 
         services = _services(request)
         try:
@@ -1073,18 +1201,26 @@ def create_streaming_router() -> APIRouter:
                 timeout_s=body.timeout_s,
             )
         except KeyError:
-            raise HTTPException(status_code=503, detail="Camera controls are not available (cameras extension not loaded)") from None
+            raise HTTPException(
+                status_code=503,
+                detail="Camera controls are not available (cameras extension not loaded)",
+            ) from None
 
         return TransmissionCameraActionResponse(ok=True)
 
-    @router.post("/transmissions/{transmission_id}/camera/stop", response_model=TransmissionCameraActionResponse)
+    @router.post(
+        "/transmissions/{transmission_id}/camera/stop",
+        response_model=TransmissionCameraActionResponse,
+    )
     async def transmission_camera_stop(
         request: Request,
         transmission_id: str,
         body: TransmissionCameraStopRequest,
     ) -> TransmissionCameraActionResponse:
         _require_auth(request, action="core:settings:read")
-        _transmission, camera_id = await _require_transmission_camera_controls(request, transmission_id=transmission_id)
+        _transmission, camera_id = await _require_transmission_camera_controls(
+            request, transmission_id=transmission_id
+        )
 
         services = _services(request)
         try:
@@ -1095,7 +1231,10 @@ def create_streaming_router() -> APIRouter:
                 zoom=bool(body.zoom),
             )
         except KeyError:
-            raise HTTPException(status_code=503, detail="Camera controls are not available (cameras extension not loaded)") from None
+            raise HTTPException(
+                status_code=503,
+                detail="Camera controls are not available (cameras extension not loaded)",
+            ) from None
 
         return TransmissionCameraActionResponse(ok=True)
 
@@ -1108,24 +1247,33 @@ def create_streaming_router() -> APIRouter:
         config_store = _config_store(request)
         streaming_settings = await _load_settings(config_store)
 
-        transmission = next((item for item in streaming_settings.transmissions if item.id == body.transmission_id), None)
+        transmission = next(
+            (item for item in streaming_settings.transmissions if item.id == body.transmission_id),
+            None,
+        )
         if transmission is None:
             raise HTTPException(status_code=404, detail="Transmission not found")
 
         app_settings = await config_store.get_settings()
-        resolved_camera_id = _resolve_camera_id_from_settings(app_settings, camera_selector=body.camera_id)
+        resolved_camera_id = _resolve_camera_id_from_settings(
+            app_settings, camera_selector=body.camera_id
+        )
         if not resolved_camera_id:
             raise HTTPException(status_code=404, detail="Camera not found")
 
         optional = body.optional_parameters
-        optional_payload = optional.model_dump(mode="python", exclude_none=True) if optional is not None else {}
+        optional_payload = (
+            optional.model_dump(mode="python", exclude_none=True) if optional is not None else {}
+        )
 
         existing_names = {pipeline.name for pipeline in await config_store.list_pipelines()}
         requested_name = str(optional_payload.get("pipeline_name") or "").strip()
         if requested_name:
             pipeline_name = _safe_pipeline_name(requested_name)
             if pipeline_name in existing_names:
-                raise HTTPException(status_code=409, detail=f"Pipeline already exists: {pipeline_name}")
+                raise HTTPException(
+                    status_code=409, detail=f"Pipeline already exists: {pipeline_name}"
+                )
         else:
             suggested = suggested_streaming_wizard_pipeline_name(
                 transmission_id=transmission.id,
@@ -1149,8 +1297,12 @@ def create_streaming_router() -> APIRouter:
             optional.processing_server_id if optional is not None else "local",
             fallback="local",
         )
-        processing_server_id = await _validate_host_server_id_for_request(request, processing_server_id)
-        transmission_host_server_id = normalize_server_id(transmission.host_server_id, fallback="local")
+        processing_server_id = await _validate_host_server_id_for_request(
+            request, processing_server_id
+        )
+        transmission_host_server_id = normalize_server_id(
+            transmission.host_server_id, fallback="local"
+        )
         if transmission_host_server_id != processing_server_id:
             raise HTTPException(
                 status_code=400,
@@ -1162,7 +1314,6 @@ def create_streaming_router() -> APIRouter:
 
         pipeline = Pipeline(
             name=pipeline_name,
-            type="final",
             enabled=enabled,
             processing_server_id=processing_server_id,
             editor_mode="interactive",
@@ -1181,7 +1332,9 @@ def create_streaming_router() -> APIRouter:
         try:
             await config_store.create_pipeline(pipeline)
         except PipelineAlreadyExistsError:
-            raise HTTPException(status_code=409, detail=f"Pipeline already exists: {pipeline_name}") from None
+            raise HTTPException(
+                status_code=409, detail=f"Pipeline already exists: {pipeline_name}"
+            ) from None
         except PipelineValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1200,7 +1353,9 @@ def create_streaming_router() -> APIRouter:
             engine_status = await manager.get_status()
             local_engine_running = bool(engine_status.running)
             if not engine_status.running:
-                warnings.append("Streaming engine is not running. Start the engine to publish this pipeline.")
+                warnings.append(
+                    "Streaming engine is not running. Start the engine to publish this pipeline."
+                )
         else:
             warnings.append(
                 "Pipeline is assigned to a remote processing server. "
@@ -1223,11 +1378,15 @@ def create_streaming_router() -> APIRouter:
         _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
-        transmission = next((item for item in settings.transmissions if item.id == transmission_id), None)
+        transmission = next(
+            (item for item in settings.transmissions if item.id == transmission_id), None
+        )
         if transmission is None:
             raise HTTPException(status_code=404, detail="Transmission not found")
 
-        transmission_host_server_id = normalize_server_id(transmission.host_server_id, fallback="local")
+        transmission_host_server_id = normalize_server_id(
+            transmission.host_server_id, fallback="local"
+        )
         current_server_id = _current_server_id(request)
         if transmission_host_server_id == current_server_id:
             return await _resolve_local_transmission_urls(
@@ -1240,16 +1399,24 @@ def create_streaming_router() -> APIRouter:
             transmission=transmission,
         )
 
-    @router.get("/internal/transmissions/{transmission_id}/urls", response_model=TransmissionUrlsResponse)
-    async def transmission_urls_internal(request: Request, transmission_id: str) -> TransmissionUrlsResponse:
+    @router.get(
+        "/internal/transmissions/{transmission_id}/urls", response_model=TransmissionUrlsResponse
+    )
+    async def transmission_urls_internal(
+        request: Request, transmission_id: str
+    ) -> TransmissionUrlsResponse:
         _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
-        transmission = next((item for item in settings.transmissions if item.id == transmission_id), None)
+        transmission = next(
+            (item for item in settings.transmissions if item.id == transmission_id), None
+        )
         if transmission is None:
             raise HTTPException(status_code=404, detail="Transmission not found")
 
-        transmission_host_server_id = normalize_server_id(transmission.host_server_id, fallback="local")
+        transmission_host_server_id = normalize_server_id(
+            transmission.host_server_id, fallback="local"
+        )
         current_server_id = _current_server_id(request)
         if transmission_host_server_id != current_server_id:
             raise HTTPException(
@@ -1290,7 +1457,10 @@ def create_streaming_router() -> APIRouter:
 
         outputs: list[StreamingOutputRuntimeStatus] = []
         for transmission in settings.transmissions:
-            if normalize_server_id(transmission.host_server_id, fallback="local") != current_server_id:
+            if (
+                normalize_server_id(transmission.host_server_id, fallback="local")
+                != current_server_id
+            ):
                 continue
             for output_id, protocol, resolved_engine_path in _iter_enabled_outputs(transmission):
                 output_key = build_transmission_output_key(
@@ -1314,8 +1484,12 @@ def create_streaming_router() -> APIRouter:
                         publisher_frames_sent=int(getattr(publisher_status, "frames_sent", 0) or 0),
                         publisher_last_error=getattr(publisher_status, "last_error", None),
                         publisher_active_codec=getattr(publisher_status, "active_codec", None),
-                        publisher_hardware_accelerated=bool(getattr(publisher_status, "hardware_accelerated", False)),
-                        publisher_restart_count=int(getattr(publisher_status, "restart_count", 0) or 0),
+                        publisher_hardware_accelerated=bool(
+                            getattr(publisher_status, "hardware_accelerated", False)
+                        ),
+                        publisher_restart_count=int(
+                            getattr(publisher_status, "restart_count", 0) or 0
+                        ),
                     )
                 )
 
@@ -1350,12 +1524,18 @@ def create_streaming_router() -> APIRouter:
             "bridge": bridge_snapshot,
         }
 
-    @router.get("/transmissions/{transmission_id}/demand", response_model=TransmissionDemandResponse)
-    async def transmission_demand(request: Request, transmission_id: str) -> TransmissionDemandResponse:
+    @router.get(
+        "/transmissions/{transmission_id}/demand", response_model=TransmissionDemandResponse
+    )
+    async def transmission_demand(
+        request: Request, transmission_id: str
+    ) -> TransmissionDemandResponse:
         _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
-        transmission = next((item for item in settings.transmissions if item.id == transmission_id), None)
+        transmission = next(
+            (item for item in settings.transmissions if item.id == transmission_id), None
+        )
         if transmission is None:
             raise HTTPException(status_code=404, detail="Transmission not found")
 
@@ -1392,11 +1572,15 @@ def create_streaming_router() -> APIRouter:
         _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
-        transmission = next((item for item in settings.transmissions if item.id == transmission_id), None)
+        transmission = next(
+            (item for item in settings.transmissions if item.id == transmission_id), None
+        )
         if transmission is None:
             raise HTTPException(status_code=404, detail="Transmission not found")
 
-        if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(request):
+        if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(
+            request
+        ):
             return {
                 "transmission_id": transmission_id,
                 "primed": False,
@@ -1416,7 +1600,9 @@ def create_streaming_router() -> APIRouter:
         try:
             primed_outputs = int(await prime_demand(transmission_id))
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to prime streaming demand: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to prime streaming demand: {exc}"
+            ) from exc
         return {
             "transmission_id": transmission_id,
             "primed": primed_outputs > 0,

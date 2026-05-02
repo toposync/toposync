@@ -88,17 +88,35 @@ def test_category_gate_is_lifecycle_safe() -> None:
                 {
                     "id": "source",
                     "operator": "core.demo_frame_sequence_source",
-                    "config": {"frames": 4, "interval_seconds": 0.0, "object_category_label": "person"},
+                    "config": {
+                        "frames": 4,
+                        "interval_seconds": 0.0,
+                        "object_category_label": "person",
+                    },
                 },
-                {"id": "gate", "operator": "core.category_gate", "config": {"mode": mode, "categories": categories}},
+                {
+                    "id": "gate",
+                    "operator": "core.category_gate",
+                    "config": {"mode": mode, "categories": categories},
+                },
                 {"id": "sink", "operator": "test.collect_sink", "config": {}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "gate", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
-                {"from": {"node": "gate", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "gate", "port": "in"},
+                    "maxsize": 32,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "gate", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 32,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
-        pipeline = Pipeline(name="category_gate_test", type="final", graph=graph)
+        pipeline = Pipeline(name="category_gate_test", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         await runtime.run_for(0.25)
@@ -149,7 +167,11 @@ def test_schedule_gate_pauses_camera_source(monkeypatch: pytest.MonkeyPatch) -> 
             "schema_version": 1,
             "nodes": [
                 {"id": "gate", "operator": "core.schedule_gate", "config": gate_config},
-                {"id": "camera", "operator": "camera.source", "config": {"rtsp_url": "rtsp://example", "fps": 5.0}},
+                {
+                    "id": "camera",
+                    "operator": "camera.source",
+                    "config": {"rtsp_url": "rtsp://example", "fps": 5.0},
+                },
                 {"id": "sink", "operator": "core.sink", "config": {}},
             ],
             "edges": [
@@ -157,7 +179,7 @@ def test_schedule_gate_pauses_camera_source(monkeypatch: pytest.MonkeyPatch) -> 
                 {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"}},
             ],
         }
-        pipeline = Pipeline(name="schedule_gate_pause_camera", type="final", graph=graph)
+        pipeline = Pipeline(name="schedule_gate_pause_camera", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         await runtime.run_for(0.35)
@@ -172,14 +194,18 @@ def test_schedule_gate_pauses_camera_source(monkeypatch: pytest.MonkeyPatch) -> 
     assert stop_calls == 1
 
 
-def test_camera_hub_aggregates_demand_across_pipelines_with_different_schedules(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_camera_hub_aggregates_demand_across_pipelines_with_different_schedules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import toposync_ext_cameras.pipelines.operators as camera_ops
 
     class _FakeFrameGrabber:
         start_calls = 0
         stop_calls = 0
 
-        def __init__(self, rtsp_url: str, *, target_fps: float = 15.0, backend: str = "auto", **_kwargs: Any) -> None:
+        def __init__(
+            self, rtsp_url: str, *, target_fps: float = 15.0, backend: str = "auto", **_kwargs: Any
+        ) -> None:
             self.rtsp_url = rtsp_url
             self.target_fps = float(target_fps)
             self.backend = str(backend)
@@ -211,7 +237,11 @@ def test_camera_hub_aggregates_demand_across_pipelines_with_different_schedules(
             "schema_version": 1,
             "nodes": [
                 {"id": "gate", "operator": "core.schedule_gate", "config": {"enabled": False}},
-                {"id": "camera", "operator": "camera.source", "config": {"rtsp_url": "rtsp://example", "fps": 5.0}},
+                {
+                    "id": "camera",
+                    "operator": "camera.source",
+                    "config": {"rtsp_url": "rtsp://example", "fps": 5.0},
+                },
                 {"id": "sink", "operator": "core.sink", "config": {}},
             ],
             "edges": [
@@ -224,7 +254,11 @@ def test_camera_hub_aggregates_demand_across_pipelines_with_different_schedules(
             "nodes": [
                 # Enabled=true with default 24h window keeps the gate open, but differs from graph_a config.
                 {"id": "gate", "operator": "core.schedule_gate", "config": {}},
-                {"id": "camera", "operator": "camera.source", "config": {"rtsp_url": "rtsp://example", "fps": 5.0}},
+                {
+                    "id": "camera",
+                    "operator": "camera.source",
+                    "config": {"rtsp_url": "rtsp://example", "fps": 5.0},
+                },
                 {"id": "sink", "operator": "core.sink", "config": {}},
             ],
             "edges": [
@@ -235,8 +269,8 @@ def test_camera_hub_aggregates_demand_across_pipelines_with_different_schedules(
 
         report = PipelineGraphCompiler(registry).compile_many(
             [
-                Pipeline(name="final_a", type="final", graph=graph_a),
-                Pipeline(name="final_b", type="final", graph=graph_b),
+                Pipeline(name="final_a", graph=graph_a),
+                Pipeline(name="final_b", graph=graph_b),
             ],
         )
         runtime = PipelineBundleRuntime(report=report, registry=registry)
@@ -251,4 +285,7 @@ def test_camera_hub_aggregates_demand_across_pipelines_with_different_schedules(
     shared_nodes = snapshot.get("shared_nodes") or {}
     for occurrences in shared_nodes.values():
         occurrence_set = {(item.get("pipeline_name"), item.get("node_id")) for item in occurrences}
-        assert ("final_a", "camera") not in occurrence_set or ("final_b", "camera") not in occurrence_set
+        assert ("final_a", "camera") not in occurrence_set or (
+            "final_b",
+            "camera",
+        ) not in occurrence_set

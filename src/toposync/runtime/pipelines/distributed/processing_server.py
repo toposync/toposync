@@ -202,13 +202,15 @@ class ProcessingServerRuntime:
 
     def apply_config(self, payload: dict[str, Any]) -> None:
         parsed = ProcessingConfig.model_validate(payload)
-        desired = [p for p in parsed.pipelines if p.type == "final"]
+        desired = [p for p in parsed.pipelines if getattr(p, "enabled", True) is not False]
         self._reconcile(desired)
 
     def _reconcile(self, desired: list[Pipeline]) -> None:
         active = self._active
         if active is not None:
-            existing_sig = json.dumps([p.model_dump(mode="json") for p in active.pipelines], sort_keys=True)
+            existing_sig = json.dumps(
+                [p.model_dump(mode="json") for p in active.pipelines], sort_keys=True
+            )
         else:
             existing_sig = ""
         desired_sig = json.dumps([p.model_dump(mode="json") for p in desired], sort_keys=True)
@@ -233,7 +235,6 @@ class ProcessingServerRuntime:
             processing_pipelines.append(
                 Pipeline(
                     name=f"{pipeline.name}__processing",
-                    type="final",
                     graph=graphs.processing_graph,
                 ),
             )
@@ -242,6 +243,7 @@ class ProcessingServerRuntime:
             return
 
         report = self._compiler.compile_many(processing_pipelines)
+
         def _env_int(name: str, default: int) -> int:
             raw = str(os.getenv(name) or "").strip()
             if not raw:
@@ -251,11 +253,19 @@ class ProcessingServerRuntime:
             except Exception:
                 return int(default)
 
-        artifact_max_bytes_per_packet = _env_int("TOPOSYNC_ARTIFACT_MAX_BYTES_PER_PACKET", 128 * 1024 * 1024)
-        artifact_max_total_bytes_per_pipeline = _env_int("TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_PER_PIPELINE", 512 * 1024 * 1024)
-        artifact_max_total_bytes_global = _env_int("TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_GLOBAL", 1024 * 1024 * 1024)
+        artifact_max_bytes_per_packet = _env_int(
+            "TOPOSYNC_ARTIFACT_MAX_BYTES_PER_PACKET", 128 * 1024 * 1024
+        )
+        artifact_max_total_bytes_per_pipeline = _env_int(
+            "TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_PER_PIPELINE", 512 * 1024 * 1024
+        )
+        artifact_max_total_bytes_global = _env_int(
+            "TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_GLOBAL", 1024 * 1024 * 1024
+        )
         artifact_global_counter = (
-            ArtifactMemoryCounter(limit_bytes=artifact_max_total_bytes_global) if artifact_max_total_bytes_global > 0 else None
+            ArtifactMemoryCounter(limit_bytes=artifact_max_total_bytes_global)
+            if artifact_max_total_bytes_global > 0
+            else None
         )
         deps = PipelineRuntimeDependencies(
             config_store=self._config_store,
@@ -270,7 +280,12 @@ class ProcessingServerRuntime:
             artifact_max_total_bytes_per_pipeline=artifact_max_total_bytes_per_pipeline,
             artifact_global_counter=artifact_global_counter,
         )
-        bundle = PipelineBundleRuntime(report=report, registry=self._registry, dependencies=deps, bundle_name="processing_bundle")
+        bundle = PipelineBundleRuntime(
+            report=report,
+            registry=self._registry,
+            dependencies=deps,
+            bundle_name="processing_bundle",
+        )
         await bundle.start()
         self._active = _ActiveBundle(runtime=bundle, pipelines=list(desired))
 
@@ -377,10 +392,14 @@ def create_processing_app() -> FastAPI:
             except Exception:
                 decoded = ""
             provided_user, _, provided_pass = decoded.partition(":")
-            if hmac.compare_digest(provided_user, expected_user) and hmac.compare_digest(provided_pass, expected_pass):
+            if hmac.compare_digest(provided_user, expected_user) and hmac.compare_digest(
+                provided_pass, expected_pass
+            ):
                 return await call_next(request)
 
-        return Response(status_code=401, headers={"WWW-Authenticate": "Basic"}, content="Unauthorized")
+        return Response(
+            status_code=401, headers={"WWW-Authenticate": "Basic"}, content="Unauthorized"
+        )
 
     @app.on_event("startup")
     async def _startup() -> None:
@@ -430,17 +449,25 @@ def create_processing_app() -> FastAPI:
     async def get_processing_status() -> dict[str, Any]:
         status = runtime.status()
         try:
-            status.update(await collect_processing_server_diagnostics(data_dir=str(config_store.paths.data_dir)))
+            status.update(
+                await collect_processing_server_diagnostics(
+                    data_dir=str(config_store.paths.data_dir)
+                )
+            )
         except Exception:
             pass
         return status
 
     @app.post("/api/processing/vision/manifests/import")
-    async def import_processing_vision_manifest(body: ProcessingVisionManifestImportRequest) -> dict[str, Any]:
+    async def import_processing_vision_manifest(
+        body: ProcessingVisionManifestImportRequest,
+    ) -> dict[str, Any]:
         try:
             from toposync_ext_vision.registry import ModelRegistryError, import_custom_manifest
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Vision extension unavailable: {exc}"
+            ) from exc
 
         try:
             return import_custom_manifest(
@@ -462,7 +489,9 @@ def create_processing_app() -> FastAPI:
             from toposync_ext_vision.registry.custom_onnx import stage_custom_onnx_upload
             from toposync_ext_vision.registry.manifests import ModelRegistryError
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Vision extension unavailable: {exc}"
+            ) from exc
 
         try:
             result = await asyncio.to_thread(
@@ -486,12 +515,16 @@ def create_processing_app() -> FastAPI:
             from toposync_ext_vision.registry.custom_onnx import preview_custom_onnx_model
             from toposync_ext_vision.registry.manifests import ModelRegistryError
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Vision extension unavailable: {exc}"
+            ) from exc
 
         try:
             body = ProcessingVisionCustomOnnxRequest.model_validate_json(config_json or "{}")
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"Invalid custom ONNX preview config: {exc}") from exc
+            raise HTTPException(
+                status_code=400, detail=f"Invalid custom ONNX preview config: {exc}"
+            ) from exc
 
         try:
             image_bytes = await image.read()
@@ -527,12 +560,16 @@ def create_processing_app() -> FastAPI:
         return dict(result or {})
 
     @app.post("/api/processing/vision/custom-onnx/import")
-    async def import_processing_custom_onnx(body: ProcessingVisionCustomOnnxRequest) -> dict[str, Any]:
+    async def import_processing_custom_onnx(
+        body: ProcessingVisionCustomOnnxRequest,
+    ) -> dict[str, Any]:
         try:
             from toposync_ext_vision.registry.custom_onnx import import_custom_onnx_model
             from toposync_ext_vision.registry.manifests import ModelRegistryError
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Vision extension unavailable: {exc}"
+            ) from exc
 
         try:
             result = await asyncio.to_thread(
@@ -567,12 +604,16 @@ def create_processing_app() -> FastAPI:
         return dict(result or {})
 
     @app.post("/api/processing/vision/huggingface/probe")
-    async def probe_processing_huggingface(body: ProcessingVisionHuggingFaceProbeRequest) -> dict[str, Any]:
+    async def probe_processing_huggingface(
+        body: ProcessingVisionHuggingFaceProbeRequest,
+    ) -> dict[str, Any]:
         try:
             from toposync_ext_vision.registry.huggingface import probe_huggingface_repo
             from toposync_ext_vision.registry.manifests import ModelRegistryError
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Vision extension unavailable: {exc}"
+            ) from exc
 
         try:
             result = await asyncio.to_thread(
@@ -585,12 +626,16 @@ def create_processing_app() -> FastAPI:
         return dict(result or {})
 
     @app.post("/api/processing/vision/huggingface/inspect")
-    async def inspect_processing_huggingface(body: ProcessingVisionHuggingFaceInspectRequest) -> dict[str, Any]:
+    async def inspect_processing_huggingface(
+        body: ProcessingVisionHuggingFaceInspectRequest,
+    ) -> dict[str, Any]:
         try:
             from toposync_ext_vision.registry.huggingface import inspect_huggingface_onnx
             from toposync_ext_vision.registry.manifests import ModelRegistryError
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Vision extension unavailable: {exc}"
+            ) from exc
 
         try:
             result = await asyncio.to_thread(
@@ -606,12 +651,16 @@ def create_processing_app() -> FastAPI:
         return dict(result or {})
 
     @app.post("/api/processing/vision/huggingface/export")
-    async def export_processing_huggingface(body: ProcessingVisionHuggingFaceExportRequest) -> dict[str, Any]:
+    async def export_processing_huggingface(
+        body: ProcessingVisionHuggingFaceExportRequest,
+    ) -> dict[str, Any]:
         try:
             from toposync_ext_vision.registry.huggingface import export_huggingface_model
             from toposync_ext_vision.registry.manifests import ModelRegistryError
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Vision extension unavailable: {exc}"
+            ) from exc
 
         try:
             result = await asyncio.to_thread(
@@ -628,12 +677,16 @@ def create_processing_app() -> FastAPI:
         return dict(result or {})
 
     @app.post("/api/processing/vision/huggingface/import")
-    async def import_processing_huggingface(body: ProcessingVisionHuggingFaceImportRequest) -> dict[str, Any]:
+    async def import_processing_huggingface(
+        body: ProcessingVisionHuggingFaceImportRequest,
+    ) -> dict[str, Any]:
         try:
             from toposync_ext_vision.registry.huggingface import import_huggingface_onnx_model
             from toposync_ext_vision.registry.manifests import ModelRegistryError
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Vision extension unavailable: {exc}"
+            ) from exc
 
         try:
             result = await asyncio.to_thread(
@@ -687,7 +740,9 @@ def create_processing_app() -> FastAPI:
                 data_dir=config_store.paths.data_dir,
             )
         except KeyError as exc:
-            raise HTTPException(status_code=500, detail=f"Vision install service unavailable: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Vision install service unavailable: {exc}"
+            ) from exc
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return dict(result or {})
@@ -705,7 +760,9 @@ def create_processing_app() -> FastAPI:
                 data_dir=config_store.paths.data_dir,
             )
         except KeyError as exc:
-            raise HTTPException(status_code=500, detail=f"Vision install service unavailable: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Vision install service unavailable: {exc}"
+            ) from exc
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return dict(result or {})
@@ -723,7 +780,9 @@ def create_processing_app() -> FastAPI:
                 data_dir=config_store.paths.data_dir,
             )
         except KeyError as exc:
-            raise HTTPException(status_code=500, detail=f"Vision install service unavailable: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Vision install service unavailable: {exc}"
+            ) from exc
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return dict(result or {})
@@ -737,7 +796,9 @@ def create_processing_app() -> FastAPI:
             from toposync_ext_vision.registry.artifact_upload import upload_model_artifact
             from toposync_ext_vision.registry.manifests import ModelRegistryError
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Vision extension unavailable: {exc}"
+            ) from exc
 
         try:
             result = await asyncio.to_thread(

@@ -531,7 +531,6 @@ class PipelinesTelemetryImageMarkersResponse(BaseModel):
 class PipelineTemplateApplyCamerasRequest(BaseModel):
     template_pipeline_name: str
     camera_ids: list[str] = Field(default_factory=list)
-    instance_type: str = "final"
     enabled: bool = False
     processing_server_id: str = "local"
     conflict: str = "skip"  # skip|replace|error
@@ -2681,7 +2680,6 @@ def create_app() -> FastAPI:
         pipeline = compiled.pipelines[0]
         compiled_dict = {
             "name": pipeline.name,
-            "type": pipeline.pipeline_type,
             "schema_version": pipeline.schema_version,
             "topological_order": list(pipeline.topological_order),
             "nodes": [
@@ -2756,7 +2754,6 @@ def create_app() -> FastAPI:
         compiled_pipeline = compiled.pipelines[0]
         compiled_dict = {
             "name": compiled_pipeline.name,
-            "type": compiled_pipeline.pipeline_type,
             "schema_version": compiled_pipeline.schema_version,
             "topological_order": list(compiled_pipeline.topological_order),
             "nodes": [
@@ -2917,10 +2914,6 @@ def create_app() -> FastAPI:
         if not camera_ids:
             raise HTTPException(status_code=400, detail="camera_ids is required")
 
-        instance_type = str(body.instance_type or "final").strip().lower()
-        if instance_type not in {"final", "reuse"}:
-            raise HTTPException(status_code=400, detail="instance_type must be 'final' or 'reuse'")
-
         conflict = str(body.conflict or "skip").strip().lower()
         if conflict not in {"skip", "replace", "error"}:
             raise HTTPException(
@@ -2981,8 +2974,7 @@ def create_app() -> FastAPI:
 
             instance = Pipeline(
                 name=instance_name,
-                type=instance_type,  # type: ignore[arg-type]
-                enabled=bool(body.enabled) if instance_type == "final" else True,
+                enabled=bool(body.enabled),
                 processing_server_id=str(
                     body.processing_server_id or template.processing_server_id or "local"
                 ).strip()

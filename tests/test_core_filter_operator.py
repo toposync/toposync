@@ -52,16 +52,34 @@ def test_core_filter_expression_is_lifecycle_safe() -> None:
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {"frames": 4, "interval_seconds": 0.0}},
-                {"id": "filter", "operator": "core.filter", "config": {"expression": 'lifecycle == "open"'}},
+                {
+                    "id": "source",
+                    "operator": "core.demo_frame_sequence_source",
+                    "config": {"frames": 4, "interval_seconds": 0.0},
+                },
+                {
+                    "id": "filter",
+                    "operator": "core.filter",
+                    "config": {"expression": 'lifecycle == "open"'},
+                },
                 {"id": "sink", "operator": "test.collect_sink", "config": {}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "filter", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
-                {"from": {"node": "filter", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "filter", "port": "in"},
+                    "maxsize": 32,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "filter", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 32,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
-        pipeline = Pipeline(name="core_filter_lifecycle_safe", type="final", graph=graph)
+        pipeline = Pipeline(name="core_filter_lifecycle_safe", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         await runtime.run_for(0.25)
@@ -92,8 +110,20 @@ def test_core_filter_drops_entire_stream_when_open_filtered() -> None:
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {"frames": 4, "interval_seconds": 0.0, "object_category_label": "person"}},
-                {"id": "filter", "operator": "core.filter", "config": {"expression": 'payload.object_category_label == "car"'}},
+                {
+                    "id": "source",
+                    "operator": "core.demo_frame_sequence_source",
+                    "config": {
+                        "frames": 4,
+                        "interval_seconds": 0.0,
+                        "object_category_label": "person",
+                    },
+                },
+                {
+                    "id": "filter",
+                    "operator": "core.filter",
+                    "config": {"expression": 'payload.object_category_label == "car"'},
+                },
                 {"id": "sink", "operator": "test.collect_sink", "config": {}},
             ],
             "edges": [
@@ -101,7 +131,7 @@ def test_core_filter_drops_entire_stream_when_open_filtered() -> None:
                 {"from": {"node": "filter", "port": "out"}, "to": {"node": "sink", "port": "in"}},
             ],
         }
-        pipeline = Pipeline(name="core_filter_drop_stream", type="final", graph=graph)
+        pipeline = Pipeline(name="core_filter_drop_stream", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         await runtime.run_for(0.25)
@@ -118,7 +148,11 @@ def test_core_filter_rejects_unsafe_expression() -> None:
         "schema_version": 1,
         "nodes": [
             {"id": "source", "operator": "core.synthetic_source", "config": {"rate_hz": 10.0}},
-            {"id": "filter", "operator": "core.filter", "config": {"expression": '__import__(\"os\").system(\"echo hacked\")'}},
+            {
+                "id": "filter",
+                "operator": "core.filter",
+                "config": {"expression": '__import__("os").system("echo hacked")'},
+            },
             {"id": "sink", "operator": "core.sink", "config": {}},
         ],
         "edges": [
@@ -126,7 +160,7 @@ def test_core_filter_rejects_unsafe_expression() -> None:
             {"from": {"node": "filter", "port": "out"}, "to": {"node": "sink", "port": "in"}},
         ],
     }
-    pipeline = Pipeline(name="core_filter_unsafe", type="final", graph=graph)
+    pipeline = Pipeline(name="core_filter_unsafe", graph=graph)
     with pytest.raises(GraphCompileError):
         PipelineGraphCompiler(registry).compile_pipeline(pipeline)
 
@@ -138,7 +172,9 @@ def test_core_filter_can_be_used_before_camera_source(monkeypatch: pytest.Monkey
         start_calls = 0
         stop_calls = 0
 
-        def __init__(self, rtsp_url: str, *, target_fps: float = 15.0, backend: str = "auto", **_kwargs: Any) -> None:
+        def __init__(
+            self, rtsp_url: str, *, target_fps: float = 15.0, backend: str = "auto", **_kwargs: Any
+        ) -> None:
             _ = rtsp_url
             _ = target_fps
             _ = backend
@@ -171,16 +207,23 @@ def test_core_filter_can_be_used_before_camera_source(monkeypatch: pytest.Monkey
             "nodes": [
                 {"id": "gate", "operator": "core.schedule_gate", "config": {"enabled": False}},
                 {"id": "filter", "operator": "core.filter", "config": {"expression": "False"}},
-                {"id": "camera", "operator": "camera.source", "config": {"rtsp_url": "rtsp://example", "fps": 5.0}},
+                {
+                    "id": "camera",
+                    "operator": "camera.source",
+                    "config": {"rtsp_url": "rtsp://example", "fps": 5.0},
+                },
                 {"id": "sink", "operator": "core.sink", "config": {}},
             ],
             "edges": [
                 {"from": {"node": "gate", "port": "out"}, "to": {"node": "filter", "port": "in"}},
-                {"from": {"node": "filter", "port": "out"}, "to": {"node": "camera", "port": "gate"}},
+                {
+                    "from": {"node": "filter", "port": "out"},
+                    "to": {"node": "camera", "port": "gate"},
+                },
                 {"from": {"node": "camera", "port": "out"}, "to": {"node": "sink", "port": "in"}},
             ],
         }
-        pipeline = Pipeline(name="core_filter_before_camera", type="final", graph=graph)
+        pipeline = Pipeline(name="core_filter_before_camera", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
         await runtime.run_for(0.25)

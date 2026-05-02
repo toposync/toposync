@@ -108,7 +108,12 @@ def test_store_images_writes_files_and_sets_references(tmp_path: Path) -> None:
                     "tracking_id": "track-1",
                 },
                 "artifacts": {
-                    "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                    "frame_original": Artifact(
+                        name="frame_original",
+                        data=frame,
+                        mime_type="image/raw",
+                        metadata={"source": "test"},
+                    ),
                     "frame": Artifact(
                         name="frame",
                         data=frame,
@@ -127,7 +132,11 @@ def test_store_images_writes_files_and_sets_references(tmp_path: Path) -> None:
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "store",
                     "operator": "core.store_images",
@@ -142,12 +151,22 @@ def test_store_images_writes_files_and_sets_references(tmp_path: Path) -> None:
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                {"from": {"node": "store", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "store", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "store", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
-        pipeline = Pipeline(name="stage7_store_images", type="final", graph=graph)
+        pipeline = Pipeline(name="stage7_store_images", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
         await runtime.run_for(0.25)
@@ -190,7 +209,12 @@ def test_store_images_saves_with_correct_color_channels(tmp_path: Path) -> None:
                     "tracking_id": "track-1",
                 },
                 "artifacts": {
-                    "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                    "frame_original": Artifact(
+                        name="frame_original",
+                        data=frame,
+                        mime_type="image/raw",
+                        metadata={"source": "test"},
+                    ),
                     "frame": Artifact(
                         name="frame",
                         data=frame,
@@ -209,7 +233,11 @@ def test_store_images_saves_with_correct_color_channels(tmp_path: Path) -> None:
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "store",
                     "operator": "core.store_images",
@@ -224,12 +252,22 @@ def test_store_images_saves_with_correct_color_channels(tmp_path: Path) -> None:
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                {"from": {"node": "store", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "store", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "store", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
-        pipeline = Pipeline(name="stage7_store_images_colors", type="final", graph=graph)
+        pipeline = Pipeline(name="stage7_store_images_colors", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
         await runtime.run_for(0.25)
@@ -268,7 +306,12 @@ def test_store_images_in_bundle_uses_logical_pipeline_folder(tmp_path: Path) -> 
                     "tracking_id": "track-1",
                 },
                 "artifacts": {
-                    "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                    "frame_original": Artifact(
+                        name="frame_original",
+                        data=frame,
+                        mime_type="image/raw",
+                        metadata={"source": "test"},
+                    ),
                     "frame": Artifact(
                         name="frame",
                         data=frame,
@@ -288,7 +331,11 @@ def test_store_images_in_bundle_uses_logical_pipeline_folder(tmp_path: Path) -> 
             return {
                 "schema_version": 1,
                 "nodes": [
-                    {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                    {
+                        "id": "source",
+                        "operator": "test.sequence_source",
+                        "config": {"stream_id": "camera:test"},
+                    },
                     {
                         "id": "store",
                         "operator": "core.store_images",
@@ -300,20 +347,36 @@ def test_store_images_in_bundle_uses_logical_pipeline_folder(tmp_path: Path) -> 
                             "overwrite": False,
                         },
                     },
-                    {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
+                    {
+                        "id": "sink",
+                        "operator": "test.collect_sink",
+                        "config": {"sink_name": sink_name},
+                    },
                 ],
                 "edges": [
-                    {"from": {"node": "source", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
-                    {"from": {"node": "store", "port": "out"}, "to": {"node": "sink", "port": "in"}, "maxsize": 8, "drop_policy": "drop_oldest"},
+                    {
+                        "from": {"node": "source", "port": "out"},
+                        "to": {"node": "store", "port": "in"},
+                        "maxsize": 8,
+                        "drop_policy": "drop_oldest",
+                    },
+                    {
+                        "from": {"node": "store", "port": "out"},
+                        "to": {"node": "sink", "port": "in"},
+                        "maxsize": 8,
+                        "drop_policy": "drop_oldest",
+                    },
                 ],
             }
 
         compiler = PipelineGraphCompiler(registry)
-        compiled_a = compiler.compile_pipeline(Pipeline(name="final_a", type="final", graph=graph_for("sink_a")))
-        compiled_b = compiler.compile_pipeline(Pipeline(name="final_b", type="final", graph=graph_for("sink_b")))
+        compiled_a = compiler.compile_pipeline(Pipeline(name="final_a", graph=graph_for("sink_a")))
+        compiled_b = compiler.compile_pipeline(Pipeline(name="final_b", graph=graph_for("sink_b")))
 
         report = CompilationReport(pipelines=(compiled_a, compiled_b), shared_signatures={})
-        bundle = PipelineBundleRuntime(report=report, registry=registry, dependencies=deps, bundle_name="local_bundle")
+        bundle = PipelineBundleRuntime(
+            report=report, registry=registry, dependencies=deps, bundle_name="local_bundle"
+        )
         await bundle.start()
         await bundle.run_for(0.25)
         await bundle.stop()
@@ -322,8 +385,12 @@ def test_store_images_in_bundle_uses_logical_pipeline_folder(tmp_path: Path) -> 
         packets_b = collector.get("sink_b", [])
         assert packets_a and packets_b
 
-        ref_a = next((art.reference for art in packets_a[-1].artifacts.values() if art.reference), None)
-        ref_b = next((art.reference for art in packets_b[-1].artifacts.values() if art.reference), None)
+        ref_a = next(
+            (art.reference for art in packets_a[-1].artifacts.values() if art.reference), None
+        )
+        ref_b = next(
+            (art.reference for art in packets_b[-1].artifacts.values() if art.reference), None
+        )
         assert ref_a and ref_b
 
         assert str(ref_a).startswith("pipelines/final_a/")
@@ -346,8 +413,18 @@ def test_notify_upserts_single_notification_with_templates_and_no_spam(tmp_path:
 
         frame = np.full((32, 32, 3), 180, dtype=np.uint8)
         artifacts = {
-            "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
-            "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+            "frame_original": Artifact(
+                name="frame_original",
+                data=frame,
+                mime_type="image/raw",
+                metadata={"source": "test"},
+            ),
+            "frame": Artifact(
+                name="frame",
+                data=frame,
+                mime_type="image/raw",
+                metadata={"source": "test", "derived_from": "frame_original"},
+            ),
         }
         sequence = [
             {
@@ -403,7 +480,11 @@ def test_notify_upserts_single_notification_with_templates_and_no_spam(tmp_path:
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "store",
                     "operator": "core.store_images",
@@ -429,12 +510,22 @@ def test_notify_upserts_single_notification_with_templates_and_no_spam(tmp_path:
                 },
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
-                {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "store", "port": "in"},
+                    "maxsize": 32,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "store", "port": "out"},
+                    "to": {"node": "notify", "port": "in"},
+                    "maxsize": 32,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
-        pipeline = Pipeline(name="stage7_notify", type="final", graph=graph)
+        pipeline = Pipeline(name="stage7_notify", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
         await runtime.run_for(0.35)
@@ -469,7 +560,9 @@ def test_notify_upserts_single_notification_with_templates_and_no_spam(tmp_path:
     asyncio.run(scenario())
 
 
-def test_notify_thumbnail_shows_latest_when_live_and_best_confidence_on_close(tmp_path: Path) -> None:
+def test_notify_thumbnail_shows_latest_when_live_and_best_confidence_on_close(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
         files_dir = tmp_path / "files"
         notifications = NotificationsRuntime(data_dir=tmp_path / "data")
@@ -482,7 +575,12 @@ def test_notify_thumbnail_shows_latest_when_live_and_best_confidence_on_close(tm
 
         frame = np.full((32, 32, 3), 128, dtype=np.uint8)
         artifacts = {
-            "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+            "frame_original": Artifact(
+                name="frame_original",
+                data=frame,
+                mime_type="image/raw",
+                metadata={"source": "test"},
+            ),
         }
         sequence = [
             {
@@ -538,11 +636,20 @@ def test_notify_thumbnail_shows_latest_when_live_and_best_confidence_on_close(tm
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "store",
                     "operator": "core.store_images",
-                    "config": {"artifact_names": ["frame_original"], "subdir": "pipelines", "format": "png", "keep_data": False},
+                    "config": {
+                        "artifact_names": ["frame_original"],
+                        "subdir": "pipelines",
+                        "format": "png",
+                        "keep_data": False,
+                    },
                 },
                 {
                     "id": "notify",
@@ -557,12 +664,22 @@ def test_notify_thumbnail_shows_latest_when_live_and_best_confidence_on_close(tm
                 },
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
-                {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "store", "port": "in"},
+                    "maxsize": 32,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "store", "port": "out"},
+                    "to": {"node": "notify", "port": "in"},
+                    "maxsize": 32,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
-        pipeline = Pipeline(name="stage7_notify_thumb_selection", type="final", graph=graph)
+        pipeline = Pipeline(name="stage7_notify_thumb_selection", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
         await runtime.run_for(0.35)
@@ -631,22 +748,42 @@ def test_notify_close_prefers_earliest_frame_on_confidence_tie(tmp_path: Path) -
 
         frame = np.full((24, 24, 3), 128, dtype=np.uint8)
         artifacts = {
-            "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+            "frame_original": Artifact(
+                name="frame_original",
+                data=frame,
+                mime_type="image/raw",
+                metadata={"source": "test"},
+            ),
         }
         sequence = [
             {
                 "lifecycle": Lifecycle.OPEN,
-                "payload": {"frame_ts": 200.0, "camera_id": "camera-main", "tracking_id": "trk-1", "object_confidence": 0.5},
+                "payload": {
+                    "frame_ts": 200.0,
+                    "camera_id": "camera-main",
+                    "tracking_id": "trk-1",
+                    "object_confidence": 0.5,
+                },
                 "artifacts": artifacts,
             },
             {
                 "lifecycle": Lifecycle.UPDATE,
-                "payload": {"frame_ts": 201.0, "camera_id": "camera-main", "tracking_id": "trk-1", "object_confidence": 0.5},
+                "payload": {
+                    "frame_ts": 201.0,
+                    "camera_id": "camera-main",
+                    "tracking_id": "trk-1",
+                    "object_confidence": 0.5,
+                },
                 "artifacts": artifacts,
             },
             {
                 "lifecycle": Lifecycle.CLOSE,
-                "payload": {"frame_ts": 202.0, "camera_id": "camera-main", "tracking_id": "trk-1", "object_confidence": 0.5},
+                "payload": {
+                    "frame_ts": 202.0,
+                    "camera_id": "camera-main",
+                    "tracking_id": "trk-1",
+                    "object_confidence": 0.5,
+                },
                 "artifacts": artifacts,
             },
         ]
@@ -658,11 +795,20 @@ def test_notify_close_prefers_earliest_frame_on_confidence_tie(tmp_path: Path) -
         graph = {
             "schema_version": 1,
             "nodes": [
-                {"id": "source", "operator": "test.sequence_source", "config": {"stream_id": "camera:test"}},
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
                 {
                     "id": "store",
                     "operator": "core.store_images",
-                    "config": {"artifact_names": ["frame_original"], "subdir": "pipelines", "format": "png", "keep_data": False},
+                    "config": {
+                        "artifact_names": ["frame_original"],
+                        "subdir": "pipelines",
+                        "format": "png",
+                        "keep_data": False,
+                    },
                 },
                 {
                     "id": "notify",
@@ -677,12 +823,22 @@ def test_notify_close_prefers_earliest_frame_on_confidence_tie(tmp_path: Path) -
                 },
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "store", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
-                {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}, "maxsize": 32, "drop_policy": "drop_oldest"},
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "store", "port": "in"},
+                    "maxsize": 32,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "store", "port": "out"},
+                    "to": {"node": "notify", "port": "in"},
+                    "maxsize": 32,
+                    "drop_policy": "drop_oldest",
+                },
             ],
         }
 
-        pipeline = Pipeline(name="stage7_notify_conf_tie", type="final", graph=graph)
+        pipeline = Pipeline(name="stage7_notify_conf_tie", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
         await runtime.run_for(0.30)

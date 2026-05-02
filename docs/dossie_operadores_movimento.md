@@ -45,7 +45,6 @@ Na pratica: se um novo operador de movimento for especifico de camera/visao, o l
 Um pipeline e uma entidade persistida com:
 
 - `name`: identificador Python valido;
-- `type`: `reuse` ou `final`;
 - `enabled`;
 - `processing_server_id`;
 - `editor_mode`: `interactive`, `json` ou `python`;

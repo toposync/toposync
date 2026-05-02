@@ -501,7 +501,7 @@ export function buildInteractiveStepsFromGraph(
       nodeId,
       operatorId,
       configText: jsonPretty(config),
-      collapsed: false,
+      collapsed: true,
       showAdvanced: false,
     });
   }

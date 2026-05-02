@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from toposync.runtime.config_store import Pipeline
@@ -128,6 +129,71 @@ def test_pipeline_telemetry_store_applies_sampling_and_window_rollover() -> None
     rolled = store.snapshot_numeric_metric("pipe", "node", "test.score", now_s=130.0)
     assert rolled is not None
     assert int(rolled["total_count"]) == 0
+
+
+def test_pipeline_telemetry_store_cancel_check_stops_heavy_queries() -> None:
+    store = PipelineTelemetryStore(
+        metric_specs=[
+            NumericMetricSpec(
+                metric_id="test.score",
+                window_seconds=4096,
+                bucket_seconds=1,
+                histogram_min=0.0,
+                histogram_max=1.0,
+                histogram_bins=20,
+            )
+        ],
+        max_numeric_series=8,
+        max_image_markers_per_pipeline=4096,
+        max_image_pipelines=4,
+    )
+
+    for index in range(2048):
+        store.observe_numeric(
+            "pipe",
+            "node",
+            "test.score",
+            float(index % 100) / 100.0,
+            now_s=1_700_000_000.0 + float(index),
+        )
+
+    numeric_cancel_checks = 0
+
+    def cancel_numeric() -> None:
+        nonlocal numeric_cancel_checks
+        numeric_cancel_checks += 1
+        if numeric_cancel_checks >= 2:
+            raise RuntimeError("cancelled")
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        store.snapshot_numeric_metric(
+            "pipe",
+            "node",
+            "test.score",
+            now_s=1_700_004_000.0,
+            cancel_check=cancel_numeric,
+        )
+    assert numeric_cancel_checks >= 2
+
+    for index in range(2048):
+        store.record_image_marker(
+            "pipe",
+            node_id="store",
+            rel_path=f"pipelines/pipe/frame_{index}.png",
+            ts_s=1_700_000_000.0 + float(index),
+        )
+
+    marker_cancel_checks = 0
+
+    def cancel_markers() -> None:
+        nonlocal marker_cancel_checks
+        marker_cancel_checks += 1
+        if marker_cancel_checks >= 3:
+            raise RuntimeError("cancelled")
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        store.list_all_image_markers(limit=4096, cancel_check=cancel_markers)
+    assert marker_cancel_checks >= 3
 
 
 def test_pipeline_runtime_collects_numeric_and_image_telemetry() -> None:

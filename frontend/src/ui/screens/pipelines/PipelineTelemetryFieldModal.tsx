@@ -41,6 +41,14 @@ function clamp(value: number, minValue: number, maxValue: number): number {
   return Math.min(maxValue, Math.max(minValue, value));
 }
 
+function isAbortError(err: unknown): boolean {
+  return (
+    typeof DOMException !== "undefined" &&
+    err instanceof DOMException &&
+    err.name === "AbortError"
+  );
+}
+
 export function PipelineTelemetryFieldModal({
   open,
   pipelineName,
@@ -71,36 +79,43 @@ export function PipelineTelemetryFieldModal({
     setPendingValue(Number.isFinite(request.value) ? request.value : 0);
   }, [open, request]);
 
-	  useEffect(() => {
-	    if (!open || !pipelineName || !request) {
-	      setData(null);
+  useEffect(() => {
+    if (!open || !pipelineName || !request) {
+      setData(null);
       setError(null);
       setLoading(false);
       return;
     }
 
-    let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
-    getPipelineTelemetryNumeric(pipelineName, request.nodeId, request.metricId, 800)
+    getPipelineTelemetryNumeric(
+      pipelineName,
+      request.nodeId,
+      request.metricId,
+      800,
+      undefined,
+      controller.signal,
+    )
       .then((response) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         setData(response);
       })
       .catch((err: any) => {
-        if (cancelled) return;
+        if (controller.signal.aborted || isAbortError(err)) return;
         setData(null);
         setError(String(err?.message ?? err));
       })
       .finally(() => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         setLoading(false);
       });
 
-	    return () => {
-	      cancelled = true;
-	    };
-	  }, [open, pipelineName, request?.nodeId, request?.metricId, refreshNonce]);
+    return () => {
+      controller.abort();
+    };
+  }, [open, pipelineName, request?.nodeId, request?.metricId, refreshNonce]);
 
   const histogram = data?.histogram_bins ?? [];
   const histogramMaxCount = useMemo(

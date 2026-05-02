@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import heapq
 import logging
 import math
 import os
@@ -12,7 +13,7 @@ from array import array
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 METRIC_MOTION_SCORE = "motion.score"
@@ -36,6 +37,13 @@ DEFAULT_PERSIST_MAX_READ_BYTES = 64 * 1024 * 1024
 DEFAULT_PERSIST_MAX_DECOMPRESSED_BYTES = 256 * 1024 * 1024
 
 _PERSIST_MAGIC = b"TOPOSYNC_PIPELINE_TELEMETRY_V1\n"
+
+CancelCheck = Callable[[], None]
+
+
+def _check_cancelled(cancel_check: CancelCheck | None) -> None:
+    if cancel_check is not None:
+        cancel_check()
 
 
 @dataclass(slots=True)
@@ -174,7 +182,9 @@ class _NumericMetricSeries:
         now_s: float | None = None,
         max_points: int | None = None,
         window_seconds: int | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> dict[str, Any]:
+        _check_cancelled(cancel_check)
         now = time.time() if now_s is None else float(now_s)
         current_bucket = self._bucket_number(now)
         effective_window_seconds = int(self.spec.window_seconds)
@@ -201,6 +211,8 @@ class _NumericMetricSeries:
         total_max: float | None = None
 
         for idx in range(self.bucket_count):
+            if idx % 64 == 0:
+                _check_cancelled(cancel_check)
             bucket_number = int(self._bucket_ids[idx])
             if bucket_number < min_bucket:
                 continue
@@ -240,6 +252,7 @@ class _NumericMetricSeries:
             )
 
         points.sort(key=lambda item: item[0])
+        _check_cancelled(cancel_check)
 
         out_points = [item[1] for item in points]
         if max_points is not None:
@@ -480,7 +493,9 @@ class PipelineTelemetryStore:
         now_s: float | None = None,
         max_points: int | None = None,
         window_seconds: int | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> dict[str, Any] | None:
+        _check_cancelled(cancel_check)
         key = (
             self._sanitize_pipeline_name(pipeline_name),
             self._sanitize_node_id(node_id),
@@ -489,7 +504,12 @@ class PipelineTelemetryStore:
         series = self._numeric_series.get(key)
         if series is None:
             return None
-        snapshot = series.snapshot(now_s=now_s, max_points=max_points, window_seconds=window_seconds)
+        snapshot = series.snapshot(
+            now_s=now_s,
+            max_points=max_points,
+            window_seconds=window_seconds,
+            cancel_check=cancel_check,
+        )
         snapshot["pipeline_name"] = key[0]
         snapshot["node_id"] = key[1]
         return snapshot
@@ -503,7 +523,9 @@ class PipelineTelemetryStore:
         now_s: float | None = None,
         max_points: int | None = None,
         window_seconds: int | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> dict[str, Any] | None:
+        _check_cancelled(cancel_check)
         metric = self._sanitize_metric_id(metric_id)
         if not metric:
             return None
@@ -523,12 +545,21 @@ class PipelineTelemetryStore:
 
         snapshots: list[dict[str, Any]] = []
         pipeline_names: set[str] = set()
-        for (pipeline_name, node_id, metric_name), series in self._numeric_series.items():
+        for index, ((pipeline_name, node_id, metric_name), series) in enumerate(
+            self._numeric_series.items()
+        ):
+            if index % 16 == 0:
+                _check_cancelled(cancel_check)
             if metric_name != metric:
                 continue
             if allowed_pipelines is not None and pipeline_name not in allowed_pipelines:
                 continue
-            snapshot = series.snapshot(now_s=now_s, max_points=max_points, window_seconds=window_seconds)
+            snapshot = series.snapshot(
+                now_s=now_s,
+                max_points=max_points,
+                window_seconds=window_seconds,
+                cancel_check=cancel_check,
+            )
             snapshot["pipeline_name"] = pipeline_name
             snapshot["node_id"] = node_id
             snapshots.append(snapshot)
@@ -544,7 +575,9 @@ class PipelineTelemetryStore:
         compatible_histograms = isinstance(histogram_bins_source, list)
         histogram_bins = [0] * (len(histogram_bins_source) if compatible_histograms else 0)
         if compatible_histograms:
-            for snapshot in snapshots:
+            for index, snapshot in enumerate(snapshots):
+                if index % 16 == 0:
+                    _check_cancelled(cancel_check)
                 bins = snapshot.get("histogram_bins")
                 if (
                     not isinstance(bins, list)
@@ -563,14 +596,18 @@ class PipelineTelemetryStore:
         bucket_seconds = 0
         effective_window_seconds = 0
 
-        for snapshot in snapshots:
+        for snapshot_index, snapshot in enumerate(snapshots):
+            if snapshot_index % 16 == 0:
+                _check_cancelled(cancel_check)
             updated_at = max(updated_at, float(snapshot.get("updated_at") or 0.0))
             bucket_seconds = max(bucket_seconds, int(snapshot.get("bucket_seconds") or 0))
             effective_window_seconds = max(effective_window_seconds, int(snapshot.get("window_seconds") or 0))
             raw_points = snapshot.get("points")
             if not isinstance(raw_points, list):
                 continue
-            for point in raw_points:
+            for point_index, point in enumerate(raw_points):
+                if point_index % 256 == 0:
+                    _check_cancelled(cancel_check)
                 if not isinstance(point, dict):
                     continue
                 bucket_start_s = float(point.get("bucket_start_s") or 0.0)
@@ -592,7 +629,11 @@ class PipelineTelemetryStore:
         total_sum = 0.0
         total_min: float | None = None
         total_max: float | None = None
-        for bucket_start_s in sorted(points_by_bucket.keys()):
+        sorted_bucket_starts = sorted(points_by_bucket.keys())
+        _check_cancelled(cancel_check)
+        for bucket_index, bucket_start_s in enumerate(sorted_bucket_starts):
+            if bucket_index % 256 == 0:
+                _check_cancelled(cancel_check)
             candidates = points_by_bucket[bucket_start_s]
             if not candidates:
                 continue
@@ -656,7 +697,9 @@ class PipelineTelemetryStore:
         node_id: str | None = None,
         window_seconds: int | None = None,
         now_s: float | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> list[dict[str, Any]]:
+        _check_cancelled(cancel_check)
         pipeline = self._sanitize_pipeline_name(pipeline_name)
         if not pipeline:
             return []
@@ -677,7 +720,9 @@ class PipelineTelemetryStore:
                 if math.isfinite(now_value):
                     min_ts = max(0.0, now_value - float(parsed_window_seconds))
         out: list[dict[str, Any]] = []
-        for marker in reversed(markers):
+        for index, marker in enumerate(reversed(markers)):
+            if index % 512 == 0:
+                _check_cancelled(cancel_check)
             if metric_filter and str(marker.get("metric_id") or "").strip().lower() != metric_filter:
                 continue
             if node_filter and str(marker.get("node_id") or "").strip() != node_filter:
@@ -704,7 +749,9 @@ class PipelineTelemetryStore:
         pipeline_names: list[str] | tuple[str, ...] | set[str] | None = None,
         window_seconds: int | None = None,
         now_s: float | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> list[dict[str, Any]]:
+        _check_cancelled(cancel_check)
         cap = max(1, min(MAX_IMAGE_MARKER_QUERY_LIMIT, int(limit)))
         metric_filter = self._sanitize_metric_id(metric_id or "")
         node_filter = self._sanitize_node_id(node_id or "")
@@ -728,11 +775,17 @@ class PipelineTelemetryStore:
                 if math.isfinite(now_value):
                     min_ts = max(0.0, now_value - float(parsed_window_seconds))
 
-        out: list[dict[str, Any]] = []
+        out: list[tuple[tuple[float, str, str], int, dict[str, Any]]] = []
+        scanned = 0
+        sequence = 0
         for pipeline_name, markers in self._image_markers_by_pipeline.items():
+            _check_cancelled(cancel_check)
             if allowed_pipelines is not None and pipeline_name not in allowed_pipelines:
                 continue
             for marker in markers:
+                scanned += 1
+                if scanned % 512 == 0:
+                    _check_cancelled(cancel_check)
                 if metric_filter and str(marker.get("metric_id") or "").strip().lower() != metric_filter:
                     continue
                 if node_filter and str(marker.get("node_id") or "").strip() != node_filter:
@@ -745,18 +798,23 @@ class PipelineTelemetryStore:
                     continue
                 item = dict(marker)
                 item["pipeline_name"] = pipeline_name
-                out.append(item)
+                key = (
+                    marker_ts,
+                    str(item.get("pipeline_name") or ""),
+                    str(item.get("rel_path") or ""),
+                )
+                entry = (key, sequence, item)
+                sequence += 1
+                if len(out) < cap:
+                    heapq.heappush(out, entry)
+                elif entry > out[0]:
+                    heapq.heapreplace(out, entry)
 
-        out.sort(
-            key=lambda item: (
-                float(item.get("ts") or 0.0),
-                str(item.get("pipeline_name") or ""),
-                str(item.get("rel_path") or ""),
-            )
-        )
-        if len(out) > cap:
-            out = out[-cap:]
-        return out
+        _check_cancelled(cancel_check)
+        return [
+            item
+            for _key, _sequence, item in sorted(out, key=lambda entry: (entry[0], entry[1]))
+        ]
 
     def debug_stats(self) -> dict[str, int]:
         total_markers = 0

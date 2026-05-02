@@ -7,10 +7,11 @@ import logging
 import mimetypes
 import os
 import re
+import threading
 import uuid
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from contextlib import asynccontextmanager
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Awaitable, Callable, Literal, TypeVar
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -101,6 +102,93 @@ from toposync.runtime.pipelines.templates import (
 
 logger = logging.getLogger("toposync")
 DEFAULT_PIPELINES_TELEMETRY_METRICS = [METRIC_MOTION_SCORE, METRIC_VISION_CONFIDENCE]
+CLIENT_CLOSED_REQUEST_STATUS = 499
+_RequestWorkResult = TypeVar("_RequestWorkResult")
+
+
+class _RequestWorkCancelled(Exception):
+    pass
+
+
+def _client_closed_request_exception() -> HTTPException:
+    return HTTPException(status_code=CLIENT_CLOSED_REQUEST_STATUS, detail="Client closed request")
+
+
+async def _watch_request_disconnect(request: Request, cancel_event: threading.Event) -> bool:
+    try:
+        while not cancel_event.is_set():
+            if await request.is_disconnected():
+                cancel_event.set()
+                return True
+            await asyncio.sleep(0.05)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.debug("Failed to monitor request disconnect", exc_info=True)
+    return False
+
+
+def _drain_cancelled_request_work(future: asyncio.Future[Any]) -> None:
+    if future.cancelled():
+        return
+    try:
+        future.result()
+    except _RequestWorkCancelled:
+        return
+    except Exception:
+        logger.debug("Cancelled request work finished with an error", exc_info=True)
+
+
+async def _run_cancelable_request_work(
+    request: Request,
+    work: Callable[[Callable[[], None]], _RequestWorkResult],
+) -> _RequestWorkResult:
+    cancel_event = threading.Event()
+
+    def check_cancelled() -> None:
+        if cancel_event.is_set():
+            raise _RequestWorkCancelled()
+
+    def run() -> _RequestWorkResult:
+        check_cancelled()
+        return work(check_cancelled)
+
+    loop = asyncio.get_running_loop()
+    work_future = loop.run_in_executor(None, run)
+    disconnect_task = asyncio.create_task(
+        _watch_request_disconnect(request, cancel_event),
+        name="toposync.request.disconnect-watch",
+    )
+
+    try:
+        done, _pending = await asyncio.wait(
+            {work_future, disconnect_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if work_future in done:
+            return await work_future
+
+        disconnected = False
+        if disconnect_task in done:
+            disconnected = bool(await disconnect_task)
+        if disconnected:
+            cancel_event.set()
+            work_future.add_done_callback(_drain_cancelled_request_work)
+            raise _client_closed_request_exception()
+
+        return await work_future
+    except _RequestWorkCancelled as exc:
+        raise _client_closed_request_exception() from exc
+    except asyncio.CancelledError:
+        cancel_event.set()
+        work_future.add_done_callback(_drain_cancelled_request_work)
+        raise
+    finally:
+        cancel_event.set()
+        if not disconnect_task.done():
+            disconnect_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await disconnect_task
 
 
 class EmitEventRequest(BaseModel):
@@ -3313,27 +3401,34 @@ def create_app() -> FastAPI:
         if telemetry_store is None or not metric_ids:
             return PipelinesTelemetryNumericOverviewResponse(aggregation=aggregation_name)
 
-        series: list[PipelineTelemetryAggregateNumericResponse] = []
-        for metric_name in metric_ids:
-            snapshot = telemetry_store.snapshot_numeric_metric_aggregate(
-                metric_name,
-                aggregation=aggregation_name,
-                pipeline_names=(pipeline_names or None),
-                max_points=int(point_limit),
-                window_seconds=(int(window_seconds) if window_seconds is not None else None),
-            )
-            if snapshot is None:
-                series.append(
-                    PipelineTelemetryAggregateNumericResponse(
-                        metric_id=metric_name,
-                        aggregation=aggregation_name,
-                    )
+        def build_response(
+            check_cancelled: Callable[[], None],
+        ) -> PipelinesTelemetryNumericOverviewResponse:
+            series: list[PipelineTelemetryAggregateNumericResponse] = []
+            for metric_name in metric_ids:
+                check_cancelled()
+                snapshot = telemetry_store.snapshot_numeric_metric_aggregate(
+                    metric_name,
+                    aggregation=aggregation_name,
+                    pipeline_names=(pipeline_names or None),
+                    max_points=int(point_limit),
+                    window_seconds=(int(window_seconds) if window_seconds is not None else None),
+                    cancel_check=check_cancelled,
                 )
-                continue
-            series.append(PipelineTelemetryAggregateNumericResponse.model_validate(snapshot))
-        return PipelinesTelemetryNumericOverviewResponse(
-            aggregation=aggregation_name, series=series
-        )
+                if snapshot is None:
+                    series.append(
+                        PipelineTelemetryAggregateNumericResponse(
+                            metric_id=metric_name,
+                            aggregation=aggregation_name,
+                        )
+                    )
+                    continue
+                series.append(PipelineTelemetryAggregateNumericResponse.model_validate(snapshot))
+            return PipelinesTelemetryNumericOverviewResponse(
+                aggregation=aggregation_name, series=series
+            )
+
+        return await _run_cancelable_request_work(request, build_response)
 
     @app.get(
         "/api/pipelines/telemetry/all/image-markers",
@@ -3359,25 +3454,32 @@ def create_app() -> FastAPI:
             if normalized and normalized not in pipeline_names:
                 pipeline_names.append(normalized)
 
-        markers = telemetry_store.list_all_image_markers(
-            limit=int(limit),
-            node_id=(str(node_id or "").strip() or None),
-            metric_id=(str(metric_id or "").strip() or None),
-            pipeline_names=(pipeline_names or None),
-            window_seconds=(int(window_seconds) if window_seconds is not None else None),
-        )
-        pipeline_count = len(
-            {
-                str(item.get("pipeline_name") or "").strip()
-                for item in markers
-                if str(item.get("pipeline_name") or "").strip()
-            }
-        )
-        return PipelinesTelemetryImageMarkersResponse(
-            aggregation=aggregation_name,
-            pipeline_count=int(pipeline_count),
-            markers=[PipelineTelemetryImageMarker.model_validate(item) for item in markers],
-        )
+        def build_response(
+            check_cancelled: Callable[[], None],
+        ) -> PipelinesTelemetryImageMarkersResponse:
+            markers = telemetry_store.list_all_image_markers(
+                limit=int(limit),
+                node_id=(str(node_id or "").strip() or None),
+                metric_id=(str(metric_id or "").strip() or None),
+                pipeline_names=(pipeline_names or None),
+                window_seconds=(int(window_seconds) if window_seconds is not None else None),
+                cancel_check=check_cancelled,
+            )
+            check_cancelled()
+            pipeline_count = len(
+                {
+                    str(item.get("pipeline_name") or "").strip()
+                    for item in markers
+                    if str(item.get("pipeline_name") or "").strip()
+                }
+            )
+            return PipelinesTelemetryImageMarkersResponse(
+                aggregation=aggregation_name,
+                pipeline_count=int(pipeline_count),
+                markers=[PipelineTelemetryImageMarker.model_validate(item) for item in markers],
+            )
+
+        return await _run_cancelable_request_work(request, build_response)
 
     @app.get(
         "/api/pipelines/{pipeline_name}/telemetry/numeric",
@@ -3406,20 +3508,25 @@ def create_app() -> FastAPI:
                 node_id=str(node_id),
                 metric_id=str(metric_id),
             )
-        snapshot = telemetry_store.snapshot_numeric_metric(
-            pipeline.name,
-            node_id=str(node_id),
-            metric_id=str(metric_id),
-            max_points=int(point_limit),
-            window_seconds=(int(window_seconds) if window_seconds is not None else None),
-        )
-        if snapshot is None:
-            return PipelineTelemetryNumericResponse(
-                pipeline_name=pipeline.name,
+
+        def build_response(check_cancelled: Callable[[], None]) -> PipelineTelemetryNumericResponse:
+            snapshot = telemetry_store.snapshot_numeric_metric(
+                pipeline.name,
                 node_id=str(node_id),
                 metric_id=str(metric_id),
+                max_points=int(point_limit),
+                window_seconds=(int(window_seconds) if window_seconds is not None else None),
+                cancel_check=check_cancelled,
             )
-        return PipelineTelemetryNumericResponse.model_validate(snapshot)
+            if snapshot is None:
+                return PipelineTelemetryNumericResponse(
+                    pipeline_name=pipeline.name,
+                    node_id=str(node_id),
+                    metric_id=str(metric_id),
+                )
+            return PipelineTelemetryNumericResponse.model_validate(snapshot)
+
+        return await _run_cancelable_request_work(request, build_response)
 
     @app.get(
         "/api/pipelines/{pipeline_name}/telemetry/image-markers",
@@ -3445,22 +3552,29 @@ def create_app() -> FastAPI:
         if telemetry_store is None:
             return PipelineTelemetryImageMarkersResponse(pipeline_name=pipeline.name)
 
-        markers = telemetry_store.list_image_markers(
-            pipeline.name,
-            limit=int(limit),
-            node_id=(str(node_id or "").strip() or None),
-            metric_id=(str(metric_id or "").strip() or None),
-            window_seconds=(int(window_seconds) if window_seconds is not None else None),
-        )
-        return PipelineTelemetryImageMarkersResponse(
-            pipeline_name=pipeline.name,
-            markers=[
-                PipelineTelemetryImageMarker.model_validate(
-                    {**item, "pipeline_name": pipeline.name}
-                )
-                for item in markers
-            ],
-        )
+        def build_response(
+            check_cancelled: Callable[[], None],
+        ) -> PipelineTelemetryImageMarkersResponse:
+            markers = telemetry_store.list_image_markers(
+                pipeline.name,
+                limit=int(limit),
+                node_id=(str(node_id or "").strip() or None),
+                metric_id=(str(metric_id or "").strip() or None),
+                window_seconds=(int(window_seconds) if window_seconds is not None else None),
+                cancel_check=check_cancelled,
+            )
+            check_cancelled()
+            return PipelineTelemetryImageMarkersResponse(
+                pipeline_name=pipeline.name,
+                markers=[
+                    PipelineTelemetryImageMarker.model_validate(
+                        {**item, "pipeline_name": pipeline.name}
+                    )
+                    for item in markers
+                ],
+            )
+
+        return await _run_cancelable_request_work(request, build_response)
 
     @app.put("/api/pipelines/{pipeline_name}", response_model=Pipeline)
     async def replace_pipeline(request: Request, pipeline_name: str, body: Pipeline) -> Pipeline:

@@ -310,6 +310,14 @@ function markerClusterCountLabel(count: number): string {
   return String(count);
 }
 
+function isAbortError(err: unknown): boolean {
+  return (
+    typeof DOMException !== "undefined" &&
+    err instanceof DOMException &&
+    err.name === "AbortError"
+  );
+}
+
 function buildMarkerClusters(points: MarkerPoint[], options: { baseY: number }): MarkerCluster[] {
   const { baseY } = options;
   if (points.length <= 0) return [];
@@ -538,7 +546,7 @@ export function PipelineTelemetryOverviewCard({
       return;
     }
 
-    let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
 
@@ -553,6 +561,7 @@ export function PipelineTelemetryOverviewCard({
                 pointLimit,
                 windowSeconds: rangeSeconds,
                 aggregation: "max",
+                signal: controller.signal,
               }).then((response) => response.series),
               getPipelinesTelemetryImageMarkers({
                 metricId: "store.image",
@@ -560,21 +569,30 @@ export function PipelineTelemetryOverviewCard({
                 pipelineNames: selectedPipelineNames,
                 windowSeconds: rangeSeconds,
                 aggregation: "max",
+                signal: controller.signal,
               }),
             ])
           : await Promise.all([
               Promise.all(
                 metricTargets.map((target) =>
-                  getPipelineTelemetryNumeric(String(pipelineName || ""), target.nodeId, target.metricId, pointLimit, rangeSeconds),
+                  getPipelineTelemetryNumeric(
+                    String(pipelineName || ""),
+                    target.nodeId,
+                    target.metricId,
+                    pointLimit,
+                    rangeSeconds,
+                    controller.signal,
+                  ),
                 ),
               ),
               getPipelineTelemetryImageMarkers(String(pipelineName || ""), {
                 metricId: "store.image",
                 limit: MARKER_FETCH_LIMIT,
                 windowSeconds: rangeSeconds,
+                signal: controller.signal,
               }),
             ]);
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
 
         const nextSeries: MetricSeries[] = [];
         for (const [index, item] of numericResponses.entries()) {
@@ -598,19 +616,19 @@ export function PipelineTelemetryOverviewCard({
         setMarkers(Array.isArray(markerResponse.markers) ? markerResponse.markers : []);
         setLastUpdatedAt(Date.now());
       } catch (err: any) {
-        if (cancelled) return;
+        if (controller.signal.aborted || isAbortError(err)) return;
         setSeries([]);
         setMarkers([]);
         setError(String(err?.message ?? err));
       } finally {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         setLoading(false);
       }
     };
 
     void run();
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [
     externalRefreshNonce,

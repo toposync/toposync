@@ -20,7 +20,6 @@ import type {
 import {
   activateComposition,
   createComposition,
-  deleteAccessGrant,
   deleteAccessUser,
   deleteComposition,
   listAccessUsers,
@@ -37,7 +36,6 @@ import {
   putComposition,
   renameComposition,
   createAccessUser,
-  upsertAccessGrant,
 } from "../util/api";
 import type { AppSettings, AuthUser } from "../util/api";
 import { i18n, resolveLocalizedString } from "../util/i18n";
@@ -1090,8 +1088,6 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           createAccessUser={createAccessUser}
           patchAccessUser={patchAccessUser}
           deleteAccessUser={deleteAccessUser}
-          upsertAccessGrant={upsertAccessGrant}
-          deleteAccessGrant={deleteAccessGrant}
         />
       ) : normalizedPathname.startsWith("/settings") ? (
         <SettingsScreen

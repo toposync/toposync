@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 METRIC_MOTION_SCORE = "motion.score"
 METRIC_VISION_CONFIDENCE = "vision.confidence"
+METRIC_AI_CONDITION_CONFIDENCE = "ai.condition_filter.confidence"
 METRIC_STORE_IMAGE = "store.image"
 
 logger = logging.getLogger("toposync.pipelines.telemetry")
@@ -1525,6 +1526,15 @@ def create_default_pipeline_telemetry_store() -> PipelineTelemetryStore | None:
             ),
             NumericMetricSpec(
                 metric_id=METRIC_VISION_CONFIDENCE,
+                window_seconds=window_seconds,
+                bucket_seconds=bucket_seconds,
+                histogram_min=0.0,
+                histogram_max=1.0,
+                histogram_bins=100,
+                min_sample_interval_s=vision_sample_interval,
+            ),
+            NumericMetricSpec(
+                metric_id=METRIC_AI_CONDITION_CONFIDENCE,
                 window_seconds=window_seconds,
                 bucket_seconds=bucket_seconds,
                 histogram_min=0.0,

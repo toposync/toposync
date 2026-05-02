@@ -80,6 +80,20 @@ class _ConditionRunContext:
         return self._cancelled
 
 
+class _TelemetryContext:
+    def __init__(self) -> None:
+        self.samples: list[tuple[str, float, float | None]] = []
+
+    def observe_telemetry_numeric(
+        self,
+        metric_id: str,
+        value: float,
+        *,
+        now_s: float | None = None,
+    ) -> None:
+        self.samples.append((metric_id, value, now_s))
+
+
 class _BlockingConditionServices:
     def __init__(
         self,
@@ -370,6 +384,46 @@ def test_ai_condition_filter_emits_only_matching_packets() -> None:
     assert len(passed) == 1
     assert passed[0].payload["ai"]["condition_filter"]["matches"] is True
     assert passed[0].payload["ai"]["condition_filter"]["model"] == "qwen3-vl:30b"
+
+
+def test_ai_condition_filter_records_confidence_telemetry() -> None:
+    async def scenario() -> _TelemetryContext:
+        import numpy as np
+
+        frame = np.zeros((32, 32, 3), dtype=np.uint8)
+        packet = Packet.create(
+            stream_id="camera:test",
+            payload={"frame_ts": 1_700_000_123.0},
+            artifacts={
+                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw"),
+                "frame": Artifact(name="frame", data=frame, mime_type="image/raw"),
+            },
+        )
+        services = _FakeServices(
+            condition={
+                "matches": True,
+                "confidence": 0.73,
+                "reason": "test",
+                "profile_id": "local_qwen3_vl_quality",
+            }
+        )
+        runtime = AiConditionFilterRuntime(
+            {
+                "condition_description": "someone is sitting on the sofa",
+                "confidence_threshold": 0.5,
+                "evaluation_interval_seconds": 0.0,
+                "reuse_last_decision_seconds": 0.0,
+            },
+            PipelineRuntimeDependencies(services=services),
+        )
+        context = _TelemetryContext()
+        await runtime.process_packet(packet, context)
+        return context
+
+    context = asyncio.run(scenario())
+    assert context.samples == [
+        ("ai.condition_filter.confidence", pytest.approx(0.73), pytest.approx(1_700_000_123.0))
+    ]
 
 
 def test_ai_condition_filter_skips_when_concurrency_is_full() -> None:

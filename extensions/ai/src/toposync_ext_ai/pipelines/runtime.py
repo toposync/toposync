@@ -7,7 +7,9 @@ from typing import Any
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
 from toposync.runtime.pipelines.images import resolve_image_artifact_for_data, set_image_key
+from toposync.runtime.pipelines.packet_contract import resolve_media_ts
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
+from toposync.runtime.pipelines.telemetry import METRIC_AI_CONDITION_CONFIDENCE
 
 from toposync_ext_ai.providers import ConditionEvaluationResult, RegionDetection, RegionDetectionResult
 
@@ -627,6 +629,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                 state.last_result = result
 
         passes = bool(result.matches and result.confidence >= self._config.confidence_threshold)
+        _record_condition_confidence_telemetry(packet=packet, context=context, result=result)
         if packet.lifecycle == Lifecycle.OPEN:
             state.stream_allowed = passes
         elif state.stream_allowed is None and passes:
@@ -784,6 +787,21 @@ def _settings_profiles(settings: Any) -> list[Any]:
     if profiles is None and isinstance(settings, dict):
         profiles = settings.get("profiles")
     return list(profiles) if isinstance(profiles, list | tuple) else []
+
+
+def _record_condition_confidence_telemetry(
+    *,
+    packet: Packet,
+    context: Any,
+    result: ConditionEvaluationResult,
+) -> None:
+    observe_numeric = getattr(context, "observe_telemetry_numeric", None)
+    if not callable(observe_numeric):
+        return
+    try:
+        observe_numeric(METRIC_AI_CONDITION_CONFIDENCE, float(result.confidence), now_s=float(resolve_media_ts(packet)))
+    except Exception:
+        return
 
 
 def _settings_default_profile_id(settings: Any) -> str:

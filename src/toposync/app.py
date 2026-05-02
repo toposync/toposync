@@ -70,6 +70,7 @@ from toposync.runtime.pipelines.safe_expression import SafeExpression, SafeExpre
 from toposync.runtime.pipelines.stats import PipelineStatsStore
 from toposync.runtime.pipelines.telemetry import (
     MAX_IMAGE_MARKER_QUERY_LIMIT,
+    METRIC_AI_CONDITION_CONFIDENCE,
     METRIC_MOTION_SCORE,
     METRIC_STORE_IMAGE,
     METRIC_VISION_CONFIDENCE,
@@ -101,7 +102,11 @@ from toposync.runtime.pipelines.templates import (
 )
 
 logger = logging.getLogger("toposync")
-DEFAULT_PIPELINES_TELEMETRY_METRICS = [METRIC_MOTION_SCORE, METRIC_VISION_CONFIDENCE]
+DEFAULT_PIPELINES_TELEMETRY_METRICS = [
+    METRIC_MOTION_SCORE,
+    METRIC_VISION_CONFIDENCE,
+    METRIC_AI_CONDITION_CONFIDENCE,
+]
 CLIENT_CLOSED_REQUEST_STATUS = 499
 _RequestWorkResult = TypeVar("_RequestWorkResult")
 

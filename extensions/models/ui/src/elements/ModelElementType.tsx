@@ -1,6 +1,6 @@
 import React, { useMemo } from "react";
 
-import { resolveToposyncUrl, type CompositionElement, type CompositionElementPatch, type ElementType, type HostI18n } from "@toposync/plugin-api";
+import { resolveToposyncUrl, type BoundsXZ, type CompositionElement, type CompositionElementPatch, type ElementType, type HostI18n } from "@toposync/plugin-api";
 
 import { MAXIMUM_MODEL_SCALE, MINIMUM_MODEL_SCALE, MODEL_ELEMENT_TYPE_ID } from "../constants";
 import { clamp, readNumber, readScale, readString, readVector3 } from "../parsing";
@@ -9,6 +9,28 @@ import type { Vector3 } from "../types";
 
 function readBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+function modelBounds(element: CompositionElement): BoundsXZ {
+  const size = readVector3((element.props as any).size, { x: 1, y: 1, z: 1 });
+  const scale = readScale((element.props as any).scale, 1);
+  const angle = readNumber((element.rotation as any)?.y, 0);
+  const halfX = (size.x * scale) / 2;
+  const halfZ = (size.z * scale) / 2;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const xs: number[] = [];
+  const zs: number[] = [];
+  for (const corner of [
+    { x: -halfX, z: -halfZ },
+    { x: halfX, z: -halfZ },
+    { x: halfX, z: halfZ },
+    { x: -halfX, z: halfZ },
+  ]) {
+    xs.push(element.position.x + corner.x * cos - corner.z * sin);
+    zs.push(element.position.z + corner.x * sin + corner.z * cos);
+  }
+  return { minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs) };
 }
 
 export function createModelElementType(i18n: HostI18n): ElementType {
@@ -36,6 +58,35 @@ export function createModelElementType(i18n: HostI18n): ElementType {
       min_y: 0,
       scale: 1,
       animation_enabled: false,
+    },
+    getMain2DBounds: modelBounds,
+    renderMain2DVector: ({ element }) => {
+      const size = readVector3((element.props as any).size, { x: 1, y: 1, z: 1 });
+      const scale = readScale((element.props as any).scale, 1);
+      const previewUrl = getPreviewUrl(element);
+      const rotationDeg = (readNumber((element.rotation as any)?.y, 0) * -180) / Math.PI;
+      const width = Math.max(0.2, size.x * scale);
+      const height = Math.max(0.2, size.z * scale);
+      return (
+        <g className="mainVector2dModel" transform={`translate(${element.position.x} ${element.position.z}) rotate(${rotationDeg})`} opacity={0.96}>
+          {previewUrl ? (
+            <image href={previewUrl} x={-width / 2} y={-height / 2} width={width} height={height} preserveAspectRatio="none" />
+          ) : (
+            <rect x={-width / 2} y={-height / 2} width={width} height={height} rx={0.04} fill="rgba(56,189,248,0.10)" />
+          )}
+          <rect
+            x={-width / 2}
+            y={-height / 2}
+            width={width}
+            height={height}
+            rx={0.04}
+            fill="none"
+            stroke="rgba(230,232,242,0.24)"
+            strokeWidth={0.026}
+            vectorEffect="non-scaling-stroke"
+          />
+        </g>
+      );
     },
     create3D: ({ THREE, requestRender }, element) => {
       const runtime = createGltfModelRuntime(THREE, { autoplay: false, onInvalidate: requestRender });

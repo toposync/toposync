@@ -4592,6 +4592,57 @@ textarea {
   background: var(--color-canvas2d-background);
 }
 
+.mainVector2dRoot {
+  overflow: hidden;
+  touch-action: none;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-canvas2d-background) 92%, var(--color-surface-solid)), var(--color-canvas2d-background));
+}
+
+.mainVector2dStage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.mainVector2dSvg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.mainVector2dElements {
+  isolation: isolate;
+}
+
+.mainVector2dEffects {
+  pointer-events: none;
+}
+
+.mainVector2dFallback circle {
+  fill: color-mix(in srgb, var(--color-accent-blue) 18%, transparent);
+  stroke: color-mix(in srgb, var(--color-text-primary) 24%, transparent);
+  stroke-width: 0.025;
+}
+
+.mainVector2dStatus {
+  position: absolute;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 12;
+  max-width: min(360px, calc(100% - var(--space-8)));
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-frost);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-12);
+  box-shadow: var(--shadow-elevation-1);
+}
+
 .appShell,
 .settingsRoot,
 .pipelinesRoot,
@@ -5028,6 +5079,12 @@ select {
 .main2dHaButton.isOff {
   border-color: color-mix(in srgb, var(--color-danger) 65%, transparent);
   background: color-mix(in srgb, var(--color-danger) 14%, var(--color-surface-frost));
+}
+
+.main2dHaButton.isUnknown,
+.main2dClusterPrimary.isUnknown {
+  border-color: color-mix(in srgb, var(--color-accent-blue) 45%, transparent);
+  background: color-mix(in srgb, var(--color-accent-blue) 10%, var(--color-surface-frost));
 }
 
 .main2dHaCluster,

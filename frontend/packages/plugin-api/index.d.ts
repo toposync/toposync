@@ -173,6 +173,17 @@ export type ElementType = {
     element: CompositionElement;
     viewport: Viewport2DContext;
   }) => void;
+  getMain2DBounds?: (element: CompositionElement) => BoundsXZ | null;
+  renderMain2DVector?: (args: {
+    element: CompositionElement;
+    ctx: Main2DVectorContext;
+  }) => import("react").ReactNode;
+  getMain2DMarker?: (args: { element: CompositionElement }) => Main2DMarker | null;
+  subscribeMain2DState?: (args: { element: CompositionElement; invalidate: () => void }) => (() => void) | void;
+  getMain2DEffectTargets?: (args: {
+    element: CompositionElement;
+    elements: CompositionElement[];
+  }) => Main2DEffectTarget[];
   hitTest2D?: (args: { element: CompositionElement; world: PlanePoint; viewport: Viewport2DContext }) => boolean;
   translate2D?: (args: { element: CompositionElement; delta: PlanePoint }) => CompositionElementPatch;
   renderActionModal?: (args: {
@@ -197,6 +208,43 @@ export type Viewport2DContext = {
   worldToScreen: (p: PlanePoint) => Vector2;
   screenToWorld: (p: Vector2) => PlanePoint;
   scale: number;
+};
+
+export type BoundsXZ = {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+};
+
+export type Main2DVectorContext = {
+  bounds: BoundsXZ;
+  scale: number;
+  themeId?: string;
+};
+
+export type Main2DMarkerState = "on" | "off" | "unknown" | "neutral";
+
+export type Main2DMarker = {
+  id?: string;
+  elementId?: string;
+  x: number;
+  z: number;
+  title: string;
+  subtitle?: string;
+  icon?: string;
+  state?: Main2DMarkerState | null;
+  className?: string;
+};
+
+export type Main2DEffectTarget = {
+  id: string;
+  element: CompositionElement;
+  baseElement?: CompositionElement;
+  signature?: unknown;
+  warmupSeconds?: number;
+  hideNonLightRenderables?: boolean;
+  opacity?: number;
 };
 
 export type EditorToolPointerEvent = {

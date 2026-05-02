@@ -1,7 +1,7 @@
 import React from "react";
 import type * as ThreeTypes from "three";
 
-import type { CompositionElement, CompositionElementPatch, ElementType, HostI18n } from "@toposync/plugin-api";
+import type { BoundsXZ, CompositionElement, CompositionElementPatch, ElementType, HostI18n, PlanePoint } from "@toposync/plugin-api";
 
 import { rgbaFromHex } from "../colors";
 import { AREA_ELEMENT_TYPE_ID, DEFAULT_AREA_FILL_COLOR, DEFAULT_AREA_OPACITY, FLOOR_EPSILON, GROUND_Y } from "../constants";
@@ -76,6 +76,26 @@ type TriangleXZ = {
   area: number;
 };
 
+function boundsForPoints(points: PlanePoint[]): BoundsXZ | null {
+  if (points.length === 0) return null;
+  let minX = points[0].x;
+  let maxX = points[0].x;
+  let minZ = points[0].z;
+  let maxZ = points[0].z;
+  for (let i = 1; i < points.length; i += 1) {
+    const point = points[i];
+    minX = Math.min(minX, point.x);
+    maxX = Math.max(maxX, point.x);
+    minZ = Math.min(minZ, point.z);
+    maxZ = Math.max(maxZ, point.z);
+  }
+  return { minX, maxX, minZ, maxZ };
+}
+
+function svgPolygonPoints(points: PlanePoint[]): string {
+  return points.map((point) => `${point.x},${point.z}`).join(" ");
+}
+
 function buildTriangleTable(geometry: ThreeTypes.BufferGeometry): { triangles: TriangleXZ[]; cdf: number[]; totalArea: number } {
   const pos = geometry.getAttribute("position") as ThreeTypes.BufferAttribute;
   const idx = geometry.getIndex();
@@ -139,6 +159,26 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
         { x: 1, z: 1 },
         { x: -1, z: 1 },
       ],
+    },
+    getMain2DBounds: (element) => boundsForPoints(readPlanePointArray(element.props.vertices)),
+    renderMain2DVector: ({ element }) => {
+      const vertices = readPlanePointArray(element.props.vertices);
+      if (vertices.length < 3) return null;
+      const fill = readString(element.props.fill, DEFAULT_AREA_FILL_COLOR);
+      const opacityRaw = readNumber(element.props.opacity, DEFAULT_AREA_OPACITY);
+      const opacity = opacityRaw < 0.001 ? 0 : opacityRaw;
+      return (
+        <g className="mainVector2dArea">
+          <polygon
+            points={svgPolygonPoints(vertices)}
+            fill={rgbaFromHex(fill, Math.min(0.88, Math.max(0, opacity)))}
+            stroke="rgba(230,232,242,0.20)"
+            strokeWidth={0.035}
+            vectorEffect="non-scaling-stroke"
+            filter="url(#mainVector2dSoftShadow)"
+          />
+        </g>
+      );
     },
     create3D: ({ THREE, view }, element) => {
       const group = new THREE.Group();

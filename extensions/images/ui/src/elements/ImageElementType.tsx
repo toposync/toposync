@@ -1,7 +1,7 @@
 import React from "react";
 import type * as ThreeTypes from "three";
 
-import { resolveToposyncUrl, type CompositionElement, type ElementType, type HostI18n } from "@toposync/plugin-api";
+import { resolveToposyncUrl, type BoundsXZ, type CompositionElement, type ElementType, type HostI18n } from "@toposync/plugin-api";
 
 import {
   DEFAULT_IMAGE_OPACITY_OVERLAY,
@@ -59,6 +59,27 @@ function parseImageProps(props: Record<string, unknown>): ImageProps {
   };
 }
 
+function imageBounds(element: CompositionElement): BoundsXZ {
+  const p = parseImageProps(element.props);
+  const angle = readNumber(element.rotation.y, 0);
+  const halfX = p.width_m / 2;
+  const halfZ = p.depth_m / 2;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const xs: number[] = [];
+  const zs: number[] = [];
+  for (const corner of [
+    { x: -halfX, z: -halfZ },
+    { x: halfX, z: -halfZ },
+    { x: halfX, z: halfZ },
+    { x: -halfX, z: halfZ },
+  ]) {
+    xs.push(element.position.x + corner.x * cos - corner.z * sin);
+    zs.push(element.position.z + corner.x * sin + corner.z * cos);
+  }
+  return { minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs) };
+}
+
 export function createImageElementType(i18n: HostI18n): ElementType {
   const imageCache = new Map<string, HTMLImageElement>();
 
@@ -78,6 +99,33 @@ export function createImageElementType(i18n: HostI18n): ElementType {
       blend: "normal",
       pixel_width: null,
       pixel_height: null,
+    },
+    getMain2DBounds: imageBounds,
+    renderMain2DVector: ({ element }) => {
+      const p = parseImageProps(element.props);
+      if (p.mode !== "overlay" && p.mode !== "tracing") return null;
+      const url = p.dir && p.file ? imageUrl(p) : "";
+      const rotationDeg = (readNumber(element.rotation.y, 0) * -180) / Math.PI;
+      const commonProps = {
+        x: -p.width_m / 2,
+        y: -p.depth_m / 2,
+        width: p.width_m,
+        height: p.depth_m,
+      };
+      return (
+        <g
+          className="mainVector2dImage"
+          transform={`translate(${element.position.x} ${element.position.z}) rotate(${rotationDeg})`}
+          opacity={p.opacity}
+          style={{ mixBlendMode: p.blend === "multiply" ? "multiply" : "normal" }}
+        >
+          {url ? (
+            <image href={url} {...commonProps} preserveAspectRatio="none" />
+          ) : (
+            <rect {...commonProps} fill="rgba(56,189,248,0.10)" stroke="rgba(230,232,242,0.22)" strokeWidth={0.025} vectorEffect="non-scaling-stroke" />
+          )}
+        </g>
+      );
     },
     create3D: ({ THREE, requestRender }, element) => {
       const group = new THREE.Group();

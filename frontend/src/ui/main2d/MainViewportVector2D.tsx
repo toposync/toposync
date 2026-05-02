@@ -1,0 +1,515 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import type { CompositionElement, ElementType, Main2DEffectTarget, Main2DMarker } from "@toposync/plugin-api";
+
+import { i18n } from "../../util/i18n";
+import { Icon } from "../Icon";
+import { Modal } from "../Modal";
+import {
+  clamp,
+  clusterMain2DMarkers,
+  computeFitTransform,
+  computeMain2DBounds,
+  orderElementsForMain2D,
+  padBounds,
+  projectWorldToStage,
+  stableStringify,
+  type Main2DMarkerStage,
+  type ViewTransform,
+} from "./shared";
+import { getOrCreateMain2DEffectManifest, type Main2DEffectRenderManifest } from "./vectorEffectCache";
+
+type Props = {
+  elements: CompositionElement[];
+  elementTypesById: Record<string, ElementType>;
+  compositionId: string;
+  onElementActivated?: (elementId: string, intent?: "click" | "dblclick" | "longpress") => void;
+};
+
+const MARKER_BUTTON_SIZE_PX = 44;
+const MARKER_CLUSTER_THRESHOLD_PX = MARKER_BUTTON_SIZE_PX * 0.92;
+const STAGE_PX_PER_METER = 96;
+
+function markerKey(marker: Main2DMarker, fallbackElementId: string): string {
+  return marker.id || marker.elementId || fallbackElementId;
+}
+
+function effectTargetCacheKey(targets: Main2DEffectTarget[]): string {
+  return stableStringify(
+    targets
+      .map((target) => ({
+        id: target.id,
+        element: target.element,
+        baseElement: target.baseElement ?? null,
+        signature: target.signature ?? null,
+        warmupSeconds: target.warmupSeconds ?? null,
+        hideNonLightRenderables: Boolean(target.hideNonLightRenderables),
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  );
+}
+
+export function MainViewportVector2D({
+  compositionId,
+  elements,
+  elementTypesById,
+  onElementActivated,
+}: Props): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const fitTransformRef = useRef<ViewTransform>({ scale: 1, x: 0, y: 0 });
+  const isPanningRef = useRef(false);
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const clickTimersRef = useRef<Map<string, number>>(new Map());
+  const invalidateRafRef = useRef<number | null>(null);
+
+  const [transform, setTransform] = useState<ViewTransform>({ scale: 1, x: 0, y: 0 });
+  const [stateVersion, setStateVersion] = useState(0);
+  const [effectManifest, setEffectManifest] = useState<Main2DEffectRenderManifest | null>(null);
+  const [effectLoading, setEffectLoading] = useState(false);
+  const [effectError, setEffectError] = useState<string | null>(null);
+  const [clusterModalMarkers, setClusterModalMarkers] = useState<Main2DMarkerStage[] | null>(null);
+
+  const invalidate = useCallback(() => {
+    if (invalidateRafRef.current != null) return;
+    invalidateRafRef.current = window.requestAnimationFrame(() => {
+      invalidateRafRef.current = null;
+      setStateVersion((prev) => prev + 1);
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (invalidateRafRef.current != null) window.cancelAnimationFrame(invalidateRafRef.current);
+      invalidateRafRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribers: Array<() => void> = [];
+    for (const element of elements) {
+      const def = elementTypesById[element.type];
+      if (!def?.subscribeMain2DState) continue;
+      try {
+        const unsubscribe = def.subscribeMain2DState({ element, invalidate });
+        if (typeof unsubscribe === "function") unsubscribers.push(unsubscribe);
+      } catch (err) {
+        console.warn(`[vector2d:subscribeMain2DState:${element.type}]`, err);
+      }
+    }
+    const onGlobalInvalidate = () => invalidate();
+    window.addEventListener("toposync:invalidate", onGlobalInvalidate);
+    return () => {
+      window.removeEventListener("toposync:invalidate", onGlobalInvalidate);
+      for (const unsubscribe of unsubscribers) {
+        try {
+          unsubscribe();
+        } catch {
+          // ignore
+        }
+      }
+    };
+  }, [elementTypesById, elements, invalidate]);
+
+  const rawMarkers = useMemo(() => {
+    const out: Array<{ elementId: string; marker: Main2DMarker }> = [];
+    for (const element of elements) {
+      const def = elementTypesById[element.type];
+      if (!def?.getMain2DMarker) continue;
+      try {
+        const marker = def.getMain2DMarker({ element });
+        if (marker) out.push({ elementId: element.id, marker });
+      } catch (err) {
+        console.warn(`[vector2d:getMain2DMarker:${element.type}]`, err);
+      }
+    }
+    return out;
+  }, [elementTypesById, elements, stateVersion]);
+
+  const bounds = useMemo(() => {
+    const markerPoints = rawMarkers.map(({ marker }) => ({ x: marker.x, z: marker.z }));
+    return padBounds(computeMain2DBounds(elements, elementTypesById, markerPoints), 0.08, 0.5);
+  }, [elementTypesById, elements, rawMarkers]);
+
+  const spanX = Math.max(1e-6, bounds.maxX - bounds.minX);
+  const spanZ = Math.max(1e-6, bounds.maxZ - bounds.minZ);
+  const stageWidth = Math.max(320, Math.round(spanX * STAGE_PX_PER_METER));
+  const stageHeight = Math.max(320, Math.round(spanZ * STAGE_PX_PER_METER));
+
+  const orderedElements = useMemo(() => orderElementsForMain2D(elements, elementTypesById), [elementTypesById, elements]);
+
+  const recomputeFit = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const next = computeFitTransform(container.clientWidth, container.clientHeight, stageWidth, stageHeight);
+    fitTransformRef.current = next;
+    setTransform(next);
+  }, [stageHeight, stageWidth]);
+
+  useEffect(() => {
+    recomputeFit();
+  }, [recomputeFit]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver(() => recomputeFit());
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [recomputeFit]);
+
+  const markersStage = useMemo<Main2DMarkerStage[]>(() => {
+    const out = rawMarkers.map(({ elementId, marker }) => {
+      const stage = projectWorldToStage({ x: marker.x, z: marker.z }, bounds, stageWidth, stageHeight);
+      const id = markerKey(marker, elementId);
+      return {
+        ...marker,
+        id,
+        elementId: marker.elementId || elementId,
+        stageX: stage.x,
+        stageY: stage.y,
+      };
+    });
+    out.sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
+    return out;
+  }, [bounds, rawMarkers, stageHeight, stageWidth]);
+
+  const markerEntries = useMemo(
+    () =>
+      clusterMain2DMarkers({
+        markers: markersStage,
+        transform,
+        thresholdPx: MARKER_CLUSTER_THRESHOLD_PX,
+        clusterTitle: (count) => t("core.ui.main2d.cluster.tooltip", { count }, `${count} items`),
+      }),
+    [markersStage, t, transform],
+  );
+
+  const effectTargets = useMemo<Main2DEffectTarget[]>(() => {
+    const out: Main2DEffectTarget[] = [];
+    for (const element of elements) {
+      const def = elementTypesById[element.type];
+      if (!def?.getMain2DEffectTargets) continue;
+      try {
+        for (const target of def.getMain2DEffectTargets({ element, elements })) {
+          if (!target?.id || !target.element) continue;
+          out.push(target);
+        }
+      } catch (err) {
+        console.warn(`[vector2d:getMain2DEffectTargets:${element.type}]`, err);
+      }
+    }
+    return out;
+  }, [elementTypesById, elements, stateVersion]);
+
+  const effectCacheKey = useMemo(() => effectTargetCacheKey(effectTargets), [effectTargets]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setEffectError(null);
+    if (effectTargets.length === 0) {
+      setEffectManifest(null);
+      setEffectLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setEffectLoading(true);
+    void getOrCreateMain2DEffectManifest({
+      compositionId,
+      elements,
+      elementTypesById,
+      bounds,
+      targets: effectTargets,
+    })
+      .then((manifest) => {
+        if (cancelled) return;
+        setEffectManifest(manifest);
+        setEffectLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.warn("[vector2d:effects]", err);
+        setEffectError(err instanceof Error ? err.message : String(err));
+        setEffectLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bounds, compositionId, effectCacheKey, elementTypesById, elements]);
+
+  const effectOpacityById = useMemo(() => {
+    const out = new Map<string, number>();
+    for (const target of effectTargets) out.set(target.id, clamp(target.opacity ?? 1, 0, 1));
+    return out;
+  }, [effectTargets]);
+
+  const handleWheel = useCallback(
+    (event: React.WheelEvent) => {
+      event.preventDefault();
+      const container = containerRef.current;
+      if (!container) return;
+
+      const rect = container.getBoundingClientRect();
+      const cursorX = event.clientX - rect.left;
+      const cursorY = event.clientY - rect.top;
+      const zoomSpeed = event.ctrlKey ? 0.0042 : 0.0024;
+      const zoomFactor = Math.exp(-event.deltaY * zoomSpeed);
+
+      setTransform((prev) => {
+        const baseMin = fitTransformRef.current.scale;
+        const minScale = Math.max(0.05, baseMin * 0.5);
+        const maxScale = Math.max(minScale * 1.5, baseMin * 10);
+        const nextScale = clamp(prev.scale * zoomFactor, minScale, maxScale);
+        const stageX = (cursorX - prev.x) / prev.scale;
+        const stageY = (cursorY - prev.y) / prev.scale;
+        return { scale: nextScale, x: cursorX - stageX * nextScale, y: cursorY - stageY * nextScale };
+      });
+    },
+    [],
+  );
+
+  const handlePointerDown = useCallback((event: React.PointerEvent) => {
+    if (event.button !== 0) return;
+    const container = containerRef.current;
+    if (!container) return;
+    isPanningRef.current = true;
+    lastPointerRef.current = { x: event.clientX, y: event.clientY };
+    try {
+      container.setPointerCapture(event.pointerId);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const stopPanning = useCallback((event: React.PointerEvent) => {
+    const container = containerRef.current;
+    isPanningRef.current = false;
+    lastPointerRef.current = null;
+    if (!container) return;
+    try {
+      container.releasePointerCapture(event.pointerId);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const handlePointerMove = useCallback((event: React.PointerEvent) => {
+    if (!isPanningRef.current) return;
+    const last = lastPointerRef.current;
+    if (!last) return;
+    const dx = event.clientX - last.x;
+    const dy = event.clientY - last.y;
+    lastPointerRef.current = { x: event.clientX, y: event.clientY };
+    setTransform((prev) => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      for (const timer of clickTimersRef.current.values()) window.clearTimeout(timer);
+      clickTimersRef.current.clear();
+    };
+  }, []);
+
+  const triggerClick = useCallback(
+    (elementId: string) => {
+      if (!onElementActivated) return;
+      const prevTimer = clickTimersRef.current.get(elementId);
+      if (prevTimer) window.clearTimeout(prevTimer);
+      const timer = window.setTimeout(() => {
+        clickTimersRef.current.delete(elementId);
+        onElementActivated(elementId, "click");
+      }, 180);
+      clickTimersRef.current.set(elementId, timer);
+    },
+    [onElementActivated],
+  );
+
+  const triggerDoubleClick = useCallback(
+    (elementId: string) => {
+      if (!onElementActivated) return;
+      const prevTimer = clickTimersRef.current.get(elementId);
+      if (prevTimer) {
+        window.clearTimeout(prevTimer);
+        clickTimersRef.current.delete(elementId);
+      }
+      onElementActivated(elementId, "dblclick");
+    },
+    [onElementActivated],
+  );
+
+  const renderFallbackVector = (element: CompositionElement): React.ReactNode => (
+    <g key={element.id} className="mainVector2dFallback">
+      <circle cx={element.position.x} cy={element.position.z} r={0.16} />
+      <title>{element.name || element.type}</title>
+    </g>
+  );
+
+  return (
+    <div
+      className="viewportRoot mainVector2dRoot"
+      ref={containerRef}
+      onWheel={handleWheel}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={stopPanning}
+      onPointerCancel={stopPanning}
+    >
+      <div
+        className="mainVector2dStage"
+        style={{
+          width: stageWidth,
+          height: stageHeight,
+          transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+        }}
+      >
+        <svg
+          className="mainVector2dSvg"
+          viewBox={`${bounds.minX} ${bounds.minZ} ${spanX} ${spanZ}`}
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <defs>
+            <filter id="mainVector2dSoftShadow" x="-20%" y="-20%" width="140%" height="140%">
+              <feDropShadow dx="0" dy="0.035" stdDeviation="0.04" floodColor="rgba(0,0,0,0.24)" />
+            </filter>
+          </defs>
+          <g className="mainVector2dElements">
+            {orderedElements.map((element) => {
+              const def = elementTypesById[element.type];
+              if (!def?.renderMain2DVector) return renderFallbackVector(element);
+              try {
+                return <React.Fragment key={element.id}>{def.renderMain2DVector({ element, ctx: { bounds, scale: transform.scale } })}</React.Fragment>;
+              } catch (err) {
+                console.warn(`[vector2d:renderMain2DVector:${element.type}]`, err);
+                return renderFallbackVector(element);
+              }
+            })}
+          </g>
+          {effectManifest ? (
+            <g className="mainVector2dEffects">
+              {effectManifest.effects.map((effect) => {
+                const opacity = effectOpacityById.get(effect.id) ?? 0;
+                return (
+                  <image
+                    key={effect.id}
+                    href={effect.url}
+                    x={effect.x}
+                    y={effect.z}
+                    width={effect.width}
+                    height={effect.height}
+                    preserveAspectRatio="none"
+                    opacity={opacity}
+                  />
+                );
+              })}
+            </g>
+          ) : null}
+        </svg>
+      </div>
+
+      <div className="main2dButtonsOverlay">
+        {markerEntries.map((entry) => {
+          if (entry.kind === "cluster") {
+            return (
+              <button
+                key={`cluster:${entry.id}`}
+                className="main2dHaButton main2dHaCluster"
+                type="button"
+                title={entry.title}
+                style={{ left: entry.screenX, top: entry.screenY }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => {
+                  setClusterModalMarkers(entry.markers.map(({ screenX: _screenX, screenY: _screenY, ...rest }) => rest));
+                }}
+              >
+                <Icon name="layer-group" />
+                <span className="main2dHaClusterCount">{entry.markers.length}</span>
+              </button>
+            );
+          }
+          return (
+            <button
+              key={entry.id}
+              className={[
+                "main2dHaButton",
+                entry.className ?? "",
+                entry.state === "on" ? "isOn" : "",
+                entry.state === "off" ? "isOff" : "",
+                entry.state === "unknown" ? "isUnknown" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              type="button"
+              title={entry.title}
+              style={{ left: entry.screenX, top: entry.screenY }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => triggerClick(entry.elementId)}
+              onDoubleClick={() => triggerDoubleClick(entry.elementId)}
+            >
+              <Icon name={entry.icon || "circle-dot"} />
+            </button>
+          );
+        })}
+      </div>
+
+      {(effectLoading || effectError) && effectTargets.length > 0 ? (
+        <div className="mainVector2dStatus">
+          {effectError ? t("core.ui.main2d.vector.effects_error", {}, "Some effects could not be rendered.") : t("core.ui.loading")}
+        </div>
+      ) : null}
+
+      <Modal
+        open={Boolean(clusterModalMarkers)}
+        title={t(
+          "core.ui.main2d.cluster.title",
+          { count: clusterModalMarkers?.length ?? 0 },
+          `Multiple items (${clusterModalMarkers?.length ?? 0})`,
+        )}
+        onClose={() => setClusterModalMarkers(null)}
+      >
+        <div className="main2dClusterList">
+          {(clusterModalMarkers ?? []).map((item) => (
+            <div key={item.id} className="main2dClusterRow">
+              <button
+                className={[
+                  "main2dClusterPrimary",
+                  item.state === "on" ? "isOn" : "",
+                  item.state === "off" ? "isOff" : "",
+                  item.state === "unknown" ? "isUnknown" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                type="button"
+                onClick={() => onElementActivated?.(item.elementId, "click")}
+              >
+                <span className="main2dClusterIcon">
+                  <Icon name={item.icon || "circle-dot"} />
+                </span>
+                <span className="main2dClusterMeta">
+                  <span className="main2dClusterTitle">{item.title}</span>
+                  {item.subtitle ? <span className="main2dClusterSubtitle">{item.subtitle}</span> : null}
+                </span>
+              </button>
+
+              <button
+                className="iconButton"
+                type="button"
+                aria-label={t("core.ui.action", {}, "Action")}
+                title={t("core.ui.action", {}, "Action")}
+                onClick={() => {
+                  setClusterModalMarkers(null);
+                  onElementActivated?.(item.elementId, "dblclick");
+                }}
+              >
+                <Icon name="ellipsis" />
+              </button>
+            </div>
+          ))}
+        </div>
+      </Modal>
+    </div>
+  );
+}

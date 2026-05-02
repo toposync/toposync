@@ -18,6 +18,7 @@ import { CompositionSelectorModal } from "../CompositionSelectorModal";
 import { Icon } from "../Icon";
 import { Viewport3D } from "../Viewport3D";
 import { MainViewport2D } from "../main2d/MainViewport2D";
+import { MainViewportVector2D } from "../main2d/MainViewportVector2D";
 import { notificationImageItems, notificationPriority, notificationThumbnailUrl } from "../notifications/pipelinesNotifications";
 import { StreamsDashboard } from "../streams/StreamsDashboard";
 
@@ -163,7 +164,7 @@ function loadNotificationsShowLow(): boolean {
   }
 }
 
-type RenderMode = "3d" | "2d" | "streams";
+type RenderMode = "3d" | "2d" | "vector2d" | "streams";
 
 const RENDER_MODE_STORAGE_KEY = "toposync.render_mode.v1";
 const STREAMS_OVERLAY_IDLE_MS = 2500;
@@ -203,7 +204,7 @@ export function MainScreen({
   const [renderMode, setRenderMode] = useState<RenderMode>(() => {
     try {
       const saved = localStorage.getItem(RENDER_MODE_STORAGE_KEY);
-      return saved === "2d" || saved === "streams" ? saved : "3d";
+      return saved === "2d" || saved === "vector2d" || saved === "streams" ? saved : "3d";
     } catch {
       return "3d";
     }
@@ -494,7 +495,13 @@ export function MainScreen({
   }, [activeNotificationId, notifications, showLowPriority]);
 
   const renderModeLabel =
-    renderMode === "3d" ? "3D" : renderMode === "2d" ? "2D" : t("core.ui.render_modal.option_streams.title", {}, "Streams");
+    renderMode === "3d"
+      ? "3D"
+      : renderMode === "2d"
+        ? "2D"
+        : renderMode === "vector2d"
+          ? t("core.ui.render_modal.option_vector2d.title", {}, "2D (Vector)")
+          : t("core.ui.render_modal.option_streams.title", {}, "Streams");
 
   return (
     <div className="screenRoot">
@@ -519,6 +526,13 @@ export function MainScreen({
         <>
           {renderMode === "2d" ? (
             <MainViewport2D
+              elements={elements}
+              elementTypesById={elementTypesById}
+              compositionId={activeCompositionId}
+              onElementActivated={handleElementActivated}
+            />
+          ) : renderMode === "vector2d" ? (
+            <MainViewportVector2D
               elements={elements}
               elementTypesById={elementTypesById}
               compositionId={activeCompositionId}
@@ -775,6 +789,26 @@ export function MainScreen({
           >
             <div className="choiceTitle">{t("core.ui.render_modal.option_2d.title")}</div>
             <div className="choiceDesc">{t("core.ui.render_modal.option_2d.desc")}</div>
+          </div>
+          <div
+            className={["choiceItem", renderMode === "vector2d" ? "isSelected" : ""].filter(Boolean).join(" ")}
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              setRenderMode("vector2d");
+              setIsRenderModalOpen(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                setRenderMode("vector2d");
+                setIsRenderModalOpen(false);
+              }
+            }}
+          >
+            <div className="choiceTitle">{t("core.ui.render_modal.option_vector2d.title", {}, "2D (Vector)")}</div>
+            <div className="choiceDesc">
+              {t("core.ui.render_modal.option_vector2d.desc", {}, "Lightweight vector plan with live controls and cached effects.")}
+            </div>
           </div>
           <div
             className={["choiceItem", renderMode === "streams" ? "isSelected" : ""].filter(Boolean).join(" ")}

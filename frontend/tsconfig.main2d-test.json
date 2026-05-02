@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "noEmit": false,
+    "outDir": ".test-dist",
+    "rootDir": "src",
+    "types": []
+  },
+  "include": [
+    "src/ui/main2d/shared.ts",
+    "src/ui/main2d/vectorEffectCache.ts",
+    "src/ui/main2d/shared.test.ts"
+  ]
+}

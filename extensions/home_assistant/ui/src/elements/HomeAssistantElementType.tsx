@@ -1,7 +1,7 @@
 import React from "react";
 import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
 
-import { resolveToposyncUrl, type CompositionElement, type ElementType, type HostI18n } from "@toposync/plugin-api";
+import { resolveToposyncUrl, type BoundsXZ, type CompositionElement, type ElementType, type HostI18n, type Main2DEffectTarget } from "@toposync/plugin-api";
 
 import { readScale as readModelScale, readVector3 as readModelVector3 } from "../../../../models/ui/src/parsing";
 import { createGltfModelRuntime } from "../../../../models/ui/src/runtime/gltfModel";
@@ -41,7 +41,7 @@ import {
   readRecord,
   readString,
 } from "../parsing";
-import { getHomeAssistantLiveState, setHomeAssistantLiveState, watchHomeAssistantLiveStates } from "../liveStates";
+import { getHomeAssistantLiveState, setHomeAssistantLiveState, subscribeToHomeAssistantLive, watchHomeAssistantLiveStates } from "../liveStates";
 import { HomeAssistantAction } from "../ui/HomeAssistantAction";
 import { HomeAssistantEditor } from "../ui/HomeAssistantEditor";
 
@@ -58,6 +58,35 @@ function resolvePrimaryEntityId(props: Record<string, unknown>): string {
   if (configured) return configured;
   const items = readHomeAssistantItemRefs(props.items);
   return items.length === 1 && items[0].kind === "entity" ? items[0].id : "";
+}
+
+function homeAssistantBounds(element: CompositionElement): BoundsXZ {
+  return {
+    minX: element.position.x - 0.65,
+    maxX: element.position.x + 0.65,
+    minZ: element.position.z - 0.65,
+    maxZ: element.position.z + 0.65,
+  };
+}
+
+function forcePrimaryState(element: CompositionElement, primaryState: string): CompositionElement {
+  return {
+    ...element,
+    props: {
+      ...readRecord(element.props),
+      server_id: "",
+      primary_state: primaryState,
+    },
+  };
+}
+
+function primaryLiveStateForProps(props: Record<string, unknown>): { serverId: string; entityId: string; live: HomeAssistantLiveState | null; state: string; domain: string } {
+  const serverId = readString(props.server_id).trim();
+  const entityId = resolvePrimaryEntityId(props);
+  const live = serverId && entityId ? getHomeAssistantLiveState(serverId, entityId) : null;
+  const state = readString(live?.state ?? props.primary_state).trim().toLowerCase();
+  const domain = entityId ? domainFromEntityId(entityId) : "";
+  return { serverId, entityId, live, state, domain };
 }
 
 export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
@@ -85,6 +114,146 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
       lamp_color: DEFAULT_LAMP_COLOR,
       airflow_intensity: DEFAULT_AIRFLOW_INTENSITY,
       model3d: null,
+    },
+    getMain2DBounds: homeAssistantBounds,
+    getMain2DMarker: ({ element }) => {
+      const props = readRecord(element.props);
+      const icon = sanitizeFontAwesomeIconName(readString(props.icon, "house")) || "house";
+      const items = readHomeAssistantItemRefs(props.items);
+      const { serverId: _serverId, entityId, state, domain } = primaryLiveStateForProps(props);
+      const hasBooleanState = entityId ? isBooleanStateDomain(domain) : false;
+      const boolState = entityId ? boolStateForDomain(domain, state) : null;
+      return {
+        elementId: element.id,
+        x: element.position.x,
+        z: element.position.z,
+        title: element.name || entityId || "Home Assistant",
+        subtitle: element.name && entityId && entityId !== element.name ? entityId : "",
+        icon,
+        state: hasBooleanState ? (boolState === true ? "on" : boolState === false ? "off" : "unknown") : "neutral",
+        className: "main2dHomeAssistantMarker",
+      };
+    },
+    subscribeMain2DState: ({ element, invalidate }) => {
+      const props = readRecord(element.props);
+      const serverId = readString(props.server_id).trim();
+      const entityId = resolvePrimaryEntityId(props);
+      if (!serverId || !entityId) return undefined;
+      const unwatch = watchHomeAssistantLiveStates(serverId, [entityId]);
+      const unsubscribe = subscribeToHomeAssistantLive(serverId, invalidate);
+      return () => {
+        unsubscribe();
+        unwatch();
+      };
+    },
+    renderMain2DVector: ({ element }) => {
+      const props = readRecord(element.props);
+      const specialView = readHomeAssistantSpecialView(props.special_view);
+      const { entityId, state, domain, live } = primaryLiveStateForProps(props);
+      const hasBooleanState = entityId ? isBooleanStateDomain(domain) : false;
+      const boolState = entityId ? boolStateForDomain(domain, state) : null;
+      const fill = hasBooleanState
+        ? boolState === true
+          ? "rgba(34,197,94,0.14)"
+          : boolState === false
+            ? "rgba(239,68,68,0.10)"
+            : "rgba(56,189,248,0.10)"
+        : "rgba(56,189,248,0.10)";
+      const stroke = hasBooleanState
+        ? boolState === true
+          ? "rgba(34,197,94,0.38)"
+          : boolState === false
+            ? "rgba(239,68,68,0.34)"
+            : "rgba(56,189,248,0.28)"
+        : "rgba(56,189,248,0.26)";
+      const rotationDeg = (-(element.rotation?.y ?? 0) * 180) / Math.PI;
+
+      if (specialView === "ceiling_fan") {
+        const r = CEILING_FAN_RADIUS_WORLD;
+        return (
+          <g className="mainVector2dHomeAssistantFan" transform={`translate(${element.position.x} ${element.position.z}) rotate(${rotationDeg})`}>
+            <circle r={r} fill={fill} stroke={stroke} strokeWidth={0.022} vectorEffect="non-scaling-stroke" />
+            {Array.from({ length: CEILING_FAN_BLADE_COUNT }, (_, index) => (
+              <rect key={index} x={r * 0.14} y={-r * 0.07} width={r * 0.7} height={r * 0.14} rx={r * 0.05} transform={`rotate(${(index / CEILING_FAN_BLADE_COUNT) * 360})`} fill="rgba(230,232,242,0.14)" />
+            ))}
+            <circle r={r * 0.14} fill="rgba(230,232,242,0.24)" />
+          </g>
+        );
+      }
+
+      if (specialView === "airflow") {
+        const flow = climateFlowFromLiveState(live, state);
+        const color = flow.mode === "heat" ? "rgba(255,107,107,0.32)" : flow.mode === "cool" ? "rgba(77,171,247,0.34)" : "rgba(147,197,253,0.30)";
+        return (
+          <g className="mainVector2dHomeAssistantAirflow" transform={`translate(${element.position.x} ${element.position.z}) rotate(${rotationDeg})`}>
+            <rect x={-0.34} y={-0.08} width={0.68} height={0.16} rx={0.045} fill={fill} stroke={stroke} strokeWidth={0.02} vectorEffect="non-scaling-stroke" />
+            <path d="M -0.24 0.10 C -0.08 0.26, 0.08 0.26, 0.24 0.10" fill="none" stroke={color} strokeWidth={0.026} strokeLinecap="round" vectorEffect="non-scaling-stroke" opacity={flow.active ? 1 : 0.28} />
+          </g>
+        );
+      }
+
+      return (
+        <g className="mainVector2dHomeAssistant" transform={`translate(${element.position.x} ${element.position.z})`}>
+          <circle r={0.22} fill={fill} stroke={stroke} strokeWidth={0.022} vectorEffect="non-scaling-stroke" />
+        </g>
+      );
+    },
+    getMain2DEffectTargets: ({ element }) => {
+      const props = readRecord(element.props);
+      const specialView = readHomeAssistantSpecialView(props.special_view);
+      const items = readHomeAssistantItemRefs(props.items);
+      const { entityId, state, domain, live } = primaryLiveStateForProps(props);
+      if (items.length !== 1 || !entityId || !domain) return [];
+
+      if (specialView === "lamp" && LAMP_COMPATIBLE_DOMAINS.has(domain.toLowerCase())) {
+        const boolState = boolStateForDomain(domain, state);
+        const intensity = readLampIntensity(props.lamp_intensity);
+        const opacity = boolState === true ? clamp(0.75 * intensity, 0.2, 1.0) : 0;
+        return [
+          {
+            id: `${element.id}:lamp`,
+            element: forcePrimaryState(element, "on"),
+            baseElement: forcePrimaryState(element, "off"),
+            warmupSeconds: 0.4,
+            hideNonLightRenderables: true,
+            opacity,
+            signature: {
+              kind: "lamp",
+              color: readHexColor(props.lamp_color, DEFAULT_LAMP_COLOR),
+              intensity,
+              view_mode: readHomeAssistantViewMode(props.view_mode),
+            },
+          },
+        ] satisfies Main2DEffectTarget[];
+      }
+
+      if (specialView === "airflow" && AIRFLOW_COMPATIBLE_DOMAINS.has(domain.toLowerCase())) {
+        const flow = climateFlowFromLiveState(live, state);
+        const intensity = readAirflowIntensity(props.airflow_intensity);
+        const baseOpacity = flow.active ? clamp(flow.factor * 0.7 * intensity, 0.1, 1.0) : 0;
+        const variants: Array<{ mode: "cool" | "heat" | "neutral"; state: string }> = [
+          { mode: "cool", state: "cool" },
+          { mode: "heat", state: "heat" },
+          { mode: "neutral", state: "fan_only" },
+        ];
+        return variants.map((variant) => ({
+          id: `${element.id}:airflow:${variant.mode}`,
+          element: forcePrimaryState(element, variant.state),
+          baseElement: forcePrimaryState(element, "off"),
+          warmupSeconds: 2.0,
+          opacity: flow.mode === variant.mode ? baseOpacity : 0,
+          signature: {
+            kind: "airflow",
+            mode: variant.mode,
+            intensity,
+            width: readAirflowWidth(props.airflow_width, 0.72),
+            mountY: readOptionalFiniteNumber(props.airflow_mount_y),
+            view_mode: readHomeAssistantViewMode(props.view_mode),
+          },
+        })) satisfies Main2DEffectTarget[];
+      }
+
+      return [];
     },
     primaryAction: async ({ element, api, update }) => {
       const props = readRecord(element.props);

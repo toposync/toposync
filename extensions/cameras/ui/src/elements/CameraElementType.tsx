@@ -4,6 +4,7 @@ import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
 import cameraSvg from "@fortawesome/fontawesome-free/svgs/solid/camera.svg";
 
 import type {
+  BoundsXZ,
   CompositionElement,
   CompositionElementPatch,
   EditorToolPointerEvent,
@@ -100,6 +101,15 @@ function formatPtzTelemetryValue(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : "—";
 }
 
+function cameraBounds(element: CompositionElement): BoundsXZ {
+  return {
+    minX: element.position.x - 0.42,
+    maxX: element.position.x + 0.42,
+    minZ: element.position.z - 0.42,
+    maxZ: element.position.z + 0.42,
+  };
+}
+
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -119,6 +129,32 @@ export function createCameraElementType(host: TopoSyncHost): ElementType {
     description: { key: "ext.cameras.element.desc" },
     placeable: false,
     defaultProps: { camera_id: "", camera_name: "", view_mode: "ceiling" },
+    getMain2DBounds: cameraBounds,
+    getMain2DMarker: ({ element }) => {
+      const props = readRecord(element.props);
+      const cameraName = readString(props.camera_name).trim();
+      const cameraId = readString(props.camera_id).trim();
+      return {
+        elementId: element.id,
+        x: element.position.x,
+        z: element.position.z,
+        title: element.name || cameraName || cameraId || i18n.t("ext.cameras.element.name", {}, "Camera"),
+        subtitle: cameraName && cameraId && cameraName !== cameraId ? cameraId : "",
+        icon: "camera",
+        state: "neutral",
+        className: "main2dCameraMarker",
+      };
+    },
+    renderMain2DVector: ({ element }) => {
+      const rotation = typeof element.rotation?.y === "number" ? element.rotation.y : 0;
+      const rotationDeg = (-rotation * 180) / Math.PI;
+      return (
+        <g className="mainVector2dCamera" transform={`translate(${element.position.x} ${element.position.z}) rotate(${rotationDeg})`}>
+          <path d="M -0.18 -0.12 L 0 -0.38 L 0.18 -0.12 Z" fill="rgba(251,191,36,0.18)" stroke="rgba(251,191,36,0.42)" strokeWidth={0.018} vectorEffect="non-scaling-stroke" />
+          <rect x={-0.17} y={-0.10} width={0.34} height={0.21} rx={0.08} fill="rgba(56,189,248,0.14)" stroke="rgba(230,232,242,0.24)" strokeWidth={0.022} vectorEffect="non-scaling-stroke" />
+        </g>
+      );
+    },
     render2D: ({ ctx: canvasContext, element, viewport }) => {
       const center = viewport.worldToScreen({ x: element.position.x, z: element.position.z });
       const rotation = typeof element.rotation?.y === "number" ? element.rotation.y : 0;

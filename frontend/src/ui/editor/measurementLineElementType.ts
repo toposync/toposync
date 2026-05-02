@@ -1,4 +1,5 @@
-import type { ElementType, PlanePoint, Viewport2DContext } from "@toposync/plugin-api";
+import React from "react";
+import type { BoundsXZ, ElementType, PlanePoint, Viewport2DContext } from "@toposync/plugin-api";
 
 import { i18n, type Locale } from "../../util/i18n";
 
@@ -42,6 +43,16 @@ function formatMeters(meters: number): string {
 
 function distance(a: PlanePoint, b: PlanePoint): number {
   return Math.hypot(a.x - b.x, a.z - b.z);
+}
+
+function measurementBounds(a: PlanePoint, b: PlanePoint, widthM: number): BoundsXZ {
+  const pad = Math.max(0.05, widthM * 2);
+  return {
+    minX: Math.min(a.x, b.x) - pad,
+    maxX: Math.max(a.x, b.x) + pad,
+    minZ: Math.min(a.z, b.z) - pad,
+    maxZ: Math.max(a.z, b.z) + pad,
+  };
 }
 
 export function drawMeasurementLine2D(args: {
@@ -134,6 +145,36 @@ export function createMeasurementLineElementType(): ElementType {
       color: DEFAULT_MEASUREMENT_COLOR,
       width: DEFAULT_MEASUREMENT_WIDTH_M,
     },
+    getMain2DBounds: (element) => {
+      const fallbackA = { x: element.position.x, z: element.position.z };
+      const fallbackB = { x: element.position.x + 1, z: element.position.z };
+      const a = readPlanePoint(element.props.a, fallbackA);
+      const b = readPlanePoint(element.props.b, fallbackB);
+      const widthM = readNumber(element.props.width, DEFAULT_MEASUREMENT_WIDTH_M);
+      return measurementBounds(a, b, widthM);
+    },
+    renderMain2DVector: ({ element }) => {
+      const fallbackA = { x: element.position.x, z: element.position.z };
+      const fallbackB = { x: element.position.x + 1, z: element.position.z };
+      const a = readPlanePoint(element.props.a, fallbackA);
+      const b = readPlanePoint(element.props.b, fallbackB);
+      const color = readString(element.props.color, DEFAULT_MEASUREMENT_COLOR);
+      const widthM = readNumber(element.props.width, DEFAULT_MEASUREMENT_WIDTH_M);
+      return React.createElement(
+        "g",
+        { className: "mainVector2dMeasurement" },
+        React.createElement("line", {
+          x1: a.x,
+          y1: a.z,
+          x2: b.x,
+          y2: b.z,
+          stroke: color,
+          strokeWidth: Math.max(0.01, widthM),
+          strokeLinecap: "round",
+          strokeDasharray: "0.12 0.08",
+        }),
+      );
+    },
     render2D: ({ ctx, element, viewport }) => {
       const fallbackA = { x: element.position.x, z: element.position.z };
       const fallbackB = { x: element.position.x + 1, z: element.position.z };
@@ -146,4 +187,3 @@ export function createMeasurementLineElementType(): ElementType {
     },
   };
 }
-

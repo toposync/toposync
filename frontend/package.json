@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "webpack serve --mode development",
+    "test:main2d": "rm -rf .test-dist && tsc -p tsconfig.main2d-test.json && node --test .test-dist/ui/main2d/shared.test.js && rm -rf .test-dist",
     "typecheck": "tsc -p tsconfig.json",
     "build": "npm run typecheck && webpack --mode production"
   },

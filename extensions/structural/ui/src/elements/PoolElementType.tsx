@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import type * as ThreeTypes from "three";
 
-import type { CompositionElement, CompositionElementPatch, ElementType, HostI18n, PlanePoint } from "@toposync/plugin-api";
+import type { BoundsXZ, CompositionElement, CompositionElementPatch, ElementType, HostI18n, PlanePoint } from "@toposync/plugin-api";
 
 import { rgbaFromHex } from "../colors";
 import { DEFAULT_POOL_DEPTH_METERS, FLOOR_EPSILON, GROUND_Y, POOL_ELEMENT_TYPE_ID } from "../constants";
@@ -17,6 +17,26 @@ let cachedWaterNormalTexture: ThreeTypes.Texture | null = null;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function boundsForPoints(points: PlanePoint[]): BoundsXZ | null {
+  if (points.length === 0) return null;
+  let minX = points[0].x;
+  let maxX = points[0].x;
+  let minZ = points[0].z;
+  let maxZ = points[0].z;
+  for (let i = 1; i < points.length; i += 1) {
+    const point = points[i];
+    minX = Math.min(minX, point.x);
+    maxX = Math.max(maxX, point.x);
+    minZ = Math.min(minZ, point.z);
+    maxZ = Math.max(maxZ, point.z);
+  }
+  return { minX, maxX, minZ, maxZ };
+}
+
+function svgPolygonPoints(points: PlanePoint[]): string {
+  return points.map((point) => `${point.x},${point.z}`).join(" ");
 }
 
 function createWaterBumpCanvas(size: number): HTMLCanvasElement {
@@ -219,6 +239,30 @@ export function createPoolElementType(i18n: HostI18n): ElementType {
         { x: 1, z: 1 },
         { x: -1, z: 1 },
       ],
+    },
+    getMain2DBounds: (element) => boundsForPoints(parsePoolProps(element.props).vertices),
+    renderMain2DVector: ({ element }) => {
+      const pool = parsePoolProps(element.props);
+      if (pool.vertices.length < 3) return null;
+      return (
+        <g className="mainVector2dPool">
+          <polygon
+            points={svgPolygonPoints(pool.vertices)}
+            fill="rgba(14,165,233,0.22)"
+            stroke="rgba(56,189,248,0.78)"
+            strokeWidth={0.04}
+            vectorEffect="non-scaling-stroke"
+            filter="url(#mainVector2dSoftShadow)"
+          />
+          <polygon
+            points={svgPolygonPoints(pool.vertices)}
+            fill="none"
+            stroke="rgba(224,242,254,0.38)"
+            strokeWidth={0.012}
+            vectorEffect="non-scaling-stroke"
+          />
+        </g>
+      );
     },
     create3D: ({ THREE, view }, element) => {
       const group = new THREE.Group();

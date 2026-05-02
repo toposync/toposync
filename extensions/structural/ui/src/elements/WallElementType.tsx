@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import type * as ThreeTypes from "three";
 
-import type { CompositionElement, CompositionElementPatch, ElementType, HostI18n, PlanePoint } from "@toposync/plugin-api";
+import type { BoundsXZ, CompositionElement, CompositionElementPatch, ElementType, HostI18n, PlanePoint } from "@toposync/plugin-api";
 
 import { DEFAULT_WALL_COLOR, DEFAULT_WALL_WIDTH, GROUND_Y, WALL_ELEMENT_TYPE_ID } from "../constants";
 import { addPoints, distanceBetweenPoints, normalizePoint, perpendicularPoint, scalePoint, subtractPoints } from "../geometry";
@@ -101,6 +101,22 @@ function buildSolidRects(length: number, height: number, openings: ResolvedWallO
 
 function pointAtDistance(start: PlanePoint, direction: PlanePoint, distanceMeters: number): PlanePoint {
   return addPoints(start, scalePoint(direction, distanceMeters));
+}
+
+function wallBounds(element: CompositionElement): BoundsXZ {
+  const startPoint = readPlanePoint(element.props.a, { x: element.position.x, z: element.position.z });
+  const endPoint = readPlanePoint(element.props.b, { x: element.position.x + 1, z: element.position.z });
+  const width = Math.max(0.04, readNumber(element.props.width, DEFAULT_WALL_WIDTH));
+  return {
+    minX: Math.min(startPoint.x, endPoint.x) - width,
+    maxX: Math.max(startPoint.x, endPoint.x) + width,
+    minZ: Math.min(startPoint.z, endPoint.z) - width,
+    maxZ: Math.max(startPoint.z, endPoint.z) + width,
+  };
+}
+
+function svgPoints(points: PlanePoint[]): string {
+  return points.map((point) => `${point.x},${point.z}`).join(" ");
 }
 
 function distPointToSegment(point: PlanePoint, a: PlanePoint, b: PlanePoint): number {
@@ -345,6 +361,63 @@ export function createWallElementType(i18n: HostI18n): ElementType {
       a: { x: 0, z: 0 },
       b: { x: 1, z: 0 },
       openings: [],
+    },
+    getMain2DBounds: wallBounds,
+    renderMain2DVector: ({ element }) => {
+      const startPoint = readPlanePoint(element.props.a, { x: element.position.x, z: element.position.z });
+      const endPoint = readPlanePoint(element.props.b, { x: element.position.x + 1, z: element.position.z });
+      const color = readString(element.props.color, DEFAULT_WALL_COLOR);
+      const widthWorld = Math.max(0.04, readNumber(element.props.width, DEFAULT_WALL_WIDTH));
+      const length = Math.max(0.001, distanceBetweenPoints(startPoint, endPoint));
+      const direction = normalizePoint(subtractPoints(endPoint, startPoint));
+      const normal = perpendicularPoint(direction);
+      const openings = resolveWallOpenings(readWallOpenings(element.props.openings), length, 3.2);
+      const blocked = openings.map((opening) => ({ start: opening.start_m, end: opening.end_m }));
+      const solids = subtractIntervals(length, blocked);
+      const openingHalfThickness = Math.max(widthWorld / 2, 0.09);
+
+      return (
+        <g className="mainVector2dWall" filter="url(#mainVector2dSoftShadow)">
+          {solids.map((interval, index) => {
+            const a = pointAtDistance(startPoint, direction, interval.start);
+            const b = pointAtDistance(startPoint, direction, interval.end);
+            return (
+              <g key={`solid:${index}`}>
+                <line
+                  x1={a.x}
+                  y1={a.z}
+                  x2={b.x}
+                  y2={b.z}
+                  stroke="rgba(0,0,0,0.26)"
+                  strokeWidth={widthWorld + 0.04}
+                  strokeLinecap="round"
+                />
+                <line x1={a.x} y1={a.z} x2={b.x} y2={b.z} stroke={color} strokeWidth={widthWorld} strokeLinecap="round" />
+              </g>
+            );
+          })}
+          {openings.map((opening) => {
+            const s = pointAtDistance(startPoint, direction, opening.start_m);
+            const e = pointAtDistance(startPoint, direction, opening.end_m);
+            const p0 = addPoints(s, scalePoint(normal, openingHalfThickness));
+            const p1 = addPoints(e, scalePoint(normal, openingHalfThickness));
+            const p2 = addPoints(e, scalePoint(normal, -openingHalfThickness));
+            const p3 = addPoints(s, scalePoint(normal, -openingHalfThickness));
+            const style = openingPreviewStyle(opening.kind);
+            return (
+              <polygon
+                key={opening.id}
+                points={svgPoints([p0, p1, p2, p3])}
+                fill={style.fill}
+                stroke={style.stroke}
+                strokeWidth={0.025}
+                strokeDasharray={opening.kind === "door" ? "0.16 0.08" : opening.kind === "window" ? "0.10 0.07" : "0.18 0.09"}
+                vectorEffect="non-scaling-stroke"
+              />
+            );
+          })}
+        </g>
+      );
     },
     create3D: ({ THREE, view }, element) => {
       const root = new THREE.Group();

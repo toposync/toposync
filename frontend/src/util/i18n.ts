@@ -318,8 +318,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.render_modal.option_3d.desc": "Interactive 3D view.",
     "core.ui.render_modal.option_2d.title": "2D (Snapshot)",
     "core.ui.render_modal.option_2d.desc": "Top-down snapshot with Home Assistant overlays.",
+    "core.ui.render_modal.option_vector2d.title": "2D (Vector)",
+    "core.ui.render_modal.option_vector2d.desc": "Lightweight vector plan with live controls and cached effects.",
     "core.ui.render_modal.option_streams.title": "Streams",
     "core.ui.render_modal.option_streams.desc": "Display configured streams in a paged live dashboard.",
+    "core.ui.main2d.vector.effects_error": "Some effects could not be rendered.",
 
     "core.ui.streams.unavailable": "Streaming extension unavailable.",
     "core.ui.streams.empty": "No enabled streams. Create one in Settings > Streams.",
@@ -2030,8 +2033,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.render_modal.option_3d.desc": "Visualização 3D interativa.",
     "core.ui.render_modal.option_2d.title": "2D (Captura)",
     "core.ui.render_modal.option_2d.desc": "Captura de cima com overlays do Home Assistant.",
+    "core.ui.render_modal.option_vector2d.title": "2D (Vetor)",
+    "core.ui.render_modal.option_vector2d.desc": "Planta vetorial leve com controles ao vivo e efeitos em cache.",
     "core.ui.render_modal.option_streams.title": "Transmissões",
     "core.ui.render_modal.option_streams.desc": "Exibe transmissões configuradas em um dashboard ao vivo com paginação.",
+    "core.ui.main2d.vector.effects_error": "Alguns efeitos não puderam ser renderizados.",
 
     "core.ui.streams.unavailable": "Extensão de streaming indisponível.",
     "core.ui.streams.empty": "Nenhuma transmissão ativa. Crie uma em Configurações > Transmissões.",

@@ -234,11 +234,44 @@ export function orderElementsForMain2D(
 }
 
 export function computeFitTransform(containerWidth: number, containerHeight: number, stageWidth: number, stageHeight: number): ViewTransform {
-  const scale = Math.min(containerWidth / Math.max(1, stageWidth), containerHeight / Math.max(1, stageHeight)) * 0.96;
+  const safeContainerWidth = Math.max(1, containerWidth);
+  const safeContainerHeight = Math.max(1, containerHeight);
+  const safeStageWidth = Math.max(1, stageWidth);
+  const safeStageHeight = Math.max(1, stageHeight);
+  const scale = Math.min(safeContainerWidth / safeStageWidth, safeContainerHeight / safeStageHeight) * 0.96;
   return {
     scale,
-    x: (containerWidth - stageWidth * scale) / 2,
-    y: (containerHeight - stageHeight * scale) / 2,
+    x: (safeContainerWidth - safeStageWidth * scale) / 2,
+    y: (safeContainerHeight - safeStageHeight * scale) / 2,
+  };
+}
+
+export function computeMain2DVectorViewBox(args: {
+  bounds: BoundsXZ;
+  stageWidth: number;
+  stageHeight: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  transform: ViewTransform;
+}): BoundsXZ {
+  const spanX = Math.max(1e-6, args.bounds.maxX - args.bounds.minX);
+  const spanZ = Math.max(1e-6, args.bounds.maxZ - args.bounds.minZ);
+  const safeStageWidth = Math.max(1, args.stageWidth);
+  const safeStageHeight = Math.max(1, args.stageHeight);
+  const safeViewportWidth = Math.max(1, args.viewportWidth);
+  const safeViewportHeight = Math.max(1, args.viewportHeight);
+  const safeScale = Math.max(1e-6, args.transform.scale);
+
+  const stageMinX = -args.transform.x / safeScale;
+  const stageMinY = -args.transform.y / safeScale;
+  const stageMaxX = stageMinX + safeViewportWidth / safeScale;
+  const stageMaxY = stageMinY + safeViewportHeight / safeScale;
+
+  return {
+    minX: args.bounds.minX + (stageMinX / safeStageWidth) * spanX,
+    maxX: args.bounds.minX + (stageMaxX / safeStageWidth) * spanX,
+    minZ: args.bounds.minZ + (stageMinY / safeStageHeight) * spanZ,
+    maxZ: args.bounds.minZ + (stageMaxY / safeStageHeight) * spanZ,
   };
 }
 

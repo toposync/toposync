@@ -252,6 +252,8 @@ export type Main2DMarker = {
   className?: string;
 };
 
+export type Main2DEffectBlendMode = "source-over" | "screen";
+
 export type Main2DEffectTarget = {
   id: string;
   element: CompositionElement;
@@ -259,6 +261,7 @@ export type Main2DEffectTarget = {
   signature?: unknown;
   warmupSeconds?: number;
   hideNonLightRenderables?: boolean;
+  blendMode?: Main2DEffectBlendMode;
   opacity?: number;
 };
 

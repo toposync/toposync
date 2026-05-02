@@ -3,6 +3,7 @@ import type * as ThreeTypes from "three";
 
 import type { BoundsXZ, CompositionElement, CompositionElementPatch, ElementType, HostI18n, PlanePoint } from "@toposync/plugin-api";
 
+import { rgbaFromHex, shadeHex } from "../colors";
 import { DEFAULT_WALL_COLOR, DEFAULT_WALL_WIDTH, GROUND_Y, WALL_ELEMENT_TYPE_ID } from "../constants";
 import { addPoints, distanceBetweenPoints, normalizePoint, perpendicularPoint, scalePoint, subtractPoints } from "../geometry";
 import { readNumber, readPlanePoint, readString } from "../parsing";
@@ -199,6 +200,38 @@ function openingPreviewStyle(kind: WallOpeningKind): { fill: string; stroke: str
   return { fill: "rgba(251,191,36,0.12)", stroke: "rgba(251,191,36,0.92)", dash: [9, 5] };
 }
 
+function openingVectorStyle(opening: ResolvedWallOpening): { fill: string; stroke: string; accent: string; highlight: string } {
+  const fallback = defaultColorForKind(opening.kind) ?? "#cbd5e1";
+  const color = opening.color ?? fallback;
+  const texture = readOpeningTextureId(opening.texture, defaultTextureForKind(opening.kind));
+
+  if (opening.kind === "window") {
+    const glass = texture === "glass" ? color : "#b9d8f4";
+    return {
+      fill: rgbaFromHex(glass, 0.30),
+      stroke: rgbaFromHex(shadeHex(glass, -0.16), 0.56),
+      accent: rgbaFromHex(shadeHex(glass, 0.34), 0.82),
+      highlight: "rgba(255,255,255,0.38)",
+    };
+  }
+
+  if (opening.kind === "door") {
+    return {
+      fill: rgbaFromHex(color, texture === "wood" ? 0.50 : 0.38),
+      stroke: rgbaFromHex(shadeHex(color, -0.28), 0.52),
+      accent: rgbaFromHex(shadeHex(color, 0.26), 0.42),
+      highlight: "rgba(255,255,255,0.16)",
+    };
+  }
+
+  return {
+    fill: "rgba(255,255,255,0.08)",
+    stroke: rgbaFromHex(color, 0.26),
+    accent: rgbaFromHex(shadeHex(color, 0.20), 0.22),
+    highlight: "rgba(255,255,255,0.10)",
+  };
+}
+
 function readOpeningKind(value: unknown, fallback: WallOpeningKind): WallOpeningKind {
   return value === "opening" || value === "door" || value === "window" ? value : fallback;
 }
@@ -367,6 +400,7 @@ export function createWallElementType(i18n: HostI18n): ElementType {
       const startPoint = readPlanePoint(element.props.a, { x: element.position.x, z: element.position.z });
       const endPoint = readPlanePoint(element.props.b, { x: element.position.x + 1, z: element.position.z });
       const color = readString(element.props.color, DEFAULT_WALL_COLOR);
+      const textureId = readWallTextureId(element.props.texture, "none");
       const widthWorld = Math.max(0.04, readNumber(element.props.width, DEFAULT_WALL_WIDTH));
       const length = Math.max(0.001, distanceBetweenPoints(startPoint, endPoint));
       const direction = normalizePoint(subtractPoints(endPoint, startPoint));
@@ -375,25 +409,29 @@ export function createWallElementType(i18n: HostI18n): ElementType {
       const blocked = openings.map((opening) => ({ start: opening.start_m, end: opening.end_m }));
       const solids = subtractIntervals(length, blocked);
       const openingHalfThickness = Math.max(widthWorld / 2, 0.09);
+      const wallFill =
+        textureId === "brick"
+          ? rgbaFromHex(shadeHex(color, -0.16), 0.98)
+          : textureId === "concrete"
+            ? rgbaFromHex(shadeHex(color, -0.10), 0.98)
+            : rgbaFromHex(shadeHex(color, -0.12), 0.98);
 
       return (
-        <g className="mainVector2dWall" filter="url(#mainVector2dSoftShadow)">
+        <g className="mainVector2dWall">
           {solids.map((interval, index) => {
             const a = pointAtDistance(startPoint, direction, interval.start);
             const b = pointAtDistance(startPoint, direction, interval.end);
+            const halfWidth = Math.max(widthWorld / 2, 0.02);
+            const p0 = addPoints(a, scalePoint(normal, halfWidth));
+            const p1 = addPoints(b, scalePoint(normal, halfWidth));
+            const p2 = addPoints(b, scalePoint(normal, -halfWidth));
+            const p3 = addPoints(a, scalePoint(normal, -halfWidth));
             return (
-              <g key={`solid:${index}`}>
-                <line
-                  x1={a.x}
-                  y1={a.z}
-                  x2={b.x}
-                  y2={b.z}
-                  stroke="rgba(0,0,0,0.26)"
-                  strokeWidth={widthWorld + 0.04}
-                  strokeLinecap="round"
-                />
-                <line x1={a.x} y1={a.z} x2={b.x} y2={b.z} stroke={color} strokeWidth={widthWorld} strokeLinecap="round" />
-              </g>
+              <polygon
+                key={`solid:${index}`}
+                points={svgPoints([p0, p1, p2, p3])}
+                fill={wallFill}
+              />
             );
           })}
           {openings.map((opening) => {
@@ -403,17 +441,40 @@ export function createWallElementType(i18n: HostI18n): ElementType {
             const p1 = addPoints(e, scalePoint(normal, openingHalfThickness));
             const p2 = addPoints(e, scalePoint(normal, -openingHalfThickness));
             const p3 = addPoints(s, scalePoint(normal, -openingHalfThickness));
-            const style = openingPreviewStyle(opening.kind);
+            const style = openingVectorStyle(opening);
+            const centerA = pointAtDistance(startPoint, direction, opening.start_m + opening.width_m * 0.18);
+            const centerB = pointAtDistance(startPoint, direction, opening.end_m - opening.width_m * 0.18);
             return (
-              <polygon
-                key={opening.id}
-                points={svgPoints([p0, p1, p2, p3])}
-                fill={style.fill}
-                stroke={style.stroke}
-                strokeWidth={0.025}
-                strokeDasharray={opening.kind === "door" ? "0.16 0.08" : opening.kind === "window" ? "0.10 0.07" : "0.18 0.09"}
-                vectorEffect="non-scaling-stroke"
-              />
+              <g key={opening.id} className={`mainVector2dWallOpening mainVector2dWallOpening-${opening.kind}`}>
+                <polygon
+                  points={svgPoints([p0, p1, p2, p3])}
+                  fill={style.fill}
+                  stroke={style.stroke}
+                  strokeWidth={0.018}
+                  vectorEffect="non-scaling-stroke"
+                />
+                <line
+                  x1={centerA.x}
+                  y1={centerA.z}
+                  x2={centerB.x}
+                  y2={centerB.z}
+                  stroke={style.accent}
+                  strokeWidth={Math.max(0.008, opening.kind === "window" ? widthWorld * 0.32 : widthWorld * 0.18)}
+                  strokeLinecap="round"
+                />
+                {opening.kind === "window" ? (
+                  <line
+                    x1={addPoints(centerA, scalePoint(normal, -openingHalfThickness * 0.46)).x}
+                    y1={addPoints(centerA, scalePoint(normal, -openingHalfThickness * 0.46)).z}
+                    x2={addPoints(centerB, scalePoint(normal, -openingHalfThickness * 0.46)).x}
+                    y2={addPoints(centerB, scalePoint(normal, -openingHalfThickness * 0.46)).z}
+                    stroke={style.highlight}
+                    strokeWidth={0.01}
+                    strokeLinecap="round"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                ) : null}
+              </g>
             );
           })}
         </g>

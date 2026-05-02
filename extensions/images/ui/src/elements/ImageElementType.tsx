@@ -112,18 +112,22 @@ export function createImageElementType(i18n: HostI18n): ElementType {
         width: p.width_m,
         height: p.depth_m,
       };
+      const frameStroke = p.mode === "tracing" ? "rgba(15,23,42,0.22)" : "rgba(226,232,240,0.20)";
       return (
         <g
           className="mainVector2dImage"
           transform={`translate(${element.position.x} ${element.position.z}) rotate(${rotationDeg})`}
           opacity={p.opacity}
           style={{ mixBlendMode: p.blend === "multiply" ? "multiply" : "normal" }}
+          filter={url ? "url(#mainVector2dSoftShadow)" : undefined}
         >
+          {url ? <rect {...commonProps} fill="rgba(2,6,23,0.10)" /> : null}
           {url ? (
             <image href={url} {...commonProps} preserveAspectRatio="none" />
           ) : (
-            <rect {...commonProps} fill="rgba(56,189,248,0.10)" stroke="rgba(230,232,242,0.22)" strokeWidth={0.025} vectorEffect="non-scaling-stroke" />
+            <rect {...commonProps} rx={0.04} fill="rgba(56,189,248,0.08)" stroke="rgba(125,211,252,0.24)" strokeWidth={0.018} vectorEffect="non-scaling-stroke" />
           )}
+          <rect {...commonProps} rx={url ? 0 : 0.04} fill="none" stroke={frameStroke} strokeWidth={0.012} vectorEffect="non-scaling-stroke" />
         </g>
       );
     },

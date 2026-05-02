@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { CompositionElement, ElementType, Main2DEffectTarget, Main2DMarker } from "@toposync/plugin-api";
 
@@ -9,6 +9,7 @@ import {
   clamp,
   clusterMain2DMarkers,
   computeFitTransform,
+  computeMain2DVectorViewBox,
   computeMain2DBounds,
   orderElementsForMain2D,
   padBounds,
@@ -49,6 +50,7 @@ function effectTargetCacheKey(targets: Main2DEffectTarget[]): string {
         signature: target.signature ?? null,
         warmupSeconds: target.warmupSeconds ?? null,
         hideNonLightRenderables: Boolean(target.hideNonLightRenderables),
+        blendMode: target.blendMode ?? "source-over",
       }))
       .sort((a, b) => a.id.localeCompare(b.id)),
   );
@@ -77,6 +79,7 @@ export function MainViewportVector2D({
   const [effectLoading, setEffectLoading] = useState(false);
   const [effectError, setEffectError] = useState<string | null>(null);
   const [clusterModalMarkers, setClusterModalMarkers] = useState<Main2DMarkerStage[] | null>(null);
+  const [viewportSize, setViewportSize] = useState({ width: 1, height: 1 });
 
   const flushTransform = useCallback(() => {
     transformRafRef.current = null;
@@ -177,12 +180,17 @@ export function MainViewportVector2D({
   const recomputeFit = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
-    const next = computeFitTransform(container.clientWidth, container.clientHeight, stageWidth, stageHeight);
+    const viewportWidth = Math.max(1, container.clientWidth);
+    const viewportHeight = Math.max(1, container.clientHeight);
+    setViewportSize((prev) =>
+      prev.width === viewportWidth && prev.height === viewportHeight ? prev : { width: viewportWidth, height: viewportHeight },
+    );
+    const next = computeFitTransform(viewportWidth, viewportHeight, stageWidth, stageHeight);
     fitTransformRef.current = next;
     setTransformImmediately(next);
   }, [setTransformImmediately, stageHeight, stageWidth]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     recomputeFit();
   }, [recomputeFit]);
 
@@ -408,6 +416,20 @@ export function MainViewportVector2D({
     [bounds, elementTypesById, orderedElements, stateVersion],
   );
 
+  const vectorViewBox = useMemo(() => {
+    const viewBox = computeMain2DVectorViewBox({
+      bounds,
+      stageWidth,
+      stageHeight,
+      viewportWidth: viewportSize.width,
+      viewportHeight: viewportSize.height,
+      transform,
+    });
+    const width = Math.max(1e-6, viewBox.maxX - viewBox.minX);
+    const height = Math.max(1e-6, viewBox.maxZ - viewBox.minZ);
+    return `${viewBox.minX} ${viewBox.minZ} ${width} ${height}`;
+  }, [bounds, stageHeight, stageWidth, transform, viewportSize.height, viewportSize.width]);
+
   return (
     <div
       className="viewportRoot mainVector2dRoot"
@@ -418,17 +440,10 @@ export function MainViewportVector2D({
       onPointerUp={stopPanning}
       onPointerCancel={stopPanning}
     >
-      <div
-        className="mainVector2dStage"
-        style={{
-          width: stageWidth,
-          height: stageHeight,
-          transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
-        }}
-      >
+      <div className="mainVector2dStage">
         <svg
           className="mainVector2dSvg"
-          viewBox={`${bounds.minX} ${bounds.minZ} ${spanX} ${spanZ}`}
+          viewBox={vectorViewBox}
           preserveAspectRatio="none"
           aria-hidden="true"
         >
@@ -436,6 +451,24 @@ export function MainViewportVector2D({
             <filter id="mainVector2dSoftShadow" x="-20%" y="-20%" width="140%" height="140%">
               <feDropShadow dx="0" dy="0.035" stdDeviation="0.04" floodColor="rgba(0,0,0,0.24)" />
             </filter>
+            <pattern id="mainVector2dGrassPattern" patternUnits="userSpaceOnUse" width="0.34" height="0.34">
+              <path d="M 0.05 0.30 L 0.11 0.08 M 0.18 0.32 L 0.22 0.12 M 0.29 0.28 L 0.31 0.05" stroke="rgba(5,46,22,0.36)" strokeWidth="0.012" strokeLinecap="round" />
+              <path d="M 0.08 0.32 L 0.14 0.18 M 0.23 0.31 L 0.28 0.18" stroke="rgba(134,239,172,0.28)" strokeWidth="0.008" strokeLinecap="round" />
+            </pattern>
+            <pattern id="mainVector2dConcretePattern" patternUnits="userSpaceOnUse" width="0.42" height="0.42">
+              <path d="M 0.04 0.10 H 0.12 M 0.28 0.06 H 0.36 M 0.18 0.30 H 0.31" stroke="rgba(15,23,42,0.20)" strokeWidth="0.009" strokeLinecap="round" />
+              <circle cx="0.12" cy="0.28" r="0.012" fill="rgba(255,255,255,0.14)" />
+              <circle cx="0.34" cy="0.20" r="0.009" fill="rgba(15,23,42,0.16)" />
+            </pattern>
+            <linearGradient id="mainVector2dWaterGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="rgba(186,230,253,0.50)" />
+              <stop offset="45%" stopColor="rgba(14,165,233,0.28)" />
+              <stop offset="100%" stopColor="rgba(3,105,161,0.46)" />
+            </linearGradient>
+            <pattern id="mainVector2dWaterPattern" patternUnits="userSpaceOnUse" width="0.52" height="0.30">
+              <path d="M 0.02 0.17 C 0.12 0.08, 0.22 0.08, 0.32 0.17 S 0.48 0.26, 0.56 0.17" fill="none" stroke="rgba(224,242,254,0.34)" strokeWidth="0.012" strokeLinecap="round" />
+              <path d="M -0.04 0.28 C 0.08 0.20, 0.18 0.20, 0.30 0.28 S 0.48 0.36, 0.60 0.28" fill="none" stroke="rgba(7,89,133,0.22)" strokeWidth="0.01" strokeLinecap="round" />
+            </pattern>
           </defs>
           <g className="mainVector2dElements">{vectorElements}</g>
           {effectManifest ? (
@@ -452,6 +485,7 @@ export function MainViewportVector2D({
                     height={effect.height}
                     preserveAspectRatio="none"
                     opacity={opacity}
+                    style={effect.blendMode === "screen" ? { mixBlendMode: "screen" } : undefined}
                   />
                 );
               })}

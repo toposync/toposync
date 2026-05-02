@@ -2,7 +2,14 @@ declare const require: any;
 
 import type { CompositionElement, ElementType } from "@toposync/plugin-api";
 
-import { buildMain2DSignatureElements, clusterMain2DMarkers, computeMain2DBounds, stableStringify } from "./shared";
+import {
+  buildMain2DSignatureElements,
+  clusterMain2DMarkers,
+  computeFitTransform,
+  computeMain2DBounds,
+  computeMain2DVectorViewBox,
+  stableStringify,
+} from "./shared";
 import { computeMain2DEffectDeltaCrop, type Main2DEffectPixelBuffer } from "./vectorEffectCache";
 
 const test: (name: string, fn: () => void | Promise<void>) => void = require("node:test").test;
@@ -25,6 +32,16 @@ function buffer(width: number, height: number, pixels?: Array<[number, number, n
     data.set(pixel, index * 4);
   });
   return { width, height, data };
+}
+
+function compositeSourceOver(base: number, overlay: number, alpha: number): number {
+  const a = alpha / 255;
+  return overlay * a + base * (1 - a);
+}
+
+function compositeScreen(base: number, overlay: number, alpha: number): number {
+  const a = alpha / 255;
+  return base + (255 - base) * (overlay / 255) * a;
 }
 
 test("stableStringify keeps signatures stable regardless of object key order", () => {
@@ -67,6 +84,27 @@ test("clusterMain2DMarkers clusters by screen distance after transform", () => {
   assert.equal(singles[0].id, "c");
 });
 
+test("computeMain2DVectorViewBox maps the pan zoom transform back to world coordinates", () => {
+  const viewBox = computeMain2DVectorViewBox({
+    bounds: { minX: 0, maxX: 10, minZ: 0, maxZ: 20 },
+    stageWidth: 1000,
+    stageHeight: 2000,
+    viewportWidth: 500,
+    viewportHeight: 500,
+    transform: { scale: 2, x: -100, y: 50 },
+  });
+
+  assert.deepEqual(viewBox, { minX: 0.5, maxX: 3, minZ: -0.25, maxZ: 2.25 });
+});
+
+test("computeFitTransform remains finite for hidden containers", () => {
+  const transform = computeFitTransform(0, 0, 1000, 1000);
+  assert.equal(Number.isFinite(transform.scale), true);
+  assert.equal(Number.isFinite(transform.x), true);
+  assert.equal(Number.isFinite(transform.y), true);
+  assert.equal(transform.scale > 0, true);
+});
+
 test("buildMain2DSignatureElements sorts elements by id", () => {
   const signature = buildMain2DSignatureElements([element("z", "box", 0, 0), element("a", "box", 1, 1)]);
   assert.deepEqual(
@@ -75,17 +113,31 @@ test("buildMain2DSignatureElements sorts elements by id", () => {
   );
 });
 
-test("computeMain2DEffectDeltaCrop returns a padded positive delta crop", () => {
+test("computeMain2DEffectDeltaCrop returns a source-over positive delta crop", () => {
   const base = buffer(3, 3, Array.from({ length: 9 }, () => [10, 10, 10, 255]));
   const active = buffer(3, 3, Array.from({ length: 9 }, () => [10, 10, 10, 255]));
   active.data.set([90, 30, 10, 255], 4 * 4);
 
   const delta = computeMain2DEffectDeltaCrop(base, active);
+  const idx = 4 * 4;
   assert.deepEqual(delta?.crop, { x: 0, y: 0, width: 3, height: 3 });
-  assert.equal(delta?.data[4 * 4], 90);
-  assert.equal(delta?.data[4 * 4 + 1], 30);
-  assert.equal(delta?.data[4 * 4 + 2], 10);
-  assert.ok((delta?.data[4 * 4 + 3] ?? 0) > 0);
+  assert.ok((delta?.data[idx + 3] ?? 0) > 0);
+  assert.ok(Math.abs(compositeSourceOver(10, delta?.data[idx] ?? 0, delta?.data[idx + 3] ?? 0) - 90) <= 1);
+  assert.ok(Math.abs(compositeSourceOver(10, delta?.data[idx + 1] ?? 0, delta?.data[idx + 3] ?? 0) - 30) <= 1);
+  assert.ok(Math.abs(compositeSourceOver(10, delta?.data[idx + 2] ?? 0, delta?.data[idx + 3] ?? 0) - 10) <= 1);
+});
+
+test("computeMain2DEffectDeltaCrop can encode light deltas for screen blending without dark channels", () => {
+  const base = buffer(1, 1, [[80, 90, 100, 255]]);
+  const active = buffer(1, 1, [[120, 105, 90, 255]]);
+
+  const delta = computeMain2DEffectDeltaCrop(base, active, { blendMode: "screen" });
+  assert.deepEqual(delta?.crop, { x: 0, y: 0, width: 1, height: 1 });
+  assert.ok((delta?.data[3] ?? 0) > 0);
+  assert.equal(delta?.data[2], 0);
+  assert.ok(Math.abs(compositeScreen(80, delta?.data[0] ?? 0, delta?.data[3] ?? 0) - 120) <= 1);
+  assert.ok(Math.abs(compositeScreen(90, delta?.data[1] ?? 0, delta?.data[3] ?? 0) - 105) <= 1);
+  assert.ok(Math.abs(compositeScreen(100, delta?.data[2] ?? 0, delta?.data[3] ?? 0) - 100) <= 1);
 });
 
 test("computeMain2DEffectDeltaCrop returns null when nothing changed", () => {

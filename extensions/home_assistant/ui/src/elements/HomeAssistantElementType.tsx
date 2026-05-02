@@ -146,58 +146,7 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
         unwatch();
       };
     },
-    renderMain2DVector: ({ element }) => {
-      const props = readRecord(element.props);
-      const specialView = readHomeAssistantSpecialView(props.special_view);
-      const { entityId, state, domain, live } = primaryLiveStateForProps(props);
-      const hasBooleanState = entityId ? isBooleanStateDomain(domain) : false;
-      const boolState = entityId ? boolStateForDomain(domain, state) : null;
-      const fill = hasBooleanState
-        ? boolState === true
-          ? "rgba(34,197,94,0.14)"
-          : boolState === false
-            ? "rgba(239,68,68,0.10)"
-            : "rgba(56,189,248,0.10)"
-        : "rgba(56,189,248,0.10)";
-      const stroke = hasBooleanState
-        ? boolState === true
-          ? "rgba(34,197,94,0.38)"
-          : boolState === false
-            ? "rgba(239,68,68,0.34)"
-            : "rgba(56,189,248,0.28)"
-        : "rgba(56,189,248,0.26)";
-      const rotationDeg = (-(element.rotation?.y ?? 0) * 180) / Math.PI;
-
-      if (specialView === "ceiling_fan") {
-        const r = CEILING_FAN_RADIUS_WORLD;
-        return (
-          <g className="mainVector2dHomeAssistantFan" transform={`translate(${element.position.x} ${element.position.z}) rotate(${rotationDeg})`}>
-            <circle r={r} fill={fill} stroke={stroke} strokeWidth={0.022} vectorEffect="non-scaling-stroke" />
-            {Array.from({ length: CEILING_FAN_BLADE_COUNT }, (_, index) => (
-              <rect key={index} x={r * 0.14} y={-r * 0.07} width={r * 0.7} height={r * 0.14} rx={r * 0.05} transform={`rotate(${(index / CEILING_FAN_BLADE_COUNT) * 360})`} fill="rgba(230,232,242,0.14)" />
-            ))}
-            <circle r={r * 0.14} fill="rgba(230,232,242,0.24)" />
-          </g>
-        );
-      }
-
-      if (specialView === "airflow") {
-        const flow = climateFlowFromLiveState(live, state);
-        const color = flow.mode === "heat" ? "rgba(255,107,107,0.32)" : flow.mode === "cool" ? "rgba(77,171,247,0.34)" : "rgba(147,197,253,0.30)";
-        return (
-          <g className="mainVector2dHomeAssistantAirflow" transform={`translate(${element.position.x} ${element.position.z}) rotate(${rotationDeg})`}>
-            <rect x={-0.34} y={-0.08} width={0.68} height={0.16} rx={0.045} fill={fill} stroke={stroke} strokeWidth={0.02} vectorEffect="non-scaling-stroke" />
-            <path d="M -0.24 0.10 C -0.08 0.26, 0.08 0.26, 0.24 0.10" fill="none" stroke={color} strokeWidth={0.026} strokeLinecap="round" vectorEffect="non-scaling-stroke" opacity={flow.active ? 1 : 0.28} />
-          </g>
-        );
-      }
-
-      return (
-        <g className="mainVector2dHomeAssistant" transform={`translate(${element.position.x} ${element.position.z})`}>
-          <circle r={0.22} fill={fill} stroke={stroke} strokeWidth={0.022} vectorEffect="non-scaling-stroke" />
-        </g>
-      );
-    },
+    renderMain2DVector: () => null,
     getMain2DEffectTargets: ({ element }) => {
       const props = readRecord(element.props);
       const specialView = readHomeAssistantSpecialView(props.special_view);
@@ -216,6 +165,7 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
             baseElement: forcePrimaryState(element, "off"),
             warmupSeconds: 0.4,
             hideNonLightRenderables: true,
+            blendMode: "screen",
             opacity,
             signature: {
               kind: "lamp",
@@ -241,6 +191,7 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
           element: forcePrimaryState(element, variant.state),
           baseElement: forcePrimaryState(element, "off"),
           warmupSeconds: 2.0,
+          blendMode: "screen",
           opacity: flow.mode === variant.mode ? baseOpacity : 0,
           signature: {
             kind: "airflow",

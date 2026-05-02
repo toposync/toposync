@@ -1,4 +1,13 @@
-import { resolveToposyncUrl, type BoundsXZ, type CompositionElement, type Element3DInstance, type ElementType, type Main2DEffectTarget, type ViewSettings } from "@toposync/plugin-api";
+import {
+  resolveToposyncUrl,
+  type BoundsXZ,
+  type CompositionElement,
+  type Element3DInstance,
+  type ElementType,
+  type Main2DEffectBlendMode,
+  type Main2DEffectTarget,
+  type ViewSettings,
+} from "@toposync/plugin-api";
 import * as THREE from "three";
 
 import {
@@ -8,7 +17,7 @@ import {
 } from "./shared";
 
 const EFFECT_RENDER_DIR_ID = "render2d-effects";
-const EFFECT_RENDER_VERSION = 1 as const;
+const EFFECT_RENDER_VERSION = 2 as const;
 
 export type Main2DEffectOverlayManifest = {
   id: string;
@@ -17,6 +26,7 @@ export type Main2DEffectOverlayManifest = {
   z: number;
   width: number;
   height: number;
+  blendMode: Main2DEffectBlendMode;
 };
 
 export type Main2DEffectRenderManifest = {
@@ -183,10 +193,33 @@ function captureImageData(renderer: THREE.WebGLRenderer, width: number, height: 
   return ctx.getImageData(0, 0, width, height);
 }
 
-export function computeMain2DEffectDeltaCrop(base: Main2DEffectPixelBuffer, active: Main2DEffectPixelBuffer): Main2DEffectDeltaCrop | null {
+function alphaRequirementForIncrease(delta: number, base: number): number {
+  if (delta <= 0) return 0;
+  const headroom = 255 - base;
+  return headroom <= 1e-6 ? 1 : delta / headroom;
+}
+
+function solveSourceOverChannel(base: number, delta: number, alpha: number): number {
+  if (delta <= 0) return base;
+  return Math.max(0, Math.min(255, Math.round(base + delta / Math.max(1e-6, alpha))));
+}
+
+function solveScreenChannel(base: number, delta: number, alpha: number): number {
+  if (delta <= 0) return 0;
+  const headroom = 255 - base;
+  if (headroom <= 1e-6) return 0;
+  return Math.max(0, Math.min(255, Math.round((delta / (headroom * Math.max(1e-6, alpha))) * 255)));
+}
+
+export function computeMain2DEffectDeltaCrop(
+  base: Main2DEffectPixelBuffer,
+  active: Main2DEffectPixelBuffer,
+  options: { blendMode?: Main2DEffectBlendMode } = {},
+): Main2DEffectDeltaCrop | null {
   if (base.width !== active.width || base.height !== active.height || base.data.length !== active.data.length) {
     throw new Error("Effect buffers must have matching dimensions");
   }
+  const blendMode = options.blendMode ?? "source-over";
   const width = base.width;
   const height = base.height;
   const baseData = base.data;
@@ -200,17 +233,39 @@ export function computeMain2DEffectDeltaCrop(base: Main2DEffectPixelBuffer, acti
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const idx = (y * width + x) * 4;
-      const dr = Math.max(0, activeData[idx] - baseData[idx]);
-      const dg = Math.max(0, activeData[idx + 1] - baseData[idx + 1]);
-      const db = Math.max(0, activeData[idx + 2] - baseData[idx + 2]);
+      const baseAlpha = baseData[idx + 3] / 255;
+      const activeAlpha = activeData[idx + 3] / 255;
+      const baseR = baseData[idx] * baseAlpha;
+      const baseG = baseData[idx + 1] * baseAlpha;
+      const baseB = baseData[idx + 2] * baseAlpha;
+      const activeR = activeData[idx] * activeAlpha;
+      const activeG = activeData[idx + 1] * activeAlpha;
+      const activeB = activeData[idx + 2] * activeAlpha;
+      const dr = Math.max(0, activeR - baseR);
+      const dg = Math.max(0, activeG - baseG);
+      const db = Math.max(0, activeB - baseB);
       const da = Math.max(0, activeData[idx + 3] - baseData[idx + 3]);
       const delta = Math.max(dr, dg, db, da);
       if (delta <= 4) continue;
 
-      outData[idx] = activeData[idx];
-      outData[idx + 1] = activeData[idx + 1];
-      outData[idx + 2] = activeData[idx + 2];
-      outData[idx + 3] = Math.min(230, Math.max(24, Math.round(delta * 1.55 + da * 0.45)));
+      const rgbAlpha = Math.max(
+        alphaRequirementForIncrease(dr, baseR),
+        alphaRequirementForIncrease(dg, baseG),
+        alphaRequirementForIncrease(db, baseB),
+      );
+      const alphaAlpha = activeAlpha > baseAlpha && baseAlpha < 0.999 ? (activeAlpha - baseAlpha) / (1 - baseAlpha) : 0;
+      const overlayAlpha = Math.max(0.025, Math.min(1, Math.max(rgbAlpha, alphaAlpha)));
+
+      if (blendMode === "screen") {
+        outData[idx] = solveScreenChannel(baseR, dr, overlayAlpha);
+        outData[idx + 1] = solveScreenChannel(baseG, dg, overlayAlpha);
+        outData[idx + 2] = solveScreenChannel(baseB, db, overlayAlpha);
+      } else {
+        outData[idx] = solveSourceOverChannel(baseR, dr, overlayAlpha);
+        outData[idx + 1] = solveSourceOverChannel(baseG, dg, overlayAlpha);
+        outData[idx + 2] = solveSourceOverChannel(baseB, db, overlayAlpha);
+      }
+      outData[idx + 3] = Math.round(overlayAlpha * 255);
       if (x < minX) minX = x;
       if (x > maxX) maxX = x;
       if (y < minY) minY = y;
@@ -231,8 +286,12 @@ export function computeMain2DEffectDeltaCrop(base: Main2DEffectPixelBuffer, acti
   return { data: outData, crop: { x: minX, y: minY, width: cropWidth, height: cropHeight } };
 }
 
-function diffAndCrop(base: ImageData, active: ImageData): { canvas: HTMLCanvasElement; crop: { x: number; y: number; width: number; height: number } } | null {
-  const delta = computeMain2DEffectDeltaCrop(base, active);
+function diffAndCrop(
+  base: ImageData,
+  active: ImageData,
+  blendMode: Main2DEffectBlendMode,
+): { canvas: HTMLCanvasElement; crop: { x: number; y: number; width: number; height: number } } | null {
+  const delta = computeMain2DEffectDeltaCrop(base, active, { blendMode });
   if (!delta) return null;
 
   const fullCanvas = document.createElement("canvas");
@@ -367,7 +426,8 @@ async function captureEffectOverlay(args: {
     const activeData = await renderScene(args.target.element);
     if (!baseData || !activeData) return null;
 
-    const diff = diffAndCrop(baseData, activeData);
+    const blendMode = args.target.blendMode ?? "source-over";
+    const diff = diffAndCrop(baseData, activeData, blendMode);
     if (!diff) return null;
 
     const spanX = Math.max(1e-6, args.bounds.maxX - args.bounds.minX);
@@ -377,7 +437,7 @@ async function captureEffectOverlay(args: {
     const width = (diff.crop.width / args.renderWidth) * spanX;
     const height = (diff.crop.height / args.renderHeight) * spanZ;
     const blob = await canvasToBlob(diff.canvas);
-    return { id: args.target.id, x, z, width, height, blob };
+    return { id: args.target.id, x, z, width, height, blendMode, blob };
   } finally {
     renderer.dispose();
   }
@@ -407,6 +467,7 @@ export async function getOrCreateMain2DEffectManifest(args: {
         signature: target.signature ?? null,
         warmupSeconds: target.warmupSeconds ?? null,
         hideNonLightRenderables: Boolean(target.hideNonLightRenderables),
+        blendMode: target.blendMode ?? "source-over",
       }))
       .sort((a, b) => a.id.localeCompare(b.id)),
   });
@@ -449,6 +510,7 @@ export async function getOrCreateMain2DEffectManifest(args: {
         z: captured.z,
         width: captured.width,
         height: captured.height,
+        blendMode: captured.blendMode,
       });
     }
 

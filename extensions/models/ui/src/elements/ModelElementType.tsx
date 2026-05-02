@@ -67,24 +67,28 @@ export function createModelElementType(i18n: HostI18n): ElementType {
       const rotationDeg = (readNumber((element.rotation as any)?.y, 0) * -180) / Math.PI;
       const width = Math.max(0.2, size.x * scale);
       const height = Math.max(0.2, size.z * scale);
+      const animated = readBoolean((element.props as any).animation_enabled, false);
+      const accent = animated ? "rgba(56,189,248,0.42)" : "rgba(226,232,240,0.22)";
       return (
-        <g className="mainVector2dModel" transform={`translate(${element.position.x} ${element.position.z}) rotate(${rotationDeg})`} opacity={0.96}>
+        <g className="mainVector2dModel" transform={`translate(${element.position.x} ${element.position.z}) rotate(${rotationDeg})`} opacity={0.96} filter="url(#mainVector2dSoftShadow)">
+          <rect x={-width / 2} y={-height / 2} width={width} height={height} rx={0.05} fill="rgba(2,6,23,0.12)" />
           {previewUrl ? (
             <image href={previewUrl} x={-width / 2} y={-height / 2} width={width} height={height} preserveAspectRatio="none" />
           ) : (
-            <rect x={-width / 2} y={-height / 2} width={width} height={height} rx={0.04} fill="rgba(56,189,248,0.10)" />
+            <rect x={-width / 2} y={-height / 2} width={width} height={height} rx={0.05} fill="rgba(56,189,248,0.08)" />
           )}
           <rect
             x={-width / 2}
             y={-height / 2}
             width={width}
             height={height}
-            rx={0.04}
+            rx={0.05}
             fill="none"
-            stroke="rgba(230,232,242,0.24)"
-            strokeWidth={0.026}
+            stroke={accent}
+            strokeWidth={0.018}
             vectorEffect="non-scaling-stroke"
           />
+          {animated ? <circle cx={width / 2 - 0.07} cy={-height / 2 + 0.07} r={0.025} fill="rgba(56,189,248,0.72)" /> : null}
         </g>
       );
     },

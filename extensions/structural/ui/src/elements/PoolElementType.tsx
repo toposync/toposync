@@ -244,21 +244,25 @@ export function createPoolElementType(i18n: HostI18n): ElementType {
     renderMain2DVector: ({ element }) => {
       const pool = parsePoolProps(element.props);
       if (pool.vertices.length < 3) return null;
+      const points = svgPolygonPoints(pool.vertices);
+      const depthAlpha = clamp(pool.depth_m / 4.5, 0.16, 0.42);
       return (
         <g className="mainVector2dPool">
           <polygon
-            points={svgPolygonPoints(pool.vertices)}
-            fill="rgba(14,165,233,0.22)"
-            stroke="rgba(56,189,248,0.78)"
-            strokeWidth={0.04}
+            points={points}
+            fill={`rgba(8,47,73,${depthAlpha})`}
+            stroke="rgba(125,211,252,0.60)"
+            strokeWidth={0.045}
             vectorEffect="non-scaling-stroke"
             filter="url(#mainVector2dSoftShadow)"
           />
+          <polygon points={points} fill="url(#mainVector2dWaterGradient)" opacity="0.86" />
+          <polygon points={points} fill="url(#mainVector2dWaterPattern)" opacity="0.46" />
           <polygon
-            points={svgPolygonPoints(pool.vertices)}
+            points={points}
             fill="none"
-            stroke="rgba(224,242,254,0.38)"
-            strokeWidth={0.012}
+            stroke="rgba(224,242,254,0.58)"
+            strokeWidth={0.016}
             vectorEffect="non-scaling-stroke"
           />
         </g>

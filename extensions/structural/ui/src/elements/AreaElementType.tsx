@@ -3,7 +3,7 @@ import type * as ThreeTypes from "three";
 
 import type { BoundsXZ, CompositionElement, CompositionElementPatch, ElementType, HostI18n, PlanePoint } from "@toposync/plugin-api";
 
-import { rgbaFromHex } from "../colors";
+import { rgbaFromHex, shadeHex } from "../colors";
 import { AREA_ELEMENT_TYPE_ID, DEFAULT_AREA_FILL_COLOR, DEFAULT_AREA_OPACITY, FLOOR_EPSILON, GROUND_Y } from "../constants";
 import { readNumber, readPlanePointArray, readString, saveAreaFillColor } from "../parsing";
 import { getFloorTexture, readFloorTextureId } from "../textures";
@@ -167,16 +167,24 @@ export function createAreaElementType(i18n: HostI18n): ElementType {
       const fill = readString(element.props.fill, DEFAULT_AREA_FILL_COLOR);
       const opacityRaw = readNumber(element.props.opacity, DEFAULT_AREA_OPACITY);
       const opacity = opacityRaw < 0.001 ? 0 : opacityRaw;
+      if (opacity <= 0) return null;
+      const textureId = readFloorTextureId(element.props.texture, "none");
+      const points = svgPolygonPoints(vertices);
+      const edgeColor = rgbaFromHex(shadeHex(fill, textureId === "grass" ? -0.24 : -0.16), Math.min(0.34, opacity * 0.34));
+      const highlightColor = rgbaFromHex(shadeHex(fill, 0.42), Math.min(0.20, opacity * 0.20));
+      const patternId = textureId === "grass" ? "mainVector2dGrassPattern" : textureId === "concrete" ? "mainVector2dConcretePattern" : "";
       return (
         <g className="mainVector2dArea">
           <polygon
-            points={svgPolygonPoints(vertices)}
-            fill={rgbaFromHex(fill, Math.min(0.88, Math.max(0, opacity)))}
-            stroke="rgba(230,232,242,0.20)"
-            strokeWidth={0.035}
+            points={points}
+            fill={rgbaFromHex(fill, Math.min(0.92, Math.max(0, opacity)))}
+            stroke={edgeColor}
+            strokeWidth={0.026}
             vectorEffect="non-scaling-stroke"
             filter="url(#mainVector2dSoftShadow)"
           />
+          {patternId ? <polygon points={points} fill={`url(#${patternId})`} opacity={Math.min(0.42, opacity * 0.38)} /> : null}
+          <polygon points={points} fill="none" stroke={highlightColor} strokeWidth={0.01} vectorEffect="non-scaling-stroke" />
         </g>
       );
     },

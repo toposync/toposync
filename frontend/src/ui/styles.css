@@ -4757,10 +4757,7 @@ textarea {
 
 .mainVector2dStage {
   position: absolute;
-  left: 0;
-  top: 0;
-  transform-origin: 0 0;
-  will-change: transform;
+  inset: 0;
 }
 
 .mainVector2dSvg {
@@ -4768,6 +4765,7 @@ textarea {
   width: 100%;
   height: 100%;
   overflow: visible;
+  isolation: isolate;
 }
 
 .mainVector2dElements {

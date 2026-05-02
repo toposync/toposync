@@ -145,16 +145,7 @@ export function createCameraElementType(host: TopoSyncHost): ElementType {
         className: "main2dCameraMarker",
       };
     },
-    renderMain2DVector: ({ element }) => {
-      const rotation = typeof element.rotation?.y === "number" ? element.rotation.y : 0;
-      const rotationDeg = (-rotation * 180) / Math.PI;
-      return (
-        <g className="mainVector2dCamera" transform={`translate(${element.position.x} ${element.position.z}) rotate(${rotationDeg})`}>
-          <path d="M -0.18 -0.12 L 0 -0.38 L 0.18 -0.12 Z" fill="rgba(251,191,36,0.18)" stroke="rgba(251,191,36,0.42)" strokeWidth={0.018} vectorEffect="non-scaling-stroke" />
-          <rect x={-0.17} y={-0.10} width={0.34} height={0.21} rx={0.08} fill="rgba(56,189,248,0.14)" stroke="rgba(230,232,242,0.24)" strokeWidth={0.022} vectorEffect="non-scaling-stroke" />
-        </g>
-      );
-    },
+    renderMain2DVector: () => null,
     render2D: ({ ctx: canvasContext, element, viewport }) => {
       const center = viewport.worldToScreen({ x: element.position.x, z: element.position.z });
       const rotation = typeof element.rotation?.y === "number" ? element.rotation.y : 0;

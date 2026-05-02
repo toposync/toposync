@@ -18,7 +18,7 @@ const DEFAULT_SMART_CROP = {
   refresh_on_ptz_idle: true,
   ptz_idle_debounce_seconds: 2,
   set_stream_frame: true,
-  missing_policy: "pass_through",
+  missing_policy: "drop",
 };
 
 const DEFAULT_CONDITION_FILTER = {
@@ -132,9 +132,9 @@ function AiSmartCropPanel({ i18n, config, showAdvanced, updateConfig }: PanelArg
                 value={asString(c.missing_policy) || DEFAULT_SMART_CROP.missing_policy}
                 onChange={(event) => updateConfig({ missing_policy: event.target.value })}
               >
-                <option value="pass_through">{t("ext.ai.operator.smart_crop.missing.pass", {}, "Pass through without crop")}</option>
-                <option value="reuse_last">{t("ext.ai.operator.smart_crop.missing.reuse", {}, "Reuse last crop")}</option>
                 <option value="drop">{t("ext.ai.operator.smart_crop.missing.drop", {}, "Drop packet")}</option>
+                <option value="reuse_last">{t("ext.ai.operator.smart_crop.missing.reuse", {}, "Reuse last crop")}</option>
+                <option value="pass_through">{t("ext.ai.operator.smart_crop.missing.pass", {}, "Pass through without crop")}</option>
               </select>
             </label>
             <NumberField

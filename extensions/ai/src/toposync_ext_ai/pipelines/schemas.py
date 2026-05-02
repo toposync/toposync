@@ -26,7 +26,7 @@ class AiSmartCropConfig(BaseModel):
     output_image_key: str = "ai_crop"
     set_stream_frame: bool = True
     min_crop_size_px: int = Field(default=8, ge=1, le=8192)
-    missing_policy: Literal["pass_through", "drop", "reuse_last"] = "pass_through"
+    missing_policy: Literal["pass_through", "drop", "reuse_last"] = "drop"
 
     @field_validator(
         "profile_id",

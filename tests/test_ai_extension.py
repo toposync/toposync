@@ -58,6 +58,7 @@ def test_ai_extension_registers_initial_operators() -> None:
     assert smart_crop.owner == "com.toposync.ai"
     assert condition_filter.owner == "com.toposync.ai"
     assert smart_crop.definition.defaults["profile_id"] == "local_qwen3_vl_quality"
+    assert smart_crop.definition.defaults["missing_policy"] == "drop"
     assert "frame_original" in smart_crop.definition.requires_artifacts
     assert "object_bbox01" in smart_crop.definition.produces_payload_keys
     assert "ai" in condition_filter.definition.produces_payload_keys
@@ -193,6 +194,40 @@ def test_ai_smart_crop_can_union_multiple_detections() -> None:
     assert out.payload["frame_crop"]["selected_detection_index"] is None
     assert len(out.payload["detected_objects"]) == 2
     assert len(out.payload["ai"]["smart_crop"]["detections"]) == 2
+
+
+def test_ai_smart_crop_drops_by_default_when_target_is_missing() -> None:
+    async def scenario() -> list[Packet]:
+        import numpy as np
+
+        frame = np.zeros((32, 32, 3), dtype=np.uint8)
+        packet = Packet.create(
+            stream_id="camera:test",
+            artifacts={
+                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw"),
+                "frame": Artifact(name="frame", data=frame, mime_type="image/raw"),
+            },
+        )
+        services = _FakeServices(
+            region={
+                "found": False,
+                "confidence": 0.0,
+                "reason": "not_found",
+                "profile_id": "local_qwen3_vl_quality",
+                "provider_id": "ollama_local",
+                "model": "qwen3-vl:30b",
+            }
+        )
+        runtime = AiSmartCropRuntime(
+            {
+                "target_description": "car",
+                "refresh_on_ptz_idle": False,
+            },
+            PipelineRuntimeDependencies(services=services),
+        )
+        return await runtime.process_packet(packet, None)
+
+    assert asyncio.run(scenario()) == []
 
 
 def test_ai_condition_filter_emits_only_matching_packets() -> None:

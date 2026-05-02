@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .custom_onnx import _safe_filename
 from .local_build import (
     _preferred_host_python,
     _python_version_text,

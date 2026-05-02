@@ -7,7 +7,6 @@ import shlex
 import shutil
 import socket
 import subprocess
-import sys
 import tempfile
 import time
 import tomllib

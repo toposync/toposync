@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import logging
 import os
-import shutil
 import subprocess
 import sys
 import time

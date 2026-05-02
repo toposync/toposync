@@ -4,7 +4,7 @@ from collections import OrderedDict
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, SinkRuntime
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry

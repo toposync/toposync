@@ -73,7 +73,7 @@ class CameraHub:
                     try:
                         started = await asyncio.wait_for(started_task, timeout=self._start_timeout_s)
                     except TimeoutError as exc:
-                        raise RuntimeError(
+                        raise TimeoutError(
                             f"Camera grabber start timed out after {self._start_timeout_s:.2f}s"
                         ) from exc
                 else:

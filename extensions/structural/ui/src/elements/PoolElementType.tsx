@@ -368,15 +368,16 @@ export function createPoolElementType(i18n: HostI18n): ElementType {
         object: group,
         update: apply,
         tick: (dt: number) => {
-          if ((view.graphicsQuality ?? "simplified") !== "detailed") return;
+          if ((view.graphicsQuality ?? "simplified") !== "detailed" || !waterMesh.visible) return false;
           const now = performance.now();
           const userData = ((waterNormal as any).userData ??= {});
           const lastUpdate = typeof userData.lastOffsetUpdateMs === "number" ? userData.lastOffsetUpdateMs : 0;
-          if (now - lastUpdate < 4) return;
+          if (now - lastUpdate < 4) return true;
           userData.lastOffsetUpdateMs = now;
           const speed = 0.022;
           waterNormal.offset.x = (waterNormal.offset.x + dt * speed) % 1;
           waterNormal.offset.y = (waterNormal.offset.y + dt * speed * 0.7) % 1;
+          return true;
         },
         dispose: () => {
           if (shapeGeometry) shapeGeometry.dispose();

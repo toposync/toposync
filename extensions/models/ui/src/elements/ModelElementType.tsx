@@ -7,6 +7,10 @@ import { clamp, readNumber, readScale, readString, readVector3 } from "../parsin
 import { createGltfModelRuntime } from "../runtime/gltfModel";
 import type { Vector3 } from "../types";
 
+function readBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 export function createModelElementType(i18n: HostI18n): ElementType {
   const imageCache = new Map<string, HTMLImageElement>();
 
@@ -31,14 +35,18 @@ export function createModelElementType(i18n: HostI18n): ElementType {
       center: { x: 0, y: 0, z: 0 },
       min_y: 0,
       scale: 1,
+      animation_enabled: false,
     },
-    create3D: ({ THREE }, element) => {
-      const runtime = createGltfModelRuntime(THREE, { autoplay: true });
+    create3D: ({ THREE, requestRender }, element) => {
+      const runtime = createGltfModelRuntime(THREE, { autoplay: false, onInvalidate: requestRender });
       runtime.updateFromProps(element.props);
-      runtime.setAnimated(true);
+      runtime.setAnimated(readBoolean((element.props as any).animation_enabled, false));
       return {
         object: runtime.object,
-        update: (el) => runtime.updateFromProps(el.props),
+        update: (el) => {
+          runtime.updateFromProps(el.props);
+          runtime.setAnimated(readBoolean((el.props as any).animation_enabled, false));
+        },
         tick: runtime.tick,
         dispose: runtime.dispose,
       };
@@ -124,6 +132,7 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
   const previewFilename = readString((element.props as any).preview, "");
   const size = readVector3((element.props as any).size, { x: 1, y: 1, z: 1 });
   const scale = readScale((element.props as any).scale, 1);
+  const animationEnabled = readBoolean((element.props as any).animation_enabled, false);
   const heightMeters = readNumber((element.position as any).y, 0);
 
   const previewUrl =
@@ -176,6 +185,15 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
           />
         </div>
       </div>
+
+      <label className="chipButton" style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+        <input
+          type="checkbox"
+          checked={animationEnabled}
+          onChange={(event) => update({ props: { animation_enabled: event.target.checked } })}
+        />
+        <span>{t("ext.models.editor.play_animations")}</span>
+      </label>
 
       <div className="field">
         <div className="label">

@@ -70,7 +70,7 @@ export type AirflowConfig = {
 type AirflowEffect = {
   object: any;
   update: (patch: Partial<AirflowConfig>) => void;
-  tick: (dt: number) => void;
+  tick: (dt: number) => boolean;
   dispose: () => void;
 };
 
@@ -269,9 +269,9 @@ export function createAirflowEffect(THREE: any, opts?: { particleCount?: number 
     for (let i = 0; i < activeParticleCount; i += 1) if (ages[i] > lifes[i]) respawn(i);
   }
 
-  function tick(dt: number): void {
-    if (!active) return;
-    if (shouldPauseEffectsForIdlePage()) return;
+  function tick(dt: number): boolean {
+    if (!active) return false;
+    if (shouldPauseEffectsForIdlePage()) return false;
 
     const d = Math.max(0.001, Math.min(0.05, dt));
     t += d;
@@ -369,6 +369,7 @@ export function createAirflowEffect(THREE: any, opts?: { particleCount?: number 
     (geometry.attributes.position as any).needsUpdate = true;
     (geometry.attributes.color as any).needsUpdate = true;
     (pointsGeo.attributes.color as any).needsUpdate = true;
+    return true;
   }
 
   function dispose(): void {

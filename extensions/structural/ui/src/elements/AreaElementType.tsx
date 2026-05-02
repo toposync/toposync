@@ -377,10 +377,11 @@ transformed.z += sin(uTime * 1.1 + instanceSeed * 0.7) * 0.06 * h01 * h01;`,
         object: group,
         update: apply,
         tick: () => {
-          if (!grassBladeMaterial) return;
+          if (!grassBladeMaterial || !grassBlades?.visible) return false;
           const shader = (grassBladeMaterial.userData as any).shader;
-          if (!shader) return;
+          if (!shader) return false;
           shader.uniforms.uTime.value = performance.now() / 1000;
+          return true;
         },
         dispose: () => {
           if (mesh) (mesh.geometry as ThreeTypes.BufferGeometry).dispose();

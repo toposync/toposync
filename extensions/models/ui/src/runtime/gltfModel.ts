@@ -11,14 +11,14 @@ export type GltfModelRuntime = {
   object: ThreeTypes.Group;
   updateFromProps: (props: unknown) => void;
   setAnimated: (animated: boolean) => void;
-  tick: (dt: number) => void;
+  tick: (dt: number) => boolean;
   dispose: () => void;
   getHasAnimations: () => boolean;
 };
 
 export function createGltfModelRuntime(
   THREE: typeof import("three"),
-  options?: { autoplay?: boolean },
+  options?: { autoplay?: boolean; onInvalidate?: () => void },
 ): GltfModelRuntime {
   const group = new THREE.Group();
 
@@ -33,13 +33,46 @@ export function createGltfModelRuntime(
   let hasAnimations = false;
   let isAnimated = Boolean(options?.autoplay);
 
+  function disposeMaterial(material: ThreeTypes.Material) {
+    const materialAny = material as any;
+    const textureKeys = [
+      "map",
+      "alphaMap",
+      "aoMap",
+      "bumpMap",
+      "clearcoatMap",
+      "clearcoatNormalMap",
+      "clearcoatRoughnessMap",
+      "displacementMap",
+      "emissiveMap",
+      "envMap",
+      "iridescenceMap",
+      "iridescenceThicknessMap",
+      "lightMap",
+      "metalnessMap",
+      "normalMap",
+      "roughnessMap",
+      "sheenColorMap",
+      "sheenRoughnessMap",
+      "specularColorMap",
+      "specularIntensityMap",
+      "thicknessMap",
+      "transmissionMap",
+    ];
+    for (const key of textureKeys) {
+      const tex = materialAny[key];
+      if (tex && tex.isTexture && typeof tex.dispose === "function") tex.dispose();
+    }
+    material.dispose();
+  }
+
   function disposeObject(obj: ThreeTypes.Object3D) {
     obj.traverse((child) => {
       const mesh = child as any;
       if (mesh.geometry?.dispose) mesh.geometry.dispose();
       const material = mesh.material;
-      if (Array.isArray(material)) material.forEach((m) => m?.dispose?.());
-      else material?.dispose?.();
+      if (Array.isArray(material)) material.forEach((m) => m && disposeMaterial(m));
+      else if (material) disposeMaterial(material);
     });
   }
 
@@ -138,8 +171,10 @@ export function createGltfModelRuntime(
       } else {
         disposeMixer();
       }
+      options?.onInvalidate?.();
     } catch (err) {
       console.error("[models:gltfModel]", err);
+      options?.onInvalidate?.();
     }
   }
 
@@ -183,8 +218,9 @@ export function createGltfModelRuntime(
     updateFromProps,
     setAnimated,
     tick: (dt: number) => {
-      if (!isAnimated) return;
+      if (!isAnimated || !mixer) return false;
       mixer?.update(dt);
+      return true;
     },
     dispose: () => {
       disposed = true;

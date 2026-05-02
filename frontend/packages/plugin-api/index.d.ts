@@ -76,7 +76,13 @@ export type NotificationOverlayPointerEvent = {
 
 export type Notification3DOverlay = {
   object: import("three").Object3D;
-  tick?: (deltaSeconds: number) => void;
+  /**
+   * Called before a rendered frame. Return true while the overlay needs
+   * continuous frames; return false when it can sleep until the host is
+   * invalidated again. A void return is treated as a one-shot tick by hosts
+   * that render on demand.
+   */
+  tick?: (deltaSeconds: number) => boolean | void;
   update?: (notification: Notification) => void;
   onPointerEvent?: (event: NotificationOverlayPointerEvent) => boolean | void;
   dispose?: () => void;
@@ -133,11 +139,18 @@ export type Scene3DContext = {
   renderer: import("three").WebGLRenderer;
   view: ViewSettings;
   compositionId?: string;
+  requestRender?: () => void;
 };
 
 export type Element3DInstance = {
   object: import("three").Object3D;
-  tick?: (deltaSeconds: number) => void;
+  /**
+   * Called before a rendered frame. Return true while the element needs
+   * continuous frames; return false when it can sleep until the host is
+   * invalidated again. A void return is treated as a one-shot tick by hosts
+   * that render on demand.
+   */
+  tick?: (deltaSeconds: number) => boolean | void;
   update?: (element: CompositionElement) => void;
   dispose?: () => void;
 };

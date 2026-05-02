@@ -40,6 +40,7 @@ const FOCUS_HIGHLIGHT_COLOR = 0x3b82f6;
 const GHOST_WALLS_MATERIAL_STATE_KEY = "__toposyncGhostWallsOriginal";
 const AUTO_FIT_GRACE_MS = 3500;
 const AUTO_FIT_THROTTLE_MS = 220;
+const MAX_INTERACTIVE_PIXEL_RATIO = 2;
 
 function expandBoundsByVisibleObject(target: THREE.Box3, root: THREE.Object3D): boolean {
   let added = false;
@@ -344,6 +345,7 @@ export function Viewport3D({
   const autoFitUntilRef = useRef<number>(0);
   const autoFitLastBoundsRef = useRef<THREE.Box3 | null>(null);
   const autoFitLastCheckTsRef = useRef<number>(0);
+  const requestRenderRef = useRef<(() => void) | null>(null);
 
   const [focusedElementId, setFocusedElementId] = useState<string | null>(null);
   const focusHelperRef = useRef<THREE.BoxHelper | null>(null);
@@ -388,6 +390,7 @@ export function Viewport3D({
         scene.remove(overlay.object);
         overlay.dispose?.();
         notificationOverlayRef.current = null;
+        requestRenderRef.current?.();
       }
       notificationOverlayNotificationIdRef.current = null;
       notificationOverlayRendererIdRef.current = null;
@@ -403,6 +406,7 @@ export function Viewport3D({
 
     if (!needsRecreate) {
       overlay.update?.(notification);
+      requestRenderRef.current?.();
       return;
     }
 
@@ -410,6 +414,7 @@ export function Viewport3D({
       scene.remove(overlay.object);
       overlay.dispose?.();
       notificationOverlayRef.current = null;
+      requestRenderRef.current?.();
     }
 
     const actions: NotificationOverlayActions = {
@@ -418,7 +423,15 @@ export function Viewport3D({
 
     try {
       const created = create3DOverlay(
-        { THREE, scene, camera, renderer, view: viewRef.current, compositionId: currentCompositionId ?? undefined },
+        {
+          THREE,
+          scene,
+          camera,
+          renderer,
+          view: viewRef.current,
+          compositionId: currentCompositionId ?? undefined,
+          requestRender: () => requestRenderRef.current?.(),
+        },
         notification,
         actions,
       );
@@ -433,6 +446,7 @@ export function Viewport3D({
       notificationOverlayNotificationIdRef.current = notification.id;
       notificationOverlayRendererIdRef.current = rendererDef.id;
       notificationOverlayCompositionIdRef.current = currentCompositionId;
+      requestRenderRef.current?.();
     } catch (err) {
       console.warn("[notificationOverlay]", err);
       notificationOverlayNotificationIdRef.current = null;
@@ -492,7 +506,7 @@ export function Viewport3D({
     const containerEl: HTMLDivElement = container;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true, alpha: true });
-    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_INTERACTIVE_PIXEL_RATIO));
     renderer.setClearColor(0x000000, 0);
     renderer.shadowMap.enabled = false;
     renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -516,8 +530,8 @@ export function Viewport3D({
     dirLight.position.set(2.2, 6, 3);
     scene.add(dirLight);
 
-	    const controls = new OrbitControls(camera, renderer.domElement);
-	    controls.enableDamping = true;
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.rotateSpeed = 0.7;
     controls.zoomSpeed = 0.9;
@@ -525,48 +539,80 @@ export function Viewport3D({
     controls.target.set(0, 0.2, 0);
     controls.minDistance = 0.3;
     controls.maxDistance = 40;
-	    controls.maxPolarAngle = Math.PI / 2 - 0.02;
-	    controls.update();
-	    controlsRef.current = controls;
+    controls.maxPolarAngle = Math.PI / 2 - 0.02;
+    controls.update();
+    controlsRef.current = controls;
 
-	    const handleControlsStart = () => {
-	      userInteractedWithCameraRef.current = true;
+    const handleControlsStart = () => {
+      userInteractedWithCameraRef.current = true;
       autoFitUntilRef.current = 0;
-	    };
-	    controls.addEventListener("start", handleControlsStart);
+      requestRenderRef.current?.();
+    };
+    const handleControlsChange = () => requestRenderRef.current?.();
+    const handleControlsEnd = () => requestRenderRef.current?.();
+    controls.addEventListener("start", handleControlsStart);
+    controls.addEventListener("change", handleControlsChange);
+    controls.addEventListener("end", handleControlsEnd);
 
-    rendererRef.current = renderer;
-    cameraRef.current = camera;
-    sceneRef.current = scene;
-    syncNotificationOverlay();
+    let raf = 0;
+    let needsRender = true;
+    let lastFrameTs = 0;
+    const autoFitSize = new THREE.Vector3();
+
+    function scheduleFrame() {
+      if (raf || document.hidden) return;
+      raf = requestAnimationFrame(frame);
+    }
+
+    function requestRender() {
+      needsRender = true;
+      scheduleFrame();
+    }
+
+    function tickInstance(label: string, tick: ((deltaSeconds: number) => boolean | void) | undefined, dt: number): boolean {
+      if (!tick) return false;
+      try {
+        return tick(dt) === true;
+      } catch (err) {
+        console.warn(`[Viewport3D:${label}.tick]`, err);
+        return false;
+      }
+    }
 
     function resize() {
       const w = containerEl.clientWidth;
       const h = containerEl.clientHeight;
       renderer.setSize(w, h);
       labelRenderer.setSize(w, h);
-      camera.aspect = w / h;
+      camera.aspect = h > 0 ? w / h : 1;
       camera.updateProjectionMatrix();
+      requestRender();
     }
 
-    resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(containerEl);
+    function frame(ts: number) {
+      raf = 0;
+      if (document.hidden) {
+        lastFrameTs = 0;
+        return;
+      }
 
-    let raf = 0;
-    const clock = new THREE.Clock();
-    const autoFitSize = new THREE.Vector3();
+      const dt = lastFrameTs ? Math.min((ts - lastFrameTs) / 1000, 0.05) : 0;
+      lastFrameTs = ts;
 
-    function animate() {
-      raf = requestAnimationFrame(animate);
-      const dt = Math.min(clock.getDelta(), 0.05);
-      for (const tracked of trackedRef.current.values()) tracked.instance.tick?.(dt);
-      notificationOverlayRef.current?.tick?.(dt);
-      focusHelperRef.current?.update();
+      const renderRequested = needsRender;
+      needsRender = false;
+      let shouldRender = renderRequested;
+      let wantsNextFrame = false;
+
+      for (const tracked of trackedRef.current.values()) {
+        if (tickInstance(`element:${tracked.type}`, tracked.instance.tick, dt)) wantsNextFrame = true;
+      }
+      if (tickInstance("notificationOverlay", notificationOverlayRef.current?.tick, dt)) wantsNextFrame = true;
 
       const now = Date.now();
       const autoFitUntil = autoFitUntilRef.current;
       if (autoFitUntil && now <= autoFitUntil && !userInteractedWithCameraRef.current) {
+        wantsNextFrame = true;
         const lastCheckTs = autoFitLastCheckTsRef.current;
         if (!lastCheckTs || now - lastCheckTs >= AUTO_FIT_THROTTLE_MS) {
           autoFitLastCheckTsRef.current = now;
@@ -584,6 +630,7 @@ export function Viewport3D({
               fitCameraAngledOverview(camera, controls, bounds);
               autoFitLastBoundsRef.current = bounds.clone();
               lastAutoFitCompositionIdRef.current = compositionIdRef.current ?? null;
+              shouldRender = true;
             }
           }
         }
@@ -591,12 +638,51 @@ export function Viewport3D({
         autoFitUntilRef.current = 0;
       }
 
-      controls.update();
-      renderer.render(scene, camera);
-      labelRenderer.render(scene, camera);
+      const controlsChanged = controls.update();
+      if (controlsChanged) {
+        shouldRender = true;
+        wantsNextFrame = true;
+      }
+      if (wantsNextFrame) shouldRender = true;
+
+      if (shouldRender) {
+        focusHelperRef.current?.update();
+        renderer.render(scene, camera);
+        labelRenderer.render(scene, camera);
+      }
+
+      if (wantsNextFrame || needsRender) {
+        scheduleFrame();
+      } else {
+        lastFrameTs = 0;
+      }
     }
 
-    animate();
+    requestRenderRef.current = requestRender;
+    rendererRef.current = renderer;
+    cameraRef.current = camera;
+    sceneRef.current = scene;
+    syncNotificationOverlay();
+
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(containerEl);
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) scheduleFrame();
+      else lastFrameTs = 0;
+    };
+    const handleInvalidate = () => requestRender();
+    const handleUserActivity = () => scheduleFrame();
+    const activityListenerOptions: AddEventListenerOptions = { capture: true, passive: true };
+    document.addEventListener("visibilitychange", handleVisibilityChange, { capture: true });
+    window.addEventListener("toposync:invalidate", handleInvalidate as EventListener);
+    window.addEventListener("pointerdown", handleUserActivity, activityListenerOptions);
+    window.addEventListener("pointermove", handleUserActivity, activityListenerOptions);
+    window.addEventListener("keydown", handleUserActivity, { capture: true });
+    window.addEventListener("wheel", handleUserActivity, activityListenerOptions);
+    window.addEventListener("touchstart", handleUserActivity, activityListenerOptions);
+    window.addEventListener("focus", handleUserActivity, { capture: true });
 
     let downAt: { x: number; y: number } | null = null;
     let dragged = false;
@@ -756,7 +842,7 @@ export function Viewport3D({
     renderer.domElement.addEventListener("pointercancel", handlePointerUp);
     renderer.domElement.addEventListener("contextmenu", handleContextMenu);
 
-	    return () => {
+    return () => {
       if (longPressTimer) window.clearTimeout(longPressTimer);
       longPressTimer = null;
       if (pendingClick) window.clearTimeout(pendingClick.timer);
@@ -776,12 +862,22 @@ export function Viewport3D({
       renderer.domElement.removeEventListener("pointerup", handlePointerUp);
       renderer.domElement.removeEventListener("pointercancel", handlePointerUp);
       renderer.domElement.removeEventListener("contextmenu", handleContextMenu);
+      document.removeEventListener("visibilitychange", handleVisibilityChange, { capture: true });
+      window.removeEventListener("toposync:invalidate", handleInvalidate as EventListener);
+      window.removeEventListener("pointerdown", handleUserActivity, activityListenerOptions);
+      window.removeEventListener("pointermove", handleUserActivity, activityListenerOptions);
+      window.removeEventListener("keydown", handleUserActivity, { capture: true });
+      window.removeEventListener("wheel", handleUserActivity, activityListenerOptions);
+      window.removeEventListener("touchstart", handleUserActivity, activityListenerOptions);
+      window.removeEventListener("focus", handleUserActivity, { capture: true });
       ro.disconnect();
-	      cancelAnimationFrame(raf);
+      if (raf) cancelAnimationFrame(raf);
 
-	      controls.dispose();
-	      controls.removeEventListener("start", handleControlsStart);
-	      controlsRef.current = null;
+      controls.removeEventListener("start", handleControlsStart);
+      controls.removeEventListener("change", handleControlsChange);
+      controls.removeEventListener("end", handleControlsEnd);
+      controls.dispose();
+      controlsRef.current = null;
 
       if (notificationOverlayRef.current) {
         scene.remove(notificationOverlayRef.current.object);
@@ -795,13 +891,14 @@ export function Viewport3D({
       renderer.dispose();
       containerEl.removeChild(renderer.domElement);
       containerEl.removeChild(labelRenderer.domElement);
+      requestRenderRef.current = null;
       rendererRef.current = null;
       cameraRef.current = null;
       sceneRef.current = null;
     };
   }, [mouse, raycaster]);
 
-	  useEffect(() => {
+  useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
 
@@ -812,6 +909,7 @@ export function Viewport3D({
       if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
       else mat.dispose();
       focusHelperRef.current = null;
+      requestRenderRef.current?.();
     }
 
     if (!focusedElementId) return;
@@ -832,6 +930,7 @@ export function Viewport3D({
     helper.renderOrder = 9999;
     scene.add(helper);
     focusHelperRef.current = helper;
+    requestRenderRef.current?.();
   }, [focusedElementId]);
 
   useEffect(() => {
@@ -840,21 +939,22 @@ export function Viewport3D({
     const camera = cameraRef.current;
     if (!scene || !renderer || !camera) return;
 
-	    const viewKey = `${viewSettings.wallHeightPreset}:${viewSettings.wallHeight}:${Boolean(viewSettings.ghostWalls)}:${viewSettings.graphicsQuality ?? "simplified"}`;
-	    const viewChanged = viewKeyRef.current !== viewKey;
-	    viewKeyRef.current = viewKey;
-	    const ghostWallsEnabled = Boolean(viewSettings.ghostWalls);
+    const viewKey = `${viewSettings.wallHeightPreset}:${viewSettings.wallHeight}:${Boolean(viewSettings.ghostWalls)}:${viewSettings.graphicsQuality ?? "simplified"}`;
+    const viewChanged = viewKeyRef.current !== viewKey;
+    viewKeyRef.current = viewKey;
+    const ghostWallsEnabled = Boolean(viewSettings.ghostWalls);
     const shadowsEnabled = ghostWallsEnabled;
     if (renderer.shadowMap.enabled !== shadowsEnabled) {
       renderer.shadowMap.enabled = shadowsEnabled;
       renderer.shadowMap.needsUpdate = true;
     }
 
-	    const tracked = trackedRef.current;
-	    const elementsById = new Map(elements.map((e) => [e.id, e]));
-	    const areaElements = elements.filter((e) => (elementTypesById[e.type]?.layerGroup ?? "") === "areas");
-	    const areaOrderById = new Map<string, number>();
-	    for (let i = 0; i < areaElements.length; i += 1) areaOrderById.set(areaElements[i].id, i);
+    const tracked = trackedRef.current;
+    const elementsById = new Map(elements.map((e) => [e.id, e]));
+    const areaElements = elements.filter((e) => (elementTypesById[e.type]?.layerGroup ?? "") === "areas");
+    const areaOrderById = new Map<string, number>();
+    for (let i = 0; i < areaElements.length; i += 1) areaOrderById.set(areaElements[i].id, i);
+    let changed = viewChanged;
 
     for (const [id, entry] of tracked.entries()) {
       const element = elementsById.get(id);
@@ -863,6 +963,7 @@ export function Viewport3D({
         scene.remove(entry.instance.object);
         entry.instance.dispose?.();
         tracked.delete(id);
+        changed = true;
       }
     }
 
@@ -876,60 +977,90 @@ export function Viewport3D({
           scene.remove(existing.instance.object);
           existing.instance.dispose?.();
           tracked.delete(element.id);
+          changed = true;
         }
 
         const view = def.layerGroup === "walls" ? viewRef.current : elementViewRef.current;
-        const instance = def.create3D({ THREE, scene, camera, renderer, view, compositionId: compositionIdRef.current }, element);
+        const instance = def.create3D(
+          {
+            THREE,
+            scene,
+            camera,
+            renderer,
+            view,
+            compositionId: compositionIdRef.current,
+            requestRender: () => requestRenderRef.current?.(),
+          },
+          element,
+        );
         (instance.object.userData as any)[ELEMENT_ID] = element.id;
         scene.add(instance.object);
         if (def.layerGroup === "walls") applyGhostWalls(instance.object, ghostWallsEnabled, ghostWallOpacityForTheme());
         tracked.set(element.id, { type: element.type, instance, last: element });
+        changed = true;
       }
 
       const entry = tracked.get(element.id);
       if (!entry) continue;
 
-      entry.instance.object.position.set(element.position.x, element.position.y, element.position.z);
-      entry.instance.object.rotation.set(element.rotation.x, element.rotation.y, element.rotation.z);
+      if (
+        entry.instance.object.position.x !== element.position.x ||
+        entry.instance.object.position.y !== element.position.y ||
+        entry.instance.object.position.z !== element.position.z
+      ) {
+        entry.instance.object.position.set(element.position.x, element.position.y, element.position.z);
+        changed = true;
+      }
+      if (
+        entry.instance.object.rotation.x !== element.rotation.x ||
+        entry.instance.object.rotation.y !== element.rotation.y ||
+        entry.instance.object.rotation.z !== element.rotation.z
+      ) {
+        entry.instance.object.rotation.set(element.rotation.x, element.rotation.y, element.rotation.z);
+        changed = true;
+      }
 
-	      if (viewChanged || !elementsEqual(entry.last, element)) {
-	        entry.instance.update?.(element);
-	        entry.last = element;
-	      }
+      if (viewChanged || !elementsEqual(entry.last, element)) {
+        entry.instance.update?.(element);
+        entry.last = element;
+        changed = true;
+      }
 
       if (viewChanged && def.layerGroup === "walls") {
         applyGhostWalls(entry.instance.object, ghostWallsEnabled, ghostWallOpacityForTheme());
       }
-	      if (def.layerGroup === "areas") {
-	        const order = areaOrderById.get(element.id);
-	        if (typeof order === "number") {
-	          const stackIndex = areaElements.length - 1 - order;
-	          applyPolygonOffsetUnits(entry.instance.object, 1 + stackIndex);
-	        }
-	      }
-	    }
+      if (def.layerGroup === "areas") {
+        const order = areaOrderById.get(element.id);
+        if (typeof order === "number") {
+          const stackIndex = areaElements.length - 1 - order;
+          applyPolygonOffsetUnits(entry.instance.object, 1 + stackIndex);
+        }
+      }
+    }
 
-	    const fitKey = compositionId ?? null;
-	    const controls = controlsRef.current;
-	    if (controls && !userInteractedWithCameraRef.current && lastAutoFitCompositionIdRef.current !== fitKey) {
-	      const bounds = computeTrackedBounds(tracked);
-	      if (bounds) {
-	        fitCameraAngledOverview(camera, controls, bounds);
-	        lastAutoFitCompositionIdRef.current = fitKey;
-          autoFitLastBoundsRef.current = bounds.clone();
-          autoFitUntilRef.current = Date.now() + AUTO_FIT_GRACE_MS;
-          autoFitLastCheckTsRef.current = 0;
-	      }
-	    }
-	  }, [
-	    elements,
-	    elementTypesById,
-	    viewSettings.ghostWalls,
-	    viewSettings.graphicsQuality,
-	    viewSettings.wallHeight,
-	    viewSettings.wallHeightPreset,
-	    compositionId,
-	  ]);
+    const fitKey = compositionId ?? null;
+    const controls = controlsRef.current;
+    if (controls && !userInteractedWithCameraRef.current && lastAutoFitCompositionIdRef.current !== fitKey) {
+      const bounds = computeTrackedBounds(tracked);
+      if (bounds) {
+        fitCameraAngledOverview(camera, controls, bounds);
+        lastAutoFitCompositionIdRef.current = fitKey;
+        autoFitLastBoundsRef.current = bounds.clone();
+        autoFitUntilRef.current = Date.now() + AUTO_FIT_GRACE_MS;
+        autoFitLastCheckTsRef.current = 0;
+        changed = true;
+      }
+    }
+    if (changed) requestRenderRef.current?.();
+  }, [
+    elements,
+    elementTypesById,
+    viewSettings.ghostWalls,
+    viewSettings.graphicsQuality,
+    viewSettings.wallHeight,
+    viewSettings.wallHeightPreset,
+    compositionId,
+  ]);
 
   function focusNext(delta: number) {
     if (focusables.length === 0) return;

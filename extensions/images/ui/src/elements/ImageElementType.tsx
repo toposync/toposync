@@ -79,20 +79,20 @@ export function createImageElementType(i18n: HostI18n): ElementType {
       pixel_width: null,
       pixel_height: null,
     },
-    create3D: ({ THREE }, element) => {
+    create3D: ({ THREE, requestRender }, element) => {
       const group = new THREE.Group();
       const geometry = new THREE.PlaneGeometry(1, 1, 1, 1);
       geometry.rotateX(-Math.PI / 2);
 
-	      const material = new THREE.MeshBasicMaterial({
-	        color: 0xffffff,
-	        transparent: true,
-	        opacity: 1,
-	        depthWrite: false,
-	        polygonOffset: true,
-	        polygonOffsetFactor: -1,
-	        polygonOffsetUnits: -1,
-	      });
+      const material = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 1,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+      });
       const mesh = new THREE.Mesh(geometry, material);
       mesh.position.y = IMAGE_LAYER_Y;
       mesh.raycast = () => undefined;
@@ -119,8 +119,10 @@ export function createImageElementType(i18n: HostI18n): ElementType {
           currentTexture = tex;
           material.map = tex;
           material.needsUpdate = true;
+          requestRender?.();
         } catch (err) {
           console.warn("[images:create3D] texture load failed", err);
+          requestRender?.();
         }
       }
 

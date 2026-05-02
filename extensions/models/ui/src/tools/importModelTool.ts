@@ -103,6 +103,7 @@ export function createImportModelTool(i18n: HostI18n): EditorTool {
             center: preview.center,
             min_y: preview.minY,
             scale: suggestInitialScale(preview.size),
+            animation_enabled: false,
           },
         });
         if (id) toolContext.openEditor(id);

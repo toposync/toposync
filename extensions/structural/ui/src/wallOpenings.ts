@@ -63,7 +63,7 @@ export function defaultColorForKind(kind: WallOpeningKind): string | undefined {
   return undefined;
 }
 
-export function defaultTextureForKind(kind: WallOpeningKind): string {
+export function defaultTextureForKind(kind: WallOpeningKind): "none" | "wood" | "glass" {
   if (kind === "door") return "wood";
   if (kind === "window") return "glass";
   return "none";

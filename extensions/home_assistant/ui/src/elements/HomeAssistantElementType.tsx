@@ -105,7 +105,7 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
       }
       return true;
     },
-    create3D: ({ THREE, view }, element) => {
+    create3D: ({ THREE, view, requestRender }, element) => {
       function getIconGeometry(iconName: string): { geometry: any; scale: number; key: string } {
         const resolved = resolveFontAwesomeSvg(iconName);
         const cached = iconGeometryCache.get(resolved.key);
@@ -151,7 +151,7 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
       group.add(airflow.object);
       const modelMount = new THREE.Group();
       modelMount.visible = false;
-      const model3d = createGltfModelRuntime(THREE, { autoplay: false });
+      const model3d = createGltfModelRuntime(THREE, { autoplay: false, onInvalidate: requestRender });
       model3d.setAnimated(false);
       modelMount.add(model3d.object);
       group.add(modelMount);
@@ -877,8 +877,9 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
         object: group,
         update: apply,
         tick: (dt: number) => {
-          airflow.tick(dt);
-          model3d.tick(dt);
+          let wantsNextFrame = false;
+          if (airflow.tick(dt)) wantsNextFrame = true;
+          if (model3d.tick(dt)) wantsNextFrame = true;
           if (watchedServer && watchedEntity) {
             const live = getHomeAssistantLiveState(watchedServer, watchedEntity);
             const next = readString(live?.state).trim().toLowerCase();
@@ -895,7 +896,9 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
               applyNeonFromState(next, live);
               if (currentSpecialView === "model") {
                 const boolState = watchedEntity ? boolStateForDomain(watchedDomain, next) : null;
-                model3d.setAnimated(boolState === true);
+                const shouldAnimateModel = boolState === true;
+                model3d.setAnimated(shouldAnimateModel);
+                if (shouldAnimateModel) wantsNextFrame = true;
               }
               if (currentSpecialView === "ceiling_fan") {
                 const flow = nextFanFlow ?? fanFlowFromLiveState(live, next);
@@ -910,6 +913,7 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
             const target = fanOn ? fanTargetSpeed01 : 0;
             const accel = 1 - Math.exp(-d * 7);
             fanSpeed01 += (target - fanSpeed01) * accel;
+            if (!fanOn && fanSpeed01 < 0.001) fanSpeed01 = 0;
 
             const maxRps = 2.4;
             fanSpinY += fanSpeed01 * maxRps * Math.PI * 2 * d;
@@ -918,15 +922,17 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
             const blur = clamp((fanSpeed01 - 0.35) / 0.65, 0, 1);
             fanBlurMaterial.opacity = fanOn ? blur * 0.18 : 0.0;
             fanAccentMaterial.emissiveIntensity = fanOn ? 0.12 + 0.75 * fanSpeed01 + Math.sin(fanSpinY * 0.15) * 0.03 : 0.0;
+            if (fanOn || fanSpeed01 > 0) wantsNextFrame = true;
           }
 
-          if (wantedIconKey === currentIconKey) return;
-          if (!isFontAwesomeSolidIconAvailable(wantedIconKey)) return;
+          if (wantedIconKey === currentIconKey) return wantsNextFrame;
+          if (!isFontAwesomeSolidIconAvailable(wantedIconKey)) return wantsNextFrame;
           const entry = getIconGeometry(wantedIconKey);
-          if (entry.key === currentIconKey) return;
+          if (entry.key === currentIconKey) return wantsNextFrame;
           currentIconKey = entry.key;
           iconMesh.geometry = entry.geometry;
           iconMesh.scale.setScalar(entry.scale);
+          return wantsNextFrame;
         },
         dispose: () => {
           unwatch?.();

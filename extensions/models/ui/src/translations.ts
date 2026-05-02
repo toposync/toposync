@@ -8,6 +8,7 @@ export const modelsTranslations = {
     "ext.models.editor.size": "Size",
     "ext.models.editor.preview": "Preview",
     "ext.models.editor.scale": "Scale",
+    "ext.models.editor.play_animations": "Play model animations",
     "ext.models.editor.height": "Height",
     "ext.models.editor.height.floor": "Floor",
     "ext.models.editor.height.mid": "Mid",
@@ -26,6 +27,7 @@ export const modelsTranslations = {
     "ext.models.editor.size": "Tamanho",
     "ext.models.editor.preview": "Prévia",
     "ext.models.editor.scale": "Escala",
+    "ext.models.editor.play_animations": "Reproduzir animações do modelo",
     "ext.models.editor.height": "Altura",
     "ext.models.editor.height.floor": "Chão",
     "ext.models.editor.height.mid": "Meio",
@@ -36,4 +38,3 @@ export const modelsTranslations = {
     "ext.models.error.pick_entry": "Selecione pelo menos um arquivo .glb ou .gltf",
   },
 } as const;
-

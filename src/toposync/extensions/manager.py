@@ -121,8 +121,9 @@ PluginFactory = Callable[[], Any]
 
 
 class ExtensionManager:
-    def __init__(self, *, group: str):
+    def __init__(self, *, group: str, disabled_extension_ids: set[str] | None = None):
         self._group = group
+        self._disabled_extension_ids = set(disabled_extension_ids or set())
         self._extensions: dict[str, LoadedExtension] = {}
         self._auth_routes: list[ExtensionAuthRoute] = []
 
@@ -130,7 +131,10 @@ class ExtensionManager:
         return self._extensions.get(extension_id)
 
     def public_extensions(self) -> list[dict[str, Any]]:
-        return [ext.public_dict() for ext in sorted(self._extensions.values(), key=lambda e: e.manifest.id)]
+        return [
+            ext.public_dict()
+            for ext in sorted(self._extensions.values(), key=lambda e: e.manifest.id)
+        ]
 
     def auth_routes(self) -> list[ExtensionAuthRoute]:
         return list(self._auth_routes)
@@ -144,25 +148,37 @@ class ExtensionManager:
             try:
                 plugin = ep.load()
             except Exception:
-                logger.warning("Failed to load extension entry point '%s' (%s).", ep.name, ep.value, exc_info=True)
+                logger.warning(
+                    "Failed to load extension entry point '%s' (%s).",
+                    ep.name,
+                    ep.value,
+                    exc_info=True,
+                )
                 continue
 
             try:
                 plugin_obj = plugin() if isinstance(plugin, type) else plugin
             except Exception:
                 logger.warning(
-                    "Failed to initialize extension entry point '%s' (%s).", ep.name, ep.value, exc_info=True
+                    "Failed to initialize extension entry point '%s' (%s).",
+                    ep.name,
+                    ep.value,
+                    exc_info=True,
                 )
                 continue
 
             if not hasattr(plugin_obj, "manifest"):
-                logger.warning("Ignoring entry point '%s' (%s): missing .manifest().", ep.name, ep.value)
+                logger.warning(
+                    "Ignoring entry point '%s' (%s): missing .manifest().", ep.name, ep.value
+                )
                 continue
 
             try:
                 manifest: ExtensionManifest = plugin_obj.manifest()
             except Exception:
-                logger.warning("Failed to read manifest for '%s' (%s).", ep.name, ep.value, exc_info=True)
+                logger.warning(
+                    "Failed to read manifest for '%s' (%s).", ep.name, ep.value, exc_info=True
+                )
                 continue
 
             static_root: Traversable | None = None
@@ -171,7 +187,10 @@ class ExtensionManager:
                     static_root = plugin_obj.static_root()
                 except Exception:
                     logger.warning(
-                        "Failed to read static_root for '%s' (%s).", ep.name, ep.value, exc_info=True
+                        "Failed to read static_root for '%s' (%s).",
+                        ep.name,
+                        ep.value,
+                        exc_info=True,
                     )
                     static_root = None
 
@@ -184,9 +203,19 @@ class ExtensionManager:
                 )
                 continue
 
-            discovered[manifest.id] = LoadedExtension(manifest=manifest, plugin=plugin_obj, static_root=static_root)
+            discovered[manifest.id] = LoadedExtension(
+                manifest=manifest, plugin=plugin_obj, static_root=static_root
+            )
 
-        self._extensions = self._filter_compatible_extensions(discovered)
+        enabled_discovered = {
+            extension_id: ext
+            for extension_id, ext in discovered.items()
+            if extension_id not in self._disabled_extension_ids
+        }
+        for extension_id in sorted(set(discovered) - set(enabled_discovered)):
+            logger.info("Skipping extension '%s': disabled by local configuration", extension_id)
+
+        self._extensions = self._filter_compatible_extensions(enabled_discovered)
         for ext in self._extensions.values():
             self._register_auth_routes(ext)
 
@@ -201,7 +230,9 @@ class ExtensionManager:
 
         await asyncio.gather(*(_setup(ext) for ext in self._extensions.values()))
 
-    def _filter_compatible_extensions(self, discovered: dict[str, LoadedExtension]) -> dict[str, LoadedExtension]:
+    def _filter_compatible_extensions(
+        self, discovered: dict[str, LoadedExtension]
+    ) -> dict[str, LoadedExtension]:
         core_version = _current_core_version()
         remaining = dict(discovered)
 
@@ -234,7 +265,9 @@ class ExtensionManager:
 
         requires_core = str(manifest.requires_core_version or "").strip()
         if requires_core:
-            matches, detail = _matches_version_specifier(version=core_version, specifier=requires_core)
+            matches, detail = _matches_version_specifier(
+                version=core_version, specifier=requires_core
+            )
             if detail is not None:
                 errors.append(f"invalid requires_core_version for '{manifest.id}': {detail}")
             elif not matches:
@@ -251,14 +284,18 @@ class ExtensionManager:
 
             required_extension = loaded_extensions.get(required_extension_id)
             if required_extension is None:
-                errors.append(f"requires extension {required_extension_id!r}, which is not available")
+                errors.append(
+                    f"requires extension {required_extension_id!r}, which is not available"
+                )
                 continue
 
             if version_spec is None:
                 continue
 
             required_version = str(required_extension.manifest.version or "").strip()
-            matches, detail = _matches_version_specifier(version=required_version, specifier=version_spec)
+            matches, detail = _matches_version_specifier(
+                version=required_version, specifier=version_spec
+            )
             if detail is not None:
                 errors.append(
                     f"invalid version constraint for required extension {required_extension_id!r}: {detail}"
@@ -288,8 +325,12 @@ class ExtensionManager:
         if not isinstance(auth_caps, dict):
             return
 
-        route_action = str(auth_caps.get("action") or "core:extension:use").strip() or "core:extension:use"
-        route_resource_type = str(auth_caps.get("resource_type") or "core:extension").strip() or "core:extension"
+        route_action = (
+            str(auth_caps.get("action") or "core:extension:use").strip() or "core:extension:use"
+        )
+        route_resource_type = (
+            str(auth_caps.get("resource_type") or "core:extension").strip() or "core:extension"
+        )
         prefixes = auth_caps.get("api_prefixes")
         if not isinstance(prefixes, list):
             return

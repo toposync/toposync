@@ -145,7 +145,13 @@ def _parse_mode(raw: str | None) -> str:
     mode = str(raw or "").strip().lower()
     if mode in {"bypass", "off", "disabled"}:
         return "bypass"
-    if mode in {"ingress", "ha-ingress", "ha_ingress", "home-assistant-ingress", "home_assistant_ingress"}:
+    if mode in {
+        "ingress",
+        "ha-ingress",
+        "ha_ingress",
+        "home-assistant-ingress",
+        "home_assistant_ingress",
+    }:
         return "ingress"
     if mode in {
         "hybrid",
@@ -1105,6 +1111,7 @@ class AuthRuntime:
     # Registry used by UX to configure include/exclude quickly.
     configurable_actions: dict[str, list[str]] = {
         "core:extension": ["core:extension:use", "core:extension:settings:write"],
+        "core:extensions": ["core:extensions:list", "core:extensions:manage"],
         "core:event": ["core:events:emit"],
         "core:area": ["core:area:read", "core:area:control", "core:area:edit"],
     }
@@ -1129,15 +1136,24 @@ class AuthRuntime:
         )
         self.store = AuthStore(data_dir / "auth" / "auth.sqlite3")
         self._access_secret = self.store.get_or_create_secret("access_secret")
-        self._ingress_user_id_header = str(
-            os.getenv("TOPOSYNC_AUTH_INGRESS_USER_ID_HEADER") or "x-remote-user-id"
-        ).strip().lower()
-        self._ingress_username_header = str(
-            os.getenv("TOPOSYNC_AUTH_INGRESS_USERNAME_HEADER") or "x-remote-user-name"
-        ).strip().lower()
-        self._ingress_display_name_header = str(
-            os.getenv("TOPOSYNC_AUTH_INGRESS_DISPLAY_NAME_HEADER") or "x-remote-user-display-name"
-        ).strip().lower()
+        self._ingress_user_id_header = (
+            str(os.getenv("TOPOSYNC_AUTH_INGRESS_USER_ID_HEADER") or "x-remote-user-id")
+            .strip()
+            .lower()
+        )
+        self._ingress_username_header = (
+            str(os.getenv("TOPOSYNC_AUTH_INGRESS_USERNAME_HEADER") or "x-remote-user-name")
+            .strip()
+            .lower()
+        )
+        self._ingress_display_name_header = (
+            str(
+                os.getenv("TOPOSYNC_AUTH_INGRESS_DISPLAY_NAME_HEADER")
+                or "x-remote-user-display-name"
+            )
+            .strip()
+            .lower()
+        )
         ingress_role_raw = str(os.getenv("TOPOSYNC_AUTH_INGRESS_ROLE") or "owner").strip().lower()
         self._ingress_role: RoleName = (
             ingress_role_raw
@@ -1155,8 +1171,12 @@ class AuthRuntime:
             default=True,
         )
         # Optional credentials for service-to-service authentication (e.g. extension sync).
-        self._streaming_sync_username = str(os.getenv("TOPOSYNC_STREAMING_SYNC_USERNAME") or "").strip()
-        self._streaming_sync_password = str(os.getenv("TOPOSYNC_STREAMING_SYNC_PASSWORD") or "").strip()
+        self._streaming_sync_username = str(
+            os.getenv("TOPOSYNC_STREAMING_SYNC_USERNAME") or ""
+        ).strip()
+        self._streaming_sync_password = str(
+            os.getenv("TOPOSYNC_STREAMING_SYNC_PASSWORD") or ""
+        ).strip()
 
     @property
     def bypass_principal(self) -> AuthPrincipal:
@@ -1271,7 +1291,9 @@ class AuthRuntime:
         if not encoded:
             return None
         try:
-            decoded = base64.b64decode(encoded.encode("ascii"), validate=True).decode("utf-8", errors="replace")
+            decoded = base64.b64decode(encoded.encode("ascii"), validate=True).decode(
+                "utf-8", errors="replace"
+            )
         except Exception:
             return None
         if ":" not in decoded:
@@ -1371,16 +1393,18 @@ class AuthRuntime:
                 maybe_basic = self._authorization_header_basic_credentials(request)
                 if maybe_basic is not None:
                     username, password = maybe_basic
-                    if hmac.compare_digest(username, self._streaming_sync_username) and hmac.compare_digest(
-                        password, self._streaming_sync_password
-                    ):
+                    if hmac.compare_digest(
+                        username, self._streaming_sync_username
+                    ) and hmac.compare_digest(password, self._streaming_sync_password):
                         principal = AuthPrincipal(
                             user_id="service:streaming_sync",
                             username="streaming-sync",
                             display_name="Streaming Sync",
                             role="service",
                         )
-                        return AuthContext(principal=principal, mode=self.mode, requires_setup=requires_setup)
+                        return AuthContext(
+                            principal=principal, mode=self.mode, requires_setup=requires_setup
+                        )
 
         bearer = self._authorization_header_token(request)
         if bearer:

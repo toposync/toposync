@@ -40,10 +40,14 @@ def _load_manager(
     entry_points: list[_FakeEntryPoint],
     monkeypatch: pytest.MonkeyPatch,
     core_version: str = "0.3.0",
+    disabled_extension_ids: set[str] | None = None,
 ) -> ExtensionManager:
     monkeypatch.setattr(ext_manager_mod, "_iter_entry_points", lambda _group: entry_points)
     monkeypatch.setattr(ext_manager_mod, "_current_core_version", lambda: core_version)
-    manager = ExtensionManager(group="toposync.extensions")
+    manager = ExtensionManager(
+        group="toposync.extensions",
+        disabled_extension_ids=disabled_extension_ids,
+    )
     asyncio.run(manager.load(app=FastAPI(), bus=EventBus(), services=ServiceRegistry()))
     return manager
 
@@ -144,7 +148,44 @@ def test_extension_manager_skips_dependents_of_rejected_extensions(
     assert setup_calls == ["com.test.ok"]
 
 
-def test_extension_manager_validates_required_extension_version(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_extension_manager_skips_dependents_of_disabled_extensions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup_calls: list[str] = []
+    base_plugin = _make_plugin(
+        {
+            "id": "com.test.base",
+            "name": "Base",
+            "version": "0.1.0",
+        },
+        setup_calls,
+    )
+    dependent_plugin = _make_plugin(
+        {
+            "id": "com.test.dependent",
+            "name": "Dependent",
+            "version": "0.1.0",
+            "requires_extensions": ["com.test.base"],
+        },
+        setup_calls,
+    )
+
+    manager = _load_manager(
+        entry_points=[
+            _FakeEntryPoint("base", base_plugin),
+            _FakeEntryPoint("dependent", dependent_plugin),
+        ],
+        monkeypatch=monkeypatch,
+        disabled_extension_ids={"com.test.base"},
+    )
+
+    assert manager.public_extensions() == []
+    assert setup_calls == []
+
+
+def test_extension_manager_validates_required_extension_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     setup_calls: list[str] = []
     base_plugin = _make_plugin(
         {

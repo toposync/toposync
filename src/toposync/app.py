@@ -34,6 +34,18 @@ from toposync.runtime.config_store import (
     ProcessingServer,
     UserDataPaths,
 )
+from toposync.runtime.extension_management import (
+    ExtensionManagementCatalog,
+    PipOperationResult,
+    build_extension_management_catalog,
+    disabled_extension_ids_from_settings,
+    disable_extension,
+    enable_extension,
+    ensure_desired_extensions_installed,
+    install_manual_extension,
+    install_recommended_extension,
+    remove_extension,
+)
 from toposync.runtime.notifications import NotificationsRuntime
 from toposync.runtime.services import ServiceRegistry
 from toposync.runtime.processing_diagnostics import collect_processing_server_diagnostics
@@ -48,7 +60,10 @@ from toposync.runtime.pipelines import (
     register_builtin_operators,
 )
 from toposync.runtime.pipelines.execution_scheduler import ExecutionScheduler
-from toposync.runtime.pipelines.python_dsl import PythonDslCompileError, compile_python_source_to_graph
+from toposync.runtime.pipelines.python_dsl import (
+    PythonDslCompileError,
+    compile_python_source_to_graph,
+)
 from toposync.runtime.pipelines.recommendations import PipelineAlert, analyze_compiled_pipeline
 from toposync.runtime.pipelines.safe_expression import SafeExpression, SafeExpressionError
 from toposync.runtime.pipelines.stats import PipelineStatsStore
@@ -70,7 +85,10 @@ from toposync.runtime.pipelines.operators_sinks import _encode_image_bytes
 from toposync.runtime.pipelines.step_snapshots import PipelineStepSnapshotStore
 from toposync.runtime.pipelines.step_snapshots import build_step_input_snapshot_rel_path
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
-from toposync.runtime.pipelines.distributed.transport import HttpProcessingTransport, ProcessingTransportError
+from toposync.runtime.pipelines.distributed.transport import (
+    HttpProcessingTransport,
+    ProcessingTransportError,
+)
 from toposync.runtime.pipelines.migration_legacy_cameras import (
     build_pipeline_from_legacy_camera_rule,
     extract_legacy_camera_rules,
@@ -145,6 +163,17 @@ def _normalize_telemetry_aggregation(value: str | None) -> str:
 class ExtensionSettingsResponse(BaseModel):
     extension_id: str
     settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExtensionInstallRequest(BaseModel):
+    pip_spec: str
+
+
+class ExtensionOperationResponse(BaseModel):
+    ok: bool
+    pip: PipOperationResult | None = None
+    catalog: ExtensionManagementCatalog
+    error: str | None = None
 
 
 class PipelinesListResponse(BaseModel):
@@ -744,7 +773,9 @@ def _public_base_path_for_request(request: Request) -> str:
     return _normalize_public_base_path(request.headers.get("x-ingress-path"))
 
 
-_FRONTEND_INDEX_ASSET_RE = re.compile(r'(?P<prefix>\s(?:src|href)=["\'])(?P<url>[^"\']+)(?P<suffix>["\'])')
+_FRONTEND_INDEX_ASSET_RE = re.compile(
+    r'(?P<prefix>\s(?:src|href)=["\'])(?P<url>[^"\']+)(?P<suffix>["\'])'
+)
 
 
 def _prefix_frontend_index_assets(html: str, base_path: str) -> str:
@@ -830,7 +861,9 @@ async def _lifespan(app: FastAPI):
         if not device_id:
             raise HTTPException(status_code=400, detail="payload.device_id is required")
         if action != "toggle":
-            raise HTTPException(status_code=400, detail="Only action=toggle is supported in the base runtime")
+            raise HTTPException(
+                status_code=400, detail="Only action=toggle is supported in the base runtime"
+            )
         state = await services.call("devices.toggle", device_id=device_id)
         return {"device_id": device_id, "state": state}
 
@@ -872,14 +905,37 @@ async def _lifespan(app: FastAPI):
         except Exception:
             return int(default)
 
-    artifact_max_bytes_per_packet = _env_int("TOPOSYNC_ARTIFACT_MAX_BYTES_PER_PACKET", 128 * 1024 * 1024)
-    artifact_max_total_bytes_per_pipeline = _env_int("TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_PER_PIPELINE", 512 * 1024 * 1024)
-    artifact_max_total_bytes_global = _env_int("TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_GLOBAL", 1024 * 1024 * 1024)
+    artifact_max_bytes_per_packet = _env_int(
+        "TOPOSYNC_ARTIFACT_MAX_BYTES_PER_PACKET", 128 * 1024 * 1024
+    )
+    artifact_max_total_bytes_per_pipeline = _env_int(
+        "TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_PER_PIPELINE", 512 * 1024 * 1024
+    )
+    artifact_max_total_bytes_global = _env_int(
+        "TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_GLOBAL", 1024 * 1024 * 1024
+    )
     artifact_global_counter = (
-        ArtifactMemoryCounter(limit_bytes=artifact_max_total_bytes_global) if artifact_max_total_bytes_global > 0 else None
+        ArtifactMemoryCounter(limit_bytes=artifact_max_total_bytes_global)
+        if artifact_max_total_bytes_global > 0
+        else None
     )
 
-    ext_manager = ExtensionManager(group="toposync.extensions")
+    if str(os.getenv("TOPOSYNC_EXTENSION_AUTO_INSTALL_ON_STARTUP", "1") or "1").strip() != "0":
+        try:
+            install_results = await ensure_desired_extensions_installed(config_store)
+            failed = [item for item in install_results if not item.ok]
+            if failed:
+                logger.warning(
+                    "Failed to restore %s managed extension package(s) on startup.", len(failed)
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to restore managed extension packages on startup: %s", exc)
+
+    disabled_extension_ids = disabled_extension_ids_from_settings(await config_store.get_settings())
+    ext_manager = ExtensionManager(
+        group="toposync.extensions",
+        disabled_extension_ids=disabled_extension_ids,
+    )
     await ext_manager.load(app=app, bus=bus, services=services)
     app.state.extensions = ext_manager
 
@@ -894,7 +950,9 @@ async def _lifespan(app: FastAPI):
             services=services,
             pipeline_stats_store=pipeline_stats_store,
             pipeline_telemetry_store=pipeline_telemetry_store,
-            pipeline_snapshot_store=PipelineStepSnapshotStore(files_dir=config_store.paths.files_dir),
+            pipeline_snapshot_store=PipelineStepSnapshotStore(
+                files_dir=config_store.paths.files_dir
+            ),
             execution_scheduler=ExecutionScheduler(),
             artifact_max_bytes_per_packet=artifact_max_bytes_per_packet,
             artifact_max_total_bytes_per_pipeline=artifact_max_total_bytes_per_pipeline,
@@ -995,23 +1053,34 @@ def create_app() -> FastAPI:
 
         if auth.ingress_network_guard_enabled() and path != "/api/health":
             if not auth.is_trusted_ingress_request(request):
-                return JSONResponse(status_code=403, content={"detail": "Ingress access is restricted to Home Assistant"})
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Ingress access is restricted to Home Assistant"},
+                )
 
         if auth.mode != "bypass":
-            if context.requires_setup and (is_api or is_protected_file_route or is_protected_extension_asset):
+            if context.requires_setup and (
+                is_api or is_protected_file_route or is_protected_extension_asset
+            ):
                 setup_allowed = is_setup_api and request.method == "POST"
                 status_allowed = path == "/api/auth/status"
                 health_allowed = path == "/api/health"
                 if not (setup_allowed or status_allowed or health_allowed):
-                    return JSONResponse(status_code=503, content={"detail": "Auth setup is required"})
+                    return JSONResponse(
+                        status_code=503, content={"detail": "Auth setup is required"}
+                    )
             if (is_api or is_protected_file_route or is_protected_extension_asset) and not (
                 is_public_api or is_auth_api or is_setup_api
             ):
                 if context.principal is None:
-                    return JSONResponse(status_code=401, content={"detail": "Authentication required"})
+                    return JSONResponse(
+                        status_code=401, content={"detail": "Authentication required"}
+                    )
 
             if is_api:
-                ext_manager: ExtensionManager | None = getattr(request.app.state, "extensions", None)
+                ext_manager: ExtensionManager | None = getattr(
+                    request.app.state, "extensions", None
+                )
                 if ext_manager is not None:
                     for auth_route in ext_manager.auth_routes():
                         prefix = auth_route.prefix.rstrip("/")
@@ -1024,7 +1093,9 @@ def create_app() -> FastAPI:
                                     resource_selector=auth_route.extension_id,
                                 )
                             except HTTPException as exc:
-                                return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+                                return JSONResponse(
+                                    status_code=exc.status_code, content={"detail": exc.detail}
+                                )
                             break
 
         response = await call_next(request)
@@ -1059,7 +1130,9 @@ def create_app() -> FastAPI:
         if principal is not None and not principal.bypass:
             db_user = auth.store.get_user_by_id(principal.user_id)
             if db_user is not None:
-                user = AuthUserPublic.model_validate(auth.serialize_user(db_user, include_grants=True))
+                user = AuthUserPublic.model_validate(
+                    auth.serialize_user(db_user, include_grants=True)
+                )
         if principal is not None and principal.bypass:
             user = AuthUserPublic(
                 id="bypass",
@@ -1072,7 +1145,12 @@ def create_app() -> FastAPI:
                 updated_at=0.0,
                 is_disabled=False,
             )
-        if principal is not None and not principal.bypass and user is None and auth.mode in {"ingress", "hybrid"}:
+        if (
+            principal is not None
+            and not principal.bypass
+            and user is None
+            and auth.mode in {"ingress", "hybrid"}
+        ):
             user = AuthUserPublic.model_validate(auth.serialize_ingress_principal(principal))
         return AuthStatusResponse(
             mode=auth.mode,
@@ -1094,9 +1172,13 @@ def create_app() -> FastAPI:
             password=body.password,
             device_label=body.device_label,
         )
-        payload = AuthLoginResponse(user=AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True)))
+        payload = AuthLoginResponse(
+            user=AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True))
+        )
         response = JSONResponse(payload.model_dump(mode="json"))
-        auth.apply_session_cookies(response, access_token=access_token, refresh_token=refresh_token, request=request)
+        auth.apply_session_cookies(
+            response, access_token=access_token, refresh_token=refresh_token, request=request
+        )
         return response
 
     @app.post("/api/auth/login", response_model=AuthLoginResponse)
@@ -1110,9 +1192,13 @@ def create_app() -> FastAPI:
         user = auth.store.get_user_by_id(principal.user_id)
         if user is None:
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        payload = AuthLoginResponse(user=AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True)))
+        payload = AuthLoginResponse(
+            user=AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True))
+        )
         response = JSONResponse(payload.model_dump(mode="json"))
-        auth.apply_session_cookies(response, access_token=access_token, refresh_token=refresh_token, request=request)
+        auth.apply_session_cookies(
+            response, access_token=access_token, refresh_token=refresh_token, request=request
+        )
         return response
 
     @app.post("/api/auth/logout")
@@ -1124,11 +1210,15 @@ def create_app() -> FastAPI:
         return response
 
     @app.post("/api/auth/pair/start", response_model=AuthPairStartResponse)
-    async def auth_pair_start(request: Request, body: AuthPairStartRequest) -> AuthPairStartResponse:
+    async def auth_pair_start(
+        request: Request, body: AuthPairStartRequest
+    ) -> AuthPairStartResponse:
         _require(request, action="core:auth:pair")
         auth: AuthRuntime = request.app.state.auth
         principal = auth.require_authenticated(_auth_context(request))
-        code, expires_at = auth.start_pairing(user_id=principal.user_id, device_label=body.device_label)
+        code, expires_at = auth.start_pairing(
+            user_id=principal.user_id, device_label=body.device_label
+        )
         return AuthPairStartResponse(code=code, expires_at=expires_at)
 
     @app.post("/api/auth/pair/complete", response_model=AuthLoginResponse)
@@ -1141,16 +1231,23 @@ def create_app() -> FastAPI:
         user = auth.store.get_user_by_id(principal.user_id)
         if user is None:
             raise HTTPException(status_code=401, detail="Invalid pairing")
-        payload = AuthLoginResponse(user=AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True)))
+        payload = AuthLoginResponse(
+            user=AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True))
+        )
         response = JSONResponse(payload.model_dump(mode="json"))
-        auth.apply_session_cookies(response, access_token=access_token, refresh_token=refresh_token, request=request)
+        auth.apply_session_cookies(
+            response, access_token=access_token, refresh_token=refresh_token, request=request
+        )
         return response
 
     @app.get("/api/access/users", response_model=AccessUsersResponse)
     async def list_access_users(request: Request) -> AccessUsersResponse:
         _require(request, action="core:access:manage")
         auth: AuthRuntime = request.app.state.auth
-        users = [AuthUserPublic.model_validate(auth.serialize_user(item, include_grants=True)) for item in auth.store.list_users()]
+        users = [
+            AuthUserPublic.model_validate(auth.serialize_user(item, include_grants=True))
+            for item in auth.store.list_users()
+        ]
         return AccessUsersResponse(users=users, grants_catalog=auth.configurable_actions)
 
     @app.get("/api/access/users/{user_id}/sessions", response_model=AccessSessionsResponse)
@@ -1161,7 +1258,11 @@ def create_app() -> FastAPI:
         target = auth.store.get_user_by_id(user_id)
         if target is None:
             raise HTTPException(status_code=404, detail="Unknown user")
-        if context.principal is not None and context.principal.role != "owner" and target.role == "owner":
+        if (
+            context.principal is not None
+            and context.principal.role != "owner"
+            and target.role == "owner"
+        ):
             raise HTTPException(status_code=403, detail="Only owners can manage owner sessions")
         sessions = [
             AccessSessionPublic(
@@ -1176,14 +1277,20 @@ def create_app() -> FastAPI:
         return AccessSessionsResponse(sessions=sessions)
 
     @app.delete("/api/access/users/{user_id}/sessions/{session_id}")
-    async def revoke_access_user_session(request: Request, user_id: str, session_id: str) -> dict[str, bool]:
+    async def revoke_access_user_session(
+        request: Request, user_id: str, session_id: str
+    ) -> dict[str, bool]:
         _require(request, action="core:access:manage")
         auth: AuthRuntime = request.app.state.auth
         context = _auth_context(request)
         target = auth.store.get_user_by_id(user_id)
         if target is None:
             raise HTTPException(status_code=404, detail="Unknown user")
-        if context.principal is not None and context.principal.role != "owner" and target.role == "owner":
+        if (
+            context.principal is not None
+            and context.principal.role != "owner"
+            and target.role == "owner"
+        ):
             raise HTTPException(status_code=403, detail="Only owners can manage owner sessions")
         revoked = auth.store.revoke_refresh_session(token_id=session_id, user_id=user_id)
         if not revoked:
@@ -1222,7 +1329,9 @@ def create_app() -> FastAPI:
                 area_name = str(el.name or "").strip() or area_id
                 areas.append(AccessOptionItem(id=area_id, name=area_name))
             areas.sort(key=lambda a: a.name.lower())
-            composition_options.append(AccessCompositionOptions(id=comp.id, name=comp.name, areas=areas))
+            composition_options.append(
+                AccessCompositionOptions(id=comp.id, name=comp.name, areas=areas)
+            )
 
         composition_options.sort(key=lambda c: c.name.lower())
         extensions.sort(key=lambda e: e.name.lower())
@@ -1238,7 +1347,11 @@ def create_app() -> FastAPI:
         _require(request, action="core:access:manage")
         auth: AuthRuntime = request.app.state.auth
         context = _auth_context(request)
-        if context.principal is not None and context.principal.role != "owner" and body.role == "owner":
+        if (
+            context.principal is not None
+            and context.principal.role != "owner"
+            and body.role == "owner"
+        ):
             raise HTTPException(status_code=403, detail="Only owners can create another owner")
         try:
             user = auth.store.create_user(
@@ -1252,16 +1365,27 @@ def create_app() -> FastAPI:
         return AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True))
 
     @app.patch("/api/access/users/{user_id}", response_model=AuthUserPublic)
-    async def patch_access_user(request: Request, user_id: str, body: AccessUserPatchRequest) -> AuthUserPublic:
+    async def patch_access_user(
+        request: Request, user_id: str, body: AccessUserPatchRequest
+    ) -> AuthUserPublic:
         _require(request, action="core:access:manage")
         auth: AuthRuntime = request.app.state.auth
         context = _auth_context(request)
         current = auth.store.get_user_by_id(user_id)
         if current is None:
             raise HTTPException(status_code=404, detail="Unknown user")
-        if context.principal is not None and user_id == context.principal.user_id and body.is_disabled is True:
+        if (
+            context.principal is not None
+            and user_id == context.principal.user_id
+            and body.is_disabled is True
+        ):
             raise HTTPException(status_code=400, detail="Cannot disable current user")
-        if context.principal is not None and user_id == context.principal.user_id and body.role and body.role != "owner":
+        if (
+            context.principal is not None
+            and user_id == context.principal.user_id
+            and body.role
+            and body.role != "owner"
+        ):
             raise HTTPException(status_code=400, detail="Cannot downgrade current owner session")
         if context.principal is not None and context.principal.role != "owner":
             if current.role == "owner" or body.role == "owner":
@@ -1290,7 +1414,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown user")
         if context.principal is not None and user_id == context.principal.user_id:
             raise HTTPException(status_code=400, detail="Cannot delete current user")
-        if context.principal is not None and context.principal.role != "owner" and target.role == "owner":
+        if (
+            context.principal is not None
+            and context.principal.role != "owner"
+            and target.role == "owner"
+        ):
             raise HTTPException(status_code=403, detail="Only owners can delete owner accounts")
         owners = [item for item in auth.store.list_users() if item.role == "owner"]
         if any(owner.id == user_id for owner in owners) and len(owners) <= 1:
@@ -1360,6 +1488,126 @@ def create_app() -> FastAPI:
         ext_manager: ExtensionManager = request.app.state.extensions
         return JSONResponse(ext_manager.public_extensions())
 
+    async def _extension_management_response(
+        request: Request,
+        *,
+        ok: bool = True,
+        pip: PipOperationResult | None = None,
+        error: str | None = None,
+    ) -> ExtensionOperationResponse:
+        config_store: ConfigStore = request.app.state.config_store
+        ext_manager: ExtensionManager = request.app.state.extensions
+        catalog = await build_extension_management_catalog(
+            config_store=config_store,
+            extension_manager=ext_manager,
+        )
+        return ExtensionOperationResponse(ok=ok, pip=pip, catalog=catalog, error=error)
+
+    @app.get("/api/extensions/manage", response_model=ExtensionManagementCatalog)
+    async def extensions_management_catalog(request: Request) -> ExtensionManagementCatalog:
+        _require(request, action="core:extensions:list")
+        config_store: ConfigStore = request.app.state.config_store
+        ext_manager: ExtensionManager = request.app.state.extensions
+        return await build_extension_management_catalog(
+            config_store=config_store,
+            extension_manager=ext_manager,
+        )
+
+    @app.post(
+        "/api/extensions/manage/install",
+        response_model=ExtensionOperationResponse,
+    )
+    async def install_extension_manual(
+        request: Request,
+        body: ExtensionInstallRequest,
+    ) -> ExtensionOperationResponse:
+        _require(request, action="core:extensions:manage")
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            result = await install_manual_extension(config_store, body.pip_spec)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return await _extension_management_response(
+            request,
+            ok=result.ok,
+            pip=result,
+            error=None if result.ok else result.stderr or result.stdout or "pip install failed",
+        )
+
+    @app.post(
+        "/api/extensions/manage/recommended/{extension_id}/install",
+        response_model=ExtensionOperationResponse,
+    )
+    async def install_extension_recommended(
+        request: Request,
+        extension_id: str,
+    ) -> ExtensionOperationResponse:
+        _require(request, action="core:extensions:manage")
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            result = await install_recommended_extension(config_store, extension_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return await _extension_management_response(
+            request,
+            ok=result.ok,
+            pip=result,
+            error=None if result.ok else result.stderr or result.stdout or "pip install failed",
+        )
+
+    @app.post(
+        "/api/extensions/manage/{extension_id}/enable",
+        response_model=ExtensionOperationResponse,
+    )
+    async def enable_managed_extension(
+        request: Request,
+        extension_id: str,
+    ) -> ExtensionOperationResponse:
+        _require(request, action="core:extensions:manage")
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            await enable_extension(config_store, extension_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return await _extension_management_response(request)
+
+    @app.post(
+        "/api/extensions/manage/{extension_id}/disable",
+        response_model=ExtensionOperationResponse,
+    )
+    async def disable_managed_extension(
+        request: Request,
+        extension_id: str,
+    ) -> ExtensionOperationResponse:
+        _require(request, action="core:extensions:manage")
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            await disable_extension(config_store, extension_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return await _extension_management_response(request)
+
+    @app.delete(
+        "/api/extensions/manage/{extension_id}",
+        response_model=ExtensionOperationResponse,
+    )
+    async def remove_managed_extension(
+        request: Request,
+        extension_id: str,
+    ) -> ExtensionOperationResponse:
+        _require(request, action="core:extensions:manage")
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            result = await remove_extension(config_store, extension_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return await _extension_management_response(
+            request,
+            ok=result.ok,
+            pip=result,
+            error=None if result.ok else result.stderr or result.stdout or "pip uninstall failed",
+        )
+
     @app.get("/api/settings", response_model=AppSettings)
     async def get_settings(request: Request) -> AppSettings:
         _require(request, action="core:settings:read")
@@ -1420,7 +1668,9 @@ def create_app() -> FastAPI:
         return ProcessingServersListResponse(servers=servers)
 
     @app.put("/api/processing-servers/{server_id}", response_model=ProcessingServer)
-    async def put_processing_server(request: Request, server_id: str, body: ProcessingServer) -> ProcessingServer:
+    async def put_processing_server(
+        request: Request, server_id: str, body: ProcessingServer
+    ) -> ProcessingServer:
         _require(request, action="core:processing_servers:write")
         if body.id != server_id:
             raise HTTPException(status_code=400, detail="server_id mismatch")
@@ -1455,8 +1705,12 @@ def create_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Unknown processing server") from exc
 
-    @app.get("/api/processing-servers/{server_id}/status", response_model=ProcessingServerStatusResponse)
-    async def get_processing_server_status(request: Request, server_id: str) -> ProcessingServerStatusResponse:
+    @app.get(
+        "/api/processing-servers/{server_id}/status", response_model=ProcessingServerStatusResponse
+    )
+    async def get_processing_server_status(
+        request: Request, server_id: str
+    ) -> ProcessingServerStatusResponse:
         _require(request, action="core:processing_servers:read")
         config_store: ConfigStore = request.app.state.config_store
         sid = str(server_id or "").strip().lower()
@@ -1468,7 +1722,11 @@ def create_app() -> FastAPI:
         if server.kind != "http":
             status: dict[str, Any] = {"kind": server.kind, "id": server.id}
             try:
-                status.update(await collect_processing_server_diagnostics(data_dir=str(config_store.paths.data_dir)))
+                status.update(
+                    await collect_processing_server_diagnostics(
+                        data_dir=str(config_store.paths.data_dir)
+                    )
+                )
             except Exception:
                 pass
             return ProcessingServerStatusResponse(ok=True, status=status)
@@ -1515,14 +1773,17 @@ def create_app() -> FastAPI:
             try:
                 from toposync_ext_vision.registry import ModelRegistryError, import_custom_manifest
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Vision extension unavailable: {exc}"
+                ) from exc
             try:
                 result = import_custom_manifest(
                     manifest_text=body.manifest_text,
                     artifact_path_override=body.artifact_path,
                     data_dir=config_store.paths.data_dir,
                     replace_existing=bool(body.replace_existing),
-                    imported_by=dict(body.imported_by or {}) or _processing_install_requested_by(request),
+                    imported_by=dict(body.imported_by or {})
+                    or _processing_install_requested_by(request),
                     imported_via="api_processing_server_import",
                 )
             except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
@@ -1541,7 +1802,9 @@ def create_app() -> FastAPI:
 
         try:
             payload = body.model_dump(mode="json")
-            payload["imported_by"] = dict(body.imported_by or {}) or _processing_install_requested_by(request)
+            payload["imported_by"] = dict(
+                body.imported_by or {}
+            ) or _processing_install_requested_by(request)
             result = await transport.import_vision_manifest(payload)
             return ProcessingServerVisionManifestImportResponse.model_validate(result)
         except ProcessingTransportError as exc:
@@ -1571,7 +1834,9 @@ def create_app() -> FastAPI:
                 from toposync_ext_vision.registry.custom_onnx import stage_custom_onnx_upload
                 from toposync_ext_vision.registry.manifests import ModelRegistryError
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Vision extension unavailable: {exc}"
+                ) from exc
             try:
                 result = await asyncio.to_thread(
                     stage_custom_onnx_upload,
@@ -1634,14 +1899,18 @@ def create_app() -> FastAPI:
         try:
             body = ProcessingServerVisionCustomOnnxRequest.model_validate_json(config_json or "{}")
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"Invalid custom ONNX preview config: {exc}") from exc
+            raise HTTPException(
+                status_code=400, detail=f"Invalid custom ONNX preview config: {exc}"
+            ) from exc
 
         if server.kind != "http":
             try:
                 from toposync_ext_vision.registry.custom_onnx import preview_custom_onnx_model
                 from toposync_ext_vision.registry.manifests import ModelRegistryError
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Vision extension unavailable: {exc}"
+                ) from exc
             try:
                 image_bytes = await image.read()
                 result = await asyncio.to_thread(
@@ -1730,7 +1999,9 @@ def create_app() -> FastAPI:
                 from toposync_ext_vision.registry.custom_onnx import import_custom_onnx_model
                 from toposync_ext_vision.registry.manifests import ModelRegistryError
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Vision extension unavailable: {exc}"
+                ) from exc
             try:
                 result = await asyncio.to_thread(
                     import_custom_onnx_model,
@@ -1756,7 +2027,8 @@ def create_app() -> FastAPI:
                     class_labels=body.class_labels,
                     source_url=body.source_url,
                     replace_existing=body.replace_existing,
-                    imported_by=dict(body.imported_by or {}) or _processing_install_requested_by(request),
+                    imported_by=dict(body.imported_by or {})
+                    or _processing_install_requested_by(request),
                     data_dir=config_store.paths.data_dir,
                 )
             except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
@@ -1775,7 +2047,9 @@ def create_app() -> FastAPI:
 
         try:
             payload = body.model_dump(mode="json")
-            payload["imported_by"] = dict(body.imported_by or {}) or _processing_install_requested_by(request)
+            payload["imported_by"] = dict(
+                body.imported_by or {}
+            ) or _processing_install_requested_by(request)
             result = await transport.import_vision_custom_onnx(payload)
             return ProcessingServerVisionManifestImportResponse.model_validate(result)
         except ProcessingTransportError as exc:
@@ -1808,7 +2082,9 @@ def create_app() -> FastAPI:
                 from toposync_ext_vision.registry.huggingface import probe_huggingface_repo
                 from toposync_ext_vision.registry.manifests import ModelRegistryError
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Vision extension unavailable: {exc}"
+                ) from exc
             try:
                 result = await asyncio.to_thread(
                     probe_huggingface_repo,
@@ -1862,7 +2138,9 @@ def create_app() -> FastAPI:
                 from toposync_ext_vision.registry.huggingface import inspect_huggingface_onnx
                 from toposync_ext_vision.registry.manifests import ModelRegistryError
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Vision extension unavailable: {exc}"
+                ) from exc
             try:
                 result = await asyncio.to_thread(
                     inspect_huggingface_onnx,
@@ -1919,7 +2197,9 @@ def create_app() -> FastAPI:
                 from toposync_ext_vision.registry.huggingface import export_huggingface_model
                 from toposync_ext_vision.registry.manifests import ModelRegistryError
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Vision extension unavailable: {exc}"
+                ) from exc
             try:
                 result = await asyncio.to_thread(
                     export_huggingface_model,
@@ -1977,7 +2257,9 @@ def create_app() -> FastAPI:
                 from toposync_ext_vision.registry.huggingface import import_huggingface_onnx_model
                 from toposync_ext_vision.registry.manifests import ModelRegistryError
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Vision extension unavailable: {exc}"
+                ) from exc
             try:
                 result = await asyncio.to_thread(
                     import_huggingface_onnx_model,
@@ -2007,7 +2289,8 @@ def create_app() -> FastAPI:
                     class_labels=body.class_labels,
                     recipe_id=body.recipe_id,
                     replace_existing=body.replace_existing,
-                    imported_by=dict(body.imported_by or {}) or _processing_install_requested_by(request),
+                    imported_by=dict(body.imported_by or {})
+                    or _processing_install_requested_by(request),
                     data_dir=config_store.paths.data_dir,
                 )
             except (ModelRegistryError, FileNotFoundError, RuntimeError, ValueError) as exc:
@@ -2026,7 +2309,9 @@ def create_app() -> FastAPI:
 
         try:
             payload = body.model_dump(mode="json")
-            payload["imported_by"] = dict(body.imported_by or {}) or _processing_install_requested_by(request)
+            payload["imported_by"] = dict(
+                body.imported_by or {}
+            ) or _processing_install_requested_by(request)
             result = await transport.import_vision_huggingface(payload)
             return ProcessingServerVisionManifestImportResponse.model_validate(result)
         except ProcessingTransportError as exc:
@@ -2060,7 +2345,9 @@ def create_app() -> FastAPI:
             if services is None:
                 raise HTTPException(status_code=500, detail="Service registry unavailable")
             try:
-                requested_by = dict(body.requested_by or {}) or _processing_install_requested_by(request)
+                requested_by = dict(body.requested_by or {}) or _processing_install_requested_by(
+                    request
+                )
                 result = await services.call(
                     "vision.model_install.start",
                     model_id=model_id,
@@ -2071,7 +2358,9 @@ def create_app() -> FastAPI:
                     data_dir=config_store.paths.data_dir,
                 )
             except KeyError as exc:
-                raise HTTPException(status_code=500, detail=f"Vision install service unavailable: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Vision install service unavailable: {exc}"
+                ) from exc
             except (RuntimeError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             return ProcessingServerVisionModelInstallResponse.model_validate(result)
@@ -2088,7 +2377,9 @@ def create_app() -> FastAPI:
 
         try:
             payload = body.model_dump(mode="json")
-            payload["requested_by"] = dict(body.requested_by or {}) or _processing_install_requested_by(request)
+            payload["requested_by"] = dict(
+                body.requested_by or {}
+            ) or _processing_install_requested_by(request)
             result = await transport.install_vision_model(model_id=model_id, payload=payload)
             return ProcessingServerVisionModelInstallResponse.model_validate(result)
         except ProcessingTransportError as exc:
@@ -2122,7 +2413,9 @@ def create_app() -> FastAPI:
             if services is None:
                 raise HTTPException(status_code=500, detail="Service registry unavailable")
             try:
-                requested_by = dict(body.requested_by or {}) or _processing_install_requested_by(request)
+                requested_by = dict(body.requested_by or {}) or _processing_install_requested_by(
+                    request
+                )
                 result = await services.call(
                     "vision.model_install.cancel",
                     model_id=model_id,
@@ -2130,7 +2423,9 @@ def create_app() -> FastAPI:
                     data_dir=config_store.paths.data_dir,
                 )
             except KeyError as exc:
-                raise HTTPException(status_code=500, detail=f"Vision install service unavailable: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Vision install service unavailable: {exc}"
+                ) from exc
             except (RuntimeError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             return ProcessingServerVisionModelInstallResponse.model_validate(result)
@@ -2147,7 +2442,9 @@ def create_app() -> FastAPI:
 
         try:
             payload = body.model_dump(mode="json")
-            payload["requested_by"] = dict(body.requested_by or {}) or _processing_install_requested_by(request)
+            payload["requested_by"] = dict(
+                body.requested_by or {}
+            ) or _processing_install_requested_by(request)
             result = await transport.cancel_vision_model(model_id=model_id, payload=payload)
             return ProcessingServerVisionModelInstallResponse.model_validate(result)
         except ProcessingTransportError as exc:
@@ -2181,7 +2478,9 @@ def create_app() -> FastAPI:
             if services is None:
                 raise HTTPException(status_code=500, detail="Service registry unavailable")
             try:
-                requested_by = dict(body.requested_by or {}) or _processing_install_requested_by(request)
+                requested_by = dict(body.requested_by or {}) or _processing_install_requested_by(
+                    request
+                )
                 result = await services.call(
                     "vision.model_install.retry",
                     model_id=model_id,
@@ -2189,7 +2488,9 @@ def create_app() -> FastAPI:
                     data_dir=config_store.paths.data_dir,
                 )
             except KeyError as exc:
-                raise HTTPException(status_code=500, detail=f"Vision install service unavailable: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Vision install service unavailable: {exc}"
+                ) from exc
             except (RuntimeError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             return ProcessingServerVisionModelInstallResponse.model_validate(result)
@@ -2206,7 +2507,9 @@ def create_app() -> FastAPI:
 
         try:
             payload = body.model_dump(mode="json")
-            payload["requested_by"] = dict(body.requested_by or {}) or _processing_install_requested_by(request)
+            payload["requested_by"] = dict(
+                body.requested_by or {}
+            ) or _processing_install_requested_by(request)
             result = await transport.retry_vision_model(model_id=model_id, payload=payload)
             return ProcessingServerVisionModelInstallResponse.model_validate(result)
         except ProcessingTransportError as exc:
@@ -2240,7 +2543,9 @@ def create_app() -> FastAPI:
                 from toposync_ext_vision.registry.artifact_upload import upload_model_artifact
                 from toposync_ext_vision.registry.manifests import ModelRegistryError
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"Vision extension unavailable: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Vision extension unavailable: {exc}"
+                ) from exc
             try:
                 result = await asyncio.to_thread(
                     upload_model_artifact,
@@ -2300,7 +2605,9 @@ def create_app() -> FastAPI:
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
         return OperatorsListResponse(operators=registry.list_operators())
 
-    @app.post("/api/pipelines/filter-expression/validate", response_model=FilterExpressionValidateResponse)
+    @app.post(
+        "/api/pipelines/filter-expression/validate", response_model=FilterExpressionValidateResponse
+    )
     async def validate_filter_expression(
         request: Request,
         body: FilterExpressionValidateRequest,
@@ -2342,7 +2649,9 @@ def create_app() -> FastAPI:
         )
 
     @app.post("/api/pipelines/compile", response_model=PipelineCompileResponse)
-    async def compile_pipeline_graph(request: Request, body: PipelineCompileRequest) -> PipelineCompileResponse:
+    async def compile_pipeline_graph(
+        request: Request, body: PipelineCompileRequest
+    ) -> PipelineCompileResponse:
         _require(request, action="core:pipelines:compile")
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
@@ -2350,7 +2659,9 @@ def create_app() -> FastAPI:
         if str(getattr(pipeline, "editor_mode", "json")) == "python":
             source = str(getattr(pipeline, "python_source", "") or "")
             if not source.strip():
-                raise HTTPException(status_code=400, detail="python_source is required when editor_mode='python'")
+                raise HTTPException(
+                    status_code=400, detail="python_source is required when editor_mode='python'"
+                )
             try:
                 graph = compile_python_source_to_graph(
                     python_source=source,
@@ -2407,10 +2718,14 @@ def create_app() -> FastAPI:
             for signature, occurrences in compiled.shared_signatures.items()
         }
         alerts = analyze_compiled_pipeline(pipeline=pipeline, registry=registry)
-        return PipelineCompileResponse(pipeline=compiled_dict, shared_signatures=shared_signatures, alerts=alerts)
+        return PipelineCompileResponse(
+            pipeline=compiled_dict, shared_signatures=shared_signatures, alerts=alerts
+        )
 
     @app.post("/api/pipelines/compile-python", response_model=PipelineCompilePythonResponse)
-    async def compile_pipeline_python(request: Request, body: PipelineCompileRequest) -> PipelineCompilePythonResponse:
+    async def compile_pipeline_python(
+        request: Request, body: PipelineCompileRequest
+    ) -> PipelineCompilePythonResponse:
         _require(request, action="core:pipelines:compile")
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
@@ -2486,7 +2801,9 @@ def create_app() -> FastAPI:
         )
 
     @app.post("/api/pipelines/preview/frame")
-    async def preview_pipeline_frame(request: Request, body: PipelinePreviewFrameRequest) -> Response:
+    async def preview_pipeline_frame(
+        request: Request, body: PipelinePreviewFrameRequest
+    ) -> Response:
         _require(request, action="core:pipelines:read")
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
@@ -2532,7 +2849,9 @@ def create_app() -> FastAPI:
             try:
                 image = await asyncio.wait_for(captured_image, timeout=float(body.timeout_seconds))
             except TimeoutError as exc:
-                fallback_response = _pipeline_preview_fallback_response(request, body.fallback_snapshot)
+                fallback_response = _pipeline_preview_fallback_response(
+                    request, body.fallback_snapshot
+                )
                 if fallback_response is not None:
                     return fallback_response
                 raise HTTPException(
@@ -2572,7 +2891,10 @@ def create_app() -> FastAPI:
             },
         )
 
-    @app.post("/api/pipelines/templates/apply-cameras", response_model=PipelineTemplateApplyCamerasResponse)
+    @app.post(
+        "/api/pipelines/templates/apply-cameras",
+        response_model=PipelineTemplateApplyCamerasResponse,
+    )
     async def apply_pipeline_template_to_cameras(
         request: Request,
         body: PipelineTemplateApplyCamerasRequest,
@@ -2601,13 +2923,17 @@ def create_app() -> FastAPI:
 
         conflict = str(body.conflict or "skip").strip().lower()
         if conflict not in {"skip", "replace", "error"}:
-            raise HTTPException(status_code=400, detail="conflict must be one of: skip, replace, error")
+            raise HTTPException(
+                status_code=400, detail="conflict must be one of: skip, replace, error"
+            )
 
         template_graph = template.graph
         if str(getattr(template, "editor_mode", "json")) == "python":
             source = str(getattr(template, "python_source", "") or "")
             if not source.strip():
-                raise HTTPException(status_code=400, detail="Template python pipeline is missing python_source")
+                raise HTTPException(
+                    status_code=400, detail="Template python pipeline is missing python_source"
+                )
             try:
                 template_graph = compile_python_source_to_graph(
                     python_source=source,
@@ -2633,13 +2959,23 @@ def create_app() -> FastAPI:
 
             exists = instance_name in existing_names
             if exists and conflict == "skip":
-                skipped.append({"camera_id": camera_id, "pipeline_name": instance_name, "reason": "already_exists"})
+                skipped.append(
+                    {
+                        "camera_id": camera_id,
+                        "pipeline_name": instance_name,
+                        "reason": "already_exists",
+                    }
+                )
                 continue
             if exists and conflict == "error":
-                raise HTTPException(status_code=409, detail=f"Pipeline already exists: {instance_name}")
+                raise HTTPException(
+                    status_code=409, detail=f"Pipeline already exists: {instance_name}"
+                )
 
             try:
-                graph = instantiate_camera_template_graph(template_graph=template_graph, camera_id=camera_id)
+                graph = instantiate_camera_template_graph(
+                    template_graph=template_graph, camera_id=camera_id
+                )
             except PipelineTemplateError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2647,7 +2983,9 @@ def create_app() -> FastAPI:
                 name=instance_name,
                 type=instance_type,  # type: ignore[arg-type]
                 enabled=bool(body.enabled) if instance_type == "final" else True,
-                processing_server_id=str(body.processing_server_id or template.processing_server_id or "local").strip()
+                processing_server_id=str(
+                    body.processing_server_id or template.processing_server_id or "local"
+                ).strip()
                 or "local",
                 editor_mode="interactive",
                 python_source="",
@@ -2674,7 +3012,13 @@ def create_app() -> FastAPI:
             except PipelineValidationError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             except PipelineAlreadyExistsError:
-                skipped.append({"camera_id": camera_id, "pipeline_name": instance_name, "reason": "already_exists"})
+                skipped.append(
+                    {
+                        "camera_id": camera_id,
+                        "pipeline_name": instance_name,
+                        "reason": "already_exists",
+                    }
+                )
 
         orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
         if orchestrator is not None and not body.dry_run:
@@ -2710,18 +3054,25 @@ def create_app() -> FastAPI:
                 transmission_ids.add(transmission_id)
         return transmission_ids
 
-    async def _validate_publish_video_host_affinity(config_store: ConfigStore, pipeline: Pipeline) -> None:
+    async def _validate_publish_video_host_affinity(
+        config_store: ConfigStore, pipeline: Pipeline
+    ) -> None:
         transmission_ids = _extract_publish_video_transmission_ids(pipeline)
         if not transmission_ids:
             return
 
-        pipeline_server_id = _normalize_server_id(getattr(pipeline, "processing_server_id", "local"))
+        pipeline_server_id = _normalize_server_id(
+            getattr(pipeline, "processing_server_id", "local")
+        )
         settings = await config_store.get_settings()
         ext_settings = settings.extensions if isinstance(settings.extensions, dict) else {}
-        streaming_settings = ext_settings.get("com.toposync.streaming") if isinstance(ext_settings, dict) else None
+        streaming_settings = (
+            ext_settings.get("com.toposync.streaming") if isinstance(ext_settings, dict) else None
+        )
         transmissions = (
             streaming_settings.get("transmissions")
-            if isinstance(streaming_settings, dict) and isinstance(streaming_settings.get("transmissions"), list)
+            if isinstance(streaming_settings, dict)
+            and isinstance(streaming_settings.get("transmissions"), list)
             else []
         )
         host_by_transmission_id: dict[str, str] = {}
@@ -2731,7 +3082,9 @@ def create_app() -> FastAPI:
             transmission_id = str(item.get("id") or "").strip()
             if not transmission_id:
                 continue
-            host_by_transmission_id[transmission_id] = _normalize_server_id(str(item.get("host_server_id") or "local"))
+            host_by_transmission_id[transmission_id] = _normalize_server_id(
+                str(item.get("host_server_id") or "local")
+            )
 
         mismatches: list[str] = []
         for transmission_id in sorted(transmission_ids):
@@ -2781,7 +3134,10 @@ def create_app() -> FastAPI:
             if str(getattr(body, "editor_mode", "json")) == "python":
                 source = str(getattr(body, "python_source", "") or "")
                 if not source.strip():
-                    raise HTTPException(status_code=400, detail="python_source is required when editor_mode='python'")
+                    raise HTTPException(
+                        status_code=400,
+                        detail="python_source is required when editor_mode='python'",
+                    )
                 try:
                     graph = compile_python_source_to_graph(
                         python_source=source,
@@ -2825,8 +3181,12 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown pipeline")
 
         existing_names = {p.name for p in await config_store.list_pipelines()}
-        requested_name = str(getattr(body, "new_name", "") or "").strip() if body is not None else ""
-        new_name = requested_name or _suggest_duplicate_pipeline_name(base_name=source.name, existing_names=existing_names)
+        requested_name = (
+            str(getattr(body, "new_name", "") or "").strip() if body is not None else ""
+        )
+        new_name = requested_name or _suggest_duplicate_pipeline_name(
+            base_name=source.name, existing_names=existing_names
+        )
         if new_name in existing_names:
             raise HTTPException(status_code=409, detail=f"Pipeline already exists: {new_name}")
 
@@ -2882,7 +3242,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if pipeline is None:
             raise HTTPException(status_code=404, detail="Unknown pipeline")
-        stats_store: PipelineStatsStore | None = getattr(request.app.state, "pipeline_stats_store", None)
+        stats_store: PipelineStatsStore | None = getattr(
+            request.app.state, "pipeline_stats_store", None
+        )
         if stats_store is None:
             return PipelineStatsResponse(pipeline_name=pipeline.name)
         node_ids: set[str] = set()
@@ -2907,7 +3269,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if pipeline is None:
             raise HTTPException(status_code=404, detail="Unknown pipeline")
-        stats_store: PipelineStatsStore | None = getattr(request.app.state, "pipeline_stats_store", None)
+        stats_store: PipelineStatsStore | None = getattr(
+            request.app.state, "pipeline_stats_store", None
+        )
         if stats_store is None:
             return PipelineStatsResponse(pipeline_name=pipeline.name)
         stats_store.reset(pipeline.name)
@@ -2929,7 +3293,10 @@ def create_app() -> FastAPI:
         snapshot = stats_store.snapshot(pipeline.name, node_ids=node_ids or None)
         return PipelineStatsResponse.model_validate(snapshot)
 
-    @app.get("/api/pipelines/telemetry/all/numeric", response_model=PipelinesTelemetryNumericOverviewResponse)
+    @app.get(
+        "/api/pipelines/telemetry/all/numeric",
+        response_model=PipelinesTelemetryNumericOverviewResponse,
+    )
     async def get_pipelines_telemetry_numeric_overview(
         request: Request,
         metric_id: list[str] | None = Query(default=None),
@@ -2941,12 +3308,12 @@ def create_app() -> FastAPI:
         _require(request, action="core:pipelines:read")
         aggregation_name = _normalize_telemetry_aggregation(aggregation)
         metric_ids: list[str] = []
-        for item in (metric_id or DEFAULT_PIPELINES_TELEMETRY_METRICS):
+        for item in metric_id or DEFAULT_PIPELINES_TELEMETRY_METRICS:
             normalized = str(item or "").strip().lower()
             if normalized and normalized not in metric_ids:
                 metric_ids.append(normalized)
         pipeline_names: list[str] = []
-        for item in (pipeline_name or []):
+        for item in pipeline_name or []:
             normalized = str(item or "").strip()
             if normalized and normalized not in pipeline_names:
                 pipeline_names.append(normalized)
@@ -2972,9 +3339,14 @@ def create_app() -> FastAPI:
                 )
                 continue
             series.append(PipelineTelemetryAggregateNumericResponse.model_validate(snapshot))
-        return PipelinesTelemetryNumericOverviewResponse(aggregation=aggregation_name, series=series)
+        return PipelinesTelemetryNumericOverviewResponse(
+            aggregation=aggregation_name, series=series
+        )
 
-    @app.get("/api/pipelines/telemetry/all/image-markers", response_model=PipelinesTelemetryImageMarkersResponse)
+    @app.get(
+        "/api/pipelines/telemetry/all/image-markers",
+        response_model=PipelinesTelemetryImageMarkersResponse,
+    )
     async def get_pipelines_telemetry_image_markers(
         request: Request,
         aggregation: str = Query(default="max"),
@@ -2990,7 +3362,7 @@ def create_app() -> FastAPI:
         if telemetry_store is None:
             return PipelinesTelemetryImageMarkersResponse(aggregation=aggregation_name)
         pipeline_names: list[str] = []
-        for item in (pipeline_name or []):
+        for item in pipeline_name or []:
             normalized = str(item or "").strip()
             if normalized and normalized not in pipeline_names:
                 pipeline_names.append(normalized)
@@ -3002,14 +3374,23 @@ def create_app() -> FastAPI:
             pipeline_names=(pipeline_names or None),
             window_seconds=(int(window_seconds) if window_seconds is not None else None),
         )
-        pipeline_count = len({str(item.get("pipeline_name") or "").strip() for item in markers if str(item.get("pipeline_name") or "").strip()})
+        pipeline_count = len(
+            {
+                str(item.get("pipeline_name") or "").strip()
+                for item in markers
+                if str(item.get("pipeline_name") or "").strip()
+            }
+        )
         return PipelinesTelemetryImageMarkersResponse(
             aggregation=aggregation_name,
             pipeline_count=int(pipeline_count),
             markers=[PipelineTelemetryImageMarker.model_validate(item) for item in markers],
         )
 
-    @app.get("/api/pipelines/{pipeline_name}/telemetry/numeric", response_model=PipelineTelemetryNumericResponse)
+    @app.get(
+        "/api/pipelines/{pipeline_name}/telemetry/numeric",
+        response_model=PipelineTelemetryNumericResponse,
+    )
     async def get_pipeline_telemetry_numeric(
         request: Request,
         pipeline_name: str,
@@ -3048,7 +3429,10 @@ def create_app() -> FastAPI:
             )
         return PipelineTelemetryNumericResponse.model_validate(snapshot)
 
-    @app.get("/api/pipelines/{pipeline_name}/telemetry/image-markers", response_model=PipelineTelemetryImageMarkersResponse)
+    @app.get(
+        "/api/pipelines/{pipeline_name}/telemetry/image-markers",
+        response_model=PipelineTelemetryImageMarkersResponse,
+    )
     async def get_pipeline_telemetry_image_markers(
         request: Request,
         pipeline_name: str,
@@ -3078,7 +3462,12 @@ def create_app() -> FastAPI:
         )
         return PipelineTelemetryImageMarkersResponse(
             pipeline_name=pipeline.name,
-            markers=[PipelineTelemetryImageMarker.model_validate({**item, "pipeline_name": pipeline.name}) for item in markers],
+            markers=[
+                PipelineTelemetryImageMarker.model_validate(
+                    {**item, "pipeline_name": pipeline.name}
+                )
+                for item in markers
+            ],
         )
 
     @app.put("/api/pipelines/{pipeline_name}", response_model=Pipeline)
@@ -3091,7 +3480,10 @@ def create_app() -> FastAPI:
             if str(getattr(body, "editor_mode", "json")) == "python":
                 source = str(getattr(body, "python_source", "") or "")
                 if not source.strip():
-                    raise HTTPException(status_code=400, detail="python_source is required when editor_mode='python'")
+                    raise HTTPException(
+                        status_code=400,
+                        detail="python_source is required when editor_mode='python'",
+                    )
                 try:
                     graph = compile_python_source_to_graph(
                         python_source=source,
@@ -3145,8 +3537,12 @@ def create_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Unknown pipeline") from exc
 
-    @app.post("/api/pipelines/migrate-legacy/cameras", response_model=LegacyCamerasMigrationResponse)
-    async def migrate_legacy_cameras(request: Request, body: LegacyCamerasMigrationRequest) -> LegacyCamerasMigrationResponse:
+    @app.post(
+        "/api/pipelines/migrate-legacy/cameras", response_model=LegacyCamerasMigrationResponse
+    )
+    async def migrate_legacy_cameras(
+        request: Request, body: LegacyCamerasMigrationRequest
+    ) -> LegacyCamerasMigrationResponse:
         _require(request, action="core:pipelines:write")
         config_store: ConfigStore = request.app.state.config_store
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
@@ -3192,7 +3588,9 @@ def create_app() -> FastAPI:
                 # Name collisions should be rare due to suffixing, but keep it safe.
                 await config_store.replace_pipeline(pipeline.name, pipeline)
 
-        return LegacyCamerasMigrationResponse(dry_run=bool(body.dry_run), created=created, skipped=skipped)
+        return LegacyCamerasMigrationResponse(
+            dry_run=bool(body.dry_run), created=created, skipped=skipped
+        )
 
     @app.get("/api/composition", response_model=Composition)
     async def get_composition(request: Request) -> Composition:
@@ -3239,7 +3637,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown composition") from exc
 
     @app.patch("/api/compositions/{composition_id}", response_model=Composition)
-    async def rename_composition(request: Request, composition_id: str, body: RenameCompositionRequest) -> Composition:
+    async def rename_composition(
+        request: Request, composition_id: str, body: RenameCompositionRequest
+    ) -> Composition:
         _require(request, action="core:compositions:manage")
         name = body.name.strip()
         if not name:
@@ -3252,7 +3652,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown composition") from exc
 
     @app.delete("/api/compositions/{composition_id}", response_model=DeleteCompositionResponse)
-    async def delete_composition(request: Request, composition_id: str) -> DeleteCompositionResponse:
+    async def delete_composition(
+        request: Request, composition_id: str
+    ) -> DeleteCompositionResponse:
         _require(request, action="core:compositions:manage")
         config_store: ConfigStore = request.app.state.config_store
         try:
@@ -3262,7 +3664,9 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        active = next((c for c in cfg.compositions if c.id == cfg.active_composition_id), cfg.compositions[0])
+        active = next(
+            (c for c in cfg.compositions if c.id == cfg.active_composition_id), cfg.compositions[0]
+        )
         return DeleteCompositionResponse(
             active_composition_id=cfg.active_composition_id,
             compositions=[CompositionSummary(id=c.id, name=c.name) for c in cfg.compositions],
@@ -3359,7 +3763,9 @@ def create_app() -> FastAPI:
         )
 
     @app.post("/api/events/{event_name}", response_model=EmitEventResponse)
-    async def emit_event(request: Request, event_name: str, body: EmitEventRequest) -> EmitEventResponse:
+    async def emit_event(
+        request: Request, event_name: str, body: EmitEventRequest
+    ) -> EmitEventResponse:
         if not _event_is_allowed(event_name):
             raise HTTPException(status_code=403, detail="Event is not allowed for external emit")
         _require(
@@ -3374,7 +3780,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="payload must be an object")
 
         result = await bus.emit(event_name, body.payload, context=body.context)
-        if isinstance(result.outcome, EventOutcome) and isinstance(result.outcome.exception, Exception):
+        if isinstance(result.outcome, EventOutcome) and isinstance(
+            result.outcome.exception, Exception
+        ):
             raise result.outcome.exception
 
         return EmitEventResponse(
@@ -3391,7 +3799,9 @@ def create_app() -> FastAPI:
         return {"device_id": device_id, "state": store.peek(device_id)}
 
     @app.get("/api/notifications")
-    async def list_notifications(request: Request, before: int | None = None, limit: int = 50) -> dict[str, Any]:
+    async def list_notifications(
+        request: Request, before: int | None = None, limit: int = 50
+    ) -> dict[str, Any]:
         _require(request, action="core:notifications:read")
         runtime: NotificationsRuntime = request.app.state.notifications
         items, next_cursor = await runtime.list(before=before, limit=limit)

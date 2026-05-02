@@ -20,6 +20,7 @@ PIPELINE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PIPELINE_GRAPH_SCHEMA_VERSION_KEY = "schema_version"
 PROCESSING_SERVERS_KEY = "processing_servers"
 PROCESSING_SERVER_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+EXTENSION_MANAGEMENT_KEY = "extension_management"
 
 
 class PipelineValidationError(ValueError):
@@ -197,6 +198,9 @@ def _normalize_settings(settings: AppSettings) -> AppSettings:
     # Legacy: previous versions used a pipelines feature flag for gradual rollout.
     core.pop("pipelines_v1_enabled", None)
     core[PROCESSING_SERVERS_KEY] = _normalize_processing_servers(core.get(PROCESSING_SERVERS_KEY))
+    core[EXTENSION_MANAGEMENT_KEY] = _normalize_extension_management(
+        core.get(EXTENSION_MANAGEMENT_KEY)
+    )
     return AppSettings(core=core, extensions=dict(settings.extensions))
 
 
@@ -216,6 +220,51 @@ def _normalize_processing_servers(value: Any) -> list[dict[str, Any]]:
         seen.add(server.id)
         out.append(server)
     return [s.model_dump(mode="json") for s in out]
+
+
+def _normalize_extension_management(value: Any) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    desired_raw = raw.get("desired")
+    desired_items = desired_raw if isinstance(desired_raw, list) else []
+    desired: list[dict[str, Any]] = []
+    seen_desired: set[str] = set()
+    for item in desired_items:
+        if not isinstance(item, dict):
+            continue
+        pip_spec = str(item.get("pip_spec") or "").strip()
+        package = str(item.get("package") or "").strip()
+        extension_id = str(item.get("extension_id") or "").strip()
+        source = str(item.get("source") or "manual").strip()
+        if source not in {"recommended", "manual"}:
+            source = "manual"
+        key = extension_id or package or pip_spec
+        if not pip_spec or not key or key in seen_desired:
+            continue
+        seen_desired.add(key)
+        desired.append(
+            {
+                "pip_spec": pip_spec,
+                "package": package,
+                "extension_id": extension_id or None,
+                "source": source,
+            }
+        )
+
+    disabled_raw = raw.get("disabled_extension_ids")
+    disabled_items = disabled_raw if isinstance(disabled_raw, list) else []
+    disabled_extension_ids: list[str] = []
+    seen_disabled: set[str] = set()
+    for item in disabled_items:
+        extension_id = str(item or "").strip()
+        if not extension_id or extension_id in seen_disabled:
+            continue
+        seen_disabled.add(extension_id)
+        disabled_extension_ids.append(extension_id)
+
+    return {
+        "desired": desired,
+        "disabled_extension_ids": disabled_extension_ids,
+    }
 
 
 def _default_composition() -> Composition:
@@ -396,7 +445,9 @@ def _build_config(
     return AppConfig(
         schema_version=base.schema_version,
         compositions=list(base.compositions if compositions is None else compositions),
-        active_composition_id=base.active_composition_id if active_composition_id is None else active_composition_id,
+        active_composition_id=base.active_composition_id
+        if active_composition_id is None
+        else active_composition_id,
         settings=base.settings if settings is None else settings,
         pipelines=list(base.pipelines if pipelines is None else pipelines),
     )
@@ -414,7 +465,9 @@ class ConfigStore:
         return self._paths
 
     async def _persist_locked(self, cfg: AppConfig) -> AppConfig:
-        stamp = await asyncio.to_thread(_atomic_write_json, self._paths.config_path, cfg.model_dump())
+        stamp = await asyncio.to_thread(
+            _atomic_write_json, self._paths.config_path, cfg.model_dump()
+        )
         self._config = cfg
         self._config_stamp = stamp
         return cfg
@@ -494,7 +547,9 @@ class ConfigStore:
             await self._persist_locked(cfg2)
             return cfg2.settings
 
-    async def patch_extension_settings(self, extension_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    async def patch_extension_settings(
+        self, extension_id: str, patch: dict[str, Any]
+    ) -> dict[str, Any]:
         await self.load()
         async with self._lock:
             cfg = self._config or _default_config()
@@ -522,7 +577,9 @@ class ConfigStore:
                     compositions.append(c)
             if not replaced:
                 compositions.append(composition)
-            cfg2 = _build_config(cfg, compositions=compositions, active_composition_id=composition.id)
+            cfg2 = _build_config(
+                cfg, compositions=compositions, active_composition_id=composition.id
+            )
             cfg2 = _normalize_config(cfg2)
             await self._persist_locked(cfg2)
             return composition
@@ -544,7 +601,9 @@ class ConfigStore:
             await self._persist_locked(cfg2)
             return composition
 
-    async def create_composition(self, *, name: str, composition_id: str | None = None) -> Composition:
+    async def create_composition(
+        self, *, name: str, composition_id: str | None = None
+    ) -> Composition:
         await self.load()
         async with self._lock:
             cfg = self._config or _default_config()
@@ -554,7 +613,9 @@ class ConfigStore:
                 raise ValueError(f"Composition id already exists: {cid}")
 
             composition = Composition(id=cid, name=name, elements=[])
-            cfg2 = _build_config(cfg, compositions=[*cfg.compositions, composition], active_composition_id=cid)
+            cfg2 = _build_config(
+                cfg, compositions=[*cfg.compositions, composition], active_composition_id=cid
+            )
             cfg2 = _normalize_config(cfg2)
             await self._persist_locked(cfg2)
             return composition
@@ -640,9 +701,13 @@ class ConfigStore:
                 and str(getattr(existing_pipeline, "editor_mode", "json")) == "python"
                 and str(getattr(pipeline, "editor_mode", "json")) != "python"
             ):
-                raise PipelineValidationError("Pipeline is in python mode and cannot be converted back to json/ui modes")
+                raise PipelineValidationError(
+                    "Pipeline is in python mode and cannot be converted back to json/ui modes"
+                )
 
-            if pipeline.name != name and any(existing.name == pipeline.name for existing in cfg.pipelines):
+            if pipeline.name != name and any(
+                existing.name == pipeline.name for existing in cfg.pipelines
+            ):
                 raise PipelineAlreadyExistsError(f"Pipeline already exists: {pipeline.name}")
 
             pipelines = list(cfg.pipelines)

@@ -3470,6 +3470,125 @@ textarea {
   margin: 0;
 }
 
+.streamingCameraPicker {
+  position: relative;
+}
+
+.streamingCameraPickerButton {
+  width: 100%;
+  min-height: 42px;
+  height: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.streamingCameraPickerButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.streamingCameraPickerButtonText,
+.streamingCameraPickerOptionMain {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.streamingCameraPickerName,
+.streamingCameraPickerOptionName {
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.streamingCameraPickerMeta,
+.streamingCameraPickerOptionMeta {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.streamingCameraPickerButton > i {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.streamingCameraPickerPopover {
+  position: absolute;
+  z-index: calc(var(--z-modal) + 2);
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  padding: 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  background: var(--color-surface-solid);
+  box-shadow: var(--shadow-elevation-3);
+}
+
+.streamingCameraPickerSearch {
+  width: 100%;
+  height: 34px;
+}
+
+.streamingCameraPickerList {
+  display: grid;
+  gap: 4px;
+  max-height: 260px;
+  margin-top: 8px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.streamingCameraPickerOption {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+}
+
+.streamingCameraPickerOption:hover,
+.streamingCameraPickerOption.isSelected {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-frost);
+}
+
+.streamingCameraPickerOption > i {
+  flex: 0 0 auto;
+  color: var(--color-accent-teal);
+  font-size: 12px;
+}
+
+.streamingCameraPickerEmpty {
+  padding: 12px 8px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .settingsListItemRow {
   display: flex;
   justify-content: space-between;

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import type { HostI18n } from "@toposync/plugin-api";
 
@@ -81,6 +81,46 @@ function normalizeServerId(value: string | undefined): string {
   return normalized || "local";
 }
 
+function normalizeCameraSearch(value: string): string {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function shortCameraId(value: string): string {
+  const trimmed = String(value || "").trim();
+  if (trimmed.length <= 12) return trimmed;
+  return `${trimmed.slice(0, 8)}...`;
+}
+
+function cameraIdInList(cameras: CameraIndexItem[], cameraId: string): string {
+  const target = String(cameraId || "").trim();
+  if (!target) return "";
+  return cameras.some((camera) => String(camera.id || "").trim() === target) ? target : "";
+}
+
+function chooseInitialCameraId(cameras: CameraIndexItem[], preferredCameraId: string, transmission: Transmission | null): string {
+  const preferred = cameraIdInList(cameras, preferredCameraId);
+  if (preferred) return preferred;
+
+  const transmissionLabels = [transmission?.name, transmission?.path]
+    .map((value) => normalizeCameraSearch(String(value || "")))
+    .filter(Boolean);
+  if (transmissionLabels.length > 0) {
+    const exactMatch = cameras.find((camera) => {
+      const cameraName = normalizeCameraSearch(String(camera.name || ""));
+      const cameraId = normalizeCameraSearch(String(camera.id || ""));
+      return (cameraName && transmissionLabels.includes(cameraName)) || (cameraId && transmissionLabels.includes(cameraId));
+    });
+    if (exactMatch) return String(exactMatch.id || "").trim();
+  }
+
+  if (cameras.length === 1) return String(cameras[0]?.id || "").trim();
+  return "";
+}
+
 function sortProcessingServers(servers: ProcessingServer[]): ProcessingServer[] {
   const local = servers.find((item) => normalizeServerId(item.id) === "local") ?? null;
   const rest = servers
@@ -115,10 +155,14 @@ export function WizardCreatePipelineFromTransmission({
   onCreated: (payload: StreamingWizardCreatePipelineResponse) => void;
 }): React.ReactElement | null {
   const { t } = i18n.useI18n();
+  const cameraListboxId = useId();
+  const cameraPickerRef = useRef<HTMLDivElement | null>(null);
 
   const [step, setStep] = useState<WizardStep>("form");
   const [presetId, setPresetId] = useState<StreamingWizardPresetId>("simple_stream");
   const [cameraId, setCameraId] = useState("");
+  const [cameraPickerOpen, setCameraPickerOpen] = useState(false);
+  const [cameraSearch, setCameraSearch] = useState("");
   const [cameras, setCameras] = useState<CameraIndexItem[]>([]);
   const [camerasLoading, setCamerasLoading] = useState(false);
   const [camerasError, setCamerasError] = useState<string | null>(null);
@@ -143,11 +187,15 @@ export function WizardCreatePipelineFromTransmission({
   const [createError, setCreateError] = useState<string | null>(null);
   const [created, setCreated] = useState<StreamingWizardCreatePipelineResponse | null>(null);
 
+  const transmissionCameraControlId = String(transmission?.camera_controls?.camera_id || "").trim();
+
   useEffect(() => {
     if (!open) return;
     setStep("form");
     setPresetId("simple_stream");
     setCameraId("");
+    setCameraPickerOpen(false);
+    setCameraSearch("");
     setCameras([]);
     setCamerasLoading(false);
     setCamerasError(null);
@@ -169,7 +217,7 @@ export function WizardCreatePipelineFromTransmission({
     setCreateBusy(false);
     setCreateError(null);
     setCreated(null);
-  }, [open, transmission?.host_server_id]);
+  }, [open, transmission?.host_server_id, transmission?.id]);
 
   useEffect(() => {
     if (!open) return;
@@ -184,9 +232,11 @@ export function WizardCreatePipelineFromTransmission({
         if (controller.signal.aborted) return;
         const next = Array.isArray(data.cameras) ? data.cameras : [];
         setCameras(next);
-        if (next.length > 0) {
-          setCameraId((previous) => previous || String(next[0]?.id || "").trim());
-        }
+        setCameraId((previous) => {
+          if (next.length === 0) return "";
+          const current = String(previous || "").trim();
+          return cameraIdInList(next, current) || chooseInitialCameraId(next, transmissionCameraControlId, transmission);
+        });
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
         setCamerasError(error instanceof Error ? error.message : String(error));
@@ -196,7 +246,24 @@ export function WizardCreatePipelineFromTransmission({
     })();
 
     return () => controller.abort();
-  }, [open]);
+  }, [open, transmission?.id, transmission?.name, transmission?.path, transmissionCameraControlId]);
+
+  useEffect(() => {
+    if (!cameraPickerOpen) return;
+
+    function handleDocumentMouseDown(event: MouseEvent | TouchEvent): void {
+      const root = cameraPickerRef.current;
+      if (!root || !(event.target instanceof Node)) return;
+      if (!root.contains(event.target)) setCameraPickerOpen(false);
+    }
+
+    document.addEventListener("mousedown", handleDocumentMouseDown);
+    document.addEventListener("touchstart", handleDocumentMouseDown);
+    return () => {
+      document.removeEventListener("mousedown", handleDocumentMouseDown);
+      document.removeEventListener("touchstart", handleDocumentMouseDown);
+    };
+  }, [cameraPickerOpen]);
 
   const selectedTransmissionName = useMemo(() => {
     if (!transmission) return "";
@@ -204,6 +271,25 @@ export function WizardCreatePipelineFromTransmission({
   }, [transmission]);
 
   const selectedPreset = useMemo(() => PRESET_OPTIONS.find((item) => item.id === presetId) ?? PRESET_OPTIONS[0], [presetId]);
+  const selectedCamera = useMemo(() => cameras.find((camera) => String(camera.id || "").trim() === cameraId.trim()) ?? null, [cameraId, cameras]);
+  const cameraNameCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const camera of cameras) {
+      const name = String(camera.name || "").trim();
+      if (!name) continue;
+      const key = normalizeCameraSearch(name);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [cameras]);
+  const filteredCameras = useMemo(() => {
+    const query = normalizeCameraSearch(cameraSearch);
+    if (!query) return cameras;
+    return cameras.filter((camera) => {
+      const haystack = normalizeCameraSearch(`${camera.name || ""} ${camera.id || ""}`);
+      return haystack.includes(query);
+    });
+  }, [cameraSearch, cameras]);
   const sortedProcessingServers = useMemo(
     () => sortProcessingServers(Array.isArray(processingServers) ? processingServers : []),
     [processingServers],
@@ -226,6 +312,21 @@ export function WizardCreatePipelineFromTransmission({
       .filter(Boolean);
     if (items.length === 0) return undefined;
     return Array.from(new Set(items));
+  }
+
+  function cameraDisplayName(camera: CameraIndexItem | null): string {
+    const name = String(camera?.name || "").trim();
+    if (name) return name;
+    return t("ext.streaming.wizard.camera_unnamed", {}, "Unnamed camera");
+  }
+
+  function cameraMeta(camera: CameraIndexItem | null, fallbackCameraId?: string): string {
+    const cid = String(camera?.id || fallbackCameraId || "").trim();
+    if (!cid) return "";
+    const name = String(camera?.name || "").trim();
+    if (!name) return `ID ${shortCameraId(cid)}`;
+    const duplicateCount = cameraNameCounts.get(normalizeCameraSearch(name)) ?? 0;
+    return duplicateCount > 1 ? `ID ${shortCameraId(cid)}` : "";
   }
 
   async function createPipeline(): Promise<void> {
@@ -257,6 +358,7 @@ export function WizardCreatePipelineFromTransmission({
 
     setCreateBusy(true);
     setCreateError(null);
+    setCameraPickerOpen(false);
     try {
       const response = await createPipelineFromTransmissionWizard({
         transmission_id: transmission.id,
@@ -330,20 +432,98 @@ export function WizardCreatePipelineFromTransmission({
             <div className="cardBody">
               <div className="field">
                 <label className="label">{t("ext.streaming.wizard.camera", {}, "Câmera")}</label>
-                <input
-                  className="input"
-                  list="streaming-wizard-cameras"
-                  value={cameraId}
-                  onChange={(event) => setCameraId(event.target.value)}
-                  placeholder={t("ext.streaming.wizard.camera_placeholder", {}, "camera_id")}
-                />
-                <datalist id="streaming-wizard-cameras">
-                  {cameras.map((camera) => (
-                    <option key={camera.id} value={camera.id}>
-                      {camera.name || camera.id}
-                    </option>
-                  ))}
-                </datalist>
+                <div className="streamingCameraPicker" ref={cameraPickerRef}>
+                  <button
+                    type="button"
+                    className="input streamingCameraPickerButton"
+                    aria-haspopup="listbox"
+                    aria-expanded={cameraPickerOpen}
+                    aria-controls={cameraListboxId}
+                    onClick={() => {
+                      setCameraSearch("");
+                      setCameraPickerOpen((current) => !current);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "ArrowDown") {
+                        event.preventDefault();
+                        setCameraSearch("");
+                        setCameraPickerOpen(true);
+                      }
+                      if (event.key === "Escape") setCameraPickerOpen(false);
+                    }}
+                    disabled={camerasLoading || cameras.length === 0}
+                  >
+                    <span className="streamingCameraPickerButtonText">
+                      <span className="streamingCameraPickerName">
+                        {selectedCamera
+                          ? cameraDisplayName(selectedCamera)
+                          : camerasLoading
+                            ? t("ext.streaming.wizard.loading_cameras", {}, "Loading cameras...")
+                            : t("ext.streaming.wizard.camera_placeholder", {}, "Select a camera")}
+                      </span>
+                      {selectedCamera || cameraId.trim() ? (
+                        <span className="streamingCameraPickerMeta">{cameraMeta(selectedCamera, cameraId)}</span>
+                      ) : null}
+                    </span>
+                    <i className={`fa-solid ${cameraPickerOpen ? "fa-chevron-up" : "fa-chevron-down"}`} aria-hidden="true" />
+                  </button>
+
+                  {cameraPickerOpen ? (
+                    <div className="streamingCameraPickerPopover">
+                      <input
+                        className="input streamingCameraPickerSearch"
+                        value={cameraSearch}
+                        onChange={(event) => setCameraSearch(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            setCameraPickerOpen(false);
+                          }
+                        }}
+                        placeholder={t("ext.streaming.wizard.camera_search", {}, "Search by name or ID")}
+                        autoFocus
+                      />
+                      <div className="streamingCameraPickerList" id={cameraListboxId} role="listbox" aria-label={t("ext.streaming.wizard.camera", {}, "Camera")}>
+                        {filteredCameras.length > 0 ? (
+                          filteredCameras.map((camera) => {
+                            const cid = String(camera.id || "").trim();
+                            const selected = cid === cameraId.trim();
+                            const meta = cameraMeta(camera);
+                            return (
+                              <button
+                                key={cid}
+                                type="button"
+                                className={`streamingCameraPickerOption${selected ? " isSelected" : ""}`}
+                                role="option"
+                                aria-selected={selected}
+                                onClick={() => {
+                                  setCameraId(cid);
+                                  setCameraPickerOpen(false);
+                                  setCameraSearch("");
+                                }}
+                              >
+                                <span className="streamingCameraPickerOptionMain">
+                                  <span className="streamingCameraPickerOptionName">{cameraDisplayName(camera)}</span>
+                                  {meta ? <span className="streamingCameraPickerOptionMeta">{meta}</span> : null}
+                                </span>
+                                {selected ? <i className="fa-solid fa-check" aria-hidden="true" /> : null}
+                              </button>
+                            );
+                          })
+                        ) : (
+                          <div className="streamingCameraPickerEmpty">
+                            {t("ext.streaming.wizard.camera_no_results", {}, "No cameras match your search.")}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                {cameras.length === 0 && !camerasLoading ? (
+                  <div className="cardMeta">
+                    {t("ext.streaming.wizard.camera_empty", {}, "No cameras found. Add a camera in Settings > Cameras.")}
+                  </div>
+                ) : null}
               </div>
 
               <div className="field">

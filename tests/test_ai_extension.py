@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 import pytest
@@ -9,9 +10,9 @@ from fastapi.testclient import TestClient
 
 from toposync.app import create_app
 from toposync.runtime.config_store import AppSettings
-from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+from toposync.runtime.pipelines.execution import NodeRuntimeMetrics, PipelineRuntimeDependencies
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
-from toposync.runtime.pipelines.runtime import Artifact, Packet
+from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync_ext_ai.constants import EXTENSION_ID
 from toposync_ext_ai.pipelines import register_ai_pipeline_operators
 from toposync_ext_ai.pipelines.runtime import AiConditionFilterRuntime, AiSmartCropRuntime
@@ -46,6 +47,105 @@ class _FakeConfigStore:
         return settings
 
 
+class _ConditionRunContext:
+    def __init__(self) -> None:
+        self.node_id = "condition"
+        self.metrics = NodeRuntimeMetrics()
+        self.logger = logging.getLogger("tests.ai.condition")
+        self.emitted: list[Packet] = []
+        self._queue: asyncio.Queue[Packet] = asyncio.Queue()
+        self._cancelled = False
+
+    async def put(self, packet: Packet) -> None:
+        await self._queue.put(packet)
+
+    async def read(self, *, port: str = "in", timeout_s: float = 0.2) -> Packet | None:  # noqa: ARG002
+        try:
+            packet = await asyncio.wait_for(self._queue.get(), timeout=timeout_s)
+        except TimeoutError:
+            self.metrics.timeout_count += 1
+            return None
+        self.metrics.processed_packets += 1
+        return packet
+
+    async def emit(self, packet: Packet, *, port: str = "out", timeout_s: float = 0.1) -> int:  # noqa: ARG002
+        self.emitted.append(packet)
+        self.metrics.emitted_packets += 1
+        return 1
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def is_cancelled(self) -> bool:
+        return self._cancelled
+
+
+class _BlockingConditionServices:
+    def __init__(
+        self,
+        *,
+        settings: dict[str, Any] | None = None,
+        primary_profile_id: str = "primary",
+        blocked_primary_calls: int = 1,
+    ) -> None:
+        self.settings = settings or {}
+        self.primary_profile_id = primary_profile_id
+        self.blocked_primary_calls = blocked_primary_calls
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.primary_started = asyncio.Event()
+        self.fallback_started = asyncio.Event()
+        self.release_primary = asyncio.Event()
+        self._blocked_count = 0
+
+    async def call(self, service_id: str, **kwargs: Any) -> Any:
+        if service_id == "ai.settings.get":
+            return dict(self.settings)
+        if service_id != "ai.infer.evaluate_condition":
+            raise KeyError(service_id)
+
+        self.calls.append((service_id, kwargs))
+        profile_id = str(kwargs.get("profile_id") or "")
+        if (
+            profile_id == self.primary_profile_id
+            and self._blocked_count < self.blocked_primary_calls
+        ):
+            self._blocked_count += 1
+            self.primary_started.set()
+            await self.release_primary.wait()
+        elif profile_id != self.primary_profile_id:
+            self.fallback_started.set()
+
+        return {
+            "matches": True,
+            "confidence": 0.9,
+            "reason": "test",
+            "profile_id": profile_id,
+            "provider_id": f"{profile_id}_provider",
+            "model": f"{profile_id}_model",
+        }
+
+
+def _image_packet(stream_id: str = "camera:test") -> Packet:
+    import numpy as np
+
+    frame = np.zeros((32, 32, 3), dtype=np.uint8)
+    return Packet.create(
+        stream_id=stream_id,
+        artifacts={
+            "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw"),
+            "frame": Artifact(name="frame", data=frame, mime_type="image/raw"),
+        },
+    )
+
+
+async def _wait_until(predicate, *, timeout_s: float = 1.0) -> None:  # noqa: ANN001
+    async def poll() -> None:
+        while not predicate():
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(poll(), timeout=timeout_s)
+
+
 def test_ai_extension_registers_initial_operators() -> None:
     registry = OperatorRegistry()
     register_ai_pipeline_operators(registry)
@@ -59,6 +159,8 @@ def test_ai_extension_registers_initial_operators() -> None:
     assert condition_filter.owner == "com.toposync.ai"
     assert smart_crop.definition.defaults["profile_id"] == "local_qwen3_vl_quality"
     assert smart_crop.definition.defaults["missing_policy"] == "drop"
+    assert condition_filter.definition.defaults["max_concurrency"] == 1
+    assert condition_filter.definition.defaults["concurrency_policy"] == "skip"
     assert "frame_original" in smart_crop.definition.requires_artifacts
     assert "object_bbox01" in smart_crop.definition.produces_payload_keys
     assert "ai" in condition_filter.definition.produces_payload_keys
@@ -268,6 +370,174 @@ def test_ai_condition_filter_emits_only_matching_packets() -> None:
     assert len(passed) == 1
     assert passed[0].payload["ai"]["condition_filter"]["matches"] is True
     assert passed[0].payload["ai"]["condition_filter"]["model"] == "qwen3-vl:30b"
+
+
+def test_ai_condition_filter_skips_when_concurrency_is_full() -> None:
+    async def scenario() -> tuple[_ConditionRunContext, _BlockingConditionServices]:
+        services = _BlockingConditionServices()
+        runtime = AiConditionFilterRuntime(
+            {
+                "profile_id": "primary",
+                "condition_description": "someone is sitting on the sofa",
+                "evaluation_interval_seconds": 0.0,
+                "reuse_last_decision_seconds": 0.0,
+                "max_concurrency": 1,
+                "concurrency_policy": "skip",
+            },
+            PipelineRuntimeDependencies(services=services),
+        )
+        context = _ConditionRunContext()
+        await context.put(_image_packet())
+        task = asyncio.create_task(runtime.run(context))
+        await asyncio.wait_for(services.primary_started.wait(), timeout=1.0)
+
+        await context.put(_image_packet())
+        await _wait_until(lambda: context.metrics.dropped_packets == 1)
+
+        context.cancel()
+        services.release_primary.set()
+        await asyncio.wait_for(task, timeout=1.0)
+        return context, services
+
+    context, services = asyncio.run(scenario())
+    condition_calls = [
+        kwargs
+        for service_id, kwargs in services.calls
+        if service_id == "ai.infer.evaluate_condition"
+    ]
+    assert len(condition_calls) == 1
+    assert context.metrics.dropped_packets == 1
+    assert len(context.emitted) == 1
+    assert context.emitted[0].payload["ai"]["condition_filter"]["profile_id"] == "primary"
+
+
+def test_ai_condition_filter_queues_when_concurrency_is_full() -> None:
+    async def scenario() -> tuple[_ConditionRunContext, _BlockingConditionServices]:
+        services = _BlockingConditionServices(blocked_primary_calls=1)
+        runtime = AiConditionFilterRuntime(
+            {
+                "profile_id": "primary",
+                "condition_description": "someone is sitting on the sofa",
+                "evaluation_interval_seconds": 0.0,
+                "reuse_last_decision_seconds": 0.0,
+                "max_concurrency": 1,
+                "concurrency_policy": "queue",
+            },
+            PipelineRuntimeDependencies(services=services),
+        )
+        context = _ConditionRunContext()
+        await context.put(_image_packet())
+        task = asyncio.create_task(runtime.run(context))
+        await asyncio.wait_for(services.primary_started.wait(), timeout=1.0)
+
+        await context.put(_image_packet())
+        await asyncio.sleep(0.05)
+        assert len(services.calls) == 1
+        assert context.metrics.dropped_packets == 0
+
+        services.release_primary.set()
+        await _wait_until(lambda: len(services.calls) == 2 and len(context.emitted) == 2)
+        context.cancel()
+        await asyncio.wait_for(task, timeout=1.0)
+        return context, services
+
+    context, services = asyncio.run(scenario())
+    profiles = [
+        kwargs["profile_id"]
+        for service_id, kwargs in services.calls
+        if service_id == "ai.infer.evaluate_condition"
+    ]
+    assert profiles == ["primary", "primary"]
+    assert context.metrics.dropped_packets == 0
+    assert len(context.emitted) == 2
+
+
+def test_ai_condition_filter_emits_close_after_active_packet() -> None:
+    async def scenario() -> _ConditionRunContext:
+        services = _BlockingConditionServices(blocked_primary_calls=1)
+        runtime = AiConditionFilterRuntime(
+            {
+                "profile_id": "primary",
+                "condition_description": "someone is sitting on the sofa",
+                "evaluation_interval_seconds": 0.0,
+                "reuse_last_decision_seconds": 0.0,
+                "max_concurrency": 1,
+                "concurrency_policy": "skip",
+            },
+            PipelineRuntimeDependencies(services=services),
+        )
+        context = _ConditionRunContext()
+        await context.put(_image_packet())
+        task = asyncio.create_task(runtime.run(context))
+        await asyncio.wait_for(services.primary_started.wait(), timeout=1.0)
+
+        await context.put(Packet.create(stream_id="camera:test", lifecycle=Lifecycle.CLOSE))
+        await asyncio.sleep(0.05)
+        assert context.emitted == []
+
+        services.release_primary.set()
+        await _wait_until(lambda: len(context.emitted) == 2)
+        context.cancel()
+        await asyncio.wait_for(task, timeout=1.0)
+        return context
+
+    context = asyncio.run(scenario())
+    assert [packet.lifecycle for packet in context.emitted] == [Lifecycle.UPDATE, Lifecycle.CLOSE]
+
+
+def test_ai_condition_filter_uses_profile_fallback_when_concurrency_is_full() -> None:
+    async def scenario() -> tuple[_ConditionRunContext, _BlockingConditionServices]:
+        services = _BlockingConditionServices(
+            settings={
+                "profiles": [
+                    {"id": "primary", "fallback_profile_ids": ["fallback"]},
+                    {"id": "fallback", "fallback_profile_ids": []},
+                ]
+            }
+        )
+        runtime = AiConditionFilterRuntime(
+            {
+                "profile_id": "primary",
+                "condition_description": "someone is sitting on the sofa",
+                "evaluation_interval_seconds": 0.0,
+                "reuse_last_decision_seconds": 0.0,
+                "max_concurrency": 1,
+                "concurrency_policy": "fallback",
+            },
+            PipelineRuntimeDependencies(services=services),
+        )
+        context = _ConditionRunContext()
+        await context.put(_image_packet("camera:first"))
+        task = asyncio.create_task(runtime.run(context))
+        await asyncio.wait_for(services.primary_started.wait(), timeout=1.0)
+
+        await context.put(_image_packet("camera:second"))
+        await asyncio.wait_for(services.fallback_started.wait(), timeout=1.0)
+
+        services.release_primary.set()
+        await _wait_until(lambda: len(context.emitted) == 2)
+        context.cancel()
+        await asyncio.wait_for(task, timeout=1.0)
+        return context, services
+
+    context, services = asyncio.run(scenario())
+    profiles = [
+        kwargs["profile_id"]
+        for service_id, kwargs in services.calls
+        if service_id == "ai.infer.evaluate_condition"
+    ]
+    assert profiles == ["primary", "fallback"]
+    fallback_packets = [
+        packet
+        for packet in context.emitted
+        if packet.payload["ai"]["condition_filter"]["profile_id"] == "fallback"
+    ]
+    assert len(fallback_packets) == 1
+    assert (
+        fallback_packets[0].payload["ai"]["condition_filter"]["reason"]
+        == "primary_concurrency_full"
+    )
+    assert context.metrics.dropped_packets == 0
 
 
 def test_ai_router_falls_back_between_profiles(monkeypatch: pytest.MonkeyPatch) -> None:

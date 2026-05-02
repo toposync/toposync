@@ -71,6 +71,8 @@ class AiConditionFilterConfig(BaseModel):
     evaluation_interval_seconds: float = Field(default=5.0, ge=0.0, le=86400.0)
     reuse_last_decision_seconds: float = Field(default=10.0, ge=0.0, le=86400.0)
     failure_policy: Literal["drop", "pass_through", "reuse_last"] = "reuse_last"
+    max_concurrency: int = Field(default=1, ge=1, le=32)
+    concurrency_policy: Literal["skip", "queue", "fallback"] = "skip"
 
     @field_validator("profile_id", "condition_description", "input_with_fallback", mode="before")
     @classmethod

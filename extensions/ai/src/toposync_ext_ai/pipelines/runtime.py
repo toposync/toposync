@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -463,8 +464,130 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         self._config = AiConditionFilterConfig.model_validate(config)
         self._deps = dependencies
         self._states: dict[str, _ConditionState] = {}
+        self._fallback_profile_ids_cache: list[str] | None = None
+
+    async def run(self, context) -> None:  # noqa: ANN001
+        primary_slots = asyncio.Semaphore(int(self._config.max_concurrency))
+        fallback_slots = asyncio.Semaphore(int(self._config.max_concurrency))
+        tasks: set[asyncio.Task[None]] = set()
+
+        def discard_task(task: asyncio.Task[None]) -> None:
+            tasks.discard(task)
+
+        async def drain_tasks() -> None:
+            if not tasks:
+                return
+            await asyncio.gather(*set(tasks), return_exceptions=True)
+
+        async def process_with_slot(
+            packet: Packet,
+            *,
+            slot: asyncio.Semaphore | None,
+            profile_id: str | None,
+            fallback_profile_ids: list[str] | None,
+            concurrency_reason: str,
+        ) -> None:
+            started_ns = time.monotonic_ns()
+            try:
+                out_packets = await self._process_packet_with_profiles(
+                    packet,
+                    context,
+                    profile_id=profile_id,
+                    fallback_profile_ids=fallback_profile_ids,
+                    concurrency_reason=concurrency_reason,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                context.metrics.error_count += 1
+                context.logger.exception("Node '%s' failed to process packet", context.node_id)
+                return
+            finally:
+                if slot is not None:
+                    try:
+                        slot.release()
+                    except Exception:
+                        pass
+
+            elapsed_ms = max(0.0, (float(time.monotonic_ns()) - float(started_ns)) / 1_000_000.0)
+            context.metrics.record_latency(elapsed_ms)
+            for out_packet in out_packets:
+                await context.emit(out_packet, port=self.output_port)
+
+        try:
+            while not context.is_cancelled():
+                packet = await context.read(port=self.input_port, timeout_s=self.read_timeout_s)
+                if packet is None:
+                    continue
+
+                if packet.lifecycle == Lifecycle.CLOSE:
+                    await drain_tasks()
+                    await process_with_slot(
+                        packet,
+                        slot=None,
+                        profile_id=None,
+                        fallback_profile_ids=None,
+                        concurrency_reason="",
+                    )
+                    continue
+
+                policy = self._config.concurrency_policy
+                slot = await self._acquire_condition_slot(primary_slots, wait=policy == "queue")
+                profile_id: str | None = None
+                fallback_profile_ids: list[str] | None = None
+                concurrency_reason = ""
+
+                if slot is None and policy == "fallback":
+                    configured_fallbacks = await self._fallback_profile_ids()
+                    if configured_fallbacks:
+                        slot = await self._acquire_condition_slot(fallback_slots, wait=False)
+                        if slot is not None:
+                            profile_id = configured_fallbacks[0]
+                            fallback_profile_ids = configured_fallbacks[1:]
+                            concurrency_reason = "primary_concurrency_full"
+
+                if slot is None:
+                    context.metrics.dropped_packets += 1
+                    continue
+
+                task = asyncio.create_task(
+                    process_with_slot(
+                        packet,
+                        slot=slot,
+                        profile_id=profile_id,
+                        fallback_profile_ids=fallback_profile_ids,
+                        concurrency_reason=concurrency_reason,
+                    ),
+                    name=f"ai.condition_filter[{context.node_id}]",
+                )
+                tasks.add(task)
+                task.add_done_callback(discard_task)
+        finally:
+            if tasks:
+                done, pending = await asyncio.wait(set(tasks), timeout=2.0)
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                await asyncio.gather(*done, return_exceptions=True)
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
+        return await self._process_packet_with_profiles(
+            packet,
+            context,
+            profile_id=None,
+            fallback_profile_ids=None,
+            concurrency_reason="",
+        )
+
+    async def _process_packet_with_profiles(
+        self,
+        packet: Packet,
+        context,  # noqa: ANN001
+        *,
+        profile_id: str | None,
+        fallback_profile_ids: list[str] | None,
+        concurrency_reason: str,
+    ) -> list[Packet]:
         stream_key = packet.stream_id
         state = self._states.setdefault(stream_key, _ConditionState())
 
@@ -488,7 +611,12 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         now = time.monotonic()
         result = self._cached_result(state=state, now=now)
         if result is None:
-            result = await self._evaluate_condition(image=image, description=description)
+            result = await self._evaluate_condition(
+                image=image,
+                description=description,
+                profile_id=profile_id,
+                fallback_profile_ids=fallback_profile_ids,
+            )
             state.last_eval_at = now
             if result.reason not in {
                 "ai_service_unavailable",
@@ -508,12 +636,29 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             packet,
             result=result,
             status="matched" if passes else "not_matched",
+            reason=concurrency_reason,
             input_artifact_name=artifact_name,
             input_image_key=image_key,
         )
         return [annotated] if passes else []
 
-    async def _evaluate_condition(self, *, image: Any, description: str) -> ConditionEvaluationResult:
+    @staticmethod
+    async def _acquire_condition_slot(
+        semaphore: asyncio.Semaphore, *, wait: bool
+    ) -> asyncio.Semaphore | None:
+        if not wait and semaphore.locked():
+            return None
+        await semaphore.acquire()
+        return semaphore
+
+    async def _evaluate_condition(
+        self,
+        *,
+        image: Any,
+        description: str,
+        profile_id: str | None = None,
+        fallback_profile_ids: list[str] | None = None,
+    ) -> ConditionEvaluationResult:
         services = self._deps.services
         if services is None:
             return ConditionEvaluationResult(matches=False, reason="ai_service_unavailable")
@@ -521,8 +666,12 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             "ai.infer.evaluate_condition",
             image=image,
             description=description,
-            profile_id=self._config.profile_id,
-            fallback_profile_ids=self._config.fallback_profile_ids,
+            profile_id=profile_id or self._config.profile_id,
+            fallback_profile_ids=list(
+                self._config.fallback_profile_ids
+                if fallback_profile_ids is None
+                else fallback_profile_ids
+            ),
             min_confidence=float(self._config.confidence_threshold),
             fallback_on_low_confidence=bool(self._config.fallback_on_low_confidence),
         )
@@ -531,6 +680,49 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         if isinstance(value, dict):
             return ConditionEvaluationResult.model_validate(value)
         return ConditionEvaluationResult(matches=False, reason="invalid_ai_service_response")
+
+    async def _fallback_profile_ids(self) -> list[str]:
+        cached = self._fallback_profile_ids_cache
+        if cached is not None:
+            return list(cached)
+
+        primary_id = str(self._config.profile_id or "").strip()
+        profile_ids: list[str] = []
+        seen: set[str] = set()
+
+        def add_profile_id(value: Any) -> None:
+            item = str(value or "").strip()
+            if not item or item in seen:
+                return
+            profile_ids.append(item)
+            seen.add(item)
+
+        services = self._deps.services
+        settings: Any | None = None
+        if services is not None:
+            try:
+                settings = await services.call("ai.settings.get")
+            except Exception:
+                settings = None
+            if not primary_id:
+                primary_id = _settings_default_profile_id(settings)
+        if primary_id:
+            seen.add(primary_id)
+        if services is not None:
+            profiles = _settings_profiles(settings)
+            for profile in profiles:
+                profile_id = _profile_value(profile, "id")
+                if profile_id != primary_id:
+                    continue
+                for item in _profile_list_value(profile, "fallback_profile_ids"):
+                    add_profile_id(item)
+                break
+
+        for item in self._config.fallback_profile_ids:
+            add_profile_id(item)
+
+        self._fallback_profile_ids_cache = list(profile_ids)
+        return profile_ids
 
     def _cached_result(self, *, state: _ConditionState, now: float) -> ConditionEvaluationResult | None:
         result = state.last_result
@@ -580,6 +772,40 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             "attempts": [item.model_dump() for item in (result.attempts if result is not None else [])],
             "input_artifact_name": input_artifact_name,
             "input_image_key": input_image_key,
+            "max_concurrency": int(self._config.max_concurrency),
+            "concurrency_policy": self._config.concurrency_policy,
         }
         payload["ai"] = ai_payload
         return replace(packet, payload=payload)
+
+
+def _settings_profiles(settings: Any) -> list[Any]:
+    profiles = getattr(settings, "profiles", None)
+    if profiles is None and isinstance(settings, dict):
+        profiles = settings.get("profiles")
+    return list(profiles) if isinstance(profiles, list | tuple) else []
+
+
+def _settings_default_profile_id(settings: Any) -> str:
+    value = getattr(settings, "default_profile_id", None)
+    if value is None and isinstance(settings, dict):
+        value = settings.get("default_profile_id")
+    return str(value or "").strip()
+
+
+def _profile_value(profile: Any, key: str) -> str:
+    value = getattr(profile, key, None)
+    if value is None and isinstance(profile, dict):
+        value = profile.get(key)
+    return str(value or "").strip()
+
+
+def _profile_list_value(profile: Any, key: str) -> list[Any]:
+    value = getattr(profile, key, None)
+    if value is None and isinstance(profile, dict):
+        value = profile.get(key)
+    if isinstance(value, list | tuple | set):
+        return list(value)
+    if value is None:
+        return []
+    return [value]

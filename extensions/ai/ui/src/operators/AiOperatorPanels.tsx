@@ -26,6 +26,8 @@ const DEFAULT_CONDITION_FILTER = {
   condition_description: "",
   confidence_threshold: 0.5,
   evaluation_interval_seconds: 5,
+  max_concurrency: 1,
+  concurrency_policy: "skip",
   reuse_last_decision_seconds: 10,
   failure_policy: "reuse_last",
 };
@@ -200,6 +202,29 @@ function AiConditionFilterPanel({ i18n, config, showAdvanced, updateConfig }: Pa
           value={asNumber(c.evaluation_interval_seconds, DEFAULT_CONDITION_FILTER.evaluation_interval_seconds)}
           onChange={(evaluation_interval_seconds) => updateConfig({ evaluation_interval_seconds })}
         />
+      </div>
+
+      <div className="rowWrap" style={{ gap: 12 }}>
+        <NumberField
+          label={t("ext.ai.operator.condition.concurrency", {}, "Concorrência")}
+          min={1}
+          max={32}
+          step={1}
+          value={asNumber(c.max_concurrency, DEFAULT_CONDITION_FILTER.max_concurrency)}
+          onChange={(max_concurrency) => updateConfig({ max_concurrency: Math.round(max_concurrency) })}
+        />
+        <label className="pipelinesLabel" style={{ flex: "1 1 220px" }}>
+          <span>{t("ext.ai.operator.condition.concurrency_policy", {}, "Quando lotado")}</span>
+          <select
+            className="pipelinesSelect"
+            value={asString(c.concurrency_policy) || DEFAULT_CONDITION_FILTER.concurrency_policy}
+            onChange={(event) => updateConfig({ concurrency_policy: event.target.value })}
+          >
+            <option value="skip">{t("ext.ai.operator.condition.concurrency.skip", {}, "Skip frame")}</option>
+            <option value="queue">{t("ext.ai.operator.condition.concurrency.queue", {}, "Queue")}</option>
+            <option value="fallback">{t("ext.ai.operator.condition.concurrency.fallback", {}, "Use fallback")}</option>
+          </select>
+        </label>
       </div>
 
       {showAdvanced ? (

@@ -12,6 +12,7 @@ import type {
 } from "@toposync/plugin-api";
 
 import { i18n } from "../util/i18n";
+import { DEFAULT_THEME_ID } from "../util/theme";
 
 type Props = {
   elements: CompositionElement[];
@@ -526,7 +527,7 @@ export function Viewport2D({
 
     function themeIdForStyles(): string {
       const el = document.documentElement;
-      return el.dataset.toposyncBaseTheme || el.dataset.toposyncTheme || "topo-day";
+      return el.dataset.toposyncBaseTheme || el.dataset.toposyncTheme || DEFAULT_THEME_ID;
     }
 
     function stylesSignature(): string {

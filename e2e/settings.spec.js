@@ -99,6 +99,18 @@ test("theme can be selected from settings", async ({ page }) => {
   expect(bgAfter.toLowerCase()).toBe("#060914");
 });
 
+test("Topo Night is the default theme", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.removeItem("toposync.theme");
+  });
+
+  const dialog = await openSettings(page);
+  await dialog.getByRole("button", { name: /^View\b/ }).click();
+
+  await page.waitForFunction(() => document.documentElement.dataset.toposyncBaseTheme === "topo-night");
+  await expect(dialog.getByRole("button", { name: /^Topo Night\b/ })).toHaveClass(/isSelected/);
+});
+
 test("visual settings hide theme-internal appearance controls", async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem("toposync.transparency", "high");

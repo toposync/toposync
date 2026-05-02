@@ -1,6 +1,8 @@
 import { resolveToposyncUrl, type CompositionElement, type Element3DInstance, type ElementType, type ViewSettings } from "@toposync/plugin-api";
 import * as THREE from "three";
 
+import { DEFAULT_THEME_ID } from "../../util/theme";
+
 const RENDER_DIR_ID = "render2d";
 const RENDER_VERSION = 7 as const;
 const HOME_ASSISTANT_ELEMENT_TYPE_ID = "com.toposync.home_assistant.item";
@@ -182,7 +184,7 @@ function buildCamera(viewBounds: BoundsXZ, viewWidth: number, viewHeight: number
 function ghostWallOpacityForTheme(): number {
   if (typeof document === "undefined") return 0.08;
   const { dataset } = document.documentElement;
-  const themeId = dataset.toposyncBaseTheme || dataset.toposyncTheme || "topo-day";
+  const themeId = dataset.toposyncBaseTheme || dataset.toposyncTheme || DEFAULT_THEME_ID;
   return themeId === "topo-day" ? 0.1 : 0.08;
 }
 

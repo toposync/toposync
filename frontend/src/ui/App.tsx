@@ -43,6 +43,7 @@ import { loadRemoteActivate } from "../util/moduleFederation";
 import {
   applyTheme,
   applyUserVisualPreferences,
+  DEFAULT_THEME_ID,
   isBuiltinThemeId,
   loadThemeId,
   loadViewport3DBackground,
@@ -365,7 +366,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     if (overridesTheme && isBuiltinThemeId(overridesTheme.id)) {
       return { baseThemeId: overridesTheme.id, overridesTheme };
     }
-    return { baseThemeId: "topo-day", overridesTheme };
+    return { baseThemeId: DEFAULT_THEME_ID, overridesTheme };
   }, [themeId, themesById]);
 
   useEffect(() => {

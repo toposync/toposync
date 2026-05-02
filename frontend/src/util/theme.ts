@@ -6,6 +6,7 @@ const VIEWPORT3D_STORAGE_KEY = "toposync.viewport3dBackground";
 
 export const BUILTIN_THEME_IDS = ["topo-day", "topo-night"] as const;
 export type BuiltinThemeId = (typeof BUILTIN_THEME_IDS)[number];
+export const DEFAULT_THEME_ID: BuiltinThemeId = "topo-night";
 
 export const THEME_DEFAULT_TRANSPARENCY = "normal";
 export type TransparencyLevel = typeof THEME_DEFAULT_TRANSPARENCY;
@@ -49,7 +50,7 @@ export function isBuiltinThemeId(value: string): value is BuiltinThemeId {
 
 export function loadThemeId(): string {
   const stored = safeGetStorage(THEME_STORAGE_KEY);
-  if (!stored || stored === "default") return "topo-day";
+  if (!stored || stored === "default") return DEFAULT_THEME_ID;
   if (stored === "com.toposync.theme.neon_blue") return "topo-day";
   return stored;
 }

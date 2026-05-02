@@ -14,6 +14,8 @@ import type {
   ViewSettings,
 } from "@toposync/plugin-api";
 
+import { DEFAULT_THEME_ID } from "../util/theme";
+
 type Props = {
   elements: CompositionElement[];
   elementTypesById: Record<string, ElementType>;
@@ -213,7 +215,7 @@ function fitCameraAngledOverview(camera: THREE.PerspectiveCamera, controls: Orbi
 function ghostWallOpacityForTheme(): number {
   if (typeof document === "undefined") return 0.08;
   const { dataset } = document.documentElement;
-  const themeId = dataset.toposyncBaseTheme || dataset.toposyncTheme || "topo-day";
+  const themeId = dataset.toposyncBaseTheme || dataset.toposyncTheme || DEFAULT_THEME_ID;
   return themeId === "topo-day" ? 0.1 : 0.08;
 }
 

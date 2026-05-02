@@ -45,7 +45,7 @@ type Props = {
 const VIEW_PANEL_ID = "__view__";
 const CORE_PANEL_ID = "__core__";
 const EXTENSIONS_PANEL_ID = "__extensions__";
-const ACTIVE_PANEL_STORAGE_KEY = "toposync.settings.active_panel.v3";
+const ACTIVE_PANEL_STORAGE_KEY = "toposync.settings.active_panel.v4";
 
 type SettingsEntry =
   | {

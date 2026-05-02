@@ -56,9 +56,9 @@
     "openvino": true,
     "mps": false
   },
-  "recommended_profiles": ["cpu_low", "cuda_low", "openvino_balanced"],
+  "recommended_profiles": [],
   "notes": [
     "Fastest RTMDet option for CPU-first deployments.",
-    "Recommended first smoke-test model for general COCO detection."
+    "Useful first smoke-test model for general COCO detection."
   ]
 }

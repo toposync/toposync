@@ -1169,7 +1169,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.segmentation_model_id_hint":
       "Choose the segmentation model. This quick list favors models that fit the selected machine.",
     "core.ui.pipelines.panels.yolo.model_shortlist_hint":
-      "RF-DETR Small is the easiest cross-platform default, RF-DETR Nano is the lighter one-click option, and RTMDet stays available when you prefer the MMDetection/MMDeploy path.",
+      "RF-DETR Medium is the default recommendation for object detection because TopoSync can prepare it through assisted local export. RTMDet stays available for the MMDetection/MMDeploy path.",
     "core.ui.pipelines.panels.yolo.segmentation_model_shortlist_hint":
       "RTMDet-Ins Tiny is the lightest option, Small is the default balance, and Medium spends more machine resources for better masks.",
     "core.ui.pipelines.panels.yolo.processing_server_hint":
@@ -1410,15 +1410,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.model_rfdetr_nano_hint":
       "RF-DETR Nano: easiest cross-platform starting point when you want assisted local export with lower CPU cost.",
     "core.ui.pipelines.panels.yolo.model_rfdetr_small_hint":
-      "RF-DETR Small: easiest cross-platform default with stronger COCO quality and a simpler export path.",
+      "RF-DETR Small: cross-platform option with stronger COCO quality and a simpler export path.",
     "core.ui.pipelines.panels.yolo.model_rfdetr_medium_hint":
-      "RF-DETR Medium: higher-quality RF-DETR option when you can spend more latency per frame.",
+      "RF-DETR Medium: default recommendation with assisted local export and stronger COCO quality.",
     "core.ui.pipelines.panels.yolo.model_rtmdet_tiny_hint":
       "RTMDet Tiny: fastest option for CPU-first deployments and quick smoke tests.",
     "core.ui.pipelines.panels.yolo.model_rtmdet_small_hint":
-      "RTMDet Small: balanced default recommendation for general COCO detection.",
+      "RTMDet Small: balanced option for general COCO detection.",
     "core.ui.pipelines.panels.yolo.model_rtmdet_medium_hint":
-      "RTMDet Medium: higher-quality option when you can spend more latency per frame.",
+      "RTMDet Medium: higher-quality RTMDet option when you can spend more latency per frame.",
     "core.ui.pipelines.panels.yolo.model_rtmdet_ins_tiny_hint":
       "RTMDet-Ins Tiny: fastest path to real masks on CPU-first deployments.",
     "core.ui.pipelines.panels.yolo.model_rtmdet_ins_small_hint":
@@ -2896,7 +2896,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.segmentation_model_id_hint":
       "Escolha o modelo de segmentação. Esta lista rápida prioriza opções que cabem na máquina selecionada.",
     "core.ui.pipelines.panels.yolo.model_shortlist_hint":
-      "RF-DETR Small é o caminho mais simples entre Windows, macOS e Linux, RF-DETR Nano é a opção one-click mais leve, e RTMDet continua disponível para quem prefere o fluxo MMDetection/MMDeploy.",
+      "RF-DETR Medium é a recomendação padrão para detecção de objetos porque o TopoSync consegue prepará-lo por exportação local assistida. RTMDet continua disponível para o fluxo MMDetection/MMDeploy.",
     "core.ui.pipelines.panels.yolo.segmentation_model_shortlist_hint":
       "RTMDet-Ins Tiny é a opção mais leve, Small é o equilíbrio padrão e Medium usa mais máquina para máscaras melhores.",
     "core.ui.pipelines.panels.yolo.processing_server_hint":
@@ -3140,15 +3140,15 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.model_rfdetr_nano_hint":
       "RF-DETR Nano: ponto de partida mais simples entre plataformas quando você quer exportação local assistida com menor custo de CPU.",
     "core.ui.pipelines.panels.yolo.model_rfdetr_small_hint":
-      "RF-DETR Small: padrão cross-platform mais simples, com qualidade COCO forte e exportação mais direta.",
+      "RF-DETR Small: opção cross-platform com qualidade COCO forte e exportação mais direta.",
     "core.ui.pipelines.panels.yolo.model_rfdetr_medium_hint":
-      "RF-DETR Medium: opção RF-DETR de maior qualidade quando você pode gastar mais latência por frame.",
+      "RF-DETR Medium: recomendação padrão com exportação local assistida e qualidade COCO mais forte.",
     "core.ui.pipelines.panels.yolo.model_rtmdet_tiny_hint":
       "RTMDet Tiny: opção mais rápida para implantações focadas em CPU e smoke tests rápidos.",
     "core.ui.pipelines.panels.yolo.model_rtmdet_small_hint":
-      "RTMDet Small: recomendação padrão equilibrada para detecção COCO geral.",
+      "RTMDet Small: opção equilibrada para detecção COCO geral.",
     "core.ui.pipelines.panels.yolo.model_rtmdet_medium_hint":
-      "RTMDet Medium: opção de melhor qualidade quando você pode gastar mais latência por frame.",
+      "RTMDet Medium: opção RTMDet de maior qualidade quando você pode gastar mais latência por frame.",
     "core.ui.pipelines.panels.yolo.model_rtmdet_ins_tiny_hint":
       "RTMDet-Ins Tiny: caminho mais rápido para máscaras reais em implantações focadas em CPU.",
     "core.ui.pipelines.panels.yolo.model_rtmdet_ins_small_hint":

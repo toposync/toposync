@@ -56,9 +56,9 @@
     "openvino": true,
     "mps": false
   },
-  "recommended_profiles": ["cpu_balanced", "cuda_balanced", "openvino_balanced"],
+  "recommended_profiles": [],
   "notes": [
-    "Balanced RTMDet option and default recommendation for general COCO detection.",
+    "Balanced RTMDet option for general COCO detection.",
     "Good trade-off between accuracy and CPU/GPU cost."
   ]
 }

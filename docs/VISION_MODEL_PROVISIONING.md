@@ -141,7 +141,7 @@ f89e0b0e87f4cb93260ef62a187dfa71fa4dc5fdaf4173e5eeeaa624498fe18e  rtmdet_det_med
 For a normal user, the practical flow is:
 1. Open the processing server status or pipeline editor.
 2. Confirm the chosen detection model appears as available.
-3. In `vision.detect`, pick `RTMDet Small` for general use, or `RTMDet Tiny` on weaker machines.
+3. In `vision.detect`, use this flow only when you intentionally want RTMDet; the general default recommendation is `RF-DETR Medium`.
 4. Save the pipeline.
 5. If a pipeline was previously disabled only because the model was missing, re-enable it.
 

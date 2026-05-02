@@ -55,7 +55,7 @@
     "openvino": false,
     "mps": true
   },
-  "recommended_profiles": ["cpu_balanced", "cuda_balanced"],
+  "recommended_profiles": [],
   "notes": [
     "Balanced RF-DETR option with clearer cross-platform packaging than RTMDet/MMDeploy.",
     "Good one-click candidate when you want strong COCO quality without a container-only builder."

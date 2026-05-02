@@ -55,7 +55,7 @@
     "openvino": false,
     "mps": true
   },
-  "recommended_profiles": ["cpu_low", "cuda_low"],
+  "recommended_profiles": [],
   "notes": [
     "Portable RF-DETR entry point with official ONNX export in the upstream package.",
     "Strong quality for a lightweight cross-platform assisted local build path."

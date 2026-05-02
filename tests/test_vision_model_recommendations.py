@@ -15,17 +15,18 @@ def _bind_detection_artifacts_to_missing_paths(registry, *, root: Path) -> None:
         manifest.artifact_path = str((root / f"{manifest.model_id}.onnx").resolve())
 
 
-def test_builtin_rtmdet_detection_shortlist_is_registered() -> None:
+def test_builtin_detection_shortlist_recommends_rfdetr_medium() -> None:
     registry = build_default_model_registry()
     shortlist = list_official_detection_shortlist(model_registry=registry)
     assert [item["model_id"] for item in shortlist] == [
+        "rfdetr_det_medium",
+        "rfdetr_det_small",
+        "rfdetr_det_nano",
         "rtmdet_det_tiny",
         "rtmdet_det_small",
         "rtmdet_det_medium",
-        "rfdetr_det_nano",
-        "rfdetr_det_small",
-        "rfdetr_det_medium",
     ]
+    assert shortlist[0]["badge_ids"] == ["recommended", "best_quality"]
 
 
 def test_builtin_rtmdet_families_remain_guided_upload_until_future_auto_download_family() -> None:
@@ -73,7 +74,7 @@ def test_builtin_rfdetr_detection_family_uses_assisted_local_build_metadata() ->
         assert manifest.acquisition.explicit_consent_required is True
 
 
-def test_detection_recommendation_prefers_tiny_for_small_cpu_hosts(tmp_path: Path) -> None:
+def test_detection_recommendation_prefers_rfdetr_medium_for_small_cpu_hosts(tmp_path: Path) -> None:
     registry = build_default_model_registry()
     _bind_detection_artifacts_to_missing_paths(registry, root=tmp_path)
     recommendation = recommend_detection_models(
@@ -82,7 +83,8 @@ def test_detection_recommendation_prefers_tiny_for_small_cpu_hosts(tmp_path: Pat
         model_registry=registry,
     )
     assert recommendation["profile"] == "cpu_low"
-    assert recommendation["items"][0]["model_id"] == "rtmdet_det_tiny"
+    assert recommendation["items"][0]["model_id"] == "rfdetr_det_medium"
+    assert "recommended" in recommendation["items"][0]["badge_ids"]
 
 
 def test_detection_recommendation_prefers_medium_for_strong_cuda_hosts(tmp_path: Path) -> None:
@@ -95,6 +97,7 @@ def test_detection_recommendation_prefers_medium_for_strong_cuda_hosts(tmp_path:
     )
     assert recommendation["profile"] == "cuda_quality"
     assert recommendation["items"][0]["model_id"] == "rfdetr_det_medium"
+    assert "recommended" in recommendation["items"][0]["badge_ids"]
 
 
 def test_builtin_rtmdet_catalog_blocks_remote_install_when_redistribution_is_not_allowed(monkeypatch) -> None:  # noqa: ANN001
@@ -162,6 +165,6 @@ def test_detection_catalog_prefers_actionable_cross_platform_local_builds_when_n
     )
 
     assert catalog["profile"] == "cpu_balanced"
-    assert catalog["items"][0]["model_id"] == "rfdetr_det_small"
+    assert catalog["items"][0]["model_id"] == "rfdetr_det_medium"
     assert catalog["items"][0]["local_build_supported"] is True
     assert catalog["items"][0]["acquisition_mode"] == "local_build_assisted"

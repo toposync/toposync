@@ -55,9 +55,9 @@
     "openvino": false,
     "mps": true
   },
-  "recommended_profiles": ["cuda_quality", "cpu_balanced"],
+  "recommended_profiles": ["cpu_low", "cpu_balanced", "cuda_low", "cuda_balanced", "cuda_quality", "openvino_balanced"],
   "notes": [
-    "Higher-quality RF-DETR option with official ONNX export and Apache-designated open weights.",
+    "Default recommended RF-DETR option with official ONNX export and Apache-designated open weights.",
     "Best fit when you want the easiest first-party portable path without dropping quality."
   ]
 }

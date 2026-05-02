@@ -56,9 +56,9 @@
     "openvino": true,
     "mps": false
   },
-  "recommended_profiles": ["cuda_quality"],
+  "recommended_profiles": [],
   "notes": [
-    "Higher-quality RTMDet option for stronger CPU/GPU machines.",
+    "Higher-quality RTMDet option for general COCO detection.",
     "Use when object recall matters more than per-frame latency."
   ]
 }

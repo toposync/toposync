@@ -438,6 +438,8 @@ const BASIC_CATEGORY_LABEL_KEYS: Record<string, string> = {
   dog: "core.ui.pipelines.panels.yolo.category.dog",
   cat: "core.ui.pipelines.panels.yolo.category.cat",
 };
+const DEFAULT_DETECTION_MODEL_ID = "rfdetr_det_medium";
+const DETECTION_LAST_USED_MODEL_STORAGE_KEY = "toposync:pipelines:vision.detect:last_model_id";
 
 function resourceTierTranslationKey(value: string): string {
   return `core.ui.pipelines.panels.yolo.resource_tier.${String(value || "").trim() || "unknown"}`;
@@ -535,7 +537,7 @@ function defaultAcquisitionForModelId(modelId: string): VisionModelAcquisition {
 }
 
 function detectionFallbackItems(): VisionModelCatalogItem[] {
-  return [
+  const items = [
     fallbackCatalogItem("rfdetr_det_nano", "RF-DETR Nano", "onnxruntime", { custom: false }),
     fallbackCatalogItem("rfdetr_det_small", "RF-DETR Small", "onnxruntime", { custom: false }),
     fallbackCatalogItem("rfdetr_det_medium", "RF-DETR Medium", "onnxruntime", { custom: false }),
@@ -543,6 +545,9 @@ function detectionFallbackItems(): VisionModelCatalogItem[] {
     fallbackCatalogItem("rtmdet_det_small", "RTMDet Small", "onnxruntime", { custom: false }),
     fallbackCatalogItem("rtmdet_det_medium", "RTMDet Medium", "onnxruntime", { custom: false }),
   ];
+  return items.map((item) =>
+    item.modelId === DEFAULT_DETECTION_MODEL_ID ? { ...item, badgeIds: ["recommended", ...item.badgeIds] } : item,
+  );
 }
 
 function segmentationFallbackItems(): VisionModelCatalogItem[] {
@@ -596,6 +601,42 @@ function pickSuggestedAvailableModel(items: VisionModelCatalogItem[]): VisionMod
     if (match) return match;
   }
   return items[0] ?? null;
+}
+
+function pickRecommendedDetectionModel(items: VisionModelCatalogItem[]): VisionModelCatalogItem | null {
+  return (
+    items.find((item) => item.badgeIds.includes("recommended")) ??
+    items.find((item) => item.modelId === DEFAULT_DETECTION_MODEL_ID) ??
+    pickSuggestedAvailableModel(items)
+  );
+}
+
+function pickInitialDetectionModel(items: VisionModelCatalogItem[], lastUsedModelId: string): VisionModelCatalogItem | null {
+  const clean = String(lastUsedModelId || "").trim();
+  if (clean) {
+    const lastUsed = items.find((item) => item.modelId === clean);
+    if (lastUsed) return lastUsed;
+  }
+  return pickRecommendedDetectionModel(items);
+}
+
+function readLastUsedDetectionModelId(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return String(window.localStorage.getItem(DETECTION_LAST_USED_MODEL_STORAGE_KEY) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function writeLastUsedDetectionModelId(modelId: string): void {
+  const clean = String(modelId || "").trim();
+  if (!clean || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(DETECTION_LAST_USED_MODEL_STORAGE_KEY, clean);
+  } catch {
+    // localStorage can be unavailable in restricted browser contexts.
+  }
 }
 
 function parsePrivacyPolicyLabels(raw: string): string[] {
@@ -884,6 +925,32 @@ export function VisionConfigCard({
   const showSelectedModelNarrative =
     !!selectedModelHintKey && (!manualInstallItem?.artifactExists || selectedModelIncompatible || showAdvanced);
   const provisionDetailsOpen = showProvisionDetails || selectedModelIncompatible || manualInstallFailed;
+
+  useEffect(() => {
+    if (!isDetection || modelId) return;
+    const lastUsedModelId = readLastUsedDetectionModelId();
+    const lastUsedInCurrentCatalog = lastUsedModelId
+      ? catalogItems.find((item) => item.modelId === lastUsedModelId) ?? null
+      : null;
+    if (lastUsedModelId && !lastUsedInCurrentCatalog && !taskCatalog && !catalogError && serverStatus === null) {
+      return;
+    }
+    const initialItem = pickInitialDetectionModel(catalogItems, lastUsedModelId);
+    if (!initialItem?.modelId) return;
+    onUpdateConfig((prev) => {
+      const currentModelId = String((prev as any).model_id ?? "").trim();
+      if (currentModelId) return prev;
+      return {
+        ...prev,
+        model_id: initialItem.modelId,
+      };
+    });
+  }, [catalogError, catalogItems, isDetection, modelId, onUpdateConfig, serverStatus, taskCatalog]);
+
+  useEffect(() => {
+    if (!isDetection || !modelId) return;
+    writeLastUsedDetectionModelId(modelId);
+  }, [isDetection, modelId]);
 
   useEffect(() => {
     if (!manualInstallItem?.installJob) return;

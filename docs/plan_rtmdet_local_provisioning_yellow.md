@@ -552,7 +552,7 @@ Sequência prática:
 7. só depois avaliar RTMDet-Ins
 
 Motivo:
-- `RTMDet Small` já é o default recomendado no repo
+- `RF-DETR Medium` é o default recomendado no repo
 - reduz explosão de matriz de teste
 - fecha o ciclo amarelo com o caso mais útil primeiro
 

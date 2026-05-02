@@ -94,14 +94,14 @@ OFFICIAL_RTMDET_DETECTION_MODEL_IDS: tuple[str, ...] = (
 )
 
 OFFICIAL_RFDETR_DETECTION_MODEL_IDS: tuple[str, ...] = (
-    "rfdetr_det_nano",
-    "rfdetr_det_small",
     "rfdetr_det_medium",
+    "rfdetr_det_small",
+    "rfdetr_det_nano",
 )
 
 OFFICIAL_DETECTION_MODEL_IDS: tuple[str, ...] = (
-    *OFFICIAL_RTMDET_DETECTION_MODEL_IDS,
     *OFFICIAL_RFDETR_DETECTION_MODEL_IDS,
+    *OFFICIAL_RTMDET_DETECTION_MODEL_IDS,
 )
 
 OFFICIAL_RTMDET_SEGMENTATION_MODEL_IDS: tuple[str, ...] = (

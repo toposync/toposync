@@ -276,7 +276,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   };
 
   const resolveGraphFromActiveMode = (): { ok: true; graph: Record<string, unknown> } | { ok: false; message: string } => {
-    if (!draft) return { ok: false, message: "No pipeline selected." };
+    if (!draft) return { ok: false, message: t("core.ui.pipelines.error.no_selection") };
 
     if (mode === "interactive") {
       if (!interactiveGraph.graph) {

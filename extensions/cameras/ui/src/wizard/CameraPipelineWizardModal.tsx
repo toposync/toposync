@@ -48,7 +48,7 @@ function safePipelineName(value: string): string {
   const raw = String(value ?? "");
   if (!raw.trim()) return "";
   const cleaned = raw.replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+/, "");
-  let out = cleaned || "pipeline";
+  let out = cleaned || "fluxo";
   if (!/^[A-Za-z_]/.test(out)) out = `_${out}`;
   if (PYTHON_KEYWORDS.has(out)) out = `${out}_`;
   return out.slice(0, 120);

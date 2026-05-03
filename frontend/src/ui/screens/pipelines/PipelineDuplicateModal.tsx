@@ -13,7 +13,7 @@ type Props = {
 };
 
 function suggestDuplicateName(baseName: string, existing: Set<string>): string {
-  const base = String(baseName || "").trim() || "pipeline";
+  const base = String(baseName || "").trim() || "fluxo";
   let index = 2;
   while (existing.has(`${base}_${index}`)) index += 1;
   return `${base}_${index}`;

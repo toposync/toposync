@@ -395,7 +395,7 @@ export function WizardCreatePipelineFromTransmission({
   return (
     <SubModal
       open={open}
-      title={t("ext.streaming.wizard.title", {}, "Criar pipeline para transmissão")}
+      title={t("ext.streaming.wizard.title", {}, "Criar fluxo para transmissão")}
       closeAriaLabel={t("core.actions.close", {}, "Close")}
       onClose={() => {
         if (createBusy) return;
@@ -415,7 +415,7 @@ export function WizardCreatePipelineFromTransmission({
                   {t(
                     "ext.streaming.wizard.engine_warning",
                     {},
-                    "A engine de streaming está parada. Você pode criar o pipeline agora e iniciar a engine depois.",
+                    "A engine de streaming está parada. Você pode criar o fluxo agora e iniciar a engine depois.",
                   )}
                 </div>
               ) : null}
@@ -540,7 +540,7 @@ export function WizardCreatePipelineFromTransmission({
 
               <div className="rowWrap" style={{ gap: 10 }}>
                 <div className="field" style={{ flex: 1, minWidth: 220 }}>
-                  <label className="label">{t("ext.streaming.wizard.pipeline_name", {}, "Nome do pipeline (opcional)")}</label>
+                  <label className="label">{t("ext.streaming.wizard.pipeline_name", {}, "Nome do fluxo (opcional)")}</label>
                   <input className="input" value={pipelineName} onChange={(event) => setPipelineName(event.target.value)} />
                 </div>
                 <div className="field" style={{ width: 180 }}>
@@ -674,7 +674,7 @@ export function WizardCreatePipelineFromTransmission({
               <div className="field">
                 <label className="rowWrap" style={{ gap: 10 }}>
                   <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
-                  <span className="cardMeta">{t("ext.streaming.wizard.enabled", {}, "Pipeline habilitado após criação")}</span>
+                  <span className="cardMeta">{t("ext.streaming.wizard.enabled", {}, "Fluxo habilitado após criação")}</span>
                 </label>
               </div>
 
@@ -702,7 +702,7 @@ export function WizardCreatePipelineFromTransmission({
                 || !knownProcessingServerIds.has(selectedProcessingServerId)
               }
             >
-              {createBusy ? t("ext.streaming.wizard.creating", {}, "Criando…") : t("ext.streaming.wizard.create", {}, "Criar pipeline")}
+              {createBusy ? t("ext.streaming.wizard.creating", {}, "Criando…") : t("ext.streaming.wizard.create", {}, "Criar fluxo")}
             </button>
           </div>
         </div>
@@ -713,10 +713,10 @@ export function WizardCreatePipelineFromTransmission({
           <div className="card">
             <div className="cardBody">
               <div className="modalSectionTitle" style={{ marginBottom: 6 }}>
-                {t("ext.streaming.wizard.done_title", {}, "Pipeline criado")}
+                {t("ext.streaming.wizard.done_title", {}, "Fluxo criado")}
               </div>
               <div className="cardMeta">
-                {t("ext.streaming.wizard.pipeline_created_name", {}, "Pipeline")}: {created.pipeline_name}
+                {t("ext.streaming.wizard.pipeline_created_name", {}, "Fluxo")}: {created.pipeline_name}
               </div>
               {Array.isArray(created.warnings) && created.warnings.length > 0 ? (
                 <div className="cardMeta" style={{ marginTop: 8 }}>
@@ -738,7 +738,7 @@ export function WizardCreatePipelineFromTransmission({
                 onClose();
               }}
             >
-              {t("ext.streaming.wizard.open_pipelines", {}, "Abrir Pipelines")}
+              {t("ext.streaming.wizard.open_pipelines", {}, "Abrir Fluxos")}
             </button>
           </div>
         </div>

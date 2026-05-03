@@ -747,7 +747,7 @@ function StreamingSettingsPanelContent({
             <ol className="streamingQuickStepsList">
               <li>{t("ext.streaming.settings.quickstart_step_1", {}, "Crie uma transmissão com ao menos uma saída.")}</li>
               <li>{t("ext.streaming.settings.quickstart_step_2", {}, "Ajuste resolução/FPS/autenticação por saída.")}</li>
-              <li>{t("ext.streaming.settings.quickstart_step_3", {}, "Salve, carregue URLs e use o wizard para gerar o pipeline.")}</li>
+              <li>{t("ext.streaming.settings.quickstart_step_3", {}, "Salve, carregue URLs e use o wizard para gerar o fluxo.")}</li>
             </ol>
           </div>
         </div>
@@ -1114,7 +1114,7 @@ function StreamingSettingsPanelContent({
                 <ol className="streamingQuickStepsList streamingQuickStepsListCompact">
                   <li>{t("ext.streaming.settings.quickstart_step_1", {}, "Crie uma transmissão com ao menos uma saída.")}</li>
                   <li>{t("ext.streaming.settings.quickstart_step_2", {}, "Ajuste resolução/FPS/autenticação por saída.")}</li>
-                  <li>{t("ext.streaming.settings.quickstart_step_3", {}, "Salve, carregue URLs e use o wizard para gerar o pipeline.")}</li>
+                  <li>{t("ext.streaming.settings.quickstart_step_3", {}, "Salve, carregue URLs e use o wizard para gerar o fluxo.")}</li>
                 </ol>
                 <button
                   className="primaryButton"
@@ -1180,7 +1180,7 @@ function StreamingSettingsPanelContent({
                   {t("ext.streaming.transmissions.select", {}, "Selecione uma transmissão para editar.")}
                 </div>
                 <div className="cardMeta">
-                  {t("ext.streaming.transmissions.select_hint", {}, "Dica: comece criando uma transmissão e depois abra o wizard para gerar o pipeline.")}
+                  {t("ext.streaming.transmissions.select_hint", {}, "Dica: comece criando uma transmissão e depois abra o wizard para gerar o fluxo.")}
                 </div>
                 <button
                   className="primaryButton"
@@ -1695,7 +1695,7 @@ function StreamingSettingsPanelContent({
                           : t("ext.streaming.transmissions.load_urls", {}, "Carregar URLs")}
                       </button>
                       <button className="primaryButton" type="button" onClick={() => setWizardTransmission(transmissionDraft)}>
-                        {t("ext.streaming.wizard.open", {}, "Criar pipeline com esta transmissão")}
+                        {t("ext.streaming.wizard.open", {}, "Criar fluxo com esta transmissão")}
                       </button>
                     </div>
                   </div>

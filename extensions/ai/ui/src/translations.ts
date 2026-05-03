@@ -140,7 +140,7 @@ export const aiTranslations: TranslationBundle = {
     "ext.ai.settings.per_day": "Por dia",
     "ext.ai.settings.per_month": "Por mês",
     "ext.ai.settings.usage": "Uso",
-    "ext.ai.settings.unsaved": "Salve as configurações antes de executar pipelines.",
+    "ext.ai.settings.unsaved": "Salve as configurações antes de executar fluxos.",
     "ext.ai.settings.local_privacy": "Perfil local. As imagens ficam na sua rede local.",
     "ext.ai.settings.cloud_privacy": "Perfil em nuvem. Habilite o envio de imagens explicitamente antes de usar.",
     "ext.ai.settings.empty_cloud": "Nenhum provedor em nuvem configurado.",

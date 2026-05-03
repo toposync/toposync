@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { getPipelineTelemetryNumeric, type PipelineTelemetryNumeric } from "../../../util/api";
 import { i18n } from "../../../util/i18n";
@@ -41,6 +41,16 @@ function clamp(value: number, minValue: number, maxValue: number): number {
   return Math.min(maxValue, Math.max(minValue, value));
 }
 
+function histogramRatio(value: number, minValue: number, maxValue: number): number {
+  const span = Math.max(1e-9, maxValue - minValue);
+  return clamp((value - minValue) / span, 0, 1);
+}
+
+function roundedHistogramValue(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Number(value.toFixed(4));
+}
+
 function isAbortError(err: unknown): boolean {
   return (
     typeof DOMException !== "undefined" &&
@@ -62,6 +72,9 @@ export function PipelineTelemetryFieldModal({
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<PipelineTelemetryNumeric | null>(null);
   const [pendingValue, setPendingValue] = useState(0);
+  const [hoverValue, setHoverValue] = useState<number | null>(null);
+  const [draggingHistogram, setDraggingHistogram] = useState(false);
+  const histogramFrameRef = useRef<HTMLDivElement | null>(null);
 
   const integerFormatter = useMemo(() => new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }), [locale]);
   const decimalFormatter = useMemo(
@@ -77,6 +90,8 @@ export function PipelineTelemetryFieldModal({
     if (!open) return;
     if (!request) return;
     setPendingValue(Number.isFinite(request.value) ? request.value : 0);
+    setHoverValue(null);
+    setDraggingHistogram(false);
   }, [open, request]);
 
   useEffect(() => {
@@ -126,6 +141,9 @@ export function PipelineTelemetryFieldModal({
   const histogramMin = Number(data?.histogram_min ?? 0);
   const histogramMax = Number(data?.histogram_max ?? 1);
   const markerValue = clamp(pendingValue, histogramMin, histogramMax);
+  const hoverMarkerValue = hoverValue === null ? null : clamp(hoverValue, histogramMin, histogramMax);
+  const markerRatio = histogramRatio(markerValue, histogramMin, histogramMax);
+  const hoverMarkerRatio = hoverMarkerValue === null ? null : histogramRatio(hoverMarkerValue, histogramMin, histogramMax);
 
   const p90 = useMemo(
     () => percentileFromHistogram(histogram, histogramMin, histogramMax, 0.9),
@@ -143,6 +161,25 @@ export function PipelineTelemetryFieldModal({
   const chartWidth = 720;
   const chartHeight = 220;
   const usableHeight = chartHeight - 24;
+  const keyboardStep = Math.max(1e-9, histogramMax - histogramMin) / Math.max(1, histogram.length || 100);
+
+  const valueFromHistogramPointer = (event: React.PointerEvent<HTMLDivElement>): number => {
+    const bounds = (histogramFrameRef.current ?? event.currentTarget).getBoundingClientRect();
+    const ratio = bounds.width > 0 ? clamp((event.clientX - bounds.left) / bounds.width, 0, 1) : 0;
+    return histogramMin + ratio * Math.max(1e-9, histogramMax - histogramMin);
+  };
+
+  const selectHistogramValue = (value: number): void => {
+    setPendingValue(roundedHistogramValue(clamp(value, histogramMin, histogramMax)));
+  };
+
+  const nudgeHistogramValue = (delta: number): void => {
+    setHoverValue(null);
+    setPendingValue((current) => {
+      const baseValue = Number.isFinite(current) ? current : histogramMin;
+      return roundedHistogramValue(clamp(baseValue + delta, histogramMin, histogramMax));
+    });
+  };
 
   return (
     <Modal
@@ -196,22 +233,107 @@ export function PipelineTelemetryFieldModal({
             </div>
           </div>
 
-          <div className="pipelinesTelemetryHistogramWrap">
-            <svg className="pipelinesTelemetryHistogram" viewBox={`0 0 ${chartWidth} ${chartHeight}`} preserveAspectRatio="none" aria-hidden="true">
-              {histogram.map((countRaw, index) => {
-                const count = Math.max(0, Number(countRaw) || 0);
-                const barWidth = chartWidth / Math.max(1, histogram.length);
-                const x = index * barWidth;
-                const barHeight = (count / histogramMaxCount) * usableHeight;
-                const y = chartHeight - barHeight - 12;
-                return <rect key={`hist:${index}`} x={x} y={y} width={Math.max(1, barWidth - 1)} height={barHeight} rx={1} className="pipelinesTelemetryHistogramBar" />;
-              })}
-              {(() => {
-                const span = Math.max(1e-9, histogramMax - histogramMin);
-                const x = ((markerValue - histogramMin) / span) * chartWidth;
-                return <line x1={x} x2={x} y1={0} y2={chartHeight} className="pipelinesTelemetryMarkerLine" />;
-              })()}
-            </svg>
+          <div
+            className="pipelinesTelemetryHistogramWrap"
+            role="slider"
+            tabIndex={0}
+            aria-label={t("core.ui.pipelines.telemetry.histogram_picker", {}, "Histogram value picker")}
+            aria-valuemin={histogramMin}
+            aria-valuemax={histogramMax}
+            aria-valuenow={markerValue}
+            aria-valuetext={decimalFormatter.format(markerValue)}
+            title={t("core.ui.pipelines.telemetry.histogram_picker_title", {}, "Click or drag across the histogram to set the current value.")}
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              const nextValue = valueFromHistogramPointer(event);
+              event.currentTarget.setPointerCapture(event.pointerId);
+              setDraggingHistogram(true);
+              setHoverValue(nextValue);
+              selectHistogramValue(nextValue);
+            }}
+            onPointerMove={(event) => {
+              const nextValue = valueFromHistogramPointer(event);
+              setHoverValue(nextValue);
+              if ((event.buttons & 1) === 1) {
+                selectHistogramValue(nextValue);
+              }
+            }}
+            onPointerUp={(event) => {
+              const nextValue = valueFromHistogramPointer(event);
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }
+              setDraggingHistogram(false);
+              setHoverValue(nextValue);
+              selectHistogramValue(nextValue);
+            }}
+            onPointerCancel={(event) => {
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }
+              setDraggingHistogram(false);
+              setHoverValue(null);
+            }}
+            onPointerLeave={() => {
+              if (!draggingHistogram) setHoverValue(null);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+                event.preventDefault();
+                nudgeHistogramValue(-keyboardStep);
+              } else if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+                event.preventDefault();
+                nudgeHistogramValue(keyboardStep);
+              } else if (event.key === "PageDown") {
+                event.preventDefault();
+                nudgeHistogramValue(-keyboardStep * 10);
+              } else if (event.key === "PageUp") {
+                event.preventDefault();
+                nudgeHistogramValue(keyboardStep * 10);
+              } else if (event.key === "Home") {
+                event.preventDefault();
+                selectHistogramValue(histogramMin);
+              } else if (event.key === "End") {
+                event.preventDefault();
+                selectHistogramValue(histogramMax);
+              }
+            }}
+          >
+            <div className="pipelinesTelemetryHistogramFrame" ref={histogramFrameRef}>
+              <svg className="pipelinesTelemetryHistogram" viewBox={`0 0 ${chartWidth} ${chartHeight}`} preserveAspectRatio="none" aria-hidden="true">
+                {histogram.map((countRaw, index) => {
+                  const count = Math.max(0, Number(countRaw) || 0);
+                  const barWidth = chartWidth / Math.max(1, histogram.length);
+                  const x = index * barWidth;
+                  const barHeight = (count / histogramMaxCount) * usableHeight;
+                  const y = chartHeight - barHeight - 12;
+                  return <rect key={`hist:${index}`} x={x} y={y} width={Math.max(1, barWidth - 1)} height={barHeight} rx={1} className="pipelinesTelemetryHistogramBar" />;
+                })}
+                {hoverMarkerRatio !== null ? (
+                  <line
+                    x1={hoverMarkerRatio * chartWidth}
+                    x2={hoverMarkerRatio * chartWidth}
+                    y1={0}
+                    y2={chartHeight}
+                    className="pipelinesTelemetryPreviewLine"
+                  />
+                ) : null}
+                <line x1={markerRatio * chartWidth} x2={markerRatio * chartWidth} y1={0} y2={chartHeight} className="pipelinesTelemetryMarkerLine" />
+              </svg>
+              {hoverMarkerValue !== null && hoverMarkerRatio !== null ? (
+                <div
+                  className={[
+                    "pipelinesTelemetryHistogramHoverValue",
+                    hoverMarkerRatio < 0.12 ? "isStart" : "",
+                    hoverMarkerRatio > 0.88 ? "isEnd" : "",
+                  ].filter(Boolean).join(" ")}
+                  style={{ left: `${hoverMarkerRatio * 100}%` }}
+                >
+                  {decimalFormatter.format(hoverMarkerValue)}
+                </div>
+              ) : null}
+            </div>
             <div className="pipelinesTelemetryHistogramAxis">
               <span>{decimalFormatter.format(histogramMin)}</span>
               <span>{decimalFormatter.format(histogramMax)}</span>

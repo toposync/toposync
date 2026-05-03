@@ -707,7 +707,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
 
               {recommendationsLoading ? <div className="pipelinesHint">{t("core.ui.pipelines.analysis.loading")}</div> : null}
 
-              {recommendations.length > 0 ? (
+              {recommendations.length > 0 && mode !== "interactive" ? (
                 <div className="card">
                   <div className="cardTitle">{t("core.ui.pipelines.recommendations.title")}</div>
                   <div className="cardBody">
@@ -715,7 +715,10 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                       {recommendations.map((alert, index) => (
                         <div
                           key={`${alert.code}:${alert.node_id ?? ""}:${index}`}
-                          className={["pipelinesAlertRow", alert.severity === "warning" ? "isWarning" : "isInfo"]
+                          className={[
+                            "pipelinesAlertRow",
+                            alert.severity === "error" ? "isError" : alert.severity === "warning" ? "isWarning" : "isInfo",
+                          ]
                             .filter(Boolean)
                             .join(" ")}
                         >
@@ -733,42 +736,49 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                 </div>
               ) : null}
 
-              <div className="pipelinesEditorGrid">
-                <div className="pipelinesForm">
-                  <label className="pipelinesLabel">
-                    <span>{t("core.ui.pipelines.form.enabled")}</span>
-                    <input
-                      type="checkbox"
-                      checked={draft.enabled !== false}
-                      onChange={(event) => setDraft((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))}
-                    />
-                  </label>
+              <div className="pipelinesEditorControls">
+                <label className="pipelinesInlineToggle">
+                  <input
+                    type="checkbox"
+                    checked={draft.enabled !== false}
+                    onChange={(event) => setDraft((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))}
+                  />
+                  <span>{t("core.ui.pipelines.form.enabled")}</span>
+                </label>
 
-                  <label className="pipelinesLabel">
-                    <span>{t("core.ui.pipelines.form.processing_server")}</span>
-                    <div className="row">
-                      <select
-                        className="pipelinesSelect"
-                        value={draft.processing_server_id ?? "local"}
-                        onChange={(event) =>
-                          setDraft((prev) => (prev ? { ...prev, processing_server_id: event.target.value } : prev))
-                        }
-                      >
-                        {servers.map((server) => (
-                          <option key={server.id} value={server.id}>
-                            {server.id}
-                          </option>
-                        ))}
-                      </select>
-                      {onOpenProcessingServers ? (
-                        <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
-                          {t("core.ui.pipelines.form.processing_server.manage")}
-                        </button>
-                      ) : null}
-                    </div>
-                  </label>
+                <label className="pipelinesControlField pipelinesProcessingServerField">
+                  <span>{t("core.ui.pipelines.form.processing_server")}</span>
+                  <div className="pipelinesControlRow">
+                    <select
+                      className="pipelinesSelect"
+                      value={draft.processing_server_id ?? "local"}
+                      onChange={(event) =>
+                        setDraft((prev) => (prev ? { ...prev, processing_server_id: event.target.value } : prev))
+                      }
+                    >
+                      {servers.map((server) => (
+                        <option key={server.id} value={server.id}>
+                          {server.id}
+                        </option>
+                      ))}
+                    </select>
+                    {onOpenProcessingServers ? (
+                      <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
+                        <i className="fa-solid fa-server" aria-hidden="true" />
+                        {t("core.ui.pipelines.form.processing_server.manage")}
+                      </button>
+                    ) : null}
+                  </div>
+                </label>
 
-                  <div className="pipelinesModes">
+                <div className="pipelinesControlField pipelinesModeField">
+                  <span>{t("core.ui.pipelines.form.editor_mode", {}, "Editor mode")}</span>
+                  <div className="pipelinesModes" role="group" aria-label={t("core.ui.pipelines.form.editor_mode", {}, "Editor mode")}>
+                    {mode === "python" || isPythonLocked ? (
+                      <button className="pillButton isActive" type="button" disabled>
+                        {t("core.ui.pipelines.modes.python_one_way")}
+                      </button>
+                    ) : null}
                     <button
                       className={["pillButton", mode === "interactive" ? "isActive" : ""].filter(Boolean).join(" ")}
                       type="button"
@@ -786,61 +796,60 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                       {t("core.ui.pipelines.modes.json")}
                     </button>
                   </div>
-
-                  <div className="pipelinesHint">{t("core.ui.pipelines.operator_count", { count: operators.length })}</div>
                 </div>
+              </div>
 
-                <div className="pipelinesEditorPanel">
-                  {mode === "python" ? (
-                    <div className="pipelinesMonacoWrap">
-                      <Editor
-                        height="520px"
-                        language="python"
-                        value={pythonText}
-                        onChange={(value) => setPythonText(String(value ?? ""))}
-                        options={{
-                          automaticLayout: true,
-                          fontSize: 13,
-                          minimap: { enabled: false },
-                          scrollBeyondLastLine: false,
-                          wordWrap: "on",
-                        }}
-                      />
-                    </div>
-                  ) : mode === "interactive" ? (
-                    <InteractivePipelineEditor
-                      operatorsById={operatorsById}
-                      camerasIndex={camerasIndex}
-                      pipelineName={draft?.name ?? null}
-                      processingServerId={draft?.processing_server_id ?? "local"}
-                      onOpenProcessingServers={onOpenProcessingServers}
-                      stepOutputsByNodeId={stepOutputsByNodeId}
-                      interactiveSteps={interactiveSteps}
-                      setInteractiveSteps={setInteractiveSteps}
-                      interactiveWarning={interactiveWarning}
-                      setInteractiveWarning={setInteractiveWarning}
-                      interactiveGraph={interactiveGraph}
-                      operatorPanels={operatorPanels}
-                      onOpenTelemetryField={openTelemetryFieldInspector}
+              <div className="pipelinesEditorPanel">
+                {mode === "python" ? (
+                  <div className="pipelinesMonacoWrap">
+                    <Editor
+                      height="520px"
+                      language="python"
+                      value={pythonText}
+                      onChange={(value) => setPythonText(String(value ?? ""))}
+                      options={{
+                        automaticLayout: true,
+                        fontSize: 13,
+                        minimap: { enabled: false },
+                        scrollBeyondLastLine: false,
+                        wordWrap: "on",
+                      }}
                     />
-                  ) : (
-                    <div className="pipelinesMonacoWrap">
-                      <Editor
-                        height="520px"
-                        language="json"
-                        value={graphText}
-                        onChange={(value) => setGraphText(String(value ?? ""))}
-                        options={{
-                          automaticLayout: true,
-                          fontSize: 13,
-                          minimap: { enabled: false },
-                          scrollBeyondLastLine: false,
-                          wordWrap: "on",
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
+                  </div>
+                ) : mode === "interactive" ? (
+                  <InteractivePipelineEditor
+                    operatorsById={operatorsById}
+                    camerasIndex={camerasIndex}
+                    pipelineName={draft?.name ?? null}
+                    processingServerId={draft?.processing_server_id ?? "local"}
+                    onOpenProcessingServers={onOpenProcessingServers}
+                    stepOutputsByNodeId={stepOutputsByNodeId}
+                    interactiveSteps={interactiveSteps}
+                    setInteractiveSteps={setInteractiveSteps}
+                    interactiveWarning={interactiveWarning}
+                    setInteractiveWarning={setInteractiveWarning}
+                    interactiveGraph={interactiveGraph}
+                    pipelineAlerts={recommendations}
+                    operatorPanels={operatorPanels}
+                    onOpenTelemetryField={openTelemetryFieldInspector}
+                  />
+                ) : (
+                  <div className="pipelinesMonacoWrap">
+                    <Editor
+                      height="520px"
+                      language="json"
+                      value={graphText}
+                      onChange={(value) => setGraphText(String(value ?? ""))}
+                      options={{
+                        automaticLayout: true,
+                        fontSize: 13,
+                        minimap: { enabled: false },
+                        scrollBeyondLastLine: false,
+                        wordWrap: "on",
+                      }}
+                    />
+                  </div>
+                )}
               </div>
 
               {compileOutput ? (

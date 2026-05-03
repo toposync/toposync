@@ -1,7 +1,7 @@
 import React from "react";
 import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 
-import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../../../util/api";
+import type { CameraContextsResponse, PipelineAlert, PipelineOperatorDefinition } from "../../../../util/api";
 import { i18n } from "../../../../util/i18n";
 
 import type { CameraAreaOption, DragInsertPosition, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../types";
@@ -26,6 +26,7 @@ type Props = {
   activeCameraContextsError: string | null;
   cameraAreaOptions: CameraAreaOption[];
   stepOutputsByNodeId: Record<string, number> | null;
+  stepAlerts?: PipelineAlert[];
   operatorPanels?: Record<string, PipelineOperatorPanel>;
 
   draggingStepUid: string | null;
@@ -107,6 +108,22 @@ function telemetryMetricForConfigField(operatorId: string, configKey: string): s
   return null;
 }
 
+function alertSeverityRank(severity: PipelineAlert["severity"]): number {
+  if (severity === "error") return 3;
+  if (severity === "warning") return 2;
+  return 1;
+}
+
+function highestAlertSeverity(alerts: PipelineAlert[]): PipelineAlert["severity"] | null {
+  let highest: PipelineAlert["severity"] | null = null;
+  for (const alert of alerts) {
+    if (!highest || alertSeverityRank(alert.severity) > alertSeverityRank(highest)) {
+      highest = alert.severity;
+    }
+  }
+  return highest;
+}
+
 export function InteractiveStepCard({
   step,
   index,
@@ -122,6 +139,7 @@ export function InteractiveStepCard({
   activeCameraContextsError,
   cameraAreaOptions,
   stepOutputsByNodeId,
+  stepAlerts = [],
   operatorPanels = {},
   draggingStepUid,
   dragOverStep,
@@ -169,12 +187,16 @@ export function InteractiveStepCard({
   const hasOperatorPanel = Boolean(operatorPanels[step.operatorId]);
   const shouldShowScalarGrid = scalarEntries.length > 0 && ((!hasOperatorPanel && !shouldHideScalarGrid(step.operatorId)) || step.showAdvanced);
   const shouldShowConfigJson = step.showAdvanced;
+  const issueSeverity = highestAlertSeverity(stepAlerts);
 
   const rowClass = ["pipelinesStepCard"];
   if (draggingStepUid === step.uid) rowClass.push("isDragSource");
   if (dragOverStep?.uid === step.uid) {
     rowClass.push(dragOverStep.position === "before" ? "isDropBefore" : "isDropAfter");
   }
+  if (issueSeverity === "error") rowClass.push("hasError");
+  if (issueSeverity === "warning") rowClass.push("hasWarning");
+  if (issueSeverity === "info") rowClass.push("hasInfo");
 
   const operatorName = operator ? prettyOperatorName(operator.id) : prettyOperatorName(step.operatorId);
   const operatorDescription = operator ? prettyOperatorDescription(operator) : prettyOperatorDescription(step.operatorId);
@@ -186,10 +208,12 @@ export function InteractiveStepCard({
   const stepBodyId = `pipelines-step-body-${step.uid}`;
   const moveUpTitle = t("core.ui.pipelines.editor.step.move_up");
   const moveDownTitle = t("core.ui.pipelines.editor.step.move_down");
+  const issueTitle = stepAlerts.map((alert) => alert.message).filter(Boolean).join("\n");
 
   return (
     <div
       className={rowClass.join(" ")}
+      data-pipeline-step-uid={step.uid}
       onDragOver={(event) => onDragOver(event, step.uid)}
       onDrop={(event) => onDrop(event, step.uid)}
     >
@@ -209,6 +233,18 @@ export function InteractiveStepCard({
             <div className="pipelinesStepStatBadge" title={t("core.ui.pipelines.stats.step.outputs_tooltip")}>
               <i className="fa-solid fa-arrow-right" aria-hidden="true" />
               {integerFormatter.format(stepOutputCount)}
+            </div>
+          ) : null}
+          {issueSeverity ? (
+            <div
+              className={["pipelinesStepIssueBadge", `is${issueSeverity.charAt(0).toUpperCase()}${issueSeverity.slice(1)}`].join(" ")}
+              title={issueTitle || undefined}
+            >
+              <i
+                className={issueSeverity === "error" ? "fa-solid fa-circle-exclamation" : "fa-solid fa-triangle-exclamation"}
+                aria-hidden="true"
+              />
+              {integerFormatter.format(stepAlerts.length)}
             </div>
           ) : null}
         </button>

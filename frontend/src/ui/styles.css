@@ -779,24 +779,73 @@ textarea {
   justify-content: flex-end;
 }
 
-.pipelinesEditorGrid {
-  display: grid;
-  grid-template-columns: 320px 1fr;
-  gap: 12px;
-  min-height: 0;
-  position: relative;
-  z-index: 1;
-}
-
-.pipelinesForm {
+.pipelinesEditorControls {
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 12px;
+  padding: 10px 12px;
   background: rgba(12, 18, 37, 0.55);
   box-shadow: var(--shadow);
-  display: grid;
+  display: flex;
+  align-items: flex-end;
   gap: 12px;
-  align-content: start;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.pipelinesInlineToggle {
+  min-height: var(--control-height-m);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: rgba(15, 23, 48, 0.45);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.pipelinesInlineToggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--color-accent-teal);
+}
+
+.pipelinesControlField {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.pipelinesControlField > span {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.pipelinesControlRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.pipelinesProcessingServerField {
+  flex: 1 1 320px;
+}
+
+.pipelinesProcessingServerField .pipelinesSelect {
+  flex: 1 1 190px;
+  min-width: min(240px, 100%);
+}
+
+.pipelinesModeField {
+  flex: 0 1 auto;
 }
 
 .pipelinesLabel {
@@ -814,6 +863,7 @@ textarea {
 
 .pipelinesEditorPanel {
   min-height: 360px;
+  min-width: 0;
 }
 
 .pipelinesMonacoWrap {
@@ -938,6 +988,11 @@ textarea {
   background: rgba(15, 23, 48, 0.55);
 }
 
+.pipelinesAlertRow.isError {
+  border-color: rgba(239, 68, 68, 0.42);
+  background: rgba(239, 68, 68, 0.07);
+}
+
 .pipelinesAlertRow.isWarning {
   border-color: rgba(251, 191, 36, 0.35);
   background: rgba(251, 191, 36, 0.06);
@@ -972,6 +1027,35 @@ textarea {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.pipelinesChecksCard .cardBody {
+  padding-top: 0;
+}
+
+.pipelinesCheckRow {
+  appearance: none;
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pipelinesCheckRow:disabled {
+  cursor: default;
+}
+
+.pipelinesCheckRow:not(:disabled):hover {
+  border-color: var(--borderStrong);
+  background: color-mix(in srgb, var(--panelSolid) 62%, transparent);
+}
+
+.pipelinesCheckOpenIcon {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  align-self: center;
 }
 
 .pipelinesInteractiveRoot {
@@ -1009,6 +1093,24 @@ textarea {
   border-radius: 14px;
   background: rgba(12, 18, 37, 0.55);
   box-shadow: var(--shadow);
+}
+
+.pipelinesStepCard.hasError {
+  border-color: rgba(239, 68, 68, 0.58);
+  box-shadow:
+    0 0 0 1px rgba(239, 68, 68, 0.24),
+    var(--shadow);
+}
+
+.pipelinesStepCard.hasWarning {
+  border-color: rgba(251, 191, 36, 0.55);
+  box-shadow:
+    0 0 0 1px rgba(251, 191, 36, 0.20),
+    var(--shadow);
+}
+
+.pipelinesStepCard.hasInfo {
+  border-color: rgba(59, 130, 246, 0.42);
 }
 
 .pipelinesStepCard.isDragSource {
@@ -1095,6 +1197,42 @@ textarea {
 }
 
 .pipelinesStepStatBadge i {
+  font-size: 11px;
+}
+
+.pipelinesStepIssueBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 28px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+.pipelinesStepIssueBadge.isError {
+  border: 1px solid rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.14);
+  color: #fecaca;
+}
+
+.pipelinesStepIssueBadge.isWarning {
+  border: 1px solid rgba(251, 191, 36, 0.48);
+  background: rgba(251, 191, 36, 0.12);
+  color: #fde68a;
+}
+
+.pipelinesStepIssueBadge.isInfo {
+  border: 1px solid rgba(59, 130, 246, 0.42);
+  background: rgba(59, 130, 246, 0.10);
+  color: #bfdbfe;
+}
+
+.pipelinesStepIssueBadge i {
   font-size: 11px;
 }
 
@@ -1215,22 +1353,72 @@ textarea {
   border-radius: 12px;
   padding: 10px;
   background: var(--panel2);
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.pipelinesTelemetryHistogramWrap:hover {
+  border-color: color-mix(in srgb, var(--color-accent-teal) 42%, var(--borderStrong));
+}
+
+.pipelinesTelemetryHistogramWrap:focus-visible {
+  outline: 2px solid var(--color-accent-blue);
+  outline-offset: 2px;
+  border-color: color-mix(in srgb, var(--color-accent-blue) 55%, var(--borderStrong));
+}
+
+.pipelinesTelemetryHistogramFrame {
+  position: relative;
 }
 
 .pipelinesTelemetryHistogram {
   width: 100%;
   height: 220px;
   display: block;
+  pointer-events: none;
 }
 
 .pipelinesTelemetryHistogramBar {
   fill: color-mix(in srgb, var(--color-accent-teal) 66%, transparent);
 }
 
+.pipelinesTelemetryPreviewLine {
+  stroke: var(--color-warning);
+  stroke-width: 1.5;
+  stroke-dasharray: 2 2;
+}
+
 .pipelinesTelemetryMarkerLine {
   stroke: var(--color-accent-blue);
   stroke-width: 2;
   stroke-dasharray: 4 3;
+}
+
+.pipelinesTelemetryHistogramHoverValue {
+  position: absolute;
+  top: 8px;
+  transform: translateX(-50%);
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 45%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panelSolid) 92%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
+  white-space: nowrap;
+}
+
+.pipelinesTelemetryHistogramHoverValue.isStart {
+  transform: translateX(0);
+}
+
+.pipelinesTelemetryHistogramHoverValue.isEnd {
+  transform: translateX(-100%);
 }
 
 .pipelinesTelemetryHistogramAxis {
@@ -1760,10 +1948,6 @@ textarea {
 }
 
 @media (max-width: 1100px) {
-  .pipelinesEditorGrid {
-    grid-template-columns: 1fr;
-  }
-
   .pipelinesEditorActions {
     margin-left: 0;
     width: 100%;

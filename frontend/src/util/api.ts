@@ -155,7 +155,7 @@ export type Pipeline = {
 };
 
 export type PipelineAlert = {
-  severity: "info" | "warning";
+  severity: "info" | "warning" | "error";
   code: string;
   message: string;
   suggestion?: string;

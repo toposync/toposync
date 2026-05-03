@@ -1,11 +1,12 @@
 import React, { useCallback, useMemo, useState } from "react";
 import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 
-import type { CamerasIndexResponse, PipelineOperatorDefinition } from "../../../util/api";
+import type { CamerasIndexResponse, PipelineAlert, PipelineOperatorDefinition } from "../../../util/api";
+import { i18n } from "../../../util/i18n";
 
-import { PIPELINE_PRESET_OPERATOR_IDS } from "./constants";
+import { NODE_ID_RE, PIPELINE_PRESET_OPERATOR_IDS } from "./constants";
 import type { DragInsertPosition, InteractiveBuildResult, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "./types";
-import { createInteractiveStep, isRecord, jsonPretty, moveStep, safeJsonParse } from "./utils";
+import { createInteractiveStep, isRecord, jsonPretty, moveStep, prettyOperatorName, safeJsonParse } from "./utils";
 
 import { InteractiveStepsList } from "./editor/InteractiveStepsList";
 import { InteractiveStepsToolbar } from "./editor/InteractiveStepsToolbar";
@@ -23,9 +24,22 @@ type Props = {
   interactiveWarning: string | null;
   setInteractiveWarning: React.Dispatch<React.SetStateAction<string | null>>;
   interactiveGraph: InteractiveBuildResult;
+  pipelineAlerts?: PipelineAlert[];
   operatorPanels?: Record<string, PipelineOperatorPanel>;
   onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
 };
+
+function severityRank(severity: PipelineAlert["severity"]): number {
+  if (severity === "error") return 3;
+  if (severity === "warning") return 2;
+  return 1;
+}
+
+function alertToneClass(severity: PipelineAlert["severity"]): string {
+  if (severity === "error") return "isError";
+  if (severity === "warning") return "isWarning";
+  return "isInfo";
+}
 
 export function InteractivePipelineEditor({
   operatorsById,
@@ -39,9 +53,11 @@ export function InteractivePipelineEditor({
   interactiveWarning,
   setInteractiveWarning,
   interactiveGraph,
+  pipelineAlerts = [],
   operatorPanels = {},
   onOpenTelemetryField,
 }: Props): React.ReactElement {
+  const { t } = i18n.useI18n();
   const [draggingStepUid, setDraggingStepUid] = useState<string | null>(null);
   const [dragOverStep, setDragOverStep] = useState<{ uid: string; position: DragInsertPosition } | null>(null);
 
@@ -103,6 +119,153 @@ export function InteractivePipelineEditor({
   }, [cameraSelectOptions]);
 
   const { activeCameraContexts, activeCameraContextsError, cameraAreaOptions } = useCameraContexts(interactiveCameraId);
+
+  const localStepAlerts = useMemo<PipelineAlert[]>(() => {
+    const alerts: PipelineAlert[] = [];
+    const firstStepByNodeId = new Map<string, InteractiveStep>();
+    interactiveSteps.forEach((step, index) => {
+      const stepLabel = `${index + 1}. ${prettyOperatorName(step.operatorId)}`;
+      const operatorId = String(step.operatorId || "").trim();
+      if (!operatorId || !operatorsById[operatorId]) {
+        alerts.push({
+          severity: "error",
+          code: "interactive_unknown_operator",
+          message: t(
+            "core.ui.pipelines.checks.unknown_operator",
+            { step: stepLabel, operator: operatorId || "" },
+            `Step ${stepLabel} uses an unknown operator.`,
+          ),
+          node_id: step.nodeId || null,
+          operator_id: operatorId || null,
+        });
+      }
+
+      const nodeId = String(step.nodeId || "").trim();
+      if (!nodeId) {
+        alerts.push({
+          severity: "error",
+          code: "interactive_missing_node_id",
+          message: t("core.ui.pipelines.checks.missing_node_id", { step: stepLabel }, `Step ${stepLabel} needs a node id.`),
+          node_id: null,
+          operator_id: operatorId || null,
+        });
+      } else if (!NODE_ID_RE.test(nodeId)) {
+        alerts.push({
+          severity: "error",
+          code: "interactive_invalid_node_id",
+          message: t(
+            "core.ui.pipelines.checks.invalid_node_id",
+            { step: stepLabel, node_id: nodeId },
+            `Step ${stepLabel} has an invalid node id.`,
+          ),
+          suggestion: t(
+            "core.ui.pipelines.checks.invalid_node_id_suggestion",
+            {},
+            "Use letters, numbers, and underscores, starting with a letter or underscore.",
+          ),
+          node_id: nodeId,
+          operator_id: operatorId || null,
+        });
+      } else if (firstStepByNodeId.has(nodeId)) {
+        alerts.push({
+          severity: "error",
+          code: "interactive_duplicate_node_id",
+          message: t(
+            "core.ui.pipelines.checks.duplicate_node_id",
+            { step: stepLabel, node_id: nodeId },
+            `Step ${stepLabel} duplicates node id '${nodeId}'.`,
+          ),
+          suggestion: t("core.ui.pipelines.checks.duplicate_node_id_suggestion", {}, "Give each step a unique node id."),
+          node_id: nodeId,
+          operator_id: operatorId || null,
+        });
+      } else {
+        firstStepByNodeId.set(nodeId, step);
+      }
+
+      const parsed = safeJsonParse(step.configText || "{}");
+      if (!parsed.ok) {
+        alerts.push({
+          severity: "error",
+          code: "interactive_invalid_config_json",
+          message: t(
+            "core.ui.pipelines.checks.invalid_config_json",
+            { step: stepLabel, error: parsed.error },
+            `Step ${stepLabel} has invalid config JSON: ${parsed.error}`,
+          ),
+          node_id: nodeId || null,
+          operator_id: operatorId || null,
+        });
+      } else if (!isRecord(parsed.data)) {
+        alerts.push({
+          severity: "error",
+          code: "interactive_config_must_be_object",
+          message: t(
+            "core.ui.pipelines.checks.config_must_be_object",
+            { step: stepLabel },
+            `Step ${stepLabel} config must be a JSON object.`,
+          ),
+          node_id: nodeId || null,
+          operator_id: operatorId || null,
+        });
+      }
+    });
+    return alerts;
+  }, [interactiveSteps, operatorsById, t]);
+
+  const visibleAlerts = useMemo(() => {
+    const seen = new Set<string>();
+    const combined = [...localStepAlerts, ...pipelineAlerts].filter((alert) => {
+      const message = String(alert.message || "").trim();
+      if (!message) return false;
+      const key = [
+        alert.severity,
+        alert.code,
+        alert.node_id ?? "",
+        alert.operator_id ?? "",
+        message,
+      ].join("\u0000");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const stepIndexByNodeId = new Map(interactiveSteps.map((step, index) => [step.nodeId, index]));
+    return combined.sort((a, b) => {
+      const severityDelta = severityRank(b.severity) - severityRank(a.severity);
+      if (severityDelta) return severityDelta;
+      const aIndex = stepIndexByNodeId.get(String(a.node_id || "")) ?? Number.MAX_SAFE_INTEGER;
+      const bIndex = stepIndexByNodeId.get(String(b.node_id || "")) ?? Number.MAX_SAFE_INTEGER;
+      if (aIndex !== bIndex) return aIndex - bIndex;
+      return String(a.message || "").localeCompare(String(b.message || ""));
+    });
+  }, [interactiveSteps, localStepAlerts, pipelineAlerts]);
+
+  const alertsByNodeId = useMemo(() => {
+    const map = new Map<string, PipelineAlert[]>();
+    for (const alert of visibleAlerts) {
+      const nodeId = String(alert.node_id || "").trim();
+      if (!nodeId) continue;
+      map.set(nodeId, [...(map.get(nodeId) ?? []), alert]);
+    }
+    return map;
+  }, [visibleAlerts]);
+
+  const focusAlertStep = useCallback(
+    (alert: PipelineAlert) => {
+      const nodeId = String(alert.node_id || "").trim();
+      if (!nodeId) return;
+      const step = interactiveSteps.find((item) => item.nodeId === nodeId);
+      if (!step) return;
+      setInteractiveSteps((prev) => prev.map((item) => (item.uid === step.uid ? { ...item, collapsed: false } : item)));
+      window.setTimeout(() => {
+        const el = document.querySelector(`[data-pipeline-step-uid="${step.uid}"]`);
+        if (el instanceof HTMLElement) {
+          el.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
+      }, 0);
+    },
+    [interactiveSteps, setInteractiveSteps],
+  );
 
   const addInteractiveStep = useCallback(
     (operatorId: string) => {
@@ -267,6 +430,46 @@ export function InteractivePipelineEditor({
         </div>
       ) : null}
 
+      {visibleAlerts.length > 0 ? (
+        <div className="card pipelinesChecksCard">
+          <div className="cardTitle">{t("core.ui.pipelines.checks.title", {}, "Pipeline checks")}</div>
+          <div className="cardBody">
+            <div className="pipelinesAlerts">
+              {visibleAlerts.map((alert, index) => {
+                const nodeId = String(alert.node_id || "").trim();
+                const step = nodeId ? interactiveSteps.find((item) => item.nodeId === nodeId) : null;
+                const stepLabel = step
+                  ? `${interactiveSteps.indexOf(step) + 1}. ${prettyOperatorName(step.operatorId)}`
+                  : t("core.ui.pipelines.checks.pipeline_scope", {}, "Pipeline");
+                const canFocus = Boolean(step);
+                return (
+                  <button
+                    key={`${alert.code}:${nodeId}:${index}`}
+                    className={["pipelinesAlertRow", "pipelinesCheckRow", alertToneClass(alert.severity)].join(" ")}
+                    type="button"
+                    disabled={!canFocus}
+                    onClick={() => focusAlertStep(alert)}
+                    title={canFocus ? t("core.ui.pipelines.checks.open_step", {}, "Open step") : undefined}
+                  >
+                    <div className="pipelinesAlertBadge">{alert.severity}</div>
+                    <div className="pipelinesAlertText">
+                      <div className="pipelinesAlertMessage">{alert.message}</div>
+                      {alert.suggestion ? <div className="pipelinesAlertSuggestion">{alert.suggestion}</div> : null}
+                      <div className="pipelinesHint">{stepLabel}</div>
+                    </div>
+                    {canFocus ? (
+                      <div className="pipelinesCheckOpenIcon">
+                        <i className="fa-solid fa-arrow-turn-down" aria-hidden="true" />
+                      </div>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <InteractiveStepsList
         steps={interactiveSteps}
         operatorsById={operatorsById}
@@ -280,6 +483,7 @@ export function InteractivePipelineEditor({
         activeCameraContextsError={activeCameraContextsError}
         cameraAreaOptions={cameraAreaOptions}
         stepOutputsByNodeId={stepOutputsByNodeId}
+        alertsByNodeId={alertsByNodeId}
         operatorPanels={operatorPanels}
         draggingStepUid={draggingStepUid}
         dragOverStep={dragOverStep}

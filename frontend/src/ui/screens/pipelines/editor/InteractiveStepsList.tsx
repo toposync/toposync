@@ -1,7 +1,7 @@
 import React from "react";
 import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 
-import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../../../util/api";
+import type { CameraContextsResponse, PipelineAlert, PipelineOperatorDefinition } from "../../../../util/api";
 import { i18n } from "../../../../util/i18n";
 
 import type { CameraAreaOption, DragInsertPosition, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../types";
@@ -22,6 +22,7 @@ type Props = {
   activeCameraContextsError: string | null;
   cameraAreaOptions: CameraAreaOption[];
   stepOutputsByNodeId: Record<string, number> | null;
+  alertsByNodeId?: Map<string, PipelineAlert[]>;
   operatorPanels?: Record<string, PipelineOperatorPanel>;
 
   draggingStepUid: string | null;
@@ -48,7 +49,13 @@ export function InteractiveStepsList(props: Props): React.ReactElement {
   return (
     <div className="pipelinesStepsList">
       {steps.map((step, index) => (
-        <InteractiveStepCard key={step.uid} step={step} index={index} {...props} />
+        <InteractiveStepCard
+          key={step.uid}
+          step={step}
+          index={index}
+          stepAlerts={props.alertsByNodeId?.get(step.nodeId) ?? []}
+          {...props}
+        />
       ))}
 
       {steps.length === 0 ? (

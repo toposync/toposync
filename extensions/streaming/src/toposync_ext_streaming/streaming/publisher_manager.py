@@ -20,6 +20,39 @@ from .ffmpeg_binary import resolve_ffmpeg_binary
 
 LOGGER = logging.getLogger("toposync.extensions.streaming.publisher")
 
+_CPU_H264_ENCODER = "libx264"
+_HARDWARE_H264_ENCODERS = {
+    "h264_amf",
+    "h264_nvenc",
+    "h264_qsv",
+    "h264_vaapi",
+    "h264_videotoolbox",
+}
+_AUTO_H264_ENCODER_CANDIDATES = (
+    _CPU_H264_ENCODER,
+    "h264_nvenc",
+    "h264_vaapi",
+    "h264_videotoolbox",
+    "h264_qsv",
+    "h264_amf",
+)
+_ENCODER_RUNTIME_PROBE_TIMEOUT_S = 6.0
+_ENCODER_RUNTIME_FAILURE_MARKERS = (
+    "cannot load libcuda",
+    "libcuda.so",
+    "nvcuda.dll",
+    "no capable devices found",
+    "device creation failed",
+    "no device available",
+    "hardware device",
+    "error while opening encoder",
+    "error initializing output stream",
+    "failed to initialize encoder",
+    "failed to initialise encoder",
+    "failed to initialise vaapi",
+    "failed to initialize vaapi",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class PublisherOutput:
@@ -116,6 +149,7 @@ class _PublisherRuntime:
         self._ffmpeg_path = ffmpeg_path
         self._ffmpeg_source = ffmpeg_source
         self._supported_encoders = {str(item).strip() for item in supported_encoders if str(item).strip()}
+        self._disabled_encoders: set[str] = set()
         self._config = config
         self._latest_frame = _LatestFrameSlot()
         self._run_task: asyncio.Task[None] | None = None
@@ -210,7 +244,10 @@ class _PublisherRuntime:
                 raise
             except Exception as exc:
                 self.last_error = str(exc)
-                self._consecutive_failures += 1
+                if self._maybe_disable_failed_auto_encoder():
+                    self._consecutive_failures = 0
+                else:
+                    self._consecutive_failures += 1
             finally:
                 await self._shutdown_process()
 
@@ -352,7 +389,7 @@ class _PublisherRuntime:
         height = int(self._config.encoding.height)
         fps = max(1.0, float(self._config.encoding.fps))
         codec = self._pick_video_codec()
-        hardware_accelerated = codec in {"h264_nvenc", "h264_vaapi", "h264_videotoolbox"}
+        hardware_accelerated = codec in _HARDWARE_H264_ENCODERS
         preset, tune = self._resolve_latency_profile()
         bitrate_kbps = self._config.encoding.bitrate_kbps
         ffmpeg_loglevel = str(os.getenv("TOPOSYNC_STREAMING_FFMPEG_LOGLEVEL", "warning") or "warning").strip() or "warning"
@@ -391,7 +428,7 @@ class _PublisherRuntime:
 
         args.extend(["-an", "-c:v", codec])
 
-        if codec == "libx264":
+        if codec == _CPU_H264_ENCODER:
             args.extend(["-preset", preset])
             if tune:
                 args.extend(["-tune", tune])
@@ -447,9 +484,9 @@ class _PublisherRuntime:
             return requested
 
         if not self._config.encoding.prefer_hardware:
-            return "libx264"
+            return _CPU_H264_ENCODER
 
-        available = self._supported_encoders
+        available = self._supported_encoders - self._disabled_encoders
         platform = sys.platform.lower()
         ordered_candidates: list[str] = []
         if platform.startswith("darwin"):
@@ -462,7 +499,37 @@ class _PublisherRuntime:
         for candidate in ordered_candidates:
             if candidate in available:
                 return candidate
-        return "libx264"
+        return _CPU_H264_ENCODER
+
+    def _maybe_disable_failed_auto_encoder(self) -> bool:
+        codec = str(self.active_codec or "").strip()
+        if not codec or codec == _CPU_H264_ENCODER or codec not in _HARDWARE_H264_ENCODERS:
+            return False
+
+        requested = str(self._config.encoding.video_codec or "").strip().lower()
+        if requested and requested != "auto":
+            return False
+        if codec in self._disabled_encoders:
+            return False
+
+        stderr_tail = "\n".join(self._stderr_tail)
+        if not _looks_like_encoder_runtime_failure(stderr_tail):
+            return False
+
+        self._disabled_encoders.add(codec)
+        detail = _last_log_line(stderr_tail)
+        suffix = f" Last FFmpeg error: {detail}" if detail else ""
+        self.last_error = (
+            f"FFmpeg encoder '{codec}' failed at runtime; falling back to '{_CPU_H264_ENCODER}'."
+            f"{suffix}"
+        )
+        LOGGER.warning(
+            "Disabled FFmpeg encoder '%s' for streaming publisher '%s' after runtime failure.%s",
+            codec,
+            self.output_id,
+            f" Last FFmpeg error: {detail}" if detail else "",
+        )
+        return True
 
     def _resolve_latency_profile(self) -> tuple[str, str]:
         profile = str(self._config.encoding.latency_profile or "normal").strip().lower()
@@ -694,6 +761,21 @@ def _sanitize_component(value: str, *, fallback: str) -> str:
 
 
 def _probe_ffmpeg_encoders(path: str, *, logger: logging.Logger) -> set[str]:
+    announced = _probe_ffmpeg_announced_encoders(path, logger=logger)
+    candidates = [
+        encoder for encoder in _AUTO_H264_ENCODER_CANDIDATES if not announced or encoder in announced
+    ]
+    if not announced:
+        candidates = [_CPU_H264_ENCODER]
+
+    usable: set[str] = set()
+    for encoder in candidates:
+        if _probe_ffmpeg_encoder_runtime(path, encoder, logger=logger):
+            usable.add(encoder)
+    return usable
+
+
+def _probe_ffmpeg_announced_encoders(path: str, *, logger: logging.Logger) -> set[str]:
     try:
         completed = subprocess.run(
             [path, "-hide_banner", "-encoders"],
@@ -705,6 +787,11 @@ def _probe_ffmpeg_encoders(path: str, *, logger: logging.Logger) -> set[str]:
     except Exception as exc:
         logger.warning("Failed to probe FFmpeg encoders: %s", exc)
         return set()
+
+    if completed.returncode != 0:
+        detail = _summarize_process_output(completed.stdout, completed.stderr)
+        suffix = f": {detail}" if detail else ""
+        logger.warning("FFmpeg encoder list probe exited with code %s%s", completed.returncode, suffix)
 
     payload = "\n".join([completed.stdout or "", completed.stderr or ""])
     encoders: set[str] = set()
@@ -727,3 +814,81 @@ def _probe_ffmpeg_encoders(path: str, *, logger: logging.Logger) -> set[str]:
             continue
         encoders.add(encoder_name)
     return encoders
+
+
+def _probe_ffmpeg_encoder_runtime(path: str, encoder: str, *, logger: logging.Logger) -> bool:
+    args = _ffmpeg_encoder_runtime_probe_args(path, encoder)
+    try:
+        completed = subprocess.run(
+            args,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_ENCODER_RUNTIME_PROBE_TIMEOUT_S,
+        )
+    except Exception as exc:
+        logger.info("FFmpeg encoder '%s' failed runtime capability probe: %s", encoder, exc)
+        return False
+
+    if completed.returncode == 0:
+        return True
+
+    detail = _summarize_process_output(completed.stdout, completed.stderr)
+    suffix = f": {detail}" if detail else ""
+    logger.info(
+        "FFmpeg encoder '%s' is advertised but not usable at runtime%s",
+        encoder,
+        suffix,
+    )
+    return False
+
+
+def _ffmpeg_encoder_runtime_probe_args(path: str, encoder: str) -> list[str]:
+    args = [
+        path,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostats",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=64x64:rate=1",
+        "-frames:v",
+        "1",
+        "-an",
+        "-c:v",
+        encoder,
+    ]
+
+    if encoder == _CPU_H264_ENCODER:
+        args.extend(["-preset", "ultrafast", "-tune", "zerolatency", "-pix_fmt", "yuv420p"])
+    elif encoder == "h264_nvenc":
+        args.extend(["-preset", _nvenc_preset_for_latency("normal"), "-pix_fmt", "yuv420p"])
+    elif encoder == "h264_vaapi":
+        args.extend(["-vf", "format=nv12,hwupload"])
+    elif encoder in {"h264_videotoolbox", "h264_qsv", "h264_amf"}:
+        args.extend(["-pix_fmt", "yuv420p"])
+
+    args.extend(["-f", "null", "-"])
+    return args
+
+
+def _looks_like_encoder_runtime_failure(stderr_tail: str) -> bool:
+    text = str(stderr_tail or "").lower()
+    if not text:
+        return False
+    return any(marker in text for marker in _ENCODER_RUNTIME_FAILURE_MARKERS)
+
+
+def _summarize_process_output(stdout: str | None, stderr: str | None, *, max_chars: int = 240) -> str:
+    payload = "\n".join([stdout or "", stderr or ""])
+    line = _last_log_line(payload)
+    if len(line) > max_chars:
+        return line[: max(0, max_chars - 3)].rstrip() + "..."
+    return line
+
+
+def _last_log_line(payload: str | None) -> str:
+    lines = [line.strip() for line in str(payload or "").splitlines() if line.strip()]
+    return lines[-1] if lines else ""

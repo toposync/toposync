@@ -1,8 +1,16 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import type { CompositionElement, ElementType, Main2DEffectTarget, Main2DMarker } from "@toposync/plugin-api";
+import type {
+  CompositionElement,
+  ElementType,
+  Main2DEffectTarget,
+  Main2DMarker,
+  Notification,
+  NotificationRenderer,
+} from "@toposync/plugin-api";
 
 import { i18n } from "../../util/i18n";
+import { Notification2DPinView } from "../notifications/Notification2DPinView";
 import { Icon } from "../Icon";
 import { Modal } from "../Modal";
 import {
@@ -25,6 +33,8 @@ type Props = {
   elementTypesById: Record<string, ElementType>;
   compositionId: string;
   onElementActivated?: (elementId: string, intent?: "click" | "dblclick" | "longpress") => void;
+  activeNotification?: Notification | null;
+  activeNotificationRenderer?: NotificationRenderer | null;
 };
 
 const MARKER_BUTTON_SIZE_PX = 44;
@@ -61,6 +71,8 @@ export function MainViewportVector2D({
   elements,
   elementTypesById,
   onElementActivated,
+  activeNotification,
+  activeNotificationRenderer,
 }: Props): React.ReactElement {
   const { t } = i18n.useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -416,6 +428,46 @@ export function MainViewportVector2D({
     [bounds, elementTypesById, orderedElements, stateVersion],
   );
 
+  const notificationOverlay = useMemo(() => {
+    if (!activeNotification || !activeNotificationRenderer?.create2DOverlay) return null;
+    try {
+      return activeNotificationRenderer.create2DOverlay(
+        { compositionId },
+        activeNotification,
+        { openImage: () => undefined },
+      );
+    } catch (err) {
+      console.warn(`[vector2d:create2DOverlay:${activeNotificationRenderer.id}]`, err);
+      return null;
+    }
+  }, [activeNotification, activeNotificationRenderer, compositionId]);
+
+  useEffect(() => {
+    return () => {
+      notificationOverlay?.dispose?.();
+    };
+  }, [notificationOverlay]);
+
+  const notificationPin = useMemo(() => {
+    if (!notificationOverlay) return null;
+    const pinData = notificationOverlay.pin();
+    if (!pinData) return null;
+
+    const stage = projectWorldToStage({ x: pinData.x, z: pinData.z }, bounds, stageWidth, stageHeight);
+    const screenX = transform.x + stage.x * transform.scale;
+    const screenY = transform.y + stage.y * transform.scale;
+
+    let trail: Array<{ x: number; y: number }> | undefined;
+    if (pinData.trail && pinData.trail.length >= 2) {
+      trail = pinData.trail.map((p) => {
+        const s = projectWorldToStage({ x: p.x, z: p.z }, bounds, stageWidth, stageHeight);
+        return { x: transform.x + s.x * transform.scale, y: transform.y + s.y * transform.scale };
+      });
+    }
+
+    return { screenX, screenY, trail, priority: pinData.priority, closed: pinData.closed };
+  }, [bounds, notificationOverlay, stageHeight, stageWidth, transform]);
+
   const vectorViewBox = useMemo(() => {
     const viewBox = computeMain2DVectorViewBox({
       bounds,
@@ -495,6 +547,15 @@ export function MainViewportVector2D({
       </div>
 
       <div className="main2dButtonsOverlay">
+        {notificationPin ? (
+          <Notification2DPinView
+            screenX={notificationPin.screenX}
+            screenY={notificationPin.screenY}
+            priority={notificationPin.priority}
+            closed={notificationPin.closed}
+            trail={notificationPin.trail}
+          />
+        ) : null}
         {markerEntries.map((entry) => {
           if (entry.kind === "cluster") {
             return (

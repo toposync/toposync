@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { DEFAULT_THEME_ID } from "../../util/theme";
 
 const RENDER_DIR_ID = "render2d";
-const RENDER_VERSION = 7 as const;
+const RENDER_VERSION = 8 as const;
 const HOME_ASSISTANT_ELEMENT_TYPE_ID = "com.toposync.home_assistant.item";
 const MODEL_ELEMENT_TYPE_ID = "com.toposync.models.gltf";
 const IMAGE_ELEMENT_TYPE_ID = "com.toposync.images.image";

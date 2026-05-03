@@ -695,6 +695,8 @@ export function MainScreen({
               elementTypesById={elementTypesById}
               compositionId={activeCompositionId}
               onElementActivated={handleElementActivated}
+              activeNotification={activeNotification}
+              activeNotificationRenderer={activeNotificationRenderer}
             />
           ) : renderMode === "vector2d" ? (
             <MainViewportVector2D
@@ -702,6 +704,8 @@ export function MainScreen({
               elementTypesById={elementTypesById}
               compositionId={activeCompositionId}
               onElementActivated={handleElementActivated}
+              activeNotification={activeNotification}
+              activeNotificationRenderer={activeNotificationRenderer}
             />
           ) : (
             <StreamsDashboard uiVisible={streamsOverlayVisible} isActive={renderMode === "streams"} />

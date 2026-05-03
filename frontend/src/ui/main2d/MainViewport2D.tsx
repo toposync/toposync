@@ -1,8 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { CompositionElement, ElementType } from "@toposync/plugin-api";
+import type {
+  CompositionElement,
+  ElementType,
+  Notification,
+  NotificationRenderer,
+} from "@toposync/plugin-api";
 
 import { i18n } from "../../util/i18n";
+import { Notification2DPinView } from "../notifications/Notification2DPinView";
 import { Icon } from "../Icon";
 import { Modal } from "../Modal";
 import { getOrCreateMain2DRenderManifest } from "./render2dCache";
@@ -13,6 +19,8 @@ type Props = {
   elementTypesById: Record<string, ElementType>;
   compositionId: string;
   onElementActivated?: (elementId: string, intent?: "click" | "dblclick" | "longpress") => void;
+  activeNotification?: Notification | null;
+  activeNotificationRenderer?: NotificationRenderer | null;
 };
 
 type ViewTransform = { scale: number; x: number; y: number };
@@ -22,6 +30,8 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 const HOME_ASSISTANT_ELEMENT_TYPE_ID = "com.toposync.home_assistant.item";
+const HOME_ASSISTANT_DEFAULT_LAMP_INTENSITY = 3.0;
+const HOME_ASSISTANT_MAX_LAMP_INTENSITY = 10.0;
 const HOME_ASSISTANT_BUTTON_SIZE_PX = 44;
 const HOME_ASSISTANT_CLUSTER_THRESHOLD_PX = HOME_ASSISTANT_BUTTON_SIZE_PX * 0.92;
 const HOME_ASSISTANT_REST_POLL_INTERVAL_MS = 1000;
@@ -156,7 +166,14 @@ function climateFlowFromLiveState(
   return { active: true, mode: "neutral", factor: 0.75 };
 }
 
-export function MainViewport2D({ compositionId, elements, elementTypesById, onElementActivated }: Props): React.ReactElement {
+export function MainViewport2D({
+  compositionId,
+  elements,
+  elementTypesById,
+  onElementActivated,
+  activeNotification,
+  activeNotificationRenderer,
+}: Props): React.ReactElement {
   const { t } = i18n.useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -210,7 +227,7 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
         const icon = readString(props.icon).trim() || "house";
         const specialView = readSpecialView(props.special_view);
         const fallbackState = readString(props.primary_state).trim().toLowerCase();
-        const lampIntensity = readNumber(props.lamp_intensity, 1.0);
+        const lampIntensity = readNumber(props.lamp_intensity, HOME_ASSISTANT_DEFAULT_LAMP_INTENSITY);
         const airflowIntensity = readNumber(props.airflow_intensity, 1.0);
         return {
           id: element.id,
@@ -694,7 +711,7 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
 
       if (overlay.kind === "lamp") {
         const boolState = domain ? boolStateForDomain(domain, stateRaw) : null;
-        const intensity = clamp(homeAssistantElement.lampIntensity, 0, 3);
+        const intensity = clamp(homeAssistantElement.lampIntensity, 0, HOME_ASSISTANT_MAX_LAMP_INTENSITY);
         const opacity = boolState === true ? clamp(0.75 * intensity, 0.2, 1.0) : 0;
         out.push({ key: `${overlay.elementId}:lamp`, url: overlay.url, opacity });
         continue;
@@ -711,6 +728,47 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
 
     return out;
   }, [homeAssistantElements, homeAssistantLiveStates, manifest]);
+
+  const notificationOverlay = useMemo(() => {
+    if (!activeNotification || !activeNotificationRenderer?.create2DOverlay) return null;
+    try {
+      return activeNotificationRenderer.create2DOverlay(
+        { compositionId },
+        activeNotification,
+        { openImage: () => undefined },
+      );
+    } catch (err) {
+      console.warn(`[main2d:create2DOverlay:${activeNotificationRenderer.id}]`, err);
+      return null;
+    }
+  }, [activeNotification, activeNotificationRenderer, compositionId]);
+
+  useEffect(() => {
+    return () => {
+      notificationOverlay?.dispose?.();
+    };
+  }, [notificationOverlay]);
+
+  const notificationPin = useMemo(() => {
+    if (!notificationOverlay || !manifest) return null;
+    const pinData = notificationOverlay.pin();
+    if (!pinData) return null;
+
+    const bounds = manifest.bounds;
+    const spanX = Math.max(1e-6, bounds.maxX - bounds.minX);
+    const spanZ = Math.max(1e-6, bounds.maxZ - bounds.minZ);
+    const project = (p: { x: number; z: number }) => {
+      const stageX = ((p.x - bounds.minX) / spanX) * manifest.widthPx;
+      const stageY = ((p.z - bounds.minZ) / spanZ) * manifest.heightPx;
+      return { x: transform.x + stageX * transform.scale, y: transform.y + stageY * transform.scale };
+    };
+
+    const head = project({ x: pinData.x, z: pinData.z });
+    const trail =
+      pinData.trail && pinData.trail.length >= 2 ? pinData.trail.map(project) : undefined;
+
+    return { screenX: head.x, screenY: head.y, trail, priority: pinData.priority, closed: pinData.closed };
+  }, [manifest, notificationOverlay, transform]);
 
   return (
     <div
@@ -763,6 +821,15 @@ export function MainViewport2D({ compositionId, elements, elementTypesById, onEl
           </div>
 
           <div className="main2dButtonsOverlay">
+            {notificationPin ? (
+              <Notification2DPinView
+                screenX={notificationPin.screenX}
+                screenY={notificationPin.screenY}
+                priority={notificationPin.priority}
+                closed={notificationPin.closed}
+                trail={notificationPin.trail}
+              />
+            ) : null}
             {homeAssistantButtonEntries.map((entry) => {
               if (entry.kind === "cluster") {
                 return (

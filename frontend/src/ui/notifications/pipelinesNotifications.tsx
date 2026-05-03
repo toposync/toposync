@@ -3,6 +3,9 @@ import { resolveToposyncUrl } from "@toposync/plugin-api";
 
 import type {
   Notification,
+  Notification2DContext,
+  Notification2DOverlay,
+  Notification2DPin,
   Notification3DOverlay,
   NotificationOverlayActions,
   NotificationRenderer,
@@ -175,6 +178,28 @@ function resolveTrailPoints(notification: Notification): Array<{ x: number; z: n
   return point ? [point] : null;
 }
 
+function createHaloTexture(THREE: Scene3DContext["THREE"]): import("three").Texture {
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const c = canvas.getContext("2d");
+  if (c) {
+    const cx = size / 2;
+    const grad = c.createRadialGradient(cx, cx, 0, cx, cx, cx);
+    grad.addColorStop(0.0, "rgba(255,255,255,1)");
+    grad.addColorStop(0.35, "rgba(255,255,255,0.55)");
+    grad.addColorStop(1.0, "rgba(255,255,255,0)");
+    c.fillStyle = grad;
+    c.fillRect(0, 0, size, size);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 function createPipelines3DOverlay(
   ctx: Scene3DContext,
   notification: Notification,
@@ -207,13 +232,90 @@ function createPipelines3DOverlay(
   line.renderOrder = 10_000;
   group.add(line);
 
-  const markerMat = new THREE.MeshBasicMaterial({ color: 0xff3b81 });
-  markerMat.depthTest = false;
-  markerMat.depthWrite = false;
-  const marker = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 12), markerMat);
-  marker.frustumCulled = false;
-  marker.renderOrder = 10_001;
-  group.add(marker);
+  // ── Marker: pulse rings on the ground + map-pin shape + soft halo ──
+  const PIN_HEX = 0xff3b81;
+  const HEAD_RADIUS = 0.07;
+  const CONE_BASE_RADIUS = 0.05;
+  const CONE_HEIGHT = 0.16;
+  const HEAD_CENTER_Y = CONE_HEIGHT + Math.sqrt(HEAD_RADIUS * HEAD_RADIUS - CONE_BASE_RADIUS * CONE_BASE_RADIUS);
+  const HALO_BASE_SCALE = 0.34;
+  const RING_DURATION = 1.7;
+
+  const markerGroup = new THREE.Group();
+  markerGroup.frustumCulled = false;
+
+  const ringGeom = new THREE.RingGeometry(0.10, 0.13, 48);
+  const pulseRings: { mesh: import("three").Mesh; mat: import("three").MeshBasicMaterial; phase: number }[] = [];
+  for (let i = 0; i < 2; i += 1) {
+    const mat = new THREE.MeshBasicMaterial({
+      color: PIN_HEX,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+    });
+    mat.depthTest = false;
+    mat.depthWrite = false;
+    const mesh = new THREE.Mesh(ringGeom, mat);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.y = 0.006;
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 10_001;
+    markerGroup.add(mesh);
+    pulseRings.push({ mesh, mat, phase: i * 0.5 });
+  }
+
+  // Cone tip pointing down, base at y = CONE_HEIGHT, tip at y = 0.
+  const coneGeom = new THREE.ConeGeometry(CONE_BASE_RADIUS, CONE_HEIGHT, 24, 1);
+  coneGeom.rotateX(Math.PI);
+  coneGeom.translate(0, CONE_HEIGHT / 2, 0);
+  const coneMat = new THREE.MeshBasicMaterial({ color: PIN_HEX });
+  coneMat.depthTest = false;
+  coneMat.depthWrite = false;
+  const cone = new THREE.Mesh(coneGeom, coneMat);
+  cone.frustumCulled = false;
+  cone.renderOrder = 10_002;
+  markerGroup.add(cone);
+
+  const sphereGeom = new THREE.SphereGeometry(HEAD_RADIUS, 24, 24);
+  sphereGeom.translate(0, HEAD_CENTER_Y, 0);
+  const sphereMat = new THREE.MeshBasicMaterial({ color: PIN_HEX });
+  sphereMat.depthTest = false;
+  sphereMat.depthWrite = false;
+  const sphere = new THREE.Mesh(sphereGeom, sphereMat);
+  sphere.frustumCulled = false;
+  sphere.renderOrder = 10_002;
+  markerGroup.add(sphere);
+
+  const coreGeom = new THREE.SphereGeometry(0.024, 16, 16);
+  coreGeom.translate(0, HEAD_CENTER_Y + 0.026, 0);
+  const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 });
+  coreMat.depthTest = false;
+  coreMat.depthWrite = false;
+  const core = new THREE.Mesh(coreGeom, coreMat);
+  core.frustumCulled = false;
+  core.renderOrder = 10_003;
+  markerGroup.add(core);
+
+  const haloTex = createHaloTexture(THREE);
+  const haloMat = new THREE.SpriteMaterial({
+    map: haloTex,
+    color: PIN_HEX,
+    transparent: true,
+    opacity: 0.6,
+    depthTest: false,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+  const halo = new THREE.Sprite(haloMat);
+  halo.scale.set(HALO_BASE_SCALE, HALO_BASE_SCALE, 1);
+  halo.position.set(0, HEAD_CENTER_Y, 0);
+  halo.renderOrder = 10_001;
+  markerGroup.add(halo);
+
+  group.add(markerGroup);
+
+  let closedDim = 1;
+  let elapsed = 0;
 
   function writeTrail(points: Array<{ x: number; z: number }>): void {
     pointCount = 0;
@@ -245,7 +347,7 @@ function createPipelines3DOverlay(
     geometry.setDrawRange(0, pointCount);
     geometry.computeBoundingSphere();
 
-    if (lastX != null && lastZ != null) marker.position.set(lastX, 0.06, lastZ);
+    if (lastX != null && lastZ != null) markerGroup.position.set(lastX, 0, lastZ);
   }
 
   function append(x: number, z: number): void {
@@ -273,7 +375,7 @@ function createPipelines3DOverlay(
     geometry.setDrawRange(0, pointCount);
     geometry.computeBoundingSphere();
 
-    marker.position.set(x, 0.06, z);
+    markerGroup.position.set(x, 0, z);
   }
 
   function applyStyleFromNotification(next: Notification): void {
@@ -285,8 +387,15 @@ function createPipelines3DOverlay(
     else if (prio === "low") material.color.setHex(0x9aa4b2);
     else material.color.setHex(0x00d1ff);
     material.opacity = closed ? 0.35 : 0.9;
-    markerMat.opacity = closed ? 0.4 : 1.0;
-    markerMat.transparent = closed;
+
+    closedDim = closed ? 0.45 : 1;
+    const headOpacity = closed ? 0.5 : 1.0;
+    coneMat.transparent = closed;
+    coneMat.opacity = headOpacity;
+    sphereMat.transparent = closed;
+    sphereMat.opacity = headOpacity;
+    coreMat.opacity = closed ? 0.4 : 0.85;
+    haloMat.opacity = closed ? 0.25 : 0.6;
   }
 
   writeTrail(trail);
@@ -294,6 +403,22 @@ function createPipelines3DOverlay(
 
   return {
     object: group,
+    tick: (deltaSeconds) => {
+      elapsed += deltaSeconds;
+
+      for (const ring of pulseRings) {
+        const tRaw = (elapsed / RING_DURATION + ring.phase) % 1;
+        const t = tRaw < 0 ? tRaw + 1 : tRaw;
+        const scale = 0.45 + t * 2.6;
+        ring.mesh.scale.set(scale, scale, 1);
+        ring.mat.opacity = (1 - t) * 0.7 * closedDim;
+      }
+
+      const haloPulse = 1 + Math.sin(elapsed * 2.4) * 0.08;
+      halo.scale.set(HALO_BASE_SCALE * haloPulse, HALO_BASE_SCALE * haloPulse, 1);
+
+      return true;
+    },
     update: (next) => {
       const nextTrail = resolveTrailPoints(next);
       const nextLast = nextTrail?.length ? nextTrail[nextTrail.length - 1] ?? null : null;
@@ -319,8 +444,16 @@ function createPipelines3DOverlay(
     dispose: () => {
       geometry.dispose();
       material.dispose();
-      marker.geometry.dispose();
-      markerMat.dispose();
+      ringGeom.dispose();
+      for (const ring of pulseRings) ring.mat.dispose();
+      coneGeom.dispose();
+      coneMat.dispose();
+      sphereGeom.dispose();
+      sphereMat.dispose();
+      coreGeom.dispose();
+      coreMat.dispose();
+      haloMat.dispose();
+      haloTex.dispose();
     },
   };
 }
@@ -417,17 +550,56 @@ function renderPipelinesNotification(notification: Notification): React.ReactNod
   );
 }
 
+function createPipelines2DOverlay(
+  ctx: Notification2DContext,
+  notification: Notification,
+  _actions: NotificationOverlayActions,
+): Notification2DOverlay | null {
+  let current: Notification = notification;
+
+  function compute(): Notification2DPin | null {
+    const trail = resolveTrailPoints(current);
+    if (!trail?.length) return null;
+    const last = trail[trail.length - 1] ?? null;
+    if (!last) return null;
+    if (ctx.compositionId && last.compositionId && last.compositionId !== ctx.compositionId) return null;
+
+    const payload = asRecord(current.payload);
+    const lifecycle = asString(payload.lifecycle, "").trim().toLowerCase();
+    const closed = lifecycle === "close" || asString(payload.status, "").trim().toLowerCase() === "closed";
+
+    return {
+      x: last.x,
+      z: last.z,
+      trail: trail.map((p) => ({ x: p.x, z: p.z })),
+      priority: normalizePriority(payload.priority),
+      closed,
+    };
+  }
+
+  if (!compute()) return null;
+
+  return {
+    pin: () => compute(),
+    update: (next) => {
+      current = next;
+    },
+  };
+}
+
 export const builtinNotificationRenderers: NotificationRenderer[] = [
   {
     id: "core.pipelines_event_renderer.v1",
     type: "pipelines.event",
     render: renderPipelinesNotification,
     create3DOverlay: createPipelines3DOverlay,
+    create2DOverlay: createPipelines2DOverlay,
   },
   {
     id: "core.pipelines_tracking_renderer.v1",
     type: "pipelines.tracking",
     render: renderPipelinesNotification,
     create3DOverlay: createPipelines3DOverlay,
+    create2DOverlay: createPipelines2DOverlay,
   },
 ];

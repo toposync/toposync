@@ -88,6 +88,32 @@ export type Notification3DOverlay = {
   dispose?: () => void;
 };
 
+export type Notification2DPin = {
+  /** World-space anchor coordinates. The pin tip lands here. */
+  x: number;
+  z: number;
+  /** Optional history of past world positions. Drawn as a polyline beneath the pin. */
+  trail?: ReadonlyArray<{ x: number; z: number }>;
+  /** Used by the host to tint the pin (cyan/medium by default, red/high, gray/low). */
+  priority?: "low" | "medium" | "high";
+  /** When true the host dims the pin to indicate the notification was closed. */
+  closed?: boolean;
+};
+
+export type Notification2DContext = {
+  /** Composition currently shown in the viewport. Renderers should return null when the pin
+   * belongs to another composition. */
+  compositionId?: string;
+};
+
+export type Notification2DOverlay = {
+  /** Resolve the current pin. Called whenever the host needs to redraw — return null to hide. */
+  pin: () => Notification2DPin | null;
+  /** Called when the same notification arrives with new payload data (e.g. tracking updates). */
+  update?: (notification: Notification) => void;
+  dispose?: () => void;
+};
+
 export type NotificationRenderer = {
   id: string;
   type: string;
@@ -97,6 +123,11 @@ export type NotificationRenderer = {
     notification: Notification,
     actions: NotificationOverlayActions,
   ) => Notification3DOverlay | null;
+  create2DOverlay?: (
+    ctx: Notification2DContext,
+    notification: Notification,
+    actions: NotificationOverlayActions,
+  ) => Notification2DOverlay | null;
 };
 
 export type SettingsPanel = {

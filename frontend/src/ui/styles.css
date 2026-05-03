@@ -155,7 +155,6 @@ textarea {
   display: grid;
   place-items: center;
   cursor: pointer;
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .main2dMarkerButton:hover {
@@ -171,6 +170,103 @@ textarea {
 .main2dMarkerButton.isOff {
   border-color: rgba(239, 68, 68, 0.55);
   background: rgba(239, 68, 68, 0.12);
+}
+
+/* Notification pin overlay (2D) */
+.notification2dPin {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 14;
+  --notification2d-pin-color: #ff3b81;
+}
+
+.notification2dPinShape {
+  position: absolute;
+  left: -16px;
+  top: -48px;
+  shape-rendering: geometricPrecision;
+  filter: drop-shadow(0 5px 8px rgba(0, 0, 0, 0.45));
+}
+
+.notification2dPin.isClosed .notification2dPinShape {
+  opacity: 0.55;
+  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.35));
+}
+
+/* Soft "ground spotlight" — radial gradient that breathes; always visible. */
+.notification2dPinSpot {
+  position: absolute;
+  left: -22px;
+  top: -22px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    var(--notification2d-pin-color) 0%,
+    color-mix(in srgb, var(--notification2d-pin-color) 50%, transparent) 35%,
+    transparent 72%
+  );
+  opacity: 0.5;
+  transform-origin: center;
+  animation: notification2dPinSpot 2.4s ease-in-out infinite;
+}
+
+.notification2dPin.isClosed .notification2dPinSpot {
+  filter: opacity(0.55) saturate(0.6);
+}
+
+@keyframes notification2dPinSpot {
+  0%, 100% { transform: scale(0.92); opacity: 0.38; }
+  50%      { transform: scale(1.10); opacity: 0.60; }
+}
+
+/* Expanding rings — emanate outward from the anchor (radar ping). */
+.notification2dPinPulse {
+  position: absolute;
+  left: -20px;
+  top: -20px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid var(--notification2d-pin-color);
+  box-shadow: 0 0 6px var(--notification2d-pin-color);
+  opacity: 0;
+  transform-origin: center;
+  animation: notification2dPinPulse 2.1s ease-out infinite;
+}
+
+.notification2dPin.isClosed .notification2dPinPulse {
+  filter: opacity(0.45) saturate(0.6);
+}
+
+@keyframes notification2dPinPulse {
+  0%   { transform: scale(0.35); opacity: 0;    }
+  12%  { opacity: 0.9;  }
+  100% { transform: scale(2.1);  opacity: 0;    }
+}
+
+.notification2dTrail {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 13;
+  pointer-events: none;
+  --notification2d-trail-color: #00d1ff;
+  overflow: visible;
+}
+
+.notification2dTrail path {
+  fill: none;
+  stroke: var(--notification2d-trail-color);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.85;
+  filter: drop-shadow(0 0 4px var(--notification2d-trail-color));
 }
 
 /* Pipelines editor */
@@ -5508,7 +5604,7 @@ select {
   border-radius: var(--radius-panel);
   border-color: var(--color-border-subtle);
   background: var(--color-surface-frost);
-  box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
+  box-shadow: none;
 }
 
 .main2dMarkerButton:hover {

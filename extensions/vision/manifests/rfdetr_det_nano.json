@@ -22,7 +22,7 @@
     "type": "rfdetr_detr",
     "output_name": "dets",
     "label_output_name": "labels",
-    "box_format": "xyxy01",
+    "box_format": "cxcywh01",
     "confidence_threshold_default": 0.4,
     "iou_threshold_default": 0.65
   },

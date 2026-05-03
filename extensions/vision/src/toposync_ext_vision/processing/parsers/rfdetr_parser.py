@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 
+from ...registry.builtin_data import resolve_coco91_category_label
 from ...registry.manifests import ModelManifest
 from ..contracts import DetectionObject, normalize_bbox01
 from .generic_onnx_boxes_parser import select_manifest_labels
@@ -53,6 +54,20 @@ def _box_cxcywh_to_xyxy01(row: np.ndarray) -> tuple[float, float, float, float]:
     return normalize_bbox01((cx - half_w, cy - half_h, cx + half_w, cy + half_h))
 
 
+def _normalize_rfdetr_bbox01(row: np.ndarray, manifest: ModelManifest) -> tuple[float, float, float, float]:
+    box_format = str(manifest.postprocess.box_format or "cxcywh01").strip().lower()
+    if box_format == "cxcywh01":
+        return _box_cxcywh_to_xyxy01(row)
+    return normalize_bbox01(tuple(float(value) for value in row[:4]))
+
+
+def _select_label(label_id: int, *, manifest: ModelManifest, num_classes: int) -> str:
+    if num_classes == 91 and str(manifest.classes.source or "").strip().lower() == "coco80":
+        return resolve_coco91_category_label(label_id)
+    labels = select_manifest_labels(manifest)
+    return labels[label_id] if 0 <= label_id < len(labels) else f"class_{label_id}"
+
+
 def parse_rfdetr_outputs(
     outputs_by_name: dict[str, np.ndarray],
     *,
@@ -74,14 +89,15 @@ def parse_rfdetr_outputs(
     flat_scores = probabilities.reshape(-1)
     top_indices = np.argpartition(flat_scores, -top_k)[-top_k:]
     ordered_indices = top_indices[np.argsort(flat_scores[top_indices])[::-1]]
-    labels = select_manifest_labels(manifest)
 
     detections: list[DetectionObject] = []
     for flat_index in ordered_indices:
         query_index = int(flat_index // max(1, num_classes))
         label_id = int(flat_index % max(1, num_classes))
         score = float(flat_scores[int(flat_index)])
-        label = labels[label_id] if 0 <= label_id < len(labels) else f"class_{label_id}"
+        label = _select_label(label_id, manifest=manifest, num_classes=num_classes)
+        if not label:
+            continue
         if categories and label not in categories:
             continue
         detections.append(
@@ -89,7 +105,7 @@ def parse_rfdetr_outputs(
                 label=label,
                 label_id=label_id,
                 score=score,
-                bbox01=_box_cxcywh_to_xyxy01(dets[query_index]),
+                bbox01=_normalize_rfdetr_bbox01(dets[query_index], manifest),
                 model_id=manifest.model_id,
                 metadata={"parser": "rfdetr_detr"},
             )

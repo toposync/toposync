@@ -59,7 +59,7 @@ class ModelPostprocessSpec(BaseModel):
     output_name: str = ""
     label_output_name: str = ""
     mask_output_name: str = ""
-    box_format: Literal["xyxy01", "xyxy_pixels"] = "xyxy01"
+    box_format: Literal["xyxy01", "xyxy_pixels", "cxcywh01"] = "xyxy01"
     mask_format: Literal[
         "full_frame_binary",
         "full_frame_logits",

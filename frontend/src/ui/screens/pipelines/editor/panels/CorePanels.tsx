@@ -879,8 +879,9 @@ type StoreImagesProps = {
 
 export function StoreImagesConfigCard({ config, showAdvanced, onUpdateConfig }: StoreImagesProps): React.ReactElement {
   const { t } = i18n.useI18n();
-  const formatRaw = String((config as any).format ?? "png").trim().toLowerCase() || "png";
-  const format = formatRaw === "jpg" || formatRaw === "jpeg" ? "jpg" : "png";
+  const formatRaw = String((config as any).format ?? "webp").trim().toLowerCase() || "webp";
+  const format =
+    formatRaw === "jpg" || formatRaw === "jpeg" ? "jpg" : formatRaw === "png" ? "png" : "webp";
   const subdir = textConfigValue((config as any).subdir, "pipelines");
   const jpegQualityRaw = Number((config as any).jpeg_quality ?? 85);
   const jpegQuality = Number.isFinite(jpegQualityRaw) ? Math.max(1, Math.min(100, jpegQualityRaw)) : 85;
@@ -970,16 +971,18 @@ export function StoreImagesConfigCard({ config, showAdvanced, onUpdateConfig }: 
           className="pipelinesSelect"
           value={format}
           onChange={(event) => {
-            const nextValue = String(event.target.value || "png").trim().toLowerCase();
-            onUpdateConfig((prev) => ({ ...prev, format: nextValue === "jpg" ? "jpg" : "png" }));
+            const nextValue = String(event.target.value || "webp").trim().toLowerCase();
+            const nextFormat = nextValue === "jpg" ? "jpg" : nextValue === "png" ? "png" : "webp";
+            onUpdateConfig((prev) => ({ ...prev, format: nextFormat }));
           }}
         >
+          <option value="webp">WebP</option>
           <option value="png">PNG</option>
           <option value="jpg">JPG</option>
         </select>
       </label>
 
-      {format === "jpg" ? (
+      {format === "jpg" || format === "webp" ? (
         <label className="pipelinesLabel">
           <span>{t("core.ui.pipelines.panels.store_images.jpeg_quality")}</span>
           <PipelinesNumberInput

@@ -42,6 +42,8 @@ _SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 _SAFE_DIR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _TEMPLATE_RE = re.compile(r"\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}")
 
+ImageStorageFormat = Literal["jpg", "png", "webp"]
+
 
 def _safe_component(value: str | None, *, fallback: str = "unknown", max_len: int = 80) -> str:
     raw = str(value or "").strip()
@@ -224,26 +226,37 @@ def _ensure_original_artifact(packet: Packet) -> Packet:
     return ensure_packet_image_keys(out)
 
 
-def _encode_image_bytes(image: Any, *, fmt: Literal["jpg", "png"], jpeg_quality: int) -> tuple[bytes, str, str]:
-    ext = ".jpg" if fmt == "jpg" else ".png"
-    mime = "image/jpeg" if fmt == "jpg" else "image/png"
+def _image_ext_mime(fmt: ImageStorageFormat) -> tuple[str, str]:
+    if fmt == "jpg":
+        return ".jpg", "image/jpeg"
+    if fmt == "webp":
+        return ".webp", "image/webp"
+    return ".png", "image/png"
 
-    if isinstance(image, (bytes, bytearray, memoryview)):
-        return bytes(image), ext, mime
 
-    if fmt == "png":
-        return _encode_png(image), ".png", "image/png"
+def _sniff_encoded_image(blob: bytes) -> tuple[str, str] | None:
+    if blob.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png", "image/png"
+    if blob.startswith(b"\xff\xd8\xff"):
+        return ".jpg", "image/jpeg"
+    if len(blob) >= 12 and blob[:4] == b"RIFF" and blob[8:12] == b"WEBP":
+        return ".webp", "image/webp"
+    return None
 
-    # JPEG encoding requires an external image library.
+
+def _pil_image_from_array(image: Any) -> Any:
     try:
         from PIL import Image  # type: ignore
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError("JPEG encoding requires Pillow (pip install pillow)") from exc
+        raise RuntimeError("JPG/WebP encoding requires Pillow (pip install pillow)") from exc
+
+    if isinstance(image, Image.Image):
+        return image
 
     try:
         import numpy as np  # type: ignore
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError("JPEG encoding requires numpy") from exc
+        raise RuntimeError("JPG/WebP encoding requires numpy") from exc
 
     arr = np.asarray(image)
     if arr.dtype != np.uint8:
@@ -251,15 +264,45 @@ def _encode_image_bytes(image: Any, *, fmt: Literal["jpg", "png"], jpeg_quality:
     if arr.ndim == 3 and int(arr.shape[2]) == 3:
         arr = arr[..., ::-1]
     elif arr.ndim == 3 and int(arr.shape[2]) == 4:
-        arr = arr[..., [2, 1, 0]]
-    im = Image.fromarray(arr)
-    out = bytearray()
+        arr = arr[..., [2, 1, 0, 3]]
+    elif arr.ndim != 2:
+        raise ValueError("Unsupported image shape for JPG/WebP encoding")
+    return Image.fromarray(np.ascontiguousarray(arr))
+
+
+def _encode_image_bytes(image: Any, *, fmt: ImageStorageFormat, jpeg_quality: int) -> tuple[bytes, str, str]:
+    ext, mime = _image_ext_mime(fmt)
+
+    if isinstance(image, (bytes, bytearray, memoryview)):
+        blob = bytes(image)
+        sniffed = _sniff_encoded_image(blob)
+        if sniffed is not None:
+            return blob, sniffed[0], sniffed[1]
+        return blob, ext, mime
+
+    if fmt == "png":
+        return _encode_png(image), ".png", "image/png"
+
     import io
 
+    im = _pil_image_from_array(image)
     buf = io.BytesIO()
-    im.save(buf, format="JPEG", quality=int(max(1, min(100, jpeg_quality))))
-    out.extend(buf.getvalue())
-    return bytes(out), ".jpg", "image/jpeg"
+    quality = int(max(1, min(100, jpeg_quality)))
+    if fmt == "jpg":
+        if im.mode not in {"L", "RGB"}:
+            im = im.convert("RGB")
+        im.save(buf, format="JPEG", quality=quality)
+        return buf.getvalue(), ".jpg", "image/jpeg"
+
+    try:
+        from PIL import features  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("WebP encoding requires Pillow with WebP support") from exc
+    if not features.check("webp"):
+        raise RuntimeError("WebP encoding requires Pillow with WebP support")
+
+    im.save(buf, format="WEBP", quality=quality, method=4)
+    return buf.getvalue(), ".webp", "image/webp"
 
 
 def _png_chunk(tag: bytes, data: bytes) -> bytes:
@@ -373,7 +416,7 @@ class StoreImagesConfig(BaseModel):
         description="Optional minimum payload.frame_height required to store images. 0 disables the check.",
     )
     subdir: str = "pipelines"
-    format: Literal["jpg", "png"] = "png"
+    format: ImageStorageFormat = "webp"
     jpeg_quality: int = Field(default=85, ge=1, le=100)
     drop_data_after_store: bool = True
     overwrite: bool = False
@@ -1036,7 +1079,7 @@ def _select_notification_data(packet: Packet) -> dict[str, Any]:
 def register_sink_operators(registry: OperatorRegistry) -> None:
     registry.register_operator(
         operator_id="core.store_images",
-        description="Stores selected image artifacts to local /files storage and attaches references.",
+        description="Stores selected image artifacts to local /files storage as WebP/PNG/JPG and attaches references.",
         config_model=StoreImagesConfig,
         inputs=[{"name": "in", "required": True}],
         outputs=[{"name": "out"}],

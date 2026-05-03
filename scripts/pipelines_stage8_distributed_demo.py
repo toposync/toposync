@@ -45,7 +45,7 @@ def build_pipeline() -> Pipeline:
                 "config": {
                     "artifact_names": ["frame_original"],
                     "subdir": "pipelines",
-                    "format": "png",
+                    "format": "webp",
                     "keep_data": False,
                 },
             },

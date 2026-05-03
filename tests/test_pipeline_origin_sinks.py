@@ -188,6 +188,96 @@ def test_store_images_writes_files_and_sets_references(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_store_images_defaults_to_webp(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        files_dir = tmp_path / "files"
+        deps = PipelineRuntimeDependencies(files_dir=files_dir)
+
+        frame = np.zeros((8, 10, 3), dtype=np.uint8)
+        frame[:, :, 2] = 255
+        sequence = [
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {
+                    "frame_ts": 123.456,
+                    "camera_id": "camera-main",
+                    "tracking_id": "track-1",
+                },
+                "artifacts": {
+                    "frame_original": Artifact(
+                        name="frame_original",
+                        data=frame,
+                        mime_type="image/raw",
+                        metadata={"source": "test"},
+                    ),
+                    "frame": Artifact(
+                        name="frame",
+                        data=frame,
+                        mime_type="image/raw",
+                        metadata={"source": "test", "derived_from": "frame_original"},
+                    ),
+                },
+            },
+        ]
+        collector: dict[str, list[Packet]] = {}
+
+        registry = OperatorRegistry()
+        register_builtin_operators(registry)
+        _register_test_source_and_sink(registry, sequence=sequence, collector=collector)
+
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
+                {
+                    "id": "store",
+                    "operator": "core.store_images",
+                    "config": {
+                        "artifact_names": ["frame_original"],
+                        "subdir": "pipelines",
+                        "drop_data_after_store": True,
+                    },
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+            ],
+            "edges": [
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "store", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "store", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
+            ],
+        }
+
+        pipeline = Pipeline(name="stage7_store_images_webp_default", graph=graph)
+        compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+        runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
+        await runtime.run_for(0.5)
+
+        packets = collector.get("sink", [])
+        assert len(packets) == 1
+        art = packets[0].artifacts["frame_original"]
+        assert art.reference
+        assert art.mime_type == "image/webp"
+        assert str(art.reference).endswith(".webp")
+        blob = (files_dir / str(art.reference)).read_bytes()
+        assert blob[:4] == b"RIFF"
+        assert blob[8:12] == b"WEBP"
+
+    asyncio.run(scenario())
+
+
 def test_store_images_saves_with_correct_color_channels(tmp_path: Path) -> None:
     async def scenario() -> None:
         files_dir = tmp_path / "files"

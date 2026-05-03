@@ -431,9 +431,10 @@ Implementação: `extensions/cameras/src/toposync_ext_cameras/pipelines/postproc
 
 Persistência local (por enquanto):
 - escreve arquivos em `files/` e coloca o caminho relativo em `Artifact.reference`
+- usa `format=webp` por padrão; `png` e `jpg` seguem disponíveis para precisão sem perda ou máxima compatibilidade
 - por padrão, **remove `Artifact.data` após persistir** (`drop_data_after_store=true`) para reduzir uso de memória
 - **não** depende de câmera/tracking id “field configurável”: resolve por payload/metadata quando possível
-- converte BGR→RGB ao codificar PNG/JPEG (OpenCV friendly)
+- converte BGR→RGB ao codificar WebP/PNG/JPEG (OpenCV friendly)
 
 Implementação: `src/toposync/runtime/pipelines/operators_sinks.py`.
 

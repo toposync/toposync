@@ -132,7 +132,7 @@ def build_pipeline_from_legacy_camera_rule(
                     "config": {
                         "artifact_names": ["best_frame", "frame_original"],
                         "subdir": "pipelines",
-                        "format": "png",
+                        "format": "webp",
                         "drop_data_after_store": True,
                     },
                 },
@@ -235,7 +235,7 @@ def build_pipeline_from_legacy_camera_rule(
                 "config": {
                     "artifact_names": ["best_frame", "frame_original"],
                     "subdir": "pipelines",
-                    "format": "png",
+                    "format": "webp",
                     "drop_data_after_store": True,
                 },
             },

@@ -1565,7 +1565,7 @@ class CamerasExtension(BaseExtension):
                         "config": {
                             "image_with_fallback": "best_frame,original,treated,segmented",
                             "subdir": "pipelines",
-                            "format": "png",
+                            "format": "webp",
                         },
                     },
                     {
@@ -1674,7 +1674,7 @@ class CamerasExtension(BaseExtension):
                         "config": {
                             "image_with_fallback": "best_frame,original,treated,segmented",
                             "subdir": "pipelines",
-                            "format": "png",
+                            "format": "webp",
                         },
                     },
                     {
@@ -1820,7 +1820,7 @@ class CamerasExtension(BaseExtension):
                         "config": {
                             "image_with_fallback": "best_frame,original,treated,segmented",
                             "subdir": "pipelines",
-                            "format": "png",
+                            "format": "webp",
                         },
                     },
                     {

@@ -2506,6 +2506,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "packaging" },
+    { name = "pillow" },
     { name = "pydantic" },
     { name = "python-multipart" },
     { name = "uvicorn" },
@@ -2532,6 +2533,7 @@ extensions = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "packaging", specifier = ">=24.0" },
+    { name = "pillow", specifier = ">=10,<13" },
     { name = "pydantic", specifier = ">=2.8" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "uvicorn", specifier = ">=0.30" },

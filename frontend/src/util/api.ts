@@ -184,7 +184,7 @@ export type PipelinePreviewFrameRequest = {
   pipeline: Pipeline;
   fallback_snapshot?: PipelinePreviewFallbackSnapshotRequest | null;
   timeout_seconds?: number;
-  format?: "png" | "jpg";
+  format?: "png" | "jpg" | "webp";
   jpeg_quality?: number;
 };
 

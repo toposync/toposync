@@ -8,9 +8,9 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
-from .operators_sinks import _encode_image_bytes
+from .operators_sinks import ImageStorageFormat, _encode_image_bytes
 
 
 _SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -51,7 +51,7 @@ def _encode_and_atomic_write_image(
     image: Any,
     *,
     abs_path: Path,
-    fmt: Literal["jpg", "png"],
+    fmt: ImageStorageFormat,
     jpeg_quality: int,
 ) -> None:
     blob, _ext, _mime = _encode_image_bytes(image, fmt=fmt, jpeg_quality=jpeg_quality)
@@ -95,7 +95,7 @@ class PipelineStepSnapshotStore:
         source_id: str,
         image: Any,
         interval_seconds: float,
-        fmt: Literal["jpg", "png"] = "png",
+        fmt: ImageStorageFormat = "png",
         jpeg_quality: int = 85,
     ) -> str | None:  # noqa: ANN001
         if image is None:
@@ -116,7 +116,7 @@ class PipelineStepSnapshotStore:
             pipeline_name=logical_pipeline,
             node_id=node_id,
             source_id=source_id,
-            filename="input.png" if fmt == "png" else "input.jpg",
+            filename=f"input.{fmt}",
         )
         entry = self._state.get(rel_path)
         if entry is None:

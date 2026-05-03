@@ -83,7 +83,7 @@ from toposync.runtime.pipelines.preview import (
     prepare_preview_pipeline,
     resolve_preview_packet_image,
 )
-from toposync.runtime.pipelines.operators_sinks import _encode_image_bytes
+from toposync.runtime.pipelines.operators_sinks import ImageStorageFormat, _encode_image_bytes
 from toposync.runtime.pipelines.step_snapshots import PipelineStepSnapshotStore
 from toposync.runtime.pipelines.step_snapshots import build_step_input_snapshot_rel_path
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
@@ -504,7 +504,7 @@ class PipelinePreviewFrameRequest(BaseModel):
     pipeline: Pipeline
     fallback_snapshot: PipelinePreviewFallbackSnapshotRequest | None = None
     timeout_seconds: float = Field(default=12.0, ge=0.5, le=60.0)
-    format: Literal["jpg", "png"] = "png"
+    format: ImageStorageFormat = "png"
     jpeg_quality: int = Field(default=85, ge=1, le=100)
 
 

@@ -72,6 +72,40 @@ def test_transmission_urls_include_webrtc_whep_url(tmp_path: Path) -> None:
         assert "Engine is not running. URLs are based on preferred ports." in payload.get("warnings", [])
 
 
+def test_transmission_urls_use_request_host_when_exposed_to_lan(tmp_path: Path) -> None:
+    with _create_client(tmp_path) as client:
+        settings_res = client.patch(
+            "/api/streams/settings",
+            json={
+                "engine": {
+                    "expose_to_lan": True,
+                    "preferred_ports": {"hls": 18759, "webrtc": 18760},
+                }
+            },
+        )
+        assert settings_res.status_code == 200
+
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "LAN stream",
+                "path": "lan-main",
+                "outputs": [{"id": "main_webrtc", "protocol": "webrtc", "enabled": True}],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        urls_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/urls",
+            headers={"host": "192.168.0.100:18756"},
+        )
+        assert urls_res.status_code == 200
+        payload = urls_res.json()
+
+        assert payload["outputs"][0]["url"] == "http://192.168.0.100:18760/lan-main/whep"
+
+
 def test_transmission_urls_primes_demand_hint(tmp_path: Path) -> None:
     with _create_client(tmp_path) as client:
         bridge = _WriterBridgeStub()
@@ -120,10 +154,14 @@ def test_mediamtx_config_renders_webrtc_and_optional_ice_servers() -> None:
         paths=["camera-main"],
         enable_webrtc=True,
         webrtc_ice_servers=["stun:stun.l.google.com:19302", "turn:username:password@turn.example.com:3478"],
+        webrtc_additional_hosts=["192.168.0.100", "homeassistant.local"],
+        webrtc_local_udp_address=":18762",
     )
 
     assert "webrtc: true" in config
     assert "webrtcAddress: 127.0.0.1:8889" in config
+    assert "webrtcAdditionalHosts: ['192.168.0.100', 'homeassistant.local']" in config
+    assert "webrtcLocalUDPAddress: ':18762'" in config
     assert "webrtcICEServers2:" in config
     assert "stun:stun.l.google.com:19302" in config
     assert "turn:username:password@turn.example.com:3478" in config

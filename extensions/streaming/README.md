@@ -125,6 +125,11 @@ Stored under the extension settings as `engine`:
 - `mediamtx_version`: selects which MediaMTX version to download/install.
 - `webrtc_ice_servers`: optional list of `stun:` / `turn:` / `turns:` URLs for NAT traversal.
 
+Additional WebRTC runtime knobs are available as environment variables for container/add-on deployments:
+- `TOPOSYNC_STREAMING_WEBRTC_ADDITIONAL_HOSTS`: comma-separated LAN/public hosts advertised to WebRTC clients.
+- `TOPOSYNC_STREAMING_WEBRTC_LOCAL_UDP_ADDRESS`: static ICE UDP bind address, for example `:18762`.
+- `TOPOSYNC_STREAMING_WEBRTC_LOCAL_TCP_ADDRESS`: optional static ICE TCP bind address when UDP is blocked.
+
 ## Engine distribution (on-demand download)
 
 This repo does not ship MediaMTX binaries. The backend downloads the correct release asset at runtime when the engine is started.
@@ -187,6 +192,7 @@ Source of truth:
 - `rtsp: true` with `rtspTransports: [udp, tcp]`
 - `hls: true` with `hlsVariant: mpegts`
 - `webrtc: true` with WHEP enabled at `/<path>/whep`
+- `webrtcAdditionalHosts` and static ICE addresses when configured through environment variables.
 
 ## Security considerations
 
@@ -629,6 +635,7 @@ To enable LAN viewers:
 
 Notes:
 - `GET /api/streams/transmissions/{id}/urls` chooses the host component based on the current request host when `expose_to_lan` is enabled.
+- If MediaMTX runs behind Docker/NAT, advertise the reachable LAN host with `TOPOSYNC_STREAMING_WEBRTC_ADDITIONAL_HOSTS` and publish the static ICE UDP port configured by `TOPOSYNC_STREAMING_WEBRTC_LOCAL_UDP_ADDRESS`.
 - MediaMTX still restricts publishing and API access to localhost IPs; LAN exposure is for viewer playback only.
 
 ## Troubleshooting

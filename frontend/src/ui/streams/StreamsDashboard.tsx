@@ -40,6 +40,8 @@ const RETRY_BASE_MS = 900;
 const RETRY_MAX_MS = 8000;
 const WEBRTC_SIGNAL_TIMEOUT_MS = 5000;
 const WEBRTC_CONNECT_TIMEOUT_MS = 5000;
+const WEBRTC_WHEP_READY_ATTEMPTS = 8;
+const WEBRTC_WHEP_READY_RETRY_MS = 500;
 
 function readGridMode(): GridMode {
   if (typeof window === "undefined") return "2x2";
@@ -592,21 +594,23 @@ function StreamTilePlayer({
 
       let webRtcError: string | null = null;
       if (webrtcUrl) {
-        const maxAttempts = 3;
-        for (let attemptIndex = 0; attemptIndex < maxAttempts; attemptIndex += 1) {
+        for (let attemptIndex = 0; attemptIndex < WEBRTC_WHEP_READY_ATTEMPTS; attemptIndex += 1) {
           try {
             await startWebRtcPlayback(video);
             return;
           } catch (error) {
             const message = asErrorMessage(error);
             webRtcError = message;
+            const normalizedMessage = message.toLowerCase();
 
             const shouldRetry =
-              attemptIndex < maxAttempts - 1 &&
-              (message.includes("(404)") || message.includes("no stream is available"));
+              attemptIndex < WEBRTC_WHEP_READY_ATTEMPTS - 1 &&
+              (normalizedMessage.includes("(404)") ||
+                normalizedMessage.includes("no stream is available") ||
+                normalizedMessage.includes("path has no one publishing"));
             if (!shouldRetry) break;
 
-            await new Promise((resolve) => window.setTimeout(resolve, 250));
+            await new Promise((resolve) => window.setTimeout(resolve, WEBRTC_WHEP_READY_RETRY_MS));
             if (cancelled) return;
           }
         }

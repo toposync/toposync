@@ -21,6 +21,28 @@ from .mediamtx_processes import kill_mediamtx_processes_for_config_path
 from .platform import detect_mediamtx_platform
 
 
+def _split_env_list(name: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in str(os.getenv(name) or "").replace(";", ",").split(","):
+        value = item.strip()
+        if not value:
+            continue
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+    return out
+
+
+def _env_address(name: str, *, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip()
+
+
 @dataclass(frozen=True, slots=True)
 class MediaMtxPorts:
     rtsp: int
@@ -494,12 +516,20 @@ class MediaMtxEngineManager:
             paths=list(self._engine_paths),
             enable_webrtc=True,
             webrtc_ice_servers=list(getattr(engine_settings, "webrtc_ice_servers", []) or []),
+            webrtc_additional_hosts=_split_env_list("TOPOSYNC_STREAMING_WEBRTC_ADDITIONAL_HOSTS"),
             path_auth=path_auth_entries,
             path_configs=dict(self._path_configs_by_path),
             api_allow_origins=["*"],
             hls_allow_origins=["*"],
             webrtc_allow_origins=["*"],
-            webrtc_local_udp_address=":0",
+            webrtc_local_udp_address=_env_address(
+                "TOPOSYNC_STREAMING_WEBRTC_LOCAL_UDP_ADDRESS",
+                default=":0",
+            ),
+            webrtc_local_tcp_address=_env_address(
+                "TOPOSYNC_STREAMING_WEBRTC_LOCAL_TCP_ADDRESS",
+                default="",
+            ),
         )
 
         config_hash = hashlib.sha256(config_text.encode("utf-8")).hexdigest()

@@ -77,6 +77,7 @@ def render_mediamtx_config(
     paths: list[str],
     enable_webrtc: bool = False,
     webrtc_ice_servers: list[str] | None = None,
+    webrtc_additional_hosts: list[str] | None = None,
     path_auth: list[MediaMTXPathAuth] | None = None,
     path_configs: dict[str, dict[str, object]] | None = None,
     api_allow_origins: list[str] | None = None,
@@ -201,6 +202,13 @@ def render_mediamtx_config(
     if enable_webrtc and ports.webrtc is not None:
         lines.append(f"webrtcAddress: {_address(bind_host, ports.webrtc)}")
         lines.append(f"webrtcAllowOrigins: {_as_yaml_list(default_webrtc_origins)}")
+        normalized_additional_hosts = [
+            str(item or "").strip()
+            for item in (webrtc_additional_hosts or [])
+            if str(item or "").strip()
+        ]
+        if normalized_additional_hosts:
+            lines.append(f"webrtcAdditionalHosts: {_as_yaml_list(normalized_additional_hosts)}")
         lines.append(f"webrtcLocalUDPAddress: {_yaml_single_quote(str(webrtc_local_udp_address or ':0'))}")
         local_tcp = str(webrtc_local_tcp_address or "").strip()
         if local_tcp:

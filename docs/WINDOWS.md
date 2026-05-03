@@ -46,13 +46,8 @@ uv venv .venv --python 3.12
 
 ## 4) Instalar o bundle padrão
 
-Para instalar a partir do TestPyPI:
-
 ```powershell
-uv pip install --upgrade --refresh `
-  --index-url https://test.pypi.org/simple/ `
-  --extra-index-url https://pypi.org/simple/ `
-  toposync==0.4.2
+uv pip install --upgrade --refresh toposync==0.4.2
 ```
 
 Depois rode:
@@ -84,10 +79,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 Para máquinas Windows com GPU compatível via DirectML:
 
 ```powershell
-uv pip install --upgrade --refresh `
-  --index-url https://test.pypi.org/simple/ `
-  --extra-index-url https://pypi.org/simple/ `
-  toposync-vision-directml==0.4.2
+uv pip install --upgrade --refresh toposync-vision-directml==0.4.2
 ```
 
 ### CUDA
@@ -95,10 +87,7 @@ uv pip install --upgrade --refresh `
 Para NVIDIA:
 
 ```powershell
-uv pip install --upgrade --refresh `
-  --index-url https://test.pypi.org/simple/ `
-  --extra-index-url https://pypi.org/simple/ `
-  toposync-vision-cuda==0.4.2
+uv pip install --upgrade --refresh toposync-vision-cuda==0.4.2
 ```
 
 Observação:

@@ -186,6 +186,9 @@ function CamerasSettingsPanelContent({
     });
   }, [cameras, suggestionsResult]);
 
+  const suggestionsWarnings = suggestionsResult?.warnings ?? [];
+  const suggestionsTargets = suggestionsResult?.targets ?? [];
+
   function closeSnapshotModal(): void {
     snapshotAbortRef.current?.abort();
     snapshotAbortRef.current = null;
@@ -460,9 +463,26 @@ function CamerasSettingsPanelContent({
             </div>
           ) : null}
 
+          {suggestionsWarnings.length > 0 ? (
+            <div className="card" style={{ marginTop: 10 }}>
+              <div className="cardBody">
+                {suggestionsWarnings.map((warning, index) => (
+                  <div key={`${warning}-${index}`}>{warning}</div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           {suggestionsResult && !suggestionsLoading && suggestedDevices.length === 0 ? (
             <div className="card" style={{ marginTop: 10 }}>
-              <div className="cardBody">{t("ext.cameras.settings.suggestions.none", {}, "No new cameras found.")}</div>
+              <div className="cardBody">
+                <div>{t("ext.cameras.settings.suggestions.none", {}, "No new cameras found.")}</div>
+                {suggestionsTargets.length > 0 ? (
+                  <div className="cardMeta" style={{ marginTop: 6 }}>
+                    {t("ext.cameras.settings.suggestions.targets", {}, "Discovery targets")}: {suggestionsTargets.join(", ")}
+                  </div>
+                ) : null}
+              </div>
             </div>
           ) : null}
 

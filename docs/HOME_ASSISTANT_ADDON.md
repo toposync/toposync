@@ -19,6 +19,7 @@ https://github.com/toposync/toposync-homeassistant-addon
 - expõe opcionalmente uma porta direta (`18756`) com proxy que remove headers de identidade do Home Assistant
 - usa o `SUPERVISOR_TOKEN` e o proxy interno do Core API automaticamente
 - não exige configurar `host` e `apiKey` manualmente dentro da extensão `home_assistant`
+- permite que a extensão `cameras` use `/network/info` do Supervisor para descobrir o broadcast IPv4 da LAN em buscas ONVIF
 
 ## Modo de execução
 
@@ -34,6 +35,8 @@ No modo `supervisor`, a extensão `home_assistant` passa a usar:
 - REST: `http://supervisor/core/api`
 - websocket: `ws://supervisor/core/websocket`
 - bearer token: `SUPERVISOR_TOKEN`
+
+O add-on também habilita `hassio_api: true` para permitir leitura de `/network/info`. Isso é usado pela extensão `cameras` para enviar WS-Discovery ONVIF também ao broadcast da LAN, sem precisar ativar `host_network`.
 
 ## Segurança
 
@@ -68,7 +71,7 @@ Todos passam a consumir o mesmo bundle publicado.
 
 Por padrão, o Dockerfile do add-on instala:
 
-- `toposync==0.4.1`
+- `toposync-streaming==0.4.2`
 
 Para testar contra outro índice, ajuste os build args:
 

@@ -46,6 +46,7 @@ from .onvif import (
     OnvifProfile,
     discover_onvif_devices,
     normalize_onvif_xaddr,
+    resolve_onvif_discovery_targets,
 )
 
 
@@ -118,6 +119,8 @@ class OnvifDiscoverResponse(BaseModel):
     scanned_at_unix: float = 0.0
     duration_ms: int = 0
     cached: bool = False
+    targets: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
     devices: list[OnvifDiscoveredDeviceInfo] = Field(default_factory=list)
 
 
@@ -916,6 +919,7 @@ class CamerasExtension(BaseExtension):
                 cached = False
                 duration_ms = 0
                 devices: list[OnvifDiscoveredDevice] = []
+                targets, warnings = resolve_onvif_discovery_targets()
 
                 if (
                     not bool(body.force)
@@ -932,6 +936,7 @@ class CamerasExtension(BaseExtension):
                         timeout_s=timeout_s,
                         attempts=2,
                         max_results=128,
+                        targets=targets,
                     )
                     duration_ms = int(max(0.0, (time.time() - started) * 1000.0))
                     onvif_discover_cache_at = time.time()
@@ -963,6 +968,8 @@ class CamerasExtension(BaseExtension):
                 scanned_at_unix=float(time.time()),
                 duration_ms=int(duration_ms),
                 cached=bool(cached),
+                targets=[target.label for target in targets],
+                warnings=list(warnings),
                 devices=out,
             )
 

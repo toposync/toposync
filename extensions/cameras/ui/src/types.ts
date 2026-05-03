@@ -177,5 +177,7 @@ export type OnvifDiscoverResponse = {
   scanned_at_unix: number;
   duration_ms: number;
   cached: boolean;
+  targets?: string[];
+  warnings?: string[];
   devices: OnvifDiscoveredDeviceInfo[];
 };

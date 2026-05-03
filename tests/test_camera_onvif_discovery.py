@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from toposync_ext_cameras.onvif import parse_ws_discovery_probe_matches
+from toposync_ext_cameras.onvif.discovery import resolve_onvif_discovery_targets
+import toposync_ext_cameras.onvif.discovery as discovery_mod
 
 
 def test_parse_ws_discovery_probe_matches_extracts_device_id_xaddrs_and_scopes() -> None:
@@ -33,3 +35,48 @@ def test_parse_ws_discovery_probe_matches_extracts_device_id_xaddrs_and_scopes()
     assert d.name == "Front Gate"
     assert d.hardware == "Tapo C200"
 
+
+def test_resolve_onvif_discovery_targets_includes_configured_targets(monkeypatch) -> None:
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.setenv("TOPOSYNC_ONVIF_DISCOVERY_TARGETS", "192.168.0.255,10.0.0.255:3703")
+
+    targets, warnings = resolve_onvif_discovery_targets()
+
+    assert warnings == []
+    assert [target.label for target in targets] == [
+        "239.255.255.250",
+        "255.255.255.255",
+        "192.168.0.255",
+        "10.0.0.255:3703",
+    ]
+
+
+def test_resolve_onvif_discovery_targets_uses_home_assistant_supervisor_network(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+    monkeypatch.delenv("TOPOSYNC_ONVIF_DISCOVERY_TARGETS", raising=False)
+    monkeypatch.setattr(
+        discovery_mod,
+        "_supervisor_network_info",
+        lambda: {
+            "interfaces": [
+                {
+                    "enabled": True,
+                    "connected": True,
+                    "ipv4": {"ip_address": "192.168.0.100/24"},
+                },
+                {
+                    "enabled": True,
+                    "connected": True,
+                    "ipv4": {"ip_address": "172.30.32.1/23"},
+                },
+            ]
+        },
+    )
+
+    targets, warnings = resolve_onvif_discovery_targets()
+
+    assert warnings == []
+    assert "192.168.0.255" in [target.label for target in targets]
+    assert "172.30.33.255" in [target.label for target in targets]

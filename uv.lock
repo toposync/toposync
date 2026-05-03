@@ -2575,7 +2575,7 @@ requires-dist = [
 
 [[package]]
 name = "toposync-ext-cameras"
-version = "0.1.2"
+version = "0.1.3"
 source = { editable = "extensions/cameras" }
 dependencies = [
     { name = "numpy" },

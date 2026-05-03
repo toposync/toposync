@@ -1960,6 +1960,21 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .pipelinesEditorControls {
+    align-items: stretch;
+  }
+
+  .pipelinesInlineToggle,
+  .pipelinesControlField,
+  .pipelinesModeField {
+    flex: 1 1 100%;
+  }
+
+  .pipelinesProcessingServerField .pipelinesSelect,
+  .pipelinesControlRow .pillButton {
+    flex: 1 1 100%;
+  }
+
   .pipelinesStepHeader {
     flex-direction: column;
     align-items: stretch;
@@ -5403,7 +5418,7 @@ textarea {
 
 .card,
 .railNotifications,
-.pipelinesForm,
+.pipelinesEditorControls,
 .pipelinesInteractiveToolbar,
 .pipelinesStepCard,
 .pipelinesOperatorConfigCard,

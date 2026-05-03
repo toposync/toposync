@@ -50,14 +50,14 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates tini ${TOPOSYNC_APT_PACKAGES} \
  && rm -rf /var/lib/apt/lists/* \
  && python -m venv "${VIRTUAL_ENV}" \
- && python -m pip install --upgrade pip \
- && /bin/sh -lc "python -m pip install --find-links=/wheelhouse ${TOPOSYNC_INSTALL_WHEEL} ${TOPOSYNC_EXTRA_WHEELS} ${TOPOSYNC_EXTRA_PIP_PACKAGES}" \
+ && "${VIRTUAL_ENV}/bin/python" -m pip install --upgrade pip \
+ && "${VIRTUAL_ENV}/bin/python" -m pip install --find-links=/wheelhouse ${TOPOSYNC_INSTALL_WHEEL} ${TOPOSYNC_EXTRA_WHEELS} ${TOPOSYNC_EXTRA_PIP_PACKAGES} \
  && rm -rf /wheelhouse
 
 EXPOSE 8000
 VOLUME ["/data"]
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 CMD python -c "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status == 200 else 1)"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 CMD "${VIRTUAL_ENV}/bin/python" -c "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status == 200 else 1)"
 
 ENTRYPOINT ["tini", "--"]
 CMD ["toposync", "serve", "--host", "0.0.0.0", "--port", "8000", "--data-dir", "/data"]
@@ -84,14 +84,14 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates python3 python3-venv python3-pip tini ${TOPOSYNC_APT_PACKAGES} \
  && rm -rf /var/lib/apt/lists/* \
  && python3 -m venv "${VIRTUAL_ENV}" \
- && python3 -m pip install --upgrade pip \
- && /bin/sh -lc "python3 -m pip install --find-links=/wheelhouse ${TOPOSYNC_INSTALL_WHEEL} ${TOPOSYNC_EXTRA_WHEELS} ${TOPOSYNC_EXTRA_PIP_PACKAGES}" \
+ && "${VIRTUAL_ENV}/bin/python" -m pip install --upgrade pip \
+ && "${VIRTUAL_ENV}/bin/python" -m pip install --find-links=/wheelhouse ${TOPOSYNC_INSTALL_WHEEL} ${TOPOSYNC_EXTRA_WHEELS} ${TOPOSYNC_EXTRA_PIP_PACKAGES} \
  && rm -rf /wheelhouse
 
 EXPOSE 8000
 VOLUME ["/data"]
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 CMD python3 -c "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status == 200 else 1)"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 CMD "${VIRTUAL_ENV}/bin/python" -c "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status == 200 else 1)"
 
 ENTRYPOINT ["tini", "--"]
 CMD ["toposync", "serve", "--host", "0.0.0.0", "--port", "8000", "--data-dir", "/data"]

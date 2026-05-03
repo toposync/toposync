@@ -223,6 +223,33 @@ class NotificationStore:
                 raise RuntimeError("Failed to read notification after insert")
             return rec, True
 
+    def count_by_priority(self) -> dict[str, int]:
+        """Aggregate counts per priority bucket. Buckets match the frontend
+        normalization: anything that is not exactly "low", "medium", or "high"
+        is bucketed as "medium" so totals always sum to total."""
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                SELECT
+                  CASE LOWER(COALESCE(json_extract(payload_json, '$.priority'), ''))
+                    WHEN 'low' THEN 'low'
+                    WHEN 'high' THEN 'high'
+                    ELSE 'medium'
+                  END AS bucket,
+                  COUNT(*) AS n
+                FROM notification
+                GROUP BY bucket
+                """,
+            )
+            rows = cur.fetchall()
+        out = {"low": 0, "medium": 0, "high": 0}
+        for row in rows:
+            bucket = str(row["bucket"]) if row["bucket"] is not None else "medium"
+            if bucket not in out:
+                bucket = "medium"
+            out[bucket] += int(row["n"] or 0)
+        return out
+
     def list_open_pipeline_notifications(self, *, limit: int = 5000) -> list[NotificationRecord]:
         limit_n = max(1, min(50_000, int(limit)))
         with self._lock:

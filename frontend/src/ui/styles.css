@@ -2396,6 +2396,155 @@ textarea {
   pointer-events: none;
 }
 
+.notificationsFilterAnchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.notificationsFilterPopover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  min-width: 260px;
+  max-width: min(320px, calc(100vw - 32px));
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--color-border-subtle, var(--border));
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 24px 56px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+  -webkit-backdrop-filter: blur(var(--glassBlur)) saturate(var(--glassSaturate));
+}
+
+.notificationsFilterSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.notificationsFilterSectionTitle {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted, var(--muted));
+}
+
+.notificationsFilterChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.notificationsFilterChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-subtle, var(--border));
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-muted, var(--muted));
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.notificationsFilterChip:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.notificationsFilterChip.isEnabled {
+  background: rgba(99, 102, 241, 0.18);
+  border-color: rgba(99, 102, 241, 0.55);
+  color: var(--color-text, inherit);
+}
+
+.notificationsFilterChipCount {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  opacity: 0.75;
+  padding-left: 4px;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.notificationsFilterSearch {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border-subtle, var(--border));
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.notificationsFilterSearch:focus {
+  border-color: rgba(99, 102, 241, 0.55);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.notificationsFilterTypeList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.notificationsFilterTypeRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-text, inherit);
+  cursor: pointer;
+  padding: 4px 2px;
+  border-radius: 6px;
+}
+
+.notificationsFilterTypeRow:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.notificationsFilterTypeLabel {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.notificationsFilterFooter {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.notificationsFilterLink {
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  color: var(--color-accent, rgba(129, 140, 248, 1));
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.notificationsFilterLink:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.notificationsFilterLink:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .railScroll {
   flex: 1;
   overflow: auto;

@@ -28,6 +28,7 @@ import {
   getComposition,
   getDevice,
   getNotification,
+  getNotificationsCount,
   getSettings,
   listCompositions,
   listNotifications,
@@ -38,7 +39,7 @@ import {
   renameComposition,
   createAccessUser,
 } from "../util/api";
-import type { AppSettings, AuthUser } from "../util/api";
+import type { AppSettings, AuthUser, NotificationsCount } from "../util/api";
 import { i18n, resolveLocalizedString } from "../util/i18n";
 import { loadRemoteActivate } from "../util/moduleFederation";
 import {
@@ -268,6 +269,10 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const [notificationsCursor, setNotificationsCursor] = useState<number | null>(null);
   const [notificationsHasMore, setNotificationsHasMore] = useState(true);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsCount, setNotificationsCount] = useState<NotificationsCount>({
+    total: 0,
+    by_priority: { low: 0, medium: 0, high: 0 },
+  });
   const [activeNotificationId, setActiveNotificationId] = useState<string | null>(null);
   const lastUserInteractionTsRef = useRef<number>(Date.now());
   const hasManualNotificationSelectionRef = useRef(false);
@@ -619,11 +624,12 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     setNotificationsLoading(true);
     void (async () => {
       try {
-        const page = await listNotifications(null, 40);
+        const [page, count] = await Promise.all([listNotifications(null, 40), getNotificationsCount()]);
         if (cancelled) return;
         setNotifications(sortNotificationsByCreatedDesc(page.notifications ?? []));
         setNotificationsCursor(page.next_cursor ?? null);
         setNotificationsHasMore(page.next_cursor != null);
+        setNotificationsCount(count);
       } catch (err) {
         console.error("Failed to load notifications", err);
       } finally {
@@ -658,6 +664,14 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         upsertNotification(notif, op);
 
         if (op === "insert") {
+          const payload = (notif.payload && typeof notif.payload === "object" ? notif.payload : {}) as Record<string, unknown>;
+          const rawPrio = typeof payload.priority === "string" ? payload.priority.toLowerCase() : "";
+          const bucket: "low" | "medium" | "high" = rawPrio === "low" || rawPrio === "high" ? rawPrio : "medium";
+          setNotificationsCount((prev) => ({
+            total: prev.total + 1,
+            by_priority: { ...prev.by_priority, [bucket]: prev.by_priority[bucket] + 1 },
+          }));
+
           const now = Date.now();
           const idle = now - lastUserInteractionTsRef.current > 12_000;
           const allowAuto = !hasManualNotificationSelectionRef.current || idle;
@@ -1136,6 +1150,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           viewSettings={viewSettings}
           notificationRenderers={notificationRenderers}
           notifications={notifications}
+          notificationsCount={notificationsCount}
+          notificationsHasMore={notificationsHasMore}
           activeNotificationId={activeNotificationId}
           notificationsLoading={notificationsLoading}
           onSelectNotification={selectNotification}

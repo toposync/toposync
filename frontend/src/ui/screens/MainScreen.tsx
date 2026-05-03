@@ -10,7 +10,7 @@ import type {
   ViewSettings,
 } from "@toposync/plugin-api";
 
-import type { Composition, CompositionSummary } from "../../util/api";
+import type { Composition, CompositionSummary, NotificationsCount } from "../../util/api";
 import { i18n } from "../../util/i18n";
 
 import { Modal } from "../Modal";
@@ -33,6 +33,8 @@ type Props = {
   viewSettings: ViewSettings;
   notificationRenderers: NotificationRenderer[];
   notifications: Notification[];
+  notificationsCount: NotificationsCount;
+  notificationsHasMore: boolean;
   activeNotificationId: string | null;
   notificationsLoading: boolean;
   onSelectNotification: (notificationId: string) => void;
@@ -127,7 +129,22 @@ function formatDurationVerbose(secondsRaw: unknown): string | null {
 }
 
 const NOTIFICATIONS_OPEN_STORAGE_KEY = "toposync.notifications_open.v1";
-const NOTIFICATIONS_SHOW_LOW_STORAGE_KEY = "toposync.notifications_show_low.v1";
+const NOTIFICATIONS_FILTER_STORAGE_KEY = "toposync.notifications_filter.v2";
+
+type Priority = "low" | "medium" | "high";
+const ALL_PRIORITIES: Priority[] = ["high", "medium", "low"];
+
+type NotificationsFilter = {
+  priorities: Priority[];
+  types: string[]; // empty array = "all types"
+  query: string;
+};
+
+const DEFAULT_FILTER: NotificationsFilter = {
+  priorities: ["high"],
+  types: [],
+  query: "",
+};
 
 function loadNotificationsOpen(): boolean {
   if (typeof window === "undefined") return true;
@@ -156,14 +173,42 @@ function shouldAutoCloseNotificationsAfterSelect(): boolean {
   }
 }
 
-function loadNotificationsShowLow(): boolean {
-  if (typeof window === "undefined") return false;
+function loadNotificationsFilter(): NotificationsFilter {
+  if (typeof window === "undefined") return { ...DEFAULT_FILTER };
   try {
-    const raw = localStorage.getItem(NOTIFICATIONS_SHOW_LOW_STORAGE_KEY);
-    return raw === "1";
+    const raw = localStorage.getItem(NOTIFICATIONS_FILTER_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_FILTER };
+    const parsed = JSON.parse(raw) as Partial<NotificationsFilter>;
+    const priorities = Array.isArray(parsed.priorities)
+      ? parsed.priorities.filter((p): p is Priority => p === "low" || p === "medium" || p === "high")
+      : DEFAULT_FILTER.priorities;
+    const types = Array.isArray(parsed.types) ? parsed.types.filter((t): t is string => typeof t === "string" && t.length > 0) : [];
+    const query = typeof parsed.query === "string" ? parsed.query : "";
+    return {
+      priorities: priorities.length > 0 ? priorities : DEFAULT_FILTER.priorities,
+      types,
+      query,
+    };
   } catch {
-    return false;
+    return { ...DEFAULT_FILTER };
   }
+}
+
+function isFilterRestrictive(filter: NotificationsFilter): boolean {
+  if (filter.priorities.length < ALL_PRIORITIES.length) return true;
+  if (filter.types.length > 0) return true;
+  if (filter.query.trim().length > 0) return true;
+  return false;
+}
+
+function expectedFilteredCount(filter: NotificationsFilter, count: NotificationsCount): number | null {
+  // We can compute an exact expected count from server counts only when the
+  // type/query filters are inactive — otherwise we have to fall back to
+  // counting loaded matches.
+  if (filter.types.length > 0 || filter.query.trim().length > 0) return null;
+  let total = 0;
+  for (const p of filter.priorities) total += count.by_priority[p] ?? 0;
+  return total;
 }
 
 type RenderMode = "3d" | "2d" | "vector2d" | "streams";
@@ -182,6 +227,8 @@ export function MainScreen({
   viewSettings,
   notificationRenderers,
   notifications,
+  notificationsCount,
+  notificationsHasMore,
   activeNotificationId,
   notificationsLoading,
   onSelectNotification,
@@ -204,7 +251,10 @@ export function MainScreen({
   const [isNotificationDetailsOpen, setIsNotificationDetailsOpen] = useState(false);
   const [notificationImageIndex, setNotificationImageIndex] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(() => loadNotificationsOpen());
-  const [showLowPriority, setShowLowPriority] = useState(() => loadNotificationsShowLow());
+  const [filter, setFilter] = useState<NotificationsFilter>(() => loadNotificationsFilter());
+  const [isFilterPopoverOpen, setIsFilterPopoverOpen] = useState(false);
+  const filterPopoverRef = useRef<HTMLDivElement | null>(null);
+  const filterButtonRef = useRef<HTMLButtonElement | null>(null);
   const [renderMode, setRenderMode] = useState<RenderMode>(() => {
     try {
       const saved = localStorage.getItem(RENDER_MODE_STORAGE_KEY);
@@ -404,11 +454,11 @@ export function MainScreen({
 
   useEffect(() => {
     try {
-      localStorage.setItem(NOTIFICATIONS_SHOW_LOW_STORAGE_KEY, showLowPriority ? "1" : "0");
+      localStorage.setItem(NOTIFICATIONS_FILTER_STORAGE_KEY, JSON.stringify(filter));
     } catch {
       // ignore
     }
-  }, [showLowPriority]);
+  }, [filter]);
 
   useEffect(() => {
     if (activeNotification) return;
@@ -484,19 +534,115 @@ export function MainScreen({
     setActiveElementId(elementId);
   };
 
-  const lowPriorityHiddenCount = useMemo(() => {
-    if (showLowPriority) return 0;
-    return notifications.filter((n) => notificationPriority(n) === "low" && (!activeNotificationId || n.id !== activeNotificationId)).length;
-  }, [activeNotificationId, notifications, showLowPriority]);
+  const availableTypes = useMemo(() => {
+    const seen = new Set<string>();
+    for (const n of notifications) {
+      if (typeof n.type === "string" && n.type) seen.add(n.type);
+    }
+    return Array.from(seen).sort();
+  }, [notifications]);
+
+  const matchesFilter = useCallback(
+    (n: Notification): boolean => {
+      const prio = notificationPriority(n);
+      if (!filter.priorities.includes(prio)) return false;
+      if (filter.types.length > 0 && !filter.types.includes(n.type)) return false;
+      const q = filter.query.trim().toLowerCase();
+      if (q) {
+        const haystack = `${n.title ?? ""}\n${n.description ?? ""}`.toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return true;
+    },
+    [filter],
+  );
 
   const visibleNotifications = useMemo(() => {
-    if (showLowPriority) return notifications;
     return notifications.filter((n) => {
-      const prio = notificationPriority(n);
-      if (prio !== "low") return true;
+      if (matchesFilter(n)) return true;
+      // Always keep the actively-selected notification visible so the
+      // selection isn't silently lost when the user tightens the filter.
       return Boolean(activeNotificationId && n.id === activeNotificationId);
     });
-  }, [activeNotificationId, notifications, showLowPriority]);
+  }, [activeNotificationId, notifications, matchesFilter]);
+
+  const filterRestrictive = useMemo(() => isFilterRestrictive(filter), [filter]);
+
+  const filteredLoadedCount = useMemo(
+    () => notifications.reduce((acc, n) => (matchesFilter(n) ? acc + 1 : acc), 0),
+    [notifications, matchesFilter],
+  );
+
+  // Server-side total for the current filter when it's expressible there
+  // (priorities only). Otherwise null and we display the loaded-matches
+  // figure with a "+" suffix when more pages remain.
+  const expectedTotal = useMemo(() => expectedFilteredCount(filter, notificationsCount), [filter, notificationsCount]);
+
+  const badgeLabel = useMemo(() => {
+    if (expectedTotal != null) {
+      if (expectedTotal <= 0) return null;
+      return expectedTotal > 999 ? "999+" : String(expectedTotal);
+    }
+    if (filteredLoadedCount <= 0) return null;
+    const suffix = notificationsHasMore ? "+" : "";
+    const cap = filteredLoadedCount > 999 ? "999+" : `${filteredLoadedCount}${suffix}`;
+    return cap;
+  }, [expectedTotal, filteredLoadedCount, notificationsHasMore]);
+
+  const hiddenByFilterCount = useMemo(() => {
+    if (!filterRestrictive) return 0;
+    return notifications.length - filteredLoadedCount;
+  }, [filterRestrictive, notifications.length, filteredLoadedCount]);
+
+  // When a restrictive filter leaves few visible items but more pages exist,
+  // proactively pull more so the user isn't staring at an empty list.
+  useEffect(() => {
+    if (!filterRestrictive) return;
+    if (notificationsLoading) return;
+    if (!notificationsHasMore) return;
+    if (filteredLoadedCount >= 12) return;
+    onLoadMoreNotifications();
+  }, [filterRestrictive, notificationsLoading, notificationsHasMore, filteredLoadedCount, onLoadMoreNotifications]);
+
+  // Close the filter popover when clicking outside.
+  useEffect(() => {
+    if (!isFilterPopoverOpen) return;
+    function onPointerDown(event: MouseEvent | TouchEvent): void {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (filterPopoverRef.current?.contains(target)) return;
+      if (filterButtonRef.current?.contains(target)) return;
+      setIsFilterPopoverOpen(false);
+    }
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key === "Escape") setIsFilterPopoverOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isFilterPopoverOpen]);
+
+  const togglePriorityFilter = useCallback((prio: Priority) => {
+    setFilter((prev) => {
+      const has = prev.priorities.includes(prio);
+      const next = has ? prev.priorities.filter((p) => p !== prio) : [...prev.priorities, prio];
+      // Don't allow zero priorities — falls back to default.
+      return { ...prev, priorities: next.length > 0 ? next : DEFAULT_FILTER.priorities };
+    });
+  }, []);
+
+  const toggleTypeFilter = useCallback((type: string) => {
+    setFilter((prev) => {
+      const has = prev.types.includes(type);
+      const next = has ? prev.types.filter((t) => t !== type) : [...prev.types, type];
+      return { ...prev, types: next };
+    });
+  }, []);
+
+  const clearFilter = useCallback(() => setFilter({ ...DEFAULT_FILTER }), []);
 
   const renderModeLabel =
     renderMode === "3d"
@@ -640,23 +786,106 @@ export function MainScreen({
                   <Icon name="circle-info" />
                 </button>
 
-                <button
-                  className={["iconButton", showLowPriority ? "iconButtonPrimary" : ""].filter(Boolean).join(" ")}
-                  type="button"
-                  aria-label={
-                    showLowPriority
-                      ? t("core.ui.notifications.hide_low", {}, "Hide low priority")
-                      : t("core.ui.notifications.show_low", {}, "Show low priority")
-                  }
-                  title={
-                    showLowPriority
-                      ? t("core.ui.notifications.hide_low", {}, "Hide low priority")
-                      : t("core.ui.notifications.show_low", {}, "Show low priority")
-                  }
-                  onClick={() => setShowLowPriority((prev) => !prev)}
-                >
-                  <Icon name={showLowPriority ? "eye" : "eye-slash"} />
-                </button>
+                <div className="notificationsFilterAnchor">
+                  <button
+                    ref={filterButtonRef}
+                    className={["iconButton", filterRestrictive ? "iconButtonPrimary" : ""].filter(Boolean).join(" ")}
+                    type="button"
+                    aria-label={t("core.ui.notifications.filter.aria", {}, "Filter notifications")}
+                    title={t("core.ui.notifications.filter.aria", {}, "Filter notifications")}
+                    aria-expanded={isFilterPopoverOpen}
+                    onClick={() => setIsFilterPopoverOpen((prev) => !prev)}
+                  >
+                    <Icon name="filter" />
+                  </button>
+
+                  {isFilterPopoverOpen ? (
+                    <div className="notificationsFilterPopover" ref={filterPopoverRef} role="dialog">
+                      <div className="notificationsFilterSection">
+                        <div className="notificationsFilterSectionTitle">
+                          {t("core.ui.notifications.filter.priority", {}, "Priority")}
+                        </div>
+                        <div className="notificationsFilterChips">
+                          {ALL_PRIORITIES.map((prio) => {
+                            const enabled = filter.priorities.includes(prio);
+                            const count = notificationsCount.by_priority[prio] ?? 0;
+                            const label = t(`core.ui.notifications.filter.priority.${prio}`, {}, prio);
+                            return (
+                              <button
+                                key={prio}
+                                type="button"
+                                className={["notificationsFilterChip", `prio_${prio}`, enabled ? "isEnabled" : ""].filter(Boolean).join(" ")}
+                                onClick={() => togglePriorityFilter(prio)}
+                                aria-pressed={enabled}
+                              >
+                                <span className={["notificationPriorityDot", prio === "high" ? "isHigh" : prio === "low" ? "isLow" : "isMedium"].join(" ")} aria-hidden="true" />
+                                <span>{label}</span>
+                                <span className="notificationsFilterChipCount">{count > 999 ? "999+" : count}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="notificationsFilterSection">
+                        <label className="notificationsFilterSectionTitle" htmlFor="notificationsFilterSearch">
+                          {t("core.ui.notifications.filter.search", {}, "Search")}
+                        </label>
+                        <input
+                          id="notificationsFilterSearch"
+                          type="search"
+                          className="notificationsFilterSearch"
+                          placeholder={t("core.ui.notifications.filter.search_placeholder", {}, "Title or description")}
+                          value={filter.query}
+                          onChange={(e) => setFilter((prev) => ({ ...prev, query: e.target.value }))}
+                        />
+                      </div>
+
+                      {availableTypes.length > 1 ? (
+                        <div className="notificationsFilterSection">
+                          <div className="notificationsFilterSectionTitle">
+                            {t("core.ui.notifications.filter.types", {}, "Types")}
+                          </div>
+                          <div className="notificationsFilterTypeList">
+                            {availableTypes.map((type) => {
+                              const enabled = filter.types.length === 0 || filter.types.includes(type);
+                              return (
+                                <label key={type} className="notificationsFilterTypeRow">
+                                  <input
+                                    type="checkbox"
+                                    checked={enabled}
+                                    onChange={() => toggleTypeFilter(type)}
+                                  />
+                                  <span className="notificationsFilterTypeLabel">{type}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                          {filter.types.length > 0 ? (
+                            <button
+                              type="button"
+                              className="notificationsFilterLink"
+                              onClick={() => setFilter((prev) => ({ ...prev, types: [] }))}
+                            >
+                              {t("core.ui.notifications.filter.types_all", {}, "Show all types")}
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      <div className="notificationsFilterFooter">
+                        <button
+                          type="button"
+                          className="notificationsFilterLink"
+                          onClick={clearFilter}
+                          disabled={!filterRestrictive}
+                        >
+                          {t("core.ui.notifications.filter.reset", {}, "Reset to defaults")}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
 
                 <button
                   className="iconButton notificationsCollapseButton"
@@ -674,10 +903,19 @@ export function MainScreen({
               {visibleNotifications.length === 0 ? (
                 <div className="card">
                   <div className="cardBody">
-                    {lowPriorityHiddenCount
-                      ? t("core.ui.notifications.low_hidden", { count: lowPriorityHiddenCount }, "{{count}} low priority notifications hidden.")
+                    {filterRestrictive && hiddenByFilterCount > 0
+                      ? t(
+                          "core.ui.notifications.filtered_empty",
+                          { count: hiddenByFilterCount },
+                          "{{count}} notifications hidden by filter.",
+                        )
                       : t("core.ui.notifications_empty")}
                   </div>
+                  {filterRestrictive ? (
+                    <button type="button" className="notificationsFilterLink" onClick={clearFilter}>
+                      {t("core.ui.notifications.filter.reset", {}, "Reset to defaults")}
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
               {visibleNotifications.map((n) => {
@@ -750,8 +988,8 @@ export function MainScreen({
               onClick={() => setNotificationsOpen(true)}
             >
               <Icon name="bell" />
-              {visibleNotifications.length > 0 ? (
-                <span className="notificationsToggleBadge">{visibleNotifications.length}</span>
+              {badgeLabel ? (
+                <span className="notificationsToggleBadge">{badgeLabel}</span>
               ) : null}
             </button>
           </div>

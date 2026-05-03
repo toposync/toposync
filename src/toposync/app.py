@@ -3921,6 +3921,14 @@ def create_app() -> FastAPI:
         items, next_cursor = await runtime.list(before=before, limit=limit)
         return {"notifications": items, "next_cursor": next_cursor}
 
+    @app.get("/api/notifications/count")
+    async def count_notifications(request: Request) -> dict[str, Any]:
+        _require(request, action="core:notifications:read")
+        runtime: NotificationsRuntime = request.app.state.notifications
+        by_prio = await runtime.count_by_priority()
+        total = sum(by_prio.values())
+        return {"total": total, "by_priority": by_prio}
+
     @app.get("/api/notifications/stream")
     async def notifications_stream(request: Request) -> StreamingResponse:  # noqa: ARG001
         _require(request, action="core:notifications:stream")

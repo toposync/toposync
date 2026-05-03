@@ -40,6 +40,9 @@ class NotificationsRuntime:
         records, next_cursor = await asyncio.to_thread(self.store.list, before=before, limit=limit)
         return ([_to_public(r) for r in records], next_cursor)
 
+    async def count_by_priority(self) -> dict[str, int]:
+        return await asyncio.to_thread(self.store.count_by_priority)
+
     async def get(self, notification_id: str) -> dict[str, Any] | None:
         rec = await asyncio.to_thread(self.store.get, notification_id)
         return _to_public(rec) if rec is not None else None

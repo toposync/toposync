@@ -644,6 +644,11 @@ export type NotificationsPage = {
   next_cursor: number | null;
 };
 
+export type NotificationsCount = {
+  total: number;
+  by_priority: { low: number; medium: number; high: number };
+};
+
 export type StreamingTransmissionOutput = {
   id: string;
   protocol: "hls" | "rtsp" | "webrtc";
@@ -1055,6 +1060,21 @@ export async function listNotifications(before: number | null = null, limit = 40
   if (!res.ok) throw new Error(`Failed to list notifications: ${res.status}`);
   const body = (await res.json()) as { notifications?: Notification[]; next_cursor?: number | null };
   return { notifications: body.notifications ?? [], next_cursor: body.next_cursor ?? null };
+}
+
+export async function getNotificationsCount(): Promise<NotificationsCount> {
+  const res = await fetch("/api/notifications/count");
+  if (!res.ok) throw new Error(`Failed to count notifications: ${res.status}`);
+  const body = (await res.json()) as Partial<NotificationsCount>;
+  const by = body.by_priority ?? { low: 0, medium: 0, high: 0 };
+  return {
+    total: typeof body.total === "number" ? body.total : 0,
+    by_priority: {
+      low: typeof by.low === "number" ? by.low : 0,
+      medium: typeof by.medium === "number" ? by.medium : 0,
+      high: typeof by.high === "number" ? by.high : 0,
+    },
+  };
 }
 
 export async function getNotification(notificationId: string): Promise<Notification> {

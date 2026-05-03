@@ -38,6 +38,7 @@ type Props = {
 
   onUpdateStep: (uid: string, patch: Partial<InteractiveStep>) => void;
   onRemoveStep: (uid: string) => void;
+  onMoveStep: (uid: string, direction: "up" | "down") => void;
   onUpdateStepScalar: (uid: string, key: string, value: string | number | boolean) => void;
   onUpdateStepConfig: (uid: string, updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
   onInsertStepAfter: (afterUid: string, operatorId: string, defaultsOverride?: Record<string, unknown>) => void;
@@ -130,6 +131,7 @@ export function InteractiveStepCard({
   onDrop,
   onUpdateStep,
   onRemoveStep,
+  onMoveStep,
   onUpdateStepScalar,
   onUpdateStepConfig,
   onInsertStepAfter,
@@ -178,6 +180,12 @@ export function InteractiveStepCard({
   const operatorDescription = operator ? prettyOperatorDescription(operator) : prettyOperatorDescription(step.operatorId);
   const stepIndexLabel = `${index + 1}.`;
   const stepOutputCount = stepOutputsByNodeId ? Number(stepOutputsByNodeId[step.nodeId] ?? 0) : null;
+  const canMoveUp = index > 0;
+  const canMoveDown = index < steps.length - 1;
+  const expandToggleTitle = step.collapsed ? t("core.ui.pipelines.editor.step.expand") : t("core.ui.pipelines.editor.step.collapse");
+  const stepBodyId = `pipelines-step-body-${step.uid}`;
+  const moveUpTitle = t("core.ui.pipelines.editor.step.move_up");
+  const moveDownTitle = t("core.ui.pipelines.editor.step.move_down");
 
   return (
     <div
@@ -186,7 +194,15 @@ export function InteractiveStepCard({
       onDrop={(event) => onDrop(event, step.uid)}
     >
       <div className="pipelinesStepHeader">
-        <div className="pipelinesStepHeaderMain">
+        <button
+          className="pipelinesStepHeaderMain pipelinesStepHeaderToggle"
+          type="button"
+          onClick={() => onUpdateStep(step.uid, { collapsed: !step.collapsed })}
+          title={expandToggleTitle}
+          aria-label={expandToggleTitle}
+          aria-expanded={!step.collapsed}
+          aria-controls={stepBodyId}
+        >
           <div className="pipelinesStepIndex">{stepIndexLabel}</div>
           <div className="pipelinesStepTitle">{operatorName}</div>
           {stepOutputCount !== null ? (
@@ -195,9 +211,19 @@ export function InteractiveStepCard({
               {integerFormatter.format(stepOutputCount)}
             </div>
           ) : null}
-        </div>
+        </button>
 
         <div className="pipelinesStepHeaderActions">
+          <button
+            className="iconButton"
+            type="button"
+            onClick={() => onUpdateStep(step.uid, { collapsed: !step.collapsed })}
+            title={expandToggleTitle}
+            aria-label={expandToggleTitle}
+          >
+            <i className={step.collapsed ? "fa-solid fa-eye" : "fa-solid fa-eye-slash"} aria-hidden="true" />
+          </button>
+
           <button
             className="iconButton"
             type="button"
@@ -212,10 +238,23 @@ export function InteractiveStepCard({
           <button
             className="iconButton"
             type="button"
-            onClick={() => onUpdateStep(step.uid, { collapsed: !step.collapsed })}
-            title={step.collapsed ? t("core.ui.pipelines.editor.step.expand") : t("core.ui.pipelines.editor.step.collapse")}
+            onClick={() => onMoveStep(step.uid, "up")}
+            title={moveUpTitle}
+            aria-label={moveUpTitle}
+            disabled={!canMoveUp}
           >
-            <i className={step.collapsed ? "fa-solid fa-chevron-down" : "fa-solid fa-chevron-up"} aria-hidden="true" />
+            <i className="fa-solid fa-arrow-up-long" aria-hidden="true" />
+          </button>
+
+          <button
+            className="iconButton"
+            type="button"
+            onClick={() => onMoveStep(step.uid, "down")}
+            title={moveDownTitle}
+            aria-label={moveDownTitle}
+            disabled={!canMoveDown}
+          >
+            <i className="fa-solid fa-arrow-down-long" aria-hidden="true" />
           </button>
 
           <button
@@ -230,7 +269,7 @@ export function InteractiveStepCard({
       </div>
 
       {!step.collapsed ? (
-        <div className="pipelinesStepBody">
+        <div className="pipelinesStepBody" id={stepBodyId}>
           {operator ? <div className="pipelinesStepDescription">{operatorDescription}</div> : null}
           {operatorCaps.has("sink") && index < steps.length - 1 ? (
             <div className="pipelinesStepHint">{t("core.ui.pipelines.editor.step.parallel_sink_hint")}</div>

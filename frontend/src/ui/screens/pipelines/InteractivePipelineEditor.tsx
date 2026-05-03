@@ -141,6 +141,23 @@ export function InteractivePipelineEditor({
     [setInteractiveSteps],
   );
 
+  const moveInteractiveStep = useCallback(
+    (uid: string, direction: "up" | "down") => {
+      setInteractiveSteps((prev) => {
+        const currentIndex = prev.findIndex((step) => step.uid === uid);
+        if (currentIndex < 0) return prev;
+        const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+        if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+
+        const next = prev.slice();
+        const [step] = next.splice(currentIndex, 1);
+        next.splice(targetIndex, 0, step);
+        return next;
+      });
+    },
+    [setInteractiveSteps],
+  );
+
   const updateInteractiveStepScalar = useCallback(
     (uid: string, key: string, value: string | number | boolean) => {
       setInteractiveSteps((prev) =>
@@ -272,6 +289,7 @@ export function InteractivePipelineEditor({
         onDrop={dropStep}
         onUpdateStep={updateInteractiveStep}
         onRemoveStep={removeInteractiveStep}
+        onMoveStep={moveInteractiveStep}
         onUpdateStepScalar={updateInteractiveStepScalar}
         onUpdateStepConfig={updateInteractiveStepConfig}
         onInsertStepAfter={insertInteractiveStepAfter}

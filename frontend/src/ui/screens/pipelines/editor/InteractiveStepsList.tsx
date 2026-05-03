@@ -34,6 +34,7 @@ type Props = {
 
   onUpdateStep: (uid: string, patch: Partial<InteractiveStep>) => void;
   onRemoveStep: (uid: string) => void;
+  onMoveStep: (uid: string, direction: "up" | "down") => void;
   onUpdateStepScalar: (uid: string, key: string, value: string | number | boolean) => void;
   onUpdateStepConfig: (uid: string, updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
   onInsertStepAfter: (afterUid: string, operatorId: string, defaultsOverride?: Record<string, unknown>) => void;

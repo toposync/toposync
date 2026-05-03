@@ -2501,7 +2501,7 @@ wheels = [
 
 [[package]]
 name = "toposync-core"
-version = "0.4.1"
+version = "0.4.2"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -2556,7 +2556,7 @@ extensions = [
 
 [[package]]
 name = "toposync-ext-ai"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "extensions/ai" }
 dependencies = [
     { name = "httpx" },
@@ -2661,7 +2661,7 @@ requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
 
 [[package]]
 name = "toposync-ext-vision"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "extensions/vision" }
 dependencies = [
     { name = "huggingface-hub" },

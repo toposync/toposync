@@ -40,6 +40,7 @@ import {
   emptyGraph,
   isRecord,
   jsonPretty,
+  pythonSourceFromGraph,
   safeJsonParse,
 } from "./pipelines/utils";
 
@@ -269,6 +270,20 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
         return;
       }
       setGraphText(jsonPretty(interactiveGraph.graph));
+    }
+
+    if (nextMode === "python" && mode !== "python" && !pythonText.trim()) {
+      const resolved = resolveGraphFromActiveMode();
+      if (!resolved.ok) {
+        setError(resolved.message);
+        return;
+      }
+      const generated = pythonSourceFromGraph(resolved.graph, operatorsById);
+      if (!generated.ok) {
+        setError(generated.message);
+        return;
+      }
+      setPythonText(generated.source);
     }
 
     setError(null);

@@ -31,6 +31,265 @@ export function jsonPretty(value: unknown): string {
   }
 }
 
+const PYTHON_IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const PYTHON_KEYWORDS = new Set([
+  "False",
+  "None",
+  "True",
+  "and",
+  "as",
+  "assert",
+  "async",
+  "await",
+  "break",
+  "class",
+  "continue",
+  "def",
+  "del",
+  "elif",
+  "else",
+  "except",
+  "finally",
+  "for",
+  "from",
+  "global",
+  "if",
+  "import",
+  "in",
+  "is",
+  "lambda",
+  "nonlocal",
+  "not",
+  "or",
+  "pass",
+  "raise",
+  "return",
+  "try",
+  "while",
+  "with",
+  "yield",
+]);
+
+function pythonString(value: string): string {
+  return JSON.stringify(String(value));
+}
+
+function pythonLiteral(value: unknown): string {
+  if (value === null || value === undefined) return "None";
+  if (typeof value === "boolean") return value ? "True" : "False";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "None";
+  if (typeof value === "string") return pythonString(value);
+  if (Array.isArray(value)) return `[${value.map((item) => pythonLiteral(item)).join(", ")}]`;
+  if (isRecord(value)) {
+    const entries = Object.entries(value).map(([key, item]) => `${pythonString(key)}: ${pythonLiteral(item)}`);
+    return `{${entries.join(", ")}}`;
+  }
+  return pythonString(String(value));
+}
+
+function isPythonIdentifier(value: string): boolean {
+  return PYTHON_IDENTIFIER_RE.test(value) && !PYTHON_KEYWORDS.has(value);
+}
+
+function pythonVariableName(raw: string, fallback: string, used: Set<string>): string {
+  let value = String(raw || "")
+    .trim()
+    .replace(/[^A-Za-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!value) value = fallback;
+  if (/^[0-9]/.test(value)) value = `_${value}`;
+  if (!isPythonIdentifier(value)) value = `node_${value}`;
+
+  const root = value;
+  let suffix = 2;
+  while (used.has(value)) {
+    value = `${root}_${suffix}`;
+    suffix += 1;
+  }
+  used.add(value);
+  return value;
+}
+
+function formatPythonCall(functionName: string, positionalArgs: string[], kwargs: Array<[string, unknown]>): string {
+  const parts = [...positionalArgs];
+  const dictOnlyKwargs: Array<[string, unknown]> = [];
+
+  for (const [key, value] of kwargs) {
+    const normalizedKey = String(key || "").trim();
+    if (!normalizedKey) continue;
+    if (isPythonIdentifier(normalizedKey)) {
+      parts.push(`${normalizedKey}=${pythonLiteral(value)}`);
+    } else {
+      dictOnlyKwargs.push([normalizedKey, value]);
+    }
+  }
+
+  if (dictOnlyKwargs.length > 0) {
+    const dictItems = dictOnlyKwargs.map(([key, value]) => `${pythonString(key)}: ${pythonLiteral(value)}`);
+    parts.push(`**{${dictItems.join(", ")}}`);
+  }
+
+  return `${functionName}(${parts.join(", ")})`;
+}
+
+function graphNodeFactoryCall(node: Record<string, unknown>): string {
+  const operatorId = String(node.operator || "").trim();
+  const nodeId = String(node.id || "").trim();
+  const config = isRecord(node.config) ? node.config : {};
+  return formatPythonCall("op", [pythonString(operatorId)], [
+    ["_id", nodeId],
+    ...Object.entries(config),
+  ]);
+}
+
+function graphNodeHasRequiredInputs(
+  node: Record<string, unknown>,
+  operatorsById: Record<string, PipelineOperatorDefinition>,
+  incomingEdges: Map<string, number>,
+): boolean {
+  const operatorId = String(node.operator || "").trim();
+  const operator = operatorsById[operatorId] ?? null;
+  if (!operator) return (incomingEdges.get(String(node.id || "").trim()) ?? 0) > 0;
+  return (operator.inputs ?? []).some((port) => Boolean(port.required));
+}
+
+function streamExpressionForNode(nodeVar: string, streamVar: string | undefined, sourcePort: string): string {
+  const port = String(sourcePort || "out").trim() || "out";
+  const base = streamVar || nodeVar;
+  if (port === "out") return base;
+  return streamVar ? `${streamVar}.port(${pythonString(port)})` : `${nodeVar}.as_stream().port(${pythonString(port)})`;
+}
+
+function targetExpressionForEdge(nodeVar: string, edge: Record<string, unknown>): string {
+  let expr = nodeVar;
+  const target = isRecord(edge.to) ? edge.to : {};
+  const targetPort = String(target.port || "").trim();
+  if (targetPort) expr = `${expr}.with_input_port(${pythonString(targetPort)})`;
+
+  const channelKwargs: Array<[string, unknown]> = [];
+  if (edge.maxsize !== undefined && edge.maxsize !== null) channelKwargs.push(["maxsize", edge.maxsize]);
+  if (edge.drop_policy !== undefined && edge.drop_policy !== null && String(edge.drop_policy || "").trim()) {
+    channelKwargs.push(["drop_policy", String(edge.drop_policy || "").trim()]);
+  }
+  if (channelKwargs.length > 0) expr = `${expr}.${formatPythonCall("with_channel", [], channelKwargs)}`;
+  return expr;
+}
+
+export function pythonSourceFromGraph(
+  graphValue: unknown,
+  operatorsById: Record<string, PipelineOperatorDefinition>,
+): { ok: true; source: string } | { ok: false; message: string } {
+  if (!isRecord(graphValue)) return { ok: false, message: "Graph JSON must be an object." };
+
+  const rawNodes = Array.isArray(graphValue.nodes) ? graphValue.nodes : [];
+  const rawEdges = Array.isArray(graphValue.edges) ? graphValue.edges : [];
+  const nodes = rawNodes.filter(isRecord);
+  const edges = rawEdges.filter(isRecord);
+  if (nodes.length === 0) return { ok: true, source: "" };
+
+  const usedVariables = new Set<string>();
+  const nodeVariables = new Map<string, string>();
+  const nodesById = new Map<string, Record<string, unknown>>();
+  const incomingEdgeCounts = new Map<string, number>();
+  const edgeNodeIds = new Set<string>();
+
+  for (const edge of edges) {
+    const source = isRecord(edge.from) ? edge.from : {};
+    const target = isRecord(edge.to) ? edge.to : {};
+    const sourceNodeId = String(source.node || "").trim();
+    const targetNodeId = String(target.node || "").trim();
+    if (sourceNodeId) edgeNodeIds.add(sourceNodeId);
+    if (targetNodeId) edgeNodeIds.add(targetNodeId);
+    if (targetNodeId) incomingEdgeCounts.set(targetNodeId, (incomingEdgeCounts.get(targetNodeId) ?? 0) + 1);
+  }
+
+  const lines: string[] = [];
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index];
+    const nodeId = String(node.id || "").trim();
+    const operatorId = String(node.operator || "").trim();
+    if (!nodeId) return { ok: false, message: `Graph node ${index + 1} has no id.` };
+    if (!operatorId) return { ok: false, message: `Graph node ${nodeId} has no operator.` };
+    if (nodesById.has(nodeId)) return { ok: false, message: `Duplicate graph node id '${nodeId}'.` };
+    nodesById.set(nodeId, node);
+    nodeVariables.set(nodeId, pythonVariableName(nodeId, `node_${index + 1}`, usedVariables));
+  }
+
+  for (const node of nodes) {
+    const nodeId = String(node.id || "").trim();
+    lines.push(`${nodeVariables.get(nodeId)} = ${graphNodeFactoryCall(node)}`);
+  }
+
+  const streamVariables = new Map<string, string>();
+  const sourceCapableNodeIds = new Set<string>();
+  for (const node of nodes) {
+    const nodeId = String(node.id || "").trim();
+    if (!graphNodeHasRequiredInputs(node, operatorsById, incomingEdgeCounts)) sourceCapableNodeIds.add(nodeId);
+  }
+
+  let lastStreamExpression = "";
+  const pendingEdges = edges.map((edge, index) => ({ edge, index }));
+  const emittedEdges = new Set<number>();
+
+  while (emittedEdges.size < pendingEdges.length) {
+    let progressed = false;
+
+    for (const { edge, index } of pendingEdges) {
+      if (emittedEdges.has(index)) continue;
+
+      const source = isRecord(edge.from) ? edge.from : {};
+      const target = isRecord(edge.to) ? edge.to : {};
+      const sourceNodeId = String(source.node || "").trim();
+      const targetNodeId = String(target.node || "").trim();
+      if (!sourceNodeId || !targetNodeId) return { ok: false, message: `Graph edge ${index + 1} is missing source or target node.` };
+      if (!nodesById.has(sourceNodeId)) return { ok: false, message: `Graph edge ${index + 1} references unknown source node '${sourceNodeId}'.` };
+      if (!nodesById.has(targetNodeId)) return { ok: false, message: `Graph edge ${index + 1} references unknown target node '${targetNodeId}'.` };
+
+      const sourceVar = nodeVariables.get(sourceNodeId) || sourceNodeId;
+      const targetVar = nodeVariables.get(targetNodeId) || targetNodeId;
+      const sourceStreamVar = streamVariables.get(sourceNodeId);
+      if (!sourceStreamVar && !sourceCapableNodeIds.has(sourceNodeId)) continue;
+
+      const targetStreamVar = pythonVariableName(`${targetVar}_out`, `stream_${index + 1}`, usedVariables);
+      const sourceExpr = streamExpressionForNode(sourceVar, sourceStreamVar, String(source.port || "out"));
+      const targetExpr = targetExpressionForEdge(targetVar, edge);
+      lines.push(`${targetStreamVar} = ${sourceExpr} | ${targetExpr}`);
+      streamVariables.set(targetNodeId, targetStreamVar);
+      lastStreamExpression = targetStreamVar;
+      emittedEdges.add(index);
+      progressed = true;
+    }
+
+    if (!progressed) {
+      return {
+        ok: false,
+        message: "Current graph cannot be converted to Python automatically; it may contain a cycle or a node with missing upstream input.",
+      };
+    }
+  }
+
+  for (const node of nodes) {
+    const nodeId = String(node.id || "").trim();
+    if (streamVariables.has(nodeId) || edgeNodeIds.has(nodeId) || !sourceCapableNodeIds.has(nodeId)) continue;
+    const nodeVar = nodeVariables.get(nodeId) || nodeId;
+    const streamVar = pythonVariableName(`${nodeVar}_out`, "stream", usedVariables);
+    lines.push(`${streamVar} = ${nodeVar}.as_stream()`);
+    streamVariables.set(nodeId, streamVar);
+    if (!lastStreamExpression) lastStreamExpression = streamVar;
+  }
+
+  if (!lastStreamExpression) {
+    const rootNode = nodes[0];
+    const rootNodeId = String(rootNode.id || "").trim();
+    lastStreamExpression = streamVariables.get(rootNodeId) || nodeVariables.get(rootNodeId) || "";
+  }
+
+  if (!lastStreamExpression) return { ok: false, message: "Current graph cannot be converted to Python automatically." };
+
+  lines.push(`PIPELINE = ${lastStreamExpression}`);
+  return { ok: true, source: `${lines.join("\n")}\n` };
+}
+
 export function humanizeIdentifier(raw: string): string {
   const normalized = String(raw || "").trim();
   if (!normalized) return "";

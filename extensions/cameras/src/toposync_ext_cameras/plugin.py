@@ -51,6 +51,7 @@ from .onvif import (
 
 
 EXTENSION_ID = "com.toposync.cameras"
+DEFAULT_CAMERA_DETECTION_MODEL_ID = "rfdetr_det_medium"
 
 
 class RtspSnapshotRequest(BaseModel):
@@ -1537,7 +1538,7 @@ class CamerasExtension(BaseExtension):
                         "id": "detect",
                         "operator": "vision.detect",
                         "config": {
-                            "model_id": "rtmdet_det_small",
+                            "model_id": DEFAULT_CAMERA_DETECTION_MODEL_ID,
                             "categories": ["person"],
                             "confidence_threshold": 0.55,
                             "emit_mode": "annotate",
@@ -1643,7 +1644,7 @@ class CamerasExtension(BaseExtension):
                         "id": "detect",
                         "operator": "vision.detect",
                         "config": {
-                            "model_id": "rtmdet_det_small",
+                            "model_id": DEFAULT_CAMERA_DETECTION_MODEL_ID,
                             "categories": ["cat", "dog"],
                             "emit_mode": "annotate",
                         },
@@ -1755,7 +1756,7 @@ class CamerasExtension(BaseExtension):
                         "id": "detect",
                         "operator": "vision.detect",
                         "config": {
-                            "model_id": "rtmdet_det_small",
+                            "model_id": DEFAULT_CAMERA_DETECTION_MODEL_ID,
                             "categories": ["car", "motorcycle", "bicycle"],
                             "confidence_threshold": 0.55,
                             "inference_interval_seconds": 0.7,

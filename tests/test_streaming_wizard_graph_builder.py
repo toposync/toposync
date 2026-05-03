@@ -117,6 +117,7 @@ def test_wizard_graph_defaults_detection_to_filter_and_tracking_to_events() -> N
         optional_parameters=None,
     )
     assert _operator_config(detection_graph, operator_id="vision.detect").get("emit_mode") == "events"
+    assert _operator_config(detection_graph, operator_id="vision.detect").get("model_id") == "rfdetr_det_medium"
 
     tracking_graph = build_streaming_wizard_graph(
         transmission_id="transmission_main",
@@ -125,6 +126,7 @@ def test_wizard_graph_defaults_detection_to_filter_and_tracking_to_events() -> N
         optional_parameters=None,
     )
     assert _operator_config(tracking_graph, operator_id="vision.detect").get("emit_mode") == "annotate"
+    assert _operator_config(tracking_graph, operator_id="vision.detect").get("model_id") == "rfdetr_det_medium"
     assert _operator_config(tracking_graph, operator_id="vision.track").get("emit_mode") == "events"
 
 

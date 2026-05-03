@@ -20,6 +20,8 @@ STREAMING_WIZARD_PRESETS: tuple[WizardPresetId, ...] = (
     "segmentation_stream",
 )
 
+DEFAULT_STREAMING_DETECTION_MODEL_ID = "rfdetr_det_medium"
+
 
 def suggested_streaming_wizard_pipeline_name(
     *,
@@ -114,7 +116,7 @@ def build_streaming_wizard_graph(
                 "id": "detect",
                 "operator": "vision.detect",
                 "config": {
-                    "model_id": "rtmdet_det_small",
+                    "model_id": DEFAULT_STREAMING_DETECTION_MODEL_ID,
                     "categories": detection_categories,
                     "confidence_threshold": float(yolo_confidence),
                     "emit_mode": yolo_emit_mode,
@@ -130,7 +132,7 @@ def build_streaming_wizard_graph(
                 "id": "detect",
                 "operator": "vision.detect",
                 "config": {
-                    "model_id": "rtmdet_det_small",
+                    "model_id": DEFAULT_STREAMING_DETECTION_MODEL_ID,
                     "categories": tracking_categories,
                     "confidence_threshold": float(yolo_confidence),
                     "emit_mode": "annotate",

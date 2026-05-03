@@ -219,17 +219,6 @@ export function InteractiveStepCard({
           </button>
 
           <button
-            className={["iconButton", step.showAdvanced ? "isActive" : ""].filter(Boolean).join(" ")}
-            type="button"
-            onClick={() => onUpdateStep(step.uid, { showAdvanced: !step.showAdvanced })}
-            title={
-              step.showAdvanced ? t("core.ui.pipelines.editor.step.hide_advanced") : t("core.ui.pipelines.editor.step.show_advanced")
-            }
-          >
-            <i className="fa-solid fa-sliders" aria-hidden="true" />
-          </button>
-
-          <button
             className="iconButton"
             type="button"
             onClick={() => onRemoveStep(step.uid)}

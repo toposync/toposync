@@ -20,7 +20,13 @@ import {
   readHomeAssistantViewMode,
   suggestIconForDomain,
 } from "../domain";
-import { DEFAULT_AIRFLOW_INTENSITY, DEFAULT_LAMP_COLOR, DEFAULT_LAMP_INTENSITY, AIRFLOW_COMPATIBLE_DOMAINS, LAMP_COMPATIBLE_DOMAINS } from "../constants";
+import {
+  DEFAULT_LAMP_COLOR,
+  MAX_LAMP_INTENSITY,
+  MIN_LAMP_INTENSITY,
+  AIRFLOW_COMPATIBLE_DOMAINS,
+  LAMP_COMPATIBLE_DOMAINS,
+} from "../constants";
 import {
   readAirflowIntensity,
   readAirflowWidth,
@@ -927,8 +933,8 @@ export function HomeAssistantEditor({
                 <input
                   className="input"
                   type="range"
-                  min={0.2}
-                  max={3}
+                  min={MIN_LAMP_INTENSITY}
+                  max={MAX_LAMP_INTENSITY}
                   step={0.05}
                   value={lampIntensityValue}
                   onChange={(e) => update({ props: { lamp_intensity: Number(e.target.value) } })}

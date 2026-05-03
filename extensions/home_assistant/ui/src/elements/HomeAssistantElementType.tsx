@@ -11,6 +11,8 @@ import {
   DEFAULT_AIRFLOW_INTENSITY,
   DEFAULT_LAMP_COLOR,
   DEFAULT_LAMP_INTENSITY,
+  MAX_LAMP_INTENSITY,
+  MIN_LAMP_INTENSITY,
   HOME_ASSISTANT_ELEMENT_TYPE_ID,
   AIRFLOW_COMPATIBLE_DOMAINS,
   LAMP_COMPATIBLE_DOMAINS,
@@ -721,7 +723,7 @@ export function createHomeAssistantElementType(i18n: HostI18n): ElementType {
           light.color.set(lampColor);
 
           if (on) {
-            const amp = clamp(lampIntensity, 0.2, 3.0);
+            const amp = clamp(lampIntensity, MIN_LAMP_INTENSITY, MAX_LAMP_INTENSITY);
             sphereMaterial.emissiveIntensity = 0.55 + 0.75 * amp;
             light.intensity = 1.8 * amp;
             light.distance = 4.5 + 3.5 * amp;

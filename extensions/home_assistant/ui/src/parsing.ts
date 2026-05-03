@@ -1,4 +1,4 @@
-import { DEFAULT_AIRFLOW_INTENSITY, DEFAULT_LAMP_INTENSITY } from "./constants";
+import { DEFAULT_AIRFLOW_INTENSITY, DEFAULT_LAMP_INTENSITY, MAX_LAMP_INTENSITY, MIN_LAMP_INTENSITY } from "./constants";
 import type { HomeAssistantItemRef, HomeAssistantServer } from "./types";
 
 export function readString(value: unknown, fallback = ""): string {
@@ -25,7 +25,7 @@ export function readOptionalFiniteNumber(value: unknown): number | null {
 }
 
 export function readLampIntensity(value: unknown): number {
-  return clamp(readFiniteNumber(value, DEFAULT_LAMP_INTENSITY), 0.2, 3.0);
+  return clamp(readFiniteNumber(value, DEFAULT_LAMP_INTENSITY), MIN_LAMP_INTENSITY, MAX_LAMP_INTENSITY);
 }
 
 export function readAirflowIntensity(value: unknown): number {

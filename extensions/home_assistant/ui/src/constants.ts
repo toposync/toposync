@@ -17,7 +17,9 @@ export const BOOLEAN_STATE_DOMAINS = new Set([...PRIMARY_TOGGLE_DOMAINS, "binary
 
 export const LAMP_COMPATIBLE_DOMAINS = new Set(["light", "switch", "fan", "input_boolean", "humidifier", "binary_sensor"]);
 export const DEFAULT_LAMP_COLOR = "#ffe8b0";
-export const DEFAULT_LAMP_INTENSITY = 1.0;
+export const MIN_LAMP_INTENSITY = 0.2;
+export const MAX_LAMP_INTENSITY = 10.0;
+export const DEFAULT_LAMP_INTENSITY = 3.0;
 
 export const AIRFLOW_COMPATIBLE_DOMAINS = new Set(["climate"]);
 export const DEFAULT_AIRFLOW_INTENSITY = 1.0;

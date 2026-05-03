@@ -40,7 +40,6 @@ import {
   emptyGraph,
   isRecord,
   jsonPretty,
-  pythonSourceFromGraph,
   safeJsonParse,
 } from "./pipelines/utils";
 
@@ -270,20 +269,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
         return;
       }
       setGraphText(jsonPretty(interactiveGraph.graph));
-    }
-
-    if (nextMode === "python" && mode !== "python" && !pythonText.trim()) {
-      const resolved = resolveGraphFromActiveMode();
-      if (!resolved.ok) {
-        setError(resolved.message);
-        return;
-      }
-      const generated = pythonSourceFromGraph(resolved.graph, operatorsById);
-      if (!generated.ok) {
-        setError(generated.message);
-        return;
-      }
-      setPythonText(generated.source);
     }
 
     setError(null);
@@ -799,13 +784,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                       onClick={() => switchMode("json")}
                     >
                       {t("core.ui.pipelines.modes.json")}
-                    </button>
-                    <button
-                      className={["pillButton", mode === "python" ? "isActive" : ""].filter(Boolean).join(" ")}
-                      type="button"
-                      onClick={() => switchMode("python")}
-                    >
-                      {t("core.ui.pipelines.modes.python_one_way")}
                     </button>
                   </div>
 

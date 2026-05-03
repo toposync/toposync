@@ -20,7 +20,7 @@ from toposync.runtime.config_store import (
     ProcessingServer,
 )
 from toposync.runtime.pipelines.compiler import GraphCompileError, PipelineGraphCompiler
-from toposync.runtime.pipelines.templates import safe_pipeline_name
+from toposync.runtime.pipelines.templates import camera_names_by_id, safe_pipeline_name
 from toposync.runtime.services import ServiceRegistry
 
 from ..streaming.engine_manager import MediaMtxEngineManager
@@ -1277,7 +1277,10 @@ def create_streaming_router() -> APIRouter:
         else:
             suggested = suggested_streaming_wizard_pipeline_name(
                 transmission_id=transmission.id,
+                transmission_name=transmission.name,
+                transmission_path=transmission.path,
                 camera_id=resolved_camera_id,
+                camera_name=camera_names_by_id(app_settings.extensions).get(resolved_camera_id),
                 preset_id=body.preset_id,
             )
             pipeline_name = _unique_pipeline_name(suggested, existing_names=existing_names)

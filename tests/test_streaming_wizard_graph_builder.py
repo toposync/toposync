@@ -5,6 +5,7 @@ import pytest
 from toposync_ext_streaming.wizard.pipeline_builder import (
     STREAMING_WIZARD_PRESETS,
     build_streaming_wizard_graph,
+    suggested_streaming_wizard_pipeline_name,
 )
 
 
@@ -38,6 +39,44 @@ def _operator_config(graph: dict, *, operator_id: str) -> dict:
         config = node.get("config")
         return config if isinstance(config, dict) else {}
     return {}
+
+
+def test_suggested_pipeline_name_starts_with_transmission_context() -> None:
+    assert (
+        suggested_streaming_wizard_pipeline_name(
+            transmission_id="frente",
+            transmission_path="frente",
+            camera_id="frente",
+            preset_id="simple_stream",
+        )
+        == "frente__stream"
+    )
+
+
+def test_suggested_pipeline_name_uses_meaningful_slug_before_preset() -> None:
+    assert (
+        suggested_streaming_wizard_pipeline_name(
+            transmission_id="550e8400-e29b-41d4-a716-446655440000",
+            transmission_name="Transmissão",
+            transmission_path="entrada-frente",
+            camera_id="camera-frente",
+            preset_id="detection_stream",
+        )
+        == "entrada_frente__camera_frente__detection"
+    )
+
+
+def test_suggested_pipeline_name_skips_generic_transmission_prefix() -> None:
+    assert (
+        suggested_streaming_wizard_pipeline_name(
+            transmission_id="550e8400-e29b-41d4-a716-446655440000",
+            transmission_name="Transmissão",
+            transmission_path="stream",
+            camera_id="frente",
+            preset_id="simple_stream",
+        )
+        == "frente__stream"
+    )
 
 
 @pytest.mark.parametrize("preset_id", STREAMING_WIZARD_PRESETS)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from typing import Any, Literal
 
 from toposync.runtime.pipelines.templates import safe_pipeline_name
@@ -22,14 +23,40 @@ STREAMING_WIZARD_PRESETS: tuple[WizardPresetId, ...] = (
 
 DEFAULT_STREAMING_DETECTION_MODEL_ID = "rfdetr_det_medium"
 
+_GENERIC_NAME_COMPONENTS = {"stream", "transmission", "transmissao", "fluxo"}
+_PRESET_NAME_COMPONENTS: dict[str, str] = {
+    "simple_stream": "stream",
+    "motion_gate_stream": "motion",
+    "detection_stream": "detection",
+    "tracking_stream": "tracking",
+    "segmentation_stream": "segmentation",
+}
+
 
 def suggested_streaming_wizard_pipeline_name(
     *,
     transmission_id: str,
     camera_id: str,
     preset_id: WizardPresetId,
+    transmission_name: str | None = None,
+    transmission_path: str | None = None,
+    camera_name: str | None = None,
 ) -> str:
-    base = f"stream_{preset_id}__{camera_id}__{transmission_id}"
+    transmission_component = _pick_name_component(
+        transmission_path,
+        transmission_name,
+        transmission_id,
+        fallback="stream",
+        skip_generic=True,
+    )
+    camera_component = _pick_name_component(camera_id, camera_name)
+    preset_component = _PRESET_NAME_COMPONENTS.get(str(preset_id), "stream")
+
+    components = [transmission_component, camera_component, preset_component]
+    if camera_component and _is_generic_component(transmission_component):
+        components = [camera_component, preset_component]
+
+    base = "__".join(_dedupe_name_components(components))
     return safe_pipeline_name(base)
 
 
@@ -203,6 +230,69 @@ def _append_edge(
             "drop_policy": "drop_oldest",
         }
     )
+
+
+def _pick_name_component(
+    *values: str | None,
+    fallback: str = "",
+    skip_generic: bool = False,
+) -> str:
+    candidates = [_safe_name_component(value) for value in values]
+    candidates = [item for item in candidates if item]
+    for candidate in candidates:
+        if skip_generic and _is_generic_component(candidate):
+            continue
+        if _is_uuid_component(candidate):
+            continue
+        return candidate
+    for candidate in candidates:
+        if skip_generic and (_is_generic_component(candidate) or _is_uuid_component(candidate)):
+            continue
+        return candidate
+    return _safe_name_component(fallback)
+
+
+def _dedupe_name_components(values: list[str]) -> list[str]:
+    components: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        component = _safe_name_component(value)
+        key = _component_key(component)
+        if not component or not key or key in seen:
+            continue
+        seen.add(key)
+        components.append(component)
+    return components
+
+
+def _safe_name_component(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    ascii_raw = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode("ascii")
+    return safe_pipeline_name(ascii_raw or raw)
+
+
+def _component_key(value: str | None) -> str:
+    return _safe_name_component(value).strip("_").lower()
+
+
+def _is_generic_component(value: str | None) -> bool:
+    return _component_key(value) in _GENERIC_NAME_COMPONENTS
+
+
+def _is_uuid_component(value: str | None) -> bool:
+    key = _component_key(value).replace("_", "-")
+    if len(key) != 36:
+        return False
+    for index, char in enumerate(key):
+        if index in {8, 13, 18, 23}:
+            if char != "-":
+                return False
+            continue
+        if char not in "0123456789abcdef":
+            return False
+    return True
 
 
 def _pick_choice(value: Any, *, allowed: set[str], default: str) -> str:

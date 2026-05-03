@@ -13,6 +13,7 @@ from toposync.runtime.config_store import AppSettings
 from toposync.runtime.pipelines.execution import NodeRuntimeMetrics, PipelineRuntimeDependencies
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
+from toposync_ext_ai.catalog import normalize_model_ref
 from toposync_ext_ai.constants import EXTENSION_ID
 from toposync_ext_ai.pipelines import register_ai_pipeline_operators
 from toposync_ext_ai.pipelines.runtime import AiConditionFilterRuntime, AiSmartCropRuntime
@@ -193,6 +194,14 @@ def test_ai_result_parsers_accept_common_model_aliases() -> None:
     condition = ConditionEvaluationResult.model_validate({"answer": True, "score": 0.62})
     assert condition.matches is True
     assert condition.confidence == pytest.approx(0.62)
+
+
+def test_ai_model_ref_normalization_matches_ollama_display_names() -> None:
+    expected = normalize_model_ref("qwen3-vl:30b")
+
+    assert normalize_model_ref("Qwen3-VL 30B") == expected
+    assert normalize_model_ref(" qwen3 vl:30B ") == expected
+    assert normalize_model_ref("QWEN3_VL_30B") == expected
 
 
 def test_ai_region_result_supports_multiple_detections() -> None:
@@ -686,6 +695,37 @@ def test_ai_router_blocks_cloud_profiles_without_image_upload_opt_in(monkeypatch
     assert result.found is False
     assert result.reason == "all_ai_profiles_failed"
     assert result.attempts[0].error == "image_upload_not_allowed"
+
+
+def test_ai_router_detects_installed_ollama_model_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _list_models(_self) -> list[dict[str, Any]]:  # noqa: ANN001
+        return [{"name": "Qwen3-VL 30B"}]
+
+    monkeypatch.setattr("toposync_ext_ai.router.OllamaProvider.list_models", _list_models)
+
+    async def scenario() -> dict[str, Any]:
+        router = AiRouter(
+            config_store=_FakeConfigStore(
+                {
+                    "providers": [
+                        {"id": "local", "name": "Local", "kind": "ollama", "host": "http://localhost:11434"},
+                    ],
+                    "profiles": [
+                        {
+                            "id": "quality",
+                            "name": "Quality",
+                            "provider_id": "local",
+                            "model": "qwen3-vl:30b",
+                        },
+                    ],
+                }
+            )
+        )
+        return await router.test_provider(provider_id="local", profile_id="quality")
+
+    result = asyncio.run(scenario())
+    assert result["ok"] is True
+    assert result["model_installed"] is True
 
 
 def test_ai_settings_and_preview_api(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001

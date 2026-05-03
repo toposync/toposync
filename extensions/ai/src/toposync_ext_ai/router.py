@@ -6,6 +6,7 @@ from typing import Any, AsyncIterator
 
 from toposync.runtime.config_store import AppSettings
 
+from .catalog import normalize_model_ref
 from .constants import DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_PROVIDER_ID, DEFAULT_PROFILE_ID, EXTENSION_ID
 from .providers import (
     AiAttempt,
@@ -257,16 +258,19 @@ class AiRouter:
         }
         if provider_config.kind == "ollama":
             models = await OllamaProvider(provider_config, profile).list_models()
-            installed_names = {
-                str(item.get("name") or item.get("model") or "").strip()
-                for item in models
-                if isinstance(item, dict)
-            }
+            installed_names: set[str] = set()
+            for item in models:
+                if not isinstance(item, dict):
+                    continue
+                for key in ("name", "model"):
+                    name = normalize_model_ref(item.get(key))
+                    if name:
+                        installed_names.add(name)
             payload.update(
                 {
                     "ok": True,
                     "models": models,
-                    "model_installed": profile.model in installed_names,
+                    "model_installed": normalize_model_ref(profile.model) in installed_names,
                 }
             )
             return payload

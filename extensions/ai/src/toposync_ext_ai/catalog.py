@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from typing import Any
 
@@ -42,3 +43,10 @@ BUILTIN_MODEL_CATALOG: list[dict[str, Any]] = [
 
 def list_builtin_model_catalog() -> list[dict[str, Any]]:
     return deepcopy(BUILTIN_MODEL_CATALOG)
+
+
+def normalize_model_ref(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    return re.sub(r"[^a-z0-9]+", "-", text).strip("-")

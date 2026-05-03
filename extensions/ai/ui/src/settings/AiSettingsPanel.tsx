@@ -137,10 +137,16 @@ function AiSettingsPanelContent({ i18n, settings, updateSettings }: Props): Reac
   const profiles = normalized.profiles;
   const ollamaProvider = providers.find((provider) => provider.kind === "ollama") ?? HARD_DEFAULTS.providers[0];
   const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? profiles[0];
-  const installedNames = useMemo(
-    () => new Set(ollamaModels.map((model) => String(model.name || model.model || "").trim()).filter(Boolean)),
-    [ollamaModels],
-  );
+  const installedModelRefs = useMemo(() => {
+    const refs = new Set<string>();
+    for (const model of ollamaModels) {
+      for (const value of [model.name, model.model]) {
+        const ref = normalizeModelRef(value);
+        if (ref) refs.add(ref);
+      }
+    }
+    return refs;
+  }, [ollamaModels]);
 
   useEffect(() => {
     if (activeProfileId && profiles.some((profile) => profile.id === activeProfileId)) return;
@@ -291,7 +297,7 @@ function AiSettingsPanelContent({ i18n, settings, updateSettings }: Props): Reac
   }
 
   const cloudProviders = providers.filter((provider) => provider.kind !== "ollama");
-  const qwenInstalled = installedNames.has(DEFAULT_OLLAMA_MODEL);
+  const qwenInstalled = hasInstalledModel(installedModelRefs, DEFAULT_OLLAMA_MODEL);
 
   return (
     <div>
@@ -327,7 +333,7 @@ function AiSettingsPanelContent({ i18n, settings, updateSettings }: Props): Reac
           catalog={catalog}
           loading={ollamaLoading}
           error={ollamaError}
-          installedNames={installedNames}
+          installedModelRefs={installedModelRefs}
           pullingModel={pullingModel}
           onProviderChange={(patchValue) => updateProvider(ollamaProvider.id, patchValue)}
           onRefresh={() => void refreshOllamaModels()}
@@ -381,7 +387,7 @@ function OllamaSection({
   catalog,
   loading,
   error,
-  installedNames,
+  installedModelRefs,
   pullingModel,
   onProviderChange,
   onRefresh,
@@ -394,7 +400,7 @@ function OllamaSection({
   catalog: AiModelCatalogEntry[];
   loading: boolean;
   error: string | null;
-  installedNames: Set<string>;
+  installedModelRefs: Set<string>;
   pullingModel: string | null;
   onProviderChange: (patch: Partial<AiProviderConfig>) => void;
   onRefresh: () => void;
@@ -437,7 +443,8 @@ function OllamaSection({
       </div>
       <div className="settingsList">
         {recommendations.map((entry) => {
-          const installed = installedNames.has(entry.model);
+          const installed = hasInstalledModel(installedModelRefs, entry.model, entry.name);
+          const pulling = pullingModel === entry.model;
           return (
             <div key={entry.id} className="choiceItem">
               <div className="settingsListItemRow">
@@ -452,9 +459,14 @@ function OllamaSection({
                   className="chipButton"
                   type="button"
                   onClick={() => onPull(entry.model)}
-                  disabled={installed || pullingModel === entry.model}
+                  disabled={installed || pulling}
                 >
-                  <i className="fa-solid fa-download" aria-hidden="true" /> {t("ext.ai.settings.pull", {}, "Baixar")}
+                  <i className={installed ? "fa-solid fa-check" : "fa-solid fa-download"} aria-hidden="true" />{" "}
+                  {installed
+                    ? t("ext.ai.settings.installed", {}, "Instalado")
+                    : pulling
+                      ? t("ext.ai.settings.pulling", {}, "Baixando...")
+                      : t("ext.ai.settings.pull", {}, "Baixar")}
                 </button>
               </div>
             </div>
@@ -963,6 +975,20 @@ function providerLabel(provider?: AiProviderConfig): string {
 
 function profileLabel(profile: AiProfileConfig): string {
   return profile.name.trim() || profile.model.trim() || profile.id;
+}
+
+function hasInstalledModel(installedModelRefs: Set<string>, ...values: unknown[]): boolean {
+  return values.some((value) => {
+    const ref = normalizeModelRef(value);
+    return Boolean(ref) && installedModelRefs.has(ref);
+  });
+}
+
+function normalizeModelRef(value: unknown): string {
+  return asString(value, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 function normalizeProviderKind(value: unknown): AiProviderKind {

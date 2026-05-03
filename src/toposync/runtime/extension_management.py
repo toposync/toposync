@@ -83,6 +83,14 @@ RECOMMENDED_EXTENSIONS: tuple[RecommendedExtension, ...] = (
         category="pipeline",
     ),
     RecommendedExtension(
+        extension_id="com.toposync.ai",
+        name="AI",
+        description="Adiciona provedores de IA, fallback e operadores visuais para pipelines.",
+        package="toposync-ext-ai",
+        pip_spec="toposync-ext-ai",
+        category="pipeline",
+    ),
+    RecommendedExtension(
         extension_id="com.toposync.streaming",
         name="Streaming",
         description="Cria transmissoes RTSP/HLS/WebRTC a partir de cameras e pipelines.",

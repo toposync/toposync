@@ -77,11 +77,15 @@ def test_extension_management_catalog_includes_loaded_and_recommended(
     assert response.status_code == 200
     catalog = response.json()
     active = _item_by_id(catalog, "com.test.active")
+    ai = _item_by_id(catalog, "com.toposync.ai")
     streaming = _item_by_id(catalog, "com.toposync.streaming")
 
     assert active["status"] == "active"
     assert active["loaded"] is True
     assert active["installed"] is True
+    assert ai["recommended"] is True
+    assert ai["pip_spec"] == "toposync-ext-ai"
+    assert ai["status"] in {"not_installed", "pending_restart", "active"}
     assert streaming["recommended"] is True
     assert streaming["pip_spec"] == "toposync-ext-streaming"
     assert streaming["status"] in {"not_installed", "pending_restart", "active"}

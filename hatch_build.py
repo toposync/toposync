@@ -17,17 +17,20 @@ class CustomBuildHook(BuildHookInterface):
         sdist_packaged_frontend_dist = root / "toposync" / "_frontend" / "dist"
         sdist_packaged_frontend_index = sdist_packaged_frontend_dist / "index.html"
 
-        if not frontend_index.is_file():
+        npm = shutil.which("npm")
+        frontend_sources_available = (
+            (root / "package.json").is_file() and (root / "frontend" / "package.json").is_file()
+        )
+        if npm is not None and frontend_sources_available:
+            subprocess.run([npm, "run", "build:frontend"], cwd=root, check=True)
+        elif not frontend_index.is_file():
             if source_packaged_frontend_index.is_file() or sdist_packaged_frontend_index.is_file():
                 return
 
-            npm = shutil.which("npm")
-            if npm is None:
-                raise RuntimeError(
-                    "Missing frontend bundle at frontend/dist and no packaged host bundle was found. "
-                    "Run `npm install && npm run build:frontend` before building toposync-core."
-                )
-            subprocess.run([npm, "run", "build:frontend"], cwd=root, check=True)
+            raise RuntimeError(
+                "Missing frontend bundle at frontend/dist and no packaged host bundle was found. "
+                "Run `npm install && npm run build:frontend` before building toposync-core."
+            )
 
         if not frontend_index.is_file():
             raise RuntimeError(

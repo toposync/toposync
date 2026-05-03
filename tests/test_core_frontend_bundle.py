@@ -96,3 +96,26 @@ def test_frontend_deep_link_uses_root_assets_without_ingress(
     assert 'window.__TOPOSYNC_PUBLIC_BASE_PATH__="/"' in body
     assert 'src="/main.js"' in body
     assert 'href="/style.css"' in body
+
+
+def test_frontend_static_assets_are_revalidated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frontend_dir = tmp_path / "frontend-dist"
+    frontend_dir.mkdir(parents=True)
+    (frontend_dir / "index.html").write_text(
+        '<!doctype html><html><head><script src="main.js"></script></head><body></body></html>',
+        encoding="utf-8",
+    )
+    (frontend_dir / "main.js").write_text("console.log('toposync')", encoding="utf-8")
+
+    monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TOPOSYNC_FRONTEND_DIR", str(frontend_dir))
+    monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "bypass")
+    monkeypatch.delenv("TOPOSYNC_NO_FRONTEND", raising=False)
+
+    with TestClient(create_app()) as client:
+        response = client.get("/main.js")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-cache"

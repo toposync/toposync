@@ -3994,6 +3994,14 @@ def create_app() -> FastAPI:
 
             response = await call_next(request)
             if response.status_code != 404:
+                path = request.url.path
+                if (
+                    request.method in {"GET", "HEAD"}
+                    and response.status_code < 400
+                    and path not in {"/", "/index.html"}
+                    and not path.startswith(("/api", "/extensions", "/files"))
+                ):
+                    response.headers["Cache-Control"] = "no-cache"
                 return response
 
             if request.method not in {"GET", "HEAD"}:

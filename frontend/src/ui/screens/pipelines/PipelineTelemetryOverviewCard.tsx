@@ -114,12 +114,30 @@ const MARKER_CLUSTER_LANE_SPACING = 11;
 const MARKER_CLUSTER_GAP = 5;
 const MARKER_CLUSTER_PREVIEW_LIMIT = 96;
 const METRIC_SERIES_COLORS = [
-  "var(--color-accent-teal)",
-  "var(--color-warning)",
-  "var(--color-accent)",
-  "var(--color-success)",
-  "var(--color-danger)",
-  "var(--color-info)",
+  "#4f9dff",
+  "#ff7a59",
+  "#34c98a",
+  "#b06bff",
+  "#ffb13d",
+  "#ec5d8e",
+  "#26c5d8",
+  "#c9d23a",
+  "#ff5e7e",
+  "#7c8cff",
+  "#52d3a4",
+  "#f57aaa",
+  "#36a3ff",
+  "#ffd166",
+  "#9a7bff",
+  "#5ed4c6",
+  "#ff8c42",
+  "#a3e048",
+  "#e26ad6",
+  "#5b9aff",
+  "#ff6b6b",
+  "#74e09a",
+  "#cc7aff",
+  "#ffae73",
 ];
 
 function clamp01(value: number): number {
@@ -411,6 +429,7 @@ export function PipelineTelemetryOverviewCard({
   const [hoveredClusterKey, setHoveredClusterKey] = useState<string | null>(null);
   const [pinnedClusterKey, setPinnedClusterKey] = useState<string | null>(null);
   const [hoverTimeline, setHoverTimeline] = useState<HoverTimelineState | null>(null);
+  const [hiddenSeriesKeys, setHiddenSeriesKeys] = useState<Set<string>>(() => new Set());
   const pipelineOptions = useMemo(() => {
     const items = Array.isArray(availablePipelines) ? availablePipelines : [];
     const next = items
@@ -654,6 +673,37 @@ export function PipelineTelemetryOverviewCard({
     setHoverTimeline(null);
   }, [isAggregate, pipelineName, markers.length, rangeSeconds]);
 
+  useEffect(() => {
+    setHiddenSeriesKeys((prev) => {
+      if (prev.size === 0) return prev;
+      const valid = new Set(series.map((item) => item.seriesKey));
+      let changed = false;
+      const next = new Set<string>();
+      for (const key of prev) {
+        if (valid.has(key)) {
+          next.add(key);
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [series]);
+
+  const toggleSeriesHidden = (seriesKey: string) => {
+    setHiddenSeriesKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(seriesKey)) next.delete(seriesKey);
+      else next.add(seriesKey);
+      return next;
+    });
+  };
+
+  const visibleSeries = useMemo(
+    () => series.filter((item) => !hiddenSeriesKeys.has(item.seriesKey)),
+    [series, hiddenSeriesKeys],
+  );
+
   const latestDataS = useMemo(() => {
     let latest = 0;
     for (const item of series) {
@@ -691,7 +741,7 @@ export function PipelineTelemetryOverviewCard({
 
   const timelineSegmentsBySeries = useMemo(() => {
     const out = new Map<string, TimelineSegment[]>();
-    for (const item of series) {
+    for (const item of visibleSeries) {
       const segments = splitIntoSegments(item.points, item.bucketSeconds).map((points) => {
         const range = segmentRangeFromZero(points);
         return {
@@ -705,7 +755,7 @@ export function PipelineTelemetryOverviewCard({
       out.set(item.seriesKey, segments);
     }
     return out;
-  }, [series]);
+  }, [visibleSeries]);
 
   const markerPoints: MarkerPoint[] = useMemo(() => {
     if (!markers.length || xMax <= xMin) return [];
@@ -765,20 +815,59 @@ export function PipelineTelemetryOverviewCard({
     if (pinnedClusterKey && !markerClustersByKey.has(pinnedClusterKey)) setPinnedClusterKey(null);
   }, [markerClustersByKey, hoveredClusterKey, pinnedClusterKey]);
 
-  useEffect(() => {
-    if (!pinnedClusterKey) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPinnedClusterKey(null);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [pinnedClusterKey]);
-
   const activeCluster = useMemo(() => {
     if (pinnedClusterKey) return markerClustersByKey.get(pinnedClusterKey) ?? null;
     if (hoveredClusterKey) return markerClustersByKey.get(hoveredClusterKey) ?? null;
     return null;
   }, [markerClustersByKey, pinnedClusterKey, hoveredClusterKey]);
+
+  const sortedClusters = useMemo(
+    () => markerClusters.slice().sort((a, b) => a.earliestTs - b.earliestTs),
+    [markerClusters],
+  );
+  const pinnedClusterIndex = useMemo(() => {
+    if (!pinnedClusterKey) return -1;
+    return sortedClusters.findIndex((cluster) => cluster.key === pinnedClusterKey);
+  }, [sortedClusters, pinnedClusterKey]);
+  const hasPrevCluster = pinnedClusterIndex > 0;
+  const hasNextCluster = pinnedClusterIndex >= 0 && pinnedClusterIndex < sortedClusters.length - 1;
+  const goToCluster = (offset: number) => {
+    if (pinnedClusterIndex < 0) return;
+    const next = sortedClusters[pinnedClusterIndex + offset];
+    if (!next) return;
+    setPinnedClusterKey(next.key);
+  };
+
+  useEffect(() => {
+    if (!pinnedClusterKey) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPinnedClusterKey(null);
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || (target && target.isContentEditable)) return;
+      if (event.key === "ArrowLeft") {
+        if (pinnedClusterIndex > 0) {
+          event.preventDefault();
+          const prev = sortedClusters[pinnedClusterIndex - 1];
+          if (prev) setPinnedClusterKey(prev.key);
+        }
+        return;
+      }
+      if (event.key === "ArrowRight") {
+        if (pinnedClusterIndex >= 0 && pinnedClusterIndex < sortedClusters.length - 1) {
+          event.preventDefault();
+          const next = sortedClusters[pinnedClusterIndex + 1];
+          if (next) setPinnedClusterKey(next.key);
+        }
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pinnedClusterKey, pinnedClusterIndex, sortedClusters]);
   const hoverTooltipStyle = useMemo(() => {
     if (!hoverTimeline) return null;
     const leftPercent = (hoverTimeline.chartX / chartWidth) * 100;
@@ -810,7 +899,40 @@ export function PipelineTelemetryOverviewCard({
           .join(" ")}
       >
         <div className="pipelinesTelemetryClusterOverlayHeader">
-          <div className="pipelinesHint">{activeClusterTimeLabel}</div>
+          {pinnedClusterKey ? (
+            <div className="pipelinesTelemetryClusterNav">
+              <button
+                className="iconButton"
+                type="button"
+                onClick={() => goToCluster(-1)}
+                disabled={!hasPrevCluster}
+                title={t("core.ui.pipelines.telemetry.overview.cluster.prev", {}, "Previous cluster")}
+                aria-label={t("core.ui.pipelines.telemetry.overview.cluster.prev", {}, "Previous cluster")}
+              >
+                <i className="fa-solid fa-chevron-left" aria-hidden="true" />
+              </button>
+              <span className="pipelinesTelemetryClusterNavCounter" aria-live="polite">
+                {pinnedClusterIndex >= 0
+                  ? t(
+                      "core.ui.pipelines.telemetry.overview.cluster.position",
+                      { current: pinnedClusterIndex + 1, total: sortedClusters.length },
+                      `${pinnedClusterIndex + 1} / ${sortedClusters.length}`,
+                    )
+                  : ""}
+              </span>
+              <button
+                className="iconButton"
+                type="button"
+                onClick={() => goToCluster(1)}
+                disabled={!hasNextCluster}
+                title={t("core.ui.pipelines.telemetry.overview.cluster.next", {}, "Next cluster")}
+                aria-label={t("core.ui.pipelines.telemetry.overview.cluster.next", {}, "Next cluster")}
+              >
+                <i className="fa-solid fa-chevron-right" aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
+          <div className="pipelinesTelemetryClusterTimeLabel">{activeClusterTimeLabel}</div>
           {pinnedClusterKey ? (
             <button className="iconButton" type="button" onClick={() => setPinnedClusterKey(null)} title={t("core.actions.close")}>
               <i className="fa-solid fa-xmark" aria-hidden="true" />
@@ -856,7 +978,18 @@ export function PipelineTelemetryOverviewCard({
         ) : null}
       </div>
     );
-  }, [activeCluster, activeClusterMarkers, activeClusterTimeLabel, pinnedClusterKey, t, timeFormatter]);
+  }, [
+    activeCluster,
+    activeClusterMarkers,
+    activeClusterTimeLabel,
+    pinnedClusterKey,
+    pinnedClusterIndex,
+    sortedClusters,
+    hasPrevCluster,
+    hasNextCluster,
+    t,
+    timeFormatter,
+  ]);
 
   return (
     <div className="card">
@@ -953,12 +1086,35 @@ export function PipelineTelemetryOverviewCard({
         {!loading && !error && (series.length > 0 || markerClusters.length > 0) ? (
           <>
             <div className="pipelinesTelemetryLegend">
-              {series.map((item) => (
-                    <div key={`legend:${item.seriesKey}`} className="pipelinesTelemetryLegendItem">
-                      <span className="pipelinesTelemetryLegendSwatch" style={{ backgroundColor: item.color }} />
-                      <span>{item.label}</span>
-                    </div>
-                  ))}
+              {series.map((item) => {
+                const hidden = hiddenSeriesKeys.has(item.seriesKey);
+                return (
+                  <button
+                    key={`legend:${item.seriesKey}`}
+                    type="button"
+                    className={[
+                      "pipelinesTelemetryLegendItem",
+                      "isToggleable",
+                      hidden ? "isHidden" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    aria-pressed={!hidden}
+                    title={
+                      hidden
+                        ? t("core.ui.pipelines.telemetry.overview.legend.show", {}, "Show this series")
+                        : t("core.ui.pipelines.telemetry.overview.legend.hide", {}, "Hide this series")
+                    }
+                    onClick={() => toggleSeriesHidden(item.seriesKey)}
+                  >
+                    <span
+                      className="pipelinesTelemetryLegendSwatch"
+                      style={hidden ? undefined : { backgroundColor: item.color }}
+                    />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
               {markerClusters.length ? (
                 <div className="pipelinesTelemetryLegendItem">
                   <span className="pipelinesTelemetryLegendSwatch isImage" />
@@ -971,7 +1127,7 @@ export function PipelineTelemetryOverviewCard({
 	              <div
 	                className="pipelinesTelemetryTimelineStage"
 	                onMouseMove={(event) => {
-	                  if (xMax <= xMin || series.length <= 0) return;
+	                  if (xMax <= xMin || visibleSeries.length <= 0) return;
 	                  const rect = event.currentTarget.getBoundingClientRect();
 	                  if (rect.width <= 0) return;
 	                  const rawX = ((event.clientX - rect.left) / rect.width) * chartWidth;
@@ -979,7 +1135,7 @@ export function PipelineTelemetryOverviewCard({
 	                  const ratio = (chartX - paddingLeft) / Math.max(1, innerWidth);
 	                  const cursorTs = xMin + Math.max(0, Math.min(1, ratio)) * Math.max(1e-9, xMax - xMin);
 	                  const samples: HoverTimelineSample[] = [];
-	                  for (const metric of series) {
+	                  for (const metric of visibleSeries) {
 	                    const nearest = findNearestPoint(metric.points, cursorTs);
 	                    if (!nearest) continue;
 	                    if (metric.bucketSeconds > 0) {
@@ -1026,7 +1182,7 @@ export function PipelineTelemetryOverviewCard({
 	                    y2={paddingTop + innerHeight}
 	                    className="pipelinesTelemetryAxis"
 	                  />
-	                  {series.map((item) => {
+	                  {visibleSeries.map((item) => {
 	                    const segments = timelineSegmentsBySeries.get(item.seriesKey) ?? [];
 	                    if (!segments.length) return null;
 	                    return (
@@ -1141,16 +1297,20 @@ export function PipelineTelemetryOverviewCard({
 
 	                {hoverTimeline && hoverTooltipStyle ? (
 	                  <div className="pipelinesTelemetryHoverTooltip" style={hoverTooltipStyle}>
-	                    <div className="pipelinesHint">{timeFormatter.format(new Date(hoverTimeline.cursorTs * 1000))}</div>
+	                    <div className="pipelinesTelemetryHoverTime">{timeFormatter.format(new Date(hoverTimeline.cursorTs * 1000))}</div>
 	                    {hoverTimeline.samples.map((sample) => (
 	                      <div key={`hover:row:${sample.seriesKey}`} className="pipelinesTelemetryHoverRow">
 	                        <span className="pipelinesTelemetryHoverSwatch" style={{ backgroundColor: sample.color }} />
-	                        <span>{sample.label}</span>
-	                        <span>
-	                          {t("core.ui.pipelines.telemetry.total_avg", {}, "Avg")}: {decimalFormatter.format(sample.avg)} ·{" "}
-	                          {t("core.ui.pipelines.telemetry.total_min", {}, "Min")}: {decimalFormatter.format(sample.min)} ·{" "}
-	                          {t("core.ui.pipelines.telemetry.total_max", {}, "Max")}: {decimalFormatter.format(sample.max)}
-	                        </span>
+	                        <div className="pipelinesTelemetryHoverRowText">
+	                          <span className="pipelinesTelemetryHoverRowLabel">{sample.label}</span>
+	                          <span className="pipelinesTelemetryHoverRowStats">
+	                            <span>{t("core.ui.pipelines.telemetry.total_avg", {}, "Avg")} {decimalFormatter.format(sample.avg)}</span>
+	                            <span aria-hidden="true">·</span>
+	                            <span>{t("core.ui.pipelines.telemetry.total_min", {}, "Min")} {decimalFormatter.format(sample.min)}</span>
+	                            <span aria-hidden="true">·</span>
+	                            <span>{t("core.ui.pipelines.telemetry.total_max", {}, "Max")} {decimalFormatter.format(sample.max)}</span>
+	                          </span>
+	                        </div>
 	                      </div>
 	                    ))}
 	                  </div>

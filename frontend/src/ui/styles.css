@@ -1151,10 +1151,48 @@ textarea {
   color: var(--muted);
 }
 
+.pipelinesTelemetryLegendItem.isToggleable {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 3px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--text);
+  transition: background-color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+  user-select: none;
+}
+
+.pipelinesTelemetryLegendItem.isToggleable:hover {
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.pipelinesTelemetryLegendItem.isToggleable:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 2px;
+}
+
+.pipelinesTelemetryLegendItem.isHidden {
+  opacity: 0.55;
+}
+
+.pipelinesTelemetryLegendItem.isHidden span:not(.pipelinesTelemetryLegendSwatch) {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
 .pipelinesTelemetryLegendSwatch {
   width: 12px;
   height: 12px;
   border-radius: 99px;
+  flex: 0 0 auto;
+}
+
+.pipelinesTelemetryLegendItem.isHidden .pipelinesTelemetryLegendSwatch {
+  background: transparent;
+  border: 1.5px solid color-mix(in srgb, var(--muted) 60%, transparent);
 }
 
 .pipelinesTelemetryLegendSwatch.isImage {
@@ -1299,30 +1337,65 @@ textarea {
   position: absolute;
   top: 2px;
   z-index: 3;
-  min-width: 180px;
-  max-width: 320px;
-  display: grid;
-  gap: 6px;
-  padding: 8px 10px;
+  min-width: 220px;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid var(--borderStrong);
-  background: color-mix(in srgb, var(--panelSolid) 92%, transparent);
+  background: color-mix(in srgb, var(--panelSolid) 94%, transparent);
   pointer-events: none;
   backdrop-filter: blur(8px);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow) 24%, transparent);
+}
+
+.pipelinesTelemetryHoverTime {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  text-transform: uppercase;
 }
 
 .pipelinesTelemetryHoverRow {
-  display: grid;
-  grid-template-columns: 10px 1fr auto;
-  align-items: center;
+  display: flex;
+  align-items: flex-start;
   gap: 8px;
   font-size: 12px;
+  line-height: 1.4;
+}
+
+.pipelinesTelemetryHoverRowText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.pipelinesTelemetryHoverRowLabel {
+  color: var(--text);
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.pipelinesTelemetryHoverRowStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .pipelinesTelemetryHoverSwatch {
   width: 10px;
   height: 10px;
   border-radius: 999px;
+  flex: 0 0 auto;
+  margin-top: 4px;
 }
 
 .pipelinesTelemetryClusterOverlay {
@@ -1353,9 +1426,55 @@ textarea {
 
 .pipelinesTelemetryClusterOverlayHeader {
   display: flex;
-  align-items: start;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.pipelinesTelemetryClusterTimeLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pipelinesTelemetryClusterNav {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.pipelinesTelemetryClusterNav .iconButton {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pipelinesTelemetryClusterNav .iconButton:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.pipelinesTelemetryClusterNavCounter {
+  min-width: 44px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .pipelinesTelemetryClusterOverlayTitle {

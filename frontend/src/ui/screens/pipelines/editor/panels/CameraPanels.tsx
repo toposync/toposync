@@ -8,7 +8,7 @@ import { i18n } from "../../../../../util/i18n";
 
 import { buildArtifactSuggestions, pipelinesReactSelectStyles } from "../../constants";
 import type { CameraAreaOption, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
-import { prettyOperatorName } from "../../utils";
+import { prettyOperatorName, textConfigValue } from "../../utils";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
 import {
   CropRectangleDrawModal,
@@ -422,7 +422,7 @@ export function MotionGateConfigCard({
 	    : 0.1;
 	  const maskStrokes = parseMotionMaskStrokes((config as any).mask_strokes);
 
-  const inputWithFallback = String((config as any).input_with_fallback ?? "segmented,treated,original").trim() || "segmented,treated,original";
+  const inputWithFallback = textConfigValue((config as any).input_with_fallback, "segmented,treated,original");
   const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? (config as any).fallback_to_payload_frame ?? true;
 
   const drawEligibility = React.useMemo(
@@ -686,7 +686,7 @@ export function MotionBgSubAdaptiveConfigCard({
     : 0.1;
   const maskStrokes = parseMotionMaskStrokes((config as any).mask_strokes);
 
-  const inputWithFallback = String((config as any).input_with_fallback ?? "segmented,treated,original").trim() || "segmented,treated,original";
+  const inputWithFallback = textConfigValue((config as any).input_with_fallback, "segmented,treated,original");
   const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? true;
 
   const drawEligibility = React.useMemo(
@@ -1165,7 +1165,7 @@ export function MotionSampleBgConfigCard({
     : 0.1;
   const maskStrokes = parseMotionMaskStrokes((config as any).mask_strokes);
 
-  const inputWithFallback = String((config as any).input_with_fallback ?? "segmented,treated,original").trim() || "segmented,treated,original";
+  const inputWithFallback = textConfigValue((config as any).input_with_fallback, "segmented,treated,original");
   const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? true;
 
   const drawEligibility = React.useMemo(
@@ -1699,7 +1699,7 @@ export function ImageCropConfigCard({ config, pipelineName, steps, operatorsById
   const top = Number((config as any).top ?? 0);
   const right = Number((config as any).right ?? 100);
   const bottom = Number((config as any).bottom ?? 100);
-  const outputArtifactName = String((config as any).output_artifact_name ?? "frame").trim() || "frame";
+  const outputArtifactName = textConfigValue((config as any).output_artifact_name, "frame");
   const minCropSizePx = Number((config as any).min_crop_size_px ?? 8);
   const setStreamFrame = (config as any).set_stream_frame ?? (config as any).set_payload_frame ?? true;
 
@@ -1951,7 +1951,7 @@ export function ImagePerspectiveCropConfigCard({
       ? outputRatioRaw
       : "auto";
 
-  const outputArtifactName = String((config as any).output_artifact_name ?? "frame").trim() || "frame";
+  const outputArtifactName = textConfigValue((config as any).output_artifact_name, "frame");
   const minOutputEdgePx = Number((config as any).min_output_edge_px ?? 8);
   const maxOutputEdgePx = Number((config as any).max_output_edge_px ?? 0);
   const setStreamFrame = (config as any).set_stream_frame ?? (config as any).set_payload_frame ?? true;
@@ -2251,7 +2251,7 @@ export function ImagePrivacyConfigCard({
   const right = Number((config as any).right ?? 0);
   const bottom = Number((config as any).bottom ?? 0);
   const effect = parsePrivacyEffect((config as any).effect);
-  const outputArtifactName = String((config as any).output_artifact_name ?? "frame").trim() || "frame";
+  const outputArtifactName = textConfigValue((config as any).output_artifact_name, "frame");
   const minRegionSizePx = Number((config as any).min_region_size_px ?? 8);
   const setStreamFrame = (config as any).set_stream_frame ?? (config as any).set_payload_frame ?? true;
   const preserveAlpha = (config as any).preserve_alpha !== false;
@@ -2529,7 +2529,7 @@ export function ArtifactPrivacyConfigCard({
   onUpdateConfig,
 }: ArtifactPrivacyProps): React.ReactElement {
   const { t } = i18n.useI18n();
-  const expression = String((config as any).expression ?? "").trim();
+  const expression = textConfigValue((config as any).expression);
   const invert = Boolean((config as any).invert ?? false);
   const artifactNamesRaw = (config as any).artifact_names;
   const artifactNames = Array.isArray(artifactNamesRaw)
@@ -2628,7 +2628,7 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
   const contrast = Number((config as any).contrast ?? 1.0);
   const gamma = Number((config as any).gamma ?? 1.0);
 
-  const outputArtifactName = String((config as any).output_artifact_name ?? "frame").trim() || "frame";
+  const outputArtifactName = textConfigValue((config as any).output_artifact_name, "frame");
   const setStreamFrame = (config as any).set_stream_frame ?? (config as any).set_payload_frame ?? true;
   const preserveAlpha = (config as any).preserve_alpha !== false;
   const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? (config as any).fallback_to_payload_frame ?? true;
@@ -2858,8 +2858,8 @@ export function ObjectSegmentationConfigCard({
   const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? (config as any).fallback_to_payload_frame ?? true;
   const paddingRatio = Number((config as any).padding_ratio ?? 0.08);
   const minCropSizePx = Number((config as any).min_crop_size_px ?? 8);
-  const outputArtifactName = String((config as any).output_artifact_name ?? "segmented").trim() || "segmented";
-  const bboxField = String((config as any).bbox_field ?? "object_bbox01").trim() || "object_bbox01";
+  const outputArtifactName = textConfigValue((config as any).output_artifact_name, "segmented");
+  const bboxField = textConfigValue((config as any).bbox_field, "object_bbox01");
 
   const inputNames = normalizeStringArray((config as any).input_artifact_names, ["original", "treated"]);
   const preferOriginal = String(inputNames[0] || "").trim().toLowerCase() !== "treated";

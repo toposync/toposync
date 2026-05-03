@@ -19,6 +19,7 @@ import { LocalBuildConsentModal } from "../../../../LocalBuildConsentModal";
 import { Modal } from "../../../../Modal";
 import { pipelinesReactSelectStyles, YOLO_CATEGORY_OPTIONS } from "../../constants";
 import type { InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
+import { textConfigValue } from "../../utils";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
@@ -697,7 +698,7 @@ export function VisionConfigCard({
   const pauseWhenGateClosed = Boolean((config as any).pause_when_gate_closed ?? true);
   const useWorldAnchor = Boolean((config as any).use_world_anchor ?? false);
   const modelId = String((config as any).model_id ?? "").trim();
-  const inputWithFallback = String((config as any).input_with_fallback ?? "treated,original").trim() || "treated,original";
+  const inputWithFallback = textConfigValue((config as any).input_with_fallback, "treated,original");
   const attachMaskArtifacts = Boolean((config as any).attach_mask_artifacts ?? true);
   const attachPolygons = Boolean((config as any).attach_polygons ?? false);
   const maxInstancesRaw = Number((config as any).max_instances_per_frame ?? 16);

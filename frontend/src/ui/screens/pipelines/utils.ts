@@ -31,6 +31,11 @@ export function jsonPretty(value: unknown): string {
   }
 }
 
+export function textConfigValue(value: unknown, fallback = ""): string {
+  if (value === undefined || value === null) return fallback;
+  return String(value);
+}
+
 export function humanizeIdentifier(raw: string): string {
   const normalized = String(raw || "").trim();
   if (!normalized) return "";

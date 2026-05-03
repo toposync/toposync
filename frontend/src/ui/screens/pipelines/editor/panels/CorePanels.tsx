@@ -19,7 +19,7 @@ import {
   YOLO_CATEGORY_OPTIONS,
 } from "../../constants";
 import type { InteractiveStep, SelectOption } from "../../types";
-import { isRecord, safeJsonParse } from "../../utils";
+import { isRecord, safeJsonParse, textConfigValue } from "../../utils";
 import { i18n } from "../../../../../util/i18n";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
 import type { PipelineStepSnapshotKey } from "./pipelineStepSnapshots";
@@ -38,7 +38,7 @@ type ScheduleGateProps = {
 export function ScheduleGateConfigCard({ config, showAdvanced, onUpdateConfig }: ScheduleGateProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const enabled = Boolean((config as any).enabled ?? true);
-  const timezone = String((config as any).timezone ?? "").trim();
+  const timezone = textConfigValue((config as any).timezone);
   const weekdaysRaw = (config as any).weekdays;
   const weekdayValues = Array.isArray(weekdaysRaw)
     ? weekdaysRaw.map((value: any) => String(value || "").trim().toLowerCase()).filter((value: string) => value.length > 0)
@@ -196,7 +196,7 @@ type FilterProps = {
 export function FilterConfigCard({ config, steps, index, operatorsById, onUpdateConfig }: FilterProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const presetId = String((config as any).preset_id ?? "").trim();
-  const expression = String((config as any).expression ?? "").trim();
+  const expression = textConfigValue((config as any).expression);
   const invert = Boolean((config as any).invert ?? false);
   const upstreamContext = useMemo(
     () => buildFilterExpressionUpstreamContext(steps, index, operatorsById),
@@ -465,7 +465,7 @@ export function VelocityThrottleConfigCard({
   const movingIntervalSeconds = Number((config as any).moving_interval_seconds ?? 2.0);
   const stoppedIntervalSeconds = Number((config as any).stopped_interval_seconds ?? 300.0);
   const keyFieldRaw = String((config as any).key_field ?? "payload.event_id").trim() || "payload.event_id";
-  const movingFieldRaw = String((config as any).moving_field ?? "payload.velocity.moving").trim() || "payload.velocity.moving";
+  const movingFieldRaw = textConfigValue((config as any).moving_field, "payload.velocity.moving");
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -530,8 +530,7 @@ export function VelocityThrottleConfigCard({
               type="text"
               value={movingFieldRaw}
               onChange={(event) => {
-                const nextField = String(event.target.value || "payload.velocity.moving").trim() || "payload.velocity.moving";
-                onUpdateConfig((prev) => ({ ...prev, moving_field: nextField }));
+                onUpdateConfig((prev) => ({ ...prev, moving_field: event.target.value }));
               }}
             />
           </label>
@@ -691,7 +690,7 @@ export function DebugConfigCard({ config, pipelineName, steps, index, showAdvanc
   const printMetadata = Boolean((config as any).print_metadata ?? true);
   const printArtifacts = Boolean((config as any).print_artifacts ?? true);
   const maxImagesPerPacket = Number((config as any).max_images_per_packet ?? 4);
-  const outputDir = String((config as any).output_dir ?? "").trim();
+  const outputDir = textConfigValue((config as any).output_dir);
   const snapshotEnabled = (config as any).snapshot_enabled !== false;
   const snapshotIntervalRaw = Number((config as any).snapshot_interval_seconds ?? 10);
   const snapshotIntervalSeconds = Number.isFinite(snapshotIntervalRaw) ? Math.max(0, Math.min(3600, snapshotIntervalRaw)) : 10;
@@ -882,7 +881,7 @@ export function StoreImagesConfigCard({ config, showAdvanced, onUpdateConfig }: 
   const { t } = i18n.useI18n();
   const formatRaw = String((config as any).format ?? "png").trim().toLowerCase() || "png";
   const format = formatRaw === "jpg" || formatRaw === "jpeg" ? "jpg" : "png";
-  const subdir = String((config as any).subdir ?? "pipelines").trim() || "pipelines";
+  const subdir = textConfigValue((config as any).subdir, "pipelines");
   const jpegQualityRaw = Number((config as any).jpeg_quality ?? 85);
   const jpegQuality = Number.isFinite(jpegQualityRaw) ? Math.max(1, Math.min(100, jpegQualityRaw)) : 85;
   const overwrite = Boolean((config as any).overwrite ?? false);
@@ -1249,14 +1248,14 @@ export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }:
 
 export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: NotifyProps): React.ReactElement {
   const { t } = i18n.useI18n();
-  const title = String((config as any).title ?? "").trim();
-  const description = String((config as any).description ?? "").trim();
+  const title = textConfigValue((config as any).title);
+  const description = textConfigValue((config as any).description);
   const priority = String((config as any).priority ?? "medium").trim().toLowerCase() || "medium";
   const realtime = Boolean((config as any).realtime ?? true);
   const updateIntervalSecondsRaw = Number((config as any).update_interval_seconds ?? 1.0);
   const updateIntervalSeconds = Number.isFinite(updateIntervalSecondsRaw) ? Math.max(0, Math.min(60, updateIntervalSecondsRaw)) : 1.0;
-  const notificationType = String((config as any).notification_type ?? "pipelines.event").trim() || "pipelines.event";
-  const dedupeKeyTemplate = String((config as any).dedupe_key_template ?? "").trim();
+  const notificationType = textConfigValue((config as any).notification_type, "pipelines.event");
+  const dedupeKeyTemplate = textConfigValue((config as any).dedupe_key_template);
 
   const notifyFallbackRaw = (config as any).thumbnail_with_fallback;
   const notifyFallback = Array.isArray(notifyFallbackRaw)
@@ -1411,9 +1410,9 @@ export function HomeAssistantNotifyConfigCard({ config, showAdvanced, onUpdateCo
   const notifyWhenRaw = String((config as any).notify_when ?? "open").trim().toLowerCase();
   const notifyWhen = ["open", "open_update", "close", "all"].includes(notifyWhenRaw) ? notifyWhenRaw : "open";
   const closeBehaviorRaw = String((config as any).close_behavior ?? "ignore").trim().toLowerCase();
-  const title = String((config as any).title ?? "").trim();
-  const message = String((config as any).message ?? "").trim();
-  const tagTemplate = String((config as any).tag_template ?? "").trim();
+  const title = textConfigValue((config as any).title);
+  const message = textConfigValue((config as any).message);
+  const tagTemplate = textConfigValue((config as any).tag_template);
 
   useEffect(() => {
     if (notifyWhen !== "open" && notifyWhen !== "open_update") return;

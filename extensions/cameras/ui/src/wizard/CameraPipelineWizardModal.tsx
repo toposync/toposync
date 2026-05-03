@@ -45,8 +45,9 @@ const PYTHON_KEYWORDS = new Set([
 ]);
 
 function safePipelineName(value: string): string {
-  const raw = String(value ?? "").trim();
-  const cleaned = raw.replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+  const raw = String(value ?? "");
+  if (!raw.trim()) return "";
+  const cleaned = raw.replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+/, "");
   let out = cleaned || "pipeline";
   if (!/^[A-Za-z_]/.test(out)) out = `_${out}`;
   if (PYTHON_KEYWORDS.has(out)) out = `${out}_`;

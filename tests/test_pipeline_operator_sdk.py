@@ -10,6 +10,7 @@ from toposync.runtime.pipelines import (
     OperatorRegistry,
     PipelineGraphCompiler,
 )
+from toposync.runtime.pipelines.recommendations import analyze_compiled_pipeline
 
 
 class ThresholdConfig(BaseModel):
@@ -226,3 +227,42 @@ def test_operator_registry_preserves_expression_hints() -> None:
             "enum_values": [],
         },
     ]
+
+
+def test_operator_diagnostics_are_collected_as_pipeline_alerts() -> None:
+    registry = OperatorRegistry()
+    registry.register_operator(
+        operator_id="test.source",
+        inputs=[],
+        outputs=[{"name": "out"}],
+        defaults={},
+        capabilities=["source"],
+        diagnostics_factory=lambda config, context: [
+            {
+                "severity": "error",
+                "code": "test_source_not_ready",
+                "message": f"Source is not ready in {context['scope']}.",
+                "suggestion": "Fix the source configuration.",
+            }
+        ],
+    )
+
+    compiled = PipelineGraphCompiler(registry).compile_pipeline(
+        Pipeline(
+            name="diagnostics",
+            graph={
+                "schema_version": 1,
+                "nodes": [{"id": "source", "operator": "test.source", "config": {}}],
+                "edges": [],
+            },
+        )
+    )
+    alerts = analyze_compiled_pipeline(pipeline=compiled, registry=registry, context={"scope": "test"})
+
+    assert any(
+        alert.severity == "error"
+        and alert.code == "test_source_not_ready"
+        and alert.node_id == "source"
+        and alert.operator_id == "test.source"
+        for alert in alerts
+    )

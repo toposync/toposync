@@ -2811,7 +2811,12 @@ def create_app() -> FastAPI:
             ]
             for signature, occurrences in compiled.shared_signatures.items()
         }
-        alerts = analyze_compiled_pipeline(pipeline=pipeline, registry=registry)
+        config_store: ConfigStore = request.app.state.config_store
+        alerts = analyze_compiled_pipeline(
+            pipeline=pipeline,
+            registry=registry,
+            context={"data_dir": str(config_store.paths.data_dir)},
+        )
         return PipelineCompileResponse(
             pipeline=compiled_dict, shared_signatures=shared_signatures, alerts=alerts
         )
@@ -2885,7 +2890,12 @@ def create_app() -> FastAPI:
             ]
             for signature, occurrences in compiled.shared_signatures.items()
         }
-        alerts = analyze_compiled_pipeline(pipeline=compiled_pipeline, registry=registry)
+        config_store: ConfigStore = request.app.state.config_store
+        alerts = analyze_compiled_pipeline(
+            pipeline=compiled_pipeline,
+            registry=registry,
+            context={"data_dir": str(config_store.paths.data_dir)},
+        )
         return PipelineCompilePythonResponse(
             graph=graph,
             pipeline=compiled_dict,

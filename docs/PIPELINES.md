@@ -259,6 +259,7 @@ Um operador declara:
 - `config_model` (Pydantic) + `defaults` + JSON schema
 - `capabilities` (ex.: `split_stream`, `origin_only`, `heavy_compute`)
 - `share_strategy` (`by_signature` ou `never`)
+- `diagnostics_factory` opcional, para a extensão reportar problemas de configuração/ambiente como modelo ausente, credencial faltando ou dependência indisponível. O TopoSync apenas agrega e exibe esses diagnósticos por etapa.
 
 Registro via `OperatorRegistry`, exposto como service:
 - `pipelines.register_operator`

@@ -15,6 +15,7 @@ CAPABILITY_NAME_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 CONTRACT_ITEM_RE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
 EXPRESSION_HINT_PATH_RE = re.compile(r"^(payload|metadata)(?:\.[a-z][a-z0-9_]{0,127}|\[[0-9]+\])*$")
 EXECUTION_MODE = Literal["in_event_loop", "thread_pool", "process_pool", "external"]
+OPERATOR_DIAGNOSTIC_SEVERITY = Literal["error", "warning", "info"]
 
 
 class OperatorRegistrationError(ValueError):
@@ -23,6 +24,18 @@ class OperatorRegistrationError(ValueError):
 
 class OperatorConfigValidationError(ValueError):
     pass
+
+
+class OperatorDiagnostic(BaseModel):
+    severity: OPERATOR_DIAGNOSTIC_SEVERITY = "warning"
+    code: str
+    message: str
+    suggestion: str = ""
+
+    @field_validator("code", "message", "suggestion")
+    @classmethod
+    def _normalize_text(cls, value: str) -> str:
+        return str(value or "").strip()
 
 
 class OperatorPort(BaseModel):
@@ -258,6 +271,7 @@ class RegisteredOperator:
     config_signature: str
     owner: str | None
     runtime_factory: Callable[[dict[str, Any], Any], Any] | None = None
+    diagnostics_factory: Callable[[dict[str, Any], dict[str, Any]], list[OperatorDiagnostic | dict[str, Any]]] | None = None
 
 
 class OperatorRegistry:
@@ -290,6 +304,7 @@ class OperatorRegistry:
         expression_hints: list[ExpressionHint | dict[str, Any]] | None = None,
         owner: str | None = None,
         runtime_factory: Callable[[dict[str, Any], Any], Any] | None = None,
+        diagnostics_factory: Callable[[dict[str, Any], dict[str, Any]], list[OperatorDiagnostic | dict[str, Any]]] | None = None,
     ) -> OperatorDefinition:
         normalized_operator_id = str(operator_id or "").strip()
         if normalized_operator_id in self._items:
@@ -348,6 +363,7 @@ class OperatorRegistry:
             config_signature=config_signature,
             owner=str(owner or "").strip() or None,
             runtime_factory=runtime_factory,
+            diagnostics_factory=diagnostics_factory,
         )
         return definition
 
@@ -364,6 +380,37 @@ class OperatorRegistry:
         merged = dict(registered.definition.defaults)
         merged.update(dict(raw_config or {}))
         return _validate_with_model(registered.config_model, merged)
+
+    def collect_diagnostics(
+        self,
+        operator_id: str,
+        config: dict[str, Any] | None,
+        context: dict[str, Any] | None = None,
+    ) -> list[OperatorDiagnostic]:
+        registered = self._items.get(operator_id)
+        if registered is None or registered.diagnostics_factory is None:
+            return []
+        try:
+            raw_items = registered.diagnostics_factory(dict(config or {}), context if context is not None else {})
+        except Exception as exc:  # noqa: BLE001
+            return [
+                OperatorDiagnostic(
+                    severity="warning",
+                    code="operator_diagnostics_failed",
+                    message=f"Could not check operator diagnostics: {exc}",
+                )
+            ]
+
+        diagnostics: list[OperatorDiagnostic] = []
+        for item in raw_items or []:
+            try:
+                diagnostic = item if isinstance(item, OperatorDiagnostic) else OperatorDiagnostic.model_validate(item)
+            except Exception:
+                continue
+            if not diagnostic.code or not diagnostic.message:
+                continue
+            diagnostics.append(diagnostic)
+        return diagnostics
 
 
 def _ensure_config_model(model_type: type[BaseModel] | None) -> type[BaseModel]:

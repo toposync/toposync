@@ -11,7 +11,7 @@ from .runtime import DropPolicy
 
 
 class PipelineAlert(BaseModel):
-    severity: Literal["info", "warning"] = "warning"
+    severity: Literal["info", "warning", "error"] = "warning"
     code: str
     message: str
     suggestion: str = ""
@@ -20,7 +20,12 @@ class PipelineAlert(BaseModel):
     edge: dict[str, Any] | None = None
 
 
-def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorRegistry) -> list[PipelineAlert]:
+def analyze_compiled_pipeline(
+    *,
+    pipeline: CompiledPipeline,
+    registry: OperatorRegistry,
+    context: dict[str, Any] | None = None,
+) -> list[PipelineAlert]:
     nodes_by_id = {node.node_id: node for node in pipeline.nodes}
     edges = list(pipeline.edges)
     order_index = {node_id: idx for idx, node_id in enumerate(pipeline.topological_order)}
@@ -101,6 +106,29 @@ def analyze_compiled_pipeline(*, pipeline: CompiledPipeline, registry: OperatorR
         return cfg if isinstance(cfg, dict) else {}
 
     alerts: list[PipelineAlert] = []
+    diagnostic_context: dict[str, Any] = context if context is not None else {}
+
+    # Extension/operator-owned diagnostics. TopoSync aggregates these without
+    # hard-coding domain-specific requirements in the core analyzer.
+    for node_id in pipeline.topological_order:
+        node = nodes_by_id.get(node_id)
+        if node is None:
+            continue
+        for diagnostic in registry.collect_diagnostics(
+            node.operator_id,
+            node.normalized_config,
+            diagnostic_context,
+        ):
+            alerts.append(
+                PipelineAlert(
+                    severity=diagnostic.severity,
+                    code=diagnostic.code,
+                    node_id=node_id,
+                    operator_id=node.operator_id,
+                    message=diagnostic.message,
+                    suggestion=diagnostic.suggestion,
+                )
+            )
 
     # Operator contracts (lightweight requires/produces) for UX guidance.
     available_payload_keys_out: dict[str, set[str]] = {}

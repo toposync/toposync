@@ -13,6 +13,7 @@ from .runtime import (
 )
 from .operator_registry import (
     ExpressionHint,
+    OperatorDiagnostic,
     OperatorConfigValidationError,
     OperatorDefinition,
     OperatorPort,
@@ -64,6 +65,7 @@ __all__ = [
     "Packet",
     "QueueOperationStatus",
     "OperatorConfigValidationError",
+    "OperatorDiagnostic",
     "ExpressionHint",
     "OperatorDefinition",
     "OperatorPort",

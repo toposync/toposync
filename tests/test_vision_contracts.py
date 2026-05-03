@@ -334,6 +334,28 @@ def test_register_vision_pipeline_operators_exposes_pose_estimate() -> None:
     assert "pose" in list(operator.definition.capabilities or [])
 
 
+def test_vision_operator_diagnostics_report_missing_model_artifact(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path))
+    registry = OperatorRegistry()
+
+    register_vision_pipeline_operators(registry)
+    diagnostics = registry.collect_diagnostics(
+        "vision.detect",
+        {"model_id": "rtmdet_det_tiny"},
+        {},
+    )
+
+    assert any(
+        item.severity == "error"
+        and item.code == "vision_model_artifact_missing"
+        and "RTMDet" in item.message
+        for item in diagnostics
+    )
+
+
 def test_register_vision_pipeline_operators_exposes_classification() -> None:
     registry = OperatorRegistry()
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from toposync.runtime.pipelines.operator_registry import OperatorRegistry, payload_path_hint
+from toposync.runtime.pipelines.operator_registry import OperatorDiagnostic, OperatorRegistry, payload_path_hint
 
 from ..processing.tasks import (
     VisionClassifyImageRuntime,
@@ -11,6 +11,7 @@ from ..processing.tasks import (
     VisionSegmentInstancesRuntime,
     VisionTrackRuntime,
 )
+from ..registry import ModelRegistry, build_default_model_registry
 from .schemas import (
     VisionClassifyImageConfig,
     VisionDetectConfig,
@@ -67,6 +68,63 @@ def _vision_expression_hints(*, branch: str | None = None) -> list[Any]:
     return hints
 
 
+def _vision_registry_from_context(context: dict[str, Any]) -> ModelRegistry:
+    cached = context.get("_toposync_vision_model_registry")
+    if isinstance(cached, ModelRegistry):
+        return cached
+    registry = build_default_model_registry()
+    context["_toposync_vision_model_registry"] = registry
+    return registry
+
+
+def _resolve_task_manifest(registry: ModelRegistry, task: str, model_id: str) -> Any:
+    if task == "classification":
+        return registry.resolve_classifier_manifest(model_id)
+    if task == "segmentation":
+        return registry.resolve_segmenter_manifest(model_id)
+    if task == "pose":
+        return registry.resolve_pose_manifest(model_id)
+    return registry.resolve_detector_manifest(model_id)
+
+
+def _vision_model_diagnostics(task: str) -> Any:
+    def collect(config: dict[str, Any], context: dict[str, Any]) -> list[OperatorDiagnostic]:
+        model_id = str(config.get("model_id") or "").strip().lower()
+        try:
+            manifest = _resolve_task_manifest(_vision_registry_from_context(context), task, model_id)
+        except Exception as exc:  # noqa: BLE001
+            return [
+                OperatorDiagnostic(
+                    severity="error",
+                    code="vision_model_unresolved",
+                    message=f"Vision {task} model is not ready: {exc}",
+                    suggestion=(
+                        "Open this step and select an available model, import a model manifest, "
+                        "or configure the model_id expected by this processing server."
+                    ),
+                )
+            ]
+
+        artifact_path = manifest.resolve_artifact_path()
+        if artifact_path.is_file():
+            return []
+
+        display_name = str(getattr(manifest, "display_name", "") or "").strip() or manifest.model_id
+        return [
+            OperatorDiagnostic(
+                severity="error",
+                code="vision_model_artifact_missing",
+                message=f"Model file for {display_name} is missing on the selected processing server.",
+                suggestion=(
+                    "Open this step and prepare or upload the ONNX model file, "
+                    "or choose another model that is already available."
+                ),
+            )
+        ]
+
+    return collect
+
+
 def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
     if registry.get("vision.classify_image") is None:
         registry.register_operator(
@@ -98,6 +156,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
                 deps,
                 operator_id="vision.classify_image",
             ),
+            diagnostics_factory=_vision_model_diagnostics("classification"),
         )
     if registry.get("vision.pose_estimate") is None:
         registry.register_operator(
@@ -135,6 +194,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
                 deps,
                 operator_id="vision.pose_estimate",
             ),
+            diagnostics_factory=_vision_model_diagnostics("pose"),
         )
     if registry.get("vision.segment_instances") is None:
         registry.register_operator(
@@ -168,6 +228,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
                 deps,
                 operator_id="vision.segment_instances",
             ),
+            diagnostics_factory=_vision_model_diagnostics("segmentation"),
         )
     if registry.get("vision.track") is None:
         registry.register_operator(
@@ -244,4 +305,5 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
                 deps,
                 operator_id="vision.detect",
             ),
+            diagnostics_factory=_vision_model_diagnostics("detection"),
         )

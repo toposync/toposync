@@ -47,7 +47,7 @@ uv venv .venv --python 3.12
 ## 4) Instalar o bundle padrão
 
 ```powershell
-uv pip install --upgrade --refresh toposync==0.4.3
+uv pip install --upgrade --refresh toposync==0.4.4
 ```
 
 Depois rode:
@@ -79,7 +79,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 Para máquinas Windows com GPU compatível via DirectML:
 
 ```powershell
-uv pip install --upgrade --refresh toposync-vision-directml==0.4.3
+uv pip install --upgrade --refresh toposync-vision-directml==0.4.4
 ```
 
 ### CUDA
@@ -87,7 +87,7 @@ uv pip install --upgrade --refresh toposync-vision-directml==0.4.3
 Para NVIDIA:
 
 ```powershell
-uv pip install --upgrade --refresh toposync-vision-cuda==0.4.3
+uv pip install --upgrade --refresh toposync-vision-cuda==0.4.4
 ```
 
 Observação:

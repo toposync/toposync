@@ -4,6 +4,7 @@ import math
 from dataclasses import replace
 from typing import Any
 
+from .images import MAIN_ARTIFACT_NAME
 from .runtime import Artifact, Packet
 
 
@@ -228,7 +229,7 @@ def resolve_media_dimensions(packet: Packet) -> tuple[int | None, int | None]:
     if legacy_width is not None and legacy_height is not None:
         return int(legacy_width), int(legacy_height)
 
-    artifact = packet.artifacts.get("frame_original") or packet.artifacts.get("frame")
+    artifact = packet.artifacts.get(MAIN_ARTIFACT_NAME)
     meta_width = _artifact_dimension_from_metadata(artifact, "width")
     meta_height = _artifact_dimension_from_metadata(artifact, "height")
     if meta_width is not None and meta_height is not None:
@@ -254,17 +255,14 @@ def ensure_video_artifact_dimensions(packet: Packet) -> Packet:
 
     changed = False
     artifacts = dict(packet.artifacts)
-    for name in ("frame_original", "frame"):
-        artifact = artifacts.get(name)
-        if artifact is None:
-            continue
+    artifact = artifacts.get(MAIN_ARTIFACT_NAME)
+    if artifact is not None:
         metadata = dict(artifact.metadata)
-        if metadata.get("width") == width and metadata.get("height") == height:
-            continue
-        metadata["width"] = int(width)
-        metadata["height"] = int(height)
-        artifacts[name] = replace(artifact, metadata=metadata)
-        changed = True
+        if metadata.get("width") != width or metadata.get("height") != height:
+            metadata["width"] = int(width)
+            metadata["height"] = int(height)
+            artifacts[MAIN_ARTIFACT_NAME] = replace(artifact, metadata=metadata)
+            changed = True
 
     if not changed:
         return packet

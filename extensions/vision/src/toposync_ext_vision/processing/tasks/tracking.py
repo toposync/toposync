@@ -484,11 +484,7 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         detections: list[DetectionObject],
         frame_ts: float,
     ):
-        _image_key, _artifact_name, frame = resolve_image_artifact_for_data(
-            packet,
-            input_with_fallback="treated,original",
-            fallback_to_stream_frame=True,
-        )
+        _artifact_name, frame = resolve_image_artifact_for_data(packet)
         backend = self._ensure_backend()
         concurrency_key = f"vision.track:{backend.tracker_id}"
         runtime_metadata = dict(packet.metadata)

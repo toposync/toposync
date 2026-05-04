@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from .compiler import CompiledPipeline
+from .images import MAIN_ARTIFACT_NAME, normalize_artifact_name
 from .operator_registry import OperatorRegistry
 from .runtime import DropPolicy
 
@@ -105,8 +106,32 @@ def analyze_compiled_pipeline(
         cfg = node.normalized_config
         return cfg if isinstance(cfg, dict) else {}
 
+    def _diagnostic_node_context(node_id: str) -> dict[str, Any]:
+        node = nodes_by_id.get(node_id)
+        upstream_nodes: list[dict[str, Any]] = []
+        for upstream_id in _upstream_nodes(node_id):
+            upstream = nodes_by_id.get(upstream_id)
+            if upstream is None:
+                continue
+            upstream_cfg = upstream.normalized_config
+            upstream_nodes.append(
+                {
+                    "node_id": upstream.node_id,
+                    "operator_id": upstream.operator_id,
+                    "normalized_config": upstream_cfg if isinstance(upstream_cfg, dict) else {},
+                }
+            )
+        return {
+            "node_id": node_id,
+            "operator_id": str(node.operator_id) if node is not None else "",
+            "pipeline_name": pipeline.name,
+            "upstream_nodes": upstream_nodes,
+        }
+
     alerts: list[PipelineAlert] = []
     diagnostic_context: dict[str, Any] = context if context is not None else {}
+    diagnostic_node_keys = ("node_id", "operator_id", "pipeline_name", "upstream_nodes")
+    missing_context_value = object()
 
     # Extension/operator-owned diagnostics. TopoSync aggregates these without
     # hard-coding domain-specific requirements in the core analyzer.
@@ -114,11 +139,23 @@ def analyze_compiled_pipeline(
         node = nodes_by_id.get(node_id)
         if node is None:
             continue
-        for diagnostic in registry.collect_diagnostics(
-            node.operator_id,
-            node.normalized_config,
-            diagnostic_context,
-        ):
+        previous_context_values = {
+            key: diagnostic_context.get(key, missing_context_value) for key in diagnostic_node_keys
+        }
+        diagnostic_context.update(_diagnostic_node_context(node_id))
+        try:
+            diagnostics = registry.collect_diagnostics(
+                node.operator_id,
+                node.normalized_config,
+                diagnostic_context,
+            )
+        finally:
+            for key, value in previous_context_values.items():
+                if value is missing_context_value:
+                    diagnostic_context.pop(key, None)
+                else:
+                    diagnostic_context[key] = value
+        for diagnostic in diagnostics:
             alerts.append(
                 PipelineAlert(
                     severity=diagnostic.severity,
@@ -145,6 +182,7 @@ def analyze_compiled_pipeline(
 
         registered = registry.get(node.operator_id)
         if registered is not None:
+            cfg = node.normalized_config if isinstance(node.normalized_config, dict) else {}
             missing_payload_keys = [key for key in registered.definition.requires_payload_keys if key not in upstream_payload_keys]
             if missing_payload_keys:
                 alerts.append(
@@ -161,7 +199,13 @@ def analyze_compiled_pipeline(
                     )
                 )
 
-            missing_artifacts = [name for name in registered.definition.requires_artifacts if name not in upstream_artifacts]
+            required_artifacts = set(registered.definition.requires_artifacts)
+            input_artifact_name = normalize_artifact_name(cfg.get("input_artifact_name"), default="")
+            if input_artifact_name and MAIN_ARTIFACT_NAME in required_artifacts:
+                required_artifacts.remove(MAIN_ARTIFACT_NAME)
+                required_artifacts.add(input_artifact_name)
+
+            missing_artifacts = [name for name in required_artifacts if name not in upstream_artifacts]
             if missing_artifacts:
                 alerts.append(
                     PipelineAlert(
@@ -178,7 +222,13 @@ def analyze_compiled_pipeline(
                 )
 
             upstream_payload_keys.update(registered.definition.produces_payload_keys)
-            upstream_artifacts.update(registered.definition.produces_artifacts)
+
+            produced_artifacts = set(registered.definition.produces_artifacts)
+            output_artifact_name = normalize_artifact_name(cfg.get("output_artifact_name"), default="")
+            if output_artifact_name and MAIN_ARTIFACT_NAME in produced_artifacts:
+                produced_artifacts.remove(MAIN_ARTIFACT_NAME)
+                produced_artifacts.add(output_artifact_name)
+            upstream_artifacts.update(produced_artifacts)
 
         available_payload_keys_out[node_id] = upstream_payload_keys
         available_artifacts_out[node_id] = upstream_artifacts
@@ -240,31 +290,27 @@ def analyze_compiled_pipeline(
                     node_id=notify_node_id,
                     operator_id="core.notify",
                     message="Notifications can't display images because there is no Store Images step before Notify.",
-                    suggestion="Add 'Store Images' before 'Notify' and store at least one artifact used as thumbnail fallback (e.g. frame_original or best_frame).",
+                    suggestion="Add 'Store Images' before 'Notify' so the main artifact has a stored reference.",
                 )
             )
         else:
             stored_artifacts: set[str] = set()
             for store_id in store_nodes:
                 cfg = _resolve_config(store_id)
-                names = cfg.get("artifact_names")
-                if isinstance(names, list):
-                    stored_artifacts.update(str(item).strip() for item in names if str(item).strip())
+                stored_artifacts.add(normalize_artifact_name(cfg.get("input_artifact_name")))
             notify_cfg = _resolve_config(notify_node_id)
-            fallback = notify_cfg.get("thumbnail_with_fallback")
-            if isinstance(fallback, list):
-                desired = {str(item).strip() for item in fallback if str(item).strip()}
-                if desired and stored_artifacts and not (desired & stored_artifacts):
-                    alerts.append(
-                        PipelineAlert(
-                            severity="warning",
-                            code="notify_thumbnail_not_stored",
-                            node_id=notify_node_id,
-                            operator_id="core.notify",
-                            message="Notify thumbnail fallback doesn't match any artifacts stored by upstream Store Images.",
-                            suggestion="Either update 'Store Images' to store one of the fallback artifacts, or change Notify fallback to include a stored artifact.",
-                        )
+            desired = normalize_artifact_name(notify_cfg.get("input_artifact_name"))
+            if stored_artifacts and desired not in stored_artifacts:
+                alerts.append(
+                    PipelineAlert(
+                        severity="warning",
+                        code="notify_thumbnail_not_stored",
+                        node_id=notify_node_id,
+                        operator_id="core.notify",
+                        message=f"Notify reads artifact '{desired}', but upstream Store Images stores {', '.join(sorted(stored_artifacts))}.",
+                        suggestion="Store the same artifact that Notify reads, or set both steps to the same advanced artifact name.",
                     )
+                )
 
     # Velocity/areas require a world mapping.
     for velocity_node_id in _node_ids_by_operator("camera.velocity_estimation"):
@@ -327,9 +373,24 @@ def analyze_compiled_pipeline(
 
     # Store Images should generally be near the end; downstream operators might need artifact pixel data.
     data_consumers = {
-        "camera.object_crop",
+        "ai.condition_filter",
+        "ai.smart_crop",
+        "camera.image_adjust",
+        "camera.image_crop",
+        "camera.image_perspective_crop",
         "camera.image_resize",
-        "camera.best_frame_selector",
+        "camera.motion_bg_adaptive",
+        "camera.motion_gate",
+        "camera.motion_sample_bg",
+        "camera.object_crop",
+        "camera.privacy_mask",
+        "camera.stabilize",
+        "camera.undistort",
+        "stream.publish_video",
+        "vision.classify",
+        "vision.detect",
+        "vision.pose",
+        "vision.segment_instances",
     }
     for store_node_id in _node_ids_by_operator("core.store_images"):
         cfg = _resolve_config(store_node_id)
@@ -365,34 +426,7 @@ def analyze_compiled_pipeline(
                     )
                 )
         downstream = _downstream_nodes(store_node_id)
-        store_mapping: dict[str, str] = {"original": "frame_original", "treated": "frame"}
-        for upstream_id in _upstream_nodes(store_node_id):
-            upstream_node = nodes_by_id.get(upstream_id)
-            if upstream_node is None:
-                continue
-            if upstream_node.operator_id == "camera.object_crop":
-                seg_cfg = _resolve_config(upstream_id)
-                out_name = str(seg_cfg.get("output_artifact_name") or "segmented").strip() or "segmented"
-                store_mapping["segmented"] = out_name
-            if upstream_node.operator_id == "camera.best_frame_selector":
-                bf_cfg = _resolve_config(upstream_id)
-                out_name = str(bf_cfg.get("output_artifact_name") or "best_frame").strip() or "best_frame"
-                store_mapping["best_frame"] = out_name
-
-        def _map_name(raw: str) -> str:
-            key = str(raw or "").strip()
-            return store_mapping.get(key, key)
-
-        # Which artifacts might Store Images drop pixel data for?
-        store_candidates: list[str] = []
-        wanted = cfg.get("artifact_names")
-        wanted_names = [str(item).strip() for item in wanted] if isinstance(wanted, list) else []
-        if wanted_names:
-            store_candidates = wanted_names
-        else:
-            fallback = str(cfg.get("image_with_fallback") or "").strip() or "best_frame,original,treated,segmented"
-            store_candidates = [p.strip() for p in fallback.split(",") if p.strip()]
-        stored_artifacts = {_map_name(name) for name in store_candidates if str(name or "").strip()}
+        stored_artifacts = {normalize_artifact_name(cfg.get("input_artifact_name"))}
 
         # Warn only when a downstream post-process step might consume the same artifacts that Store Images could drop.
         for node_id in downstream:
@@ -400,18 +434,7 @@ def analyze_compiled_pipeline(
             if node is None or node.operator_id not in data_consumers:
                 continue
             consumer_cfg = _resolve_config(node_id)
-            consumer_inputs: list[str] = []
-            if node.operator_id == "camera.object_crop":
-                raw = consumer_cfg.get("input_artifact_names")
-                consumer_inputs = [str(item).strip() for item in raw] if isinstance(raw, list) else []
-            elif node.operator_id == "camera.image_resize":
-                raw = consumer_cfg.get("artifact_names")
-                consumer_inputs = [str(item).strip() for item in raw] if isinstance(raw, list) else []
-            elif node.operator_id == "camera.best_frame_selector":
-                raw = consumer_cfg.get("input_artifact_names")
-                consumer_inputs = [str(item).strip() for item in raw] if isinstance(raw, list) else []
-
-            consumer_artifacts = {_map_name(name) for name in consumer_inputs if str(name or "").strip()}
+            consumer_artifacts = {normalize_artifact_name(consumer_cfg.get("input_artifact_name"))}
             if stored_artifacts & consumer_artifacts:
                 alerts.append(
                     PipelineAlert(
@@ -420,155 +443,32 @@ def analyze_compiled_pipeline(
                         node_id=store_node_id,
                         operator_id="core.store_images",
                         message="Store Images is placed before a post-processing step that may require artifact pixel data.",
-                        suggestion="Move 'Store Images' closer to the end of the pipeline (after segmentation/resize/best-frame selection).",
+                        suggestion="Move 'Store Images' closer to the end of the pipeline, after image-processing and vision steps.",
                     )
                 )
                 break
 
         # Storing artifacts that are never produced upstream usually indicates a broken config.
-        if wanted_names:
-            produced: set[str] = {"frame_original"}
-            for nid in _upstream_nodes(store_node_id):
-                n = nodes_by_id.get(nid)
-                if n is None:
-                    continue
-                if n.operator_id == "camera.object_crop":
-                    seg_cfg = _resolve_config(nid)
-                    produced.add(str(seg_cfg.get("output_artifact_name") or "segmented").strip() or "segmented")
-                if n.operator_id == "camera.best_frame_selector":
-                    bf_cfg = _resolve_config(nid)
-                    produced.add(str(bf_cfg.get("output_artifact_name") or "best_frame").strip() or "best_frame")
+        produced: set[str] = set()
+        for edge in incoming.get(store_node_id, []):
+            produced.update(available_artifacts_out.get(str(edge.source_node_id), set()))
+        for nid in _upstream_nodes(store_node_id):
+            output_name = _resolve_config(nid).get("output_artifact_name")
+            if output_name:
+                produced.add(normalize_artifact_name(output_name))
+        if not produced:
+            produced.add(MAIN_ARTIFACT_NAME)
 
-            missing = [name for name in wanted_names if name and name not in produced]
-            if missing:
-                alerts.append(
-                    PipelineAlert(
-                        severity="warning",
-                        code="store_images_missing_artifacts",
-                        node_id=store_node_id,
-                        operator_id="core.store_images",
-                        message=f"Store Images is configured to store artifacts that are not produced upstream: {', '.join(missing)}.",
-                        suggestion="Add the step that creates these artifacts (e.g. Object Segmentation / Best Frame Selector) or remove them from Store Images.",
-                    )
-                )
-
-    # Best frame selector should be used by storage/notify; otherwise it's wasted work.
-    for bf_node_id in _node_ids_by_operator("camera.best_frame_selector"):
-        cfg = _resolve_config(bf_node_id)
-        output_name = str(cfg.get("output_artifact_name") or "best_frame").strip() or "best_frame"
-
-        input_names_raw = cfg.get("input_artifact_names")
-        input_names = [str(item).strip() for item in input_names_raw] if isinstance(input_names_raw, list) else []
-        if input_names:
-            produced_inputs: set[str] = set()
-            for edge in incoming.get(bf_node_id, []):
-                produced_inputs.update(available_artifacts_out.get(str(edge.source_node_id), set()))
-
-            # Some operators have configurable output artifact names; include those too.
-            upstream_segmentation_outputs: set[str] = set()
-            upstream_best_frame_outputs: set[str] = set()
-            for nid in _upstream_nodes(bf_node_id):
-                n = nodes_by_id.get(nid)
-                if n is None:
-                    continue
-                if n.operator_id == "camera.object_crop":
-                    seg_cfg = _resolve_config(nid)
-                    out_name = str(seg_cfg.get("output_artifact_name") or "segmented").strip() or "segmented"
-                    upstream_segmentation_outputs.add(out_name)
-                    produced_inputs.add(out_name)
-                if n.operator_id == "camera.best_frame_selector":
-                    bf_cfg = _resolve_config(nid)
-                    out_name = str(bf_cfg.get("output_artifact_name") or "best_frame").strip() or "best_frame"
-                    upstream_best_frame_outputs.add(out_name)
-                    produced_inputs.add(out_name)
-
-            fallback_to_stream_frame = bool(cfg.get("fallback_to_stream_frame", True))
-
-            def _input_is_available(name: str) -> bool:
-                key = str(name or "").strip()
-                if not key:
-                    return False
-                # These are semantic image keys used across the UX.
-                if key == "original":
-                    return "frame_original" in produced_inputs
-                if key == "treated":
-                    return "frame" in produced_inputs
-                if key == "segmented":
-                    return bool(upstream_segmentation_outputs) or "segmented" in produced_inputs
-                if key == "best_frame":
-                    return bool(upstream_best_frame_outputs) or "best_frame" in produced_inputs
-                # Otherwise treat it as an artifact name.
-                return key in produced_inputs
-
-            has_any_input = any(_input_is_available(name) for name in input_names)
-            if not has_any_input and fallback_to_stream_frame and ("frame" in produced_inputs or "frame_original" in produced_inputs):
-                has_any_input = True
-
-            missing_inputs = [name for name in input_names if name and not _input_is_available(name)]
-            # Avoid noisy alerts for common semantic keys when a fallback is available.
-            semantic_keys = {"segmented", "treated", "original", "best_frame"}
-            missing_custom_inputs = [name for name in missing_inputs if str(name).strip() not in semantic_keys]
-            if missing_custom_inputs:
-                alerts.append(
-                    PipelineAlert(
-                        severity="info",
-                        code="best_frame_missing_inputs",
-                        node_id=bf_node_id,
-                        operator_id="camera.best_frame_selector",
-                        message=(
-                            "Best Frame Selector prefers inputs that are not produced upstream: "
-                            f"{', '.join(missing_custom_inputs)}."
-                        ),
-                        suggestion="Adjust input_artifact_names to existing artifacts, or add steps that produce them upstream.",
-                    )
-                )
-            elif not has_any_input and not fallback_to_stream_frame:
-                alerts.append(
-                    PipelineAlert(
-                        severity="warning",
-                        code="best_frame_missing_inputs",
-                        node_id=bf_node_id,
-                        operator_id="camera.best_frame_selector",
-                        message="Best Frame Selector has no usable input images upstream.",
-                        suggestion="Enable fallback_to_stream_frame or add steps that produce the preferred inputs upstream.",
-                    )
-                )
-
-        used = False
-        for nid in _downstream_nodes(bf_node_id):
-            node = nodes_by_id.get(nid)
-            if node is None:
-                continue
-            if node.operator_id == "core.store_images":
-                store_cfg = _resolve_config(nid)
-                names = store_cfg.get("artifact_names")
-                if isinstance(names, list) and any(str(item).strip() == output_name for item in names if str(item).strip()):
-                    used = True
-                    break
-                if isinstance(names, list) and any(str(item).strip() for item in names):
-                    continue
-                fallback_raw = str(store_cfg.get("image_with_fallback") or "").strip()
-                if fallback_raw:
-                    candidates = [p.strip() for p in fallback_raw.split(",") if p.strip()]
-                    if any(candidate == output_name for candidate in candidates):
-                        used = True
-                        break
-            if node.operator_id == "core.notify":
-                notify_cfg = _resolve_config(nid)
-                fallback = notify_cfg.get("thumbnail_with_fallback")
-                if isinstance(fallback, list) and any(str(item).strip() == output_name for item in fallback):
-                    used = True
-                    break
-
-        if not used:
+        missing = [name for name in sorted(stored_artifacts) if name and name not in produced]
+        if missing:
             alerts.append(
                 PipelineAlert(
-                    severity="info",
-                    code="best_frame_unused",
-                    node_id=bf_node_id,
-                    operator_id="camera.best_frame_selector",
-                    message=f"Best Frame Selector outputs '{output_name}', but nothing downstream uses it.",
-                    suggestion="Either store/notify using this artifact, or remove the Best Frame Selector step.",
+                    severity="warning",
+                    code="store_images_missing_artifacts",
+                    node_id=store_node_id,
+                    operator_id="core.store_images",
+                    message=f"Store Images reads artifacts that are not produced upstream: {', '.join(missing)}.",
+                    suggestion="Store the main artifact, or set input_artifact_name to an artifact produced upstream.",
                 )
             )
 

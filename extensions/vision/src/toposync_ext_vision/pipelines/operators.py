@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME
 from toposync.runtime.pipelines.operator_registry import OperatorDiagnostic, OperatorRegistry, payload_path_hint
 
 from ..processing.tasks import (
@@ -140,7 +141,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             defaults=VisionClassifyImageConfig().model_dump(),
             execution_mode="thread_pool",
             max_concurrency=1,
-            requires_artifacts=["frame_original"],
+            requires_artifacts=[MAIN_ARTIFACT_NAME],
             produces_payload_keys=[
                 "vision",
                 "source_stream_id",
@@ -172,7 +173,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             defaults=VisionPoseEstimateConfig().model_dump(),
             execution_mode="thread_pool",
             max_concurrency=1,
-            requires_artifacts=["frame_original"],
+            requires_artifacts=[MAIN_ARTIFACT_NAME],
             produces_payload_keys=[
                 "vision",
                 "event_id",
@@ -211,7 +212,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             defaults=VisionSegmentInstancesConfig().model_dump(),
             execution_mode="thread_pool",
             max_concurrency=1,
-            requires_artifacts=["frame_original"],
+            requires_artifacts=[MAIN_ARTIFACT_NAME],
             produces_payload_keys=[
                 "vision",
                 "object_category_label",
@@ -245,7 +246,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             execution_mode="thread_pool",
             max_concurrency=1,
             requires_payload_keys=["vision"],
-            requires_artifacts=["frame_original"],
+            requires_artifacts=[MAIN_ARTIFACT_NAME],
             produces_payload_keys=[
                 "vision",
                 "event_id",
@@ -283,7 +284,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             defaults=VisionDetectConfig().model_dump(),
             execution_mode="thread_pool",
             max_concurrency=1,
-            requires_artifacts=["frame_original"],
+            requires_artifacts=[MAIN_ARTIFACT_NAME],
             produces_payload_keys=[
                 "vision",
                 "event_id",

@@ -17,7 +17,6 @@ const DEFAULT_SMART_CROP = {
   refresh_interval_seconds: 1800,
   refresh_on_ptz_idle: true,
   ptz_idle_debounce_seconds: 2,
-  set_stream_frame: true,
   missing_policy: "drop",
 };
 
@@ -148,11 +147,6 @@ function AiSmartCropPanel({ i18n, config, showAdvanced, updateConfig }: PanelArg
               onChange={(ptz_idle_debounce_seconds) => updateConfig({ ptz_idle_debounce_seconds })}
             />
           </div>
-          <Checkbox
-            label={t("ext.ai.operator.smart_crop.use_as_frame", {}, "Usar recorte como frame tratado")}
-            checked={asBoolean(c.set_stream_frame, DEFAULT_SMART_CROP.set_stream_frame)}
-            onChange={(set_stream_frame) => updateConfig({ set_stream_frame })}
-          />
         </>
       ) : null}
     </div>

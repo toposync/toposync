@@ -161,6 +161,7 @@ class VisionPoseEstimateRuntime(TransformOperatorRuntime):
         packet: Packet,
         manifest: ModelManifest,
         track_hints: list[dict[str, Any]],
+        selected_artifact_name: str | None,
     ) -> list[PoseObject]:
         poses: list[PoseObject] = []
         for raw_item in list(raw_poses or []):
@@ -172,8 +173,16 @@ class VisionPoseEstimateRuntime(TransformOperatorRuntime):
                 continue
             if not pose.label or not pose.keypoints:
                 continue
-            bbox01 = project_detection_bbox_to_stream_space(pose.bbox01, packet)
-            keypoints = project_keypoints_to_stream_space(pose.keypoints, packet)
+            bbox01 = project_detection_bbox_to_stream_space(
+                pose.bbox01,
+                packet,
+                selected_artifact_name=selected_artifact_name,
+            )
+            keypoints = project_keypoints_to_stream_space(
+                pose.keypoints,
+                packet,
+                selected_artifact_name=selected_artifact_name,
+            )
             if bbox01 is None or keypoints is None:
                 continue
             tracking_id = self._resolve_tracking_id(pose, track_hints=track_hints)
@@ -280,10 +289,9 @@ class VisionPoseEstimateRuntime(TransformOperatorRuntime):
         return replace(packet, payload=payload, metadata=metadata)
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
-        _image_key, _artifact_name, frame = resolve_image_artifact_for_data(
+        artifact_name, frame = resolve_image_artifact_for_data(
             packet,
-            input_with_fallback=self._parsed.input_with_fallback,
-            fallback_to_stream_frame=bool(self._parsed.fallback_to_stream_frame),
+            input_artifact_name=self._parsed.input_artifact_name,
         )
         if frame is None:
             return []
@@ -304,5 +312,6 @@ class VisionPoseEstimateRuntime(TransformOperatorRuntime):
             packet=packet,
             manifest=manifest,
             track_hints=track_hints,
+            selected_artifact_name=artifact_name,
         )
         return [self._annotate_packet(packet, manifest=manifest, backend=backend, poses=poses)]

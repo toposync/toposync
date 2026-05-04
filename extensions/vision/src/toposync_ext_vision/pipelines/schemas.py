@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 VisionDetectEmitMode = Literal["annotate", "events"]
@@ -27,10 +27,9 @@ class VisionDetectConfig(BaseModel):
     iou_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     max_objects_per_frame: int = Field(default=32, ge=1, le=512)
     inference_interval_seconds: float = Field(default=0.0, ge=0.0, le=60.0)
-    input_with_fallback: str = "treated,original"
-    fallback_to_stream_frame: bool = True
+    input_artifact_name: str = ""
 
-    @field_validator("model_id", "input_with_fallback")
+    @field_validator("model_id", "input_artifact_name")
     @classmethod
     def _trim_strings(cls, value: str) -> str:
         return str(value or "").strip()
@@ -60,31 +59,18 @@ class VisionDetectConfig(BaseModel):
             seen.add(category)
         return out
 
-    @model_validator(mode="after")
-    def _validate_defaults(self) -> "VisionDetectConfig":
-        if not self.input_with_fallback:
-            self.input_with_fallback = "treated,original"
-        return self
-
 
 class VisionClassifyImageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model_id: str = ""
     top_k: int = Field(default=5, ge=1, le=64)
-    input_with_fallback: str = "treated,original"
-    fallback_to_stream_frame: bool = True
+    input_artifact_name: str = ""
 
-    @field_validator("model_id", "input_with_fallback")
+    @field_validator("model_id", "input_artifact_name")
     @classmethod
     def _trim_strings(cls, value: str) -> str:
         return str(value or "").strip()
-
-    @model_validator(mode="after")
-    def _validate_defaults(self) -> "VisionClassifyImageConfig":
-        if not self.input_with_fallback:
-            self.input_with_fallback = "treated,original"
-        return self
 
 
 class VisionTrackConfig(BaseModel):
@@ -150,13 +136,12 @@ class VisionSegmentInstancesConfig(BaseModel):
 
     model_id: str = ""
     categories: list[str] = Field(default_factory=list)
-    input_with_fallback: str = "treated,original"
-    fallback_to_stream_frame: bool = True
+    input_artifact_name: str = ""
     attach_mask_artifacts: bool = True
     attach_polygons: bool = False
     max_instances_per_frame: int = Field(default=16, ge=1, le=512)
 
-    @field_validator("model_id", "input_with_fallback")
+    @field_validator("model_id", "input_artifact_name")
     @classmethod
     def _trim_strings(cls, value: str) -> str:
         return str(value or "").strip()
@@ -174,28 +159,15 @@ class VisionSegmentInstancesConfig(BaseModel):
             seen.add(category)
         return out
 
-    @model_validator(mode="after")
-    def _validate_defaults(self) -> "VisionSegmentInstancesConfig":
-        if not self.input_with_fallback:
-            self.input_with_fallback = "treated,original"
-        return self
-
 
 class VisionPoseEstimateConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model_id: str = ""
-    input_with_fallback: str = "treated,original"
-    fallback_to_stream_frame: bool = True
+    input_artifact_name: str = ""
     max_poses_per_frame: int = Field(default=16, ge=1, le=512)
 
-    @field_validator("model_id", "input_with_fallback")
+    @field_validator("model_id", "input_artifact_name")
     @classmethod
     def _trim_strings(cls, value: str) -> str:
         return str(value or "").strip()
-
-    @model_validator(mode="after")
-    def _validate_defaults(self) -> "VisionPoseEstimateConfig":
-        if not self.input_with_fallback:
-            self.input_with_fallback = "treated,original"
-        return self

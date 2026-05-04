@@ -8,6 +8,7 @@ import numpy
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from toposync.runtime.pipelines.execution import SinkRuntime
+from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME, normalize_artifact_name
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
@@ -37,7 +38,7 @@ class PublishVideoConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     transmission_id: str
-    frame_with_fallback: list[str] = Field(default_factory=lambda: ["frame", "best_frame", "segmented", "frame_original"])
+    input_artifact_name: str = ""
     resize_mode: Literal["contain", "none"] = "contain"
     writer_priority: int = 0
     bypass_mode: Literal["auto", "force_on", "force_off"] = "auto"
@@ -50,27 +51,10 @@ class PublishVideoConfig(BaseModel):
             raise ValueError("transmission_id is required")
         return normalized
 
-    @field_validator("frame_with_fallback", mode="before")
+    @field_validator("input_artifact_name", mode="after")
     @classmethod
-    def _parse_fallback(cls, value: Any) -> list[str]:
-        if isinstance(value, str):
-            items = [item.strip() for item in value.split(",")]
-        elif isinstance(value, list):
-            items = [str(item or "").strip() for item in value]
-        else:
-            items = []
-
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for item in items:
-            if not item or item in seen:
-                continue
-            normalized.append(item)
-            seen.add(item)
-
-        if not normalized:
-            normalized = ["frame", "best_frame", "segmented", "frame_original"]
-        return normalized
+    def _trim_input_artifact_name(cls, value: str) -> str:
+        return str(value or "").strip()
 
 
 class PublishVideoRuntime(SinkRuntime):
@@ -92,7 +76,7 @@ class PublishVideoRuntime(SinkRuntime):
             )
             return []
 
-        frame = _extract_frame(packet, candidates=self._config.frame_with_fallback)
+        frame = _extract_frame(packet, artifact_name=self._config.input_artifact_name)
         frame_ts = _resolve_frame_ts(packet)
 
         await bindings.runtime_state.update_writer_frame(
@@ -136,23 +120,11 @@ def _resolve_frame_ts(packet: Packet) -> float:
     return float(resolve_media_ts(packet))
 
 
-def _extract_frame(packet: Packet, *, candidates: list[str]) -> numpy.ndarray | None:
-    payload = packet.payload if isinstance(packet.payload, dict) else {}
-    images = payload.get("images") if isinstance(payload.get("images"), dict) else {}
-
-    for candidate in candidates:
-        names_to_try: list[str] = [candidate]
-        mapped_name = str(images.get(candidate) or "").strip() if isinstance(images, dict) else ""
-        if mapped_name:
-            names_to_try.insert(0, mapped_name)
-
-        for name in names_to_try:
-            artifact = packet.artifacts.get(name)
-            if artifact is None:
-                continue
-            frame = _normalize_artifact_frame(artifact.data)
-            if frame is not None:
-                return frame
+def _extract_frame(packet: Packet, *, artifact_name: str | None) -> numpy.ndarray | None:
+    name = normalize_artifact_name(artifact_name)
+    artifact = packet.artifacts.get(name)
+    if artifact is not None:
+        return _normalize_artifact_frame(artifact.data)
     return None
 
 

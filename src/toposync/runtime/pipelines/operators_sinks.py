@@ -19,11 +19,10 @@ from toposync.runtime.config_store import ConfigStore
 
 from .execution import PipelineRuntimeDependencies, SinkRuntime, TransformOperatorRuntime
 from .images import (
+    MAIN_ARTIFACT_NAME,
     add_stored_image_entry,
-    ensure_packet_image_keys,
-    parse_fallback_keys,
+    normalize_artifact_name,
     resolve_image_artifact_for_reference,
-    resolve_image_artifact_name,
 )
 from .operator_registry import OperatorRegistry
 from .packet_contract import (
@@ -167,63 +166,6 @@ def _render_template(packet: Packet, template: str) -> str:
             return ""
 
     return _TEMPLATE_RE.sub(_replace, raw)
-
-
-def _ensure_original_artifact(packet: Packet) -> Packet:
-    artifacts = dict(packet.artifacts)
-    payload = packet.payload
-    changed = False
-
-    payload_frame = packet.payload.get("frame")
-    if payload_frame is not None:
-        payload2 = dict(packet.payload)
-        payload2.pop("frame", None)
-        payload = payload2
-        changed = True
-
-        if "frame_original" not in artifacts:
-            artifacts["frame_original"] = Artifact(
-                name="frame_original",
-                data=payload_frame,
-                mime_type="image/raw",
-                metadata={"source": "frame_contract.migrated_payload"},
-            )
-            changed = True
-        if "frame" not in artifacts:
-            artifacts["frame"] = Artifact(
-                name="frame",
-                data=payload_frame,
-                mime_type="image/raw",
-                metadata={"source": "frame_contract.migrated_payload", "derived_from": "frame_original"},
-            )
-            changed = True
-
-    if "frame_original" not in artifacts:
-        stream_frame = artifacts.get("frame")
-        if stream_frame is not None and (stream_frame.data is not None or stream_frame.reference):
-            artifacts["frame_original"] = Artifact(
-                name="frame_original",
-                data=stream_frame.data,
-                reference=stream_frame.reference,
-                mime_type=stream_frame.mime_type,
-                metadata={"source": "frame_contract.aliased_from_frame"},
-            )
-            changed = True
-
-    if "frame" not in artifacts:
-        original = artifacts.get("frame_original")
-        if original is not None and (original.data is not None or original.reference):
-            artifacts["frame"] = Artifact(
-                name="frame",
-                data=original.data,
-                reference=original.reference,
-                mime_type=original.mime_type,
-                metadata={"source": "frame_contract.aliased_from_frame_original", "derived_from": "frame_original"},
-            )
-            changed = True
-
-    out = packet if not changed else replace(packet, payload=dict(payload), artifacts=artifacts)
-    return ensure_packet_image_keys(out)
 
 
 def _image_ext_mime(fmt: ImageStorageFormat) -> tuple[str, str]:
@@ -399,10 +341,7 @@ async def _write_bytes(path: Path, blob: bytes, *, overwrite: bool) -> None:
 
 class StoreImagesConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    # New UX: store a single image selected by fallback order (recommended).
-    image_with_fallback: str = "best_frame,original,treated,segmented"
-    # Legacy/advanced: store multiple artifacts explicitly.
-    artifact_names: list[str] = Field(default_factory=list)
+    input_artifact_name: str = ""
     min_frame_width: int = Field(
         default=0,
         ge=0,
@@ -423,39 +362,17 @@ class StoreImagesConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _drop_legacy_fields(cls, values: Any) -> Any:
-        # Keep backwards compatibility with older graphs, but don't expose these knobs in the UX.
+    def _normalize_fields(cls, values: Any) -> Any:
         if isinstance(values, dict):
             values = dict(values)
             fmt = str(values.get("format", "") or "").strip().lower()
             if fmt == "jpeg":
                 values["format"] = "jpg"
-            values.pop("timestamp_field", None)
-            values.pop("camera_id_field", None)
-            values.pop("tracking_id_field", None)
-            # Legacy field. `keep_data=True` means `drop_data_after_store=False`.
-            if "keep_data" in values and "drop_data_after_store" not in values:
-                values["drop_data_after_store"] = not bool(values.pop("keep_data"))
-            else:
-                values.pop("keep_data", None)
         return values
 
-    @field_validator("artifact_names", mode="after")
+    @field_validator("input_artifact_name")
     @classmethod
-    def _normalize_artifact_names(cls, value: list[str]) -> list[str]:
-        out: list[str] = []
-        seen: set[str] = set()
-        for raw in value:
-            name = str(raw or "").strip()
-            if not name or name in seen:
-                continue
-            out.append(name)
-            seen.add(name)
-        return out
-
-    @field_validator("image_with_fallback")
-    @classmethod
-    def _trim_fallback(cls, value: str) -> str:
+    def _trim_input_artifact_name(cls, value: str) -> str:
         return str(value or "").strip()
 
     @field_validator("subdir")
@@ -482,7 +399,6 @@ class StoreImagesRuntime(TransformOperatorRuntime):
             if (min_width > 0 and width < min_width) or (min_height > 0 and height < min_height):
                 return [packet]
 
-        packet = _ensure_original_artifact(packet)
         files_dir = _resolve_files_dir(self._dependencies)
 
         pipeline_name = _resolve_logical_pipeline_name(context)
@@ -502,51 +418,9 @@ class StoreImagesRuntime(TransformOperatorRuntime):
         ts_ms = int(max(0.0, float(ts)) * 1000)
         record_marker = getattr(context, "record_telemetry_image_marker", None)
 
-        targets: list[tuple[str, str]] = []
-
-        if self._config.artifact_names:
-            for name_raw in self._config.artifact_names:
-                resolved = resolve_image_artifact_name(packet, name_raw)
-                if resolved is None:
-                    continue
-                key, artifact_name = resolved
-                targets.append((key, artifact_name))
-        else:
-            candidates = [p.strip() for p in str(self._config.image_with_fallback or "").split(",") if p.strip()]
-            for candidate in candidates:
-                resolved = resolve_image_artifact_name(packet, candidate)
-                if resolved is None:
-                    continue
-                key, artifact_name = resolved
-                artifact = packet.artifacts.get(artifact_name)
-                if artifact is None:
-                    continue
-                if artifact.data is None and not artifact.reference:
-                    continue
-                targets.append((key or artifact_name, artifact_name))
-                break
-
-        images = packet.payload.get("images") if isinstance(packet.payload.get("images"), dict) else {}
-
-        def _semantic_image_key(raw_key: str, artifact_name: str) -> str:
-            key_norm = str(raw_key or "").strip()
-            artifact_norm = str(artifact_name or "").strip()
-            if key_norm and key_norm != artifact_norm:
-                return key_norm
-            matches = [str(k) for k, v in images.items() if str(v or "").strip() == artifact_norm]
-            if matches:
-                priority = {"best_frame": 0, "segmented": 1, "treated": 2, "original": 3}
-                matches.sort(key=lambda item: priority.get(item, 100))
-                return str(matches[0] or "").strip() or artifact_norm or key_norm
-            return artifact_norm or key_norm
-
-        for key, artifact_name in targets:
-            artifact = packet.artifacts.get(artifact_name)
-            if artifact is None:
-                continue
-
-            image_key = _semantic_image_key(str(key), artifact_name)
-
+        artifact_name = normalize_artifact_name(self._config.input_artifact_name)
+        artifact = packet.artifacts.get(artifact_name)
+        if artifact is not None:
             rel: str | None = str(artifact.reference) if artifact.reference else None
             mime: str | None = str(artifact.mime_type) if artifact.mime_type else None
 
@@ -563,7 +437,7 @@ class StoreImagesRuntime(TransformOperatorRuntime):
                     parts.append(_safe_component(camera_id, max_len=40))
                 if category:
                     parts.append(_safe_component(category, max_len=32))
-                parts.append(_safe_component(image_key or artifact_name, max_len=32))
+                parts.append(_safe_component(artifact_name, max_len=32))
                 if token:
                     parts.append(_safe_component(token, max_len=80))
                 parts.append(_safe_component(packet.packet_id[:8], max_len=16))
@@ -597,7 +471,7 @@ class StoreImagesRuntime(TransformOperatorRuntime):
                 confidence = _resolve_image_confidence(packet, stored_artifact)
                 packet = add_stored_image_entry(
                     packet,
-                    key=image_key or artifact_name,
+                    key=artifact_name,
                     artifact=stored_artifact,
                     rel_path=rel,
                     stored_ts_ms=ts_ms,
@@ -609,7 +483,7 @@ class StoreImagesRuntime(TransformOperatorRuntime):
                             METRIC_STORE_IMAGE,
                             rel_path=rel,
                             ts_s=ts,
-                            image_key=image_key or artifact_name,
+                            image_key=artifact_name,
                             confidence=confidence,
                         )
                     except Exception:
@@ -626,40 +500,10 @@ class NotifyConfig(BaseModel):
     priority: Literal["low", "medium", "high"] = "medium"
     realtime: bool = True
     update_interval_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
-    thumbnail_with_fallback: list[str] = Field(
-        default_factory=lambda: ["best_frame", "original", "treated", "segmented"],
-    )
+    input_artifact_name: str = ""
     dedupe_key_template: str = ""
 
-    @model_validator(mode="before")
-    @classmethod
-    def _drop_legacy_fields(cls, values: Any) -> Any:
-        # Keep backwards compatibility with older graphs. Notifications must not store images.
-        if isinstance(values, dict):
-            values = dict(values)
-            values.pop("store_thumbnail_if_needed", None)
-            values.pop("thumbnail_subdir", None)
-            values.pop("thumbnail_format", None)
-            values.pop("thumbnail_jpeg_quality", None)
-            values.pop("timestamp_field", None)
-            values.pop("camera_id_field", None)
-            values.pop("tracking_id_field", None)
-        return values
-
-    @field_validator("thumbnail_with_fallback", mode="after")
-    @classmethod
-    def _normalize_fallback(cls, value: list[str]) -> list[str]:
-        out: list[str] = []
-        seen: set[str] = set()
-        for raw in value:
-            name = str(raw or "").strip()
-            if not name or name in seen:
-                continue
-            out.append(name)
-            seen.add(name)
-        return out
-
-    @field_validator("notification_type", "title", "description", "dedupe_key_template")
+    @field_validator("notification_type", "title", "description", "input_artifact_name", "dedupe_key_template")
     @classmethod
     def _trim_fields(cls, value: str) -> str:
         return str(value or "").strip()
@@ -774,16 +618,17 @@ class NotifyRuntime(SinkRuntime):
         description = _render_template(packet, self._config.description)
 
         image_path: str | None = None
+        input_artifact_name = normalize_artifact_name(self._config.input_artifact_name)
         if state.stored_images:
             if lifecycle == Lifecycle.CLOSE:
                 image_path = _select_best_confidence_stored_image(
                     state.stored_images,
-                    preferred_keys=list(self._config.thumbnail_with_fallback),
+                    preferred_key=input_artifact_name,
                 )
             elif bool(self._config.realtime):
                 image_path = _select_latest_stored_image(
                     state.stored_images,
-                    preferred_keys=list(self._config.thumbnail_with_fallback),
+                    preferred_key=input_artifact_name,
                 )
         if not image_path:
             image_path = await self._select_thumbnail_path(packet, context)
@@ -871,7 +716,7 @@ class NotifyRuntime(SinkRuntime):
                     image_path=(
                         _select_best_confidence_stored_image(
                             state.stored_images,
-                            preferred_keys=list(self._config.thumbnail_with_fallback),
+                            preferred_key=normalize_artifact_name(self._config.input_artifact_name),
                         )
                         or state.last_image_path
                     ),
@@ -917,10 +762,9 @@ class NotifyRuntime(SinkRuntime):
         return f"pipeline:{node_id}:camera:{camera_id}:token:{digest}"
 
     async def _select_thumbnail_path(self, packet: Packet, context) -> str | None:
-        packet = _ensure_original_artifact(packet)
-        _key, _artifact_name, rel = resolve_image_artifact_for_reference(
+        _artifact_name, rel = resolve_image_artifact_for_reference(
             packet,
-            input_with_fallback=list(self._config.thumbnail_with_fallback),
+            input_artifact_name=self._config.input_artifact_name,
         )
         return rel
 
@@ -930,29 +774,9 @@ def _signature_payload(payload: dict[str, Any]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _build_key_rank_map(preferred_keys: list[str] | None) -> dict[str, int]:
-    keys = parse_fallback_keys(preferred_keys or [])
-    if not keys:
-        return {}
-    alias = {
-        "frame_original": "original",
-        "frame": "treated",
-    }
-    out: dict[str, int] = {}
-    for idx, key in enumerate(keys):
-        if key not in out:
-            out[key] = idx
-        mapped = alias.get(key)
-        if mapped and mapped not in out:
-            out[mapped] = idx
-    return out
-
-
-def _stored_entry_key_rank(key_rank_map: dict[str, int], image_key: str) -> int:
-    if not key_rank_map:
-        return 1_000_000
+def _stored_entry_key_rank(preferred_key: str, image_key: str) -> int:
     normalized = str(image_key or "").strip()
-    return int(key_rank_map.get(normalized, 1_000_000))
+    return 0 if normalized == preferred_key else 1_000_000
 
 
 def _iter_stored_image_entries(stored_images: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
@@ -966,13 +790,13 @@ def _iter_stored_image_entries(stored_images: dict[str, Any]) -> list[tuple[str,
     return out
 
 
-def _select_latest_stored_image(stored_images: dict[str, Any], *, preferred_keys: list[str] | None = None) -> str | None:
+def _select_latest_stored_image(stored_images: dict[str, Any], *, preferred_key: str = MAIN_ARTIFACT_NAME) -> str | None:
     best_rel: str | None = None
     best_ts = -1
     best_key_rank = 1_000_000
     best_idx = -1
     idx = 0
-    key_rank_map = _build_key_rank_map(preferred_keys)
+    normalized_preferred = normalize_artifact_name(preferred_key)
     for image_key, entry in _iter_stored_image_entries(stored_images):
         rel = str(entry.get("rel_path") or "").strip()
         if not rel:
@@ -982,7 +806,7 @@ def _select_latest_stored_image(stored_images: dict[str, Any], *, preferred_keys
         except Exception:
             ts = 0
         idx += 1
-        key_rank = _stored_entry_key_rank(key_rank_map, image_key)
+        key_rank = _stored_entry_key_rank(normalized_preferred, image_key)
         if (
             ts > best_ts
             or (ts == best_ts and key_rank < best_key_rank)
@@ -995,14 +819,18 @@ def _select_latest_stored_image(stored_images: dict[str, Any], *, preferred_keys
     return best_rel
 
 
-def _select_best_confidence_stored_image(stored_images: dict[str, Any], *, preferred_keys: list[str] | None = None) -> str | None:
+def _select_best_confidence_stored_image(
+    stored_images: dict[str, Any],
+    *,
+    preferred_key: str = MAIN_ARTIFACT_NAME,
+) -> str | None:
     best_rel: str | None = None
     best_conf: float | None = None
     best_key_rank = 1_000_000
     best_ts = -1
     best_idx = -1
     idx = 0
-    key_rank_map = _build_key_rank_map(preferred_keys)
+    normalized_preferred = normalize_artifact_name(preferred_key)
     for image_key, entry in _iter_stored_image_entries(stored_images):
         rel = str(entry.get("rel_path") or "").strip()
         if not rel:
@@ -1015,7 +843,7 @@ def _select_best_confidence_stored_image(stored_images: dict[str, Any], *, prefe
         except Exception:
             ts = 0
         idx += 1
-        key_rank = _stored_entry_key_rank(key_rank_map, image_key)
+        key_rank = _stored_entry_key_rank(normalized_preferred, image_key)
 
         should_take = best_conf is None or conf > best_conf
         if not should_take and conf == best_conf:
@@ -1034,7 +862,7 @@ def _select_best_confidence_stored_image(stored_images: dict[str, Any], *, prefe
             best_idx = idx
             best_rel = rel
 
-    return best_rel or _select_latest_stored_image(stored_images, preferred_keys=preferred_keys)
+    return best_rel or _select_latest_stored_image(stored_images, preferred_key=preferred_key)
 
 
 def _select_notification_data(packet: Packet) -> dict[str, Any]:
@@ -1061,7 +889,6 @@ def _select_notification_data(packet: Packet) -> dict[str, Any]:
         "area_label",
         "area_labels",
         "velocity",
-        "images",
         "stored_images",
         "frame_crop",
         "frame_warp",

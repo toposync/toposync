@@ -28,74 +28,6 @@ def _as_float(value: Any, fallback: float) -> float:
         return float(fallback)
 
 
-def _ensure_original_artifact(packet: Packet) -> Packet:
-    artifacts = dict(packet.artifacts)
-    payload = packet.payload
-    changed = False
-
-    payload_frame = packet.payload.get("frame")
-    if payload_frame is not None:
-        payload2 = dict(packet.payload)
-        payload2.pop("frame", None)
-        payload = payload2
-        changed = True
-
-        if "frame_original" not in artifacts:
-            artifacts["frame_original"] = Artifact(
-                name="frame_original",
-                data=payload_frame,
-                mime_type="image/raw",
-                metadata={"source": "frame_contract.migrated_payload"},
-            )
-            changed = True
-        if "frame" not in artifacts:
-            artifacts["frame"] = Artifact(
-                name="frame",
-                data=payload_frame,
-                mime_type="image/raw",
-                metadata={"source": "frame_contract.migrated_payload", "derived_from": "frame_original"},
-            )
-            changed = True
-
-    if "frame_original" not in artifacts:
-        stream_frame = artifacts.get("frame")
-        if stream_frame is not None and (stream_frame.data is not None or stream_frame.reference):
-            artifacts["frame_original"] = Artifact(
-                name="frame_original",
-                data=stream_frame.data,
-                reference=stream_frame.reference,
-                mime_type=stream_frame.mime_type,
-                metadata={"source": "frame_contract.aliased_from_frame"},
-            )
-            changed = True
-
-    if "frame" not in artifacts:
-        original = artifacts.get("frame_original")
-        if original is not None and (original.data is not None or original.reference):
-            artifacts["frame"] = Artifact(
-                name="frame",
-                data=original.data,
-                reference=original.reference,
-                mime_type=original.mime_type,
-                metadata={"source": "frame_contract.aliased_from_frame_original", "derived_from": "frame_original"},
-            )
-            changed = True
-
-    if not changed:
-        return packet
-    return Packet(
-        packet_id=packet.packet_id,
-        parent_packet_id=packet.parent_packet_id,
-        stream_id=packet.stream_id,
-        lifecycle=packet.lifecycle,
-        created_at=packet.created_at,
-        created_monotonic_ns=packet.created_monotonic_ns,
-        payload=dict(payload),
-        artifacts=artifacts,
-        metadata=dict(packet.metadata),
-    )
-
-
 def _encode_artifact_inline(artifact: Artifact) -> dict[str, Any] | None:
     if artifact.data is None:
         if artifact.reference:
@@ -176,7 +108,6 @@ def _decode_inline_artifact_data(rec: dict[str, Any]) -> Any:
 
 
 def _serialize_packet(packet: Packet) -> dict[str, Any]:
-    packet = _ensure_original_artifact(packet)
     artifacts: dict[str, Any] = {}
     for name, art in packet.artifacts.items():
         encoded = _encode_artifact_inline(art)
@@ -184,15 +115,13 @@ def _serialize_packet(packet: Packet) -> dict[str, Any]:
             continue
         artifacts[name] = encoded
 
-    payload = dict(packet.payload)
-    payload.pop("frame", None)
     return {
         "packet_id": packet.packet_id,
         "parent_packet_id": packet.parent_packet_id,
         "stream_id": packet.stream_id,
         "lifecycle": packet.lifecycle.value,
         "created_at": float(packet.created_at),
-        "payload": payload,
+        "payload": dict(packet.payload),
         "metadata": dict(packet.metadata),
         "artifacts": artifacts,
     }

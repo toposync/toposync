@@ -37,8 +37,8 @@ def test_core_debug_prints_to_stdout_and_dumps_images(tmp_path: Path, capsys) ->
                 "tracking_id": "trk-1",
             },
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "main"}),
             },
         )
 

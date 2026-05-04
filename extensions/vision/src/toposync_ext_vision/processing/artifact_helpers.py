@@ -2,20 +2,27 @@ from __future__ import annotations
 
 from typing import Any
 
-from toposync.runtime.pipelines.images import resolve_image_artifact_name
+from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME, normalize_artifact_name
 from toposync.runtime.pipelines.runtime import Packet
 
 from .contracts import clamp01, normalize_bbox01
 
 
-def read_frame_crop_bbox01(packet: Packet) -> tuple[float, float, float, float] | None:
+def _payload_transform_targets_artifact(raw: Any, *, selected_artifact_name: str | None) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    target_name = normalize_artifact_name(raw.get("output_artifact_name"), default="")
+    selected_name = normalize_artifact_name(selected_artifact_name, default=MAIN_ARTIFACT_NAME)
+    return bool(target_name and selected_name and target_name == selected_name)
+
+
+def read_frame_crop_bbox01(
+    packet: Packet,
+    *,
+    selected_artifact_name: str | None = None,
+) -> tuple[float, float, float, float] | None:
     crop = packet.payload.get("frame_crop")
-    if not isinstance(crop, dict):
-        return None
-    apply_to_stream = crop.get("set_stream_frame")
-    if apply_to_stream is None:
-        apply_to_stream = crop.get("set_payload_frame")
-    if apply_to_stream is False:
+    if not _payload_transform_targets_artifact(crop, selected_artifact_name=selected_artifact_name):
         return None
     raw = crop.get("bbox01")
     if not isinstance(raw, (list, tuple)) or len(raw) < 4:
@@ -27,14 +34,9 @@ def read_frame_crop_bbox01(packet: Packet) -> tuple[float, float, float, float] 
     return normalize_bbox01(values)
 
 
-def read_frame_warp(packet: Packet) -> dict[str, Any] | None:
+def read_frame_warp(packet: Packet, *, selected_artifact_name: str | None = None) -> dict[str, Any] | None:
     warp = packet.payload.get("frame_warp")
-    if not isinstance(warp, dict):
-        return None
-    apply_to_stream = warp.get("set_stream_frame")
-    if apply_to_stream is None:
-        apply_to_stream = warp.get("set_payload_frame")
-    if apply_to_stream is False:
+    if not _payload_transform_targets_artifact(warp, selected_artifact_name=selected_artifact_name):
         return None
     if str(warp.get("kind", "")).strip().lower() != "perspective":
         return None
@@ -221,15 +223,17 @@ def unwarp_keypoints_to_stream_space(
 def project_detection_bbox_to_stream_space(
     bbox01: tuple[float, float, float, float],
     packet: Packet,
+    *,
+    selected_artifact_name: str | None = None,
 ) -> tuple[float, float, float, float] | None:
     bbox = tuple(float(v) for v in bbox01)
-    warp = read_frame_warp(packet)
+    warp = read_frame_warp(packet, selected_artifact_name=selected_artifact_name)
     if warp is not None:
         unwarped = unwarp_bbox01(bbox, warp)
         if unwarped is None:
             return None
         bbox = unwarped
-    crop_bbox01 = read_frame_crop_bbox01(packet)
+    crop_bbox01 = read_frame_crop_bbox01(packet, selected_artifact_name=selected_artifact_name)
     if crop_bbox01 is not None:
         bbox = uncrop_bbox01(bbox, crop_bbox01)
     return normalize_bbox01(bbox)
@@ -238,17 +242,19 @@ def project_detection_bbox_to_stream_space(
 def project_keypoints_to_stream_space(
     keypoints: list[tuple[float, float, float]] | None,
     packet: Packet,
+    *,
+    selected_artifact_name: str | None = None,
 ) -> list[tuple[float, float, float]] | None:
     if not keypoints:
         return None
     out = [(float(x), float(y), float(score)) for x, y, score in keypoints]
-    warp = read_frame_warp(packet)
+    warp = read_frame_warp(packet, selected_artifact_name=selected_artifact_name)
     if warp is not None:
         unwarped = unwarp_keypoints_to_stream_space(out, warp)
         if unwarped is None:
             return None
         out = unwarped
-    crop_bbox01 = read_frame_crop_bbox01(packet)
+    crop_bbox01 = read_frame_crop_bbox01(packet, selected_artifact_name=selected_artifact_name)
     if crop_bbox01 is not None:
         out = uncrop_keypoints_to_stream_space(out, crop_bbox01)
     return [(clamp01(x), clamp01(y), clamp01(score)) for x, y, score in out]
@@ -278,28 +284,6 @@ def _resize_mask_nearest(mask: Any, *, width: int, height: int):  # noqa: ANN202
         max(0, src_w - 1),
     )
     return array[y_index][:, x_index]
-
-
-def _resolve_original_frame_shape(packet: Packet) -> tuple[int, int] | None:
-    artifact = packet.artifacts.get("frame_original")
-    shape = getattr(getattr(artifact, "data", None), "shape", None)
-    if shape and len(shape) >= 2:
-        try:
-            return int(shape[0]), int(shape[1])
-        except Exception:
-            return None
-    warp = read_frame_warp(packet)
-    if warp is not None:
-        return int(warp.get("source_frame_height", 0)), int(warp.get("source_frame_width", 0))
-    return None
-
-
-def _mask_selected_from_treated_frame(packet: Packet, *, selected_artifact_name: str | None) -> bool:
-    if not selected_artifact_name:
-        return True
-    resolved = resolve_image_artifact_name(packet, "treated")
-    treated_name = resolved[1] if resolved is not None else "frame"
-    return str(selected_artifact_name or "").strip() == str(treated_name or "").strip()
 
 
 def unwarp_mask_to_stream_space(mask: Any, warp: dict[str, Any]):  # noqa: ANN202
@@ -372,6 +356,23 @@ def uncrop_mask_to_stream_space(
     return canvas
 
 
+def _infer_uncrop_source_dimensions(
+    mask: Any,
+    crop_bbox01: tuple[float, float, float, float],
+) -> tuple[int, int] | None:
+    shape = getattr(mask, "shape", None)
+    if not shape or len(shape) < 2:
+        return None
+    mask_height = int(shape[0])
+    mask_width = int(shape[1])
+    x1, y1, x2, y2 = [float(value) for value in crop_bbox01]
+    crop_width = max(0.0, x2 - x1)
+    crop_height = max(0.0, y2 - y1)
+    if mask_width <= 0 or mask_height <= 0 or crop_width <= 1e-9 or crop_height <= 1e-9:
+        return None
+    return (max(1, int(round(mask_width / crop_width))), max(1, int(round(mask_height / crop_height))))
+
+
 def project_mask_to_stream_space(
     mask: Any,
     packet: Packet,
@@ -387,20 +388,19 @@ def project_mask_to_stream_space(
         raise ValueError(f"Expected a 2D mask array, got shape {tuple(array.shape)}")
     array = np.where(array > 0, 255, 0).astype(np.uint8)
 
-    if not _mask_selected_from_treated_frame(packet, selected_artifact_name=selected_artifact_name):
-        return array
-
-    warp = read_frame_warp(packet)
+    warp = read_frame_warp(packet, selected_artifact_name=selected_artifact_name)
     if warp is not None:
         unwarped = unwarp_mask_to_stream_space(array, warp)
         if unwarped is None:
             return None
         array = unwarped
 
-    crop_bbox01 = read_frame_crop_bbox01(packet)
-    source_shape = _resolve_original_frame_shape(packet)
-    if crop_bbox01 is not None and source_shape is not None:
-        source_height, source_width = source_shape
+    crop_bbox01 = read_frame_crop_bbox01(packet, selected_artifact_name=selected_artifact_name)
+    if crop_bbox01 is not None:
+        source_size = _infer_uncrop_source_dimensions(array, crop_bbox01)
+        if source_size is None:
+            return None
+        source_width, source_height = source_size
         uncropped = uncrop_mask_to_stream_space(
             array,
             crop_bbox01,
@@ -410,4 +410,5 @@ def project_mask_to_stream_space(
         if uncropped is None:
             return None
         array = uncropped
+
     return array

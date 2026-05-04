@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
-from toposync.runtime.pipelines.images import resolve_image_artifact_for_data, set_image_key
+from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME, resolve_image_artifact_for_data
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync.runtime.pipelines.telemetry import METRIC_AI_CONDITION_CONFIDENCE
@@ -65,11 +65,11 @@ class AiSmartCropRuntime(TransformOperatorRuntime):
         if not description:
             return [self._annotate(packet, status="skipped", reason="missing_target_description")]
 
-        image_key, artifact_name, image = resolve_image_artifact_for_data(
+        artifact_name, image = resolve_image_artifact_for_data(
             packet,
-            input_with_fallback=cfg.input_with_fallback,
-            fallback_to_stream_frame=cfg.fallback_to_stream_frame,
+            input_artifact_name=cfg.input_artifact_name,
         )
+        image_key = artifact_name
         if image is None:
             return [self._annotate(packet, status="skipped", reason="missing_image")]
 
@@ -282,7 +282,7 @@ class AiSmartCropRuntime(TransformOperatorRuntime):
         detections: list[RegionDetection],
     ) -> Packet:
         cfg = self._config
-        output_name = cfg.output_artifact_name or "ai_crop"
+        output_name = cfg.output_artifact_name or MAIN_ARTIFACT_NAME
         detection_payloads = self._detections_payload(detections)
         metadata: dict[str, Any] = {
             "source": "ai.smart_crop",
@@ -299,9 +299,6 @@ class AiSmartCropRuntime(TransformOperatorRuntime):
         }
         size = image_size(crop)
         out = packet.with_artifact(Artifact(name=output_name, data=crop, mime_type="image/raw", metadata=metadata))
-        if cfg.output_image_key:
-            out = set_image_key(out, key=cfg.output_image_key, artifact_name=output_name)
-
         payload = self._build_found_payload(
             out.payload,
             bbox01=bbox01,
@@ -316,21 +313,7 @@ class AiSmartCropRuntime(TransformOperatorRuntime):
             detections=detections,
         )
 
-        if cfg.set_stream_frame and output_name != "frame":
-            out = out.with_artifact(
-                Artifact(
-                    name="frame",
-                    data=crop,
-                    mime_type="image/raw",
-                    metadata={"source": "ai.smart_crop", "derived_from": output_name},
-                )
-            )
-            payload.setdefault("images", {})
-            if isinstance(payload["images"], dict):
-                payload["images"]["treated"] = "frame"
-            if size is not None:
-                payload["frame_width"], payload["frame_height"] = size
-        elif output_name == "frame" and size is not None:
+        if output_name == MAIN_ARTIFACT_NAME and size is not None:
             payload["frame_width"], payload["frame_height"] = size
 
         return replace(out, payload=payload)
@@ -369,7 +352,6 @@ class AiSmartCropRuntime(TransformOperatorRuntime):
             "bbox01_detected": list(bbox01),
             "detection_strategy": self._config.detection_strategy,
             "selected_detection_index": selected_detection_index,
-            "set_stream_frame": bool(self._config.set_stream_frame),
             "output_artifact_name": output_artifact_name,
         }
         return self._annotate_payload(
@@ -602,11 +584,11 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         if not description:
             return [self._annotate(packet, result=None, status="skipped", reason="missing_condition_description")]
 
-        image_key, artifact_name, image = resolve_image_artifact_for_data(
+        artifact_name, image = resolve_image_artifact_for_data(
             packet,
-            input_with_fallback=self._config.input_with_fallback,
-            fallback_to_stream_frame=self._config.fallback_to_stream_frame,
+            input_artifact_name=self._config.input_artifact_name,
         )
+        image_key = artifact_name
         if image is None:
             return self._handle_failure(packet, state=state, reason="missing_image")
 

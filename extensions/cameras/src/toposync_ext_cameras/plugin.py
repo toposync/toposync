@@ -1563,7 +1563,6 @@ class CamerasExtension(BaseExtension):
                         "id": "store",
                         "operator": "core.store_images",
                         "config": {
-                            "image_with_fallback": "best_frame,original,treated,segmented",
                             "subdir": "pipelines",
                             "format": "webp",
                         },
@@ -1576,12 +1575,6 @@ class CamerasExtension(BaseExtension):
                             "title": notification_title or "{{camera_name}}: Person detected",
                             "description": notification_description or "{{camera_name}}",
                             "priority": "medium",
-                            "thumbnail_with_fallback": [
-                                "best_frame",
-                                "original",
-                                "treated",
-                                "segmented",
-                            ],
                         },
                     },
                 ]
@@ -1672,7 +1665,6 @@ class CamerasExtension(BaseExtension):
                         "id": "store",
                         "operator": "core.store_images",
                         "config": {
-                            "image_with_fallback": "best_frame,original,treated,segmented",
                             "subdir": "pipelines",
                             "format": "webp",
                         },
@@ -1685,12 +1677,6 @@ class CamerasExtension(BaseExtension):
                             "title": notification_title or "{{camera_name}}: Pet detected",
                             "description": notification_description or "{{camera_name}}",
                             "priority": "medium",
-                            "thumbnail_with_fallback": [
-                                "best_frame",
-                                "original",
-                                "treated",
-                                "segmented",
-                            ],
                         },
                     },
                 ]
@@ -1818,7 +1804,6 @@ class CamerasExtension(BaseExtension):
                         "id": "store",
                         "operator": "core.store_images",
                         "config": {
-                            "image_with_fallback": "best_frame,original,treated,segmented",
                             "subdir": "pipelines",
                             "format": "webp",
                         },
@@ -1831,12 +1816,6 @@ class CamerasExtension(BaseExtension):
                             "title": notification_title or "{{camera_name}}: Vehicle stopped",
                             "description": notification_description or "{{camera_name}}",
                             "priority": "high",
-                            "thumbnail_with_fallback": [
-                                "best_frame",
-                                "original",
-                                "treated",
-                                "segmented",
-                            ],
                         },
                     },
                 ]

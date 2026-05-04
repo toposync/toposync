@@ -106,12 +106,12 @@ class _SequenceDetectorBackend:
 
 def _frame_artifacts(frame: np.ndarray) -> dict[str, Artifact]:
     return {
-        "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw"),
-        "frame": Artifact(
-            name="frame",
+        "main": Artifact(name="main", data=frame, mime_type="image/raw"),
+        "aux": Artifact(
+            name="aux",
             data=frame,
             mime_type="image/raw",
-            metadata={"derived_from": "frame_original"},
+            metadata={"derived_from": "main"},
         ),
     }
 
@@ -156,114 +156,6 @@ def _pipeline_runtime(
             vision_model_registry=_build_registry(),
         ),
     )
-
-
-def test_best_frame_selector_continues_working_after_vision_track_decoupling() -> None:
-    async def scenario() -> None:
-        frame_a = np.full((24, 24, 3), 32, dtype=np.uint8)
-        frame_b = np.full((24, 24, 3), 224, dtype=np.uint8)
-        source_sequence = [
-            {
-                "payload": {"camera_id": "camera-main", "frame_ts": 0.00},
-                "artifacts": _frame_artifacts(frame_a),
-            },
-            {
-                "payload": {"camera_id": "camera-main", "frame_ts": 0.05},
-                "artifacts": _frame_artifacts(frame_b),
-            },
-            {
-                "payload": {"camera_id": "camera-main", "frame_ts": 0.10},
-                "artifacts": _frame_artifacts(frame_b),
-            },
-            {
-                "payload": {"camera_id": "camera-main", "frame_ts": 0.15},
-                "artifacts": _frame_artifacts(frame_b),
-            },
-            {
-                "payload": {"camera_id": "camera-main", "frame_ts": 0.20},
-                "artifacts": _frame_artifacts(frame_b),
-            },
-            {
-                "payload": {"camera_id": "camera-main", "frame_ts": 0.25},
-                "artifacts": _frame_artifacts(frame_b),
-            },
-        ]
-        detection_sequence = [
-            [
-                DetectionObject(
-                    label="person",
-                    label_id=0,
-                    score=0.55,
-                    bbox01=(0.1, 0.1, 0.3, 0.5),
-                    model_id="fake.detector",
-                )
-            ],
-            [
-                DetectionObject(
-                    label="person",
-                    label_id=0,
-                    score=0.95,
-                    bbox01=(0.1, 0.1, 0.3, 0.5),
-                    model_id="fake.detector",
-                )
-            ],
-            [],
-            [],
-            [],
-            [],
-        ]
-        graph = {
-            "schema_version": 1,
-            "nodes": [
-                {
-                    "id": "source",
-                    "operator": "test.sequence_source",
-                    "config": {"stream_id": "camera:test"},
-                },
-                {
-                    "id": "detect",
-                    "operator": "vision.detect",
-                    "config": {"model_id": "fake.detector", "emit_mode": "annotate"},
-                },
-                {
-                    "id": "track",
-                    "operator": "vision.track",
-                    "config": {
-                        "tracker_id": "simple_iou_kalman",
-                        "emit_mode": "events",
-                        "default_interval_seconds": 0.0,
-                        "close_after_seconds": 0.05,
-                    },
-                },
-                {"id": "best", "operator": "camera.best_frame_selector", "config": {}},
-                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
-            ],
-            "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "detect", "port": "in"}},
-                {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}},
-                {"from": {"node": "track", "port": "out"}, "to": {"node": "best", "port": "in"}},
-                {"from": {"node": "best", "port": "out"}, "to": {"node": "sink", "port": "in"}},
-            ],
-        }
-
-        collector: dict[str, list[Packet]] = {}
-        runtime = _pipeline_runtime(
-            graph=graph,
-            source_sequence=source_sequence,
-            detection_sequence=detection_sequence,
-            collector=collector,
-        )
-        await runtime.run_for(0.35)
-
-        packets = collector.get("sink", [])
-        assert packets
-        close_packets = [packet for packet in packets if packet.lifecycle == Lifecycle.CLOSE]
-        assert close_packets
-        best_packet = close_packets[-1]
-        assert "best_frame" in best_packet.artifacts
-        assert best_packet.payload.get("tracking_id")
-
-    asyncio.run(scenario())
 
 
 def test_velocity_estimation_continues_working_after_vision_track_decoupling() -> None:

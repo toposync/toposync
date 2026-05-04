@@ -53,7 +53,7 @@ def test_vision_classify_image_attaches_ranked_payload() -> None:
         packet = Packet.create(
             stream_id="camera:test",
             payload={"frame_width": 200, "frame_height": 100},
-            artifacts={"frame_original": Artifact(name="frame_original", data=object(), mime_type="image/raw")},
+            artifacts={"main": Artifact(name="main", data=object(), mime_type="image/raw")},
         )
 
         out_packets = await runtime.process_packet(packet, _Context())
@@ -103,7 +103,7 @@ def test_vision_classify_image_respects_top_k() -> None:
         packet = Packet.create(
             stream_id="camera:test",
             payload={},
-            artifacts={"frame_original": Artifact(name="frame_original", data=object(), mime_type="image/raw")},
+            artifacts={"main": Artifact(name="main", data=object(), mime_type="image/raw")},
         )
 
         out_packets = await runtime.process_packet(packet, _Context())

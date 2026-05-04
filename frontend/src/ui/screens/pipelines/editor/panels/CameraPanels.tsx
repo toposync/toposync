@@ -1,6 +1,5 @@
 import React from "react";
 import Select, { type MultiValue, type SingleValue } from "react-select";
-import CreatableSelect from "react-select/creatable";
 import type { StylesConfig } from "react-select";
 
 import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../../../../util/api";
@@ -422,9 +421,6 @@ export function MotionGateConfigCard({
 	    : 0.1;
 	  const maskStrokes = parseMotionMaskStrokes((config as any).mask_strokes);
 
-  const inputWithFallback = textConfigValue((config as any).input_with_fallback, "segmented,treated,original");
-  const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? (config as any).fallback_to_payload_frame ?? true;
-
   const drawEligibility = React.useMemo(
     () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId, operatorsById),
     [steps, index, pipelineName, nodeId, operatorsById],
@@ -571,24 +567,7 @@ export function MotionGateConfigCard({
       {showAdvanced ? (
         <>
           <div className="sectionDivider" />
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.motion_gate.input_with_fallback")}</span>
-            <input
-              className="pipelinesInput"
-              type="text"
-              value={inputWithFallback}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, input_with_fallback: event.target.value }))}
-            />
-          </label>
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.motion_gate.fallback_to_stream_frame")}</span>
-            <input
-              type="checkbox"
-              checked={Boolean(fallbackToStreamFrame)}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, fallback_to_stream_frame: event.target.checked }))}
-            />
-          </label>
-	          <label className="pipelinesLabel">
+		          <label className="pipelinesLabel">
 	            <span>{t("core.ui.pipelines.panels.motion_gate.mask.brush_diameter")}</span>
 	            <PipelinesNumberInput
 	              className="pipelinesInput"
@@ -685,9 +664,6 @@ export function MotionBgSubAdaptiveConfigCard({
     ? Math.max(0.002, Math.min(0.25, maskBrushDiameter01Raw))
     : 0.1;
   const maskStrokes = parseMotionMaskStrokes((config as any).mask_strokes);
-
-  const inputWithFallback = textConfigValue((config as any).input_with_fallback, "segmented,treated,original");
-  const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? true;
 
   const drawEligibility = React.useMemo(
     () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId, operatorsById),
@@ -857,23 +833,6 @@ export function MotionBgSubAdaptiveConfigCard({
       {showAdvanced ? (
         <>
           <div className="sectionDivider" />
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.motion_gate.input_with_fallback")}</span>
-            <input
-              className="pipelinesInput"
-              type="text"
-              value={inputWithFallback}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, input_with_fallback: event.target.value }))}
-            />
-          </label>
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.motion_gate.fallback_to_stream_frame")}</span>
-            <input
-              type="checkbox"
-              checked={Boolean(fallbackToStreamFrame)}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, fallback_to_stream_frame: event.target.checked }))}
-            />
-          </label>
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.motion_gate.mask.brush_diameter")}</span>
             <PipelinesNumberInput
@@ -1165,9 +1124,6 @@ export function MotionSampleBgConfigCard({
     : 0.1;
   const maskStrokes = parseMotionMaskStrokes((config as any).mask_strokes);
 
-  const inputWithFallback = textConfigValue((config as any).input_with_fallback, "segmented,treated,original");
-  const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? true;
-
   const drawEligibility = React.useMemo(
     () => resolveImageDrawEligibility(steps, index, pipelineName, nodeId, operatorsById),
     [steps, index, pipelineName, nodeId, operatorsById],
@@ -1353,23 +1309,6 @@ export function MotionSampleBgConfigCard({
       {showAdvanced ? (
         <>
           <div className="sectionDivider" />
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.motion_gate.input_with_fallback")}</span>
-            <input
-              className="pipelinesInput"
-              type="text"
-              value={inputWithFallback}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, input_with_fallback: event.target.value }))}
-            />
-          </label>
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.motion_gate.fallback_to_stream_frame")}</span>
-            <input
-              type="checkbox"
-              checked={Boolean(fallbackToStreamFrame)}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, fallback_to_stream_frame: event.target.checked }))}
-            />
-          </label>
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.motion_gate.mask.brush_diameter")}</span>
             <PipelinesNumberInput
@@ -1699,9 +1638,7 @@ export function ImageCropConfigCard({ config, pipelineName, steps, operatorsById
   const top = Number((config as any).top ?? 0);
   const right = Number((config as any).right ?? 100);
   const bottom = Number((config as any).bottom ?? 100);
-  const outputArtifactName = textConfigValue((config as any).output_artifact_name, "frame");
   const minCropSizePx = Number((config as any).min_crop_size_px ?? 8);
-  const setStreamFrame = (config as any).set_stream_frame ?? (config as any).set_payload_frame ?? true;
 
   const percentMax = 100;
   const clampPercent = (value: number) => Math.max(0, Math.min(percentMax, value));
@@ -1823,16 +1760,6 @@ export function ImageCropConfigCard({ config, pipelineName, steps, operatorsById
         <>
           <div className="sectionDivider" />
           <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.image_crop.output_artifact_name")}</span>
-            <input
-              className="pipelinesInput"
-              type="text"
-              value={outputArtifactName}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, output_artifact_name: event.target.value }))}
-            />
-          </label>
-
-          <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.image_crop.min_crop_size_px")}</span>
             <PipelinesNumberInput
               className="pipelinesInput"
@@ -1844,15 +1771,6 @@ export function ImageCropConfigCard({ config, pipelineName, steps, operatorsById
                 const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(4096, nextValue)) : 8;
                 onUpdateConfig((prev) => ({ ...prev, min_crop_size_px: normalized }));
               }}
-            />
-          </label>
-
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.image_crop.use_cropped_frame")}</span>
-            <input
-              type="checkbox"
-              checked={Boolean(setStreamFrame)}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, set_stream_frame: event.target.checked }))}
             />
           </label>
         </>
@@ -1951,10 +1869,8 @@ export function ImagePerspectiveCropConfigCard({
       ? outputRatioRaw
       : "auto";
 
-  const outputArtifactName = textConfigValue((config as any).output_artifact_name, "frame");
   const minOutputEdgePx = Number((config as any).min_output_edge_px ?? 8);
   const maxOutputEdgePx = Number((config as any).max_output_edge_px ?? 0);
-  const setStreamFrame = (config as any).set_stream_frame ?? (config as any).set_payload_frame ?? true;
 
   const interpolationRaw = String((config as any).interpolation ?? "linear").trim().toLowerCase();
   const interpolation =
@@ -2098,16 +2014,6 @@ export function ImagePerspectiveCropConfigCard({
           <div className="sectionDivider" />
 
           <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.image_perspective_crop.output_artifact_name")}</span>
-            <input
-              className="pipelinesInput"
-              type="text"
-              value={outputArtifactName}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, output_artifact_name: event.target.value }))}
-            />
-          </label>
-
-          <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.image_perspective_crop.min_output_edge_px")}</span>
             <PipelinesNumberInput
               className="pipelinesInput"
@@ -2177,15 +2083,6 @@ export function ImagePerspectiveCropConfigCard({
               }}
             />
           </label>
-
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.image_perspective_crop.use_warped_frame")}</span>
-            <input
-              type="checkbox"
-              checked={Boolean(setStreamFrame)}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, set_stream_frame: event.target.checked }))}
-            />
-          </label>
         </>
       ) : null}
 
@@ -2235,15 +2132,6 @@ export function ImagePrivacyConfigCard({
   onUpdateConfig,
 }: ImagePrivacyProps): React.ReactElement {
   const { t } = i18n.useI18n();
-  const inputArtifactNamesRaw = (config as any).input_artifact_names;
-  const inputArtifactNames = Array.isArray(inputArtifactNamesRaw)
-    ? inputArtifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
-    : ["treated", "original"];
-  const artifactSuggestions = buildArtifactSuggestions(t);
-  const selectedInputOptions = inputArtifactNames.map(
-    (value) => artifactSuggestions.find((opt) => opt.value === value) ?? { value, label: value },
-  );
-
   const unitsRaw = String((config as any).units ?? "percent").trim().toLowerCase();
   const units = unitsRaw === "pixels" ? "pixels" : "percent";
   const left = Number((config as any).left ?? 0);
@@ -2251,11 +2139,8 @@ export function ImagePrivacyConfigCard({
   const right = Number((config as any).right ?? 0);
   const bottom = Number((config as any).bottom ?? 0);
   const effect = parsePrivacyEffect((config as any).effect);
-  const outputArtifactName = textConfigValue((config as any).output_artifact_name, "frame");
   const minRegionSizePx = Number((config as any).min_region_size_px ?? 8);
-  const setStreamFrame = (config as any).set_stream_frame ?? (config as any).set_payload_frame ?? true;
   const preserveAlpha = (config as any).preserve_alpha !== false;
-  const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? (config as any).fallback_to_payload_frame ?? true;
 
   const clampPercent = (value: number, fallback: number) => {
     if (!Number.isFinite(value)) return fallback;
@@ -2420,34 +2305,6 @@ export function ImagePrivacyConfigCard({
           <div className="sectionDivider" />
 
           <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.image_privacy.input_artifacts")}</span>
-            <CreatableSelect<SelectOption, true>
-              isMulti
-              styles={pipelinesReactSelectStyles}
-              options={artifactSuggestions}
-              value={selectedInputOptions}
-              placeholder={t("core.ui.pipelines.panels.image_privacy.input_artifacts_placeholder")}
-              onChange={(value: MultiValue<SelectOption>) => {
-                onUpdateConfig((prev) => ({
-                  ...prev,
-                  input_artifact_names: value.map((item) => item.value),
-                }));
-              }}
-            />
-          </label>
-          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_privacy.input_artifacts_hint")}</div>
-
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.image_privacy.output_artifact_name")}</span>
-            <input
-              className="pipelinesInput"
-              type="text"
-              value={outputArtifactName}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, output_artifact_name: event.target.value }))}
-            />
-          </label>
-
-          <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.image_privacy.min_region_size_px")}</span>
             <PipelinesNumberInput
               className="pipelinesInput"
@@ -2459,24 +2316,6 @@ export function ImagePrivacyConfigCard({
                 const normalized = Number.isFinite(nextValue) ? Math.max(1, Math.min(4096, nextValue)) : 8;
                 onUpdateConfig((prev) => ({ ...prev, min_region_size_px: normalized }));
               }}
-            />
-          </label>
-
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.image_privacy.apply_stream_frame")}</span>
-            <input
-              type="checkbox"
-              checked={Boolean(setStreamFrame)}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, set_stream_frame: event.target.checked }))}
-            />
-          </label>
-
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.image_privacy.fallback_stream_frame")}</span>
-            <input
-              type="checkbox"
-              checked={Boolean(fallbackToStreamFrame)}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, fallback_to_stream_frame: event.target.checked }))}
             />
           </label>
 
@@ -2531,11 +2370,6 @@ export function ArtifactPrivacyConfigCard({
   const { t } = i18n.useI18n();
   const expression = textConfigValue((config as any).expression);
   const invert = Boolean((config as any).invert ?? false);
-  const artifactNamesRaw = (config as any).artifact_names;
-  const artifactNames = Array.isArray(artifactNamesRaw)
-    ? artifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
-    : ["best_frame", "original", "treated", "segmented"];
-
   const upstreamContext = React.useMemo(
     () => buildFilterExpressionUpstreamContext(steps, index, operatorsById),
     [steps, index, operatorsById],
@@ -2557,10 +2391,6 @@ export function ArtifactPrivacyConfigCard({
     }
     return merged;
   }, [t, upstreamContext.artifactNames]);
-  const selectedArtifactOptions = artifactNames.map(
-    (value) => artifactSuggestions.find((option) => option.value === value) ?? { value, label: value },
-  );
-
   return (
     <div className="pipelinesOperatorConfigCard">
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.artifact_privacy.hint")}</div>
@@ -2580,24 +2410,6 @@ export function ArtifactPrivacyConfigCard({
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.artifact_privacy.expression_hint")}</div>
 
       <label className="pipelinesLabel">
-        <span>{t("core.ui.pipelines.panels.artifact_privacy.artifacts")}</span>
-        <CreatableSelect<SelectOption, true>
-          isMulti
-          styles={pipelinesReactSelectStyles}
-          options={artifactSuggestions}
-          value={selectedArtifactOptions}
-          placeholder={t("core.ui.pipelines.panels.artifact_privacy.artifacts_placeholder")}
-          onChange={(value: MultiValue<SelectOption>) => {
-            onUpdateConfig((prev) => ({
-              ...prev,
-              artifact_names: value.map((item) => item.value),
-            }));
-          }}
-        />
-      </label>
-      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.artifact_privacy.artifacts_hint")}</div>
-
-      <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.artifact_privacy.invert")}</span>
         <input
           type="checkbox"
@@ -2614,24 +2426,12 @@ export function ArtifactPrivacyConfigCard({
 
 export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: ImageAdjustProps): React.ReactElement {
   const { t } = i18n.useI18n();
-  const inputArtifactNamesRaw = (config as any).input_artifact_names;
-  const inputArtifactNames = Array.isArray(inputArtifactNamesRaw)
-    ? inputArtifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
-    : ["segmented", "treated", "original"];
-  const artifactSuggestions = buildArtifactSuggestions(t);
-  const selectedInputOptions = inputArtifactNames.map(
-    (value) => artifactSuggestions.find((opt) => opt.value === value) ?? { value, label: value },
-  );
-
   const saturation = Number((config as any).saturation ?? 1.0);
   const brightness = Number((config as any).brightness ?? 0.0);
   const contrast = Number((config as any).contrast ?? 1.0);
   const gamma = Number((config as any).gamma ?? 1.0);
 
-  const outputArtifactName = textConfigValue((config as any).output_artifact_name, "frame");
-  const setStreamFrame = (config as any).set_stream_frame ?? (config as any).set_payload_frame ?? true;
   const preserveAlpha = (config as any).preserve_alpha !== false;
-  const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? (config as any).fallback_to_payload_frame ?? true;
 
   const clamp = (value: number, min: number, max: number, fallback: number) => {
     if (!Number.isFinite(value)) return fallback;
@@ -2640,24 +2440,6 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
 
   return (
     <div className="pipelinesOperatorConfigCard">
-      <label className="pipelinesLabel">
-        <span>{t("core.ui.pipelines.panels.image_adjust.input_artifacts")}</span>
-        <CreatableSelect<SelectOption, true>
-          isMulti
-          styles={pipelinesReactSelectStyles}
-          options={artifactSuggestions}
-          value={selectedInputOptions}
-          placeholder={t("core.ui.pipelines.panels.image_adjust.input_artifacts_placeholder")}
-          onChange={(value: MultiValue<SelectOption>) => {
-            onUpdateConfig((prev) => ({
-              ...prev,
-              input_artifact_names: value.map((item) => item.value),
-            }));
-          }}
-        />
-      </label>
-      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_adjust.input_artifacts_hint")}</div>
-
       <div className="pipelinesScalarGrid" style={{ marginTop: 8 }}>
         <label className="pipelinesLabel pipelinesScalarLabel">
           <span>{t("core.ui.pipelines.panels.image_adjust.saturation")}</span>
@@ -2725,36 +2507,6 @@ export function ImageAdjustConfigCard({ config, showAdvanced, onUpdateConfig }: 
           <div className="sectionDivider" />
 
           <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.image_adjust.output_artifact_name")}</span>
-            <input
-              className="pipelinesInput"
-              type="text"
-              value={outputArtifactName}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, output_artifact_name: event.target.value }))}
-            />
-          </label>
-
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.image_adjust.apply_stream_frame")}</span>
-            <input
-              type="checkbox"
-              checked={Boolean(setStreamFrame)}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, set_stream_frame: event.target.checked }))}
-            />
-          </label>
-
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.image_adjust.fallback_stream_frame")}</span>
-            <input
-              type="checkbox"
-              checked={Boolean(fallbackToStreamFrame)}
-              onChange={(event) =>
-                onUpdateConfig((prev) => ({ ...prev, fallback_to_stream_frame: event.target.checked }))
-              }
-            />
-          </label>
-
-          <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.image_adjust.preserve_alpha")}</span>
             <input
               type="checkbox"
@@ -2777,31 +2529,8 @@ export function ImageResizeConfigCard({ config, onUpdateConfig }: ImageResizePro
   const { t } = i18n.useI18n();
   const maxEdgePx = Number((config as any).max_edge_px ?? 1280);
   const allowUpscale = Boolean((config as any).allow_upscale ?? false);
-  const artifactNamesRaw = (config as any).artifact_names;
-  const artifactNames = Array.isArray(artifactNamesRaw)
-    ? artifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
-    : ["segmented", "treated"];
-  const artifactSuggestions = buildArtifactSuggestions(t);
-  const selectedOptions = artifactNames.map((value) => artifactSuggestions.find((opt) => opt.value === value) ?? { value, label: value });
-
   return (
     <div className="pipelinesOperatorConfigCard">
-      <label className="pipelinesLabel">
-        <span>{t("core.ui.pipelines.panels.image_resize.artifacts")}</span>
-        <CreatableSelect<SelectOption, true>
-          isMulti
-          styles={pipelinesReactSelectStyles}
-          options={artifactSuggestions}
-          value={selectedOptions}
-          placeholder={t("core.ui.pipelines.panels.image_resize.artifacts_placeholder")}
-          onChange={(value: MultiValue<SelectOption>) => {
-            onUpdateConfig((prev) => ({
-              ...prev,
-              artifact_names: value.map((item) => item.value),
-            }));
-          }}
-        />
-      </label>
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.image_resize.hint")}</div>
 
       <label className="pipelinesLabel">
@@ -2835,37 +2564,15 @@ type ObjectSegmentationProps = {
   onUpdateConfig: UpdateConfig;
 };
 
-function normalizeStringArray(value: unknown, fallback: string[]): string[] {
-  if (!Array.isArray(value)) return fallback;
-  const items = value.map((item) => String(item || "").trim()).filter((item) => item.length > 0);
-  const unique: string[] = [];
-  const seen = new Set<string>();
-  for (const item of items) {
-    const key = item.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(item);
-  }
-  return unique.length > 0 ? unique : fallback;
-}
-
 export function ObjectSegmentationConfigCard({
   config,
   showAdvanced,
   onUpdateConfig,
 }: ObjectSegmentationProps): React.ReactElement {
   const { t } = i18n.useI18n();
-  const fallbackToStreamFrame = (config as any).fallback_to_stream_frame ?? (config as any).fallback_to_payload_frame ?? true;
   const paddingRatio = Number((config as any).padding_ratio ?? 0.08);
   const minCropSizePx = Number((config as any).min_crop_size_px ?? 8);
-  const outputArtifactName = textConfigValue((config as any).output_artifact_name, "segmented");
   const bboxField = textConfigValue((config as any).bbox_field, "object_bbox01");
-
-  const inputNames = normalizeStringArray((config as any).input_artifact_names, ["original", "treated"]);
-  const preferOriginal = String(inputNames[0] || "").trim().toLowerCase() !== "treated";
-
-  const artifactSuggestions = buildArtifactSuggestions(t);
-  const selectedInputOptions = inputNames.map((value) => artifactSuggestions.find((opt) => opt.value === value) ?? { value, label: value });
 
   const clamp = (value: number, min: number, max: number, fallback: number) => {
     if (!Number.isFinite(value)) return fallback;
@@ -2874,47 +2581,6 @@ export function ObjectSegmentationConfigCard({
 
   return (
     <div className="pipelinesOperatorConfigCard">
-      <label className="pipelinesLabel">
-        <span>{t("core.ui.pipelines.panels.object_segmentation.quality")}</span>
-        <select
-          className="pipelinesSelect"
-          value={preferOriginal ? "best" : "fast"}
-          onChange={(event) => {
-            const next = String(event.target.value || "best").trim().toLowerCase();
-            onUpdateConfig((prev) => ({
-              ...prev,
-              input_artifact_names: next === "fast" ? ["treated", "original"] : ["original", "treated"],
-            }));
-          }}
-        >
-          <option value="best">{t("core.ui.pipelines.panels.object_segmentation.quality.best")}</option>
-          <option value="fast">{t("core.ui.pipelines.panels.object_segmentation.quality.fast")}</option>
-        </select>
-      </label>
-      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.object_segmentation.quality_hint")}</div>
-
-      {showAdvanced ? (
-        <>
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.object_segmentation.input_images")}</span>
-            <CreatableSelect<SelectOption, true>
-              isMulti
-              styles={pipelinesReactSelectStyles}
-              options={artifactSuggestions}
-              value={selectedInputOptions}
-              placeholder={t("core.ui.pipelines.panels.object_segmentation.input_images_placeholder")}
-              onChange={(value: MultiValue<SelectOption>) => {
-                onUpdateConfig((prev) => ({
-                  ...prev,
-                  input_artifact_names: value.map((item) => item.value),
-                }));
-              }}
-            />
-          </label>
-          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.object_segmentation.input_images_hint")}</div>
-        </>
-      ) : null}
-
       <div className="pipelinesScalarGrid" style={{ marginTop: 8 }}>
         <label className="pipelinesLabel pipelinesScalarLabel">
           <span>{t("core.ui.pipelines.panels.object_segmentation.padding")}</span>
@@ -2949,31 +2615,12 @@ export function ObjectSegmentationConfigCard({
           <div className="sectionDivider" />
 
           <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.object_segmentation.output_artifact_name")}</span>
-            <input
-              className="pipelinesInput"
-              type="text"
-              value={outputArtifactName}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, output_artifact_name: event.target.value }))}
-            />
-          </label>
-
-          <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.object_segmentation.bbox_field")}</span>
             <input
               className="pipelinesInput"
               type="text"
               value={bboxField}
               onChange={(event) => onUpdateConfig((prev) => ({ ...prev, bbox_field: event.target.value }))}
-            />
-          </label>
-
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.object_segmentation.fallback_stream_frame")}</span>
-            <input
-              type="checkbox"
-              checked={Boolean(fallbackToStreamFrame)}
-              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, fallback_to_stream_frame: event.target.checked }))}
             />
           </label>
         </>

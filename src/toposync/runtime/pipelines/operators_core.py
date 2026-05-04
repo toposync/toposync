@@ -13,6 +13,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .execution import PassThroughRuntime, SinkRuntime, SourceOperatorRuntime, TransformOperatorRuntime
+from .images import MAIN_ARTIFACT_NAME
 from .operator_registry import OperatorRegistry
 from .packet_contract import build_media_descriptor, build_source_descriptor
 from .runtime import Artifact, Lifecycle, Packet
@@ -350,14 +351,7 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
         return [packet]
 
     def _resolve_snapshot_image(self, packet: Packet) -> Any | None:
-        preferred = (
-            "frame",
-            "frame_original",
-            "best_frame",
-            "treated",
-            "original",
-            "segmented",
-        )
+        preferred = (MAIN_ARTIFACT_NAME,)
         for name in preferred:
             artifact = packet.artifacts.get(name)
             if artifact is None:
@@ -704,23 +698,12 @@ class DemoFrameSequenceSourceRuntime(SourceOperatorRuntime):
             "area_label": "demo",
         }
         artifacts = {
-            "frame_original": Artifact(
-                name="frame_original",
+            MAIN_ARTIFACT_NAME: Artifact(
+                name=MAIN_ARTIFACT_NAME,
                 data=frame,
                 mime_type="image/raw",
                 metadata={
                     "source": "core.demo_frame_sequence_source",
-                    "width": int(self._width),
-                    "height": int(self._height),
-                },
-            ),
-            "frame": Artifact(
-                name="frame",
-                data=frame,
-                mime_type="image/raw",
-                metadata={
-                    "source": "core.demo_frame_sequence_source",
-                    "derived_from": "frame_original",
                     "width": int(self._width),
                     "height": int(self._height),
                 },
@@ -939,7 +922,7 @@ def register_core_operators(registry: OperatorRegistry) -> None:
             "object_confidence",
             "area_label",
         ],
-        produces_artifacts=["frame_original", "frame"],
+        produces_artifacts=[MAIN_ARTIFACT_NAME],
         produces_source_fields=["device_id", "channel_id", "kind", "modality", "name", "transport", "clock_domain"],
         produces_media_fields=["modality", "ts", "width", "height", "frame_rate"],
         output_modalities=["video"],

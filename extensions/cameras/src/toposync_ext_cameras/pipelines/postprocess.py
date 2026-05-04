@@ -12,14 +12,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from toposync.runtime.config_store import ConfigStore
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
 from toposync.runtime.pipelines.images import (
-    ensure_packet_image_keys,
+    MAIN_ARTIFACT_NAME,
+    normalize_artifact_name,
     resolve_image_artifact_for_data,
-    resolve_image_artifact_name,
-    set_image_key,
 )
 from toposync.runtime.pipelines.operator_registry import (
+    OperatorDiagnostic,
     OperatorRegistry,
-    artifact_name_hint,
     payload_path_hint,
 )
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts, resolve_source_device_id
@@ -41,32 +40,6 @@ from ..processing.mapping import (
 )
 
 
-def _artifact_contract_expression_hints(*, default_artifact_name: str | None = None) -> list[Any]:
-    hints: list[Any] = [
-        payload_path_hint("payload.artifact_contract", value_type="object", description="Artifact selection contract for downstream operators."),
-        payload_path_hint(
-            "payload.artifact_contract.available_artifact_names",
-            value_type="array",
-            description="Artifact names currently present on the packet.",
-        ),
-        payload_path_hint(
-            "payload.artifact_contract.preferred_input_artifact_names",
-            value_type="array",
-            description="Configured preferred artifact names for upstream image selection.",
-        ),
-        payload_path_hint(
-            "payload.artifact_contract.selected_input_artifact_name",
-            value_type="string",
-            description="Artifact name selected as input by the operator.",
-        ),
-        payload_path_hint("payload.artifact_names", value_type="array", description="Artifact names available after this operator runs."),
-        payload_path_hint("payload.artifact_names[0]", value_type="string", description="First artifact name available after this operator runs."),
-    ]
-    if default_artifact_name:
-        hints.append(artifact_name_hint(default_artifact_name, description="Default output artifact name for the operator."))
-    return hints
-
-
 def _frame_crop_expression_hints() -> list[Any]:
     return [
         payload_path_hint("payload.frame_crop", value_type="object", description="Crop metadata for the generated frame artifact."),
@@ -74,7 +47,6 @@ def _frame_crop_expression_hints() -> list[Any]:
         payload_path_hint("payload.frame_crop.bbox01_current", value_type="array", description="Normalized crop rectangle applied to the current frame."),
         payload_path_hint("payload.frame_crop.units", value_type="string", description="Units used to interpret crop values."),
         payload_path_hint("payload.frame_crop.output_artifact_name", value_type="string", description="Artifact name emitted by the crop operator."),
-        payload_path_hint("payload.frame_crop.set_stream_frame", value_type="boolean", description="Whether the cropped artifact becomes the stream frame."),
     ]
 
 
@@ -85,7 +57,6 @@ def _frame_privacy_expression_hints() -> list[Any]:
         payload_path_hint("payload.frame_privacy.units", value_type="string", description="Units used to interpret the configured privacy region."),
         payload_path_hint("payload.frame_privacy.effect", value_type="string", description="Privacy effect applied inside the region."),
         payload_path_hint("payload.frame_privacy.output_artifact_name", value_type="string", description="Artifact name emitted by the privacy operator."),
-        payload_path_hint("payload.frame_privacy.set_stream_frame", value_type="boolean", description="Whether the privacy artifact becomes the stream frame."),
     ]
 
 
@@ -107,7 +78,6 @@ def _frame_warp_expression_hints() -> list[Any]:
         payload_path_hint("payload.frame_warp.dest_frame_width", value_type="number", description="Output frame width after the warp."),
         payload_path_hint("payload.frame_warp.dest_frame_height", value_type="number", description="Output frame height after the warp."),
         payload_path_hint("payload.frame_warp.output_artifact_name", value_type="string", description="Artifact name emitted by the perspective crop."),
-        payload_path_hint("payload.frame_warp.set_stream_frame", value_type="boolean", description="Whether the warped artifact becomes the stream frame."),
     ]
 
 
@@ -118,6 +88,168 @@ def _world_mapping_expression_hints() -> list[Any]:
         payload_path_hint("payload.world.z", value_type="number", description="Mapped world Z coordinate."),
         payload_path_hint("payload.mapping", value_type="object", description="Mapping metadata produced alongside world coordinates."),
     ]
+
+
+def _camera_mapping_diagnostics(config: dict[str, Any], context: dict[str, Any]) -> list[OperatorDiagnostic]:
+    parsed = CameraMappingConfig.model_validate(config)
+    if _control_point_sets_from_models(parsed.control_point_sets):
+        return []
+
+    camera_id = parsed.camera_id or _infer_camera_mapping_camera_id(context)
+    if not camera_id:
+        return []
+
+    raw_compositions = context.get("compositions")
+    if not isinstance(raw_compositions, list):
+        return []
+
+    composition_id = parsed.composition_id
+    if composition_id:
+        composition = _find_diagnostic_composition(raw_compositions, composition_id)
+        if composition is None:
+            return [
+                OperatorDiagnostic(
+                    severity="error",
+                    code="camera_mapping_composition_missing",
+                    message=f"Camera Mapping references composition '{composition_id}', but that composition does not exist.",
+                    suggestion="Select an existing composition or clear composition_id to use any calibrated composition for this camera.",
+                )
+            ]
+        return _diagnose_camera_mapping_composition(
+            composition=composition,
+            camera_id=camera_id,
+            selected_composition=True,
+        )
+
+    matched_camera = False
+    matched_without_mapping: list[Any] = []
+    for composition in raw_compositions:
+        result = _camera_mapping_composition_status(composition=composition, camera_id=camera_id)
+        if not result["found"]:
+            continue
+        matched_camera = True
+        if result["has_mapping"]:
+            return []
+        matched_without_mapping.append(composition)
+
+    if matched_camera:
+        composition_names = ", ".join(_diagnostic_composition_label(item) for item in matched_without_mapping)
+        return [
+            OperatorDiagnostic(
+                severity="error",
+                code="camera_mapping_control_points_missing",
+                message=(
+                    f"Camera '{camera_id}' is in composition(s) {composition_names}, "
+                    "but none has at least four valid control point pairs."
+                ),
+                suggestion="Add at least four control point pairs to the camera element, or provide inline control_point_sets.",
+            )
+        ]
+
+    return [
+        OperatorDiagnostic(
+            severity="error",
+            code="camera_mapping_camera_not_in_composition",
+            message=f"Camera '{camera_id}' is not placed in any composition available to Camera Mapping.",
+            suggestion="Add the camera to a composition and calibrate it with at least four control point pairs.",
+        )
+    ]
+
+
+def _infer_camera_mapping_camera_id(context: dict[str, Any]) -> str:
+    upstream_nodes = context.get("upstream_nodes")
+    if not isinstance(upstream_nodes, list):
+        return ""
+    camera_ids: set[str] = set()
+    for item in upstream_nodes:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("operator_id") or "").strip() != "camera.source":
+            continue
+        cfg = item.get("normalized_config")
+        if not isinstance(cfg, dict):
+            continue
+        camera_id = str(cfg.get("camera_id") or "").strip()
+        if camera_id:
+            camera_ids.add(camera_id)
+    if len(camera_ids) == 1:
+        return next(iter(camera_ids))
+    return ""
+
+
+def _find_diagnostic_composition(compositions: list[Any], composition_id: str) -> Any | None:
+    wanted = str(composition_id or "").strip()
+    for composition in compositions:
+        if _diagnostic_get(composition, "id") == wanted:
+            return composition
+    return None
+
+
+def _diagnose_camera_mapping_composition(
+    *,
+    composition: Any,
+    camera_id: str,
+    selected_composition: bool,
+) -> list[OperatorDiagnostic]:
+    result = _camera_mapping_composition_status(composition=composition, camera_id=camera_id)
+    composition_label = _diagnostic_composition_label(composition)
+    if not result["found"]:
+        scope = f"selected composition {composition_label}" if selected_composition else f"composition {composition_label}"
+        return [
+            OperatorDiagnostic(
+                severity="error",
+                code="camera_mapping_camera_not_in_composition",
+                message=f"Camera '{camera_id}' is not placed in the {scope}.",
+                suggestion="Add the camera to the selected composition or choose a composition that contains this camera.",
+            )
+        ]
+    if not result["has_mapping"]:
+        return [
+            OperatorDiagnostic(
+                severity="error",
+                code="camera_mapping_control_points_missing",
+                message=(
+                    f"Camera '{camera_id}' is in composition {composition_label}, "
+                    "but it does not have a control point set with at least four pairs."
+                ),
+                suggestion="Add at least four control point pairs to the camera element, or provide inline control_point_sets.",
+            )
+        ]
+    return []
+
+
+def _camera_mapping_composition_status(*, composition: Any, camera_id: str) -> dict[str, bool]:
+    found = False
+    has_mapping = False
+    elements = _diagnostic_get(composition, "elements", default=[])
+    if not isinstance(elements, list):
+        return {"found": False, "has_mapping": False}
+    for element in elements:
+        props = _diagnostic_get(element, "props", default={})
+        if not isinstance(props, dict):
+            continue
+        if str(props.get("camera_id") or "").strip() != camera_id:
+            continue
+        found = True
+        control_point_sets = _parse_control_point_sets(props.get("control_point_sets"))
+        if any(len(item.control_points) >= 4 for item in control_point_sets):
+            has_mapping = True
+            break
+    return {"found": found, "has_mapping": has_mapping}
+
+
+def _diagnostic_composition_label(composition: Any) -> str:
+    name = _diagnostic_get(composition, "name")
+    composition_id = _diagnostic_get(composition, "id")
+    if name and composition_id and name != composition_id:
+        return f"'{name}' ({composition_id})"
+    return f"'{composition_id or name or 'unknown'}'"
+
+
+def _diagnostic_get(value: Any, key: str, default: Any = "") -> Any:
+    if isinstance(value, dict):
+        return value.get(key, default)
+    return getattr(value, key, default)
 
 
 def _area_restriction_expression_hints() -> list[Any]:
@@ -147,27 +279,11 @@ def _velocity_expression_hints() -> list[Any]:
 
 class ObjectCropConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["original", "treated"])
-    fallback_to_stream_frame: bool = True
-    output_artifact_name: str = "segmented"
+    input_artifact_name: str = ""
+    output_artifact_name: str = MAIN_ARTIFACT_NAME
     bbox_field: str = "object_bbox01"
     padding_ratio: float = Field(default=0.08, ge=0.0, le=1.0)
     min_crop_size_px: int = Field(default=8, ge=1, le=4096)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _migrate_legacy_fields(cls, values: Any) -> Any:
-        # Aceita graphs antigos (payload.frame) sem expor isso no schema atual.
-        if isinstance(values, dict):
-            values = dict(values)
-            if "fallback_to_payload_frame" in values and "fallback_to_stream_frame" not in values:
-                values["fallback_to_stream_frame"] = values.pop("fallback_to_payload_frame")
-        return values
-
-    @field_validator("input_artifact_names", mode="after")
-    @classmethod
-    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
-        return _normalize_artifact_names(value)
 
     @field_validator("output_artifact_name")
     @classmethod
@@ -180,44 +296,22 @@ class ObjectCropConfig(BaseModel):
 
 class ImageResizeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated"])
+    input_artifact_name: str = ""
     max_edge_px: int = Field(default=1280, ge=16, le=16384)
     allow_upscale: bool = False
-
-    @field_validator("artifact_names", mode="after")
-    @classmethod
-    def _normalize_config_artifact_names(cls, value: list[str]) -> list[str]:
-        return _normalize_artifact_names(value)
 
 
 class ImageCropConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
-    fallback_to_stream_frame: bool = True
+    input_artifact_name: str = ""
     units: Literal["percent", "pixels"] = "percent"
     left: float = Field(default=0.0, ge=0.0)
     top: float = Field(default=0.0, ge=0.0)
     right: float = Field(default=100.0, ge=0.0)
     bottom: float = Field(default=100.0, ge=0.0)
 
-    output_artifact_name: str = "frame"
+    output_artifact_name: str = MAIN_ARTIFACT_NAME
     min_crop_size_px: int = Field(default=8, ge=1, le=4096)
-    set_stream_frame: bool = True
-
-    @model_validator(mode="before")
-    @classmethod
-    def _migrate_legacy_fields(cls, values: Any) -> Any:
-        # Aceita graphs antigos (set_payload_frame) sem expor isso no schema atual.
-        if isinstance(values, dict):
-            values = dict(values)
-            if "set_payload_frame" in values and "set_stream_frame" not in values:
-                values["set_stream_frame"] = values.pop("set_payload_frame")
-        return values
-
-    @field_validator("input_artifact_names", mode="after")
-    @classmethod
-    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
-        return _normalize_artifact_names(value)
 
     @field_validator("output_artifact_name")
     @classmethod
@@ -230,8 +324,7 @@ class ImageCropConfig(BaseModel):
 
 class ImagePrivacyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["treated", "original"])
-    fallback_to_stream_frame: bool = True
+    input_artifact_name: str = ""
     units: Literal["percent", "pixels"] = "percent"
     left: float = Field(default=0.0, ge=0.0)
     top: float = Field(default=0.0, ge=0.0)
@@ -239,26 +332,9 @@ class ImagePrivacyConfig(BaseModel):
     bottom: float = Field(default=0.0, ge=0.0)
     effect: Literal["black", "white", "gray", "blur_medium", "blur_high"] = "blur_medium"
 
-    output_artifact_name: str = "frame"
+    output_artifact_name: str = MAIN_ARTIFACT_NAME
     min_region_size_px: int = Field(default=8, ge=1, le=4096)
-    set_stream_frame: bool = True
     preserve_alpha: bool = True
-
-    @model_validator(mode="before")
-    @classmethod
-    def _migrate_legacy_fields(cls, values: Any) -> Any:
-        if isinstance(values, dict):
-            values = dict(values)
-            if "fallback_to_payload_frame" in values and "fallback_to_stream_frame" not in values:
-                values["fallback_to_stream_frame"] = values.pop("fallback_to_payload_frame")
-            if "set_payload_frame" in values and "set_stream_frame" not in values:
-                values["set_stream_frame"] = values.pop("set_payload_frame")
-        return values
-
-    @field_validator("input_artifact_names", mode="after")
-    @classmethod
-    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
-        return _normalize_artifact_names(value)
 
     @field_validator("effect")
     @classmethod
@@ -288,7 +364,7 @@ class ArtifactPrivacyConfig(BaseModel):
         description="Boolean expression evaluated against payload/metadata. When it matches, selected image artifacts are removed from the packet.",
     )
     invert: bool = False
-    artifact_names: list[str] = Field(default_factory=lambda: ["best_frame", "original", "treated", "segmented"])
+    artifact_names: list[str] = Field(default_factory=lambda: [MAIN_ARTIFACT_NAME])
 
     @field_validator("expression")
     @classmethod
@@ -303,16 +379,10 @@ class ArtifactPrivacyConfig(BaseModel):
         SafeExpression.compile(value)
         return value
 
-    @field_validator("artifact_names", mode="after")
-    @classmethod
-    def _normalize_config_artifact_names(cls, value: list[str]) -> list[str]:
-        return _normalize_artifact_names(value)
-
 
 class ImagePerspectiveCropConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
-    fallback_to_stream_frame: bool = True
+    input_artifact_name: str = ""
 
     units: Literal["percent", "pixels"] = "percent"
     points: list[tuple[float, float]] = Field(
@@ -325,16 +395,9 @@ class ImagePerspectiveCropConfig(BaseModel):
     border_mode: Literal["constant", "replicate"] = "constant"
     border_value: int = Field(default=0, ge=0, le=255)
 
-    output_artifact_name: str = "frame"
+    output_artifact_name: str = MAIN_ARTIFACT_NAME
     min_output_edge_px: int = Field(default=8, ge=1, le=4096)
     max_output_edge_px: int = Field(default=0, ge=0, le=16384, description="0 disables downscaling.")
-    set_stream_frame: bool = True
-
-    @field_validator("input_artifact_names", mode="after")
-    @classmethod
-    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
-        return _normalize_artifact_names(value)
-
     @field_validator("points", mode="before")
     @classmethod
     def _normalize_points(cls, value: Any) -> Any:
@@ -380,34 +443,14 @@ class ImagePerspectiveCropConfig(BaseModel):
 
 class ImageAdjustConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
-    fallback_to_stream_frame: bool = True
-    output_artifact_name: str = "frame"
+    input_artifact_name: str = ""
+    output_artifact_name: str = MAIN_ARTIFACT_NAME
 
     saturation: float = Field(default=1.0, ge=0.0, le=3.0)
     brightness: float = Field(default=0.0, ge=-1.0, le=1.0)
     contrast: float = Field(default=1.0, ge=0.0, le=3.0)
     gamma: float = Field(default=1.0, ge=0.1, le=5.0)
-
-    set_stream_frame: bool = True
     preserve_alpha: bool = True
-
-    @model_validator(mode="before")
-    @classmethod
-    def _migrate_legacy_fields(cls, values: Any) -> Any:
-        # Aceita graphs antigos (payload.frame) sem expor isso no schema atual.
-        if isinstance(values, dict):
-            values = dict(values)
-            if "fallback_to_payload_frame" in values and "fallback_to_stream_frame" not in values:
-                values["fallback_to_stream_frame"] = values.pop("fallback_to_payload_frame")
-            if "set_payload_frame" in values and "set_stream_frame" not in values:
-                values["set_stream_frame"] = values.pop("set_payload_frame")
-        return values
-
-    @field_validator("input_artifact_names", mode="after")
-    @classmethod
-    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
-        return _normalize_artifact_names(value)
 
     @field_validator("output_artifact_name")
     @classmethod
@@ -420,21 +463,13 @@ class ImageAdjustConfig(BaseModel):
 
 class LocalContrastCLAHEConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
-    fallback_to_stream_frame: bool = True
-    output_artifact_name: str = "frame"
+    input_artifact_name: str = ""
+    output_artifact_name: str = MAIN_ARTIFACT_NAME
 
     clip_limit: float = Field(default=2.0, ge=0.1, le=10.0)
     tile_grid_size: tuple[int, int] = Field(default=(8, 8), description="(tiles_x, tiles_y)")
     colorspace: Literal["lab", "ycrcb"] = "lab"
-
-    set_stream_frame: bool = True
     preserve_alpha: bool = True
-
-    @field_validator("input_artifact_names", mode="after")
-    @classmethod
-    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
-        return _normalize_artifact_names(value)
 
     @field_validator("tile_grid_size", mode="before")
     @classmethod
@@ -468,22 +503,14 @@ class LocalContrastCLAHEConfig(BaseModel):
 
 class UnsharpMaskConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
-    fallback_to_stream_frame: bool = True
-    output_artifact_name: str = "frame"
+    input_artifact_name: str = ""
+    output_artifact_name: str = MAIN_ARTIFACT_NAME
 
     amount: float = Field(default=0.35, ge=0.0, le=2.0)
     sigma: float = Field(default=1.0, ge=0.1, le=10.0)
     threshold: int = Field(default=0, ge=0, le=255, description="Apply sharpening only when |src-blur| > threshold.")
     luma_only: bool = True
-
-    set_stream_frame: bool = True
     preserve_alpha: bool = True
-
-    @field_validator("input_artifact_names", mode="after")
-    @classmethod
-    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
-        return _normalize_artifact_names(value)
 
     @field_validator("output_artifact_name")
     @classmethod
@@ -496,9 +523,8 @@ class UnsharpMaskConfig(BaseModel):
 
 class DenoiseLumaConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
-    fallback_to_stream_frame: bool = True
-    output_artifact_name: str = "frame"
+    input_artifact_name: str = ""
+    output_artifact_name: str = MAIN_ARTIFACT_NAME
 
     method: Literal["bilateral", "nlmeans"] = "bilateral"
     bilateral_diameter: int = Field(default=5, ge=1, le=31)
@@ -508,14 +534,7 @@ class DenoiseLumaConfig(BaseModel):
     nlmeans_h: float = Field(default=3.5, ge=0.0, le=30.0)
     nlmeans_template_window_size: int = Field(default=7, ge=3, le=21)
     nlmeans_search_window_size: int = Field(default=21, ge=7, le=51)
-
-    set_stream_frame: bool = True
     preserve_alpha: bool = True
-
-    @field_validator("input_artifact_names", mode="after")
-    @classmethod
-    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
-        return _normalize_artifact_names(value)
 
     @field_validator("output_artifact_name")
     @classmethod
@@ -540,9 +559,8 @@ class DenoiseLumaConfig(BaseModel):
 
 class AutoGammaConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
-    fallback_to_stream_frame: bool = True
-    output_artifact_name: str = "frame"
+    input_artifact_name: str = ""
+    output_artifact_name: str = MAIN_ARTIFACT_NAME
 
     measurement: Literal["mean", "p50"] = "p50"
     target_luma: float = Field(default=0.5, ge=0.05, le=0.95)
@@ -555,14 +573,7 @@ class AutoGammaConfig(BaseModel):
         description="EMA factor for gamma: next = smoothing*prev + (1-smoothing)*new.",
     )
     epsilon: float = Field(default=1e-3, ge=1e-6, le=0.05, description="Clamps luminance away from 0/1.")
-
-    set_stream_frame: bool = True
     preserve_alpha: bool = True
-
-    @field_validator("input_artifact_names", mode="after")
-    @classmethod
-    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
-        return _normalize_artifact_names(value)
 
     @model_validator(mode="after")
     def _validate_gamma_range(self) -> "AutoGammaConfig":
@@ -581,9 +592,8 @@ class AutoGammaConfig(BaseModel):
 
 class GlobalStabilizeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
-    fallback_to_stream_frame: bool = True
-    output_artifact_name: str = "frame"
+    input_artifact_name: str = ""
+    output_artifact_name: str = MAIN_ARTIFACT_NAME
 
     response_threshold: float = Field(
         default=0.2,
@@ -607,14 +617,7 @@ class GlobalStabilizeConfig(BaseModel):
     border_mode: Literal["constant", "replicate"] = "replicate"
     border_value: int = Field(default=0, ge=0, le=255)
     reset_on_lifecycle: bool = True
-
-    set_stream_frame: bool = True
     preserve_alpha: bool = True
-
-    @field_validator("input_artifact_names", mode="after")
-    @classmethod
-    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
-        return _normalize_artifact_names(value)
 
     @field_validator("output_artifact_name")
     @classmethod
@@ -627,9 +630,8 @@ class GlobalStabilizeConfig(BaseModel):
 
 class LensUndistortConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
-    fallback_to_stream_frame: bool = True
-    output_artifact_name: str = "frame"
+    input_artifact_name: str = ""
+    output_artifact_name: str = MAIN_ARTIFACT_NAME
 
     camera_matrix: list[list[float]] = Field(
         default_factory=lambda: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
@@ -650,14 +652,7 @@ class LensUndistortConfig(BaseModel):
     interpolation: Literal["linear", "nearest", "cubic", "area"] = "linear"
     border_mode: Literal["constant", "replicate"] = "constant"
     border_value: int = Field(default=0, ge=0, le=255)
-
-    set_stream_frame: bool = True
     preserve_alpha: bool = True
-
-    @field_validator("input_artifact_names", mode="after")
-    @classmethod
-    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
-        return _normalize_artifact_names(value)
 
     @model_validator(mode="after")
     def _validate_calibration(self) -> "LensUndistortConfig":
@@ -865,43 +860,6 @@ class VelocityEstimationConfig(BaseModel):
         return float(value)
 
 
-class BestFrameSelectorConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    input_artifact_names: list[str] = Field(default_factory=lambda: ["segmented", "treated", "original"])
-    fallback_to_stream_frame: bool = True
-    output_artifact_name: str = "best_frame"
-    buffer_size: int = Field(default=8, ge=1, le=128)
-    score_field: str = "object_confidence"
-    confidence_weight: float = Field(default=1.0, ge=0.0, le=100.0)
-    bbox_area_weight: float = Field(default=0.25, ge=0.0, le=100.0)
-    emit_on_update: bool = True
-    emit_on_close: bool = True
-
-    @model_validator(mode="before")
-    @classmethod
-    def _drop_legacy_fields(cls, values: Any) -> Any:
-        # Aceita graphs antigos sem expor esses campos no schema atual
-        if isinstance(values, dict):
-            values = dict(values)
-            values.pop("key_field", None)
-            if "fallback_to_payload_frame" in values and "fallback_to_stream_frame" not in values:
-                values["fallback_to_stream_frame"] = values.pop("fallback_to_payload_frame")
-        return values
-
-    @field_validator("input_artifact_names", mode="after")
-    @classmethod
-    def _normalize_input_artifact_names(cls, value: list[str]) -> list[str]:
-        return _normalize_artifact_names(value)
-
-    @field_validator("output_artifact_name", "score_field")
-    @classmethod
-    def _trim(cls, value: str) -> str:
-        name = str(value or "").strip()
-        if not name:
-            raise ValueError("field is required")
-        return name
-
-
 class ObjectCropRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = ObjectCropConfig.model_validate(config)
@@ -910,14 +868,13 @@ class ObjectCropRuntime(TransformOperatorRuntime):
         packet = _ensure_original_artifact(packet)
         selected_name, image = _resolve_input_image(
             packet,
-            preferred_artifact_names=self._config.input_artifact_names,
-            fallback_to_stream_frame=self._config.fallback_to_stream_frame,
+            input_artifact_name=self._config.input_artifact_name,
         )
         if image is None:
             payload = _annotate_artifact_contract(
                 packet.payload,
                 packet=packet,
-                preferred_input_artifact_names=self._config.input_artifact_names,
+                input_artifact_name=self._config.input_artifact_name,
                 selected_input_artifact_name=None,
             )
             return [replace(packet, payload=payload)]
@@ -939,28 +896,25 @@ class ObjectCropRuntime(TransformOperatorRuntime):
             payload = _annotate_artifact_contract(
                 packet.payload,
                 packet=packet,
-                preferred_input_artifact_names=self._config.input_artifact_names,
+                input_artifact_name=self._config.input_artifact_name,
                 selected_input_artifact_name=selected_name,
             )
             return [replace(packet, payload=payload)]
 
         bbox01_input = bbox01
         bbox01_selected = bbox01_input
-        treated_resolved = resolve_image_artifact_name(packet, "treated")
-        treated_name = treated_resolved[1] if treated_resolved is not None else "frame"
-        if selected_name == treated_name:
-            crop_bbox01 = _read_frame_crop_bbox01(packet)
-            if crop_bbox01 is not None:
-                reproj = _reproject_bbox01_to_crop(bbox01_selected, crop_bbox01)
-                if reproj is not None:
-                    bbox01_selected = reproj
-                    bbox_source = f"{bbox_source}|reproject:frame_crop" if bbox_source else "reproject:frame_crop"
-            frame_warp = _read_frame_warp(packet)
-            if frame_warp is not None:
-                warped_bbox01 = _reproject_bbox01_to_warp(bbox01_selected, frame_warp)
-                if warped_bbox01 is not None:
-                    bbox01_selected = warped_bbox01
-                    bbox_source = f"{bbox_source}|reproject:frame_warp" if bbox_source else "reproject:frame_warp"
+        crop_bbox01 = _read_frame_crop_bbox01(packet, selected_artifact_name=selected_name)
+        if crop_bbox01 is not None:
+            reproj = _reproject_bbox01_to_crop(bbox01_selected, crop_bbox01)
+            if reproj is not None:
+                bbox01_selected = reproj
+                bbox_source = f"{bbox_source}|reproject:frame_crop" if bbox_source else "reproject:frame_crop"
+        frame_warp = _read_frame_warp(packet, selected_artifact_name=selected_name)
+        if frame_warp is not None:
+            warped_bbox01 = _reproject_bbox01_to_warp(bbox01_selected, frame_warp)
+            if warped_bbox01 is not None:
+                bbox01_selected = warped_bbox01
+                bbox_source = f"{bbox_source}|reproject:frame_warp" if bbox_source else "reproject:frame_warp"
 
         bbox01_used = _expand_bbox01(bbox01_selected, padding_ratio=float(self._config.padding_ratio))
         crop = _crop_bbox01(image=image, bbox01=bbox01_used, min_crop_size_px=self._config.min_crop_size_px)
@@ -968,7 +922,7 @@ class ObjectCropRuntime(TransformOperatorRuntime):
             payload = _annotate_artifact_contract(
                 packet.payload,
                 packet=packet,
-                preferred_input_artifact_names=self._config.input_artifact_names,
+                input_artifact_name=self._config.input_artifact_name,
                 selected_input_artifact_name=selected_name,
             )
             return [replace(packet, payload=payload)]
@@ -988,11 +942,10 @@ class ObjectCropRuntime(TransformOperatorRuntime):
                 },
             ),
         )
-        out = set_image_key(out, key="segmented", artifact_name=self._config.output_artifact_name)
         payload = _annotate_artifact_contract(
             out.payload,
             packet=out,
-            preferred_input_artifact_names=self._config.input_artifact_names,
+            input_artifact_name=self._config.input_artifact_name,
             selected_input_artifact_name=selected_name,
             latest_artifact_name=self._config.output_artifact_name,
         )
@@ -1008,8 +961,7 @@ class ImageCropRuntime(TransformOperatorRuntime):
         packet = _ensure_original_artifact(packet)
         selected_name, frame = _resolve_input_image(
             packet,
-            preferred_artifact_names=self._config.input_artifact_names,
-            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+            input_artifact_name=self._config.input_artifact_name,
         )
         if frame is None:
             return [packet]
@@ -1123,18 +1075,7 @@ class ImageCropRuntime(TransformOperatorRuntime):
             "bottom": float(self._config.bottom),
         }
 
-        original = packet.artifacts.get("frame_original")
-        if original is not None and original.data is not None:
-            oshape = getattr(original.data, "shape", None)
-            if oshape and len(oshape) >= 2:
-                try:
-                    oh = int(oshape[0])
-                    ow = int(oshape[1])
-                except Exception:
-                    oh = 0
-                    ow = 0
-                if oh > 1 and ow > 1:
-                    artifact_meta["bbox_px_total"] = list(_bbox01_to_px(bbox01_total, width=ow, height=oh))
+        artifact_meta["bbox_px_total"] = list(_bbox01_to_px(bbox01_total, width=width, height=height))
 
         out = packet.with_artifact(
             Artifact(
@@ -1154,28 +1095,10 @@ class ImageCropRuntime(TransformOperatorRuntime):
             "top": float(self._config.top),
             "right": float(self._config.right),
             "bottom": float(self._config.bottom),
-            "set_stream_frame": bool(self._config.set_stream_frame),
-            "set_payload_frame": bool(self._config.set_stream_frame),  # legacy mirror for old readers
             "output_artifact_name": self._config.output_artifact_name,
         }
 
-        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
-            out = out.with_artifact(
-                Artifact(
-                    name="frame",
-                    data=crop,
-                    mime_type="image/raw",
-                    metadata={"source": "camera.image_crop", "derived_from": self._config.output_artifact_name},
-                ),
-            )
-            cshape = getattr(crop, "shape", None)
-            if cshape and len(cshape) >= 2:
-                try:
-                    payload["frame_height"] = int(cshape[0])
-                    payload["frame_width"] = int(cshape[1])
-                except Exception:
-                    pass
-        elif self._config.output_artifact_name == "frame":
+        if self._config.output_artifact_name == MAIN_ARTIFACT_NAME:
             cshape = getattr(crop, "shape", None)
             if cshape and len(cshape) >= 2:
                 try:
@@ -1187,7 +1110,7 @@ class ImageCropRuntime(TransformOperatorRuntime):
         payload = _annotate_artifact_contract(
             payload,
             packet=out,
-            preferred_input_artifact_names=self._config.input_artifact_names,
+            input_artifact_name=self._config.input_artifact_name,
             selected_input_artifact_name=selected_name,
             latest_artifact_name=self._config.output_artifact_name,
         )
@@ -1202,8 +1125,7 @@ class ImagePrivacyRuntime(TransformOperatorRuntime):
         packet = _ensure_original_artifact(packet)
         selected_name, image = _resolve_input_image(
             packet,
-            preferred_artifact_names=self._config.input_artifact_names,
-            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+            input_artifact_name=self._config.input_artifact_name,
         )
         payload = dict(packet.payload)
 
@@ -1212,7 +1134,7 @@ class ImagePrivacyRuntime(TransformOperatorRuntime):
             payload = _annotate_artifact_contract(
                 payload,
                 packet=packet,
-                preferred_input_artifact_names=self._config.input_artifact_names,
+                input_artifact_name=self._config.input_artifact_name,
                 selected_input_artifact_name=selected_name,
             )
             return [replace(packet, payload=payload)]
@@ -1224,7 +1146,7 @@ class ImagePrivacyRuntime(TransformOperatorRuntime):
             payload = _annotate_artifact_contract(
                 payload,
                 packet=packet,
-                preferred_input_artifact_names=self._config.input_artifact_names,
+                input_artifact_name=self._config.input_artifact_name,
                 selected_input_artifact_name=selected_name,
             )
             return [replace(packet, payload=payload)]
@@ -1232,7 +1154,7 @@ class ImagePrivacyRuntime(TransformOperatorRuntime):
             payload = _annotate_artifact_contract(
                 payload,
                 packet=packet,
-                preferred_input_artifact_names=self._config.input_artifact_names,
+                input_artifact_name=self._config.input_artifact_name,
                 selected_input_artifact_name=selected_name,
             )
             return [replace(packet, payload=payload)]
@@ -1267,14 +1189,12 @@ class ImagePrivacyRuntime(TransformOperatorRuntime):
                 "right": float(self._config.right),
                 "bottom": float(self._config.bottom),
                 "effect": str(self._config.effect),
-                "set_stream_frame": bool(self._config.set_stream_frame),
-                "set_payload_frame": bool(self._config.set_stream_frame),
                 "output_artifact_name": self._config.output_artifact_name,
             }
             payload = _annotate_artifact_contract(
                 payload,
                 packet=packet,
-                preferred_input_artifact_names=self._config.input_artifact_names,
+                input_artifact_name=self._config.input_artifact_name,
                 selected_input_artifact_name=selected_name,
             )
             return [replace(packet, payload=payload)]
@@ -1304,7 +1224,7 @@ class ImagePrivacyRuntime(TransformOperatorRuntime):
             payload = _annotate_artifact_contract(
                 payload,
                 packet=packet,
-                preferred_input_artifact_names=self._config.input_artifact_names,
+                input_artifact_name=self._config.input_artifact_name,
                 selected_input_artifact_name=selected_name,
             )
             return [replace(packet, payload=payload)]
@@ -1340,21 +1260,10 @@ class ImagePrivacyRuntime(TransformOperatorRuntime):
             "right": float(self._config.right),
             "bottom": float(self._config.bottom),
             "effect": effect,
-            "set_stream_frame": bool(self._config.set_stream_frame),
-            "set_payload_frame": bool(self._config.set_stream_frame),
             "output_artifact_name": self._config.output_artifact_name,
         }
 
-        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
-            out = out.with_artifact(
-                Artifact(
-                    name="frame",
-                    data=redacted,
-                    mime_type="image/raw",
-                    metadata={"source": "camera.image_privacy", "derived_from": self._config.output_artifact_name},
-                ),
-            )
-        if self._config.set_stream_frame or self._config.output_artifact_name == "frame":
+        if self._config.output_artifact_name == MAIN_ARTIFACT_NAME:
             redacted_shape = getattr(redacted, "shape", None)
             if redacted_shape and len(redacted_shape) >= 2:
                 try:
@@ -1366,7 +1275,7 @@ class ImagePrivacyRuntime(TransformOperatorRuntime):
         payload = _annotate_artifact_contract(
             payload,
             packet=out,
-            preferred_input_artifact_names=self._config.input_artifact_names,
+            input_artifact_name=self._config.input_artifact_name,
             selected_input_artifact_name=selected_name,
             latest_artifact_name=self._config.output_artifact_name,
         )
@@ -1399,9 +1308,7 @@ class ArtifactPrivacyRuntime(TransformOperatorRuntime):
         out: list[str] = []
         seen: set[str] = set()
         for raw_name in self._config.artifact_names:
-            resolved = resolve_image_artifact_name(packet, raw_name)
-            artifact_name = resolved[1] if resolved is not None else str(raw_name or "").strip()
-            artifact_name = str(artifact_name or "").strip()
+            artifact_name = normalize_artifact_name(str(raw_name or "").strip(), default="")
             if not artifact_name or artifact_name in seen:
                 continue
             seen.add(artifact_name)
@@ -1409,7 +1316,6 @@ class ArtifactPrivacyRuntime(TransformOperatorRuntime):
         return out
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
-        packet = ensure_packet_image_keys(packet)
         if not self._matches(packet):
             return [packet]
 
@@ -1426,42 +1332,6 @@ class ArtifactPrivacyRuntime(TransformOperatorRuntime):
             removed_artifact_names.append(artifact_name)
 
         payload = dict(packet.payload)
-        payload.pop("frame", None)
-
-        images_raw = payload.get("images")
-        if isinstance(images_raw, dict):
-            sanitized_images: dict[str, str] = {}
-            for raw_key, raw_name in images_raw.items():
-                key = str(raw_key or "").strip()
-                name = str(raw_name or "").strip()
-                if not key or not name or name not in artifacts:
-                    continue
-                sanitized_images[key] = name
-            payload["images"] = sanitized_images
-
-        contract_raw = payload.get("artifact_contract")
-        preferred_input_artifact_names = (
-            _normalize_artifact_names(list(contract_raw.get("preferred_input_artifact_names") or []))
-            if isinstance(contract_raw, dict)
-            else []
-        )
-        selected_input_artifact_name = (
-            str(contract_raw.get("selected_input_artifact_name") or "").strip()
-            if isinstance(contract_raw, dict)
-            else ""
-        )
-        latest_artifact_name = (
-            str(contract_raw.get("latest_artifact_name") or "").strip()
-            if isinstance(contract_raw, dict)
-            else ""
-        )
-        payload = _annotate_artifact_contract(
-            payload,
-            packet=replace(packet, artifacts=artifacts),
-            preferred_input_artifact_names=[name for name in preferred_input_artifact_names if name in artifacts],
-            selected_input_artifact_name=selected_input_artifact_name if selected_input_artifact_name in artifacts else None,
-            latest_artifact_name=latest_artifact_name if latest_artifact_name in artifacts else None,
-        )
         payload["artifact_privacy"] = {
             "applied": True,
             "matched": True,
@@ -1488,8 +1358,7 @@ class ImagePerspectiveCropRuntime(TransformOperatorRuntime):
         packet = _ensure_original_artifact(packet)
         selected_name, frame = _resolve_input_image(
             packet,
-            preferred_artifact_names=self._config.input_artifact_names,
-            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+            input_artifact_name=self._config.input_artifact_name,
         )
         if frame is None:
             return [packet]
@@ -1625,36 +1494,22 @@ class ImagePerspectiveCropRuntime(TransformOperatorRuntime):
             "interpolation": str(self._config.interpolation),
             "border_mode": str(self._config.border_mode),
             "border_value": int(self._config.border_value),
-            "set_stream_frame": bool(self._config.set_stream_frame),
-            "set_payload_frame": bool(self._config.set_stream_frame),  # legacy mirror for old readers
             "output_artifact_name": self._config.output_artifact_name,
         }
 
-        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
-            out = out.with_artifact(
-                Artifact(
-                    name="frame",
-                    data=warped,
-                    mime_type="image/raw",
-                    metadata={
-                        "source": "camera.image_perspective_crop",
-                        "derived_from": self._config.output_artifact_name,
-                    },
-                ),
-            )
-
-        wshape = getattr(warped, "shape", None)
-        if wshape and len(wshape) >= 2:
-            try:
-                payload["frame_height"] = int(wshape[0])
-                payload["frame_width"] = int(wshape[1])
-            except Exception:
-                pass
+        if self._config.output_artifact_name == MAIN_ARTIFACT_NAME:
+            wshape = getattr(warped, "shape", None)
+            if wshape and len(wshape) >= 2:
+                try:
+                    payload["frame_height"] = int(wshape[0])
+                    payload["frame_width"] = int(wshape[1])
+                except Exception:
+                    pass
 
         payload = _annotate_artifact_contract(
             payload,
             packet=out,
-            preferred_input_artifact_names=self._config.input_artifact_names,
+            input_artifact_name=self._config.input_artifact_name,
             selected_input_artifact_name=selected_name,
             latest_artifact_name=self._config.output_artifact_name,
         )
@@ -1669,14 +1524,13 @@ class ImageAdjustRuntime(TransformOperatorRuntime):
         packet = _ensure_original_artifact(packet)
         selected_name, image = _resolve_input_image(
             packet,
-            preferred_artifact_names=self._config.input_artifact_names,
-            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+            input_artifact_name=self._config.input_artifact_name,
         )
         if image is None:
             payload = _annotate_artifact_contract(
                 packet.payload,
                 packet=packet,
-                preferred_input_artifact_names=self._config.input_artifact_names,
+                input_artifact_name=self._config.input_artifact_name,
                 selected_input_artifact_name=selected_name,
             )
             return [replace(packet, payload=payload)]
@@ -1729,23 +1583,7 @@ class ImageAdjustRuntime(TransformOperatorRuntime):
         )
 
         payload = dict(out.payload)
-        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
-            out = out.with_artifact(
-                Artifact(
-                    name="frame",
-                    data=bgr,
-                    mime_type="image/raw",
-                    metadata={"source": "camera.image_adjust", "derived_from": self._config.output_artifact_name},
-                ),
-            )
-            shape = getattr(bgr, "shape", None)
-            if shape and len(shape) >= 2:
-                try:
-                    payload["frame_height"] = int(shape[0])
-                    payload["frame_width"] = int(shape[1])
-                except Exception:
-                    pass
-        elif self._config.output_artifact_name == "frame":
+        if self._config.output_artifact_name == MAIN_ARTIFACT_NAME:
             shape = getattr(bgr, "shape", None)
             if shape and len(shape) >= 2:
                 try:
@@ -1757,7 +1595,7 @@ class ImageAdjustRuntime(TransformOperatorRuntime):
         payload = _annotate_artifact_contract(
             payload,
             packet=out,
-            preferred_input_artifact_names=self._config.input_artifact_names,
+            input_artifact_name=self._config.input_artifact_name,
             selected_input_artifact_name=selected_name,
             latest_artifact_name=self._config.output_artifact_name,
         )
@@ -1903,14 +1741,13 @@ class LocalContrastCLAHERuntime(TransformOperatorRuntime):
         packet = _ensure_original_artifact(packet)
         selected_name, image = _resolve_input_image(
             packet,
-            preferred_artifact_names=self._config.input_artifact_names,
-            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+            input_artifact_name=self._config.input_artifact_name,
         )
         if image is None:
             payload = _annotate_artifact_contract(
                 packet.payload,
                 packet=packet,
-                preferred_input_artifact_names=self._config.input_artifact_names,
+                input_artifact_name=self._config.input_artifact_name,
                 selected_input_artifact_name=selected_name,
             )
             return [replace(packet, payload=payload)]
@@ -1960,21 +1797,8 @@ class LocalContrastCLAHERuntime(TransformOperatorRuntime):
         )
 
         payload = dict(out.payload)
-        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
-            out = out.with_artifact(
-                Artifact(
-                    name="frame",
-                    data=out_image,
-                    mime_type="image/raw",
-                    metadata={
-                        "source": "camera.local_contrast_clahe",
-                        "derived_from": self._config.output_artifact_name,
-                    },
-                ),
-            )
-
         shape = getattr(out_image, "shape", None)
-        if (self._config.set_stream_frame and self._config.output_artifact_name != "frame") or self._config.output_artifact_name == "frame":
+        if self._config.output_artifact_name == MAIN_ARTIFACT_NAME:
             if shape and len(shape) >= 2:
                 try:
                     payload["frame_height"] = int(shape[0])
@@ -1985,7 +1809,7 @@ class LocalContrastCLAHERuntime(TransformOperatorRuntime):
         payload = _annotate_artifact_contract(
             payload,
             packet=out,
-            preferred_input_artifact_names=self._config.input_artifact_names,
+            input_artifact_name=self._config.input_artifact_name,
             selected_input_artifact_name=selected_name,
             latest_artifact_name=self._config.output_artifact_name,
         )
@@ -2062,14 +1886,13 @@ class UnsharpMaskRuntime(TransformOperatorRuntime):
         packet = _ensure_original_artifact(packet)
         selected_name, image = _resolve_input_image(
             packet,
-            preferred_artifact_names=self._config.input_artifact_names,
-            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+            input_artifact_name=self._config.input_artifact_name,
         )
         if image is None:
             payload = _annotate_artifact_contract(
                 packet.payload,
                 packet=packet,
-                preferred_input_artifact_names=self._config.input_artifact_names,
+                input_artifact_name=self._config.input_artifact_name,
                 selected_input_artifact_name=selected_name,
             )
             return [replace(packet, payload=payload)]
@@ -2123,18 +1946,8 @@ class UnsharpMaskRuntime(TransformOperatorRuntime):
         )
 
         payload = dict(out.payload)
-        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
-            out = out.with_artifact(
-                Artifact(
-                    name="frame",
-                    data=out_image,
-                    mime_type="image/raw",
-                    metadata={"source": "camera.unsharp_mask", "derived_from": self._config.output_artifact_name},
-                ),
-            )
-
         shape = getattr(out_image, "shape", None)
-        if (self._config.set_stream_frame and self._config.output_artifact_name != "frame") or self._config.output_artifact_name == "frame":
+        if self._config.output_artifact_name == MAIN_ARTIFACT_NAME:
             if shape and len(shape) >= 2:
                 try:
                     payload["frame_height"] = int(shape[0])
@@ -2145,7 +1958,7 @@ class UnsharpMaskRuntime(TransformOperatorRuntime):
         payload = _annotate_artifact_contract(
             payload,
             packet=out,
-            preferred_input_artifact_names=self._config.input_artifact_names,
+            input_artifact_name=self._config.input_artifact_name,
             selected_input_artifact_name=selected_name,
             latest_artifact_name=self._config.output_artifact_name,
         )
@@ -2241,14 +2054,13 @@ class DenoiseLumaRuntime(TransformOperatorRuntime):
         packet = _ensure_original_artifact(packet)
         selected_name, image = _resolve_input_image(
             packet,
-            preferred_artifact_names=self._config.input_artifact_names,
-            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+            input_artifact_name=self._config.input_artifact_name,
         )
         if image is None:
             payload = _annotate_artifact_contract(
                 packet.payload,
                 packet=packet,
-                preferred_input_artifact_names=self._config.input_artifact_names,
+                input_artifact_name=self._config.input_artifact_name,
                 selected_input_artifact_name=selected_name,
             )
             return [replace(packet, payload=payload)]
@@ -2305,18 +2117,8 @@ class DenoiseLumaRuntime(TransformOperatorRuntime):
         )
 
         payload = dict(out.payload)
-        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
-            out = out.with_artifact(
-                Artifact(
-                    name="frame",
-                    data=out_image,
-                    mime_type="image/raw",
-                    metadata={"source": "camera.denoise_luma", "derived_from": self._config.output_artifact_name},
-                ),
-            )
-
         shape = getattr(out_image, "shape", None)
-        if (self._config.set_stream_frame and self._config.output_artifact_name != "frame") or self._config.output_artifact_name == "frame":
+        if self._config.output_artifact_name == MAIN_ARTIFACT_NAME:
             if shape and len(shape) >= 2:
                 try:
                     payload["frame_height"] = int(shape[0])
@@ -2327,7 +2129,7 @@ class DenoiseLumaRuntime(TransformOperatorRuntime):
         payload = _annotate_artifact_contract(
             payload,
             packet=out,
-            preferred_input_artifact_names=self._config.input_artifact_names,
+            input_artifact_name=self._config.input_artifact_name,
             selected_input_artifact_name=selected_name,
             latest_artifact_name=self._config.output_artifact_name,
         )
@@ -2428,14 +2230,13 @@ class AutoGammaRuntime(TransformOperatorRuntime):
         packet = _ensure_original_artifact(packet)
         selected_name, image = _resolve_input_image(
             packet,
-            preferred_artifact_names=self._config.input_artifact_names,
-            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+            input_artifact_name=self._config.input_artifact_name,
         )
         if image is None:
             payload = _annotate_artifact_contract(
                 packet.payload,
                 packet=packet,
-                preferred_input_artifact_names=self._config.input_artifact_names,
+                input_artifact_name=self._config.input_artifact_name,
                 selected_input_artifact_name=selected_name,
             )
             return [replace(packet, payload=payload)]
@@ -2503,18 +2304,8 @@ class AutoGammaRuntime(TransformOperatorRuntime):
         )
 
         payload = dict(out.payload)
-        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
-            out = out.with_artifact(
-                Artifact(
-                    name="frame",
-                    data=out_image,
-                    mime_type="image/raw",
-                    metadata={"source": "camera.auto_gamma", "derived_from": self._config.output_artifact_name},
-                ),
-            )
-
         shape = getattr(out_image, "shape", None)
-        if (self._config.set_stream_frame and self._config.output_artifact_name != "frame") or self._config.output_artifact_name == "frame":
+        if self._config.output_artifact_name == MAIN_ARTIFACT_NAME:
             if shape and len(shape) >= 2:
                 try:
                     payload["frame_height"] = int(shape[0])
@@ -2525,7 +2316,7 @@ class AutoGammaRuntime(TransformOperatorRuntime):
         payload = _annotate_artifact_contract(
             payload,
             packet=out,
-            preferred_input_artifact_names=self._config.input_artifact_names,
+            input_artifact_name=self._config.input_artifact_name,
             selected_input_artifact_name=selected_name,
             latest_artifact_name=self._config.output_artifact_name,
         )
@@ -2632,14 +2423,13 @@ class GlobalStabilizeRuntime(TransformOperatorRuntime):
         packet = _ensure_original_artifact(packet)
         selected_name, image = _resolve_input_image(
             packet,
-            preferred_artifact_names=self._config.input_artifact_names,
-            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+            input_artifact_name=self._config.input_artifact_name,
         )
         if image is None:
             payload = _annotate_artifact_contract(
                 packet.payload,
                 packet=packet,
-                preferred_input_artifact_names=self._config.input_artifact_names,
+                input_artifact_name=self._config.input_artifact_name,
                 selected_input_artifact_name=selected_name,
             )
             return [replace(packet, payload=payload)]
@@ -2720,18 +2510,8 @@ class GlobalStabilizeRuntime(TransformOperatorRuntime):
         )
 
         payload = dict(out.payload)
-        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
-            out = out.with_artifact(
-                Artifact(
-                    name="frame",
-                    data=out_image,
-                    mime_type="image/raw",
-                    metadata={"source": "camera.global_stabilize", "derived_from": self._config.output_artifact_name},
-                ),
-            )
-
         shape = getattr(out_image, "shape", None)
-        if (self._config.set_stream_frame and self._config.output_artifact_name != "frame") or self._config.output_artifact_name == "frame":
+        if self._config.output_artifact_name == MAIN_ARTIFACT_NAME:
             if shape and len(shape) >= 2:
                 try:
                     payload["frame_height"] = int(shape[0])
@@ -2742,7 +2522,7 @@ class GlobalStabilizeRuntime(TransformOperatorRuntime):
         payload = _annotate_artifact_contract(
             payload,
             packet=out,
-            preferred_input_artifact_names=self._config.input_artifact_names,
+            input_artifact_name=self._config.input_artifact_name,
             selected_input_artifact_name=selected_name,
             latest_artifact_name=self._config.output_artifact_name,
         )
@@ -2857,14 +2637,13 @@ class LensUndistortRuntime(TransformOperatorRuntime):
         packet = _ensure_original_artifact(packet)
         selected_name, image = _resolve_input_image(
             packet,
-            preferred_artifact_names=self._config.input_artifact_names,
-            fallback_to_stream_frame=bool(self._config.fallback_to_stream_frame),
+            input_artifact_name=self._config.input_artifact_name,
         )
         if image is None:
             payload = _annotate_artifact_contract(
                 packet.payload,
                 packet=packet,
-                preferred_input_artifact_names=self._config.input_artifact_names,
+                input_artifact_name=self._config.input_artifact_name,
                 selected_input_artifact_name=selected_name,
             )
             return [replace(packet, payload=payload)]
@@ -2924,18 +2703,8 @@ class LensUndistortRuntime(TransformOperatorRuntime):
         )
 
         payload = dict(out.payload)
-        if self._config.set_stream_frame and self._config.output_artifact_name != "frame":
-            out = out.with_artifact(
-                Artifact(
-                    name="frame",
-                    data=out_image,
-                    mime_type="image/raw",
-                    metadata={"source": "camera.lens_undistort", "derived_from": self._config.output_artifact_name},
-                ),
-            )
-
         shape = getattr(out_image, "shape", None)
-        if (self._config.set_stream_frame and self._config.output_artifact_name != "frame") or self._config.output_artifact_name == "frame":
+        if self._config.output_artifact_name == MAIN_ARTIFACT_NAME:
             if shape and len(shape) >= 2:
                 try:
                     payload["frame_height"] = int(shape[0])
@@ -2946,7 +2715,7 @@ class LensUndistortRuntime(TransformOperatorRuntime):
         payload = _annotate_artifact_contract(
             payload,
             packet=out,
-            preferred_input_artifact_names=self._config.input_artifact_names,
+            input_artifact_name=self._config.input_artifact_name,
             selected_input_artifact_name=selected_name,
             latest_artifact_name=self._config.output_artifact_name,
         )
@@ -3083,7 +2852,7 @@ class ImageResizeRuntime(TransformOperatorRuntime):
             out = await run_blocking(
                 _resize_packet_artifacts_opencv,
                 packet,
-                artifact_names=list(self._config.artifact_names),
+                artifact_name=self._config.input_artifact_name,
                 max_edge_px=int(self._config.max_edge_px),
                 allow_upscale=bool(self._config.allow_upscale),
             )
@@ -3091,7 +2860,7 @@ class ImageResizeRuntime(TransformOperatorRuntime):
             out = await asyncio.to_thread(
                 _resize_packet_artifacts_opencv,
                 packet,
-                artifact_names=list(self._config.artifact_names),
+                artifact_name=self._config.input_artifact_name,
                 max_edge_px=int(self._config.max_edge_px),
                 allow_upscale=bool(self._config.allow_upscale),
             )
@@ -3100,7 +2869,7 @@ class ImageResizeRuntime(TransformOperatorRuntime):
 
 class FrameAttachConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    artifact_names: list[str] = Field(default_factory=lambda: ["frame_original", "frame"])
+    artifact_names: list[str] = Field(default_factory=lambda: [MAIN_ARTIFACT_NAME])
     overwrite: bool = True
     wait_timeout_s: float = Field(
         default=0.0,
@@ -3116,11 +2885,6 @@ class FrameAttachConfig(BaseModel):
     )
     update_frame_dimensions: bool = True
     annotate_metadata: bool = True
-
-    @field_validator("artifact_names", mode="after")
-    @classmethod
-    def _normalize_artifact_names(cls, value: list[str]) -> list[str]:
-        return _normalize_artifact_names(value)
 
 
 class FrameAttachRuntime(TransformOperatorRuntime):
@@ -3203,7 +2967,7 @@ class FrameAttachRuntime(TransformOperatorRuntime):
 
         payload = dict(packet.payload)
         if self._config.update_frame_dimensions:
-            ref = artifacts.get("frame_original") or artifacts.get("frame")
+            ref = artifacts.get(MAIN_ARTIFACT_NAME)
             if ref is not None:
                 width = ref.metadata.get("width") if isinstance(ref.metadata, dict) else None
                 height = ref.metadata.get("height") if isinstance(ref.metadata, dict) else None
@@ -3231,7 +2995,7 @@ class FrameAttachRuntime(TransformOperatorRuntime):
 def _resize_packet_artifacts_opencv(
     packet: Packet,
     *,
-    artifact_names: list[str],
+    artifact_name: str | None,
     max_edge_px: int,
     allow_upscale: bool,
 ) -> Packet:
@@ -3246,66 +3010,64 @@ def _resize_packet_artifacts_opencv(
     if target_edge <= 0:
         return out
 
-    for name_raw in artifact_names:
-        resolved = resolve_image_artifact_name(out, name_raw)
-        name = resolved[1] if resolved is not None else str(name_raw or "").strip()
-        artifact = out.artifacts.get(name)
-        if artifact is None:
-            continue
-        if artifact.reference:
-            # Avoid inconsistency: the artifact is already persisted and referenced (resize happens in memory).
-            continue
-        if artifact.data is None:
-            continue
-        if isinstance(artifact.data, (bytes, bytearray, memoryview)):
-            continue
+    name = normalize_artifact_name(artifact_name)
+    artifact = out.artifacts.get(name)
+    if artifact is None:
+        return out
+    if artifact.reference:
+        # Avoid inconsistency: the artifact is already persisted and referenced (resize happens in memory).
+        return out
+    if artifact.data is None:
+        return out
+    if isinstance(artifact.data, (bytes, bytearray, memoryview)):
+        return out
 
-        shape = getattr(artifact.data, "shape", None)
-        if not shape or len(shape) < 2:
-            continue
+    shape = getattr(artifact.data, "shape", None)
+    if not shape or len(shape) < 2:
+        return out
 
-        try:
-            height = int(shape[0])
-            width = int(shape[1])
-        except Exception:
-            continue
-        if height <= 0 or width <= 0:
-            continue
+    try:
+        height = int(shape[0])
+        width = int(shape[1])
+    except Exception:
+        return out
+    if height <= 0 or width <= 0:
+        return out
 
-        max_edge = max(height, width)
-        if max_edge <= 0:
-            continue
+    max_edge = max(height, width)
+    if max_edge <= 0:
+        return out
 
-        if not allow_upscale and max_edge <= target_edge:
-            continue
+    if not allow_upscale and max_edge <= target_edge:
+        return out
 
-        scale = float(target_edge) / float(max_edge)
-        if not allow_upscale and scale >= 1.0:
-            continue
+    scale = float(target_edge) / float(max_edge)
+    if not allow_upscale and scale >= 1.0:
+        return out
 
-        new_width = max(1, int(round(float(width) * scale)))
-        new_height = max(1, int(round(float(height) * scale)))
-        if new_width == width and new_height == height:
-            continue
+    new_width = max(1, int(round(float(width) * scale)))
+    new_height = max(1, int(round(float(height) * scale)))
+    if new_width == width and new_height == height:
+        return out
 
-        arr = np.asarray(artifact.data)
-        if arr.size == 0:
-            continue
-        arr = np.ascontiguousarray(arr)
-        interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
-        resized = cv2.resize(arr, (new_width, new_height), interpolation=interpolation)
+    arr = np.asarray(artifact.data)
+    if arr.size == 0:
+        return out
+    arr = np.ascontiguousarray(arr)
+    interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+    resized = cv2.resize(arr, (new_width, new_height), interpolation=interpolation)
 
-        metadata = dict(artifact.metadata)
-        metadata["resized_from"] = {"width": width, "height": height}
-        metadata["resized_to"] = {"width": new_width, "height": new_height}
-        out = out.with_artifact(
-            Artifact(
-                name=artifact.name,
-                data=resized,
-                mime_type=artifact.mime_type,
-                metadata=metadata,
-            ),
-        )
+    metadata = dict(artifact.metadata)
+    metadata["resized_from"] = {"width": width, "height": height}
+    metadata["resized_to"] = {"width": new_width, "height": new_height}
+    out = out.with_artifact(
+        Artifact(
+            name=artifact.name,
+            data=resized,
+            mime_type=artifact.mime_type,
+            metadata=metadata,
+        ),
+    )
 
     return out
 
@@ -3886,82 +3648,6 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
         return [packet]
 
 
-@dataclass(frozen=True, slots=True)
-class _BestFrameCandidate:
-    image: Any
-    source_artifact_name: str | None
-    bbox01: tuple[float, float, float, float] | None
-    score: float
-    created_monotonic: float
-
-
-class BestFrameSelectorRuntime(TransformOperatorRuntime):
-    def __init__(self, config: dict[str, Any]) -> None:
-        self._config = BestFrameSelectorConfig.model_validate(config)
-        self._candidates_by_key: dict[str, deque[_BestFrameCandidate]] = {}
-
-    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
-        packet = _ensure_original_artifact(packet)
-        key = _resolve_tracking_key(packet)
-        selected_name, selected_image = _resolve_input_image(
-            packet,
-            preferred_artifact_names=self._config.input_artifact_names,
-            fallback_to_stream_frame=self._config.fallback_to_stream_frame,
-        )
-        candidates = self._candidates_by_key.setdefault(key, deque(maxlen=int(self._config.buffer_size)))
-        if selected_image is not None:
-            bbox01 = _read_bbox01(packet, bbox_field="object_bbox01")
-            score = _score_packet_for_best_frame(
-                packet=packet,
-                score_field=self._config.score_field,
-                confidence_weight=self._config.confidence_weight,
-                bbox_area_weight=self._config.bbox_area_weight,
-            )
-            candidates.append(
-                _BestFrameCandidate(
-                    image=selected_image,
-                    source_artifact_name=selected_name,
-                    bbox01=bbox01,
-                    score=score,
-                    created_monotonic=time.monotonic(),
-                ),
-            )
-
-        should_emit = (packet.lifecycle != Lifecycle.CLOSE and self._config.emit_on_update) or (
-            packet.lifecycle == Lifecycle.CLOSE and self._config.emit_on_close
-        )
-        out = packet
-        if should_emit and candidates:
-            best = max(candidates, key=lambda item: (item.score, item.created_monotonic))
-            metadata = {
-                "best_score": float(best.score),
-                "source_artifact_name": best.source_artifact_name,
-            }
-            if best.bbox01 is not None:
-                metadata["bbox01"] = list(best.bbox01)
-            out = out.with_artifact(
-                Artifact(
-                    name=self._config.output_artifact_name,
-                    data=best.image,
-                    mime_type="image/raw",
-                    metadata=metadata,
-                ),
-            )
-            out = set_image_key(out, key="best_frame", artifact_name=self._config.output_artifact_name)
-
-        payload = _annotate_artifact_contract(
-            out.payload,
-            packet=out,
-            preferred_input_artifact_names=self._config.input_artifact_names,
-            selected_input_artifact_name=selected_name,
-            latest_artifact_name=self._config.output_artifact_name if should_emit and candidates else None,
-        )
-        out = replace(out, payload=payload)
-        if packet.lifecycle == Lifecycle.CLOSE:
-            self._candidates_by_key.pop(key, None)
-        return [out]
-
-
 def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
     registry.register_operator(
         operator_id="camera.frame_attach",
@@ -3984,10 +3670,10 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "vision", "artifact"],
         defaults=ObjectCropConfig().model_dump(),
         requires_payload_keys=["object_bbox01"],
-        requires_artifacts=["frame_original"],
-        produces_payload_keys=["artifact_contract", "artifact_names"],
-        produces_artifacts=["segmented"],
-        expression_hints=_artifact_contract_expression_hints(default_artifact_name="segmented"),
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
+        produces_payload_keys=[],
+        produces_artifacts=[MAIN_ARTIFACT_NAME],
+        expression_hints=[],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: ObjectCropRuntime(config),
@@ -4000,11 +3686,10 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["camera", "artifact", "crop"],
         defaults=ImageCropConfig().model_dump(),
-        requires_artifacts=["frame_original"],
-        produces_payload_keys=["frame_crop", "artifact_contract", "artifact_names"],
-        produces_artifacts=["frame"],
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
+        produces_payload_keys=["frame_crop"],
+        produces_artifacts=[MAIN_ARTIFACT_NAME],
         expression_hints=[
-            *_artifact_contract_expression_hints(default_artifact_name="frame"),
             *_frame_crop_expression_hints(),
         ],
         share_strategy="by_signature",
@@ -4020,11 +3705,10 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "artifact", "privacy"],
         defaults=ImagePrivacyConfig().model_dump(),
         execution_mode="thread_pool",
-        requires_artifacts=["frame_original"],
-        produces_payload_keys=["frame_privacy", "artifact_contract", "artifact_names"],
-        produces_artifacts=["frame"],
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
+        produces_payload_keys=["frame_privacy"],
+        produces_artifacts=[MAIN_ARTIFACT_NAME],
         expression_hints=[
-            *_artifact_contract_expression_hints(default_artifact_name="frame"),
             *_frame_privacy_expression_hints(),
         ],
         share_strategy="by_signature",
@@ -4039,9 +3723,8 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["camera", "artifact", "privacy", "expression"],
         defaults=ArtifactPrivacyConfig().model_dump(),
-        produces_payload_keys=["artifact_privacy", "artifact_contract", "artifact_names"],
+        produces_payload_keys=["artifact_privacy"],
         expression_hints=[
-            *_artifact_contract_expression_hints(),
             *_artifact_privacy_expression_hints(),
         ],
         share_strategy="by_signature",
@@ -4057,11 +3740,10 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "artifact", "crop", "perspective"],
         defaults=ImagePerspectiveCropConfig().model_dump(),
         execution_mode="thread_pool",
-        requires_artifacts=["frame_original"],
-        produces_payload_keys=["frame_warp", "artifact_contract", "artifact_names"],
-        produces_artifacts=["frame"],
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
+        produces_payload_keys=["frame_warp"],
+        produces_artifacts=[MAIN_ARTIFACT_NAME],
         expression_hints=[
-            *_artifact_contract_expression_hints(default_artifact_name="frame"),
             *_frame_warp_expression_hints(),
         ],
         share_strategy="by_signature",
@@ -4077,10 +3759,10 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "artifact", "image_adjust"],
         defaults=ImageAdjustConfig().model_dump(),
         execution_mode="thread_pool",
-        requires_artifacts=["frame_original"],
-        produces_payload_keys=["artifact_contract", "artifact_names"],
-        produces_artifacts=["frame"],
-        expression_hints=_artifact_contract_expression_hints(default_artifact_name="frame"),
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
+        produces_payload_keys=[],
+        produces_artifacts=[MAIN_ARTIFACT_NAME],
+        expression_hints=[],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: ImageAdjustRuntime(config),
@@ -4094,10 +3776,10 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "artifact", "preprocess", "clahe"],
         defaults=LocalContrastCLAHEConfig().model_dump(),
         execution_mode="thread_pool",
-        requires_artifacts=["frame_original"],
-        produces_payload_keys=["artifact_contract", "artifact_names"],
-        produces_artifacts=["frame"],
-        expression_hints=_artifact_contract_expression_hints(default_artifact_name="frame"),
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
+        produces_payload_keys=[],
+        produces_artifacts=[MAIN_ARTIFACT_NAME],
+        expression_hints=[],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: LocalContrastCLAHERuntime(config),
@@ -4111,10 +3793,10 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "artifact", "preprocess", "sharpen"],
         defaults=UnsharpMaskConfig().model_dump(),
         execution_mode="thread_pool",
-        requires_artifacts=["frame_original"],
-        produces_payload_keys=["artifact_contract", "artifact_names"],
-        produces_artifacts=["frame"],
-        expression_hints=_artifact_contract_expression_hints(default_artifact_name="frame"),
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
+        produces_payload_keys=[],
+        produces_artifacts=[MAIN_ARTIFACT_NAME],
+        expression_hints=[],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: UnsharpMaskRuntime(config),
@@ -4128,10 +3810,10 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "artifact", "preprocess", "denoise"],
         defaults=DenoiseLumaConfig().model_dump(),
         execution_mode="thread_pool",
-        requires_artifacts=["frame_original"],
-        produces_payload_keys=["artifact_contract", "artifact_names"],
-        produces_artifacts=["frame"],
-        expression_hints=_artifact_contract_expression_hints(default_artifact_name="frame"),
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
+        produces_payload_keys=[],
+        produces_artifacts=[MAIN_ARTIFACT_NAME],
+        expression_hints=[],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: DenoiseLumaRuntime(config),
@@ -4145,10 +3827,10 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "artifact", "preprocess", "auto_levels"],
         defaults=AutoGammaConfig().model_dump(),
         execution_mode="thread_pool",
-        requires_artifacts=["frame_original"],
-        produces_payload_keys=["artifact_contract", "artifact_names"],
-        produces_artifacts=["frame"],
-        expression_hints=_artifact_contract_expression_hints(default_artifact_name="frame"),
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
+        produces_payload_keys=[],
+        produces_artifacts=[MAIN_ARTIFACT_NAME],
+        expression_hints=[],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: AutoGammaRuntime(config),
@@ -4162,10 +3844,10 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "artifact", "preprocess", "stabilize"],
         defaults=GlobalStabilizeConfig().model_dump(),
         execution_mode="thread_pool",
-        requires_artifacts=["frame_original"],
-        produces_payload_keys=["artifact_contract", "artifact_names"],
-        produces_artifacts=["frame"],
-        expression_hints=_artifact_contract_expression_hints(default_artifact_name="frame"),
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
+        produces_payload_keys=[],
+        produces_artifacts=[MAIN_ARTIFACT_NAME],
+        expression_hints=[],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: GlobalStabilizeRuntime(config),
@@ -4179,10 +3861,10 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "artifact", "preprocess", "undistort"],
         defaults=LensUndistortConfig().model_dump(),
         execution_mode="thread_pool",
-        requires_artifacts=["frame_original"],
-        produces_payload_keys=["artifact_contract", "artifact_names"],
-        produces_artifacts=["frame"],
-        expression_hints=_artifact_contract_expression_hints(default_artifact_name="frame"),
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
+        produces_payload_keys=[],
+        produces_artifacts=[MAIN_ARTIFACT_NAME],
+        expression_hints=[],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: LensUndistortRuntime(config),
@@ -4196,7 +3878,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "artifact"],
         defaults=ImageResizeConfig().model_dump(),
         execution_mode="thread_pool",
-        requires_artifacts=["frame_original"],
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: ImageResizeRuntime(config),
@@ -4214,6 +3896,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         expression_hints=_world_mapping_expression_hints(),
         share_strategy="by_signature",
         owner="com.toposync.cameras",
+        diagnostics_factory=_camera_mapping_diagnostics,
         runtime_factory=lambda config, deps: CameraMappingRuntime(config, deps),
     )
     registry.register_operator(
@@ -4246,23 +3929,6 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: VelocityEstimationRuntime(config),
     )
-    registry.register_operator(
-        operator_id="camera.best_frame_selector",
-        description="Selects best frame artifact with bounded buffer per tracking stream.",
-        config_model=BestFrameSelectorConfig,
-        inputs=[{"name": "in", "required": True}],
-        outputs=[{"name": "out"}],
-        capabilities=["camera", "artifact", "buffered_selector"],
-        defaults=BestFrameSelectorConfig().model_dump(),
-        requires_artifacts=["frame_original"],
-        produces_payload_keys=["artifact_contract", "artifact_names"],
-        produces_artifacts=["best_frame"],
-        expression_hints=_artifact_contract_expression_hints(default_artifact_name="best_frame"),
-        share_strategy="by_signature",
-        owner="com.toposync.cameras",
-        runtime_factory=lambda config, _deps: BestFrameSelectorRuntime(config),
-    )
-
 
 def _normalize_artifact_names(values: list[str]) -> list[str]:
     out: list[str] = []
@@ -4270,7 +3936,7 @@ def _normalize_artifact_names(values: list[str]) -> list[str]:
     for raw in values:
         name = str(raw or "").strip()
         if name == "payload.frame":
-            name = "frame"
+            name = MAIN_ARTIFACT_NAME
         if not name or name in seen:
             continue
         out.append(name)
@@ -4279,73 +3945,15 @@ def _normalize_artifact_names(values: list[str]) -> list[str]:
 
 
 def _ensure_original_artifact(packet: Packet) -> Packet:
-    artifacts = dict(packet.artifacts)
-    payload = packet.payload
-    changed = False
-
-    payload_frame = packet.payload.get("frame")
-    if payload_frame is not None:
-        payload2 = dict(packet.payload)
-        payload2.pop("frame", None)
-        payload = payload2
-        changed = True
-
-        if "frame_original" not in artifacts:
-            artifacts["frame_original"] = Artifact(
-                name="frame_original",
-                data=payload_frame,
-                mime_type="image/raw",
-                metadata={"source": "frame_contract.migrated_payload"},
-            )
-            changed = True
-        if "frame" not in artifacts:
-            artifacts["frame"] = Artifact(
-                name="frame",
-                data=payload_frame,
-                mime_type="image/raw",
-                metadata={"source": "frame_contract.migrated_payload", "derived_from": "frame_original"},
-            )
-            changed = True
-
-    if "frame_original" not in artifacts:
-        stream_frame = artifacts.get("frame")
-        if stream_frame is not None and (stream_frame.data is not None or stream_frame.reference):
-            artifacts["frame_original"] = Artifact(
-                name="frame_original",
-                data=stream_frame.data,
-                reference=stream_frame.reference,
-                mime_type=stream_frame.mime_type,
-                metadata={"source": "frame_contract.aliased_from_frame"},
-            )
-            changed = True
-
-    if "frame" not in artifacts:
-        original = artifacts.get("frame_original")
-        if original is not None and (original.data is not None or original.reference):
-            artifacts["frame"] = Artifact(
-                name="frame",
-                data=original.data,
-                reference=original.reference,
-                mime_type=original.mime_type,
-                metadata={"source": "frame_contract.aliased_from_frame_original", "derived_from": "frame_original"},
-            )
-            changed = True
-
-    out = packet if not changed else replace(packet, payload=dict(payload), artifacts=artifacts)
-    return ensure_packet_image_keys(out)
+    return packet
 
 
 def _resolve_input_image(
     packet: Packet,
     *,
-    preferred_artifact_names: list[str],
-    fallback_to_stream_frame: bool,
+    input_artifact_name: str | None,
 ) -> tuple[str | None, Any | None]:
-    _key, artifact_name, data = resolve_image_artifact_for_data(
-        packet,
-        input_with_fallback=list(preferred_artifact_names),
-        fallback_to_stream_frame=bool(fallback_to_stream_frame),
-    )
+    artifact_name, data = resolve_image_artifact_for_data(packet, input_artifact_name=input_artifact_name)
     return artifact_name, data
 
 
@@ -4384,14 +3992,21 @@ def _read_bbox01_from_artifact(artifact: Artifact) -> tuple[float, float, float,
     return None
 
 
-def _read_frame_crop_bbox01(packet: Packet) -> tuple[float, float, float, float] | None:
+def _payload_transform_targets_artifact(raw: Any, *, selected_artifact_name: str | None) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    target_name = normalize_artifact_name(raw.get("output_artifact_name"), default="")
+    selected_name = normalize_artifact_name(selected_artifact_name, default=MAIN_ARTIFACT_NAME)
+    return bool(target_name and selected_name and target_name == selected_name)
+
+
+def _read_frame_crop_bbox01(
+    packet: Packet,
+    *,
+    selected_artifact_name: str | None,
+) -> tuple[float, float, float, float] | None:
     crop = packet.payload.get("frame_crop")
-    if not isinstance(crop, dict):
-        return None
-    apply_to_stream = crop.get("set_stream_frame")
-    if apply_to_stream is None:
-        apply_to_stream = crop.get("set_payload_frame")  # legacy
-    if apply_to_stream is False:
+    if not _payload_transform_targets_artifact(crop, selected_artifact_name=selected_artifact_name):
         return None
     raw = crop.get("bbox01")
     if isinstance(raw, (list, tuple)) and len(raw) >= 4:
@@ -4404,14 +4019,9 @@ def _read_frame_crop_bbox01(packet: Packet) -> tuple[float, float, float, float]
     return None
 
 
-def _read_frame_warp(packet: Packet) -> dict[str, Any] | None:
+def _read_frame_warp(packet: Packet, *, selected_artifact_name: str | None) -> dict[str, Any] | None:
     warp = packet.payload.get("frame_warp")
-    if not isinstance(warp, dict):
-        return None
-    apply_to_stream = warp.get("set_stream_frame")
-    if apply_to_stream is None:
-        apply_to_stream = warp.get("set_payload_frame")  # legacy
-    if apply_to_stream is False:
+    if not _payload_transform_targets_artifact(warp, selected_artifact_name=selected_artifact_name):
         return None
     if str(warp.get("kind", "")).strip().lower() != "perspective":
         return None
@@ -5017,29 +4627,6 @@ def _resolve_packet_time(packet: Packet, *, time_field: str) -> float:
     return value
 
 
-def _score_packet_for_best_frame(
-    *,
-    packet: Packet,
-    score_field: str,
-    confidence_weight: float,
-    bbox_area_weight: float,
-) -> float:
-    confidence_raw = packet.payload.get(score_field)
-    if confidence_raw is None:
-        confidence_raw = packet.payload.get("object_confidence")
-    try:
-        confidence = float(confidence_raw)
-    except Exception:
-        confidence = 0.0
-    confidence = max(0.0, min(1.0, confidence))
-    bbox = _read_bbox01(packet, bbox_field="object_bbox01")
-    bbox_area = 0.0
-    if bbox is not None:
-        x1, y1, x2, y2 = bbox
-        bbox_area = max(0.0, (x2 - x1) * (y2 - y1))
-    return (confidence * confidence_weight) + (bbox_area * bbox_area_weight)
-
-
 def _normalize_bbox01(bbox: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
     x1, y1, x2, y2 = [float(value) for value in bbox]
     x1 = max(0.0, min(1.0, x1))
@@ -5080,16 +4667,8 @@ def _annotate_artifact_contract(
     payload: dict[str, Any],
     *,
     packet: Packet,
-    preferred_input_artifact_names: list[str],
+    input_artifact_name: str | None = None,
     selected_input_artifact_name: str | None,
     latest_artifact_name: str | None = None,
 ) -> dict[str, Any]:
-    out = dict(payload)
-    out["artifact_contract"] = {
-        "available_artifact_names": sorted(packet.artifacts.keys()),
-        "preferred_input_artifact_names": list(preferred_input_artifact_names),
-        "selected_input_artifact_name": selected_input_artifact_name,
-        "latest_artifact_name": latest_artifact_name,
-    }
-    out["artifact_names"] = sorted(packet.artifacts.keys())
-    return out
+    return dict(payload)

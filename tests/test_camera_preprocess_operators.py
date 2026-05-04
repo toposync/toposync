@@ -18,30 +18,25 @@ def test_camera_local_contrast_clahe_operator_increases_dynamic_range() -> None:
             stream_id="camera:test",
             payload={"frame_width": 64, "frame_height": 64},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "main"}),
             },
         )
 
         op = LocalContrastCLAHERuntime(
             {
-                "input_artifact_names": ["frame_original"],
-                "fallback_to_stream_frame": True,
-                "output_artifact_name": "frame_clahe",
                 "clip_limit": 2.0,
                 "tile_grid_size": [8, 8],
                 "colorspace": "lab",
-                "set_stream_frame": True,
             },
         )
 
         out_packets = await op.process_packet(packet, None)
         assert len(out_packets) == 1
         out = out_packets[0]
-        assert "frame_clahe" in out.artifacts
-        assert "frame" in out.artifacts
+        assert "frame" not in out.artifacts
 
-        clahe = out.artifacts["frame"].data
+        clahe = out.artifacts["main"].data
         assert clahe is not None
         assert tuple(getattr(clahe, "shape", ())) == (64, 64, 3)
 
@@ -70,38 +65,34 @@ def test_camera_unsharp_mask_operator_restores_high_frequency_detail() -> None:
             stream_id="camera:test",
             payload={"frame_width": 64, "frame_height": 64},
             artifacts={
-                "frame_original": Artifact(
-                    name="frame_original",
+                "main": Artifact(
+                    name="main",
                     data=blurred,
                     mime_type="image/raw",
                     metadata={"source": "test"},
                 ),
-                "frame": Artifact(
-                    name="frame",
+                "aux": Artifact(
+                    name="aux",
                     data=blurred,
                     mime_type="image/raw",
-                    metadata={"source": "test", "derived_from": "frame_original"},
+                    metadata={"source": "test", "derived_from": "main"},
                 ),
             },
         )
 
         op = UnsharpMaskRuntime(
             {
-                "input_artifact_names": ["frame_original"],
-                "fallback_to_stream_frame": True,
-                "output_artifact_name": "frame_sharp",
                 "amount": 1.0,
                 "sigma": 1.2,
                 "threshold": 0,
                 "luma_only": True,
-                "set_stream_frame": True,
             },
         )
 
         out_packets = await op.process_packet(packet, None)
         assert len(out_packets) == 1
         out = out_packets[0]
-        sharpened = out.artifacts["frame"].data
+        sharpened = out.artifacts["main"].data
         assert sharpened is not None
 
         blurred_gray = cv2.cvtColor(blurred, cv2.COLOR_BGR2GRAY)
@@ -132,28 +123,24 @@ def test_camera_denoise_luma_operator_reduces_noise_variance() -> None:
             stream_id="camera:test",
             payload={"frame_width": 64, "frame_height": 64},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "main"}),
             },
         )
 
         op = DenoiseLumaRuntime(
             {
-                "input_artifact_names": ["frame_original"],
-                "fallback_to_stream_frame": True,
-                "output_artifact_name": "frame_denoised",
                 "method": "bilateral",
                 "bilateral_diameter": 9,
                 "bilateral_sigma_color": 90.0,
                 "bilateral_sigma_space": 90.0,
-                "set_stream_frame": True,
             },
         )
 
         out_packets = await op.process_packet(packet, None)
         assert len(out_packets) == 1
         out = out_packets[0]
-        denoised = out.artifacts["frame"].data
+        denoised = out.artifacts["main"].data
         assert denoised is not None
 
         before = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
@@ -175,33 +162,29 @@ def test_camera_auto_gamma_operator_targets_configured_luminance() -> None:
             stream_id="camera:test",
             payload={"frame_width": 8, "frame_height": 8},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "main"}),
             },
         )
 
         op = AutoGammaRuntime(
             {
-                "input_artifact_names": ["frame_original"],
-                "fallback_to_stream_frame": True,
-                "output_artifact_name": "frame_auto",
                 "measurement": "mean",
                 "target_luma": 0.5,
                 "min_gamma": 0.1,
                 "max_gamma": 5.0,
                 "smoothing": 0.0,
-                "set_stream_frame": True,
             },
         )
 
         out_packets = await op.process_packet(packet, None)
         assert len(out_packets) == 1
         out = out_packets[0]
-        adjusted = out.artifacts["frame"].data
+        adjusted = out.artifacts["main"].data
         assert adjusted is not None
         assert int(adjusted[0, 0, 0]) in range(120, 137)
 
-        meta = out.artifacts["frame_auto"].metadata
+        meta = out.artifacts["main"].metadata
         assert isinstance(meta, dict)
         assert float(meta.get("gamma") or 0.0) > 1.0
 
@@ -224,16 +207,12 @@ def test_camera_global_stabilize_operator_reduces_translation_error() -> None:
 
         op = GlobalStabilizeRuntime(
             {
-                "input_artifact_names": ["frame_original"],
-                "fallback_to_stream_frame": True,
-                "output_artifact_name": "frame_stabilized",
                 "response_threshold": 0.05,
                 "max_translation_px": 20.0,
                 "smoothing": 0.0,
                 "interpolation": "nearest",
                 "border_mode": "constant",
                 "border_value": 0,
-                "set_stream_frame": True,
             },
         )
 
@@ -241,8 +220,8 @@ def test_camera_global_stabilize_operator_reduces_translation_error() -> None:
             stream_id="camera:test",
             payload={"frame_width": 64, "frame_height": 64},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=base, mime_type="image/raw", metadata={"source": "test"}),
-                "frame": Artifact(name="frame", data=base, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+                "main": Artifact(name="main", data=base, mime_type="image/raw", metadata={"source": "test"}),
+                "aux": Artifact(name="aux", data=base, mime_type="image/raw", metadata={"source": "test", "derived_from": "main"}),
             },
         )
         _ = await op.process_packet(packet1, None)
@@ -251,13 +230,13 @@ def test_camera_global_stabilize_operator_reduces_translation_error() -> None:
             stream_id="camera:test",
             payload={"frame_width": 64, "frame_height": 64},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=shifted, mime_type="image/raw", metadata={"source": "test"}),
-                "frame": Artifact(name="frame", data=shifted, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+                "main": Artifact(name="main", data=shifted, mime_type="image/raw", metadata={"source": "test"}),
+                "aux": Artifact(name="aux", data=shifted, mime_type="image/raw", metadata={"source": "test", "derived_from": "main"}),
             },
         )
         out_packets = await op.process_packet(packet2, None)
         assert len(out_packets) == 1
-        stabilized = out_packets[0].artifacts["frame"].data
+        stabilized = out_packets[0].artifacts["main"].data
         assert stabilized is not None
 
         diff_before = float(np.mean(np.abs(shifted.astype(np.int16) - base.astype(np.int16))))
@@ -285,15 +264,11 @@ def test_camera_lens_undistort_operator_is_noop_with_zero_distortion() -> None:
 
         op = LensUndistortRuntime(
             {
-                "input_artifact_names": ["frame_original"],
-                "fallback_to_stream_frame": True,
-                "output_artifact_name": "frame_undistorted",
                 "camera_matrix": K,
                 "dist_coeffs": [0.0, 0.0, 0.0, 0.0, 0.0],
                 "alpha": 0.0,
                 "use_optimal_new_camera_matrix": True,
                 "crop_to_valid_roi": False,
-                "set_stream_frame": True,
             },
         )
 
@@ -301,14 +276,14 @@ def test_camera_lens_undistort_operator_is_noop_with_zero_distortion() -> None:
             stream_id="camera:test",
             payload={"frame_width": 32, "frame_height": 32},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "main"}),
             },
         )
 
         out_packets = await op.process_packet(packet, None)
         assert len(out_packets) == 1
-        out = out_packets[0].artifacts["frame"].data
+        out = out_packets[0].artifacts["main"].data
         assert out is not None
         assert tuple(getattr(out, "shape", ())) == (32, 32, 3)
 

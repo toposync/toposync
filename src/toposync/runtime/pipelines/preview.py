@@ -16,7 +16,6 @@ _PREVIEW_SINK_BASE_ID = "preview_sink"
 
 _SKIP_OPERATOR_IDS: set[str] = {
     "camera.area_restriction",
-    "camera.best_frame_selector",
     "camera.camera_mapping",
     "camera.motion_bgsub_adaptive",
     "camera.motion_gate",
@@ -209,11 +208,7 @@ def prepare_preview_pipeline(*, pipeline: Pipeline, registry: OperatorRegistry) 
 
 
 def resolve_preview_packet_image(packet: Packet) -> Any | None:
-    _key, _artifact_name, image = resolve_image_artifact_for_data(
-        packet,
-        input_with_fallback=["treated", "original", "best_frame", "segmented"],
-        fallback_to_stream_frame=True,
-    )
+    _artifact_name, image = resolve_image_artifact_for_data(packet)
     return image
 
 

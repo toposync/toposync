@@ -307,37 +307,6 @@ const TRACKER_CHOICES = [
   },
 ] as const;
 
-const DETECTION_INPUT_PRESETS = [
-  {
-    value: "treated,original",
-    labelKey: "core.ui.pipelines.panels.yolo.input_preset.treated_first",
-    hintKey: "core.ui.pipelines.panels.yolo.input_preset.treated_first_hint",
-  },
-  {
-    value: "original,treated",
-    labelKey: "core.ui.pipelines.panels.yolo.input_preset.original_first",
-    hintKey: "core.ui.pipelines.panels.yolo.input_preset.original_first_hint",
-  },
-  {
-    value: "best_frame,treated,original",
-    labelKey: "core.ui.pipelines.panels.yolo.input_preset.best_frame_first",
-    hintKey: "core.ui.pipelines.panels.yolo.input_preset.best_frame_first_hint",
-  },
-] as const;
-
-const SEGMENTATION_INPUT_PRESETS = [
-  {
-    value: "treated,original",
-    labelKey: "core.ui.pipelines.panels.yolo.input_preset.treated_first",
-    hintKey: "core.ui.pipelines.panels.yolo.input_preset.treated_first_hint",
-  },
-  {
-    value: "original,treated",
-    labelKey: "core.ui.pipelines.panels.yolo.input_preset.original_first",
-    hintKey: "core.ui.pipelines.panels.yolo.input_preset.original_first_hint",
-  },
-] as const;
-
 const MODEL_HINT_KEYS: Record<string, string> = {
   rfdetr_det_nano: "core.ui.pipelines.panels.yolo.model_rfdetr_nano_hint",
   rfdetr_det_small: "core.ui.pipelines.panels.yolo.model_rfdetr_small_hint",
@@ -698,7 +667,6 @@ export function VisionConfigCard({
   const pauseWhenGateClosed = Boolean((config as any).pause_when_gate_closed ?? true);
   const useWorldAnchor = Boolean((config as any).use_world_anchor ?? false);
   const modelId = String((config as any).model_id ?? "").trim();
-  const inputWithFallback = textConfigValue((config as any).input_with_fallback, "treated,original");
   const attachMaskArtifacts = Boolean((config as any).attach_mask_artifacts ?? true);
   const attachPolygons = Boolean((config as any).attach_polygons ?? false);
   const maxInstancesRaw = Number((config as any).max_instances_per_frame ?? 16);
@@ -972,36 +940,6 @@ export function VisionConfigCard({
     [t],
   );
 
-  const inputPresetChoices = useMemo(
-    () => (isSegmentation ? SEGMENTATION_INPUT_PRESETS : DETECTION_INPUT_PRESETS),
-    [isSegmentation],
-  );
-
-  const inputPresetOptions = useMemo<SelectOption[]>(() => {
-    const options = inputPresetChoices.map((item) => ({
-      value: item.value,
-      label: t(item.labelKey, {}, item.value),
-    }));
-    if (!inputWithFallback || options.some((item) => item.value === inputWithFallback)) {
-      return options;
-    }
-    return [
-      {
-        value: inputWithFallback,
-        label: t(
-          "core.ui.pipelines.panels.yolo.input_preset.custom_current",
-          { value: inputWithFallback },
-          `Custom: ${inputWithFallback}`,
-        ),
-      },
-      ...options,
-    ];
-  }, [inputPresetChoices, inputWithFallback, t]);
-
-  const selectedInputPresetHintKey = useMemo(
-    () => inputPresetChoices.find((item) => item.value === inputWithFallback)?.hintKey ?? "",
-    [inputPresetChoices, inputWithFallback],
-  );
   const privacyPolicyLabels = useMemo(() => parsePrivacyPolicyLabels(privacyPolicyLabelsText), [privacyPolicyLabelsText]);
   const privacyPolicyMatchExpression = useMemo(
     () => (privacyPolicyLabels.length > 0 ? buildClassificationPrivacyMatchExpression(privacyPolicyLabels, privacyPolicyThreshold) : ""),
@@ -1090,7 +1028,6 @@ export function VisionConfigCard({
       enabled: true,
       expression: privacyPolicyMatchExpression,
       invert: false,
-      artifact_names: ["best_frame", "original", "treated", "segmented"],
     });
   }, [isClassification, onInsertStepAfter, operatorsById, privacyPolicyMatchExpression, stepUid]);
 
@@ -1990,27 +1927,6 @@ export function VisionConfigCard({
 
       {isDetection ? (
         <>
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.yolo.input_source")}</span>
-            <select
-              className="pipelinesInput"
-              value={inputWithFallback}
-              onChange={(event) => {
-                onUpdateConfig((prev) => ({
-                  ...prev,
-                  input_with_fallback: String(event.target.value || "treated,original").trim() || "treated,original",
-                }));
-              }}
-            >
-              {inputPresetOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.input_source_hint")}</div>
-          {selectedInputPresetHintKey ? <div className="pipelinesStepHint">{t(selectedInputPresetHintKey)}</div> : null}
           {showAdvanced ? (
             <>
               <label className="pipelinesLabel">
@@ -2030,22 +1946,6 @@ export function VisionConfigCard({
                 />
               </label>
               <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.inference_interval_hint")}</div>
-
-              <label className="pipelinesLabel">
-                <span>{t("core.ui.pipelines.panels.yolo.input_with_fallback")}</span>
-                <input
-                  className="pipelinesInput"
-                  type="text"
-                  value={inputWithFallback}
-                  onChange={(event) => {
-                    onUpdateConfig((prev) => ({
-                      ...prev,
-                      input_with_fallback: event.target.value,
-                    }));
-                  }}
-                />
-              </label>
-              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.input_with_fallback_hint")}</div>
             </>
           ) : null}
         </>
@@ -2053,27 +1953,6 @@ export function VisionConfigCard({
 
       {isClassification && !classificationNeedsModelSetup ? (
         <>
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.yolo.input_source")}</span>
-            <select
-              className="pipelinesInput"
-              value={inputWithFallback}
-              onChange={(event) => {
-                onUpdateConfig((prev) => ({
-                  ...prev,
-                  input_with_fallback: String(event.target.value || "treated,original").trim() || "treated,original",
-                }));
-              }}
-            >
-              {inputPresetOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.input_source_hint")}</div>
-          {selectedInputPresetHintKey ? <div className="pipelinesStepHint">{t(selectedInputPresetHintKey)}</div> : null}
           <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.classification_filter_hint")}</div>
           <div className="pipelinesOperatorConfigCard" style={{ marginTop: 10 }}>
             <div className="cardHeaderRow">
@@ -2160,22 +2039,6 @@ export function VisionConfigCard({
                 />
               </label>
               <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.classification_top_k_hint")}</div>
-
-              <label className="pipelinesLabel">
-                <span>{t("core.ui.pipelines.panels.yolo.input_with_fallback")}</span>
-                <input
-                  className="pipelinesInput"
-                  type="text"
-                  value={inputWithFallback}
-                  onChange={(event) => {
-                    onUpdateConfig((prev) => ({
-                      ...prev,
-                      input_with_fallback: event.target.value,
-                    }));
-                  }}
-                />
-              </label>
-              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.classification_input_with_fallback_hint")}</div>
             </>
           ) : null}
         </>
@@ -2183,46 +2046,8 @@ export function VisionConfigCard({
 
       {isSegmentation ? (
         <>
-          <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.yolo.input_source")}</span>
-            <select
-              className="pipelinesInput"
-              value={inputWithFallback}
-              onChange={(event) => {
-                onUpdateConfig((prev) => ({
-                  ...prev,
-                  input_with_fallback: String(event.target.value || "treated,original").trim() || "treated,original",
-                }));
-              }}
-            >
-              {inputPresetOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.input_source_hint")}</div>
-          {selectedInputPresetHintKey ? <div className="pipelinesStepHint">{t(selectedInputPresetHintKey)}</div> : null}
-
           {showAdvanced ? (
             <>
-              <label className="pipelinesLabel">
-                <span>{t("core.ui.pipelines.panels.yolo.input_with_fallback")}</span>
-                <input
-                  className="pipelinesInput"
-                  type="text"
-                  value={inputWithFallback}
-                  onChange={(event) => {
-                    onUpdateConfig((prev) => ({
-                      ...prev,
-                      input_with_fallback: event.target.value,
-                    }));
-                  }}
-                />
-              </label>
-              <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.yolo.segmentation_input_with_fallback_hint")}</div>
-
               <label className="pipelinesLabel">
                 <span>{t("core.ui.pipelines.panels.yolo.max_instances_per_frame")}</span>
                 <PipelinesNumberInput

@@ -77,7 +77,7 @@ class _TelemetryTapRuntime(TransformOperatorRuntime):
                 "test.image",
                 rel_path=rel_path,
                 ts_s=frame_ts,
-                image_key="original",
+                image_key="main",
                 confidence=score,
             )
         return [packet]
@@ -421,7 +421,7 @@ def test_pipeline_telemetry_store_roundtrips_checkpoint_bytes() -> None:
         rel_path="pipelines/test/frame_0.png",
         metric_id="test.image",
         ts_s=103.0,
-        image_key="original",
+        image_key="main",
         confidence=0.5,
     )
 

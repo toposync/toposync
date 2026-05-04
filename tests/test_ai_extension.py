@@ -147,8 +147,8 @@ def _image_packet(stream_id: str = "camera:test") -> Packet:
     return Packet.create(
         stream_id=stream_id,
         artifacts={
-            "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw"),
-            "frame": Artifact(name="frame", data=frame, mime_type="image/raw"),
+            "main": Artifact(name="main", data=frame, mime_type="image/raw"),
+            "aux": Artifact(name="aux", data=frame, mime_type="image/raw"),
         },
     )
 
@@ -176,7 +176,7 @@ def test_ai_extension_registers_initial_operators() -> None:
     assert smart_crop.definition.defaults["missing_policy"] == "drop"
     assert condition_filter.definition.defaults["max_concurrency"] == 1
     assert condition_filter.definition.defaults["concurrency_policy"] == "skip"
-    assert "frame_original" in smart_crop.definition.requires_artifacts
+    assert "main" in smart_crop.definition.requires_artifacts
     assert "object_bbox01" in smart_crop.definition.produces_payload_keys
     assert "ai" in condition_filter.definition.produces_payload_keys
 
@@ -230,8 +230,8 @@ def test_ai_smart_crop_uses_ai_bbox_and_updates_frame() -> None:
             stream_id="camera:test",
             payload={"frame_width": 200, "frame_height": 100},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw"),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw"),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw"),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw"),
             },
         )
         services = _FakeServices(
@@ -259,10 +259,8 @@ def test_ai_smart_crop_uses_ai_bbox_and_updates_frame() -> None:
         return out_packets[0]
 
     out = asyncio.run(scenario())
-    assert "ai_crop" in out.artifacts
-    assert "frame" in out.artifacts
-    assert tuple(getattr(out.artifacts["ai_crop"].data, "shape", ())) == (40, 100, 3)
-    assert tuple(getattr(out.artifacts["frame"].data, "shape", ())) == (40, 100, 3)
+    assert "main" in out.artifacts
+    assert tuple(getattr(out.artifacts["main"].data, "shape", ())) == (40, 100, 3)
     assert out.payload["object_bbox01"] == pytest.approx([0.25, 0.2, 0.75, 0.6])
     assert out.payload["object_confidence"] == pytest.approx(0.82)
     assert out.payload["object_category_label"] == "sofa"
@@ -281,8 +279,8 @@ def test_ai_smart_crop_can_union_multiple_detections() -> None:
             stream_id="camera:test",
             payload={"frame_width": 200, "frame_height": 100},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw"),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw"),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw"),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw"),
             },
         )
         services = _FakeServices(
@@ -312,7 +310,7 @@ def test_ai_smart_crop_can_union_multiple_detections() -> None:
         return out_packets[0]
 
     out = asyncio.run(scenario())
-    assert tuple(getattr(out.artifacts["ai_crop"].data, "shape", ())) == (80, 160, 3)
+    assert tuple(getattr(out.artifacts["main"].data, "shape", ())) == (80, 160, 3)
     assert out.payload["object_bbox01"] == pytest.approx([0.1, 0.1, 0.9, 0.9])
     assert out.payload["object_confidence"] == pytest.approx(0.82)
     assert out.payload["frame_crop"]["detection_strategy"] == "union"
@@ -329,8 +327,8 @@ def test_ai_smart_crop_drops_by_default_when_target_is_missing() -> None:
         packet = Packet.create(
             stream_id="camera:test",
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw"),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw"),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw"),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw"),
             },
         )
         services = _FakeServices(
@@ -363,8 +361,8 @@ def test_ai_condition_filter_emits_only_matching_packets() -> None:
         packet = Packet.create(
             stream_id="camera:test",
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw"),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw"),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw"),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw"),
             },
         )
         services = _FakeServices(
@@ -404,8 +402,8 @@ def test_ai_condition_filter_records_confidence_telemetry() -> None:
             stream_id="camera:test",
             payload={"frame_ts": 1_700_000_123.0},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw"),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw"),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw"),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw"),
             },
         )
         services = _FakeServices(

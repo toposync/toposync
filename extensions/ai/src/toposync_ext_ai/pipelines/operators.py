@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry, payload_path_hint
 
 from toposync_ext_ai.constants import EXTENSION_ID
@@ -57,7 +58,7 @@ def register_ai_pipeline_operators(registry: OperatorRegistry) -> None:
         registry.register_operator(
             operator_id="ai.smart_crop",
             description=(
-                "AI-guided image crop. Locates a region from a text description, emits a crop artifact, "
+                "AI-guided image crop. Locates a region from a text description, updates the main image by default, "
                 "and exposes object_bbox01/object_confidence for downstream camera and filter operators."
             ),
             config_model=AiSmartCropConfig,
@@ -67,7 +68,7 @@ def register_ai_pipeline_operators(registry: OperatorRegistry) -> None:
             defaults=AiSmartCropConfig().model_dump(),
             execution_mode="in_event_loop",
             max_concurrency=1,
-            requires_artifacts=["frame_original"],
+            requires_artifacts=[MAIN_ARTIFACT_NAME],
             produces_payload_keys=[
                 "ai",
                 "object_bbox01",
@@ -77,7 +78,7 @@ def register_ai_pipeline_operators(registry: OperatorRegistry) -> None:
                 "detected_objects",
                 "frame_crop",
             ],
-            produces_artifacts=["ai_crop"],
+            produces_artifacts=[MAIN_ARTIFACT_NAME],
             input_modalities=["image"],
             output_modalities=["image"],
             expression_hints=_ai_expression_hints(task="smart_crop"),
@@ -100,7 +101,7 @@ def register_ai_pipeline_operators(registry: OperatorRegistry) -> None:
             defaults=AiConditionFilterConfig().model_dump(),
             execution_mode="in_event_loop",
             max_concurrency=1,
-            requires_artifacts=["frame_original"],
+            requires_artifacts=[MAIN_ARTIFACT_NAME],
             produces_payload_keys=["ai"],
             input_modalities=["image"],
             output_modalities=["image"],

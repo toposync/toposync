@@ -25,8 +25,8 @@ def test_camera_image_perspective_crop_operator_warps_frame_and_maps_yolo_bbox_b
                 "frame_height": 100,
             },
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "main"}),
             },
         )
 
@@ -36,8 +36,6 @@ def test_camera_image_perspective_crop_operator_warps_frame_and_maps_yolo_bbox_b
                 "units": "pixels",
                 "points": [(50, 20), (150, 20), (150, 70), (50, 70)],
                 "output_ratio_preset": "auto",
-                "output_artifact_name": "frame_warped",
-                "set_stream_frame": True,
                 "min_output_edge_px": 8,
             },
             deps,
@@ -46,11 +44,10 @@ def test_camera_image_perspective_crop_operator_warps_frame_and_maps_yolo_bbox_b
         assert len(out_packets) == 1
         out = out_packets[0]
 
-        assert "frame_original" in out.artifacts
-        assert "frame" in out.artifacts
-        assert "frame_warped" in out.artifacts
+        assert "main" in out.artifacts
+        assert "frame" not in out.artifacts
 
-        warped = out.artifacts["frame"].data
+        warped = out.artifacts["main"].data
         assert warped is not None
         assert tuple(getattr(warped, "shape", ())) == (50, 100, 3)
         assert out.payload.get("frame_width") == 100
@@ -58,7 +55,6 @@ def test_camera_image_perspective_crop_operator_warps_frame_and_maps_yolo_bbox_b
 
         warp_payload = out.payload.get("frame_warp")
         assert isinstance(warp_payload, dict)
-        assert warp_payload.get("set_stream_frame") is True
         assert warp_payload.get("source_frame_width") == 200
         assert warp_payload.get("source_frame_height") == 100
         assert warp_payload.get("dest_frame_width") == 100
@@ -98,8 +94,8 @@ def test_camera_image_perspective_crop_operator_handles_skewed_quad_ordering() -
                 "frame_height": 1620,
             },
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "main"}),
             },
         )
 
@@ -109,8 +105,6 @@ def test_camera_image_perspective_crop_operator_handles_skewed_quad_ordering() -
                 "units": "percent",
                 "points": [(70.5, 17.5), (100.0, 24.0), (100.0, 39.0), (64.5, 26.5)],
                 "output_ratio_preset": "auto",
-                "output_artifact_name": "frame",
-                "set_stream_frame": True,
                 "min_output_edge_px": 8,
             },
             deps,
@@ -126,7 +120,7 @@ def test_camera_image_perspective_crop_operator_handles_skewed_quad_ordering() -
         assert int(warp_payload.get("dest_frame_width") or 0) < 2880
         assert int(warp_payload.get("dest_frame_height") or 0) < 1620
 
-        warped = out.artifacts["frame"].data
+        warped = out.artifacts["main"].data
         assert warped is not None
         warped_shape = tuple(getattr(warped, "shape", ()))
         assert warped_shape

@@ -148,10 +148,9 @@ class VisionClassifyImageRuntime(TransformOperatorRuntime):
             return
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
-        _image_key, _artifact_name, frame = resolve_image_artifact_for_data(
+        _artifact_name, frame = resolve_image_artifact_for_data(
             packet,
-            input_with_fallback=self._parsed.input_with_fallback,
-            fallback_to_stream_frame=bool(self._parsed.fallback_to_stream_frame),
+            input_artifact_name=self._parsed.input_artifact_name,
         )
         if frame is None:
             return []

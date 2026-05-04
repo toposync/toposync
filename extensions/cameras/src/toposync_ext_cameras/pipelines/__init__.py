@@ -13,7 +13,6 @@ from .operators import (
 from .postprocess import (
     AreaRestrictionConfig,
     ArtifactPrivacyConfig,
-    BestFrameSelectorConfig,
     CameraMappingConfig,
     ImageCropConfig,
     ImagePrivacyConfig,
@@ -54,7 +53,6 @@ __all__ = [
     "CameraMappingConfig",
     "AreaRestrictionConfig",
     "VelocityEstimationConfig",
-    "BestFrameSelectorConfig",
     "register_camera_core_pipeline_operators",
     "register_camera_pipeline_operators",
     "register_camera_postprocess_operators",

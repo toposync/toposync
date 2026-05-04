@@ -29,7 +29,7 @@ O runtime trafega **Packets** (eventos) entre operadores. Um Packet carrega:
 - **`payload["event_id"]`**: identifica um **evento lógico** dentro do fluxo (opcional).
   - Em tracking (`vision.track`), é preenchido e fica estável durante `open→update→close` (um por objeto).
   - Em detecção anotada (`vision.detect`), fica **nulo** por design. Lifecycle e identidade temporal pertencem a `vision.track`.
-  - Operadores stateful que fazem sentido “por objeto” (ex.: `camera.velocity_estimation`, `camera.best_frame_selector`, `core.throttle`, `core.debounce`, `core.fps_reducer`) usam `event_id` quando existe e fazem fallback para `stream_id` quando não existe.
+  - Operadores stateful que fazem sentido “por objeto” (ex.: `camera.velocity_estimation`, `core.throttle`, `core.debounce`, `core.fps_reducer`) usam `event_id` quando existe e fazem fallback para `stream_id` quando não existe.
 - **`lifecycle`**: `open | update | close`
   - `open`: início de um stream/evento (ex.: “pessoa detectada”)
   - `update`: atualização do stream (ex.: bbox mudou / posição no mundo mudou)
@@ -43,12 +43,13 @@ O runtime trafega **Packets** (eventos) entre operadores. Um Packet carrega:
 
 Implementação: `src/toposync/runtime/pipelines/runtime.py` (`Packet`, `Artifact`, `Lifecycle`).
 
-### Regra de ouro: frame nunca vai em `payload`
+### Regra de ouro: imagem nunca vai em `payload`
 
-- **Frame de imagem sempre vai em `artifacts`**, nunca em `payload`.
+- **Imagem/frame sempre vai em `artifacts`**, nunca em `payload`.
 - Convenção atual:
-  - `artifacts["frame_original"]`: frame “imutável” de origem (full frame).
-  - `artifacts["frame"]`: frame “corrente” do stream (pode ser alterado por operadores como crop/adjust).
+  - `artifacts["main"]`: artefato principal de imagem do pipeline.
+  - Operadores leem `main` por padrão e sobrescrevem `main` quando produzem uma imagem transformada.
+  - Casos avançados podem usar `input_artifact_name`/`output_artifact_name` para nomes customizados, mas não há fallback automático.
 
 ### Orçamento de memória para `Artifact.data` (realtime safe)
 
@@ -59,7 +60,7 @@ Para manter a máquina saudável quando o pipeline começa a gerar **crops/másc
 - O runtime mantém métricas de **bytes de artifacts em memória** nas filas (por edge) e limita o crescimento com drop explícito.
 
 **Limites (defaults; configuráveis via env)**
-- `TOPOSYNC_ARTIFACT_MAX_BYTES_PER_PACKET` (default `134217728`): limite por Packet; quando estoura, o runtime “evicta” `Artifact.data` de artifacts derivados (mantém `frame_original`/`frame`).
+- `TOPOSYNC_ARTIFACT_MAX_BYTES_PER_PACKET` (default `134217728`): limite por Packet; quando estoura, o runtime “evicta” `Artifact.data` de artifacts derivados e preserva `main`.
 - `TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_PER_PIPELINE` (default `536870912`): limite por runtime (por pipeline/bundle).
 - `TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_GLOBAL` (default `1073741824`): limite global do processo (soma de todos os runtimes locais).
 
@@ -260,6 +261,7 @@ Um operador declara:
 - `capabilities` (ex.: `split_stream`, `origin_only`, `heavy_compute`)
 - `share_strategy` (`by_signature` ou `never`)
 - `diagnostics_factory` opcional, para a extensão reportar problemas de configuração/ambiente como modelo ausente, credencial faltando ou dependência indisponível. O TopoSync apenas agrega e exibe esses diagnósticos por etapa.
+  - No compile da aplicação, `context` inclui `data_dir`, `compositions`, `node_id`, `operator_id`, `pipeline_name` e `upstream_nodes` para diagnósticos que dependem do grafo/config atual.
 
 Registro via `OperatorRegistry`, exposto como service:
 - `pipelines.register_operator`
@@ -288,7 +290,6 @@ Extensão `com.toposync.cameras`:
 - `vision.track`, `vision.detect`, `vision.segment_instances`
 - `camera.object_crop`, `camera.image_resize`
 - `camera.camera_mapping`, `camera.area_restriction`, `camera.velocity_estimation`
-- `camera.best_frame_selector`
 
 ---
 
@@ -296,7 +297,7 @@ Extensão `com.toposync.cameras`:
 
 ### `camera.source` (latest frame wins)
 
-- Função: captura RTSP e emite `Packet` com `artifacts["frame_original"]` + `artifacts["frame"]` e metadados básicos.
+- Função: captura RTSP e emite `Packet` com `artifacts["main"]` e metadados básicos.
 - Stream: `stream_id = "camera:<camera_id>"`
 - Portas:
   - input opcional: `gate` (permite pausar leitura RTSP)
@@ -387,7 +388,7 @@ Segmentação de instâncias task-oriented:
 - backend first-party atual: ONNX Runtime.
 - família first-party inicial: RTMDet-Ins (`rtmdet_ins_tiny`, `rtmdet_ins_small`, `rtmdet_ins_medium`).
 - parser RTMDet-Ins dedicado: espera saídas `dets + labels + masks` e reverte o letterbox para bbox/máscara no frame de entrada antes de reaplicar crop/warp do pipeline.
-- quando `attach_mask_artifacts=true`, anexa uma máscara binária por instância e publica a principal como image key semântica `mask`.
+- quando `attach_mask_artifacts=true`, anexa uma máscara binária por instância como artefato auxiliar (`mask_*`).
 - pode reconciliar as máscaras com detections/tracks já presentes no packet, sem mexer no lifecycle do objeto.
 - o editor usa o mesmo fluxo task-based do `vision.detect`: shortlist recomendada, badges, detalhes avançados e importação de manifesto customizado.
 
@@ -405,11 +406,10 @@ Implementação: `extensions/vision/src/toposync_ext_vision/processing/tasks/pos
 
 ### Pós-processamento e artefatos
 
-- `camera.object_crop`: recorte por bbox (gera artifact, default `segmented`); não é segmentação
+- `camera.object_crop`: recorte por bbox; por padrão sobrescreve `main` e não é segmentação
 - downstream pode continuar escolhendo entre bbox crop, máscara de instância e, no futuro, pose/keypoints, sem conflitar semanticamente com `camera.object_crop`
 - manifests de visão também podem declarar `capabilities` opcionais, por exemplo `reid`, para preparar catálogos futuros sem trocar o schema do registry
 - `camera.image_resize`: redimensiona artifacts em memória (reduce payload/storage)
-- `camera.best_frame_selector`: buffer bounded por track para escolher melhor frame (default `best_frame`)
 
 Implementação: `extensions/cameras/src/toposync_ext_cameras/pipelines/postprocess.py`.
 
@@ -461,11 +461,9 @@ UI/renderer:
 
 Ao compilar um pipeline, o backend analisa o grafo compilado e devolve `alerts` para guiar o usuário:
 - notify sem store_images antes
-- thumbnail fallback que não corresponde a artifacts armazenados
 - velocidade sem mapping upstream
 - velocidade depois de throttle/debounce/fps_reducer
 - store_images antes de pós-processamento
-- best_frame_selector “inútil” (nada downstream usa)
 - canais ruins depois de split (ex.: `maxsize=1 latest_only`)
 
 Implementação: `src/toposync/runtime/pipelines/recommendations.py`

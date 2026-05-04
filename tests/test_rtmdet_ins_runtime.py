@@ -143,19 +143,17 @@ def test_rtmdet_ins_runtime_reprojects_crop_and_attaches_mask_artifact(
         deps = PipelineRuntimeDependencies(vision_model_registry=build_default_model_registry())
         segment = VisionSegmentInstancesRuntime({"model_id": "rtmdet.ins.crop"}, deps)
 
-        frame_original = np.zeros((720, 1280, 3), dtype=np.uint8)
         frame_cropped = np.zeros((576, 640, 3), dtype=np.uint8)
         packet = Packet.create(
             stream_id="camera:test",
             payload={
                 "frame_crop": {
                     "bbox01": [0.25, 0.1, 0.75, 0.9],
-                    "set_stream_frame": True,
+                    "output_artifact_name": "main",
                 }
             },
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame_original, mime_type="image/raw"),
-                "frame": Artifact(name="frame", data=frame_cropped, mime_type="image/raw"),
+                "main": Artifact(name="main", data=frame_cropped, mime_type="image/raw"),
             },
         )
 
@@ -208,38 +206,39 @@ def test_rtmdet_ins_downstream_storage_can_choose_mask_or_bbox_crop(
         crop = ObjectCropRuntime(
             {
                 "bbox_field": "object_bbox01",
-                "output_artifact_name": "segmented",
+                "output_artifact_name": "debug_crop",
                 "padding_ratio": 0.0,
                 "min_crop_size_px": 1,
             }
         )
-        store_mask = StoreImagesRuntime({"image_with_fallback": "mask,segmented,original"}, deps)
-        store_crop = StoreImagesRuntime({"image_with_fallback": "segmented,mask,original"}, deps)
 
         frame = np.zeros((96, 128, 3), dtype=np.uint8)
         packet = Packet.create(
             stream_id="camera:test",
             payload={"frame_ts": 12.345, "camera_id": "camera-main", "tracking_id": "trk-1"},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw"),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw"),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw"),
             },
         )
 
         segmented = (await segment.process_packet(packet, _Context()))[0]
+        mask_name = str(segmented.payload.get("detected_object", {}).get("mask_artifact_name") or "")
+        assert mask_name
+        store_mask = StoreImagesRuntime({"input_artifact_name": mask_name}, deps)
+        store_crop = StoreImagesRuntime({"input_artifact_name": "debug_crop"}, deps)
         cropped = (await crop.process_packet(segmented, _Context()))[0]
 
         stored_mask = (await store_mask.process_packet(segmented, _Context()))[0]
         stored_crop = (await store_crop.process_packet(cropped, _Context()))[0]
 
-        mask_entries = stored_mask.payload.get("stored_images", {}).get("mask")
+        mask_entries = stored_mask.payload.get("stored_images", {}).get(mask_name)
         assert isinstance(mask_entries, list) and mask_entries
-        assert str(mask_entries[0].get("artifact_name") or "").startswith("mask_")
+        assert mask_entries[0].get("artifact_name") == mask_name
 
-        crop_entries = stored_crop.payload.get("stored_images", {}).get("segmented")
+        crop_entries = stored_crop.payload.get("stored_images", {}).get("debug_crop")
         assert isinstance(crop_entries, list) and crop_entries
-        assert crop_entries[0].get("artifact_name") == "segmented"
-        assert "segmented" in cropped.artifacts
-        assert "mask" in cropped.payload.get("images", {})
+        assert crop_entries[0].get("artifact_name") == "debug_crop"
+        assert "debug_crop" in cropped.artifacts
+        assert "images" not in cropped.payload
 
     asyncio.run(scenario())

@@ -189,7 +189,7 @@ def test_operator_registry_preserves_expression_hints() -> None:
             },
             {
                 "kind": "artifact_name",
-                "value": "best_frame",
+                "value": "main",
                 "description": "Default artifact emitted by the operator.",
             },
         ],
@@ -220,7 +220,7 @@ def test_operator_registry_preserves_expression_hints() -> None:
         {
             "kind": "artifact_name",
             "path": None,
-            "value": "best_frame",
+            "value": "main",
             "type": "",
             "description": "Default artifact emitted by the operator.",
             "examples": [],

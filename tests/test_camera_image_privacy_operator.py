@@ -23,35 +23,30 @@ def test_camera_image_privacy_operator_applies_black_region() -> None:
             stream_id="camera:test",
             payload={"frame_width": 4, "frame_height": 4},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "main"}),
             },
         )
 
         op = ImagePrivacyRuntime(
             {
-                "input_artifact_names": ["treated", "original"],
-                "fallback_to_stream_frame": True,
                 "units": "percent",
                 "left": 25,
                 "top": 25,
                 "right": 75,
                 "bottom": 75,
                 "effect": "black",
-                "output_artifact_name": "frame_private",
                 "min_region_size_px": 1,
-                "set_stream_frame": True,
             },
         )
 
         out_packets = await op.process_packet(packet, None)
         assert len(out_packets) == 1
         out = out_packets[0]
-        assert "frame_original" in out.artifacts
-        assert "frame" in out.artifacts
-        assert "frame_private" in out.artifacts
+        assert "main" in out.artifacts
+        assert "frame" not in out.artifacts
 
-        redacted = out.artifacts["frame"].data
+        redacted = out.artifacts["main"].data
         assert redacted is not None
         assert tuple(getattr(redacted, "shape", ())) == (4, 4, 3)
         assert (redacted[1:3, 1:3] == 0).all()
@@ -78,8 +73,8 @@ def test_camera_image_privacy_operator_is_noop_without_valid_region() -> None:
             stream_id="camera:test",
             payload={"frame_width": 4, "frame_height": 4},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "main"}),
             },
         )
 
@@ -90,14 +85,13 @@ def test_camera_image_privacy_operator_is_noop_without_valid_region() -> None:
                 "right": 0,
                 "bottom": 0,
                 "effect": "blur_medium",
-                "output_artifact_name": "frame_private",
             },
         )
 
         out_packets = await op.process_packet(packet, None)
         assert len(out_packets) == 1
         out = out_packets[0]
-        assert "frame_private" not in out.artifacts
+        assert "main" in out.artifacts
         privacy = out.payload.get("frame_privacy")
         assert isinstance(privacy, dict)
         assert privacy.get("enabled") is False

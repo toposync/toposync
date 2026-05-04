@@ -198,10 +198,4 @@ def test_wizard_graph_defaults_segmentation_to_rtmdet_ins_and_mask_publish() -> 
 
     assert _operator_config(segmentation_graph, operator_id="vision.segment_instances").get("model_id") == "rtmdet_ins_small"
     assert _operator_config(segmentation_graph, operator_id="vision.segment_instances").get("attach_mask_artifacts") is True
-    assert _stream_config(segmentation_graph).get("frame_with_fallback") == [
-        "mask",
-        "frame",
-        "best_frame",
-        "segmented",
-        "frame_original",
-    ]
+    assert _stream_config(segmentation_graph).get("input_artifact_name", "") == ""

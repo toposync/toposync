@@ -200,13 +200,12 @@ def test_vision_classify_image_config_normalizes_defaults() -> None:
         {
             "model_id": " classifier.main ",
             "top_k": 3,
-            "input_with_fallback": " best_frame, treated , original ",
         }
     )
 
     assert config.model_id == "classifier.main"
     assert config.top_k == 3
-    assert config.input_with_fallback == "best_frame, treated , original"
+    assert config.input_artifact_name == ""
 
 
 def test_tracked_object_normalizes_identity_score_and_bbox() -> None:
@@ -298,14 +297,13 @@ def test_vision_segment_instances_config_normalizes_categories() -> None:
         {
             "model_id": " rtmdet_ins_small ",
             "categories": [" Person ", "car", "person"],
-            "input_with_fallback": " mask, treated , original ",
             "max_instances_per_frame": 5,
         }
     )
 
     assert config.model_id == "rtmdet_ins_small"
     assert config.categories == ["person", "car"]
-    assert config.input_with_fallback == "mask, treated , original"
+    assert config.input_artifact_name == ""
     assert config.max_instances_per_frame == 5
 
 
@@ -313,13 +311,12 @@ def test_vision_pose_estimate_config_normalizes_defaults() -> None:
     config = VisionPoseEstimateConfig.model_validate(
         {
             "model_id": " fake.pose ",
-            "input_with_fallback": " treated, original ",
             "max_poses_per_frame": 5,
         }
     )
 
     assert config.model_id == "fake.pose"
-    assert config.input_with_fallback == "treated, original"
+    assert config.input_artifact_name == ""
     assert config.max_poses_per_frame == 5
 
 

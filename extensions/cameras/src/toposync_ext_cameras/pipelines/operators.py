@@ -18,7 +18,11 @@ from toposync.runtime.pipelines.execution import (
     SourceOperatorRuntime,
     TransformOperatorRuntime,
 )
-from toposync.runtime.pipelines.images import resolve_image_artifact_for_data
+from toposync.runtime.pipelines.images import (
+    MAIN_ARTIFACT_NAME,
+    normalize_artifact_name,
+    resolve_image_artifact_for_data,
+)
 from toposync.runtime.pipelines.packet_contract import (
     build_media_descriptor,
     build_source_descriptor,
@@ -97,9 +101,6 @@ def _camera_source_expression_hints() -> list[Any]:
         payload_path_hint("payload.frame_width", value_type="number", description="Frame width in pixels."),
         payload_path_hint("payload.frame_height", value_type="number", description="Frame height in pixels."),
         payload_path_hint("payload.capture", value_type="object", description="Capture runtime diagnostics for the source."),
-        payload_path_hint("payload.images", value_type="object", description="Named image aliases available on the packet."),
-        payload_path_hint("payload.images.original", value_type="string", description="Alias pointing to the original frame artifact."),
-        payload_path_hint("payload.images.treated", value_type="string", description="Alias pointing to the treated frame artifact."),
         payload_path_hint("payload.source", value_type="object", description="Source descriptor published for the stream."),
         payload_path_hint("payload.source.device_id", value_type="string", description="Device identifier from the source descriptor."),
         payload_path_hint("payload.source.channel_id", value_type="string", description="Channel identifier from the source descriptor."),
@@ -127,8 +128,7 @@ def _camera_source_expression_hints() -> list[Any]:
         metadata_path_hint("metadata.camera_id", value_type="string", description="Camera identifier copied into metadata."),
         metadata_path_hint("metadata.camera_name", value_type="string", description="Camera display name copied into metadata."),
         metadata_path_hint("metadata.capture_backend", value_type="string", description="Frame grabber backend used by the source."),
-        artifact_name_hint("frame_original", description="Original full-resolution frame artifact."),
-        artifact_name_hint("frame", description="Current stream frame artifact."),
+        artifact_name_hint(MAIN_ARTIFACT_NAME, description="Primary image/frame artifact."),
     ]
 
 
@@ -424,8 +424,7 @@ class MotionMaskStroke(BaseModel):
 
 class MotionGateConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_with_fallback: str = "segmented,treated,original"
-    fallback_to_stream_frame: bool = True
+    input_artifact_name: str = ""
     threshold: float = Field(default=0.010, ge=0.0, le=1.0)
     hold_seconds: float = Field(default=2.5, ge=0.0, le=120.0)
     activation_frames: int = Field(default=1, ge=1, le=100)
@@ -470,8 +469,7 @@ class MotionGateConfig(BaseModel):
 
 class MotionBgSubAdaptiveConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_with_fallback: str = "segmented,treated,original"
-    fallback_to_stream_frame: bool = True
+    input_artifact_name: str = ""
     backend: Literal["mog2", "knn"] = "mog2"
     threshold: float = Field(default=0.010, ge=0.0, le=1.0)
     threshold_low: float = Field(default=0.0075, ge=0.0, le=1.0)
@@ -528,8 +526,7 @@ class MotionBgSubAdaptiveConfig(BaseModel):
 
 class MotionSampleBgConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_with_fallback: str = "segmented,treated,original"
-    fallback_to_stream_frame: bool = True
+    input_artifact_name: str = ""
     backend: Literal["vibe_core", "pbas_lite"] = "pbas_lite"
     feature_mode: Literal["gray", "gray_gradient", "ycrcb_gradient"] = "gray_gradient"
     threshold: float = Field(default=0.010, ge=0.0, le=1.0)
@@ -1060,23 +1057,12 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         stream_suffix = self._camera_id or "adhoc"
         capture_metrics = self._capture_metrics_snapshot()
         frame_artifacts = {
-            "frame_original": Artifact(
-                name="frame_original",
+            MAIN_ARTIFACT_NAME: Artifact(
+                name=MAIN_ARTIFACT_NAME,
                 data=frame,
                 mime_type="image/raw",
                 metadata={
                     "source": "camera.source",
-                    "width": width,
-                    "height": height,
-                },
-            ),
-            "frame": Artifact(
-                name="frame",
-                data=frame,
-                mime_type="image/raw",
-                metadata={
-                    "source": "camera.source",
-                    "derived_from": "frame_original",
                     "width": width,
                     "height": height,
                 },
@@ -1107,10 +1093,6 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 "frame_width": width,
                 "frame_height": height,
                 "capture": capture_metrics,
-                "images": {
-                    "original": "frame_original",
-                    "treated": "frame",
-                },
             },
             artifacts=frame_artifacts,
             metadata={
@@ -1325,10 +1307,7 @@ class MotionGateRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         parsed = MotionGateConfig.model_validate(config)
         self._dependencies = dependencies
-        self._input_with_fallback = (
-            str(parsed.input_with_fallback or "").strip() or "segmented,treated,original"
-        )
-        self._fallback_to_stream_frame = bool(parsed.fallback_to_stream_frame)
+        self._input_artifact_name = str(parsed.input_artifact_name or "").strip()
         self._threshold = float(parsed.threshold)
         self._hold_seconds = float(parsed.hold_seconds)
         self._activation_frames = int(parsed.activation_frames)
@@ -1353,10 +1332,9 @@ class MotionGateRuntime(TransformOperatorRuntime):
         )
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
-        _key, _artifact_name, frame = resolve_image_artifact_for_data(
+        _artifact_name, frame = resolve_image_artifact_for_data(
             packet,
-            input_with_fallback=self._input_with_fallback,
-            fallback_to_stream_frame=self._fallback_to_stream_frame,
+            input_artifact_name=self._input_artifact_name,
         )
         if frame is None:
             return []
@@ -1423,10 +1401,7 @@ class MotionBgSubAdaptiveRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         parsed = MotionBgSubAdaptiveConfig.model_validate(config)
         self._dependencies = dependencies
-        self._input_with_fallback = (
-            str(parsed.input_with_fallback or "").strip() or "segmented,treated,original"
-        )
-        self._fallback_to_stream_frame = bool(parsed.fallback_to_stream_frame)
+        self._input_artifact_name = str(parsed.input_artifact_name or "").strip()
         self._backend = str(parsed.backend or "mog2").strip().lower() or "mog2"
         self._threshold = float(parsed.threshold)
         self._threshold_low = float(parsed.threshold_low)
@@ -1486,10 +1461,9 @@ class MotionBgSubAdaptiveRuntime(TransformOperatorRuntime):
         )
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
-        _key, _artifact_name, frame = resolve_image_artifact_for_data(
+        _artifact_name, frame = resolve_image_artifact_for_data(
             packet,
-            input_with_fallback=self._input_with_fallback,
-            fallback_to_stream_frame=self._fallback_to_stream_frame,
+            input_artifact_name=self._input_artifact_name,
         )
         if frame is None or isinstance(frame, (bytes, bytearray, memoryview)):
             return []
@@ -1557,10 +1531,7 @@ class MotionSampleBgRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         parsed = MotionSampleBgConfig.model_validate(config)
         self._dependencies = dependencies
-        self._input_with_fallback = (
-            str(parsed.input_with_fallback or "").strip() or "segmented,treated,original"
-        )
-        self._fallback_to_stream_frame = bool(parsed.fallback_to_stream_frame)
+        self._input_artifact_name = str(parsed.input_artifact_name or "").strip()
         self._backend = str(parsed.backend or "pbas_lite").strip().lower() or "pbas_lite"
         self._feature_mode = (
             str(parsed.feature_mode or "gray_gradient").strip().lower() or "gray_gradient"
@@ -1634,10 +1605,9 @@ class MotionSampleBgRuntime(TransformOperatorRuntime):
         )
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
-        _key, _artifact_name, frame = resolve_image_artifact_for_data(
+        _artifact_name, frame = resolve_image_artifact_for_data(
             packet,
-            input_with_fallback=self._input_with_fallback,
-            fallback_to_stream_frame=self._fallback_to_stream_frame,
+            input_artifact_name=self._input_artifact_name,
         )
         if frame is None or isinstance(frame, (bytes, bytearray, memoryview)):
             return []
@@ -1768,8 +1738,8 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
     def _normalize_objects(
         self, raw_objects: list[YoloObject], *, packet: Packet
     ) -> list[YoloObject]:
-        crop_bbox01 = _read_frame_crop_bbox01(packet)
-        warp = _read_frame_warp(packet)
+        crop_bbox01 = _read_frame_crop_bbox01(packet, selected_artifact_name=MAIN_ARTIFACT_NAME)
+        warp = _read_frame_warp(packet, selected_artifact_name=MAIN_ARTIFACT_NAME)
         objects: list[YoloObject] = []
         for raw in raw_objects:
             category = str(raw.category or "").strip().lower()
@@ -1811,11 +1781,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         return True
 
     async def _track_objects(self, packet: Packet, context) -> list[YoloObject]:  # noqa: ANN001
-        _key, _artifact_name, frame = resolve_image_artifact_for_data(
-            packet,
-            input_with_fallback="treated,original",
-            fallback_to_stream_frame=True,
-        )
+        _artifact_name, frame = resolve_image_artifact_for_data(packet)
         if frame is None:
             return []
         now_monotonic = time.monotonic()
@@ -1833,11 +1799,7 @@ class _BaseYoloRuntime(TransformOperatorRuntime):
         return self._normalize_objects(raw, packet=packet)
 
     async def _detect_objects(self, packet: Packet, context) -> list[YoloObject]:  # noqa: ANN001
-        _key, _artifact_name, frame = resolve_image_artifact_for_data(
-            packet,
-            input_with_fallback="treated,original",
-            fallback_to_stream_frame=True,
-        )
+        _artifact_name, frame = resolve_image_artifact_for_data(packet)
         if frame is None:
             return []
         now_monotonic = time.monotonic()
@@ -2525,9 +2487,8 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
             "frame_width",
             "frame_height",
             "capture",
-            "images",
         ],
-        produces_artifacts=["frame_original", "frame"],
+        produces_artifacts=[MAIN_ARTIFACT_NAME],
         produces_source_fields=["device_id", "channel_id", "kind", "modality", "name", "transport", "clock_domain"],
         produces_media_fields=["modality", "ts", "width", "height", "frame_rate"],
         output_modalities=["video"],
@@ -2545,7 +2506,7 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "motion", "realtime"],
         defaults=MotionGateConfig().model_dump(),
         execution_mode="thread_pool",
-        requires_artifacts=["frame_original"],
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
         produces_payload_keys=["motion"],
         expression_hints=_motion_gate_expression_hints(),
         share_strategy="by_signature",
@@ -2561,7 +2522,7 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "motion", "realtime"],
         defaults=MotionBgSubAdaptiveConfig().model_dump(),
         execution_mode="thread_pool",
-        requires_artifacts=["frame_original"],
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
         produces_payload_keys=["motion_bgsub_adaptive"],
         expression_hints=_motion_detector_expression_hints(
             "payload.motion_bgsub_adaptive",
@@ -2580,7 +2541,7 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
         capabilities=["camera", "motion", "realtime"],
         defaults=MotionSampleBgConfig().model_dump(),
         execution_mode="thread_pool",
-        requires_artifacts=["frame_original"],
+        requires_artifacts=[MAIN_ARTIFACT_NAME],
         produces_payload_keys=["motion_sample_bg"],
         expression_hints=_motion_detector_expression_hints(
             "payload.motion_sample_bg",
@@ -2802,14 +2763,21 @@ def _normalize_bbox01(bbox: tuple[float, float, float, float]) -> tuple[float, f
     return (x1, y1, x2, y2)
 
 
-def _read_frame_crop_bbox01(packet: Packet) -> tuple[float, float, float, float] | None:
+def _payload_transform_targets_artifact(raw: Any, *, selected_artifact_name: str | None) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    target_name = normalize_artifact_name(raw.get("output_artifact_name"), default="")
+    selected_name = normalize_artifact_name(selected_artifact_name, default=MAIN_ARTIFACT_NAME)
+    return bool(target_name and selected_name and target_name == selected_name)
+
+
+def _read_frame_crop_bbox01(
+    packet: Packet,
+    *,
+    selected_artifact_name: str | None,
+) -> tuple[float, float, float, float] | None:
     crop = packet.payload.get("frame_crop")
-    if not isinstance(crop, dict):
-        return None
-    apply_to_stream = crop.get("set_stream_frame")
-    if apply_to_stream is None:
-        apply_to_stream = crop.get("set_payload_frame")  # legacy
-    if apply_to_stream is False:
+    if not _payload_transform_targets_artifact(crop, selected_artifact_name=selected_artifact_name):
         return None
     raw = crop.get("bbox01")
     if isinstance(raw, (list, tuple)) and len(raw) >= 4:
@@ -2822,14 +2790,9 @@ def _read_frame_crop_bbox01(packet: Packet) -> tuple[float, float, float, float]
     return None
 
 
-def _read_frame_warp(packet: Packet) -> dict[str, Any] | None:
+def _read_frame_warp(packet: Packet, *, selected_artifact_name: str | None) -> dict[str, Any] | None:
     warp = packet.payload.get("frame_warp")
-    if not isinstance(warp, dict):
-        return None
-    apply_to_stream = warp.get("set_stream_frame")
-    if apply_to_stream is None:
-        apply_to_stream = warp.get("set_payload_frame")  # legacy
-    if apply_to_stream is False:
+    if not _payload_transform_targets_artifact(warp, selected_artifact_name=selected_artifact_name):
         return None
     if str(warp.get("kind", "")).strip().lower() != "perspective":
         return None

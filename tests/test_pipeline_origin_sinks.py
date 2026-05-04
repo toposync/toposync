@@ -108,17 +108,17 @@ def test_store_images_writes_files_and_sets_references(tmp_path: Path) -> None:
                     "tracking_id": "track-1",
                 },
                 "artifacts": {
-                    "frame_original": Artifact(
-                        name="frame_original",
+                    "main": Artifact(
+                        name="main",
                         data=frame,
                         mime_type="image/raw",
                         metadata={"source": "test"},
                     ),
-                    "frame": Artifact(
-                        name="frame",
+                    "aux": Artifact(
+                        name="aux",
                         data=frame,
                         mime_type="image/raw",
-                        metadata={"source": "test", "derived_from": "frame_original"},
+                        metadata={"source": "test", "derived_from": "main"},
                     ),
                 },
             },
@@ -141,10 +141,8 @@ def test_store_images_writes_files_and_sets_references(tmp_path: Path) -> None:
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "artifact_names": ["frame_original"],
                         "subdir": "pipelines",
                         "format": "png",
-                        "keep_data": False,
                         "overwrite": False,
                     },
                 },
@@ -174,15 +172,15 @@ def test_store_images_writes_files_and_sets_references(tmp_path: Path) -> None:
         packets = collector.get("sink", [])
         assert len(packets) == 1
         out_packet = packets[0]
-        assert "frame_original" in out_packet.artifacts
-        art = out_packet.artifacts["frame_original"]
+        assert "main" in out_packet.artifacts
+        art = out_packet.artifacts["main"]
         assert art.reference
         assert art.data is None
         rel = str(art.reference)
         assert rel.startswith("pipelines/stage7_store_images/")
         assert "camera-main" in rel
         assert "track-1" in rel
-        assert "original" in rel
+        assert "main" in rel
         assert (files_dir / str(art.reference)).is_file()
 
     asyncio.run(scenario())
@@ -204,17 +202,17 @@ def test_store_images_defaults_to_webp(tmp_path: Path) -> None:
                     "tracking_id": "track-1",
                 },
                 "artifacts": {
-                    "frame_original": Artifact(
-                        name="frame_original",
+                    "main": Artifact(
+                        name="main",
                         data=frame,
                         mime_type="image/raw",
                         metadata={"source": "test"},
                     ),
-                    "frame": Artifact(
-                        name="frame",
+                    "aux": Artifact(
+                        name="aux",
                         data=frame,
                         mime_type="image/raw",
-                        metadata={"source": "test", "derived_from": "frame_original"},
+                        metadata={"source": "test", "derived_from": "main"},
                     ),
                 },
             },
@@ -237,7 +235,6 @@ def test_store_images_defaults_to_webp(tmp_path: Path) -> None:
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "artifact_names": ["frame_original"],
                         "subdir": "pipelines",
                         "drop_data_after_store": True,
                     },
@@ -267,7 +264,7 @@ def test_store_images_defaults_to_webp(tmp_path: Path) -> None:
 
         packets = collector.get("sink", [])
         assert len(packets) == 1
-        art = packets[0].artifacts["frame_original"]
+        art = packets[0].artifacts["main"]
         assert art.reference
         assert art.mime_type == "image/webp"
         assert str(art.reference).endswith(".webp")
@@ -299,17 +296,17 @@ def test_store_images_saves_with_correct_color_channels(tmp_path: Path) -> None:
                     "tracking_id": "track-1",
                 },
                 "artifacts": {
-                    "frame_original": Artifact(
-                        name="frame_original",
+                    "main": Artifact(
+                        name="main",
                         data=frame,
                         mime_type="image/raw",
                         metadata={"source": "test"},
                     ),
-                    "frame": Artifact(
-                        name="frame",
+                    "aux": Artifact(
+                        name="aux",
                         data=frame,
                         mime_type="image/raw",
-                        metadata={"source": "test", "derived_from": "frame_original"},
+                        metadata={"source": "test", "derived_from": "main"},
                     ),
                 },
             },
@@ -332,10 +329,8 @@ def test_store_images_saves_with_correct_color_channels(tmp_path: Path) -> None:
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "artifact_names": ["frame_original"],
                         "subdir": "pipelines",
                         "format": "png",
-                        "keep_data": False,
                         "overwrite": False,
                     },
                 },
@@ -365,7 +360,7 @@ def test_store_images_saves_with_correct_color_channels(tmp_path: Path) -> None:
         packets = collector.get("sink", [])
         assert len(packets) == 1
         out_packet = packets[0]
-        rel = out_packet.artifacts["frame_original"].reference
+        rel = out_packet.artifacts["main"].reference
         assert rel
         abs_path = files_dir / str(rel)
         assert abs_path.is_file()
@@ -396,17 +391,17 @@ def test_store_images_in_bundle_uses_logical_pipeline_folder(tmp_path: Path) -> 
                     "tracking_id": "track-1",
                 },
                 "artifacts": {
-                    "frame_original": Artifact(
-                        name="frame_original",
+                    "main": Artifact(
+                        name="main",
                         data=frame,
                         mime_type="image/raw",
                         metadata={"source": "test"},
                     ),
-                    "frame": Artifact(
-                        name="frame",
+                    "aux": Artifact(
+                        name="aux",
                         data=frame,
                         mime_type="image/raw",
-                        metadata={"source": "test", "derived_from": "frame_original"},
+                        metadata={"source": "test", "derived_from": "main"},
                     ),
                 },
             },
@@ -430,10 +425,8 @@ def test_store_images_in_bundle_uses_logical_pipeline_folder(tmp_path: Path) -> 
                         "id": "store",
                         "operator": "core.store_images",
                         "config": {
-                            "artifact_names": ["frame_original"],
                             "subdir": "pipelines",
                             "format": "png",
-                            "keep_data": False,
                             "overwrite": False,
                         },
                     },
@@ -503,17 +496,17 @@ def test_notify_upserts_single_notification_with_templates_and_no_spam(tmp_path:
 
         frame = np.full((32, 32, 3), 180, dtype=np.uint8)
         artifacts = {
-            "frame_original": Artifact(
-                name="frame_original",
+            "main": Artifact(
+                name="main",
                 data=frame,
                 mime_type="image/raw",
                 metadata={"source": "test"},
             ),
-            "frame": Artifact(
-                name="frame",
+            "aux": Artifact(
+                name="aux",
                 data=frame,
                 mime_type="image/raw",
-                metadata={"source": "test", "derived_from": "frame_original"},
+                metadata={"source": "test", "derived_from": "main"},
             ),
         }
         sequence = [
@@ -579,10 +572,8 @@ def test_notify_upserts_single_notification_with_templates_and_no_spam(tmp_path:
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "artifact_names": ["frame_original"],
                         "subdir": "pipelines",
                         "format": "png",
-                        "keep_data": False,
                         "overwrite": False,
                     },
                 },
@@ -595,7 +586,6 @@ def test_notify_upserts_single_notification_with_templates_and_no_spam(tmp_path:
                         "description": "Está em {{area_label}}",
                         "priority": "high",
                         "update_interval_seconds": 60.0,
-                        "thumbnail_with_fallback": ["frame_original"],
                     },
                 },
             ],
@@ -665,8 +655,8 @@ def test_notify_thumbnail_shows_latest_when_live_and_best_confidence_on_close(
 
         frame = np.full((32, 32, 3), 128, dtype=np.uint8)
         artifacts = {
-            "frame_original": Artifact(
-                name="frame_original",
+            "main": Artifact(
+                name="main",
                 data=frame,
                 mime_type="image/raw",
                 metadata={"source": "test"},
@@ -735,10 +725,8 @@ def test_notify_thumbnail_shows_latest_when_live_and_best_confidence_on_close(
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "artifact_names": ["frame_original"],
                         "subdir": "pipelines",
                         "format": "png",
-                        "keep_data": False,
                     },
                 },
                 {
@@ -749,7 +737,6 @@ def test_notify_thumbnail_shows_latest_when_live_and_best_confidence_on_close(
                         "title": "Detected!",
                         "priority": "high",
                         "update_interval_seconds": 0.0,
-                        "thumbnail_with_fallback": ["frame_original"],
                     },
                 },
             ],
@@ -838,8 +825,8 @@ def test_notify_close_prefers_earliest_frame_on_confidence_tie(tmp_path: Path) -
 
         frame = np.full((24, 24, 3), 128, dtype=np.uint8)
         artifacts = {
-            "frame_original": Artifact(
-                name="frame_original",
+            "main": Artifact(
+                name="main",
                 data=frame,
                 mime_type="image/raw",
                 metadata={"source": "test"},
@@ -894,10 +881,8 @@ def test_notify_close_prefers_earliest_frame_on_confidence_tie(tmp_path: Path) -
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "artifact_names": ["frame_original"],
                         "subdir": "pipelines",
                         "format": "png",
-                        "keep_data": False,
                     },
                 },
                 {
@@ -908,7 +893,6 @@ def test_notify_close_prefers_earliest_frame_on_confidence_tie(tmp_path: Path) -
                         "title": "Detected!",
                         "priority": "high",
                         "update_interval_seconds": 0.0,
-                        "thumbnail_with_fallback": ["frame_original"],
                     },
                 },
             ],

@@ -93,6 +93,7 @@ class VisionDetectRuntime(TransformOperatorRuntime):
         *,
         packet: Packet,
         manifest: ModelManifest,
+        selected_artifact_name: str | None,
     ) -> list[DetectionObject]:
         detections: list[DetectionObject] = []
         for raw_item in list(raw_detections or []):
@@ -108,10 +109,18 @@ class VisionDetectRuntime(TransformOperatorRuntime):
                 continue
             if float(detection.score) < float(self._parsed.confidence_threshold):
                 continue
-            bbox01 = project_detection_bbox_to_stream_space(detection.bbox01, packet)
+            bbox01 = project_detection_bbox_to_stream_space(
+                detection.bbox01,
+                packet,
+                selected_artifact_name=selected_artifact_name,
+            )
             if bbox01 is None:
                 continue
-            keypoints = project_keypoints_to_stream_space(detection.keypoints, packet)
+            keypoints = project_keypoints_to_stream_space(
+                detection.keypoints,
+                packet,
+                selected_artifact_name=selected_artifact_name,
+            )
             detections.append(
                 replace(
                     detection,
@@ -238,10 +247,9 @@ class VisionDetectRuntime(TransformOperatorRuntime):
         return replace(packet, payload=payload, metadata=metadata)
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
-        _image_key, _artifact_name, frame = resolve_image_artifact_for_data(
+        artifact_name, frame = resolve_image_artifact_for_data(
             packet,
-            input_with_fallback=self._parsed.input_with_fallback,
-            fallback_to_stream_frame=bool(self._parsed.fallback_to_stream_frame),
+            input_artifact_name=self._parsed.input_artifact_name,
         )
         if frame is None:
             return []
@@ -258,7 +266,12 @@ class VisionDetectRuntime(TransformOperatorRuntime):
                 categories=self._categories_set or None,
                 concurrency_key=concurrency_key,
             )
-            detections = self._normalize_detections(raw_detections, packet=packet, manifest=manifest)
+            detections = self._normalize_detections(
+                raw_detections,
+                packet=packet,
+                manifest=manifest,
+                selected_artifact_name=artifact_name,
+            )
 
         self._record_confidence_telemetry(packet=packet, context=context, detections=detections)
         if self._parsed.emit_mode == "events" and not detections:

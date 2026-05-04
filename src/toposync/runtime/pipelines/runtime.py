@@ -121,7 +121,7 @@ def _apply_packet_artifact_budget(packet: Packet, *, max_bytes: int) -> Packet:
     if total <= limit:
         return packet
 
-    preserve_names = {"frame_original", "frame"}
+    preserve_names = {"main"}
     artifacts = dict(packet.artifacts)
 
     candidates: list[tuple[bool, int, str]] = []

@@ -67,7 +67,7 @@ def test_contract_alerts_when_required_artifacts_are_missing() -> None:
     assert any(
         alert.code == "missing_required_artifacts"
         and alert.node_id == "gate"
-        and "frame_original" in alert.message
+        and "main" in alert.message
         for alert in alerts
     )
 
@@ -98,7 +98,7 @@ def test_contract_alerts_when_adaptive_motion_required_artifacts_are_missing() -
     assert any(
         alert.code == "missing_required_artifacts"
         and alert.node_id == "motion"
-        and "frame_original" in alert.message
+        and "main" in alert.message
         for alert in alerts
     )
 
@@ -129,6 +129,74 @@ def test_contract_alerts_when_sample_motion_required_artifacts_are_missing() -> 
     assert any(
         alert.code == "missing_required_artifacts"
         and alert.node_id == "motion"
-        and "frame_original" in alert.message
+        and "main" in alert.message
+        for alert in alerts
+    )
+
+
+def test_contract_tracks_explicit_custom_artifact_names() -> None:
+    registry = OperatorRegistry()
+    register_builtin_operators(registry)
+    register_camera_pipeline_operators(registry)
+
+    pipeline = Pipeline(
+        name="contract_custom_artifact_names",
+        graph={
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
+                {
+                    "id": "crop",
+                    "operator": "camera.image_crop",
+                    "config": {"output_artifact_name": "debug_crop"},
+                },
+                {
+                    "id": "adjust",
+                    "operator": "camera.image_adjust",
+                    "config": {"input_artifact_name": "debug_crop"},
+                },
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "crop", "port": "in"}},
+                {"from": {"node": "crop", "port": "out"}, "to": {"node": "adjust", "port": "in"}},
+            ],
+        },
+    )
+    compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+    alerts = analyze_compiled_pipeline(pipeline=compiled, registry=registry)
+
+    assert not any(alert.code == "missing_required_artifacts" and alert.node_id == "adjust" for alert in alerts)
+
+
+def test_contract_does_not_fallback_to_main_for_missing_custom_input() -> None:
+    registry = OperatorRegistry()
+    register_builtin_operators(registry)
+    register_camera_pipeline_operators(registry)
+
+    pipeline = Pipeline(
+        name="contract_missing_custom_artifact",
+        graph={
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
+                {
+                    "id": "adjust",
+                    "operator": "camera.image_adjust",
+                    "config": {"input_artifact_name": "debug_crop"},
+                },
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "adjust", "port": "in"}},
+            ],
+        },
+    )
+    compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+    alerts = analyze_compiled_pipeline(pipeline=compiled, registry=registry)
+
+    assert any(
+        alert.code == "missing_required_artifacts"
+        and alert.node_id == "adjust"
+        and "debug_crop" in alert.message
+        and "main" not in alert.message
         for alert in alerts
     )

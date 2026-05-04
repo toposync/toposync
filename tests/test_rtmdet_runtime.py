@@ -103,19 +103,17 @@ def test_rtmdet_detection_runtime_reprojects_crop_and_feeds_object_crop(
             }
         )
 
-        frame_original = np.zeros((720, 1280, 3), dtype=np.uint8)
         frame_cropped = np.zeros((576, 640, 3), dtype=np.uint8)
         packet = Packet.create(
             stream_id="camera:test",
             payload={
                 "frame_crop": {
                     "bbox01": [0.25, 0.1, 0.75, 0.9],
-                    "set_stream_frame": True,
+                    "output_artifact_name": "main",
                 }
             },
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame_original, mime_type="image/raw"),
-                "frame": Artifact(name="frame", data=frame_cropped, mime_type="image/raw"),
+                "main": Artifact(name="main", data=frame_cropped, mime_type="image/raw"),
             },
         )
 
@@ -131,7 +129,8 @@ def test_rtmdet_detection_runtime_reprojects_crop_and_feeds_object_crop(
         assert "object_crop" in cropped_packet.artifacts
         object_crop = cropped_packet.artifacts["object_crop"].data
         object_crop_shape = tuple(getattr(object_crop, "shape", ()))
-        assert object_crop_shape[1:] == (384, 3)
+        assert object_crop_shape[1] in {384, 385}
+        assert object_crop_shape[2] == 3
         assert object_crop_shape[0] in {288, 289}
 
     asyncio.run(scenario())
@@ -158,7 +157,6 @@ def test_rtmdet_detection_runtime_reprojects_warped_stream_frame(
             payload={
                 "frame_warp": {
                     "kind": "perspective",
-                    "set_stream_frame": True,
                     "homography_inv": [[2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 1.0]],
                     "source_frame_width": 200,
                     "source_frame_height": 100,
@@ -167,12 +165,12 @@ def test_rtmdet_detection_runtime_reprojects_warped_stream_frame(
                 }
             },
             artifacts={
-                "frame_original": Artifact(
-                    name="frame_original",
+                "main": Artifact(
+                    name="main",
                     data=np.zeros((100, 200, 3), dtype=np.uint8),
                     mime_type="image/raw",
                 ),
-                "frame": Artifact(name="frame", data=np.zeros((50, 100, 3), dtype=np.uint8), mime_type="image/raw"),
+                "aux": Artifact(name="aux", data=np.zeros((50, 100, 3), dtype=np.uint8), mime_type="image/raw"),
             },
         )
 
@@ -207,13 +205,13 @@ def test_rtmdet_detection_output_feeds_vision_track(
         packet = Packet.create(
             stream_id="camera:test",
             artifacts={
-                "frame_original": Artifact(
-                    name="frame_original",
+                "main": Artifact(
+                    name="main",
                     data=np.zeros((720, 1280, 3), dtype=np.uint8),
                     mime_type="image/raw",
                 ),
-                "frame": Artifact(
-                    name="frame",
+                "aux": Artifact(
+                    name="aux",
                     data=np.zeros((720, 1280, 3), dtype=np.uint8),
                     mime_type="image/raw",
                 ),

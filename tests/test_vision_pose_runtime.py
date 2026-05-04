@@ -60,7 +60,7 @@ def test_vision_pose_estimate_runtime_annotates_packet_and_links_tracking_ids() 
             payload={
                 "frame_crop": {
                     "bbox01": [0.25, 0.1, 0.75, 0.9],
-                    "set_stream_frame": True,
+                    "output_artifact_name": "main",
                 },
                 "vision": {
                     "task": "tracking",
@@ -85,8 +85,7 @@ def test_vision_pose_estimate_runtime_annotates_packet_and_links_tracking_ids() 
                 },
             },
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=object(), mime_type="image/raw"),
-                "frame": Artifact(name="frame", data=object(), mime_type="image/raw"),
+                "main": Artifact(name="main", data=object(), mime_type="image/raw"),
             },
         )
 

@@ -25,8 +25,8 @@ def test_camera_image_crop_operator_crops_frame_and_keeps_original() -> None:
                 "frame_height": 100,
             },
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "main"}),
             },
         )
 
@@ -38,8 +38,6 @@ def test_camera_image_crop_operator_crops_frame_and_keeps_original() -> None:
                 "top": 10.0,
                 "right": 75.0,
                 "bottom": 60.0,
-                "output_artifact_name": "frame_cropped",
-                "set_stream_frame": True,
                 "min_crop_size_px": 8,
             },
             deps,
@@ -48,11 +46,10 @@ def test_camera_image_crop_operator_crops_frame_and_keeps_original() -> None:
         assert len(out_packets) == 1
         out = out_packets[0]
 
-        assert "frame_original" in out.artifacts
-        assert "frame" in out.artifacts
-        assert "frame_cropped" in out.artifacts
+        assert "main" in out.artifacts
+        assert "frame" not in out.artifacts
 
-        cropped = out.artifacts["frame"].data
+        cropped = out.artifacts["main"].data
         assert cropped is not None
         assert tuple(getattr(cropped, "shape", ())) == (50, 100, 3)
         assert out.payload.get("frame_width") == 100
@@ -60,10 +57,9 @@ def test_camera_image_crop_operator_crops_frame_and_keeps_original() -> None:
 
         crop_payload = out.payload.get("frame_crop")
         assert isinstance(crop_payload, dict)
-        assert crop_payload.get("set_stream_frame") is True
         assert crop_payload.get("bbox01") == pytest.approx([0.25, 0.10, 0.75, 0.60], abs=1e-6)
 
-        meta = out.artifacts["frame_cropped"].metadata
+        meta = out.artifacts["main"].metadata
         assert isinstance(meta, dict)
         assert meta.get("bbox_px_total") == [50, 10, 150, 60]
 

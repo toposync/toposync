@@ -29,7 +29,6 @@ export const PIPELINE_PRESET_OPERATOR_IDS = [
   "camera.camera_mapping",
   "camera.area_restriction",
   "camera.velocity_estimation",
-  "camera.best_frame_selector",
   "camera.image_adjust",
   "camera.image_resize",
   "core.throttle",
@@ -73,7 +72,6 @@ export const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "camera.camera_mapping": "World mapping",
   "camera.area_restriction": "Area restriction",
   "camera.velocity_estimation": "Speed estimation",
-  "camera.best_frame_selector": "Best frame",
   "camera.image_resize": "Resize images",
   "core.throttle": "Rate limit",
   "core.velocity_throttle": "Speed-aware rate limit",
@@ -239,10 +237,7 @@ export const YOLO_CATEGORY_OPTIONS: SelectOption[] = YOLO_CATEGORY_VALUES.map((v
 type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: string) => string;
 
 const ARTIFACT_SUGGESTION_DEFS: Array<{ value: string; labelKey: string; fallback: string }> = [
-  { value: "best_frame", labelKey: "core.ui.pipelines.artifacts.best_frame", fallback: "Best frame" },
-  { value: "segmented", labelKey: "core.ui.pipelines.artifacts.segmented", fallback: "Segmented" },
-  { value: "treated", labelKey: "core.ui.pipelines.artifacts.treated", fallback: "Treated" },
-  { value: "original", labelKey: "core.ui.pipelines.artifacts.original", fallback: "Original" },
+  { value: "main", labelKey: "core.ui.pipelines.artifacts.main", fallback: "Main" },
   { value: "face", labelKey: "core.ui.pipelines.artifacts.face", fallback: "Face" },
   { value: "pose", labelKey: "core.ui.pipelines.artifacts.pose", fallback: "Pose" },
 ];
@@ -252,10 +247,7 @@ export function buildArtifactSuggestions(t: TranslateFn): SelectOption[] {
 }
 
 const PACKET_ARTIFACT_SUGGESTION_DEFS: Array<{ value: string; labelKey: string; fallback: string }> = [
-  { value: "frame", labelKey: "core.ui.pipelines.artifacts.frame", fallback: "Frame" },
-  { value: "frame_original", labelKey: "core.ui.pipelines.artifacts.frame_original", fallback: "Full frame" },
-  { value: "best_frame", labelKey: "core.ui.pipelines.artifacts.best_frame", fallback: "Best frame" },
-  { value: "segmented", labelKey: "core.ui.pipelines.artifacts.segmented", fallback: "Segmented" },
+  { value: "main", labelKey: "core.ui.pipelines.artifacts.main", fallback: "Main" },
   { value: "face", labelKey: "core.ui.pipelines.artifacts.face", fallback: "Face" },
   { value: "pose", labelKey: "core.ui.pipelines.artifacts.pose", fallback: "Pose" },
   { value: "mask", labelKey: "", fallback: "Mask" },

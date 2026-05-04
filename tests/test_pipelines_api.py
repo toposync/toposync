@@ -108,8 +108,6 @@ def test_pipeline_preview_frame_replays_upstream_slice_and_skips_filters(
                                 "top": 10.0,
                                 "right": 75.0,
                                 "bottom": 60.0,
-                                "output_artifact_name": "frame",
-                                "set_stream_frame": True,
                                 "min_crop_size_px": 8,
                             },
                         },

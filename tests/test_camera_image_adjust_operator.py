@@ -21,32 +21,27 @@ def test_camera_image_adjust_operator_can_desaturate_frame() -> None:
             stream_id="camera:test",
             payload={"frame_width": 2, "frame_height": 2},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=frame, mime_type="image/raw", metadata={"source": "test"}),
-                "frame": Artifact(name="frame", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "frame_original"}),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw", metadata={"source": "test"}),
+                "aux": Artifact(name="aux", data=frame, mime_type="image/raw", metadata={"source": "test", "derived_from": "main"}),
             },
         )
 
         op = ImageAdjustRuntime(
             {
-                "input_artifact_names": ["frame_original"],
-                "fallback_to_stream_frame": True,
-                "output_artifact_name": "frame_adjusted",
                 "saturation": 0.0,
                 "brightness": 0.0,
                 "contrast": 1.0,
                 "gamma": 1.0,
-                "set_stream_frame": True,
             },
         )
 
         out_packets = await op.process_packet(packet, None)
         assert len(out_packets) == 1
         out = out_packets[0]
-        assert "frame_original" in out.artifacts
-        assert "frame" in out.artifacts
-        assert "frame_adjusted" in out.artifacts
+        assert "main" in out.artifacts
+        assert "frame" not in out.artifacts
 
-        adjusted = out.artifacts["frame"].data
+        adjusted = out.artifacts["main"].data
         assert adjusted is not None
         assert tuple(getattr(adjusted, "shape", ())) == (2, 2, 3)
         assert (adjusted[..., 0] == adjusted[..., 1]).all()

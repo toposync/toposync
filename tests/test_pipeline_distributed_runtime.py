@@ -47,10 +47,8 @@ def test_distributed_projection_runs_processing_and_origin_with_same_definition(
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "artifact_names": ["frame_original"],
                         "subdir": "pipelines",
                         "format": "png",
-                        "keep_data": False,
                     },
                 },
                 {
@@ -62,7 +60,6 @@ def test_distributed_projection_runs_processing_and_origin_with_same_definition(
                         "description": "Está em {{area_label}} ({{camera_name}})",
                         "priority": "high",
                         "update_interval_seconds": 60.0,
-                        "thumbnail_with_fallback": ["frame_original"],
                     },
                 },
             ],
@@ -123,7 +120,7 @@ def test_distributed_projection_runs_processing_and_origin_with_same_definition(
         assert isinstance(payload, dict)
         artifacts = payload.get("artifacts")
         assert isinstance(artifacts, dict)
-        rel = str(artifacts.get("frame_original") or "").strip()
+        rel = str(artifacts.get("main") or "").strip()
         assert rel
         assert (files_dir / rel).is_file()
 

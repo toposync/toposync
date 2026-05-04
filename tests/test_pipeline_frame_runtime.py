@@ -145,7 +145,6 @@ def test_camera_extension_operators_are_registered_with_runtime_factories() -> N
         "camera.camera_mapping",
         "camera.area_restriction",
         "camera.velocity_estimation",
-        "camera.best_frame_selector",
         "vision.track",
         "vision.detect",
     }
@@ -320,14 +319,14 @@ def test_motion_gate_uses_hold_without_emitting_close(monkeypatch: pytest.Monkey
             lifecycle=Lifecycle.UPDATE,
             payload={},
             artifacts={
-                "frame_original": Artifact(
-                    name="frame_original", data=object(), mime_type="application/octet-stream"
+                "main": Artifact(
+                    name="main", data=object(), mime_type="application/octet-stream"
                 ),
-                "frame": Artifact(
-                    name="frame",
+                "aux": Artifact(
+                    name="aux",
                     data=object(),
                     mime_type="application/octet-stream",
-                    metadata={"derived_from": "frame_original"},
+                    metadata={"derived_from": "main"},
                 ),
             },
         )
@@ -399,14 +398,14 @@ def test_motion_bgsub_adaptive_uses_hold_and_filters_when_inactive(
             lifecycle=Lifecycle.UPDATE,
             payload={},
             artifacts={
-                "frame_original": Artifact(
-                    name="frame_original", data=object(), mime_type="application/octet-stream"
+                "main": Artifact(
+                    name="main", data=object(), mime_type="application/octet-stream"
                 ),
-                "frame": Artifact(
-                    name="frame",
+                "aux": Artifact(
+                    name="aux",
                     data=object(),
                     mime_type="application/octet-stream",
-                    metadata={"derived_from": "frame_original"},
+                    metadata={"derived_from": "main"},
                 ),
             },
         )
@@ -467,8 +466,8 @@ def test_motion_bgsub_adaptive_can_emit_idle_packets(monkeypatch: pytest.MonkeyP
             lifecycle=Lifecycle.UPDATE,
             payload={},
             artifacts={
-                "frame_original": Artifact(
-                    name="frame_original", data=object(), mime_type="application/octet-stream"
+                "main": Artifact(
+                    name="main", data=object(), mime_type="application/octet-stream"
                 ),
             },
         )
@@ -523,8 +522,8 @@ def test_motion_bgsub_adaptive_requires_activation_frames(monkeypatch: pytest.Mo
             lifecycle=Lifecycle.UPDATE,
             payload={},
             artifacts={
-                "frame_original": Artifact(
-                    name="frame_original", data=object(), mime_type="application/octet-stream"
+                "main": Artifact(
+                    name="main", data=object(), mime_type="application/octet-stream"
                 ),
             },
         )
@@ -594,16 +593,16 @@ def test_motion_sample_bg_uses_hold_and_filters_when_inactive(
             lifecycle=Lifecycle.UPDATE,
             payload={},
             artifacts={
-                "frame_original": Artifact(
-                    name="frame_original",
+                "main": Artifact(
+                    name="main",
                     data=object(),
                     mime_type="application/octet-stream",
                 ),
-                "frame": Artifact(
-                    name="frame",
+                "aux": Artifact(
+                    name="aux",
                     data=object(),
                     mime_type="application/octet-stream",
-                    metadata={"derived_from": "frame_original"},
+                    metadata={"derived_from": "main"},
                 ),
             },
         )
@@ -671,8 +670,8 @@ def test_motion_sample_bg_can_emit_idle_packets(monkeypatch: pytest.MonkeyPatch)
             lifecycle=Lifecycle.UPDATE,
             payload={},
             artifacts={
-                "frame_original": Artifact(
-                    name="frame_original",
+                "main": Artifact(
+                    name="main",
                     data=object(),
                     mime_type="application/octet-stream",
                 ),
@@ -738,8 +737,8 @@ def test_motion_sample_bg_requires_activation_frames(
             lifecycle=Lifecycle.UPDATE,
             payload={},
             artifacts={
-                "frame_original": Artifact(
-                    name="frame_original",
+                "main": Artifact(
+                    name="main",
                     data=object(),
                     mime_type="application/octet-stream",
                 ),

@@ -33,7 +33,6 @@ The old per-camera detections runtime (`/api/cameras/detections/*`, `cameras.tra
 - `camera.camera_mapping`
 - `camera.area_restriction`
 - `camera.velocity_estimation`
-- `camera.best_frame_selector`
 
 Public vision operators are registered by the `com.toposync.vision` extension:
 

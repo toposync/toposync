@@ -5,7 +5,7 @@ from dataclasses import replace
 from typing import Any
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
-from toposync.runtime.pipelines.images import resolve_image_artifact_for_data, set_image_key
+from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME, resolve_image_artifact_for_data
 from toposync.runtime.pipelines.runtime import Artifact, Packet
 from toposync.runtime.pipelines.telemetry import METRIC_VISION_CONFIDENCE
 
@@ -234,6 +234,7 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
         *,
         packet: Packet,
         manifest: ModelManifest,
+        selected_artifact_name: str | None,
     ) -> list[SegmentationInstance]:
         min_score = (
             float(manifest.postprocess.confidence_threshold_default)
@@ -254,7 +255,11 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
                 continue
             if float(instance.score) < min_score:
                 continue
-            bbox01 = project_detection_bbox_to_stream_space(instance.bbox01, packet)
+            bbox01 = project_detection_bbox_to_stream_space(
+                instance.bbox01,
+                packet,
+                selected_artifact_name=selected_artifact_name,
+            )
             if bbox01 is None:
                 continue
             instances.append(replace(instance, bbox01=bbox01))
@@ -353,17 +358,11 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
                             "score": float(materialized.score),
                             "bbox01": [float(value) for value in materialized.bbox01],
                             "task": "segmentation",
-                            "derived_from": selected_artifact_name or "frame",
+                            "derived_from": selected_artifact_name or MAIN_ARTIFACT_NAME,
                         },
                     )
                 )
             enriched.append((materialized, hint))
-        if enriched and bool(self._parsed.attach_mask_artifacts):
-            out_packet = set_image_key(
-                out_packet,
-                key="mask",
-                artifact_name=enriched[0][0].mask_artifact_name,
-            )
         return out_packet, enriched
 
     def _serialize_contract_instance(self, instance: SegmentationInstance) -> dict[str, Any]:
@@ -464,10 +463,9 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
         return replace(packet, payload=payload, metadata=metadata)
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
-        _image_key, selected_artifact_name, frame = resolve_image_artifact_for_data(
+        selected_artifact_name, frame = resolve_image_artifact_for_data(
             packet,
-            input_with_fallback=self._parsed.input_with_fallback,
-            fallback_to_stream_frame=bool(self._parsed.fallback_to_stream_frame),
+            input_artifact_name=self._parsed.input_artifact_name,
         )
         if frame is None:
             return [packet]
@@ -484,7 +482,12 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
             categories=self._categories_set or None,
             concurrency_key=concurrency_key,
         )
-        instances = self._normalize_instances(raw_instances, packet=packet, manifest=manifest)
+        instances = self._normalize_instances(
+            raw_instances,
+            packet=packet,
+            manifest=manifest,
+            selected_artifact_name=selected_artifact_name,
+        )
         selected = self._select_instances(packet, hints=hints, instances=instances)
         packet_with_masks, materialized = self._materialize_instances(
             packet,

@@ -34,8 +34,8 @@ def test_yolo_detection_operator_annotate_mode_passes_through_frames() -> None:
             stream_id="camera:test",
             payload={"frame_width": 200, "frame_height": 100},
             artifacts={
-                "frame_original": Artifact(name="frame_original", data=object(), mime_type="image/raw"),
-                "frame": Artifact(name="frame", data=object(), mime_type="image/raw"),
+                "main": Artifact(name="main", data=object(), mime_type="image/raw"),
+                "aux": Artifact(name="aux", data=object(), mime_type="image/raw"),
             },
         )
 
@@ -81,7 +81,7 @@ def test_yolo_detection_operator_annotate_mode_emits_even_without_detections() -
         packet = Packet.create(
             stream_id="camera:test",
             payload={"frame_width": 200, "frame_height": 100},
-            artifacts={"frame_original": Artifact(name="frame_original", data=object(), mime_type="image/raw")},
+            artifacts={"main": Artifact(name="main", data=object(), mime_type="image/raw")},
         )
 
         out_packets = await runtime.process_packet(packet, _Context())
@@ -124,7 +124,7 @@ def test_yolo_tracking_operator_annotate_mode_passes_through_frames() -> None:
         packet = Packet.create(
             stream_id="camera:test",
             payload={"frame_width": 200, "frame_height": 100},
-            artifacts={"frame_original": Artifact(name="frame_original", data=object(), mime_type="image/raw")},
+            artifacts={"main": Artifact(name="main", data=object(), mime_type="image/raw")},
             metadata={"motion_gate_open": True},
         )
 
@@ -161,7 +161,7 @@ def test_legacy_yolo_runtime_requires_explicit_backend_factory() -> None:
         packet = Packet.create(
             stream_id="camera:test",
             payload={"frame_width": 200, "frame_height": 100},
-            artifacts={"frame_original": Artifact(name="frame_original", data=object(), mime_type="image/raw")},
+            artifacts={"main": Artifact(name="main", data=object(), mime_type="image/raw")},
         )
         runtime = ObjectDetectionYOLORuntime({"emit_mode": "annotate"}, PipelineRuntimeDependencies())
         with pytest.raises(RuntimeError, match="no longer ship with a first-party Ultralytics backend"):

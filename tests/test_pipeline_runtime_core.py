@@ -11,9 +11,9 @@ def test_packet_creation_and_artifact_attachment() -> None:
     assert packet.lifecycle == Lifecycle.OPEN
     assert packet.packet_id
 
-    enriched = packet.with_artifact(Artifact(name="frame_original", reference="files/cam/1.jpg"))
-    assert "frame_original" in enriched.artifacts
-    assert enriched.artifacts["frame_original"].reference == "files/cam/1.jpg"
+    enriched = packet.with_artifact(Artifact(name="main", reference="files/cam/1.jpg"))
+    assert "main" in enriched.artifacts
+    assert enriched.artifacts["main"].reference == "files/cam/1.jpg"
     assert enriched.packet_id == packet.packet_id
 
 

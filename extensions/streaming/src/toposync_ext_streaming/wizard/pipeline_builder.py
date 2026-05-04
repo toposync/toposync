@@ -203,7 +203,6 @@ def build_streaming_wizard_graph(
             "operator": "stream.publish_video",
             "config": {
                 "transmission_id": transmission_id,
-                "frame_with_fallback": ["mask", "frame", "best_frame", "segmented", "frame_original"],
                 "resize_mode": resize_mode,
                 "writer_priority": int(writer_priority),
                 "bypass_mode": bypass_mode,

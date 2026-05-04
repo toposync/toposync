@@ -382,8 +382,8 @@ export function CameraPipelineWizardModal({
               <div className="field">
                 <label className="label">{t("ext.cameras.wizard.summary", {}, "Summary")}</label>
                 <div className="cardMeta" style={{ lineHeight: 1.5 }}>
-                  {preset === "people" ? t("ext.cameras.wizard.summary.people", {}, "Detect people and notify (5s throttle, segmented image).") : null}
-                  {preset === "pets" ? t("ext.cameras.wizard.summary.pets", {}, "Detect pets (cat/dog) and notify (throttle, segmented image).") : null}
+                  {preset === "people" ? t("ext.cameras.wizard.summary.people", {}, "Detect people and notify (5s throttle, main image).") : null}
+                  {preset === "pets" ? t("ext.cameras.wizard.summary.pets", {}, "Detect pets (cat/dog) and notify (main image).") : null}
                   {preset === "vehicles_stopped"
                     ? t("ext.cameras.wizard.summary.vehicles", {}, "Detect vehicles that stop (mapping required), optionally restrict by area, and notify (high priority).")
                     : null}

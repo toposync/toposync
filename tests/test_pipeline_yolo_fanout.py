@@ -82,14 +82,14 @@ class _FrameSourceRuntime(SourceOperatorRuntime):
             lifecycle=Lifecycle.UPDATE,
             payload={"frame_index": self._sequence},
             artifacts={
-                "frame_original": Artifact(
-                    name="frame_original", data=frame, mime_type="application/json"
+                "main": Artifact(
+                    name="main", data=frame, mime_type="application/json"
                 ),
-                "frame": Artifact(
-                    name="frame",
+                "aux": Artifact(
+                    name="aux",
                     data=frame,
                     mime_type="application/json",
-                    metadata={"derived_from": "frame_original"},
+                    metadata={"derived_from": "main"},
                 ),
             },
             metadata={"source": "test.frame_source", "motion_gate_open": True},

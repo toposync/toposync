@@ -53,7 +53,7 @@ function formatDurationCompact(secondsRaw: unknown): string | null {
 }
 
 function preferredArtifactNames(): string[] {
-  return ["best_frame", "face", "segmented", "frame", "frame_original"];
+  return ["main", "face"];
 }
 
 function resolveArtifacts(payload: Record<string, unknown>): Record<string, string> {
@@ -234,17 +234,17 @@ function createPipelines3DOverlay(
 
   // ── Marker: pulse rings on the ground + map-pin shape + soft halo ──
   const PIN_HEX = 0xff3b81;
-  const HEAD_RADIUS = 0.07;
-  const CONE_BASE_RADIUS = 0.05;
-  const CONE_HEIGHT = 0.16;
+  const HEAD_RADIUS = 0.17;
+  const CONE_BASE_RADIUS = 0.12;
+  const CONE_HEIGHT = 0.40;
   const HEAD_CENTER_Y = CONE_HEIGHT + Math.sqrt(HEAD_RADIUS * HEAD_RADIUS - CONE_BASE_RADIUS * CONE_BASE_RADIUS);
-  const HALO_BASE_SCALE = 0.34;
+  const HALO_BASE_SCALE = 0.82;
   const RING_DURATION = 1.7;
 
   const markerGroup = new THREE.Group();
   markerGroup.frustumCulled = false;
 
-  const ringGeom = new THREE.RingGeometry(0.10, 0.13, 48);
+  const ringGeom = new THREE.RingGeometry(0.24, 0.31, 48);
   const pulseRings: { mesh: import("three").Mesh; mat: import("three").MeshBasicMaterial; phase: number }[] = [];
   for (let i = 0; i < 2; i += 1) {
     const mat = new THREE.MeshBasicMaterial({
@@ -286,8 +286,8 @@ function createPipelines3DOverlay(
   sphere.renderOrder = 10_002;
   markerGroup.add(sphere);
 
-  const coreGeom = new THREE.SphereGeometry(0.024, 16, 16);
-  coreGeom.translate(0, HEAD_CENTER_Y + 0.026, 0);
+  const coreGeom = new THREE.SphereGeometry(0.058, 16, 16);
+  coreGeom.translate(0, HEAD_CENTER_Y + 0.062, 0);
   const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 });
   coreMat.depthTest = false;
   coreMat.depthWrite = false;

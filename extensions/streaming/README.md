@@ -319,7 +319,7 @@ Config (as implemented):
 ```json
 {
   "transmission_id": "uuid",
-  "frame_with_fallback": ["frame", "best_frame", "segmented", "frame_original"],
+  "input_artifact_name": "",
   "resize_mode": "contain",
   "writer_priority": 0,
   "bypass_mode": "auto"
@@ -329,8 +329,8 @@ Config (as implemented):
 Notes:
 - `resize_mode` exists in the operator config, but resizing is currently applied by the writer bridge based on output settings.
 - Artifact selection:
-  - Iterates `frame_with_fallback` and selects the first artifact that contains an image.
-  - Supports payload image mapping (`packet.payload.images`) when present.
+  - Reads `input_artifact_name` exactly, or `main` when it is empty.
+  - There is no artifact fallback or payload image mapping.
   - Normalizes frames to `uint8` BGR and contiguous memory.
 - Lifecycle handling:
   - On `close`, the writer is marked closed and becomes ineligible for arbitration.

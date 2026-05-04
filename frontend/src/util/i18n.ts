@@ -544,7 +544,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.camera.camera_mapping": "World mapping",
     "core.ui.pipelines.operator_name.camera.area_restriction": "Area restriction",
     "core.ui.pipelines.operator_name.camera.velocity_estimation": "Speed estimation",
-    "core.ui.pipelines.operator_name.camera.best_frame_selector": "Best frame",
     "core.ui.pipelines.operator_name.camera.image_adjust": "Image adjustment",
     "core.ui.pipelines.operator_name.camera.image_resize": "Resize images",
     "core.ui.pipelines.operator_name.core.throttle": "Rate limit",
@@ -609,8 +608,6 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Labels or filters packets according to named world areas.",
     "core.ui.pipelines.operator_description.camera.velocity_estimation":
       "Estimates object speed from mapped world coordinates over time.",
-    "core.ui.pipelines.operator_description.camera.best_frame_selector":
-      "Keeps the most useful frame for each tracked object, typically the sharpest or most centered one.",
     "core.ui.pipelines.operator_description.camera.image_adjust":
       "Adjusts brightness, contrast, saturation, and gamma of the selected image artifact.",
     "core.ui.pipelines.operator_description.camera.image_resize":
@@ -630,14 +627,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_description.stream.publish_video":
       "Sends frames from this pipeline to a configured video transmission.",
 
-    "core.ui.pipelines.artifacts.frame": "Frame",
-    "core.ui.pipelines.artifacts.frame_original": "Full frame",
+    "core.ui.pipelines.artifacts.main": "Main",
     "core.ui.pipelines.artifacts.frame_cropped": "Cropped frame",
     "core.ui.pipelines.artifacts.frame_adjusted": "Adjusted frame",
-    "core.ui.pipelines.artifacts.best_frame": "Best frame",
-    "core.ui.pipelines.artifacts.segmented": "Segmented",
-    "core.ui.pipelines.artifacts.treated": "Treated",
-    "core.ui.pipelines.artifacts.original": "Original",
     "core.ui.pipelines.artifacts.face": "Face",
     "core.ui.pipelines.artifacts.pose": "Pose",
 
@@ -741,22 +733,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.filter.hint":
       "Tip: place Filter before camera.source only when you are filtering gate packets (schedule, HA, etc.).",
 
-    "core.ui.pipelines.panels.object_segmentation.quality": "Quality",
-    "core.ui.pipelines.panels.object_segmentation.quality.best": "Best (crop from original)",
-    "core.ui.pipelines.panels.object_segmentation.quality.fast": "Fast (crop from treated)",
-    "core.ui.pipelines.panels.object_segmentation.quality_hint":
-      "Uses the detection bbox (normalized) and crops on the selected image. Best quality uses the full original frame even if detection runs on a resized treated frame.",
-    "core.ui.pipelines.panels.object_segmentation.input_images": "Input images (fallback order)",
-    "core.ui.pipelines.panels.object_segmentation.input_images_placeholder": "Original → Treated",
-    "core.ui.pipelines.panels.object_segmentation.input_images_hint":
-      "Advanced: controls which image is used for cropping when available. Recommended: original,treated.",
     "core.ui.pipelines.panels.object_segmentation.padding": "Padding ratio",
     "core.ui.pipelines.panels.object_segmentation.min_crop_size_px": "Min crop size (px)",
     "core.ui.pipelines.panels.object_segmentation.hint":
-      "Produces a 'segmented' image artifact by cropping the object bbox. If the object is far away, the crop may still be small (because it occupies few pixels).",
-    "core.ui.pipelines.panels.object_segmentation.output_artifact_name": "Output artifact name",
+      "Crops the object bbox into the main image. If the object is far away, the crop may still be small because it occupies few pixels.",
     "core.ui.pipelines.panels.object_segmentation.bbox_field": "BBox field",
-    "core.ui.pipelines.panels.object_segmentation.fallback_stream_frame": "Fallback to stream frame",
 
     "core.ui.pipelines.panels.throttle.interval_seconds": "Interval (seconds)",
     "core.ui.pipelines.panels.throttle.mode": "Mode",
@@ -802,15 +783,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.debug.snapshot_interval_seconds": "Snapshot interval (seconds)",
     "core.ui.pipelines.panels.debug.snapshot_interval_hint": "Lower values update the preview more often (higher CPU/disk).",
 
-    "core.ui.pipelines.panels.store_images.artifacts": "Artifacts",
-    "core.ui.pipelines.panels.store_images.artifacts_placeholder": "Full frame",
-    "core.ui.pipelines.panels.store_images.image_with_fallback": "Image (fallback order)",
-    "core.ui.pipelines.panels.store_images.image_with_fallback_placeholder": "Best frame → Full frame → Treated → Segmented",
     "core.ui.pipelines.panels.store_images.hint":
       "Stores one image locally on the origin and attaches a reference. Add this step more than once to store multiple images.",
-    "core.ui.pipelines.panels.store_images.using_explicit_artifact_names":
-      "This step is using explicit artifact_names (advanced). Fallback selection is ignored until you clear them.",
-    "core.ui.pipelines.panels.store_images.use_fallback_button": "Use fallback (recommended)",
     "core.ui.pipelines.panels.store_images.subdir": "Subdir",
     "core.ui.pipelines.panels.store_images.format": "Format",
     "core.ui.pipelines.panels.store_images.jpeg_quality": "Quality",
@@ -833,8 +807,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.notify.update_interval_seconds": "Update interval (seconds)",
     "core.ui.pipelines.panels.notify.update_interval_hint":
       "Avoids spamming UI updates while an event is open. Set to 0 to emit every change.",
-    "core.ui.pipelines.panels.notify.thumbnail_fallback": "Thumbnail fallback",
-    "core.ui.pipelines.panels.notify.thumbnail_placeholder": "Best frame → Full frame → Treated → Segmented",
     "core.ui.pipelines.panels.notify.thumbnail_hint":
       "Registers notifications only (never stores images). To include images, add Store Images before this step.",
     "core.ui.pipelines.panels.notify.notification_type": "Notification type",
@@ -892,8 +864,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.publish_video.transmission_empty": "No transmissions found. Create one in Settings > Streaming.",
     "core.ui.pipelines.panels.publish_video.transmission_hint": "The selected transmission receives video frames from this pipeline step.",
     "core.ui.pipelines.panels.publish_video.transmission_disabled_suffix": "disabled",
-    "core.ui.pipelines.panels.publish_video.frame_fallback": "Frame fallback order",
-    "core.ui.pipelines.panels.publish_video.frame_fallback_placeholder": "Frame → Best frame → Segmented → Full frame",
     "core.ui.pipelines.panels.publish_video.resize_mode": "Resize mode",
     "core.ui.pipelines.panels.publish_video.resize_mode.contain": "Contain (recommended)",
     "core.ui.pipelines.panels.publish_video.resize_mode.none": "No resize",
@@ -963,8 +933,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.motion_gate.activation_frames": "Activation frames",
     "core.ui.pipelines.panels.motion_gate.activation_frames_hint": "Requires this many consecutive active frames to open the gate.",
     "core.ui.pipelines.panels.motion_gate.emit_when_idle": "Emit when idle",
-    "core.ui.pipelines.panels.motion_gate.input_with_fallback": "Input artifacts (with fallback)",
-    "core.ui.pipelines.panels.motion_gate.fallback_to_stream_frame": "Fallback to stream frame",
     "core.ui.pipelines.panels.motion_gate.mask.hint": "Optional ROI mask to restrict where motion is measured.",
     "core.ui.pipelines.panels.motion_gate.mask.enabled": "Enable mask",
     "core.ui.pipelines.panels.motion_gate.mask.mode": "Mask mode",
@@ -1026,7 +994,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.motion_sample_bg.max_blobs": "Max blobs",
 
     "core.ui.pipelines.panels.image_crop.hint":
-      "Crops the frame for downstream analysis (vision). The original full frame is preserved as original.",
+      "Crops the main image for downstream analysis and keeps the result as the working image.",
     "core.ui.pipelines.panels.image_crop.units": "Units",
     "core.ui.pipelines.panels.image_crop.units.percent": "Percent (0–100)",
     "core.ui.pipelines.panels.image_crop.units.pixels": "Pixels",
@@ -1039,7 +1007,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_crop.reset": "Reset",
     "core.ui.pipelines.panels.image_crop.output_artifact_name": "Output artifact name",
     "core.ui.pipelines.panels.image_crop.min_crop_size_px": "Min crop size (px)",
-    "core.ui.pipelines.panels.image_crop.use_cropped_frame": "Use cropped frame for downstream",
 
     "core.ui.pipelines.panels.image_privacy.hint":
       "Protects a fixed region of the frame with solid fill or blur before downstream analysis, storage, or video publishing.",
@@ -1060,14 +1027,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_privacy.region_missing": "No privacy region defined yet.",
     "core.ui.pipelines.panels.image_privacy.region_ready": "Privacy region ready.",
     "core.ui.pipelines.panels.image_privacy.region_hint": "Use drawing for quick placement, then fine-tune with coordinates if needed.",
-    "core.ui.pipelines.panels.image_privacy.input_artifacts": "Input artifacts (fallback order)",
-    "core.ui.pipelines.panels.image_privacy.input_artifacts_placeholder": "Treated → Original",
-    "core.ui.pipelines.panels.image_privacy.input_artifacts_hint":
-      "Advanced: by default this operator acts on the current stream frame and falls back to the original.",
-    "core.ui.pipelines.panels.image_privacy.output_artifact_name": "Output artifact name",
     "core.ui.pipelines.panels.image_privacy.min_region_size_px": "Min region size (px)",
-    "core.ui.pipelines.panels.image_privacy.apply_stream_frame": "Apply to stream frame",
-    "core.ui.pipelines.panels.image_privacy.fallback_stream_frame": "Fallback to stream frame",
     "core.ui.pipelines.panels.image_privacy.preserve_alpha": "Preserve alpha channel",
     "core.ui.pipelines.panels.artifact_privacy.hint":
       "Use this after image classification when the packet should continue without carrying image artifacts to store, notify, or publish steps.",
@@ -1075,7 +1035,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.artifact_privacy.expression_hint":
       "Typical rule: payload.classification_label_normalized in [\"nsfw\"] and payload.classification_score >= 0.85",
     "core.ui.pipelines.panels.artifact_privacy.artifacts": "Image artifacts to strip",
-    "core.ui.pipelines.panels.artifact_privacy.artifacts_placeholder": "Best frame, Original, Treated, Segmented",
     "core.ui.pipelines.panels.artifact_privacy.artifacts_hint":
       "Remove every image artifact that should stop before store, notify, or publish steps.",
     "core.ui.pipelines.panels.artifact_privacy.invert": "Invert rule",
@@ -1111,7 +1070,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_draw.snapshot_meta": "{{w}}×{{h}} • Units: {{units}}",
 
     "core.ui.pipelines.panels.image_perspective_crop.hint":
-      "Rectifies a quadrilateral region to a frontal view (homography). Useful for planar surfaces; detections are mapped back to the original frame.",
+      "Rectifies a quadrilateral region to a frontal view (homography). Useful for planar surfaces; downstream steps keep using the main image.",
     "core.ui.pipelines.panels.image_perspective_crop.units": "Units",
     "core.ui.pipelines.panels.image_perspective_crop.units.percent": "Percent (0–100)",
     "core.ui.pipelines.panels.image_perspective_crop.units.pixels": "Pixels",
@@ -1142,11 +1101,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_perspective_crop.border_mode.constant": "Constant",
     "core.ui.pipelines.panels.image_perspective_crop.border_mode.replicate": "Replicate",
     "core.ui.pipelines.panels.image_perspective_crop.border_value": "Border value",
-    "core.ui.pipelines.panels.image_perspective_crop.use_warped_frame": "Use warped frame for downstream",
-
-    "core.ui.pipelines.panels.image_adjust.input_artifacts": "Input artifacts (fallback order)",
-    "core.ui.pipelines.panels.image_adjust.input_artifacts_placeholder": "Full frame",
-    "core.ui.pipelines.panels.image_adjust.input_artifacts_hint": "Uses the first available image. Keep original as fallback.",
     "core.ui.pipelines.panels.image_adjust.saturation": "Saturation",
     "core.ui.pipelines.panels.image_adjust.brightness": "Brightness",
     "core.ui.pipelines.panels.image_adjust.contrast": "Contrast",
@@ -1154,12 +1108,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_adjust.brightness_hint":
       "Brightness is an additive offset in normalized space (e.g. 0.10 = +10%).",
     "core.ui.pipelines.panels.image_adjust.output_artifact_name": "Output artifact name",
-    "core.ui.pipelines.panels.image_adjust.apply_stream_frame": "Apply to stream frame",
-    "core.ui.pipelines.panels.image_adjust.fallback_stream_frame": "Fallback to stream frame",
     "core.ui.pipelines.panels.image_adjust.preserve_alpha": "Preserve alpha channel",
 
     "core.ui.pipelines.panels.image_resize.artifacts": "Artifacts",
-    "core.ui.pipelines.panels.image_resize.artifacts_placeholder": "Full frame",
+    "core.ui.pipelines.panels.image_resize.artifacts_placeholder": "main",
     "core.ui.pipelines.panels.image_resize.hint":
       "Resizes artifacts in-memory before storage to keep file sizes reasonable.",
     "core.ui.pipelines.panels.image_resize.max_edge_px": "Max edge (px)",
@@ -1476,26 +1428,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.inference_interval_detection": "Analysis interval (seconds)",
     "core.ui.pipelines.panels.yolo.inference_interval_hint":
       "Higher values reduce machine load by analyzing fewer frames. Use 0 for every frame.",
-    "core.ui.pipelines.panels.yolo.input_source": "Image to analyze",
-    "core.ui.pipelines.panels.yolo.input_source_hint":
-      "In most pipelines, keep the adjusted frame so detection and segmentation follow the same crop and preprocessing used upstream.",
-    "core.ui.pipelines.panels.yolo.input_preset.treated_first": "Adjusted frame (recommended)",
-    "core.ui.pipelines.panels.yolo.input_preset.treated_first_hint":
-      "Uses the processed image first and falls back to the original frame only when needed.",
-    "core.ui.pipelines.panels.yolo.input_preset.original_first": "Original camera frame",
-    "core.ui.pipelines.panels.yolo.input_preset.original_first_hint":
-      "Prefers the raw camera image. Use this when upstream image adjustments are hurting model quality.",
-    "core.ui.pipelines.panels.yolo.input_preset.best_frame_first": "Best frame when available",
-    "core.ui.pipelines.panels.yolo.input_preset.best_frame_first_hint":
-      "Prefers a previously selected best frame and falls back to the adjusted frame, then the original one.",
-    "core.ui.pipelines.panels.yolo.input_preset.custom_current": "Advanced custom order: {{value}}",
-    "core.ui.pipelines.panels.yolo.input_with_fallback": "Advanced image order",
-    "core.ui.pipelines.panels.yolo.input_with_fallback_hint":
-      "Comma-separated internal image keys or artifact names. Default: treated,original.",
     "core.ui.pipelines.panels.yolo.detect_annotate_only_hint":
       "vision.detect keeps results attached to the frame. Add vision.track when you need object lifecycle events.",
-    "core.ui.pipelines.panels.yolo.segmentation_input_with_fallback_hint":
-      "Comma-separated internal image keys or artifact names. Use treated,original in most pipelines so masks follow the same preprocessed frame used upstream.",
     "core.ui.pipelines.panels.yolo.classification_top_k": "Labels kept on packet",
     "core.ui.pipelines.panels.yolo.classification_top_k_hint":
       "Keep only the highest-confidence labels in payload. Use a later core.filter if you want to allow or block specific labels.",
@@ -1519,8 +1453,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.classification_privacy.insert_strip": "Insert metadata-only step",
     "core.ui.pipelines.panels.yolo.classification_privacy.action_hint":
       "The first preset inserts core.filter. The second inserts image-artifact stripping right after this classification step.",
-    "core.ui.pipelines.panels.yolo.classification_input_with_fallback_hint":
-      "Comma-separated internal image keys or artifact names. Use treated,original in most pipelines, or best_frame first when classifying a selected snapshot.",
     "core.ui.pipelines.panels.yolo.max_instances_per_frame": "Max instances per frame",
     "core.ui.pipelines.panels.yolo.max_instances_per_frame_hint":
       "Hard cap after segmentation and optional upstream reconciliation. Lower values reduce downstream artifact/storage pressure.",
@@ -2299,7 +2231,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.camera.camera_mapping": "Mapeamento para o mundo",
     "core.ui.pipelines.operator_name.camera.area_restriction": "Restrição de área",
     "core.ui.pipelines.operator_name.camera.velocity_estimation": "Estimativa de velocidade",
-    "core.ui.pipelines.operator_name.camera.best_frame_selector": "Seleção do melhor frame",
     "core.ui.pipelines.operator_name.camera.image_adjust": "Ajuste de imagem",
     "core.ui.pipelines.operator_name.camera.image_resize": "Redimensionar imagens",
     "core.ui.pipelines.operator_name.core.throttle": "Limite de frequência",
@@ -2364,8 +2295,6 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Rotula ou filtra pacotes de acordo com áreas nomeadas no mundo.",
     "core.ui.pipelines.operator_description.camera.velocity_estimation":
       "Estima a velocidade do objeto ao longo do tempo a partir das coordenadas no mundo.",
-    "core.ui.pipelines.operator_description.camera.best_frame_selector":
-      "Guarda o frame mais útil de cada objeto rastreado, normalmente o mais nítido ou melhor enquadrado.",
     "core.ui.pipelines.operator_description.camera.image_adjust":
       "Ajusta brilho, contraste, saturação e gamma do artifact de imagem selecionado.",
     "core.ui.pipelines.operator_description.camera.image_resize":
@@ -2385,14 +2314,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_description.stream.publish_video":
       "Envia os frames deste fluxo para uma transmissão de vídeo configurada.",
 
-    "core.ui.pipelines.artifacts.frame": "Frame",
-    "core.ui.pipelines.artifacts.frame_original": "Frame completo",
+    "core.ui.pipelines.artifacts.main": "Principal",
     "core.ui.pipelines.artifacts.frame_cropped": "Frame recortado",
     "core.ui.pipelines.artifacts.frame_adjusted": "Frame ajustado",
-    "core.ui.pipelines.artifacts.best_frame": "Melhor frame",
-    "core.ui.pipelines.artifacts.segmented": "Segmentado",
-    "core.ui.pipelines.artifacts.treated": "Tratado",
-    "core.ui.pipelines.artifacts.original": "Original",
     "core.ui.pipelines.artifacts.face": "Rosto",
     "core.ui.pipelines.artifacts.pose": "Pose",
 
@@ -2497,22 +2421,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.filter.hint":
       "Dica: coloque Filter antes de camera.source apenas quando estiver filtrando pacotes de gate (schedule, HA, etc.).",
 
-    "core.ui.pipelines.panels.object_segmentation.quality": "Qualidade",
-    "core.ui.pipelines.panels.object_segmentation.quality.best": "Melhor (recortar no original)",
-    "core.ui.pipelines.panels.object_segmentation.quality.fast": "Rápido (recortar no tratado)",
-    "core.ui.pipelines.panels.object_segmentation.quality_hint":
-      "Usa a bbox da detecção (normalizada) e recorta na imagem selecionada. Melhor qualidade usa o frame original mesmo se a detecção rodar em um tratado redimensionado.",
-    "core.ui.pipelines.panels.object_segmentation.input_images": "Imagens de entrada (ordem de fallback)",
-    "core.ui.pipelines.panels.object_segmentation.input_images_placeholder": "Original → Tratado",
-    "core.ui.pipelines.panels.object_segmentation.input_images_hint":
-      "Avançado: controla qual imagem é usada para o recorte quando disponível. Recomendado: original,treated.",
     "core.ui.pipelines.panels.object_segmentation.padding": "Padding",
     "core.ui.pipelines.panels.object_segmentation.min_crop_size_px": "Tamanho mínimo do recorte (px)",
     "core.ui.pipelines.panels.object_segmentation.hint":
-      "Produz um artefato de imagem 'segmented' recortando a bbox do objeto. Se o objeto estiver longe, o recorte pode ser pequeno (porque ele ocupa poucos pixels).",
-    "core.ui.pipelines.panels.object_segmentation.output_artifact_name": "Nome do artefato de saída",
+      "Recorta a bbox do objeto na imagem principal. Se o objeto estiver longe, o recorte pode ser pequeno porque ele ocupa poucos pixels.",
     "core.ui.pipelines.panels.object_segmentation.bbox_field": "Campo de bbox",
-    "core.ui.pipelines.panels.object_segmentation.fallback_stream_frame": "Fallback para frame do fluxo",
 
     "core.ui.pipelines.panels.throttle.interval_seconds": "Intervalo (segundos)",
     "core.ui.pipelines.panels.throttle.mode": "Modo",
@@ -2558,15 +2471,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.debug.snapshot_interval_seconds": "Intervalo do snapshot (segundos)",
     "core.ui.pipelines.panels.debug.snapshot_interval_hint": "Valores menores atualizam a prévia mais frequentemente (mais CPU/disco).",
 
-    "core.ui.pipelines.panels.store_images.artifacts": "Artefatos",
-    "core.ui.pipelines.panels.store_images.artifacts_placeholder": "Frame completo",
-    "core.ui.pipelines.panels.store_images.image_with_fallback": "Imagem (ordem de fallback)",
-    "core.ui.pipelines.panels.store_images.image_with_fallback_placeholder": "Melhor frame → Frame completo → Tratado → Segmentado",
     "core.ui.pipelines.panels.store_images.hint":
       "Salva uma imagem localmente na origem e anexa a referência. Adicione esta etapa mais de uma vez para salvar várias imagens.",
-    "core.ui.pipelines.panels.store_images.using_explicit_artifact_names":
-      "Esta etapa está usando artifact_names explícitos (avançado). A seleção de fallback é ignorada até você limpá-los.",
-    "core.ui.pipelines.panels.store_images.use_fallback_button": "Usar fallback (recomendado)",
     "core.ui.pipelines.panels.store_images.subdir": "Subdiretório",
     "core.ui.pipelines.panels.store_images.format": "Formato",
     "core.ui.pipelines.panels.store_images.jpeg_quality": "Qualidade",
@@ -2589,8 +2495,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.notify.update_interval_seconds": "Intervalo de atualização (segundos)",
     "core.ui.pipelines.panels.notify.update_interval_hint":
       "Evita spam de atualizações na UI enquanto o evento está aberto. Use 0 para emitir toda mudança.",
-    "core.ui.pipelines.panels.notify.thumbnail_fallback": "Fallback de miniatura",
-    "core.ui.pipelines.panels.notify.thumbnail_placeholder": "Melhor frame → Frame completo → Tratado → Segmentado",
     "core.ui.pipelines.panels.notify.thumbnail_hint":
       "Apenas registra notificações (nunca armazena imagens). Para incluir imagens, adicione Store Images antes desta etapa.",
     "core.ui.pipelines.panels.notify.notification_type": "Tipo de notificação",
@@ -2650,8 +2554,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.publish_video.transmission_empty": "Nenhuma transmissão encontrada. Crie uma em Configurações > Streaming.",
     "core.ui.pipelines.panels.publish_video.transmission_hint": "A transmissão selecionada recebe os frames de vídeo desta etapa do fluxo.",
     "core.ui.pipelines.panels.publish_video.transmission_disabled_suffix": "desativada",
-    "core.ui.pipelines.panels.publish_video.frame_fallback": "Ordem de fallback do frame",
-    "core.ui.pipelines.panels.publish_video.frame_fallback_placeholder": "Frame → Melhor frame → Segmentado → Frame completo",
     "core.ui.pipelines.panels.publish_video.resize_mode": "Modo de redimensionamento",
     "core.ui.pipelines.panels.publish_video.resize_mode.contain": "Contain (recomendado)",
     "core.ui.pipelines.panels.publish_video.resize_mode.none": "Sem redimensionar",
@@ -2719,8 +2621,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.motion_gate.activation_frames": "Frames de ativação",
     "core.ui.pipelines.panels.motion_gate.activation_frames_hint": "Exige este número de frames ativos consecutivos para abrir o gate.",
     "core.ui.pipelines.panels.motion_gate.emit_when_idle": "Emitir quando inativo",
-    "core.ui.pipelines.panels.motion_gate.input_with_fallback": "Artefatos de entrada (com fallback)",
-    "core.ui.pipelines.panels.motion_gate.fallback_to_stream_frame": "Fallback para o frame do stream",
     "core.ui.pipelines.panels.motion_gate.mask.hint": "Máscara opcional para restringir onde o movimento é medido.",
     "core.ui.pipelines.panels.motion_gate.mask.enabled": "Ativar máscara",
     "core.ui.pipelines.panels.motion_gate.mask.mode": "Modo da máscara",
@@ -2782,7 +2682,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.motion_sample_bg.max_blobs": "Máximo de blobs",
 
     "core.ui.pipelines.panels.image_crop.hint":
-      "Recorta o frame para análise downstream (vision). O frame cheio original é preservado como original.",
+      "Recorta a imagem principal para análise downstream e mantém o resultado como imagem de trabalho.",
     "core.ui.pipelines.panels.image_crop.units": "Unidades",
     "core.ui.pipelines.panels.image_crop.units.percent": "Porcentagem (0–100)",
     "core.ui.pipelines.panels.image_crop.units.pixels": "Pixels",
@@ -2795,7 +2695,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_crop.reset": "Resetar",
     "core.ui.pipelines.panels.image_crop.output_artifact_name": "Nome do artefato de saída",
     "core.ui.pipelines.panels.image_crop.min_crop_size_px": "Tamanho mínimo do recorte (px)",
-    "core.ui.pipelines.panels.image_crop.use_cropped_frame": "Usar frame recortado no fluxo",
 
     "core.ui.pipelines.panels.image_privacy.hint":
       "Protege uma região fixa do frame com preenchimento sólido ou blur antes da análise, do armazenamento ou da publicação de vídeo.",
@@ -2816,14 +2715,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_privacy.region_missing": "Nenhuma região de privacidade definida ainda.",
     "core.ui.pipelines.panels.image_privacy.region_ready": "Região de privacidade pronta.",
     "core.ui.pipelines.panels.image_privacy.region_hint": "Use o desenho para posicionar rápido e depois refine pelas coordenadas, se precisar.",
-    "core.ui.pipelines.panels.image_privacy.input_artifacts": "Artefatos de entrada (ordem de fallback)",
-    "core.ui.pipelines.panels.image_privacy.input_artifacts_placeholder": "Tratado → Original",
-    "core.ui.pipelines.panels.image_privacy.input_artifacts_hint":
-      "Avançado: por padrão este operador atua no frame atual do stream e cai para o original se necessário.",
     "core.ui.pipelines.panels.image_privacy.output_artifact_name": "Nome do artefato de saída",
     "core.ui.pipelines.panels.image_privacy.min_region_size_px": "Tamanho mínimo da região (px)",
-    "core.ui.pipelines.panels.image_privacy.apply_stream_frame": "Aplicar no frame do stream",
-    "core.ui.pipelines.panels.image_privacy.fallback_stream_frame": "Fallback para o frame do stream",
     "core.ui.pipelines.panels.image_privacy.preserve_alpha": "Preservar canal alpha",
     "core.ui.pipelines.panels.artifact_privacy.hint":
       "Use isto depois da classificação de imagem quando o pacote deve seguir adiante sem carregar artefatos de imagem para store, notify ou publish.",
@@ -2831,7 +2724,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.artifact_privacy.expression_hint":
       "Regra típica: payload.classification_label_normalized in [\"nsfw\"] and payload.classification_score >= 0.85",
     "core.ui.pipelines.panels.artifact_privacy.artifacts": "Artefatos de imagem para remover",
-    "core.ui.pipelines.panels.artifact_privacy.artifacts_placeholder": "Melhor frame, Original, Tratado, Segmentado",
+    "core.ui.pipelines.panels.artifact_privacy.artifacts_placeholder": "main",
     "core.ui.pipelines.panels.artifact_privacy.artifacts_hint":
       "Remova todo artefato de imagem que deve parar antes de store, notify ou publish.",
     "core.ui.pipelines.panels.artifact_privacy.invert": "Inverter regra",
@@ -2871,7 +2764,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_draw.snapshot_meta": "{{w}}×{{h}} • Unidades: {{units}}",
 
     "core.ui.pipelines.panels.image_perspective_crop.hint":
-      "Retifica um quadrilátero para uma visão frontal (homografia). Útil para superfícies planas; detecções são reprojetadas para o frame original.",
+      "Retifica um quadrilátero para uma visão frontal (homografia). Útil para superfícies planas; os próximos passos continuam na imagem principal.",
     "core.ui.pipelines.panels.image_perspective_crop.units": "Unidades",
     "core.ui.pipelines.panels.image_perspective_crop.units.percent": "Porcentagem (0–100)",
     "core.ui.pipelines.panels.image_perspective_crop.units.pixels": "Pixels",
@@ -2902,11 +2795,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_perspective_crop.border_mode.constant": "Constante",
     "core.ui.pipelines.panels.image_perspective_crop.border_mode.replicate": "Replicar",
     "core.ui.pipelines.panels.image_perspective_crop.border_value": "Valor da borda",
-    "core.ui.pipelines.panels.image_perspective_crop.use_warped_frame": "Usar frame retificado no fluxo",
-
-    "core.ui.pipelines.panels.image_adjust.input_artifacts": "Artefatos de entrada (ordem de fallback)",
-    "core.ui.pipelines.panels.image_adjust.input_artifacts_placeholder": "Full frame",
-    "core.ui.pipelines.panels.image_adjust.input_artifacts_hint": "Usa a primeira imagem disponível. Mantenha original como fallback.",
     "core.ui.pipelines.panels.image_adjust.saturation": "Saturação",
     "core.ui.pipelines.panels.image_adjust.brightness": "Brilho",
     "core.ui.pipelines.panels.image_adjust.contrast": "Contraste",
@@ -2914,12 +2802,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_adjust.brightness_hint":
       "Brilho é um offset aditivo em espaço normalizado (ex.: 0.10 = +10%).",
     "core.ui.pipelines.panels.image_adjust.output_artifact_name": "Nome do artefato de saída",
-    "core.ui.pipelines.panels.image_adjust.apply_stream_frame": "Aplicar no frame do fluxo",
-    "core.ui.pipelines.panels.image_adjust.fallback_stream_frame": "Fallback para frame do fluxo",
     "core.ui.pipelines.panels.image_adjust.preserve_alpha": "Preservar canal alfa",
 
     "core.ui.pipelines.panels.image_resize.artifacts": "Artefatos",
-    "core.ui.pipelines.panels.image_resize.artifacts_placeholder": "Full frame",
+    "core.ui.pipelines.panels.image_resize.artifacts_placeholder": "main",
     "core.ui.pipelines.panels.image_resize.hint": "Redimensiona artefatos em memória antes do storage para manter tamanhos razoáveis.",
     "core.ui.pipelines.panels.image_resize.max_edge_px": "Maior borda (px)",
     "core.ui.pipelines.panels.image_resize.allow_upscale": "Permitir upscale",
@@ -3238,26 +3124,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.inference_interval_detection": "Intervalo de análise (segundos)",
     "core.ui.pipelines.panels.yolo.inference_interval_hint":
       "Valores maiores reduzem carga na máquina analisando menos frames. Use 0 para analisar todos.",
-    "core.ui.pipelines.panels.yolo.input_source": "Imagem para analisar",
-    "core.ui.pipelines.panels.yolo.input_source_hint":
-      "Na maioria dos fluxos, mantenha o frame ajustado para que detecção e segmentação sigam o mesmo crop e pré-processamento usados antes.",
-    "core.ui.pipelines.panels.yolo.input_preset.treated_first": "Frame ajustado (recomendado)",
-    "core.ui.pipelines.panels.yolo.input_preset.treated_first_hint":
-      "Usa primeiro a imagem já tratada e só cai para o frame original quando necessário.",
-    "core.ui.pipelines.panels.yolo.input_preset.original_first": "Frame original da câmera",
-    "core.ui.pipelines.panels.yolo.input_preset.original_first_hint":
-      "Prefere a imagem bruta da câmera. Use quando os ajustes a montante estiverem piorando a qualidade para o modelo.",
-    "core.ui.pipelines.panels.yolo.input_preset.best_frame_first": "Melhor frame quando disponível",
-    "core.ui.pipelines.panels.yolo.input_preset.best_frame_first_hint":
-      "Prefere um best frame já selecionado e cai para o frame ajustado, depois para o original.",
-    "core.ui.pipelines.panels.yolo.input_preset.custom_current": "Ordem personalizada avançada: {{value}}",
-    "core.ui.pipelines.panels.yolo.input_with_fallback": "Ordem avançada das imagens",
-    "core.ui.pipelines.panels.yolo.input_with_fallback_hint":
-      "Lista separada por vírgulas de image keys ou artifact names internos. Padrão: treated,original.",
     "core.ui.pipelines.panels.yolo.detect_annotate_only_hint":
       "vision.detect mantém os resultados anexados ao frame. Adicione vision.track quando precisar de eventos de ciclo de vida por objeto.",
-    "core.ui.pipelines.panels.yolo.segmentation_input_with_fallback_hint":
-      "Lista separada por vírgulas de image keys ou artifact names internos. Em geral use treated,original para que as máscaras sigam o mesmo frame pré-processado usado a montante.",
     "core.ui.pipelines.panels.yolo.classification_top_k": "Rótulos mantidos no pacote",
     "core.ui.pipelines.panels.yolo.classification_top_k_hint":
       "Mantém só os rótulos com maior confiança no payload. Use um core.filter depois se quiser permitir ou bloquear rótulos específicos.",
@@ -3281,8 +3149,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.classification_privacy.insert_strip": "Inserir só metadados",
     "core.ui.pipelines.panels.yolo.classification_privacy.action_hint":
       "O primeiro preset insere um core.filter. O segundo insere a remoção de artefatos de imagem logo após esta classificação.",
-    "core.ui.pipelines.panels.yolo.classification_input_with_fallback_hint":
-      "Lista separada por vírgulas de image keys ou artifact names internos. Em geral use treated,original, ou best_frame primeiro quando for classificar um snapshot escolhido.",
     "core.ui.pipelines.panels.yolo.max_instances_per_frame": "Máximo de instâncias por frame",
     "core.ui.pipelines.panels.yolo.max_instances_per_frame_hint":
       "Limite rígido após a segmentação e a conciliação opcional com upstream. Valores menores reduzem pressão de artifacts/armazenamento.",

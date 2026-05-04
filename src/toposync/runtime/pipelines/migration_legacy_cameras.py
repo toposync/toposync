@@ -122,15 +122,9 @@ def build_pipeline_from_legacy_camera_rule(
                     "config": {"field": "metadata.motion_gate_open"},
                 },
                 {
-                    "id": "best",
-                    "operator": "camera.best_frame_selector",
-                    "config": {},
-                },
-                {
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "artifact_names": ["best_frame", "frame_original"],
                         "subdir": "pipelines",
                         "format": "webp",
                         "drop_data_after_store": True,
@@ -145,7 +139,6 @@ def build_pipeline_from_legacy_camera_rule(
                         "description": "{{camera_name}}",
                         "priority": "medium",
                         "update_interval_seconds": 1.0,
-                        "thumbnail_with_fallback": ["best_frame", "frame_original"],
                     },
                 },
             ],
@@ -164,12 +157,6 @@ def build_pipeline_from_legacy_camera_rule(
                 },
                 {
                     "from": {"node": "lifecycle", "port": "out"},
-                    "to": {"node": "best", "port": "in"},
-                    "maxsize": 8,
-                    "drop_policy": "drop_oldest",
-                },
-                {
-                    "from": {"node": "best", "port": "out"},
                     "to": {"node": "store", "port": "in"},
                     "maxsize": 16,
                     "drop_policy": "drop_oldest",
@@ -225,15 +212,9 @@ def build_pipeline_from_legacy_camera_rule(
                 "config": {"tracker_id": "simple_iou_kalman"},
             },
             {
-                "id": "best",
-                "operator": "camera.best_frame_selector",
-                "config": {},
-            },
-            {
                 "id": "store",
                 "operator": "core.store_images",
                 "config": {
-                    "artifact_names": ["best_frame", "frame_original"],
                     "subdir": "pipelines",
                     "format": "webp",
                     "drop_data_after_store": True,
@@ -248,7 +229,6 @@ def build_pipeline_from_legacy_camera_rule(
                     "description": "Está em {{area_label}} ({{camera_name}})",
                     "priority": "medium",
                     "update_interval_seconds": 1.0,
-                    "thumbnail_with_fallback": ["best_frame", "frame_original"],
                 },
             },
         ],
@@ -273,12 +253,6 @@ def build_pipeline_from_legacy_camera_rule(
             },
             {
                 "from": {"node": "track", "port": "out"},
-                "to": {"node": "best", "port": "in"},
-                "maxsize": 8,
-                "drop_policy": "drop_oldest",
-            },
-            {
-                "from": {"node": "best", "port": "out"},
                 "to": {"node": "store", "port": "in"},
                 "maxsize": 16,
                 "drop_policy": "drop_oldest",

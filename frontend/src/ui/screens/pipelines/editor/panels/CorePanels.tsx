@@ -891,62 +891,8 @@ export function StoreImagesConfigCard({ config, showAdvanced, onUpdateConfig }: 
   const legacyKeepData = Boolean((config as any).keep_data ?? false);
   const dropDataAfterStore = dropDataRaw === undefined || dropDataRaw === null ? !legacyKeepData : Boolean(dropDataRaw);
 
-  const artifactNamesRaw = (config as any).artifact_names;
-  const artifactNames = Array.isArray(artifactNamesRaw)
-    ? artifactNamesRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
-    : [];
-
-  const fallbackRaw = String((config as any).image_with_fallback ?? "best_frame,original,treated,segmented");
-  const fallbackKeys = fallbackRaw
-    .split(",")
-    .map((value) => String(value || "").trim())
-    .filter((value) => value.length > 0);
-  const artifactSuggestions = buildArtifactSuggestions(t);
-  const selectedFallbackOptions = fallbackKeys.map(
-    (value) => artifactSuggestions.find((option) => option.value === value) ?? { value, label: value },
-  );
-
   return (
     <div className="pipelinesOperatorConfigCard">
-      {artifactNames.length > 0 ? (
-        <div className="pipelinesInlineError">
-          {t("core.ui.pipelines.panels.store_images.using_explicit_artifact_names")}
-          <div style={{ marginTop: 8 }}>
-            <button
-              className="chipButton"
-              type="button"
-              onClick={() =>
-                onUpdateConfig((prev) => ({
-                  ...prev,
-                  artifact_names: [],
-                  image_with_fallback: String((prev as any).image_with_fallback ?? "best_frame,original,treated,segmented"),
-                }))
-              }
-            >
-              {t("core.ui.pipelines.panels.store_images.use_fallback_button")}
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      <label className="pipelinesLabel">
-        <span>{t("core.ui.pipelines.panels.store_images.image_with_fallback")}</span>
-        <CreatableSelect<SelectOption, true>
-          isMulti
-          styles={pipelinesReactSelectStyles}
-          options={artifactSuggestions}
-          value={selectedFallbackOptions}
-          placeholder={t("core.ui.pipelines.panels.store_images.image_with_fallback_placeholder")}
-          onChange={(value: MultiValue<SelectOption>) => {
-            onUpdateConfig((prev) => ({
-              ...prev,
-              image_with_fallback: value.map((item) => item.value).join(","),
-              // Avoid subtle bugs: explicit artifact_names overrides fallback selection.
-              artifact_names: [],
-            }));
-          }}
-        />
-      </label>
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.store_images.hint")}</div>
 
       {showAdvanced ? (
@@ -1042,25 +988,6 @@ type PublishVideoProps = {
   onUpdateConfig: UpdateConfig;
 };
 
-const PUBLISH_VIDEO_DEFAULT_INPUTS = ["frame", "best_frame", "segmented", "frame_original"];
-
-function parsePublishVideoInputs(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    const out = value
-      .map((item) => String(item || "").trim())
-      .filter((item) => item.length > 0);
-    return [...new Set(out)];
-  }
-  if (typeof value === "string") {
-    const out = value
-      .split(",")
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0);
-    return [...new Set(out)];
-  }
-  return [];
-}
-
 export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }: PublishVideoProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const [transmissions, setTransmissions] = useState<StreamingTransmission[]>([]);
@@ -1098,11 +1025,6 @@ export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }:
   const bypassMode = bypassModeRaw === "force_on" || bypassModeRaw === "force_off" ? bypassModeRaw : "auto";
   const writerPriorityRaw = Number((config as any).writer_priority ?? 0);
   const writerPriority = Number.isFinite(writerPriorityRaw) ? writerPriorityRaw : 0;
-  const fallbackValues = (() => {
-    const parsed = parsePublishVideoInputs((config as any).frame_with_fallback);
-    return parsed.length > 0 ? parsed : PUBLISH_VIDEO_DEFAULT_INPUTS;
-  })();
-
   const transmissionOptions = useMemo<SelectOption[]>(() => {
     const disabledSuffix = t("core.ui.pipelines.panels.publish_video.transmission_disabled_suffix", {}, "disabled");
     return transmissions
@@ -1126,25 +1048,6 @@ export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }:
   const selectedTransmissionOption = transmissionId
     ? transmissionOptions.find((option) => option.value === transmissionId) ?? { value: transmissionId, label: transmissionId }
     : null;
-
-  const fallbackOptions = useMemo<SelectOption[]>(() => {
-    const options: SelectOption[] = [
-      { value: "frame", label: t("core.ui.pipelines.artifacts.frame", {}, "Frame") },
-      { value: "frame_original", label: t("core.ui.pipelines.artifacts.frame_original", {}, "Full frame") },
-      ...buildArtifactSuggestions(t),
-    ];
-    const deduped = new Map<string, SelectOption>();
-    for (const option of options) {
-      const key = String(option.value || "").trim();
-      if (!key || deduped.has(key)) continue;
-      deduped.set(key, option);
-    }
-    return [...deduped.values()];
-  }, [t]);
-
-  const selectedFallbackOptions = fallbackValues.map(
-    (value) => fallbackOptions.find((option) => option.value === value) ?? { value, label: value },
-  );
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -1170,26 +1073,6 @@ export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }:
       ) : (
         <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.publish_video.transmission_hint")}</div>
       )}
-
-      <label className="pipelinesLabel">
-        <span>{t("core.ui.pipelines.panels.publish_video.frame_fallback")}</span>
-        <CreatableSelect<SelectOption, true>
-          isMulti
-          styles={pipelinesReactSelectStyles}
-          options={fallbackOptions}
-          value={selectedFallbackOptions}
-          placeholder={t("core.ui.pipelines.panels.publish_video.frame_fallback_placeholder")}
-          onChange={(value: MultiValue<SelectOption>) => {
-            const nextValues = value
-              .map((item) => String(item.value || "").trim())
-              .filter((item) => item.length > 0);
-            onUpdateConfig((prev) => ({
-              ...prev,
-              frame_with_fallback: nextValues.length > 0 ? [...new Set(nextValues)] : [...PUBLISH_VIDEO_DEFAULT_INPUTS],
-            }));
-          }}
-        />
-      </label>
 
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.publish_video.resize_mode")}</span>
@@ -1259,13 +1142,6 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
   const updateIntervalSeconds = Number.isFinite(updateIntervalSecondsRaw) ? Math.max(0, Math.min(60, updateIntervalSecondsRaw)) : 1.0;
   const notificationType = textConfigValue((config as any).notification_type, "pipelines.event");
   const dedupeKeyTemplate = textConfigValue((config as any).dedupe_key_template);
-
-  const notifyFallbackRaw = (config as any).thumbnail_with_fallback;
-  const notifyFallback = Array.isArray(notifyFallbackRaw)
-    ? notifyFallbackRaw.map((value: any) => String(value || "").trim()).filter((value: string) => value.length > 0)
-    : ["best_frame", "original", "treated", "segmented"];
-  const notifySelectedFallbackOptions = notifyFallback.map((value: string) => ({ value, label: value }));
-  const artifactSuggestions = buildArtifactSuggestions(t);
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -1339,26 +1215,6 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
         />
       </label>
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.notify.update_interval_hint")}</div>
-
-      <label className="pipelinesLabel">
-        <span>{t("core.ui.pipelines.panels.notify.thumbnail_fallback")}</span>
-        <CreatableSelect<SelectOption, true>
-          isMulti
-          styles={pipelinesReactSelectStyles}
-          options={artifactSuggestions}
-          value={notifySelectedFallbackOptions}
-          placeholder={t("core.ui.pipelines.panels.notify.thumbnail_placeholder")}
-          onChange={(value: MultiValue<SelectOption>) => {
-            onUpdateConfig((prev) => ({
-              ...prev,
-              thumbnail_with_fallback: value.map((item) => item.value),
-            }));
-          }}
-        />
-      </label>
-      <div className="pipelinesStepHint">
-        {t("core.ui.pipelines.panels.notify.thumbnail_hint")}
-      </div>
 
       {showAdvanced ? (
         <>

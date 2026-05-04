@@ -7,8 +7,11 @@ from fastapi.testclient import TestClient
 import pytest
 
 from toposync.app import create_app
-from toposync.runtime.config_store import AppConfig, AppSettings, Composition, CompositionElement, Vector3
+from toposync.runtime.config_store import AppConfig, AppSettings, Composition, CompositionElement, Pipeline, Vector3
+from toposync.runtime.pipelines import OperatorRegistry, PipelineGraphCompiler
+from toposync.runtime.pipelines.recommendations import PipelineAlert, analyze_compiled_pipeline
 import toposync.extensions.manager as ext_manager_mod
+from toposync_ext_cameras.pipelines.operators import register_camera_pipeline_operators
 
 
 def _create_client_with_cameras(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
@@ -27,6 +30,76 @@ def _create_client_with_cameras(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(ext_manager_mod, "_iter_entry_points", _eps)
     return TestClient(create_app())
+
+
+def _valid_control_points() -> list[dict[str, object]]:
+    return [
+        {"id": "A", "image": {"x": 0.0, "y": 0.0}, "world": {"x": 0.0, "z": 0.0}},
+        {"id": "B", "image": {"x": 1.0, "y": 0.0}, "world": {"x": 10.0, "z": 0.0}},
+        {"id": "C", "image": {"x": 1.0, "y": 1.0}, "world": {"x": 10.0, "z": 10.0}},
+        {"id": "D", "image": {"x": 0.0, "y": 1.0}, "world": {"x": 0.0, "z": 10.0}},
+    ]
+
+
+def _camera_composition(
+    *,
+    camera_id: str = "cam1",
+    composition_id: str = "yard",
+    control_points: list[dict[str, object]] | None = None,
+) -> Composition:
+    return Composition(
+        id=composition_id,
+        name=composition_id.title(),
+        elements=[
+            CompositionElement(
+                id=f"{camera_id}-element",
+                type="com.toposync.cameras.camera",
+                name=f"Camera {camera_id}",
+                position=Vector3(),
+                rotation=Vector3(),
+                props={
+                    "camera_id": camera_id,
+                    "control_point_sets": [
+                        {
+                            "id": "main",
+                            "label": "Main",
+                            "control_points": control_points if control_points is not None else _valid_control_points(),
+                        }
+                    ],
+                },
+            )
+        ],
+    )
+
+
+def _camera_mapping_alerts(
+    *,
+    mapping_config: dict[str, object] | None = None,
+    compositions: list[Composition] | None = None,
+) -> list[PipelineAlert]:
+    registry = OperatorRegistry()
+    register_camera_pipeline_operators(registry)
+    pipeline = Pipeline(
+        name="mapping_diagnostics",
+        graph={
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "camera.source", "config": {"camera_id": "cam1"}},
+                {"id": "map", "operator": "camera.camera_mapping", "config": dict(mapping_config or {})},
+            ],
+            "edges": [{"from": {"node": "source"}, "to": {"node": "map", "port": "in"}}],
+        },
+    )
+    compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+    return analyze_compiled_pipeline(
+        pipeline=compiled,
+        registry=registry,
+        context={"compositions": [item.model_dump(mode="json") for item in (compositions or [])]},
+    )
+
+
+def _camera_mapping_alert_codes(alerts: list[PipelineAlert]) -> set[str]:
+    return {alert.code for alert in alerts if alert.code.startswith("camera_mapping_")}
 
 
 def test_control_points_map_accepts_control_point_set_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -55,6 +128,106 @@ def test_control_points_map_accepts_control_point_set_payload(tmp_path: Path, mo
         assert body["world"]["z"] == pytest.approx(5.0, abs=1e-6)
         assert body["quality"]["number_of_points"] == 4
         assert body["quality"]["number_of_inliers"] == 4
+
+
+def test_camera_mapping_diagnostics_reports_camera_without_composition() -> None:
+    alerts = _camera_mapping_alerts(compositions=[])
+
+    assert "camera_mapping_camera_not_in_composition" in _camera_mapping_alert_codes(alerts)
+    assert any(
+        alert.severity == "error" and alert.node_id == "map"
+        for alert in alerts
+        if alert.code == "camera_mapping_camera_not_in_composition"
+    )
+
+
+def test_camera_mapping_diagnostics_reports_missing_control_points() -> None:
+    alerts = _camera_mapping_alerts(
+        compositions=[_camera_composition(control_points=_valid_control_points()[:3])]
+    )
+
+    assert _camera_mapping_alert_codes(alerts) == {"camera_mapping_control_points_missing"}
+
+
+def test_camera_mapping_diagnostics_accepts_calibrated_composition() -> None:
+    alerts = _camera_mapping_alerts(compositions=[_camera_composition()])
+
+    assert _camera_mapping_alert_codes(alerts) == set()
+
+
+def test_camera_mapping_diagnostics_reports_unknown_composition_id() -> None:
+    alerts = _camera_mapping_alerts(
+        mapping_config={"composition_id": "missing"},
+        compositions=[_camera_composition(composition_id="yard")],
+    )
+
+    assert _camera_mapping_alert_codes(alerts) == {"camera_mapping_composition_missing"}
+
+
+def test_camera_mapping_diagnostics_reports_camera_missing_from_selected_composition() -> None:
+    alerts = _camera_mapping_alerts(
+        mapping_config={"composition_id": "front"},
+        compositions=[
+            _camera_composition(camera_id="cam2", composition_id="front"),
+            _camera_composition(camera_id="cam1", composition_id="yard"),
+        ],
+    )
+
+    assert _camera_mapping_alert_codes(alerts) == {"camera_mapping_camera_not_in_composition"}
+
+
+def test_camera_mapping_diagnostics_inline_control_points_skip_composition_check() -> None:
+    alerts = _camera_mapping_alerts(
+        mapping_config={
+            "control_point_sets": [
+                {
+                    "id": "inline",
+                    "label": "Inline",
+                    "control_points": _valid_control_points(),
+                }
+            ]
+        },
+        compositions=[],
+    )
+
+    assert _camera_mapping_alert_codes(alerts) == set()
+
+
+def test_pipeline_compile_returns_camera_mapping_diagnostic_from_compositions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _create_client_with_cameras(tmp_path, monkeypatch) as client:
+        config_store = client.app.state.config_store
+        client.portal.call(
+            config_store.save_config,
+            AppConfig(
+                compositions=[Composition(id="ground", name="Ground", elements=[])],
+                active_composition_id="ground",
+            ),
+        )
+        pipeline = Pipeline(
+            name="mapping_diagnostics",
+            graph={
+                "schema_version": 1,
+                "nodes": [
+                    {"id": "source", "operator": "camera.source", "config": {"camera_id": "cam1"}},
+                    {"id": "map", "operator": "camera.camera_mapping", "config": {}},
+                ],
+                "edges": [{"from": {"node": "source"}, "to": {"node": "map", "port": "in"}}],
+            },
+        )
+
+        res = client.post("/api/pipelines/compile", json={"pipeline": pipeline.model_dump(mode="json")})
+
+        assert res.status_code == 200, res.text
+        alerts = res.json()["alerts"]
+        assert any(
+            item["severity"] == "error"
+            and item["code"] == "camera_mapping_camera_not_in_composition"
+            and item["node_id"] == "map"
+            for item in alerts
+        )
 
 
 def test_camera_contexts_reports_control_point_sets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

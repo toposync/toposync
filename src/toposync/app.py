@@ -494,6 +494,14 @@ class PipelineCompilePythonResponse(BaseModel):
     alerts: list[PipelineAlert] = Field(default_factory=list)
 
 
+async def _build_pipeline_diagnostics_context(config_store: ConfigStore) -> dict[str, Any]:
+    cfg = await config_store.get_config()
+    return {
+        "data_dir": str(config_store.paths.data_dir),
+        "compositions": [composition.model_dump(mode="json") for composition in cfg.compositions],
+    }
+
+
 class PipelinePreviewFallbackSnapshotRequest(BaseModel):
     pipeline_name: str = ""
     node_id: str = ""
@@ -2815,7 +2823,7 @@ def create_app() -> FastAPI:
         alerts = analyze_compiled_pipeline(
             pipeline=pipeline,
             registry=registry,
-            context={"data_dir": str(config_store.paths.data_dir)},
+            context=await _build_pipeline_diagnostics_context(config_store),
         )
         return PipelineCompileResponse(
             pipeline=compiled_dict, shared_signatures=shared_signatures, alerts=alerts
@@ -2894,7 +2902,7 @@ def create_app() -> FastAPI:
         alerts = analyze_compiled_pipeline(
             pipeline=compiled_pipeline,
             registry=registry,
-            context={"data_dir": str(config_store.paths.data_dir)},
+            context=await _build_pipeline_diagnostics_context(config_store),
         )
         return PipelineCompilePythonResponse(
             graph=graph,

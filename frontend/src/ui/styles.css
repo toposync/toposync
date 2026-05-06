@@ -3052,6 +3052,18 @@ textarea {
   gap: var(--space-2);
 }
 
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .cardButton {
   width: 100%;
   text-align: left;
@@ -5206,6 +5218,57 @@ textarea {
 .accessSummaryItem strong {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.accessCurrentUserPill {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: rgba(230, 232, 242, 0.72);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.accessPairingCard .cardBody {
+  margin-top: 0;
+}
+
+.accessPairingCode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 12px;
+  border: 1px solid rgba(149, 203, 255, 0.32);
+  border-radius: 8px;
+  background: rgba(64, 156, 255, 0.10);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.accessPairingCode.isExpired {
+  opacity: 0.48;
+}
+
+.accessPairingCodeChunk {
+  display: inline-block;
+  min-width: 4ch;
+  text-align: center;
+}
+
+.accessPairingMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  color: rgba(230, 232, 242, 0.68);
+  font-size: 12px;
 }
 
 @media (max-width: 900px) {

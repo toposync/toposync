@@ -968,6 +968,16 @@ function StreamingSettingsPanelContent({
   }, [runtimeHealth?.transmissions, runtimePipelineLinksByTransmissionId, transmissions]);
   const engineRunning = Boolean(engineStatus?.running);
   const orphanPids = Array.isArray(engineStatus?.orphan_pids) ? engineStatus.orphan_pids : [];
+  const engineNetworkContract = engineStatus?.network_contract ?? null;
+  const engineNetworkContractStatus = engineNetworkContract?.status ?? "not_applicable";
+  const engineNetworkContractMessages = [
+    ...(engineNetworkContract?.blocking_errors ?? []),
+    ...(engineNetworkContract?.warnings ?? []),
+  ];
+  const engineNetworkContractHasIssue =
+    Boolean(engineNetworkContract) &&
+    engineNetworkContractStatus !== "ok" &&
+    engineNetworkContractStatus !== "not_applicable";
   const primaryEngineAction = engineRunning ? "restart" : "start";
   const primaryEngineLabel =
     enginePendingAction === "start"
@@ -1103,6 +1113,23 @@ function StreamingSettingsPanelContent({
           {engineStatus?.urls?.webrtc_url ? (
             <div className="cardMeta">
               {t("ext.streaming.engine.test_webrtc", {}, "WebRTC/WHEP (test)")}: {engineStatus.urls.webrtc_url}
+            </div>
+          ) : null}
+
+          {engineNetworkContractHasIssue ? (
+            <div className="errorText" style={{ marginTop: 8 }}>
+              {t(
+                "ext.streaming.engine.network_contract_issue",
+                { status: engineNetworkContractStatus },
+                `Network contract issue: ${engineNetworkContractStatus}`,
+              )}
+              {engineNetworkContractMessages.length > 0 ? ` ${engineNetworkContractMessages.join(" ")}` : ""}
+            </div>
+          ) : null}
+
+          {engineNetworkContract?.public_hls_mode ? (
+            <div className="cardMeta" style={{ marginTop: 6 }}>
+              {t("ext.streaming.engine.hls_public_mode", {}, "HLS public mode")}: {engineNetworkContract.public_hls_mode}
             </div>
           ) : null}
 
@@ -2247,6 +2274,27 @@ function StreamingSettingsPanelContent({
 
                   {activeUrls && activeUrls.transmission_id === transmissionDraft.id ? (
                     <div>
+                      {Array.isArray(activeUrls.blocking_errors) && activeUrls.blocking_errors.length > 0 ? (
+                        <div className="errorText" style={{ marginTop: 10 }}>
+                          {activeUrls.blocking_errors.join(" ")}
+                        </div>
+                      ) : null}
+                      {activeUrls.network_contract?.status &&
+                      activeUrls.network_contract.status !== "ok" &&
+                      activeUrls.network_contract.status !== "not_applicable" ? (
+                        <div className="cardMeta" style={{ marginTop: 10 }}>
+                          {t(
+                            "ext.streaming.transmissions.network_contract_status",
+                            { status: activeUrls.network_contract.status },
+                            `Network contract: ${activeUrls.network_contract.status}`,
+                          )}
+                        </div>
+                      ) : null}
+                      {activeUrls.outputs.length === 0 ? (
+                        <div className="cardMeta" style={{ marginTop: 10 }}>
+                          {t("ext.streaming.transmissions.urls_no_outputs", {}, "No playback URLs are available for this stream.")}
+                        </div>
+                      ) : null}
                       {activeUrls.outputs.map((item) => (
                         <div key={`${activeUrls.transmission_id}-${item.output_id}`} className="card" style={{ marginTop: 10 }}>
                           <div className="cardBody">

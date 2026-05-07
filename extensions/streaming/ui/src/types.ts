@@ -3,6 +3,33 @@ export type StreamsHealthResponse = {
   extension?: string;
 };
 
+export type StreamingNetworkContractStatus =
+  | "ok"
+  | "port_mismatch"
+  | "proxy_required"
+  | "proxy_unavailable"
+  | "not_applicable";
+
+export type StreamingNetworkContractPorts = {
+  direct_api?: number | null;
+  rtsp?: number | null;
+  hls?: number | null;
+  webrtc?: number | null;
+  webrtc_udp?: number | null;
+  api?: number | null;
+};
+
+export type StreamingNetworkContract = {
+  environment?: string;
+  mode?: "direct" | "proxy";
+  expected_ports?: StreamingNetworkContractPorts;
+  actual_ports?: StreamingNetworkContractPorts;
+  status?: StreamingNetworkContractStatus;
+  public_hls_mode?: "direct" | "proxy";
+  warnings?: string[];
+  blocking_errors?: string[];
+};
+
 export type EngineStatusResponse = {
   running?: boolean;
   pid?: number | null;
@@ -22,6 +49,7 @@ export type EngineStatusResponse = {
     webrtc_url?: string;
   };
   last_error?: string | null;
+  network_contract?: StreamingNetworkContract | null;
   mediamtx_version?: string;
   platform?: string | null;
   binary_path?: string | null;
@@ -81,7 +109,9 @@ export type TransmissionUrlsResponse = {
   transmission_id: string;
   engine_running: boolean;
   outputs: TransmissionOutputUrl[];
+  network_contract?: StreamingNetworkContract | null;
   warnings?: string[];
+  blocking_errors?: string[];
 };
 
 export type StreamingOutputRuntimeStatus = {

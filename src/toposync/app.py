@@ -1149,7 +1149,7 @@ def create_app() -> FastAPI:
         path = request.url.path
         is_api = path.startswith("/api/")
         is_auth_api = path.startswith("/api/auth/")
-        is_public_api = path in auth.public_routes
+        is_public_api = auth.is_public_route(path)
         is_setup_api = path == "/api/auth/setup"
         is_protected_file_route = path.startswith("/files/")
         is_protected_extension_asset = path.startswith("/extensions/")

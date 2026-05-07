@@ -1122,6 +1122,15 @@ class AuthRuntime:
         "/api/auth/logout",
         "/api/auth/pair/complete",
     }
+    public_route_prefixes: tuple[str, ...] = (
+        "/api/streams/media/hls/",
+    )
+
+    def is_public_route(self, path: str) -> bool:
+        normalized = str(path or "")
+        return normalized in self.public_routes or any(
+            normalized.startswith(prefix) for prefix in self.public_route_prefixes
+        )
 
     def __init__(self, *, data_dir: Path) -> None:
         self.mode = _parse_mode(os.getenv("TOPOSYNC_AUTH_MODE"))
@@ -1380,7 +1389,7 @@ class AuthRuntime:
 
         requires_setup = self.requires_setup()
         path = request.url.path
-        if path in self.public_routes:
+        if self.is_public_route(path):
             return AuthContext(principal=None, mode=self.mode, requires_setup=requires_setup)
 
         if path == "/api/auth/setup":

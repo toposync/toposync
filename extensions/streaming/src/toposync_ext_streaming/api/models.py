@@ -375,6 +375,39 @@ class StreamingEngineActivePorts(BaseModel):
     api: int = Field(ge=1, le=65535)
 
 
+StreamingNetworkContractStatus = Literal[
+    "ok",
+    "port_mismatch",
+    "proxy_required",
+    "proxy_unavailable",
+    "not_applicable",
+]
+
+
+class StreamingNetworkContractPorts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    direct_api: int | None = Field(default=None, ge=1, le=65535)
+    rtsp: int | None = Field(default=None, ge=1, le=65535)
+    hls: int | None = Field(default=None, ge=1, le=65535)
+    webrtc: int | None = Field(default=None, ge=1, le=65535)
+    webrtc_udp: int | None = Field(default=None, ge=1, le=65535)
+    api: int | None = Field(default=None, ge=1, le=65535)
+
+
+class StreamingNetworkContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    environment: str = "generic"
+    mode: Literal["direct", "proxy"] = "direct"
+    expected_ports: StreamingNetworkContractPorts = Field(default_factory=StreamingNetworkContractPorts)
+    actual_ports: StreamingNetworkContractPorts = Field(default_factory=StreamingNetworkContractPorts)
+    status: StreamingNetworkContractStatus = "not_applicable"
+    public_hls_mode: Literal["direct", "proxy"] = "direct"
+    warnings: list[str] = Field(default_factory=list)
+    blocking_errors: list[str] = Field(default_factory=list)
+
+
 class StreamingEngineUrls(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -400,6 +433,7 @@ class StreamingEngineStatusResponse(BaseModel):
     log_path: str | None = None
     test_path: str = "test"
     urls: StreamingEngineUrls
+    network_contract: StreamingNetworkContract | None = None
     warnings: list[str] = Field(default_factory=list)
     restart_count: int = Field(default=0, ge=0)
     orphan_pids: list[int] = Field(default_factory=list)
@@ -435,7 +469,9 @@ class TransmissionUrlsResponse(BaseModel):
     transmission_id: str
     engine_running: bool
     outputs: list[TransmissionOutputUrl]
+    network_contract: StreamingNetworkContract | None = None
     warnings: list[str] = Field(default_factory=list)
+    blocking_errors: list[str] = Field(default_factory=list)
 
 
 StreamingHlsProbeStatus = Literal[

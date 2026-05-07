@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from toposync.runtime.auth import AuthContext, AuthRuntime
 from toposync.runtime.config_store import (
@@ -29,6 +30,7 @@ from ..streaming.camera_ingest import (
     build_camera_ingest_path_configs,
     iter_camera_devices_from_app_settings,
 )
+from ..streaming.mediamtx_config import normalize_path_slug
 from ..streaming.mediamtx_binary import extract_mediamtx_binary, find_installed_mediamtx_binary
 from ..streaming.platform import detect_mediamtx_platform
 from ..streaming.mediamtx_processes import (
@@ -47,6 +49,8 @@ from .models import (
     StreamingExtensionSettings,
     StreamingHealthResponse,
     StreamingHlsProbeResponse,
+    StreamingNetworkContract,
+    StreamingNetworkContractPorts,
     StreamingRuntimeHealthResponse,
     StreamingRuntimeOutputHealth,
     StreamingRuntimePipelineEdge,
@@ -161,10 +165,230 @@ def _request_host(request: Request) -> str:
     return str(request.url.hostname or "127.0.0.1").strip() or "127.0.0.1"
 
 
+def _request_public_netloc(request: Request) -> str:
+    for header_name in ("x-forwarded-host", "host"):
+        raw = str(request.headers.get(header_name) or "").strip()
+        if raw:
+            return raw.split(",", 1)[0].strip()
+    return str(request.url.netloc or "").strip()
+
+
+def _request_public_scheme(request: Request) -> str:
+    raw = str(request.headers.get("x-forwarded-proto") or "").strip().lower()
+    scheme = raw.split(",", 1)[0].strip() if raw else ""
+    if scheme in {"http", "https"}:
+        return scheme
+    request_scheme = str(request.url.scheme or "").strip().lower()
+    return request_scheme if request_scheme in {"http", "https"} else "http"
+
+
+def _request_public_port(request: Request) -> int | None:
+    netloc = _request_public_netloc(request)
+    try:
+        parsed = urllib_parse.urlsplit(f"//{netloc}")
+        if parsed.port:
+            return int(parsed.port)
+    except ValueError:
+        return None
+    scheme = _request_public_scheme(request)
+    if scheme == "https":
+        return 443
+    if scheme == "http":
+        return 80
+    return None
+
+
 def _status_host(request: Request, settings: StreamingExtensionSettings) -> str:
     if settings.engine.expose_to_lan:
         return _request_host(request)
     return "127.0.0.1"
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_port(name: str) -> int | None:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    if 1 <= value <= 65535:
+        return value
+    return None
+
+
+def _env_udp_port_from_address(name: str) -> int | None:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return None
+    port_text = raw.rsplit(":", 1)[-1].strip()
+    try:
+        value = int(port_text)
+    except ValueError:
+        return None
+    if 1 <= value <= 65535:
+        return value
+    return None
+
+
+def _network_contract_expected_ports() -> StreamingNetworkContractPorts:
+    return StreamingNetworkContractPorts(
+        direct_api=_env_port("TOPOSYNC_EXPECTED_DIRECT_API_PORT"),
+        rtsp=_env_port("TOPOSYNC_EXPECTED_RTSP_PORT"),
+        hls=_env_port("TOPOSYNC_EXPECTED_HLS_PORT"),
+        webrtc=_env_port("TOPOSYNC_EXPECTED_WEBRTC_PORT"),
+        webrtc_udp=_env_port("TOPOSYNC_EXPECTED_WEBRTC_UDP_PORT"),
+    )
+
+
+def _public_hls_mode() -> Literal["direct", "proxy"]:
+    raw = str(os.getenv("TOPOSYNC_STREAMING_HLS_PUBLIC_MODE") or "").strip().lower()
+    return "proxy" if raw == "proxy" else "direct"
+
+
+def _network_contract_active(
+    *,
+    environment: str,
+    expected_ports: StreamingNetworkContractPorts,
+    public_hls_mode: Literal["direct", "proxy"],
+) -> bool:
+    if environment == "home_assistant_addon" or public_hls_mode == "proxy":
+        return True
+    return any(
+        value is not None
+        for value in (
+            expected_ports.direct_api,
+            expected_ports.rtsp,
+            expected_ports.hls,
+            expected_ports.webrtc,
+            expected_ports.webrtc_udp,
+            expected_ports.api,
+        )
+    )
+
+
+def _hls_proxy_origin(request: Request) -> str | None:
+    netloc = _request_public_netloc(request)
+    if not netloc:
+        return None
+    return f"{_request_public_scheme(request)}://{netloc}"
+
+
+def _hls_proxy_url(request: Request, engine_path: str, file_path: str = "index.m3u8") -> str | None:
+    origin = _hls_proxy_origin(request)
+    if not origin:
+        return None
+    quoted_engine_path = urllib_parse.quote(str(engine_path or "").strip(), safe="")
+    quoted_file_path = urllib_parse.quote(str(file_path or "").strip().lstrip("/"), safe="/._-~")
+    return f"{origin}/api/streams/media/hls/{quoted_engine_path}/{quoted_file_path}"
+
+
+def _build_network_contract(
+    *,
+    request: Request,
+    ports: Any,
+    running: bool,
+) -> StreamingNetworkContract:
+    environment = str(os.getenv("TOPOSYNC_DEPLOYMENT_TARGET") or "generic").strip() or "generic"
+    public_hls_mode = _public_hls_mode()
+    expected_ports = _network_contract_expected_ports()
+    actual_ports = StreamingNetworkContractPorts(
+        direct_api=_request_public_port(request),
+        rtsp=(int(getattr(ports, "rtsp", 0) or 0) or None) if running else None,
+        hls=(int(getattr(ports, "hls", 0) or 0) or None) if running else None,
+        webrtc=(int(getattr(ports, "webrtc", 0) or 0) or None) if running else None,
+        api=(int(getattr(ports, "api", 0) or 0) or None) if running else None,
+        webrtc_udp=_env_udp_port_from_address("TOPOSYNC_STREAMING_WEBRTC_LOCAL_UDP_ADDRESS"),
+    )
+    if not _network_contract_active(
+        environment=environment,
+        expected_ports=expected_ports,
+        public_hls_mode=public_hls_mode,
+    ):
+        return StreamingNetworkContract(
+            environment=environment,
+            mode=public_hls_mode,
+            public_hls_mode=public_hls_mode,
+            expected_ports=expected_ports,
+            actual_ports=actual_ports,
+            status="not_applicable",
+        )
+
+    fail_on_mismatch = _env_bool("TOPOSYNC_FAIL_STREAM_URLS_ON_PORT_MISMATCH")
+    warnings: list[str] = []
+    blocking_errors: list[str] = []
+    status: Literal["ok", "port_mismatch", "proxy_required", "proxy_unavailable"] = "ok"
+
+    def compare_port(
+        key: str,
+        label: str,
+        *,
+        blocking_when_failed: bool = False,
+        skip: bool = False,
+    ) -> None:
+        nonlocal status
+        if skip:
+            return
+        expected = getattr(expected_ports, key)
+        actual = getattr(actual_ports, key)
+        if expected is None or actual is None or int(expected) == int(actual):
+            return
+        message = f"{label} active port {actual} does not match expected add-on port {expected}."
+        warnings.append(message)
+        if status == "ok":
+            status = "port_mismatch"
+        if blocking_when_failed and fail_on_mismatch:
+            blocking_errors.append(message)
+
+    compare_port("direct_api", "Direct API")
+    compare_port("rtsp", "RTSP")
+    compare_port(
+        "hls",
+        "HLS",
+        blocking_when_failed=True,
+        skip=public_hls_mode == "proxy",
+    )
+    compare_port("webrtc", "WebRTC")
+    compare_port("webrtc_udp", "WebRTC UDP")
+
+    if public_hls_mode == "proxy" and _hls_proxy_origin(request) is None:
+        message = "HLS media proxy is unavailable because the request host is missing."
+        blocking_errors.append(message)
+        warnings.append(message)
+        status = "proxy_unavailable"
+    elif environment == "home_assistant_addon" and public_hls_mode != "proxy":
+        warnings.append(
+            "Home Assistant add-on HLS should use the Toposync API proxy; direct HLS is for advanced diagnostics."
+        )
+        if status == "ok":
+            status = "proxy_required"
+
+    return StreamingNetworkContract(
+        environment=environment,
+        mode=public_hls_mode,
+        public_hls_mode=public_hls_mode,
+        expected_ports=expected_ports,
+        actual_ports=actual_ports,
+        status=status,
+        warnings=warnings,
+        blocking_errors=blocking_errors,
+    )
+
+
+def _hls_output_blocking_errors(contract: StreamingNetworkContract) -> list[str]:
+    out: list[str] = []
+    for message in contract.blocking_errors:
+        lowered = message.lower()
+        if "hls" in lowered or "media proxy" in lowered:
+            out.append(message)
+    return out
 
 
 def _current_server_id(request: Request) -> str:
@@ -284,6 +508,41 @@ async def _fetch_text_with_status(
         except urllib_error.HTTPError as exc:
             body = _read_http_error(exc)
             return int(exc.code), body
+        except urllib_error.URLError as exc:
+            reason = str(getattr(exc, "reason", "") or exc)
+            raise RuntimeError(f"Connection failed: {reason}") from exc
+
+    return await asyncio.to_thread(_do_request)
+
+
+async def _fetch_bytes_with_status(
+    *,
+    url: str,
+    timeout_s: float = 2.5,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, bytes, dict[str, str]]:
+    def _response_headers(response: Any) -> dict[str, str]:
+        raw_headers = getattr(response, "headers", None)
+        if raw_headers is None:
+            return {}
+        try:
+            items = raw_headers.items()
+        except Exception:
+            return {}
+        return {str(key).lower(): str(value) for key, value in items}
+
+    def _do_request() -> tuple[int, bytes, dict[str, str]]:
+        req = urllib_request.Request(url=url, headers=dict(headers or {}), method="GET")
+        try:
+            with urllib_request.urlopen(req, timeout=max(1.0, float(timeout_s))) as response:
+                payload = response.read()
+                return int(getattr(response, "status", 200) or 200), payload, _response_headers(response)
+        except urllib_error.HTTPError as exc:
+            try:
+                payload = exc.read()
+            except Exception:
+                payload = b""
+            return int(exc.code), payload, _response_headers(exc)
         except urllib_error.URLError as exc:
             reason = str(getattr(exc, "reason", "") or exc)
             raise RuntimeError(f"Connection failed: {reason}") from exc
@@ -497,6 +756,14 @@ async def _resolve_local_transmission_urls(
     warnings: list[str] = list(getattr(engine_status, "warnings", ()) or ())
     if not engine_status.running:
         warnings.append("Engine is not running. URLs are based on preferred ports.")
+    network_contract = _build_network_contract(
+        request=request,
+        ports=engine_status.ports,
+        running=engine_status.running,
+    )
+    warnings.extend(network_contract.warnings)
+    blocking_errors: list[str] = list(network_contract.blocking_errors)
+    hls_blocking_errors = _hls_output_blocking_errors(network_contract)
 
     outputs: list[TransmissionOutputUrl] = []
     for output in transmission.outputs:
@@ -506,7 +773,14 @@ async def _resolve_local_transmission_urls(
         if output.protocol == "rtsp":
             url = _rtsp_url(host, rtsp_port, engine_path)
         elif output.protocol == "hls":
-            url = _hls_url(host, hls_port, engine_path)
+            if hls_blocking_errors:
+                continue
+            if network_contract.public_hls_mode == "proxy":
+                url = _hls_proxy_url(request, engine_path) or ""
+                if not url:
+                    continue
+            else:
+                url = _hls_url(host, hls_port, engine_path)
         elif output.protocol == "webrtc":
             url = _webrtc_url(host, webrtc_port, engine_path)
         else:
@@ -529,7 +803,9 @@ async def _resolve_local_transmission_urls(
         transmission_id=transmission.id,
         engine_running=engine_status.running,
         outputs=outputs,
+        network_contract=network_contract,
         warnings=warnings,
+        blocking_errors=blocking_errors,
     )
 
 
@@ -614,7 +890,9 @@ async def _resolve_remote_transmission_urls(
         transmission_id=resolved.transmission_id,
         engine_running=resolved.engine_running,
         outputs=outputs,
+        network_contract=resolved.network_contract,
         warnings=warnings,
+        blocking_errors=list(resolved.blocking_errors),
     )
 
 
@@ -1237,6 +1515,17 @@ def create_streaming_router() -> APIRouter:
                 "MediaMTX binary is not installed yet. Starting the engine will download it (internet required), "
                 "or set TOPOSYNC_STREAMING_ENGINE_PATH to a local path."
             )
+        network_contract = _build_network_contract(
+            request=request,
+            ports=ports,
+            running=status.running,
+        )
+        warnings.extend(network_contract.warnings)
+        hls_test_url = (
+            _hls_proxy_url(request, TEST_PATH)
+            if network_contract.public_hls_mode == "proxy"
+            else None
+        ) or _hls_url(host, ports.hls, TEST_PATH)
 
         return StreamingEngineStatusResponse(
             running=status.running,
@@ -1254,9 +1543,10 @@ def create_streaming_router() -> APIRouter:
             test_path=TEST_PATH,
             urls={
                 "rtsp_url": _rtsp_url(host, ports.rtsp, TEST_PATH),
-                "hls_url": _hls_url(host, ports.hls, TEST_PATH),
+                "hls_url": hls_test_url,
                 "webrtc_url": _webrtc_url(host, ports.webrtc, TEST_PATH),
             },
+            network_contract=network_contract,
             warnings=warnings,
             restart_count=status.restart_count,
             orphan_pids=orphan_pids,
@@ -1944,6 +2234,53 @@ def create_streaming_router() -> APIRouter:
             warnings=warnings,
         )
 
+    @router.get("/media/hls/{engine_path}/{file_path:path}")
+    async def hls_media_proxy(request: Request, engine_path: str, file_path: str) -> Response:
+        manager = _engine_manager(request)
+        status = await manager.get_status()
+        if not status.running:
+            raise HTTPException(status_code=503, detail="Streaming engine is not running")
+
+        normalized_engine_path = normalize_path_slug(engine_path, fallback="")
+        normalized_file_path = str(file_path or "").strip().lstrip("/")
+        path_parts = [part for part in normalized_file_path.split("/") if part]
+        if (
+            not normalized_engine_path
+            or not path_parts
+            or len(path_parts) != len(normalized_file_path.split("/"))
+            or any(part in {".", ".."} for part in path_parts)
+        ):
+            raise HTTPException(status_code=400, detail="Invalid HLS media path")
+
+        quoted_engine_path = urllib_parse.quote(normalized_engine_path, safe="")
+        quoted_file_path = urllib_parse.quote(normalized_file_path, safe="/._-~")
+        target_url = f"http://127.0.0.1:{status.ports.hls}/{quoted_engine_path}/{quoted_file_path}"
+        forward_headers: dict[str, str] = {}
+        for header_name in ("accept", "range", "user-agent"):
+            header_value = str(request.headers.get(header_name) or "").strip()
+            if header_value:
+                forward_headers[header_name] = header_value
+        try:
+            status_code, body, response_headers = await _fetch_bytes_with_status(
+                url=target_url,
+                timeout_s=5.0,
+                headers=forward_headers,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"HLS media proxy unavailable: {exc}") from exc
+
+        passthrough_headers: dict[str, str] = {}
+        for header_name in ("cache-control", "accept-ranges", "content-range", "etag", "last-modified"):
+            header_value = response_headers.get(header_name)
+            if header_value:
+                passthrough_headers[header_name] = header_value
+        return Response(
+            content=body,
+            status_code=status_code,
+            media_type=response_headers.get("content-type") or None,
+            headers=passthrough_headers,
+        )
+
     @router.get("/transmissions/{transmission_id}/urls", response_model=TransmissionUrlsResponse)
     async def transmission_urls(request: Request, transmission_id: str) -> TransmissionUrlsResponse:
         _require_auth(request, action="core:settings:read")
@@ -2016,7 +2353,8 @@ def create_streaming_router() -> APIRouter:
                 output_id=output_id,
                 sampled_at_unix=sampled_at_unix,
                 status="no_hls_output",
-                error="Transmission does not expose a matching HLS output.",
+                error=" ".join(urls.blocking_errors)
+                or "Transmission does not expose a matching HLS output.",
             )
 
         selected_output = hls_outputs[0]

@@ -30,6 +30,9 @@ O launcher do add-on fixa estas variáveis de ambiente:
 - `TOPOSYNC_HOME_ASSISTANT_CONNECTION_MODE=supervisor`
 - `TOPOSYNC_DATA_DIR=/data`
 - `TOPOSYNC_STREAMING_ENGINE_CACHE_DIR=/data/runtime`
+- `TOPOSYNC_DEPLOYMENT_TARGET=home_assistant_addon`
+- `TOPOSYNC_STREAMING_HLS_PUBLIC_MODE=proxy`
+- `TOPOSYNC_FAIL_STREAM_URLS_ON_PORT_MISMATCH=1`
 
 No modo `supervisor`, a extensão `home_assistant` passa a usar:
 
@@ -100,18 +103,19 @@ http://homeassistant.local:18756/
 
 ## Acesso de streaming
 
-O add-on declara portas de streaming, mas deixa o host port vazio por padrão. Isso mantém RTSP, HLS, WHEP e transporte de mídia WebRTC fora da LAN até o usuário habilitar explicitamente.
+O add-on declara portas de streaming, mas deixa o host port vazio por padrão. Isso mantém RTSP, WHEP e transporte de mídia WebRTC fora da LAN até o usuário habilitar explicitamente.
+
+HLS para web/app móvel usa o proxy HTTP do próprio Toposync pela porta direta `18756`: `http://<home-assistant-ip>:18756/api/streams/media/hls/...`. Com isso o app não recebe URL HLS direta do MediaMTX na porta `18759`, que pode não estar publicada no host.
 
 Para expor streaming na rede local, configure a seção `Network` do add-on e mapeie somente os protocolos necessários:
 
 ```yaml
 18758/tcp: 18758  # RTSP
-18759/tcp: 18759  # HLS
 18760/tcp: 18760  # WebRTC/WHEP signaling
 18762/udp: 18762  # WebRTC media transport
 ```
 
-A faixa recomendada do add-on é `18756-18762` quando as portas são habilitadas: `18756` para acesso direto, `18757` para ingress/backend interno, `18758` para RTSP, `18759` para HLS, `18760` para WHEP, `18761` para a API interna do MediaMTX e `18762/udp` para mídia WebRTC. A API do MediaMTX permanece interna e não é declarada em `ports`.
+A porta `18759/tcp` continua declarada como HLS direto avançado/diagnóstico, mas não é necessária para o app móvel quando `18756/tcp` está mapeada. A faixa recomendada do add-on é `18756-18762` quando as portas são habilitadas: `18756` para acesso direto e HLS proxied, `18757` para ingress/backend interno, `18758` para RTSP, `18759` para HLS direto avançado, `18760` para WHEP, `18761` para a API interna do MediaMTX e `18762/udp` para mídia WebRTC. A API do MediaMTX permanece interna e não é declarada em `ports`.
 
 Para WebRTC na LAN, `18760/tcp` cobre só a sinalização WHEP; o transporte de mídia ainda precisa de `18762/udp` mapeado, salvo uma configuração futura com TURN/TCP/TLS.
 

@@ -9,6 +9,8 @@ import {
   fetchEngineStatus,
   fetchProcessingServers,
   fetchStreamsHealth,
+  fetchStreamingRuntimeDiagnostics,
+  fetchStreamingRuntimeHealth,
   fetchStreamingSettings,
   fetchTransmissionUrls,
   fetchTransmissions,
@@ -24,6 +26,10 @@ import type {
   ProcessingServer,
   StreamingEngineSettings,
   StreamingExtensionSettings,
+  StreamingRuntimeHealthResponse,
+  StreamingRuntimeOutputHealth,
+  StreamingRuntimeStatus,
+  StreamingRuntimeTransmissionHealth,
   StreamAuthentication,
   StreamsHealthResponse,
   Transmission,
@@ -32,6 +38,8 @@ import type {
 } from "../types";
 import { SubModal } from "./SubModal";
 import { WizardCreatePipelineFromTransmission } from "./WizardCreatePipelineFromTransmission";
+
+type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: string) => string;
 
 function toSafeInt(value: string, fallback: number): number {
   const parsed = Number.parseInt(String(value || "").trim(), 10);
@@ -135,6 +143,61 @@ function formatDuration(seconds: number | null | undefined): string {
   return `${secs}s`;
 }
 
+function formatRuntimeAge(seconds: number | null | undefined): string {
+  if (!Number.isFinite(seconds ?? NaN)) return "-";
+  const value = Math.max(0, Number(seconds));
+  if (value < 10) return `${value.toFixed(1)}s`;
+  if (value < 60) return `${Math.round(value)}s`;
+  const minutes = Math.floor(value / 60);
+  const secs = Math.round(value % 60);
+  return `${minutes}m ${secs}s`;
+}
+
+function formatRuntimeUnixTime(unixSeconds: number | null | undefined): string {
+  if (!Number.isFinite(unixSeconds ?? NaN) || !unixSeconds) return "-";
+  try {
+    return new Date(Number(unixSeconds) * 1000).toLocaleString();
+  } catch {
+    return "-";
+  }
+}
+
+function compactRuntimeId(value: string | null | undefined): string {
+  const text = String(value || "").trim();
+  if (!text) return "-";
+  if (text.length <= 18) return text;
+  return `${text.slice(0, 10)}...${text.slice(-5)}`;
+}
+
+function runtimeStatusLabel(status: StreamingRuntimeStatus | undefined, t: TranslateFn): string {
+  if (status === "live") return t("ext.streaming.runtime.status.live", {}, "Live");
+  if (status === "degraded") return t("ext.streaming.runtime.status.degraded", {}, "Degraded");
+  if (status === "stale") return t("ext.streaming.runtime.status.stale", {}, "Stale");
+  if (status === "offline") return t("ext.streaming.runtime.status.offline", {}, "Offline");
+  return "-";
+}
+
+function runtimeStatusClass(status: StreamingRuntimeStatus | undefined): string {
+  if (status === "live") return "is-live";
+  if (status === "degraded") return "is-degraded";
+  if (status === "stale") return "is-stale";
+  if (status === "offline") return "is-offline";
+  return "is-unknown";
+}
+
+function fallbackReasonLabel(reason: StreamingRuntimeTransmissionHealth["fallback_reason"], t: TranslateFn): string {
+  if (reason === "no_active_writer") return t("ext.streaming.runtime.fallback.no_active_writer", {}, "No active writer");
+  if (reason === "selected_writer_missing_frame") {
+    return t("ext.streaming.runtime.fallback.selected_writer_missing_frame", {}, "Selected writer has no frame");
+  }
+  if (reason === "no_frame") return t("ext.streaming.runtime.fallback.no_frame", {}, "No frame");
+  return "-";
+}
+
+function boolLabel(value: boolean | undefined, t: TranslateFn): string {
+  return value ? t("ext.streaming.common.yes", {}, "Yes") : t("ext.streaming.common.no", {}, "No");
+}
+
 function defaultOutput(protocol: "hls" | "rtsp" | "webrtc"): TransmissionOutput {
   return {
     id: createLocalId("output"),
@@ -189,6 +252,12 @@ function StreamingSettingsPanelContent({
   const [enginePendingAction, setEnginePendingAction] = useState<"start" | "stop" | "restart" | "reclaim" | "download" | "refresh" | null>(null);
   const [engineStatus, setEngineStatus] = useState<EngineStatusResponse | null>(null);
   const [engineError, setEngineError] = useState<string | null>(null);
+
+  const [runtimeHealthLoading, setRuntimeHealthLoading] = useState(true);
+  const [runtimeHealth, setRuntimeHealth] = useState<StreamingRuntimeHealthResponse | null>(null);
+  const [runtimeHealthError, setRuntimeHealthError] = useState<string | null>(null);
+  const [runtimeDiagnosticsBusy, setRuntimeDiagnosticsBusy] = useState(false);
+  const [runtimeDiagnosticsError, setRuntimeDiagnosticsError] = useState<string | null>(null);
 
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsError, setSettingsError] = useState<string | null>(null);
@@ -280,6 +349,21 @@ function StreamingSettingsPanelContent({
     }
   }, []);
 
+  const fetchRuntimeHealthData = useCallback(async (signal?: AbortSignal, showLoading = false) => {
+    if (showLoading) setRuntimeHealthLoading(true);
+    setRuntimeHealthError(null);
+    try {
+      const payload = await fetchStreamingRuntimeHealth(signal);
+      if (signal?.aborted) return;
+      setRuntimeHealth(payload);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setRuntimeHealthError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (showLoading && !signal?.aborted) setRuntimeHealthLoading(false);
+    }
+  }, []);
+
   const fetchSettingsData = useCallback(async (signal?: AbortSignal) => {
     setSettingsLoading(true);
     setSettingsError(null);
@@ -350,12 +434,21 @@ function StreamingSettingsPanelContent({
     const controller = new AbortController();
     void fetchHealthData(controller.signal);
     void fetchEngineData(controller.signal);
+    void fetchRuntimeHealthData(controller.signal, true);
     void fetchSettingsData(controller.signal);
     void fetchTransmissionsData(controller.signal);
     void fetchProcessingServersData(controller.signal);
     void fetchAvailableCamerasData(controller.signal);
     return () => controller.abort();
-  }, [fetchAvailableCamerasData, fetchEngineData, fetchHealthData, fetchProcessingServersData, fetchSettingsData, fetchTransmissionsData]);
+  }, [
+    fetchAvailableCamerasData,
+    fetchEngineData,
+    fetchHealthData,
+    fetchProcessingServersData,
+    fetchRuntimeHealthData,
+    fetchSettingsData,
+    fetchTransmissionsData,
+  ]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -364,6 +457,14 @@ function StreamingSettingsPanelContent({
     }, 5000);
     return () => window.clearInterval(interval);
   }, [fetchEngineData]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      void fetchRuntimeHealthData();
+    }, 2000);
+    return () => window.clearInterval(interval);
+  }, [fetchRuntimeHealthData]);
 
   useEffect(() => {
     if (activeTransmissionId && transmissions.some((item) => item.id === activeTransmissionId)) return;
@@ -473,6 +574,28 @@ function StreamingSettingsPanelContent({
       await fetchEngineData();
     } finally {
       setEnginePendingAction(null);
+    }
+  }
+
+  async function downloadRuntimeDiagnostics(): Promise<void> {
+    setRuntimeDiagnosticsBusy(true);
+    setRuntimeDiagnosticsError(null);
+    try {
+      const payload = await fetchStreamingRuntimeDiagnostics();
+      const text = JSON.stringify(payload, null, 2);
+      const blob = new Blob([text], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "toposync-streaming-runtime-diagnostics.json";
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+      setRuntimeDiagnosticsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRuntimeDiagnosticsBusy(false);
     }
   }
 
@@ -701,6 +824,51 @@ function StreamingSettingsPanelContent({
   }
 
   const activeUrls = activeTransmissionId ? urlsByTransmissionId[activeTransmissionId] ?? null : null;
+  const runtimeRows = useMemo(() => {
+    const namesById = new Map<string, string>();
+    for (const transmission of transmissions) {
+      const transmissionId = String(transmission.id || "").trim();
+      if (!transmissionId) continue;
+      const label = String(transmission.name || "").trim() || String(transmission.path || "").trim() || transmissionId;
+      namesById.set(transmissionId, label);
+    }
+
+    const rows: Array<{
+      key: string;
+      transmission: StreamingRuntimeTransmissionHealth;
+      output: StreamingRuntimeOutputHealth | null;
+      transmissionLabel: string;
+      outputLabel: string;
+    }> = [];
+
+    for (const transmission of runtimeHealth?.transmissions ?? []) {
+      const transmissionId = String(transmission.transmission_id || "").trim();
+      const transmissionLabel = namesById.get(transmissionId) ?? transmissionId;
+      const outputs = Array.isArray(transmission.outputs) ? transmission.outputs : [];
+      if (outputs.length === 0) {
+        rows.push({
+          key: `${transmissionId}-no-output`,
+          transmission,
+          output: null,
+          transmissionLabel,
+          outputLabel: "-",
+        });
+        continue;
+      }
+
+      for (const output of outputs) {
+        const outputId = String(output.output_id || output.output_key || "").trim();
+        rows.push({
+          key: `${transmissionId}-${output.output_key || outputId}`,
+          transmission,
+          output,
+          transmissionLabel,
+          outputLabel: `${String(output.protocol || "").toUpperCase()} ${outputId || "-"}`,
+        });
+      }
+    }
+    return rows;
+  }, [runtimeHealth?.transmissions, transmissions]);
   const engineRunning = Boolean(engineStatus?.running);
   const orphanPids = Array.isArray(engineStatus?.orphan_pids) ? engineStatus.orphan_pids : [];
   const primaryEngineAction = engineRunning ? "restart" : "start";
@@ -1066,6 +1234,139 @@ function StreamingSettingsPanelContent({
                   {engineSettingsBusy ? t("ext.streaming.engine.settings_applying", {}, "Aplicando…") : t("ext.streaming.engine.settings_apply", {}, "Aplicar")}
                 </button>
               </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="sectionDivider" />
+
+      <div className="card">
+        <div className="cardBody">
+          <div className="settingsDetailHeader" style={{ marginBottom: 2 }}>
+            <div>
+              <div className="modalSectionTitle" style={{ marginBottom: 4 }}>
+                {t("ext.streaming.runtime.title", {}, "Runtime")}
+              </div>
+              <div className="cardMeta">
+                {runtimeHealth
+                  ? t(
+                      "ext.streaming.runtime.meta",
+                      {
+                        stale: runtimeHealth.stale_after_seconds,
+                        placeholder: runtimeHealth.placeholder_after_seconds,
+                      },
+                      `Stale after ${runtimeHealth.stale_after_seconds}s; placeholder after ${runtimeHealth.placeholder_after_seconds}s.`,
+                    )
+                  : t("ext.streaming.runtime.meta_empty", {}, "Freshness and publisher state for active streams.")}
+              </div>
+            </div>
+
+            <div className="rowWrap" style={{ gap: 8, justifyContent: "flex-end" }}>
+              <button
+                className="chipButton"
+                type="button"
+                disabled={runtimeHealthLoading}
+                onClick={() => void fetchRuntimeHealthData(undefined, true)}
+              >
+                <i className="fa-solid fa-rotate-right" aria-hidden="true" />{" "}
+                {runtimeHealthLoading
+                  ? t("ext.streaming.runtime.refreshing", {}, "Atualizando...")
+                  : t("ext.streaming.runtime.refresh", {}, "Atualizar")}
+              </button>
+              <button
+                className="chipButton"
+                type="button"
+                disabled={runtimeDiagnosticsBusy}
+                onClick={() => void downloadRuntimeDiagnostics()}
+              >
+                <i className="fa-solid fa-download" aria-hidden="true" />{" "}
+                {runtimeDiagnosticsBusy
+                  ? t("ext.streaming.runtime.downloading", {}, "Baixando...")
+                  : t("ext.streaming.runtime.download_diagnostics", {}, "Baixar diagnostics JSON")}
+              </button>
+            </div>
+          </div>
+
+          {runtimeHealthLoading ? (
+            <div className="settingsStatusMuted">{t("ext.streaming.runtime.loading", {}, "Carregando runtime...")}</div>
+          ) : null}
+
+          {runtimeHealthError ? <div className="errorText">{runtimeHealthError}</div> : null}
+          {runtimeDiagnosticsError ? <div className="errorText">{runtimeDiagnosticsError}</div> : null}
+
+          {!runtimeHealthLoading && runtimeRows.length === 0 ? (
+            <div className="cardMeta">
+              {t("ext.streaming.runtime.empty", {}, "Nenhuma transmissão local aparece no runtime no momento.")}
+            </div>
+          ) : null}
+
+          {runtimeRows.length > 0 ? (
+            <div className="streamingRuntimeTableWrap">
+              <table className="streamingRuntimeTable">
+                <thead>
+                  <tr>
+                    <th>{t("ext.streaming.runtime.table.transmission", {}, "Transmission")}</th>
+                    <th>{t("ext.streaming.runtime.table.output", {}, "Output")}</th>
+                    <th>{t("ext.streaming.runtime.table.status", {}, "Status")}</th>
+                    <th>{t("ext.streaming.runtime.table.selected_age", {}, "Selected age")}</th>
+                    <th>{t("ext.streaming.runtime.table.incoming_age", {}, "Incoming age")}</th>
+                    <th>{t("ext.streaming.runtime.table.active_writer", {}, "Active writer")}</th>
+                    <th>{t("ext.streaming.runtime.table.fallback", {}, "Fallback")}</th>
+                    <th>{t("ext.streaming.runtime.table.viewers", {}, "Viewers")}</th>
+                    <th>{t("ext.streaming.runtime.table.publisher", {}, "Publisher")}</th>
+                    <th>{t("ext.streaming.runtime.table.frames", {}, "Frames")}</th>
+                    <th>{t("ext.streaming.runtime.table.restarts", {}, "Restarts")}</th>
+                    <th>{t("ext.streaming.runtime.table.last_error", {}, "Last error")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runtimeRows.map(({ key, transmission, output, transmissionLabel, outputLabel }) => {
+                    const status = output?.status ?? transmission.status;
+                    const activeWriterId = String(transmission.active_writer_id || "").trim();
+                    const fallbackText = transmission.fallback_active
+                      ? fallbackReasonLabel(transmission.fallback_reason, t)
+                      : boolLabel(false, t);
+                    return (
+                      <tr key={key}>
+                        <td title={transmission.transmission_id}>{transmissionLabel}</td>
+                        <td title={output?.output_key || ""}>{outputLabel}</td>
+                        <td>
+                          <span className={["streamingRuntimeBadge", runtimeStatusClass(status)].join(" ")}>
+                            {runtimeStatusLabel(status, t)}
+                          </span>
+                          {transmission.placeholder_active ? (
+                            <span className="streamingRuntimeSubtle">
+                              {t("ext.streaming.runtime.placeholder_active", {}, "placeholder")}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td>{formatRuntimeAge(transmission.selected_frame_age_seconds)}</td>
+                        <td>
+                          <span title={formatRuntimeUnixTime(transmission.last_live_frame_at_unix)}>
+                            {formatRuntimeAge(transmission.last_incoming_frame_age_seconds)}
+                          </span>
+                        </td>
+                        <td title={activeWriterId}>{compactRuntimeId(activeWriterId)}</td>
+                        <td>{fallbackText}</td>
+                        <td>{output ? output.viewer_count : "-"}</td>
+                        <td>
+                          {output
+                            ? output.publisher_running
+                              ? t("ext.streaming.runtime.publisher.running", {}, "Running")
+                              : t("ext.streaming.runtime.publisher.stopped", {}, "Stopped")
+                            : "-"}
+                        </td>
+                        <td>{output ? output.publisher_frames_sent : "-"}</td>
+                        <td>{output ? output.publisher_restart_count ?? 0 : "-"}</td>
+                        <td title={output?.publisher_last_error || ""}>
+                          {output?.publisher_last_error || "-"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           ) : null}
         </div>

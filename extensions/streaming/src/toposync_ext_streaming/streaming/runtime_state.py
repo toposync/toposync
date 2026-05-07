@@ -23,6 +23,7 @@ class WriterFrameState:
     frame: numpy.ndarray | None = None
     frame_ts: float = 0.0
     last_frame_monotonic: float = 0.0
+    last_frame_unix: float | None = None
     updated_at_monotonic: float = field(default_factory=time.monotonic)
 
 
@@ -30,11 +31,20 @@ class WriterFrameState:
 class SelectedWriterFrame:
     transmission_id: str
     writer_id: str | None
+    active_writer_id: str | None
+    selected_writer_id: str | None
     frame: numpy.ndarray | None
     lifecycle_state: Lifecycle | None
     writer_priority: int
     frame_ts: float
     updated_at_monotonic: float
+    selected_frame_age_seconds: float | None
+    last_incoming_frame_age_seconds: float | None
+    last_live_frame_at_unix: float | None
+    fallback_active: bool
+    fallback_reason: str | None
+    stale: bool
+    placeholder_active: bool
 
 
 @dataclass(slots=True)
@@ -43,6 +53,7 @@ class TransmissionFrameState:
     writer_id: str | None
     frame_ts: float
     updated_at_monotonic: float
+    updated_at_unix: float | None = None
 
 
 class TransmissionRuntimeState:
@@ -54,6 +65,7 @@ class TransmissionRuntimeState:
         sticky_window_s: float = 0.5,
         max_writers_per_transmission: int = 32,
         monotonic: Callable[[], float] | None = None,
+        wall_time: Callable[[], float] | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._lock = asyncio.Lock()
@@ -62,6 +74,7 @@ class TransmissionRuntimeState:
         self._sticky_window_s = max(0.0, float(sticky_window_s))
         self._max_writers_per_transmission = max(1, int(max_writers_per_transmission))
         self._monotonic = monotonic or time.monotonic
+        self._wall_time = wall_time or time.time
         self._logger = logger or LOGGER
 
         self._last_frame_by_writer: dict[str, dict[str, WriterFrameState]] = {}
@@ -107,15 +120,18 @@ class TransmissionRuntimeState:
             state.writer_priority = int(writer_priority)
             state.updated_at_monotonic = now_monotonic
             if frame is not None:
+                now_unix = float(self._wall_time())
                 normalized_frame = _normalize_frame(frame)
                 state.frame = normalized_frame
                 state.frame_ts = float(frame_ts)
                 state.last_frame_monotonic = now_monotonic
+                state.last_frame_unix = now_unix
                 self._last_incoming_frame_by_transmission[transmission_key] = TransmissionFrameState(
                     frame=normalized_frame,
                     writer_id=writer_key,
                     frame_ts=float(frame_ts),
                     updated_at_monotonic=float(now_monotonic),
+                    updated_at_unix=now_unix,
                 )
 
             self._evict_stale_locked(transmission_key, now_monotonic)
@@ -140,17 +156,33 @@ class TransmissionRuntimeState:
             state.updated_at_monotonic = now_monotonic
             self._refresh_active_writer_locked(transmission_key, now_monotonic)
 
-    async def get_selected_writer_frame(self, transmission_id: str) -> SelectedWriterFrame:
+    async def get_selected_writer_frame(
+        self,
+        transmission_id: str,
+        *,
+        stale_after_s: float = 3.0,
+        placeholder_after_s: float = 8.0,
+    ) -> SelectedWriterFrame:
         transmission_key = _normalize_key(transmission_id)
+        stale_after = max(0.1, float(stale_after_s))
+        placeholder_after = max(stale_after, float(placeholder_after_s))
         if not transmission_key:
-            return SelectedWriterFrame(
+            return self._selected_frame_result(
                 transmission_id="",
+                now_monotonic=0.0,
+                active_writer_id=None,
                 writer_id=None,
+                selected_writer_id=None,
                 frame=None,
                 lifecycle_state=None,
                 writer_priority=0,
                 frame_ts=0.0,
                 updated_at_monotonic=0.0,
+                last_live_frame_at_unix=None,
+                fallback_active=False,
+                fallback_reason="no_frame",
+                stale_after_s=stale_after,
+                placeholder_after_s=placeholder_after,
             )
 
         async with self._lock:
@@ -160,23 +192,39 @@ class TransmissionRuntimeState:
             if not selected_writer_id:
                 fallback = self._last_selected_frame_by_transmission.get(transmission_key) or self._last_incoming_frame_by_transmission.get(transmission_key)
                 if fallback is not None:
-                    return SelectedWriterFrame(
+                    return self._selected_frame_result(
                         transmission_id=transmission_key,
+                        now_monotonic=now_monotonic,
+                        active_writer_id=None,
                         writer_id=None,
+                        selected_writer_id=fallback.writer_id,
                         frame=fallback.frame,
                         lifecycle_state=None,
                         writer_priority=0,
                         frame_ts=float(fallback.frame_ts),
                         updated_at_monotonic=float(fallback.updated_at_monotonic),
+                        last_live_frame_at_unix=fallback.updated_at_unix,
+                        fallback_active=True,
+                        fallback_reason="no_active_writer",
+                        stale_after_s=stale_after,
+                        placeholder_after_s=placeholder_after,
                     )
-                return SelectedWriterFrame(
+                return self._selected_frame_result(
                     transmission_id=transmission_key,
+                    now_monotonic=now_monotonic,
+                    active_writer_id=None,
                     writer_id=None,
+                    selected_writer_id=None,
                     frame=None,
                     lifecycle_state=None,
                     writer_priority=0,
                     frame_ts=0.0,
                     updated_at_monotonic=now_monotonic,
+                    last_live_frame_at_unix=None,
+                    fallback_active=False,
+                    fallback_reason="no_frame",
+                    stale_after_s=stale_after,
+                    placeholder_after_s=placeholder_after,
                 )
 
             by_writer = self._last_frame_by_writer.get(transmission_key) or {}
@@ -184,62 +232,123 @@ class TransmissionRuntimeState:
             if selected is None:
                 fallback = self._last_selected_frame_by_transmission.get(transmission_key) or self._last_incoming_frame_by_transmission.get(transmission_key)
                 if fallback is not None:
-                    return SelectedWriterFrame(
+                    return self._selected_frame_result(
                         transmission_id=transmission_key,
+                        now_monotonic=now_monotonic,
+                        active_writer_id=selected_writer_id,
                         writer_id=None,
+                        selected_writer_id=fallback.writer_id,
                         frame=fallback.frame,
                         lifecycle_state=None,
                         writer_priority=0,
                         frame_ts=float(fallback.frame_ts),
                         updated_at_monotonic=float(fallback.updated_at_monotonic),
+                        last_live_frame_at_unix=fallback.updated_at_unix,
+                        fallback_active=True,
+                        fallback_reason="selected_writer_missing_frame",
+                        stale_after_s=stale_after,
+                        placeholder_after_s=placeholder_after,
                     )
-                return SelectedWriterFrame(
+                return self._selected_frame_result(
                     transmission_id=transmission_key,
+                    now_monotonic=now_monotonic,
+                    active_writer_id=selected_writer_id,
                     writer_id=None,
+                    selected_writer_id=None,
                     frame=None,
                     lifecycle_state=None,
                     writer_priority=0,
                     frame_ts=0.0,
                     updated_at_monotonic=now_monotonic,
+                    last_live_frame_at_unix=None,
+                    fallback_active=False,
+                    fallback_reason="no_frame",
+                    stale_after_s=stale_after,
+                    placeholder_after_s=placeholder_after,
                 )
             if selected.frame is not None:
                 self._last_selected_frame_by_transmission[transmission_key] = TransmissionFrameState(
                     frame=selected.frame,
                     writer_id=selected.writer_id,
                     frame_ts=float(selected.frame_ts),
-                    updated_at_monotonic=float(selected.updated_at_monotonic),
+                    updated_at_monotonic=float(selected.last_frame_monotonic),
+                    updated_at_unix=selected.last_frame_unix,
                 )
 
             resolved_frame = selected.frame
             resolved_frame_ts = float(selected.frame_ts)
-            resolved_updated_monotonic = float(selected.updated_at_monotonic)
+            resolved_updated_monotonic = float(selected.last_frame_monotonic)
+            resolved_updated_unix = selected.last_frame_unix
+            fallback_active = False
+            fallback_reason: str | None = None
+            selected_frame_writer_id: str | None = selected.writer_id
             if resolved_frame is None:
                 fallback = self._last_selected_frame_by_transmission.get(transmission_key) or self._last_incoming_frame_by_transmission.get(transmission_key)
                 if fallback is not None:
                     resolved_frame = fallback.frame
                     resolved_frame_ts = float(fallback.frame_ts)
                     resolved_updated_monotonic = float(fallback.updated_at_monotonic)
+                    resolved_updated_unix = fallback.updated_at_unix
+                    fallback_active = True
+                    fallback_reason = "selected_writer_missing_frame"
+                    selected_frame_writer_id = fallback.writer_id
+                else:
+                    fallback_reason = "no_frame"
 
-            return SelectedWriterFrame(
+            return self._selected_frame_result(
                 transmission_id=transmission_key,
+                now_monotonic=now_monotonic,
+                active_writer_id=selected_writer_id,
                 writer_id=selected.writer_id if selected.frame is not None else None,
+                selected_writer_id=selected_frame_writer_id if resolved_frame is not None else None,
                 frame=resolved_frame,
                 lifecycle_state=selected.lifecycle_state if selected.frame is not None else None,
                 writer_priority=int(selected.writer_priority) if selected.frame is not None else 0,
                 frame_ts=resolved_frame_ts,
                 updated_at_monotonic=resolved_updated_monotonic,
+                last_live_frame_at_unix=resolved_updated_unix,
+                fallback_active=fallback_active,
+                fallback_reason=fallback_reason,
+                stale_after_s=stale_after,
+                placeholder_after_s=placeholder_after,
             )
 
-    async def snapshot(self) -> dict[str, Any]:
+    async def snapshot(
+        self,
+        *,
+        stale_after_s: float = 3.0,
+        placeholder_after_s: float = 8.0,
+    ) -> dict[str, Any]:
         async with self._lock:
             transmissions: dict[str, dict[str, Any]] = {}
             now_monotonic = self._monotonic()
-            for transmission_id in list(self._last_frame_by_writer.keys()):
+            stale_after = max(0.1, float(stale_after_s))
+            placeholder_after = max(stale_after, float(placeholder_after_s))
+            known_transmissions = set(self._last_frame_by_writer.keys())
+            known_transmissions.update(self._last_incoming_frame_by_transmission.keys())
+            known_transmissions.update(self._last_selected_frame_by_transmission.keys())
+            known_transmissions.update(self._active_writer_by_transmission.keys())
+            known_transmissions.update(self._output_to_transmission.values())
+            for transmission_id in sorted(known_transmissions):
                 self._evict_stale_locked(transmission_id, now_monotonic)
                 self._refresh_active_writer_locked(transmission_id, now_monotonic)
                 by_writer = self._last_frame_by_writer.get(transmission_id) or {}
+                selected = self._selected_frame_locked(
+                    transmission_id=transmission_id,
+                    now_monotonic=now_monotonic,
+                    stale_after_s=stale_after,
+                    placeholder_after_s=placeholder_after,
+                )
                 transmissions[transmission_id] = {
                     "active_writer": self._active_writer_by_transmission.get(transmission_id),
+                    "selected_writer": selected.selected_writer_id,
+                    "selected_frame_age_seconds": selected.selected_frame_age_seconds,
+                    "last_incoming_frame_age_seconds": selected.last_incoming_frame_age_seconds,
+                    "last_live_frame_at_unix": selected.last_live_frame_at_unix,
+                    "fallback_active": bool(selected.fallback_active),
+                    "fallback_reason": selected.fallback_reason,
+                    "stale": bool(selected.stale),
+                    "placeholder_active": bool(selected.placeholder_active),
                     "sticky_until_monotonic": self._sticky_until_by_transmission.get(transmission_id),
                     "arbitration_mode": self._arbitration_mode_by_transmission.get(transmission_id),
                     "demand_signal": self._transmission_has_demand_locked(transmission_id),
@@ -250,6 +359,7 @@ class TransmissionRuntimeState:
                             "has_frame": state.frame is not None,
                             "frame_ts": float(state.frame_ts),
                             "last_frame_monotonic": float(state.last_frame_monotonic),
+                            "last_frame_unix": state.last_frame_unix,
                             "updated_at_monotonic": float(state.updated_at_monotonic),
                         }
                         for writer_id, state in by_writer.items()
@@ -434,7 +544,7 @@ class TransmissionRuntimeState:
     def _refresh_active_writer_locked(self, transmission_id: str, now_monotonic: float | None = None) -> str | None:
         by_writer = self._last_frame_by_writer.get(transmission_id)
         if not by_writer:
-            self._cleanup_transmission_locked(transmission_id)
+            self._cleanup_transmission_locked(transmission_id, preserve_frames=True)
             return None
 
         arbitration_mode = self._arbitration_mode_by_transmission.get(transmission_id) or "priority_latest"
@@ -466,6 +576,154 @@ class TransmissionRuntimeState:
             if int(self._viewer_count_by_output.get(output_key, 0)) > 0:
                 return True
         return False
+
+    def _selected_frame_locked(
+        self,
+        *,
+        transmission_id: str,
+        now_monotonic: float,
+        stale_after_s: float,
+        placeholder_after_s: float,
+    ) -> SelectedWriterFrame:
+        active_writer_id = self._active_writer_by_transmission.get(transmission_id)
+        by_writer = self._last_frame_by_writer.get(transmission_id) or {}
+        if active_writer_id:
+            selected = by_writer.get(active_writer_id)
+            if selected is not None and selected.frame is not None:
+                return self._selected_frame_result(
+                    transmission_id=transmission_id,
+                    now_monotonic=now_monotonic,
+                    active_writer_id=active_writer_id,
+                    writer_id=selected.writer_id,
+                    selected_writer_id=selected.writer_id,
+                    frame=selected.frame,
+                    lifecycle_state=selected.lifecycle_state,
+                    writer_priority=int(selected.writer_priority),
+                    frame_ts=float(selected.frame_ts),
+                    updated_at_monotonic=float(selected.last_frame_monotonic),
+                    last_live_frame_at_unix=selected.last_frame_unix,
+                    fallback_active=False,
+                    fallback_reason=None,
+                    stale_after_s=stale_after_s,
+                    placeholder_after_s=placeholder_after_s,
+                )
+
+            fallback = (
+                self._last_selected_frame_by_transmission.get(transmission_id)
+                or self._last_incoming_frame_by_transmission.get(transmission_id)
+            )
+            if fallback is not None:
+                return self._selected_frame_result(
+                    transmission_id=transmission_id,
+                    now_monotonic=now_monotonic,
+                    active_writer_id=active_writer_id,
+                    writer_id=None,
+                    selected_writer_id=fallback.writer_id,
+                    frame=fallback.frame,
+                    lifecycle_state=None,
+                    writer_priority=0,
+                    frame_ts=float(fallback.frame_ts),
+                    updated_at_monotonic=float(fallback.updated_at_monotonic),
+                    last_live_frame_at_unix=fallback.updated_at_unix,
+                    fallback_active=True,
+                    fallback_reason="selected_writer_missing_frame",
+                    stale_after_s=stale_after_s,
+                    placeholder_after_s=placeholder_after_s,
+                )
+
+        fallback = (
+            self._last_selected_frame_by_transmission.get(transmission_id)
+            or self._last_incoming_frame_by_transmission.get(transmission_id)
+        )
+        if fallback is not None:
+            return self._selected_frame_result(
+                transmission_id=transmission_id,
+                now_monotonic=now_monotonic,
+                active_writer_id=active_writer_id,
+                writer_id=None,
+                selected_writer_id=fallback.writer_id,
+                frame=fallback.frame,
+                lifecycle_state=None,
+                writer_priority=0,
+                frame_ts=float(fallback.frame_ts),
+                updated_at_monotonic=float(fallback.updated_at_monotonic),
+                last_live_frame_at_unix=fallback.updated_at_unix,
+                fallback_active=True,
+                fallback_reason="no_active_writer",
+                stale_after_s=stale_after_s,
+                placeholder_after_s=placeholder_after_s,
+            )
+
+        return self._selected_frame_result(
+            transmission_id=transmission_id,
+            now_monotonic=now_monotonic,
+            active_writer_id=active_writer_id,
+            writer_id=None,
+            selected_writer_id=None,
+            frame=None,
+            lifecycle_state=None,
+            writer_priority=0,
+            frame_ts=0.0,
+            updated_at_monotonic=now_monotonic,
+            last_live_frame_at_unix=None,
+            fallback_active=False,
+            fallback_reason="no_frame",
+            stale_after_s=stale_after_s,
+            placeholder_after_s=placeholder_after_s,
+        )
+
+    def _selected_frame_result(
+        self,
+        *,
+        transmission_id: str,
+        now_monotonic: float,
+        active_writer_id: str | None,
+        writer_id: str | None,
+        selected_writer_id: str | None,
+        frame: numpy.ndarray | None,
+        lifecycle_state: Lifecycle | None,
+        writer_priority: int,
+        frame_ts: float,
+        updated_at_monotonic: float,
+        last_live_frame_at_unix: float | None,
+        fallback_active: bool,
+        fallback_reason: str | None,
+        stale_after_s: float,
+        placeholder_after_s: float,
+    ) -> SelectedWriterFrame:
+        selected_age = (
+            max(0.0, float(now_monotonic) - float(updated_at_monotonic))
+            if frame is not None and float(updated_at_monotonic) > 0.0
+            else None
+        )
+        incoming = self._last_incoming_frame_by_transmission.get(transmission_id)
+        incoming_age = (
+            max(0.0, float(now_monotonic) - float(incoming.updated_at_monotonic))
+            if incoming is not None
+            else None
+        )
+        stale = selected_age is None or selected_age >= max(0.1, float(stale_after_s))
+        placeholder_active = (
+            frame is not None and selected_age is not None and selected_age >= max(float(stale_after_s), float(placeholder_after_s))
+        )
+        return SelectedWriterFrame(
+            transmission_id=transmission_id,
+            writer_id=writer_id,
+            active_writer_id=active_writer_id,
+            selected_writer_id=selected_writer_id,
+            frame=frame,
+            lifecycle_state=lifecycle_state,
+            writer_priority=int(writer_priority),
+            frame_ts=float(frame_ts),
+            updated_at_monotonic=float(updated_at_monotonic),
+            selected_frame_age_seconds=selected_age,
+            last_incoming_frame_age_seconds=incoming_age,
+            last_live_frame_at_unix=last_live_frame_at_unix,
+            fallback_active=bool(fallback_active),
+            fallback_reason=fallback_reason,
+            stale=bool(stale),
+            placeholder_active=bool(placeholder_active),
+        )
 
 
 def _normalize_key(value: str) -> str:

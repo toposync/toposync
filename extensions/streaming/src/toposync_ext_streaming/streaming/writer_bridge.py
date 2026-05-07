@@ -54,6 +54,8 @@ class ResolvedOutputTarget:
     bitrate_kbps: int | None
     latency_profile: str
     resize_mode: str
+    stale_after_seconds: float
+    placeholder_after_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +179,8 @@ class StreamWriterBridge:
                     "bitrate_kbps": target.bitrate_kbps,
                     "latency_profile": target.latency_profile,
                     "resize_mode": target.resize_mode,
+                    "stale_after_seconds": target.stale_after_seconds,
+                    "placeholder_after_seconds": target.placeholder_after_seconds,
                 }
                 for target in self._cached_targets
             ],
@@ -368,7 +372,11 @@ class StreamWriterBridge:
 
             selected = selected_by_transmission.get(target.transmission_id)
             if selected is None:
-                selected = await self._runtime_state.get_selected_writer_frame(target.transmission_id)
+                selected = await self._runtime_state.get_selected_writer_frame(
+                    target.transmission_id,
+                    stale_after_s=target.stale_after_seconds,
+                    placeholder_after_s=target.placeholder_after_seconds,
+                )
                 selected_by_transmission[target.transmission_id] = selected
 
             bypass_candidate = None
@@ -381,6 +389,9 @@ class StreamWriterBridge:
             if bypass_candidate is not None:
                 if not self._enable_bypass:
                     bypass_block_reason = "disabled"
+                    bypass_candidate = None
+                elif selected.stale or selected.placeholder_active:
+                    bypass_block_reason = "selected_frame_stale"
                     bypass_candidate = None
                 # Bypass pulls RTSP directly from the camera and should be enabled only when there is a single
                 # publisher per transmission. Otherwise we'd need fan-out from one pull to multiple publishes.
@@ -465,6 +476,9 @@ class StreamWriterBridge:
                 self._no_stream_hint_until_by_path.pop(path_slug, None)
 
     def _resolve_frame_for_output(self, selected: SelectedWriterFrame, target: ResolvedOutputTarget) -> numpy.ndarray:
+        if selected.placeholder_active:
+            return get_placeholder_frame(target.width, target.height, mode=target.placeholder_mode)
+
         frame = selected.frame
         if frame is None:
             return get_placeholder_frame(target.width, target.height, mode=target.placeholder_mode)
@@ -509,7 +523,13 @@ class StreamWriterBridge:
 
         engine_settings = StreamingEngineSettings.model_validate(normalized_settings.engine.model_dump(mode="python"))
         transmissions = [item.model_dump(mode="python") for item in normalized_settings.transmissions]
-        targets = _resolve_output_targets(transmissions, host_server_id=self._host_server_id)
+        stale_policy = normalized_settings.stale_policy
+        targets = _resolve_output_targets(
+            transmissions,
+            host_server_id=self._host_server_id,
+            stale_after_s=stale_policy.stale_after_seconds,
+            placeholder_after_s=stale_policy.placeholder_after_seconds,
+        )
 
         path_auth_by_path = list_path_read_auth_for_host(normalized_settings, host_server_id=self._host_server_id)
         camera_ingest_by_id = build_camera_ingest_definitions(
@@ -729,9 +749,17 @@ def _publisher_id_for_target(target: ResolvedOutputTarget) -> str:
     return f"{target.transmission_id}:{target.publish_path}"
 
 
-def _resolve_output_targets(transmissions: list[Any], *, host_server_id: str) -> list[ResolvedOutputTarget]:
+def _resolve_output_targets(
+    transmissions: list[Any],
+    *,
+    host_server_id: str,
+    stale_after_s: float = 3.0,
+    placeholder_after_s: float = 8.0,
+) -> list[ResolvedOutputTarget]:
     targets: list[ResolvedOutputTarget] = []
     target_host_server_id = normalize_server_id(host_server_id)
+    stale_after = max(0.1, float(stale_after_s))
+    placeholder_after = max(stale_after, float(placeholder_after_s))
 
     for transmission_raw in transmissions:
         if not isinstance(transmission_raw, dict):
@@ -834,6 +862,8 @@ def _resolve_output_targets(transmissions: list[Any], *, host_server_id: str) ->
                     bitrate_kbps=bitrate_kbps,
                     latency_profile=latency_profile,
                     resize_mode=resize_mode,
+                    stale_after_seconds=stale_after,
+                    placeholder_after_seconds=placeholder_after,
                 )
             )
 

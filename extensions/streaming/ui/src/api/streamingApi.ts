@@ -4,6 +4,7 @@ import type {
   ProcessingServer,
   ProcessingServersListResponse,
   StreamingOutputsRuntimeResponse,
+  StreamingRuntimeHealthResponse,
   TransmissionDemandResponse,
   StreamingExtensionSettings,
   StreamingPreferredPorts,
@@ -133,6 +134,14 @@ export async function fetchTransmissionUrls(transmissionId: string): Promise<Tra
 
 export async function fetchStreamingOutputsRuntime(signal?: AbortSignal): Promise<StreamingOutputsRuntimeResponse> {
   return requestJson<StreamingOutputsRuntimeResponse>("/api/streams/runtime/outputs", { signal });
+}
+
+export async function fetchStreamingRuntimeHealth(signal?: AbortSignal): Promise<StreamingRuntimeHealthResponse> {
+  return requestJson<StreamingRuntimeHealthResponse>("/api/streams/runtime/health", { signal });
+}
+
+export async function fetchStreamingRuntimeDiagnostics(signal?: AbortSignal): Promise<unknown> {
+  return requestJson<unknown>("/api/streams/runtime/diagnostics", { signal });
 }
 
 export async function fetchTransmissionDemand(transmissionId: string, signal?: AbortSignal): Promise<TransmissionDemandResponse> {

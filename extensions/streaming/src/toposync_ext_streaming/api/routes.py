@@ -36,7 +36,7 @@ from ..streaming.mediamtx_processes import (
     kill_mediamtx_processes_for_config_path,
 )
 from ..streaming.publisher_manager import PublisherManager
-from ..streaming.runtime_state import TransmissionRuntimeState
+from ..streaming.runtime_state import SelectedWriterFrame, TransmissionRuntimeState
 from ..wizard import build_streaming_wizard_graph, suggested_streaming_wizard_pipeline_name
 from .models import (
     EXTENSION_ID,
@@ -46,6 +46,9 @@ from .models import (
     StreamingEngineStatusResponse,
     StreamingExtensionSettings,
     StreamingHealthResponse,
+    StreamingRuntimeHealthResponse,
+    StreamingRuntimeOutputHealth,
+    StreamingRuntimeTransmissionHealth,
     StreamingOutputsRuntimeResponse,
     StreamingOutputRuntimeStatus,
     StreamingSettingsPatchRequest,
@@ -513,6 +516,152 @@ def _iter_enabled_outputs(
     if not outputs:
         outputs = [("default", "rtsp", transmission.path)]
     return outputs
+
+
+def _selection_status(*, selected: SelectedWriterFrame, transmission_enabled: bool) -> str:
+    if not transmission_enabled:
+        return "offline"
+    if selected.frame is None or selected.fallback_reason == "no_frame":
+        return "offline"
+    if selected.stale or selected.placeholder_active:
+        return "stale"
+    if selected.fallback_active:
+        return "degraded"
+    return "live"
+
+
+def _output_status(
+    *,
+    selection_status: str,
+    selected: SelectedWriterFrame,
+    publisher_running: bool,
+    publisher_last_error: str | None,
+) -> str:
+    if selection_status in {"offline", "stale"}:
+        return selection_status
+    if not publisher_running:
+        return "offline"
+    if selected.fallback_active or publisher_last_error:
+        return "degraded"
+    return "live"
+
+
+def _transmission_status(*, selection_status: str, output_statuses: list[str]) -> str:
+    if selection_status in {"offline", "stale"}:
+        return selection_status
+    if not output_statuses:
+        return "degraded"
+    if any(status == "live" for status in output_statuses):
+        return "degraded" if selection_status == "degraded" else "live"
+    if any(status == "stale" for status in output_statuses):
+        return "stale"
+    if any(status == "degraded" for status in output_statuses):
+        return "degraded"
+    return "offline"
+
+
+async def _build_runtime_health(
+    *,
+    request: Request,
+    settings: StreamingExtensionSettings,
+) -> StreamingRuntimeHealthResponse:
+    runtime_state = _runtime_state(request)
+    publisher = _publisher_manager(request)
+    current_server_id = _current_server_id(request)
+    stale_policy = settings.stale_policy
+    stale_after_s = float(stale_policy.stale_after_seconds)
+    placeholder_after_s = float(stale_policy.placeholder_after_seconds)
+
+    viewer_count_by_output = await runtime_state.get_viewer_count_by_output()
+    publisher_status_by_output = await publisher.list_status()
+
+    transmission_health: list[StreamingRuntimeTransmissionHealth] = []
+    for transmission in settings.transmissions:
+        if normalize_server_id(transmission.host_server_id, fallback="local") != current_server_id:
+            continue
+
+        selected = await runtime_state.get_selected_writer_frame(
+            transmission.id,
+            stale_after_s=stale_after_s,
+            placeholder_after_s=placeholder_after_s,
+        )
+        selection_status = _selection_status(
+            selected=selected,
+            transmission_enabled=bool(transmission.enabled),
+        )
+
+        outputs: list[StreamingRuntimeOutputHealth] = []
+        output_statuses: list[str] = []
+        for output_id, protocol, resolved_engine_path in _iter_enabled_outputs(transmission):
+            output_key = build_transmission_output_key(
+                transmission_id=transmission.id,
+                output_id=output_id,
+            )
+            viewer_count = int(viewer_count_by_output.get(output_key, 0))
+            publisher_key = f"{transmission.id}:{resolved_engine_path}"
+            publisher_status = publisher_status_by_output.get(publisher_key)
+            publisher_running = bool(getattr(publisher_status, "running", False))
+            publisher_last_error = getattr(publisher_status, "last_error", None)
+            status = _output_status(
+                selection_status=selection_status,
+                selected=selected,
+                publisher_running=publisher_running,
+                publisher_last_error=publisher_last_error,
+            )
+            output_statuses.append(status)
+            outputs.append(
+                StreamingRuntimeOutputHealth(
+                    output_key=output_key,
+                    output_id=output_id,
+                    transmission_id=transmission.id,
+                    protocol=protocol,
+                    resolved_engine_path=resolved_engine_path,
+                    viewer_count=viewer_count,
+                    demand_signal=viewer_count > 0,
+                    publisher_running=publisher_running,
+                    publisher_pid=getattr(publisher_status, "pid", None),
+                    publisher_frames_sent=int(getattr(publisher_status, "frames_sent", 0) or 0),
+                    publisher_last_error=publisher_last_error,
+                    publisher_active_codec=getattr(publisher_status, "active_codec", None),
+                    publisher_hardware_accelerated=bool(
+                        getattr(publisher_status, "hardware_accelerated", False)
+                    ),
+                    publisher_restart_count=int(
+                        getattr(publisher_status, "restart_count", 0) or 0
+                    ),
+                    status=status,
+                )
+            )
+
+        outputs.sort(key=lambda item: item.output_key)
+        transmission_health.append(
+            StreamingRuntimeTransmissionHealth(
+                transmission_id=transmission.id,
+                enabled=bool(transmission.enabled),
+                status=_transmission_status(
+                    selection_status=selection_status,
+                    output_statuses=output_statuses,
+                ),
+                active_writer_id=selected.active_writer_id,
+                selected_writer_id=selected.selected_writer_id,
+                selected_frame_age_seconds=selected.selected_frame_age_seconds,
+                last_incoming_frame_age_seconds=selected.last_incoming_frame_age_seconds,
+                last_live_frame_at_unix=selected.last_live_frame_at_unix,
+                fallback_active=bool(selected.fallback_active),
+                fallback_reason=selected.fallback_reason,
+                stale=bool(selected.stale),
+                placeholder_active=bool(selected.placeholder_active),
+                outputs=outputs,
+            )
+        )
+
+    transmission_health.sort(key=lambda item: item.transmission_id)
+    return StreamingRuntimeHealthResponse(
+        updated_at_unix=datetime.now(timezone.utc).timestamp(),
+        stale_after_seconds=stale_after_s,
+        placeholder_after_seconds=placeholder_after_s,
+        transmissions=transmission_health,
+    )
 
 
 def _resolve_camera_id_from_settings(settings: Any, *, camera_selector: str) -> str | None:
@@ -1451,56 +1600,51 @@ def create_streaming_router() -> APIRouter:
         _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
-        current_server_id = _current_server_id(request)
-
-        runtime_state = _runtime_state(request)
-        publisher = _publisher_manager(request)
-        viewer_count_by_output = await runtime_state.get_viewer_count_by_output()
-        publisher_status_by_output = await publisher.list_status()
-
+        health = await _build_runtime_health(request=request, settings=settings)
         outputs: list[StreamingOutputRuntimeStatus] = []
-        for transmission in settings.transmissions:
-            if (
-                normalize_server_id(transmission.host_server_id, fallback="local")
-                != current_server_id
-            ):
-                continue
-            for output_id, protocol, resolved_engine_path in _iter_enabled_outputs(transmission):
-                output_key = build_transmission_output_key(
-                    transmission_id=transmission.id,
-                    output_id=output_id,
-                )
-                viewer_count = int(viewer_count_by_output.get(output_key, 0))
-                publisher_key = f"{transmission.id}:{resolved_engine_path}"
-                publisher_status = publisher_status_by_output.get(publisher_key)
+        for transmission in health.transmissions:
+            for output in transmission.outputs:
                 outputs.append(
                     StreamingOutputRuntimeStatus(
-                        output_key=output_key,
-                        output_id=output_id,
-                        transmission_id=transmission.id,
-                        protocol=protocol,
-                        resolved_engine_path=resolved_engine_path,
-                        viewer_count=viewer_count,
-                        demand_signal=viewer_count > 0,
-                        publisher_running=bool(getattr(publisher_status, "running", False)),
-                        publisher_pid=getattr(publisher_status, "pid", None),
-                        publisher_frames_sent=int(getattr(publisher_status, "frames_sent", 0) or 0),
-                        publisher_last_error=getattr(publisher_status, "last_error", None),
-                        publisher_active_codec=getattr(publisher_status, "active_codec", None),
-                        publisher_hardware_accelerated=bool(
-                            getattr(publisher_status, "hardware_accelerated", False)
-                        ),
-                        publisher_restart_count=int(
-                            getattr(publisher_status, "restart_count", 0) or 0
-                        ),
+                        output_key=output.output_key,
+                        output_id=output.output_id,
+                        transmission_id=transmission.transmission_id,
+                        protocol=output.protocol,
+                        resolved_engine_path=output.resolved_engine_path,
+                        viewer_count=output.viewer_count,
+                        demand_signal=output.demand_signal,
+                        publisher_running=output.publisher_running,
+                        publisher_pid=output.publisher_pid,
+                        publisher_frames_sent=output.publisher_frames_sent,
+                        publisher_last_error=output.publisher_last_error,
+                        publisher_active_codec=output.publisher_active_codec,
+                        publisher_hardware_accelerated=output.publisher_hardware_accelerated,
+                        publisher_restart_count=output.publisher_restart_count,
+                        status=output.status,
+                        active_writer_id=transmission.active_writer_id,
+                        selected_writer_id=transmission.selected_writer_id,
+                        selected_frame_age_seconds=transmission.selected_frame_age_seconds,
+                        last_incoming_frame_age_seconds=transmission.last_incoming_frame_age_seconds,
+                        last_live_frame_at_unix=transmission.last_live_frame_at_unix,
+                        fallback_active=transmission.fallback_active,
+                        fallback_reason=transmission.fallback_reason,
+                        stale=transmission.stale,
+                        placeholder_active=transmission.placeholder_active,
                     )
                 )
 
         outputs.sort(key=lambda item: (item.transmission_id, item.output_id))
         return StreamingOutputsRuntimeResponse(
-            updated_at_unix=datetime.now(timezone.utc).timestamp(),
+            updated_at_unix=health.updated_at_unix,
             outputs=outputs,
         )
+
+    @router.get("/runtime/health", response_model=StreamingRuntimeHealthResponse)
+    async def streaming_runtime_health(request: Request) -> StreamingRuntimeHealthResponse:
+        _require_auth(request, action="core:settings:read")
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        return await _build_runtime_health(request=request, settings=settings)
 
     @router.get("/runtime/diagnostics")
     async def streaming_runtime_diagnostics(request: Request) -> dict[str, Any]:
@@ -1523,7 +1667,10 @@ def create_streaming_router() -> APIRouter:
             "server_id": _current_server_id(request),
             "engine": await manager.status_payload(host=_status_host(request, settings)),
             "publisher": await publisher.snapshot(),
-            "runtime_state": await runtime_state.snapshot(),
+            "runtime_state": await runtime_state.snapshot(
+                stale_after_s=settings.stale_policy.stale_after_seconds,
+                placeholder_after_s=settings.stale_policy.placeholder_after_seconds,
+            ),
             "bridge": bridge_snapshot,
         }
 

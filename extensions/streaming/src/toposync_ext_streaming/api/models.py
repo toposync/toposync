@@ -13,6 +13,12 @@ from ..streaming.mediamtx_config import normalize_path_slug
 
 EXTENSION_ID = "com.toposync.streaming"
 TEST_PATH = "test"
+StreamingRuntimeStatus = Literal["live", "degraded", "stale", "offline"]
+StreamingFallbackReason = Literal[
+    "no_active_writer",
+    "selected_writer_missing_frame",
+    "no_frame",
+]
 
 
 def _now_utc() -> datetime:
@@ -275,6 +281,26 @@ class StreamingCameraIngestSettings(BaseModel):
         return normalize_path_slug(str(value or ""), fallback="ingest")
 
 
+class StreamingStalePolicySettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stale_after_seconds: float = Field(default=3.0, ge=0.1, le=300.0)
+    placeholder_after_seconds: float = Field(default=8.0, ge=0.1, le=600.0)
+
+    @model_validator(mode="after")
+    def _validate_threshold_order(self) -> "StreamingStalePolicySettings":
+        if float(self.placeholder_after_seconds) < float(self.stale_after_seconds):
+            raise ValueError("placeholder_after_seconds must be greater than or equal to stale_after_seconds")
+        return self
+
+
+class StreamingStalePolicySettingsPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stale_after_seconds: float | None = Field(default=None, ge=0.1, le=300.0)
+    placeholder_after_seconds: float | None = Field(default=None, ge=0.1, le=600.0)
+
+
 class StreamingEngineSettingsPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -296,6 +322,7 @@ class StreamingExtensionSettings(BaseModel):
     transmissions: list[Transmission] = Field(default_factory=list)
     engine: StreamingEngineSettings = Field(default_factory=StreamingEngineSettings)
     camera_ingest: StreamingCameraIngestSettings = Field(default_factory=StreamingCameraIngestSettings)
+    stale_policy: StreamingStalePolicySettings = Field(default_factory=StreamingStalePolicySettings)
 
     @model_validator(mode="after")
     def _validate_uniqueness(self) -> "StreamingExtensionSettings":
@@ -330,6 +357,7 @@ class StreamingSettingsPatchRequest(BaseModel):
     transmissions: list[Transmission] | None = None
     engine: StreamingEngineSettingsPatch | None = None
     camera_ingest: StreamingCameraIngestSettings | None = None
+    stale_policy: StreamingStalePolicySettingsPatch | None = None
 
 
 class StreamingHealthResponse(BaseModel):
@@ -516,6 +544,16 @@ class StreamingOutputRuntimeStatus(BaseModel):
     publisher_active_codec: str | None = None
     publisher_hardware_accelerated: bool = False
     publisher_restart_count: int = Field(default=0, ge=0)
+    status: StreamingRuntimeStatus = "offline"
+    active_writer_id: str | None = None
+    selected_writer_id: str | None = None
+    selected_frame_age_seconds: float | None = None
+    last_incoming_frame_age_seconds: float | None = None
+    last_live_frame_at_unix: float | None = None
+    fallback_active: bool = False
+    fallback_reason: StreamingFallbackReason | None = None
+    stale: bool = False
+    placeholder_active: bool = False
 
 
 class StreamingOutputsRuntimeResponse(BaseModel):
@@ -523,6 +561,53 @@ class StreamingOutputsRuntimeResponse(BaseModel):
 
     updated_at_unix: float
     outputs: list[StreamingOutputRuntimeStatus] = Field(default_factory=list)
+
+
+class StreamingRuntimeOutputHealth(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    output_key: str
+    output_id: str
+    transmission_id: str
+    protocol: Literal["hls", "rtsp", "webrtc"]
+    resolved_engine_path: str
+    viewer_count: int = Field(ge=0)
+    demand_signal: bool
+    publisher_running: bool
+    publisher_pid: int | None = None
+    publisher_frames_sent: int = Field(default=0, ge=0)
+    publisher_last_error: str | None = None
+    publisher_active_codec: str | None = None
+    publisher_hardware_accelerated: bool = False
+    publisher_restart_count: int = Field(default=0, ge=0)
+    status: StreamingRuntimeStatus
+
+
+class StreamingRuntimeTransmissionHealth(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transmission_id: str
+    enabled: bool = True
+    status: StreamingRuntimeStatus
+    active_writer_id: str | None = None
+    selected_writer_id: str | None = None
+    selected_frame_age_seconds: float | None = None
+    last_incoming_frame_age_seconds: float | None = None
+    last_live_frame_at_unix: float | None = None
+    fallback_active: bool = False
+    fallback_reason: StreamingFallbackReason | None = None
+    stale: bool = False
+    placeholder_active: bool = False
+    outputs: list[StreamingRuntimeOutputHealth] = Field(default_factory=list)
+
+
+class StreamingRuntimeHealthResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    updated_at_unix: float
+    stale_after_seconds: float
+    placeholder_after_seconds: float
+    transmissions: list[StreamingRuntimeTransmissionHealth] = Field(default_factory=list)
 
 
 StreamingWizardPresetId = Literal[

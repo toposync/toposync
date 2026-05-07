@@ -58,6 +58,7 @@ class _PublisherManagerStub:
         self.start_calls: list[str] = []
         self.stop_calls: list[str] = []
         self.frames_by_output: dict[str, int] = {}
+        self.last_frame_by_output: dict[str, numpy.ndarray] = {}
 
     async def start_publisher(
         self,
@@ -74,8 +75,8 @@ class _PublisherManagerStub:
         return None
 
     async def submit_frame(self, output_id: str, frame: numpy.ndarray) -> None:
-        _ = frame
         self.frames_by_output[output_id] = int(self.frames_by_output.get(output_id, 0)) + 1
+        self.last_frame_by_output[output_id] = numpy.asarray(frame).copy()
 
     async def stop_publisher(self, output_id: str) -> None:
         self.started.discard(output_id)
@@ -112,6 +113,10 @@ def test_on_demand_does_not_flap_with_short_viewer_drop() -> None:
 
 def test_on_demand_prime_starts_without_viewers() -> None:
     asyncio.run(_on_demand_prime_scenario())
+
+
+def test_writer_bridge_publishes_placeholder_when_selected_frame_is_stale() -> None:
+    asyncio.run(_stale_placeholder_scenario())
 
 
 async def _on_demand_start_stop_scenario() -> None:
@@ -308,3 +313,72 @@ async def _on_demand_prime_scenario() -> None:
 
     await bridge._tick_once(108.4)
     assert publisher_manager.stop_calls == ["transmission_prime:prime-path"]
+
+
+async def _stale_placeholder_scenario() -> None:
+    extension_payload = {
+        "engine": {"enabled": True, "expose_to_lan": False},
+        "stale_policy": {"stale_after_seconds": 1.0, "placeholder_after_seconds": 2.0},
+        "transmissions": [
+            {
+                "id": "transmission_stale",
+                "path": "stale-path",
+                "enabled": True,
+                "placeholder": "gray",
+                "outputs": [
+                    {
+                        "id": "main",
+                        "protocol": "hls",
+                        "enabled": True,
+                        "resolution": {"width": 160, "height": 120},
+                        "fps_limit": 10,
+                    }
+                ],
+            }
+        ],
+    }
+
+    config_store = _ConfigStoreStub(extension_payload)
+    engine_manager = _EngineManagerStub()
+    clock = {"now": 100.0}
+    runtime_state = TransmissionRuntimeState(monotonic=lambda: float(clock["now"]))
+    publisher_manager = _PublisherManagerStub()
+    mediamtx_api_client = _MediaMtxApiClientStub({"stale-path": 1})
+    bridge = StreamWriterBridge(
+        config_store=config_store,
+        engine_manager=engine_manager,  # type: ignore[arg-type]
+        runtime_state=runtime_state,
+        publisher_manager=publisher_manager,  # type: ignore[arg-type]
+        mediamtx_api_client=mediamtx_api_client,  # type: ignore[arg-type]
+        logger=SimpleNamespace(exception=lambda *args, **kwargs: None),  # type: ignore[arg-type]
+        viewer_refresh_s=0.2,
+        on_demand_enabled=True,
+        monotonic=lambda: float(clock["now"]),
+    )
+
+    await runtime_state.update_writer_frame(
+        transmission_id="transmission_stale",
+        writer_id="pipeline_main:stream.publish_video",
+        lifecycle_state=Lifecycle.UPDATE,
+        writer_priority=1,
+        frame=numpy.full((120, 160, 3), 180, dtype=numpy.uint8),
+        frame_ts=1.0,
+    )
+
+    await bridge._tick_once(100.1)
+    output_id = "transmission_stale:stale-path"
+    first_frame = publisher_manager.last_frame_by_output[output_id]
+    assert int(first_frame[0, 0, 0]) == 180
+
+    clock["now"] = 103.0
+    await bridge._tick_once(103.0)
+    placeholder_frame = publisher_manager.last_frame_by_output[output_id]
+    assert int(placeholder_frame[0, 0, 0]) == 127
+
+    selected = await runtime_state.get_selected_writer_frame(
+        "transmission_stale",
+        stale_after_s=1.0,
+        placeholder_after_s=2.0,
+    )
+    assert selected.stale is True
+    assert selected.placeholder_active is True

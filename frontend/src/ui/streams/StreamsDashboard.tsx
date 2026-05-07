@@ -3,8 +3,10 @@ import type Hls from "hls.js";
 
 import {
   getStreamingTransmissionUrls,
+  getStreamingRuntimeHealth,
   listStreamingTransmissions,
   primeStreamingTransmissionDemand,
+  type StreamingRuntimeTransmissionHealth,
   type StreamingTransmission,
   type StreamingTransmissionUrlsResponse,
 } from "../../util/api";
@@ -20,6 +22,7 @@ type Props = {
 };
 
 type TilePlaybackStatus = "idle" | "loading" | "playing" | "error" | "unsupported";
+type TileHealthTone = "muted" | "warn" | "error";
 type TilePlaybackTransport = "none" | "webrtc" | "hls";
 type StreamProtocol = "hls" | "rtsp" | "webrtc";
 
@@ -42,6 +45,7 @@ const WEBRTC_SIGNAL_TIMEOUT_MS = 5000;
 const WEBRTC_CONNECT_TIMEOUT_MS = 5000;
 const WEBRTC_WHEP_READY_ATTEMPTS = 8;
 const WEBRTC_WHEP_READY_RETRY_MS = 500;
+const RUNTIME_HEALTH_REFRESH_MS = 2000;
 
 function readGridMode(): GridMode {
   if (typeof window === "undefined") return "2x2";
@@ -125,6 +129,79 @@ function canUseWebRtc(): boolean {
   return typeof RTCPeerConnection !== "undefined";
 }
 
+function formatRuntimeAge(seconds: number | null | undefined): string {
+  if (!Number.isFinite(seconds ?? NaN)) return "-";
+  const value = Math.max(0, Number(seconds));
+  if (value < 10) return `${value.toFixed(1)}s`;
+  return `${Math.round(value)}s`;
+}
+
+function formatLastLiveTime(unixSeconds: number | null | undefined): string {
+  if (!Number.isFinite(unixSeconds ?? NaN) || !unixSeconds) return "";
+  try {
+    return new Date(Number(unixSeconds) * 1000).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
+function buildRuntimeHealthHint(
+  health: StreamingRuntimeTransmissionHealth | undefined,
+  t: ReturnType<typeof i18n.useI18n>["t"],
+): { message: string; tone: TileHealthTone } | null {
+  if (!health) return null;
+  const lastLive = formatLastLiveTime(health.last_live_frame_at_unix);
+  if (health.status === "stale" || health.stale) {
+    const suffix = lastLive
+      ? t("core.ui.streams.health.last_live_suffix", { time: lastLive }, ` Last live frame: ${lastLive}.`)
+      : "";
+    return {
+      message: t(
+        "core.ui.streams.health.stale",
+        { suffix },
+        `Stream stale.${suffix} Recovering...`,
+      ),
+      tone: "error",
+    };
+  }
+  if (health.status === "offline") {
+    return {
+      message: t(
+        "core.ui.streams.health.offline",
+        {},
+        "Stream offline. Waiting for publisher and fresh frames...",
+      ),
+      tone: "error",
+    };
+  }
+  if (health.status === "degraded" || health.fallback_active) {
+    return {
+      message: t(
+        "core.ui.streams.health.degraded",
+        { age: formatRuntimeAge(health.selected_frame_age_seconds) },
+        `Stream degraded. Selected frame age: ${formatRuntimeAge(health.selected_frame_age_seconds)}.`,
+      ),
+      tone: "warn",
+    };
+  }
+  return null;
+}
+
+function runtimeStatusLabel(
+  status: StreamingRuntimeTransmissionHealth["status"] | undefined,
+  t: ReturnType<typeof i18n.useI18n>["t"],
+): string | null {
+  if (status === "live") return t("core.ui.streams.health.live_label", {}, "Live");
+  if (status === "degraded") return t("core.ui.streams.health.degraded_label", {}, "Degraded");
+  if (status === "stale") return t("core.ui.streams.health.stale_label", {}, "Stale");
+  if (status === "offline") return t("core.ui.streams.health.offline_label", {}, "Offline");
+  return null;
+}
+
 function waitForIceGatheringComplete(peerConnection: RTCPeerConnection, timeoutMs: number): Promise<void> {
   if (peerConnection.iceGatheringState === "complete") return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -199,6 +276,7 @@ function StreamTilePlayer({
   hlsUrl,
   hlsAuthHeader,
   hlsNativeUrl,
+  runtimeHealth,
   active,
   ptzEnabled,
   onOpenPtz,
@@ -213,6 +291,7 @@ function StreamTilePlayer({
   hlsUrl: string | null;
   hlsAuthHeader: string | null;
   hlsNativeUrl: string | null;
+  runtimeHealth?: StreamingRuntimeTransmissionHealth;
   active: boolean;
   ptzEnabled: boolean;
   onOpenPtz: () => void;
@@ -687,8 +766,9 @@ function StreamTilePlayer({
           ? t("core.ui.streams.transport.hls", {}, "HLS")
           : onlineLabel;
 
+    const healthLabel = runtimeStatusLabel(runtimeHealth?.status, t);
     if (status === "playing") {
-      return transport === "none" ? onlineLabel : transportLabel;
+      return healthLabel ?? (transport === "none" ? onlineLabel : transportLabel);
     }
     if (transport === "none") return statusLabel;
     return t(
@@ -696,7 +776,14 @@ function StreamTilePlayer({
       { status: statusLabel, transport: transportLabel },
       `${statusLabel} (${transportLabel})`,
     );
-  }, [status, t, transport]);
+  }, [runtimeHealth?.status, status, t, transport]);
+
+  const playbackDotStatus = useMemo<TilePlaybackStatus>(() => {
+    if (status === "error" || status === "unsupported") return "error";
+    if (runtimeHealth?.status === "stale" || runtimeHealth?.status === "offline") return "error";
+    if (runtimeHealth?.status === "degraded") return "loading";
+    return status;
+  }, [runtimeHealth?.status, status]);
 
   const toggleFullscreen = async () => {
     const el = frameRef.current;
@@ -750,7 +837,7 @@ function StreamTilePlayer({
 
 	      <div className={["streamsTileOverlay", overlayVisible ? "isVisible" : "isHidden"].join(" ")}>
         <div className="streamsTileOverlayLeft" title={label}>
-          <span className={["streamsPlaybackDot", `is-${status}`].join(" ")} />
+          <span className={["streamsPlaybackDot", `is-${playbackDotStatus}`].join(" ")} />
           <span className="streamsTileOverlayTitle">{label}</span>
           <span className="streamsTileOverlayMeta">{playbackStatusLabel}</span>
         </div>
@@ -811,6 +898,8 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
   const [urlsByTransmissionId, setUrlsByTransmissionId] = useState<Record<string, StreamingTransmissionUrlsResponse>>({});
   const [urlsLoadingByTransmissionId, setUrlsLoadingByTransmissionId] = useState<Record<string, boolean>>({});
   const [urlErrorByTransmissionId, setUrlErrorByTransmissionId] = useState<Record<string, string>>({});
+  const [runtimeHealthByTransmissionId, setRuntimeHealthByTransmissionId] = useState<Record<string, StreamingRuntimeTransmissionHealth>>({});
+  const [runtimeHealthError, setRuntimeHealthError] = useState<string | null>(null);
 
   const [tabVisible, setTabVisible] = useState<boolean>(() => {
     if (typeof document === "undefined") return true;
@@ -879,6 +968,11 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
     return enabledTransmissions.slice(start, start + pageSize);
   }, [enabledTransmissions, pageIndex, pageSize]);
 
+  const currentPageTransmissionIds = useMemo(
+    () => currentPageItems.map((item) => String(item.id || "").trim()).filter(Boolean),
+    [currentPageItems],
+  );
+
   useEffect(() => {
     for (const transmission of currentPageItems) {
       const transmissionId = String(transmission.id || "").trim();
@@ -908,6 +1002,42 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
         });
     }
   }, [currentPageItems, urlsByTransmissionId, urlsLoadingByTransmissionId]);
+
+  useEffect(() => {
+    if (!tabVisible || currentPageTransmissionIds.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    const visibleIds = new Set(currentPageTransmissionIds);
+    const loadRuntimeHealth = async () => {
+      try {
+        const payload = await getStreamingRuntimeHealth();
+        if (cancelled) return;
+        const next: Record<string, StreamingRuntimeTransmissionHealth> = {};
+        for (const item of payload.transmissions ?? []) {
+          const transmissionId = String(item.transmission_id || "").trim();
+          if (!visibleIds.has(transmissionId)) continue;
+          next[transmissionId] = item;
+        }
+        setRuntimeHealthByTransmissionId((previous) => ({ ...previous, ...next }));
+        setRuntimeHealthError(null);
+      } catch (loadError) {
+        if (cancelled) return;
+        setRuntimeHealthError(asErrorMessage(loadError));
+      }
+    };
+
+    void loadRuntimeHealth();
+    const intervalId = window.setInterval(() => {
+      void loadRuntimeHealth();
+    }, RUNTIME_HEALTH_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [currentPageTransmissionIds, tabVisible]);
 
   const pageTiles = useMemo(() => {
     const out: Array<StreamingTransmission | null> = [...currentPageItems];
@@ -972,6 +1102,8 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
             const hlsOutput = selectOutputByProtocol(transmission, urls, "hls");
             const urlError = urlErrorByTransmissionId[transmissionId];
             const urlLoading = Boolean(urlsLoadingByTransmissionId[transmissionId]);
+            const runtimeHealth = runtimeHealthByTransmissionId[transmissionId];
+            const runtimeHint = buildRuntimeHealthHint(runtimeHealth, t);
             const webrtcUrl = webrtcOutput?.url ?? null;
             const hlsUrl = hlsOutput?.url ?? null;
             const webrtcAuthHeader = buildBasicAuthHeader(webrtcOutput?.auth ?? null);
@@ -991,6 +1123,12 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
             } else if (!webrtcUrl && !hlsUrl) {
               sourceHint = t("core.ui.streams.hint.no_outputs", {}, "No WebRTC/HLS output configured for this transmission.");
               sourceHintTone = "warn";
+            } else if (runtimeHint) {
+              sourceHint = runtimeHint.message;
+              sourceHintTone = runtimeHint.tone;
+            } else if (runtimeHealthError) {
+              sourceHint = runtimeHealthError;
+              sourceHintTone = "warn";
             }
 
             return (
@@ -1006,6 +1144,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
                   hlsUrl={hlsUrl}
                   hlsAuthHeader={hlsAuthHeader}
                   hlsNativeUrl={hlsNativeUrl}
+                  runtimeHealth={runtimeHealth}
                   active={tileActive}
                   ptzEnabled={ptzEnabled}
                   onOpenPtz={() => setPtzOverlay({ transmissionId, label: transmissionName })}

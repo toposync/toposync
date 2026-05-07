@@ -99,11 +99,68 @@ export type StreamingOutputRuntimeStatus = {
   publisher_active_codec?: string | null;
   publisher_hardware_accelerated?: boolean;
   publisher_restart_count?: number;
+  status?: StreamingRuntimeStatus;
+  active_writer_id?: string | null;
+  selected_writer_id?: string | null;
+  selected_frame_age_seconds?: number | null;
+  last_incoming_frame_age_seconds?: number | null;
+  last_live_frame_at_unix?: number | null;
+  fallback_active?: boolean;
+  fallback_reason?: StreamingFallbackReason | null;
+  stale?: boolean;
+  placeholder_active?: boolean;
 };
 
 export type StreamingOutputsRuntimeResponse = {
   updated_at_unix: number;
   outputs: StreamingOutputRuntimeStatus[];
+};
+
+export type StreamingRuntimeStatus = "live" | "degraded" | "stale" | "offline";
+
+export type StreamingFallbackReason =
+  | "no_active_writer"
+  | "selected_writer_missing_frame"
+  | "no_frame";
+
+export type StreamingRuntimeOutputHealth = {
+  transmission_id: string;
+  output_key: string;
+  output_id: string;
+  protocol: "hls" | "rtsp" | "webrtc";
+  resolved_engine_path: string;
+  viewer_count: number;
+  demand_signal: boolean;
+  publisher_running: boolean;
+  publisher_pid?: number | null;
+  publisher_frames_sent: number;
+  publisher_last_error?: string | null;
+  publisher_active_codec?: string | null;
+  publisher_hardware_accelerated?: boolean;
+  publisher_restart_count?: number;
+  status: StreamingRuntimeStatus;
+};
+
+export type StreamingRuntimeTransmissionHealth = {
+  transmission_id: string;
+  active_writer_id?: string | null;
+  selected_writer_id?: string | null;
+  selected_frame_age_seconds?: number | null;
+  last_incoming_frame_age_seconds?: number | null;
+  last_live_frame_at_unix?: number | null;
+  fallback_active: boolean;
+  fallback_reason?: StreamingFallbackReason | null;
+  stale: boolean;
+  placeholder_active: boolean;
+  status: StreamingRuntimeStatus;
+  outputs: StreamingRuntimeOutputHealth[];
+};
+
+export type StreamingRuntimeHealthResponse = {
+  updated_at_unix: number;
+  stale_after_seconds: number;
+  placeholder_after_seconds: number;
+  transmissions: StreamingRuntimeTransmissionHealth[];
 };
 
 export type TransmissionDemandOutputStatus = {
@@ -134,9 +191,15 @@ export type StreamingEngineSettings = {
   webrtc_ice_servers?: string[];
 };
 
+export type StreamingStalePolicySettings = {
+  stale_after_seconds?: number;
+  placeholder_after_seconds?: number;
+};
+
 export type StreamingExtensionSettings = {
   transmissions?: Transmission[];
   engine?: StreamingEngineSettings;
+  stale_policy?: StreamingStalePolicySettings;
 };
 
 export type CameraIndexItem = {

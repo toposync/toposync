@@ -721,6 +721,12 @@ export type StreamingTransmissionDemandPrimeResponse = {
   primed_outputs: number;
 };
 
+export type StreamingRuntimeStatus = "live" | "degraded" | "stale" | "offline";
+export type StreamingFallbackReason =
+  | "no_active_writer"
+  | "selected_writer_missing_frame"
+  | "no_frame";
+
 export type StreamingOutputRuntimeStatus = {
   output_key: string;
   output_id: string;
@@ -736,11 +742,62 @@ export type StreamingOutputRuntimeStatus = {
   publisher_active_codec?: string | null;
   publisher_hardware_accelerated?: boolean;
   publisher_restart_count?: number;
+  status?: StreamingRuntimeStatus;
+  active_writer_id?: string | null;
+  selected_writer_id?: string | null;
+  selected_frame_age_seconds?: number | null;
+  last_incoming_frame_age_seconds?: number | null;
+  last_live_frame_at_unix?: number | null;
+  fallback_active?: boolean;
+  fallback_reason?: StreamingFallbackReason | null;
+  stale?: boolean;
+  placeholder_active?: boolean;
 };
 
 export type StreamingOutputsRuntimeResponse = {
   updated_at_unix: number;
   outputs: StreamingOutputRuntimeStatus[];
+};
+
+export type StreamingRuntimeOutputHealth = {
+  output_key: string;
+  output_id: string;
+  transmission_id: string;
+  protocol: "hls" | "rtsp" | "webrtc";
+  resolved_engine_path: string;
+  viewer_count: number;
+  demand_signal: boolean;
+  publisher_running: boolean;
+  publisher_pid?: number | null;
+  publisher_frames_sent: number;
+  publisher_last_error?: string | null;
+  publisher_active_codec?: string | null;
+  publisher_hardware_accelerated?: boolean;
+  publisher_restart_count?: number;
+  status: StreamingRuntimeStatus;
+};
+
+export type StreamingRuntimeTransmissionHealth = {
+  transmission_id: string;
+  enabled?: boolean;
+  status: StreamingRuntimeStatus;
+  active_writer_id?: string | null;
+  selected_writer_id?: string | null;
+  selected_frame_age_seconds?: number | null;
+  last_incoming_frame_age_seconds?: number | null;
+  last_live_frame_at_unix?: number | null;
+  fallback_active?: boolean;
+  fallback_reason?: StreamingFallbackReason | null;
+  stale?: boolean;
+  placeholder_active?: boolean;
+  outputs: StreamingRuntimeOutputHealth[];
+};
+
+export type StreamingRuntimeHealthResponse = {
+  updated_at_unix: number;
+  stale_after_seconds: number;
+  placeholder_after_seconds: number;
+  transmissions: StreamingRuntimeTransmissionHealth[];
 };
 
 async function _parseHttpError(res: Response, fallback: string): Promise<string> {
@@ -1782,4 +1839,10 @@ export async function getStreamingOutputsRuntime(): Promise<StreamingOutputsRunt
   const res = await fetch("/api/streams/runtime/outputs");
   if (!res.ok) throw new Error(`Failed to fetch streaming runtime outputs: ${res.status}`);
   return (await res.json()) as StreamingOutputsRuntimeResponse;
+}
+
+export async function getStreamingRuntimeHealth(): Promise<StreamingRuntimeHealthResponse> {
+  const res = await fetch("/api/streams/runtime/health");
+  if (!res.ok) throw new Error(`Failed to fetch streaming runtime health: ${res.status}`);
+  return (await res.json()) as StreamingRuntimeHealthResponse;
 }

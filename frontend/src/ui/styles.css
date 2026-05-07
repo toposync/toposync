@@ -4058,6 +4058,85 @@ video {
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-success) 22%, transparent);
 }
 
+.streamingRuntimeTableWrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-surface-frost) 70%, transparent);
+}
+
+.streamingRuntimeTable {
+  width: 100%;
+  min-width: 1040px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.streamingRuntimeTable th,
+.streamingRuntimeTable td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.streamingRuntimeTable th {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.streamingRuntimeTable td {
+  color: var(--color-text-primary);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.streamingRuntimeTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.streamingRuntimeBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  font-weight: 800;
+}
+
+.streamingRuntimeBadge.is-live {
+  color: color-mix(in srgb, var(--color-success) 82%, var(--color-text-primary));
+  background: color-mix(in srgb, var(--color-success) 15%, transparent);
+}
+
+.streamingRuntimeBadge.is-degraded {
+  color: color-mix(in srgb, var(--color-warning) 86%, var(--color-text-primary));
+  background: color-mix(in srgb, var(--color-warning) 16%, transparent);
+}
+
+.streamingRuntimeBadge.is-stale,
+.streamingRuntimeBadge.is-offline {
+  color: color-mix(in srgb, var(--color-danger) 82%, var(--color-text-primary));
+  background: color-mix(in srgb, var(--color-danger) 14%, transparent);
+}
+
+.streamingRuntimeBadge.is-unknown {
+  color: var(--color-text-muted);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.streamingRuntimeSubtle {
+  display: inline-flex;
+  margin-left: 6px;
+  color: var(--color-text-muted);
+}
+
 .streamingQuickSteps {
   margin-top: 4px;
   padding-top: 10px;

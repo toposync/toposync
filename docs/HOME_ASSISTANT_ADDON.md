@@ -17,6 +17,7 @@ https://github.com/toposync/toposync-homeassistant-addon
 - executa o mesmo `toposync serve` da distribuição normal
 - serve frontend e API na porta interna de ingress (`18757`)
 - expõe opcionalmente uma porta direta (`18756`) com proxy que remove headers de identidade do Home Assistant
+- declara portas opcionais de streaming para RTSP, HLS e WebRTC, mas não publica essas portas no host por padrão
 - usa o `SUPERVISOR_TOKEN` e o proxy interno do Core API automaticamente
 - não exige configurar `host` e `apiKey` manualmente dentro da extensão `home_assistant`
 - permite que a extensão `cameras` use `/network/info` do Supervisor para descobrir o broadcast IPv4 da LAN em buscas ONVIF
@@ -96,6 +97,23 @@ Depois acesse:
 ```text
 http://homeassistant.local:18756/
 ```
+
+## Acesso de streaming
+
+O add-on declara portas de streaming, mas deixa o host port vazio por padrão. Isso mantém RTSP, HLS, WHEP e transporte de mídia WebRTC fora da LAN até o usuário habilitar explicitamente.
+
+Para expor streaming na rede local, configure a seção `Network` do add-on e mapeie somente os protocolos necessários:
+
+```yaml
+18758/tcp: 18758  # RTSP
+18759/tcp: 18759  # HLS
+18760/tcp: 18760  # WebRTC/WHEP signaling
+18762/udp: 18762  # WebRTC media transport
+```
+
+A faixa recomendada do add-on é `18756-18762` quando as portas são habilitadas: `18756` para acesso direto, `18757` para ingress/backend interno, `18758` para RTSP, `18759` para HLS, `18760` para WHEP, `18761` para a API interna do MediaMTX e `18762/udp` para mídia WebRTC. A API do MediaMTX permanece interna e não é declarada em `ports`.
+
+Para WebRTC na LAN, `18760/tcp` cobre só a sinalização WHEP; o transporte de mídia ainda precisa de `18762/udp` mapeado, salvo uma configuração futura com TURN/TCP/TLS.
 
 ## Escopo atual
 

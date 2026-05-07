@@ -38,16 +38,44 @@ body {
 
 button,
 [role="button"],
-[draggable="true"] {
+[draggable="true"],
+summary,
+select,
+option,
+input[type="button"],
+input[type="checkbox"],
+input[type="color"],
+input[type="file"],
+input[type="image"],
+input[type="radio"],
+input[type="range"],
+input[type="reset"],
+input[type="submit"],
+[data-user-select="none"],
+.noTextSelection {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
 
 input,
-textarea {
+textarea,
+[contenteditable="true"],
+[data-user-select="text"],
+.allowTextSelection {
   user-select: text;
   -webkit-user-select: text;
+}
+
+img,
+svg[aria-hidden="true"],
+canvas,
+video {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  user-drag: none;
+  -webkit-user-drag: none;
 }
 
 #root {
@@ -86,6 +114,14 @@ textarea {
   inset: 0;
   width: 100%;
   height: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.viewportRoot :where(input, textarea, [contenteditable="true"], [data-user-select="text"], .allowTextSelection) {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .main2dRoot {

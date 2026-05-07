@@ -46,6 +46,7 @@ from .models import (
     StreamingEngineStatusResponse,
     StreamingExtensionSettings,
     StreamingHealthResponse,
+    StreamingHlsProbeResponse,
     StreamingRuntimeHealthResponse,
     StreamingRuntimeOutputHealth,
     StreamingRuntimeTransmissionHealth,
@@ -257,6 +258,184 @@ def _read_http_error(exc: urllib_error.HTTPError) -> str:
     except Exception:
         body = ""
     return body or str(exc.reason or "")
+
+
+async def _fetch_text_with_status(
+    *,
+    url: str,
+    timeout_s: float = 2.5,
+    headers: dict[str, str] | None = None,
+    username: str = "",
+    password: str = "",
+) -> tuple[int, str]:
+    def _do_request() -> tuple[int, str]:
+        request_headers = dict(headers or {})
+        if username or password:
+            request_headers["authorization"] = _build_basic_authorization(username, password)
+        req = urllib_request.Request(url=url, headers=request_headers, method="GET")
+        try:
+            with urllib_request.urlopen(req, timeout=max(1.0, float(timeout_s))) as response:
+                payload = response.read().decode("utf-8", errors="replace")
+                return int(getattr(response, "status", 200) or 200), payload
+        except urllib_error.HTTPError as exc:
+            body = _read_http_error(exc)
+            return int(exc.code), body
+        except urllib_error.URLError as exc:
+            reason = str(getattr(exc, "reason", "") or exc)
+            raise RuntimeError(f"Connection failed: {reason}") from exc
+
+    return await asyncio.to_thread(_do_request)
+
+
+def _hls_parse_uri_lines(playlist_text: str, maximum_count: int) -> list[str]:
+    uris: list[str] = []
+    for raw_line in str(playlist_text or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        uris.append(line)
+        if len(uris) >= maximum_count:
+            break
+    return uris
+
+
+def _hls_parse_uri_lines_tail(playlist_text: str, maximum_count: int) -> list[str]:
+    uris: list[str] = []
+    for raw_line in str(playlist_text or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        uris.append(line)
+        if len(uris) > maximum_count:
+            uris.pop(0)
+    return uris
+
+
+def _hls_parse_numeric_tag(playlist_text: str, tag_name: str) -> float | None:
+    prefix = f"#{tag_name}:"
+    for raw_line in str(playlist_text or "").splitlines():
+        line = raw_line.strip()
+        if not line.startswith(prefix):
+            continue
+        raw_value = line[len(prefix) :].strip()
+        try:
+            value = float(raw_value)
+        except ValueError:
+            return None
+        return value if value >= 0.0 else None
+    return None
+
+
+def _hls_resolve_url(relative_or_absolute: str, base_url: str) -> str:
+    return urllib_parse.urljoin(str(base_url or ""), str(relative_or_absolute or ""))
+
+
+async def _probe_hls_url(
+    *,
+    transmission_id: str,
+    output_id: str,
+    url: str,
+    username: str = "",
+    password: str = "",
+) -> StreamingHlsProbeResponse:
+    sampled_at_unix = datetime.now(timezone.utc).timestamp()
+    try:
+        master_status, master_text = await _fetch_text_with_status(
+            url=url,
+            timeout_s=2.5,
+            headers={"accept": "application/vnd.apple.mpegurl"},
+            username=username,
+            password=password,
+        )
+        if master_status < 200 or master_status >= 300:
+            return StreamingHlsProbeResponse(
+                transmission_id=transmission_id,
+                output_id=output_id,
+                url=url,
+                sampled_at_unix=sampled_at_unix,
+                status="playlist_unreachable",
+                error=f"HLS master playlist returned {master_status}.",
+            )
+
+        media_playlist_url = url
+        if "#EXT-X-STREAM-INF" in master_text:
+            variant_uri = (_hls_parse_uri_lines(master_text, 1) or [""])[0]
+            if not variant_uri:
+                return StreamingHlsProbeResponse(
+                    transmission_id=transmission_id,
+                    output_id=output_id,
+                    url=url,
+                    sampled_at_unix=sampled_at_unix,
+                    status="playlist_unreachable",
+                    error="HLS master playlist is missing variant entries.",
+                )
+            media_playlist_url = _hls_resolve_url(variant_uri, url)
+
+        media_status, media_text = await _fetch_text_with_status(
+            url=media_playlist_url,
+            timeout_s=2.5,
+            headers={"accept": "application/vnd.apple.mpegurl"},
+            username=username,
+            password=password,
+        )
+        if media_status < 200 or media_status >= 300:
+            return StreamingHlsProbeResponse(
+                transmission_id=transmission_id,
+                output_id=output_id,
+                url=url,
+                media_playlist_url=media_playlist_url,
+                sampled_at_unix=sampled_at_unix,
+                status="playlist_unreachable",
+                error=f"HLS media playlist returned {media_status}.",
+            )
+
+        tail_segment_uri = (_hls_parse_uri_lines_tail(media_text, 1) or [""])[0]
+        if not tail_segment_uri:
+            return StreamingHlsProbeResponse(
+                transmission_id=transmission_id,
+                output_id=output_id,
+                url=url,
+                media_playlist_url=media_playlist_url,
+                playlist_reachable=True,
+                sampled_at_unix=sampled_at_unix,
+                status="playlist_unreachable",
+                error="HLS media playlist is empty.",
+            )
+
+        tail_segment_url = _hls_resolve_url(tail_segment_uri, media_playlist_url)
+        tail_status, _tail_body = await _fetch_text_with_status(
+            url=tail_segment_url,
+            timeout_s=2.5,
+            headers={"accept": "*/*", "range": "bytes=0-1"},
+            username=username,
+            password=password,
+        )
+        tail_reachable = (200 <= tail_status < 300) or tail_status == 206
+        media_sequence_float = _hls_parse_numeric_tag(media_text, "EXT-X-MEDIA-SEQUENCE")
+        return StreamingHlsProbeResponse(
+            transmission_id=transmission_id,
+            output_id=output_id,
+            url=url,
+            media_playlist_url=media_playlist_url,
+            playlist_reachable=True,
+            target_duration_seconds=_hls_parse_numeric_tag(media_text, "EXT-X-TARGETDURATION"),
+            media_sequence=int(media_sequence_float) if media_sequence_float is not None else None,
+            tail_segment_url=tail_segment_url,
+            tail_segment_http_status=tail_status,
+            tail_segment_reachable=tail_reachable,
+            sampled_at_unix=sampled_at_unix,
+            status="ok" if tail_reachable else "tail_unavailable",
+            error=None if tail_reachable else f"HLS tail segment returned {tail_status}.",
+        )
+    except Exception as exc:
+        return StreamingHlsProbeResponse(
+            transmission_id=transmission_id,
+            output_id=output_id,
+            url=url,
+            sampled_at_unix=sampled_at_unix,
+            status="probe_error",
+            error=str(exc),
+        )
 
 
 def _extract_hostname(url: str) -> str:
@@ -1549,6 +1728,85 @@ def create_streaming_router() -> APIRouter:
         return await _resolve_remote_transmission_urls(
             config_store=config_store,
             transmission=transmission,
+        )
+
+    @router.get(
+        "/transmissions/{transmission_id}/hls/probe",
+        response_model=StreamingHlsProbeResponse,
+    )
+    async def transmission_hls_probe(
+        request: Request,
+        transmission_id: str,
+        output_id: str | None = None,
+    ) -> StreamingHlsProbeResponse:
+        _require_auth(request, action="core:settings:read")
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        transmission = next(
+            (item for item in settings.transmissions if item.id == transmission_id), None
+        )
+        sampled_at_unix = datetime.now(timezone.utc).timestamp()
+        if transmission is None:
+            raise HTTPException(status_code=404, detail="Transmission not found")
+
+        transmission_host_server_id = normalize_server_id(
+            transmission.host_server_id, fallback="local"
+        )
+        current_server_id = _current_server_id(request)
+        if transmission_host_server_id == current_server_id:
+            urls = await _resolve_local_transmission_urls(
+                request=request,
+                settings=settings,
+                transmission=transmission,
+            )
+        else:
+            urls = await _resolve_remote_transmission_urls(
+                config_store=config_store,
+                transmission=transmission,
+            )
+
+        hls_outputs = [
+            item
+            for item in urls.outputs
+            if item.protocol == "hls" and (output_id is None or item.output_id == output_id)
+        ]
+        if not hls_outputs:
+            return StreamingHlsProbeResponse(
+                transmission_id=transmission.id,
+                output_id=output_id,
+                sampled_at_unix=sampled_at_unix,
+                status="no_hls_output",
+                error="Transmission does not expose a matching HLS output.",
+            )
+
+        selected_output = hls_outputs[0]
+        if not urls.engine_running:
+            return StreamingHlsProbeResponse(
+                transmission_id=transmission.id,
+                output_id=selected_output.output_id,
+                url=selected_output.url,
+                sampled_at_unix=sampled_at_unix,
+                status="engine_stopped",
+                error="Streaming engine is stopped.",
+            )
+
+        output_settings = next(
+            (item for item in transmission.outputs if item.id == selected_output.output_id),
+            None,
+        )
+        output_auth = getattr(output_settings, "authentication", None)
+        username = ""
+        password = ""
+        if bool(getattr(output_auth, "enabled", False)):
+            username = str(getattr(output_auth, "username", "") or "").strip()
+            password = str(getattr(output_auth, "password", "") or "").strip()
+
+        return await _probe_hls_url(
+            transmission_id=transmission.id,
+            output_id=selected_output.output_id,
+            url=selected_output.url,
+            username=username,
+            password=password,
         )
 
     @router.get(

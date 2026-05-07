@@ -9,6 +9,7 @@ import {
   fetchEngineStatus,
   fetchProcessingServers,
   fetchStreamsHealth,
+  fetchStreamingHlsProbe,
   fetchStreamingRuntimeDiagnostics,
   fetchStreamingRuntimeHealth,
   fetchStreamingSettings,
@@ -26,6 +27,7 @@ import type {
   ProcessingServer,
   StreamingEngineSettings,
   StreamingExtensionSettings,
+  StreamingHlsProbeResponse,
   StreamingRuntimeHealthResponse,
   StreamingRuntimeOutputHealth,
   StreamingRuntimeStatus,
@@ -198,6 +200,16 @@ function boolLabel(value: boolean | undefined, t: TranslateFn): string {
   return value ? t("ext.streaming.common.yes", {}, "Yes") : t("ext.streaming.common.no", {}, "No");
 }
 
+function hlsProbeStatusLabel(status: StreamingHlsProbeResponse["status"] | undefined, t: TranslateFn): string {
+  if (status === "ok") return t("ext.streaming.hls_probe.status.ok", {}, "OK");
+  if (status === "engine_stopped") return t("ext.streaming.hls_probe.status.engine_stopped", {}, "Engine stopped");
+  if (status === "no_hls_output") return t("ext.streaming.hls_probe.status.no_hls_output", {}, "No HLS output");
+  if (status === "playlist_unreachable") return t("ext.streaming.hls_probe.status.playlist_unreachable", {}, "Playlist unreachable");
+  if (status === "tail_unavailable") return t("ext.streaming.hls_probe.status.tail_unavailable", {}, "Tail unavailable");
+  if (status === "probe_error") return t("ext.streaming.hls_probe.status.probe_error", {}, "Probe error");
+  return "-";
+}
+
 function defaultOutput(protocol: "hls" | "rtsp" | "webrtc"): TransmissionOutput {
   return {
     id: createLocalId("output"),
@@ -258,6 +270,10 @@ function StreamingSettingsPanelContent({
   const [runtimeHealthError, setRuntimeHealthError] = useState<string | null>(null);
   const [runtimeDiagnosticsBusy, setRuntimeDiagnosticsBusy] = useState(false);
   const [runtimeDiagnosticsError, setRuntimeDiagnosticsError] = useState<string | null>(null);
+  const [hlsProbeByKey, setHlsProbeByKey] = useState<Record<string, StreamingHlsProbeResponse>>({});
+  const [hlsProbeLastChangeByKey, setHlsProbeLastChangeByKey] = useState<Record<string, number>>({});
+  const [hlsProbeBusyKey, setHlsProbeBusyKey] = useState<string | null>(null);
+  const [hlsProbeError, setHlsProbeError] = useState<string | null>(null);
 
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsError, setSettingsError] = useState<string | null>(null);
@@ -596,6 +612,31 @@ function StreamingSettingsPanelContent({
       setRuntimeDiagnosticsError(error instanceof Error ? error.message : String(error));
     } finally {
       setRuntimeDiagnosticsBusy(false);
+    }
+  }
+
+  async function runHlsProbe(transmissionId: string, outputId: string): Promise<void> {
+    const key = `${transmissionId}:${outputId}`;
+    setHlsProbeBusyKey(key);
+    setHlsProbeError(null);
+    try {
+      const payload = await fetchStreamingHlsProbe(transmissionId, outputId);
+      setHlsProbeByKey((previous) => ({ ...previous, [key]: payload }));
+      setHlsProbeLastChangeByKey((previous) => {
+        const previousProbe = hlsProbeByKey[key];
+        const changed =
+          !previousProbe ||
+          previousProbe.media_sequence !== payload.media_sequence ||
+          previousProbe.tail_segment_url !== payload.tail_segment_url;
+        return {
+          ...previous,
+          [key]: changed ? payload.sampled_at_unix : previous[key] ?? payload.sampled_at_unix,
+        };
+      });
+    } catch (error) {
+      setHlsProbeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setHlsProbeBusyKey(null);
     }
   }
 
@@ -1318,6 +1359,7 @@ function StreamingSettingsPanelContent({
                     <th>{t("ext.streaming.runtime.table.frames", {}, "Frames")}</th>
                     <th>{t("ext.streaming.runtime.table.restarts", {}, "Restarts")}</th>
                     <th>{t("ext.streaming.runtime.table.last_error", {}, "Last error")}</th>
+                    <th>{t("ext.streaming.runtime.table.hls_probe", {}, "HLS probe")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1362,9 +1404,70 @@ function StreamingSettingsPanelContent({
                         <td title={output?.publisher_last_error || ""}>
                           {output?.publisher_last_error || "-"}
                         </td>
+                        <td>
+                          {output?.protocol === "hls" ? (
+                            <button
+                              className="chipButton"
+                              type="button"
+                              disabled={hlsProbeBusyKey === `${transmission.transmission_id}:${output.output_id}`}
+                              onClick={() => void runHlsProbe(transmission.transmission_id, output.output_id)}
+                            >
+                              {hlsProbeBusyKey === `${transmission.transmission_id}:${output.output_id}`
+                                ? t("ext.streaming.hls_probe.running", {}, "Probing...")
+                                : t("ext.streaming.hls_probe.run", {}, "Probe")}
+                            </button>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
+          {hlsProbeError ? <div className="errorText">{hlsProbeError}</div> : null}
+
+          {Object.keys(hlsProbeByKey).length > 0 ? (
+            <div className="streamingRuntimeTableWrap">
+              <table className="streamingRuntimeTable">
+                <thead>
+                  <tr>
+                    <th>{t("ext.streaming.hls_probe.table.output", {}, "Output")}</th>
+                    <th>{t("ext.streaming.hls_probe.table.status", {}, "Status")}</th>
+                    <th>{t("ext.streaming.hls_probe.table.playlist", {}, "Playlist")}</th>
+                    <th>{t("ext.streaming.hls_probe.table.sequence", {}, "Sequence")}</th>
+                    <th>{t("ext.streaming.hls_probe.table.target", {}, "Target")}</th>
+                    <th>{t("ext.streaming.hls_probe.table.tail", {}, "Tail segment")}</th>
+                    <th>{t("ext.streaming.hls_probe.table.tail_status", {}, "Tail HTTP")}</th>
+                    <th>{t("ext.streaming.hls_probe.table.tail_reachable", {}, "Tail reachable")}</th>
+                    <th>{t("ext.streaming.hls_probe.table.sampled", {}, "Last probe")}</th>
+                    <th>{t("ext.streaming.hls_probe.table.changed", {}, "Last playlist change")}</th>
+                    <th>{t("ext.streaming.hls_probe.table.error", {}, "Error")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(hlsProbeByKey).map(([key, probe]) => (
+                    <tr key={key}>
+                      <td title={key}>{probe.output_id || "-"}</td>
+                      <td>
+                        <span className={["streamingRuntimeBadge", probe.status === "ok" ? "is-live" : "is-stale"].join(" ")}>
+                          {hlsProbeStatusLabel(probe.status, t)}
+                        </span>
+                      </td>
+                      <td>{boolLabel(probe.playlist_reachable, t)}</td>
+                      <td>{probe.media_sequence ?? "-"}</td>
+                      <td>{probe.target_duration_seconds ? `${probe.target_duration_seconds}s` : "-"}</td>
+                      <td title={probe.tail_segment_url || ""}>{probe.tail_segment_url || "-"}</td>
+                      <td>{probe.tail_segment_http_status ?? "-"}</td>
+                      <td>{boolLabel(probe.tail_segment_reachable, t)}</td>
+                      <td>{formatRuntimeUnixTime(probe.sampled_at_unix)}</td>
+                      <td>{formatRuntimeUnixTime(hlsProbeLastChangeByKey[key])}</td>
+                      <td title={probe.error || ""}>{probe.error || "-"}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

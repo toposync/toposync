@@ -4,6 +4,7 @@ import type {
   ProcessingServer,
   ProcessingServersListResponse,
   StreamingOutputsRuntimeResponse,
+  StreamingHlsProbeResponse,
   StreamingRuntimeHealthResponse,
   TransmissionDemandResponse,
   StreamingExtensionSettings,
@@ -142,6 +143,18 @@ export async function fetchStreamingRuntimeHealth(signal?: AbortSignal): Promise
 
 export async function fetchStreamingRuntimeDiagnostics(signal?: AbortSignal): Promise<unknown> {
   return requestJson<unknown>("/api/streams/runtime/diagnostics", { signal });
+}
+
+export async function fetchStreamingHlsProbe(
+  transmissionId: string,
+  outputId?: string,
+  signal?: AbortSignal,
+): Promise<StreamingHlsProbeResponse> {
+  const query = outputId ? `?output_id=${encodeURIComponent(outputId)}` : "";
+  return requestJson<StreamingHlsProbeResponse>(
+    `/api/streams/transmissions/${encodeURIComponent(transmissionId)}/hls/probe${query}`,
+    { signal },
+  );
 }
 
 export async function fetchTransmissionDemand(transmissionId: string, signal?: AbortSignal): Promise<TransmissionDemandResponse> {

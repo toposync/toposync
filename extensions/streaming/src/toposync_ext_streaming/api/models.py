@@ -437,6 +437,34 @@ class TransmissionUrlsResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+StreamingHlsProbeStatus = Literal[
+    "ok",
+    "engine_stopped",
+    "no_hls_output",
+    "playlist_unreachable",
+    "tail_unavailable",
+    "probe_error",
+]
+
+
+class StreamingHlsProbeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transmission_id: str
+    output_id: str | None = None
+    url: str | None = None
+    media_playlist_url: str | None = None
+    playlist_reachable: bool = False
+    target_duration_seconds: float | None = None
+    media_sequence: int | None = None
+    tail_segment_url: str | None = None
+    tail_segment_http_status: int | None = None
+    tail_segment_reachable: bool = False
+    sampled_at_unix: float
+    status: StreamingHlsProbeStatus
+    error: str | None = None
+
+
 class CameraPtzPreset(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

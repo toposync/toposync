@@ -163,6 +163,30 @@ export type StreamingRuntimeHealthResponse = {
   transmissions: StreamingRuntimeTransmissionHealth[];
 };
 
+export type StreamingHlsProbeStatus =
+  | "ok"
+  | "engine_stopped"
+  | "no_hls_output"
+  | "playlist_unreachable"
+  | "tail_unavailable"
+  | "probe_error";
+
+export type StreamingHlsProbeResponse = {
+  transmission_id: string;
+  output_id?: string | null;
+  url?: string | null;
+  media_playlist_url?: string | null;
+  playlist_reachable: boolean;
+  target_duration_seconds?: number | null;
+  media_sequence?: number | null;
+  tail_segment_url?: string | null;
+  tail_segment_http_status?: number | null;
+  tail_segment_reachable: boolean;
+  sampled_at_unix: number;
+  status: StreamingHlsProbeStatus;
+  error?: string | null;
+};
+
 export type TransmissionDemandOutputStatus = {
   output_id: string;
   output_key: string;

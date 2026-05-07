@@ -72,6 +72,11 @@ function toFileUrl(relPath: string): string {
   return resolveToposyncUrl(`/files/${encodeURI(relPath)}`);
 }
 
+function resolveNotificationImageUrl(value: unknown): string | null {
+  const url = asString(value, "").trim();
+  return url ? resolveToposyncUrl(url) : null;
+}
+
 function resolveThumbnailFromArtifacts(artifacts: Record<string, string>): { artifactName: string; url: string } | null {
   for (const candidate of preferredArtifactNames()) {
     const rel = artifacts[candidate];
@@ -464,7 +469,8 @@ export function notificationPriority(notification: Notification): Priority {
 }
 
 export function notificationThumbnailUrl(notification: Notification): string | null {
-  if (typeof notification.imageUrl === "string" && notification.imageUrl.trim()) return notification.imageUrl;
+  const imageUrl = resolveNotificationImageUrl(notification.imageUrl);
+  if (imageUrl) return imageUrl;
   const payload = asRecord(notification.payload);
   const artifacts = resolveArtifacts(payload);
   return resolveThumbnailFromArtifacts(artifacts)?.url ?? null;
@@ -488,10 +494,11 @@ export function notificationImageItems(notification: Notification): Notification
     push(item);
   }
 
-  if (typeof notification.imageUrl === "string" && notification.imageUrl.trim()) {
+  const imageUrl = resolveNotificationImageUrl(notification.imageUrl);
+  if (imageUrl) {
     push({
       id: `thumbnail:${notification.id}`,
-      url: notification.imageUrl.trim(),
+      url: imageUrl,
       label: "thumbnail",
       source: "thumbnail",
     });

@@ -5,11 +5,11 @@ from typing import Any, Literal
 
 import cv2
 import numpy
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from toposync.runtime.pipelines.execution import SinkRuntime
-from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME, normalize_artifact_name
-from toposync.runtime.pipelines.operator_registry import OperatorRegistry
+from toposync.runtime.pipelines.images import normalize_artifact_name
+from toposync.runtime.pipelines.operator_registry import OperatorDiagnostic, OperatorRegistry
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 
@@ -106,8 +106,64 @@ def register_streaming_pipeline_operators(registry: OperatorRegistry) -> None:
         requires_media_fields=["ts", "width", "height"],
         input_modalities=["video"],
         owner=EXTENSION_ID,
+        diagnostics_factory=_publish_video_diagnostics,
         runtime_factory=lambda config, _deps: PublishVideoRuntime(config),
     )
+
+
+def _publish_video_diagnostics(_config: dict[str, Any], context: dict[str, Any]) -> list[OperatorDiagnostic]:
+    upstream_nodes = context.get("upstream_nodes")
+    if not isinstance(upstream_nodes, list):
+        return []
+
+    diagnostics: list[OperatorDiagnostic] = []
+    seen_codes: set[str] = set()
+
+    def add(code: str, message: str, suggestion: str) -> None:
+        if code in seen_codes:
+            return
+        seen_codes.add(code)
+        diagnostics.append(
+            OperatorDiagnostic(
+                severity="warning",
+                code=code,
+                message=message,
+                suggestion=suggestion,
+            )
+        )
+
+    for item in upstream_nodes:
+        node = item if isinstance(item, dict) else {}
+        operator_id = str(node.get("operator_id") or "").strip()
+        cfg = node.get("normalized_config")
+        cfg = cfg if isinstance(cfg, dict) else {}
+        node_id = str(node.get("node_id") or "").strip()
+
+        if operator_id == "camera.motion_gate" and not bool(cfg.get("emit_when_idle", False)):
+            add(
+                "stream_publish_video_event_gated_motion",
+                f"stream.publish_video is downstream of motion gate '{node_id}' with emit_when_idle=false.",
+                "Use a continuous branch into stream.publish_video and keep motion gate on a separate analytics/event branch.",
+            )
+            continue
+
+        emit_mode = str(cfg.get("emit_mode") or "").strip().lower()
+        if operator_id == "vision.detect" and emit_mode in {"events", "event", "filter", "filter_frames"}:
+            add(
+                "stream_publish_video_event_gated_detection",
+                f"stream.publish_video is downstream of detection '{node_id}' in emit_mode={emit_mode}.",
+                "Use emit_mode='annotate' for visual streaming, or split detection onto a separate analytics/event branch.",
+            )
+            continue
+
+        if operator_id == "vision.track" and emit_mode in {"events", "event"}:
+            add(
+                "stream_publish_video_event_gated_tracking",
+                f"stream.publish_video is downstream of tracking '{node_id}' in emit_mode={emit_mode}.",
+                "Use emit_mode='annotate' for visual streaming, or split tracking onto a separate analytics/event branch.",
+            )
+
+    return diagnostics
 
 
 def _build_writer_id(context) -> str:  # noqa: ANN001

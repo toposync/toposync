@@ -14,6 +14,7 @@ from ..streaming.mediamtx_config import normalize_path_slug
 EXTENSION_ID = "com.toposync.streaming"
 TEST_PATH = "test"
 StreamingRuntimeStatus = Literal["live", "degraded", "stale", "offline"]
+StreamingStreamBehavior = Literal["continuous", "event_gated"]
 StreamingFallbackReason = Literal[
     "no_active_writer",
     "selected_writer_missing_frame",
@@ -582,6 +583,10 @@ class StreamingOutputRuntimeStatus(BaseModel):
     fallback_reason: StreamingFallbackReason | None = None
     stale: bool = False
     placeholder_active: bool = False
+    stream_behavior: StreamingStreamBehavior = "continuous"
+    event_gated: bool = False
+    event_gated_idle: bool = False
+    event_gate_reasons: list[str] = Field(default_factory=list)
 
 
 class StreamingOutputsRuntimeResponse(BaseModel):
@@ -609,6 +614,10 @@ class StreamingRuntimeOutputHealth(BaseModel):
     publisher_hardware_accelerated: bool = False
     publisher_restart_count: int = Field(default=0, ge=0)
     status: StreamingRuntimeStatus
+    stream_behavior: StreamingStreamBehavior = "continuous"
+    event_gated: bool = False
+    event_gated_idle: bool = False
+    event_gate_reasons: list[str] = Field(default_factory=list)
 
 
 class StreamingRuntimeTransmissionHealth(BaseModel):
@@ -626,6 +635,10 @@ class StreamingRuntimeTransmissionHealth(BaseModel):
     fallback_reason: StreamingFallbackReason | None = None
     stale: bool = False
     placeholder_active: bool = False
+    stream_behavior: StreamingStreamBehavior = "continuous"
+    event_gated: bool = False
+    event_gated_idle: bool = False
+    event_gate_reasons: list[str] = Field(default_factory=list)
     outputs: list[StreamingRuntimeOutputHealth] = Field(default_factory=list)
 
 
@@ -636,6 +649,48 @@ class StreamingRuntimeHealthResponse(BaseModel):
     stale_after_seconds: float
     placeholder_after_seconds: float
     transmissions: list[StreamingRuntimeTransmissionHealth] = Field(default_factory=list)
+
+
+class StreamingRuntimePipelineNode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str
+    operator_id: str
+    upstream_to_publish: bool = False
+    stream_publish: bool = False
+
+
+class StreamingRuntimePipelineEdge(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_node_id: str
+    source_port: str = "out"
+    target_node_id: str
+    target_port: str = "in"
+
+
+class StreamingRuntimePipelineLink(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transmission_id: str
+    pipeline_name: str
+    enabled: bool = True
+    processing_server_id: str = "local"
+    publish_node_id: str
+    writer_id: str
+    stream_behavior: StreamingStreamBehavior = "continuous"
+    event_gated: bool = False
+    event_gate_reasons: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    nodes: list[StreamingRuntimePipelineNode] = Field(default_factory=list)
+    edges: list[StreamingRuntimePipelineEdge] = Field(default_factory=list)
+
+
+class StreamingRuntimePipelinesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    updated_at_unix: float
+    pipelines: list[StreamingRuntimePipelineLink] = Field(default_factory=list)
 
 
 StreamingWizardPresetId = Literal[
@@ -654,6 +709,7 @@ class StreamingWizardOptionalParameters(BaseModel):
     enabled: bool = True
     processing_server_id: str | None = None
     source_backend: Literal["auto", "opencv", "ffmpeg"] = "auto"
+    stream_behavior: StreamingStreamBehavior = "continuous"
     use_fps_reducer: bool | None = None
     fps_limit: float | None = Field(default=None, ge=0.5, le=60.0)
     motion_sensitivity: float | None = Field(default=None, gt=0.0, le=1.0)

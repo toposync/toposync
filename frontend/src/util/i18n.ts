@@ -396,6 +396,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.streams.status.with_transport": "{{status}} ({{transport}})",
     "core.ui.streams.transport.webrtc": "WebRTC",
     "core.ui.streams.transport.hls": "HLS",
+    "core.ui.streams.health.event_gated_idle": "No event currently. Waiting for motion/detection...",
+    "core.ui.streams.health.event_gated_idle_label": "Waiting event",
 
     "core.ui.main2d.cluster.title": "Multiple items ({{count}})",
     "core.ui.main2d.cluster.tooltip": "{{count}} items",

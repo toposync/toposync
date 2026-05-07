@@ -49,6 +49,10 @@ from .models import (
     StreamingHlsProbeResponse,
     StreamingRuntimeHealthResponse,
     StreamingRuntimeOutputHealth,
+    StreamingRuntimePipelineEdge,
+    StreamingRuntimePipelineLink,
+    StreamingRuntimePipelineNode,
+    StreamingRuntimePipelinesResponse,
     StreamingRuntimeTransmissionHealth,
     StreamingOutputsRuntimeResponse,
     StreamingOutputRuntimeStatus,
@@ -739,11 +743,219 @@ def _transmission_status(*, selection_status: str, output_statuses: list[str]) -
     return "offline"
 
 
+def _runtime_pipeline_warning(reason: str) -> str:
+    if reason == "motion_gate_idle_filter":
+        return "stream.publish_video is downstream of a motion gate that stops frames while idle."
+    if reason == "vision_detect_filter":
+        return "stream.publish_video is downstream of detection in filter mode."
+    if reason == "vision_detect_events":
+        return "stream.publish_video is downstream of detection in events mode."
+    if reason == "vision_track_events":
+        return "stream.publish_video is downstream of tracking in events mode."
+    return "This stream is explicitly configured as event-gated."
+
+
+def _runtime_pipeline_graph_nodes(graph: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
+    raw_nodes = graph.get("nodes")
+    if not isinstance(raw_nodes, list):
+        return []
+    nodes: list[tuple[str, str, dict[str, Any]]] = []
+    for item in raw_nodes:
+        node = item if isinstance(item, dict) else {}
+        node_id = str(node.get("id") or "").strip()
+        operator_id = str(node.get("operator") or node.get("operator_id") or "").strip()
+        if not node_id or not operator_id:
+            continue
+        cfg = node.get("config")
+        nodes.append((node_id, operator_id, cfg if isinstance(cfg, dict) else {}))
+    return nodes
+
+
+def _runtime_pipeline_graph_edges(graph: dict[str, Any]) -> list[StreamingRuntimePipelineEdge]:
+    raw_edges = graph.get("edges")
+    if not isinstance(raw_edges, list):
+        return []
+    edges: list[StreamingRuntimePipelineEdge] = []
+    for item in raw_edges:
+        edge = item if isinstance(item, dict) else {}
+        source = edge.get("from")
+        target = edge.get("to")
+        source = source if isinstance(source, dict) else {}
+        target = target if isinstance(target, dict) else {}
+        source_node_id = str(source.get("node") or edge.get("source_node_id") or "").strip()
+        target_node_id = str(target.get("node") or edge.get("target_node_id") or "").strip()
+        if not source_node_id or not target_node_id:
+            continue
+        edges.append(
+            StreamingRuntimePipelineEdge(
+                source_node_id=source_node_id,
+                source_port=str(source.get("port") or edge.get("source_port") or "out").strip() or "out",
+                target_node_id=target_node_id,
+                target_port=str(target.get("port") or edge.get("target_port") or "in").strip() or "in",
+            )
+        )
+    return edges
+
+
+def _runtime_pipeline_upstream_node_ids(
+    *,
+    publish_node_id: str,
+    edges: list[StreamingRuntimePipelineEdge],
+) -> set[str]:
+    incoming: dict[str, list[str]] = {}
+    for edge in edges:
+        incoming.setdefault(edge.target_node_id, []).append(edge.source_node_id)
+
+    upstream: set[str] = set()
+    stack = [publish_node_id]
+    while stack:
+        current = stack.pop()
+        for source_node_id in incoming.get(current, []):
+            if source_node_id in upstream:
+                continue
+            upstream.add(source_node_id)
+            stack.append(source_node_id)
+    return upstream
+
+
+def _runtime_pipeline_event_gate_reasons(
+    *,
+    nodes_by_id: dict[str, tuple[str, dict[str, Any]]],
+    upstream_node_ids: set[str],
+) -> list[str]:
+    reasons: list[str] = []
+    for node_id in sorted(upstream_node_ids):
+        operator_id, cfg = nodes_by_id.get(node_id, ("", {}))
+        if operator_id == "camera.motion_gate" and not bool(cfg.get("emit_when_idle", False)):
+            reasons.append("motion_gate_idle_filter")
+            continue
+
+        emit_mode = str(cfg.get("emit_mode") or "").strip().lower()
+        if operator_id == "vision.detect":
+            if emit_mode in {"filter", "filter_frames"}:
+                reasons.append("vision_detect_filter")
+            elif emit_mode in {"events", "event"}:
+                reasons.append("vision_detect_events")
+            continue
+
+        if operator_id == "vision.track" and emit_mode in {"events", "event"}:
+            reasons.append("vision_track_events")
+
+    return list(dict.fromkeys(reasons))
+
+
+def _runtime_pipeline_stream_behavior(graph: dict[str, Any], *, event_gated: bool) -> str:
+    if event_gated:
+        return "event_gated"
+    meta = graph.get("meta")
+    meta = meta if isinstance(meta, dict) else {}
+    streaming = meta.get("streaming")
+    streaming = streaming if isinstance(streaming, dict) else {}
+    stream_behavior = str(streaming.get("stream_behavior") or "").strip().lower()
+    if stream_behavior in {"continuous", "event_gated"}:
+        return stream_behavior
+    return "event_gated" if event_gated else "continuous"
+
+
+def _inspect_streaming_pipeline_links(pipeline: Pipeline) -> list[StreamingRuntimePipelineLink]:
+    graph = pipeline.graph if isinstance(pipeline.graph, dict) else {}
+    nodes = _runtime_pipeline_graph_nodes(graph)
+    edges = _runtime_pipeline_graph_edges(graph)
+    nodes_by_id = {node_id: (operator_id, cfg) for node_id, operator_id, cfg in nodes}
+    links: list[StreamingRuntimePipelineLink] = []
+
+    for publish_node_id, operator_id, cfg in nodes:
+        if operator_id != "stream.publish_video":
+            continue
+        transmission_id = str(cfg.get("transmission_id") or "").strip()
+        if not transmission_id:
+            continue
+
+        upstream_node_ids = _runtime_pipeline_upstream_node_ids(
+            publish_node_id=publish_node_id,
+            edges=edges,
+        )
+        reasons = _runtime_pipeline_event_gate_reasons(
+            nodes_by_id=nodes_by_id,
+            upstream_node_ids=upstream_node_ids,
+        )
+        stream_behavior = _runtime_pipeline_stream_behavior(graph, event_gated=bool(reasons))
+        event_gated = stream_behavior == "event_gated" or bool(reasons)
+        warnings = [_runtime_pipeline_warning(reason) for reason in reasons]
+        if event_gated and not warnings:
+            warnings.append(_runtime_pipeline_warning("explicit_event_gated"))
+
+        links.append(
+            StreamingRuntimePipelineLink(
+                transmission_id=transmission_id,
+                pipeline_name=pipeline.name,
+                enabled=bool(getattr(pipeline, "enabled", True)),
+                processing_server_id=normalize_server_id(
+                    getattr(pipeline, "processing_server_id", "local"),
+                    fallback="local",
+                ),
+                publish_node_id=publish_node_id,
+                writer_id=f"{pipeline.name}:{publish_node_id}",
+                stream_behavior=stream_behavior,
+                event_gated=event_gated,
+                event_gate_reasons=reasons,
+                warnings=warnings,
+                nodes=[
+                    StreamingRuntimePipelineNode(
+                        node_id=node_id,
+                        operator_id=item_operator_id,
+                        upstream_to_publish=node_id in upstream_node_ids,
+                        stream_publish=node_id == publish_node_id,
+                    )
+                    for node_id, item_operator_id, _cfg in nodes
+                ],
+                edges=edges,
+            )
+        )
+
+    return links
+
+
+async def _build_runtime_pipeline_links(
+    *,
+    config_store: ConfigStore,
+    settings: StreamingExtensionSettings,
+) -> list[StreamingRuntimePipelineLink]:
+    transmission_ids = {transmission.id for transmission in settings.transmissions}
+    links: list[StreamingRuntimePipelineLink] = []
+    for pipeline in await config_store.list_pipelines():
+        for link in _inspect_streaming_pipeline_links(pipeline):
+            if link.transmission_id not in transmission_ids:
+                continue
+            links.append(link)
+    links.sort(key=lambda item: (item.transmission_id, item.pipeline_name, item.publish_node_id))
+    return links
+
+
+def _select_runtime_pipeline_link(
+    *,
+    links: list[StreamingRuntimePipelineLink],
+    selected: SelectedWriterFrame,
+) -> StreamingRuntimePipelineLink | None:
+    preferred_writer_ids = [
+        str(selected.active_writer_id or "").strip(),
+        str(selected.selected_writer_id or "").strip(),
+    ]
+    for writer_id in preferred_writer_ids:
+        if not writer_id:
+            continue
+        for link in links:
+            if link.writer_id == writer_id:
+                return link
+    return links[0] if links else None
+
+
 async def _build_runtime_health(
     *,
     request: Request,
     settings: StreamingExtensionSettings,
 ) -> StreamingRuntimeHealthResponse:
+    config_store = _config_store(request)
     runtime_state = _runtime_state(request)
     publisher = _publisher_manager(request)
     current_server_id = _current_server_id(request)
@@ -753,6 +965,13 @@ async def _build_runtime_health(
 
     viewer_count_by_output = await runtime_state.get_viewer_count_by_output()
     publisher_status_by_output = await publisher.list_status()
+    pipeline_links = await _build_runtime_pipeline_links(
+        config_store=config_store,
+        settings=settings,
+    )
+    pipeline_links_by_transmission: dict[str, list[StreamingRuntimePipelineLink]] = {}
+    for link in pipeline_links:
+        pipeline_links_by_transmission.setdefault(link.transmission_id, []).append(link)
 
     transmission_health: list[StreamingRuntimeTransmissionHealth] = []
     for transmission in settings.transmissions:
@@ -768,6 +987,14 @@ async def _build_runtime_health(
             selected=selected,
             transmission_enabled=bool(transmission.enabled),
         )
+        pipeline_link = _select_runtime_pipeline_link(
+            links=pipeline_links_by_transmission.get(transmission.id, []),
+            selected=selected,
+        )
+        stream_behavior = pipeline_link.stream_behavior if pipeline_link is not None else "continuous"
+        event_gated = bool(pipeline_link.event_gated) if pipeline_link is not None else False
+        event_gate_reasons = list(pipeline_link.event_gate_reasons) if pipeline_link is not None else []
+        event_gated_idle = bool(event_gated and selection_status in {"offline", "stale"})
 
         outputs: list[StreamingRuntimeOutputHealth] = []
         output_statuses: list[str] = []
@@ -809,6 +1036,10 @@ async def _build_runtime_health(
                         getattr(publisher_status, "restart_count", 0) or 0
                     ),
                     status=status,
+                    stream_behavior=stream_behavior,
+                    event_gated=event_gated,
+                    event_gated_idle=event_gated_idle,
+                    event_gate_reasons=event_gate_reasons,
                 )
             )
 
@@ -830,6 +1061,10 @@ async def _build_runtime_health(
                 fallback_reason=selected.fallback_reason,
                 stale=bool(selected.stale),
                 placeholder_active=bool(selected.placeholder_active),
+                stream_behavior=stream_behavior,
+                event_gated=event_gated,
+                event_gated_idle=event_gated_idle,
+                event_gate_reasons=event_gate_reasons,
                 outputs=outputs,
             )
         )
@@ -1694,6 +1929,11 @@ def create_streaming_router() -> APIRouter:
             )
         if not transmission.enabled:
             warnings.append("Transmission is disabled. Enable it to publish frames.")
+        if str(optional_payload.get("stream_behavior") or "continuous") == "event_gated":
+            warnings.append(
+                "This pipeline is event-gated. It may intentionally stop publishing frames "
+                "when no motion/detection event is present."
+            )
 
         return StreamingWizardCreatePipelineResponse(
             pipeline_name=pipeline_name,
@@ -1888,6 +2128,10 @@ def create_streaming_router() -> APIRouter:
                         fallback_reason=transmission.fallback_reason,
                         stale=transmission.stale,
                         placeholder_active=transmission.placeholder_active,
+                        stream_behavior=transmission.stream_behavior,
+                        event_gated=transmission.event_gated,
+                        event_gated_idle=transmission.event_gated_idle,
+                        event_gate_reasons=transmission.event_gate_reasons,
                     )
                 )
 
@@ -1895,6 +2139,19 @@ def create_streaming_router() -> APIRouter:
         return StreamingOutputsRuntimeResponse(
             updated_at_unix=health.updated_at_unix,
             outputs=outputs,
+        )
+
+    @router.get("/runtime/pipelines", response_model=StreamingRuntimePipelinesResponse)
+    async def streaming_runtime_pipelines(request: Request) -> StreamingRuntimePipelinesResponse:
+        _require_auth(request, action="core:settings:read")
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        return StreamingRuntimePipelinesResponse(
+            updated_at_unix=datetime.now(timezone.utc).timestamp(),
+            pipelines=await _build_runtime_pipeline_links(
+                config_store=config_store,
+                settings=settings,
+            ),
         )
 
     @router.get("/runtime/health", response_model=StreamingRuntimeHealthResponse)

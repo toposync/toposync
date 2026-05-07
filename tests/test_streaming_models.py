@@ -9,7 +9,7 @@ import numpy
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from toposync.runtime.config_store import ConfigStore, UserDataPaths
+from toposync.runtime.config_store import ConfigStore, Pipeline, UserDataPaths
 from toposync.runtime.pipelines.runtime import Lifecycle
 from toposync_ext_streaming.api.models import (
     StreamingExtensionSettings,
@@ -21,6 +21,7 @@ from toposync_ext_streaming.api.routes import create_streaming_router
 from toposync_ext_streaming.streaming.engine_manager import MediaMtxEngineManager
 from toposync_ext_streaming.streaming.publisher_manager import PublisherManager
 from toposync_ext_streaming.streaming.runtime_state import TransmissionRuntimeState
+from toposync_ext_streaming.wizard.pipeline_builder import build_streaming_wizard_graph
 
 
 def _create_client(tmp_path: Path) -> TestClient:
@@ -221,3 +222,73 @@ def test_runtime_health_reports_stale_frame_and_output_freshness(tmp_path: Path)
         assert output["selected_frame_age_seconds"] == 4.0
         assert output["status"] == "stale"
         assert output["stale"] is True
+
+
+def test_runtime_pipeline_links_mark_event_gated_idle(tmp_path: Path) -> None:
+    with _create_client(tmp_path) as client:
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Events stream",
+                "path": "events-stream",
+                "enabled": True,
+                "outputs": [
+                    {
+                        "id": "hls_events",
+                        "protocol": "hls",
+                        "enabled": True,
+                        "resolution": {"width": 320, "height": 180},
+                    }
+                ],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        graph = build_streaming_wizard_graph(
+            transmission_id=transmission_id,
+            camera_id="camera_a",
+            preset_id="motion_gate_stream",
+            optional_parameters={"stream_behavior": "event_gated"},
+        )
+        config_store = client.app.state.config_store
+        asyncio.run(
+            config_store.create_pipeline(
+                Pipeline(
+                    name="events_pipeline",
+                    enabled=True,
+                    processing_server_id="local",
+                    editor_mode="interactive",
+                    graph=graph,
+                )
+            )
+        )
+
+        pipelines_res = client.get("/api/streams/runtime/pipelines")
+        assert pipelines_res.status_code == 200
+        links = pipelines_res.json()["pipelines"]
+        assert len(links) == 1
+        link = links[0]
+        assert link["transmission_id"] == transmission_id
+        assert link["pipeline_name"] == "events_pipeline"
+        assert link["publish_node_id"] == "stream"
+        assert link["writer_id"] == "events_pipeline:stream"
+        assert link["stream_behavior"] == "event_gated"
+        assert link["event_gated"] is True
+        assert "motion_gate_idle_filter" in link["event_gate_reasons"]
+        assert any(node["stream_publish"] for node in link["nodes"])
+
+        health_res = client.get("/api/streams/runtime/health")
+        assert health_res.status_code == 200
+        health_item = health_res.json()["transmissions"][0]
+        assert health_item["stream_behavior"] == "event_gated"
+        assert health_item["event_gated"] is True
+        assert health_item["event_gated_idle"] is True
+        assert "motion_gate_idle_filter" in health_item["event_gate_reasons"]
+
+        outputs_res = client.get("/api/streams/runtime/outputs")
+        assert outputs_res.status_code == 200
+        output = outputs_res.json()["outputs"][0]
+        assert output["stream_behavior"] == "event_gated"
+        assert output["event_gated"] is True
+        assert output["event_gated_idle"] is True

@@ -109,6 +109,10 @@ export type StreamingOutputRuntimeStatus = {
   fallback_reason?: StreamingFallbackReason | null;
   stale?: boolean;
   placeholder_active?: boolean;
+  stream_behavior?: StreamingStreamBehavior;
+  event_gated?: boolean;
+  event_gated_idle?: boolean;
+  event_gate_reasons?: string[];
 };
 
 export type StreamingOutputsRuntimeResponse = {
@@ -117,6 +121,7 @@ export type StreamingOutputsRuntimeResponse = {
 };
 
 export type StreamingRuntimeStatus = "live" | "degraded" | "stale" | "offline";
+export type StreamingStreamBehavior = "continuous" | "event_gated";
 
 export type StreamingFallbackReason =
   | "no_active_writer"
@@ -139,10 +144,15 @@ export type StreamingRuntimeOutputHealth = {
   publisher_hardware_accelerated?: boolean;
   publisher_restart_count?: number;
   status: StreamingRuntimeStatus;
+  stream_behavior?: StreamingStreamBehavior;
+  event_gated?: boolean;
+  event_gated_idle?: boolean;
+  event_gate_reasons?: string[];
 };
 
 export type StreamingRuntimeTransmissionHealth = {
   transmission_id: string;
+  enabled?: boolean;
   active_writer_id?: string | null;
   selected_writer_id?: string | null;
   selected_frame_age_seconds?: number | null;
@@ -153,6 +163,10 @@ export type StreamingRuntimeTransmissionHealth = {
   stale: boolean;
   placeholder_active: boolean;
   status: StreamingRuntimeStatus;
+  stream_behavior?: StreamingStreamBehavior;
+  event_gated?: boolean;
+  event_gated_idle?: boolean;
+  event_gate_reasons?: string[];
   outputs: StreamingRuntimeOutputHealth[];
 };
 
@@ -161,6 +175,40 @@ export type StreamingRuntimeHealthResponse = {
   stale_after_seconds: number;
   placeholder_after_seconds: number;
   transmissions: StreamingRuntimeTransmissionHealth[];
+};
+
+export type StreamingRuntimePipelineNode = {
+  node_id: string;
+  operator_id: string;
+  upstream_to_publish?: boolean;
+  stream_publish?: boolean;
+};
+
+export type StreamingRuntimePipelineEdge = {
+  source_node_id: string;
+  source_port?: string;
+  target_node_id: string;
+  target_port?: string;
+};
+
+export type StreamingRuntimePipelineLink = {
+  transmission_id: string;
+  pipeline_name: string;
+  enabled?: boolean;
+  processing_server_id?: string;
+  publish_node_id: string;
+  writer_id: string;
+  stream_behavior?: StreamingStreamBehavior;
+  event_gated?: boolean;
+  event_gate_reasons?: string[];
+  warnings?: string[];
+  nodes?: StreamingRuntimePipelineNode[];
+  edges?: StreamingRuntimePipelineEdge[];
+};
+
+export type StreamingRuntimePipelinesResponse = {
+  updated_at_unix: number;
+  pipelines: StreamingRuntimePipelineLink[];
 };
 
 export type StreamingHlsProbeStatus =
@@ -264,6 +312,7 @@ export type StreamingWizardCreatePipelineRequest = {
     enabled?: boolean;
     processing_server_id?: string;
     source_backend?: "auto" | "opencv" | "ffmpeg";
+    stream_behavior?: StreamingStreamBehavior;
     use_fps_reducer?: boolean;
     fps_limit?: number;
     motion_sensitivity?: number;

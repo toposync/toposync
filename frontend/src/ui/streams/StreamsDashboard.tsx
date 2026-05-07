@@ -154,6 +154,16 @@ function buildRuntimeHealthHint(
   t: ReturnType<typeof i18n.useI18n>["t"],
 ): { message: string; tone: TileHealthTone } | null {
   if (!health) return null;
+  if (health.event_gated_idle) {
+    return {
+      message: t(
+        "core.ui.streams.health.event_gated_idle",
+        {},
+        "No event currently. Waiting for motion/detection...",
+      ),
+      tone: "warn",
+    };
+  }
   const lastLive = formatLastLiveTime(health.last_live_frame_at_unix);
   if (health.status === "stale" || health.stale) {
     const suffix = lastLive
@@ -194,7 +204,9 @@ function buildRuntimeHealthHint(
 function runtimeStatusLabel(
   status: StreamingRuntimeTransmissionHealth["status"] | undefined,
   t: ReturnType<typeof i18n.useI18n>["t"],
+  eventGatedIdle = false,
 ): string | null {
+  if (eventGatedIdle) return t("core.ui.streams.health.event_gated_idle_label", {}, "Waiting event");
   if (status === "live") return t("core.ui.streams.health.live_label", {}, "Live");
   if (status === "degraded") return t("core.ui.streams.health.degraded_label", {}, "Degraded");
   if (status === "stale") return t("core.ui.streams.health.stale_label", {}, "Stale");
@@ -766,7 +778,7 @@ function StreamTilePlayer({
           ? t("core.ui.streams.transport.hls", {}, "HLS")
           : onlineLabel;
 
-    const healthLabel = runtimeStatusLabel(runtimeHealth?.status, t);
+    const healthLabel = runtimeStatusLabel(runtimeHealth?.status, t, Boolean(runtimeHealth?.event_gated_idle));
     if (status === "playing") {
       return healthLabel ?? (transport === "none" ? onlineLabel : transportLabel);
     }
@@ -776,14 +788,15 @@ function StreamTilePlayer({
       { status: statusLabel, transport: transportLabel },
       `${statusLabel} (${transportLabel})`,
     );
-  }, [runtimeHealth?.status, status, t, transport]);
+  }, [runtimeHealth?.event_gated_idle, runtimeHealth?.status, status, t, transport]);
 
   const playbackDotStatus = useMemo<TilePlaybackStatus>(() => {
     if (status === "error" || status === "unsupported") return "error";
+    if (runtimeHealth?.event_gated_idle) return "loading";
     if (runtimeHealth?.status === "stale" || runtimeHealth?.status === "offline") return "error";
     if (runtimeHealth?.status === "degraded") return "loading";
     return status;
-  }, [runtimeHealth?.status, status]);
+  }, [runtimeHealth?.event_gated_idle, runtimeHealth?.status, status]);
 
   const toggleFullscreen = async () => {
     const el = frameRef.current;

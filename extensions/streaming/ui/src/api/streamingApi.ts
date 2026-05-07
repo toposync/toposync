@@ -6,6 +6,7 @@ import type {
   StreamingOutputsRuntimeResponse,
   StreamingHlsProbeResponse,
   StreamingRuntimeHealthResponse,
+  StreamingRuntimePipelinesResponse,
   TransmissionDemandResponse,
   StreamingExtensionSettings,
   StreamingPreferredPorts,
@@ -139,6 +140,10 @@ export async function fetchStreamingOutputsRuntime(signal?: AbortSignal): Promis
 
 export async function fetchStreamingRuntimeHealth(signal?: AbortSignal): Promise<StreamingRuntimeHealthResponse> {
   return requestJson<StreamingRuntimeHealthResponse>("/api/streams/runtime/health", { signal });
+}
+
+export async function fetchStreamingRuntimePipelines(signal?: AbortSignal): Promise<StreamingRuntimePipelinesResponse> {
+  return requestJson<StreamingRuntimePipelinesResponse>("/api/streams/runtime/pipelines", { signal });
 }
 
 export async function fetchStreamingRuntimeDiagnostics(signal?: AbortSignal): Promise<unknown> {

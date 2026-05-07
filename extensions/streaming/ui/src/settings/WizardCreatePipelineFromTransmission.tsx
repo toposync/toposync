@@ -6,6 +6,7 @@ import { createPipelineFromTransmissionWizard, fetchCamerasIndex } from "../api/
 import type {
   CameraIndexItem,
   ProcessingServer,
+  StreamingStreamBehavior,
   StreamingWizardCreatePipelineResponse,
   StreamingWizardPresetId,
   Transmission,
@@ -28,35 +29,35 @@ const PRESET_OPTIONS: PresetOption[] = [
     titleKey: "ext.streaming.wizard.presets.simple_stream.title",
     descriptionKey: "ext.streaming.wizard.presets.simple_stream.desc",
     fallbackTitle: "Simple stream",
-    fallbackDescription: "camera.source + optional fps reducer + stream.publish_video",
+    fallbackDescription: "Continuous camera video",
   },
   {
     id: "motion_gate_stream",
     titleKey: "ext.streaming.wizard.presets.motion_gate_stream.title",
     descriptionKey: "ext.streaming.wizard.presets.motion_gate_stream.desc",
     fallbackTitle: "Motion gate stream",
-    fallbackDescription: "camera.source + motion gate + fps reducer + stream.publish_video",
+    fallbackDescription: "Continuous video with a separate motion analytics branch",
   },
   {
     id: "detection_stream",
     titleKey: "ext.streaming.wizard.presets.detection_stream.title",
     descriptionKey: "ext.streaming.wizard.presets.detection_stream.desc",
     fallbackTitle: "Detection stream",
-    fallbackDescription: "camera.source + object detection + stream.publish_video",
+    fallbackDescription: "Continuous video with a separate detection analytics branch",
   },
   {
     id: "tracking_stream",
     titleKey: "ext.streaming.wizard.presets.tracking_stream.title",
     descriptionKey: "ext.streaming.wizard.presets.tracking_stream.desc",
     fallbackTitle: "Tracking stream",
-    fallbackDescription: "camera.source + object tracking + stream.publish_video",
+    fallbackDescription: "Continuous video with a separate tracking analytics branch",
   },
   {
     id: "segmentation_stream",
     titleKey: "ext.streaming.wizard.presets.segmentation_stream.title",
     descriptionKey: "ext.streaming.wizard.presets.segmentation_stream.desc",
     fallbackTitle: "Segmentation stream",
-    fallbackDescription: "camera.source + object segmentation + stream.publish_video",
+    fallbackDescription: "Continuous video with a separate segmentation analytics branch",
   },
 ];
 
@@ -171,6 +172,7 @@ export function WizardCreatePipelineFromTransmission({
   const [enabled, setEnabled] = useState(true);
   const [processingServerId, setProcessingServerId] = useState("local");
   const [sourceBackend, setSourceBackend] = useState<"auto" | "opencv" | "ffmpeg">("auto");
+  const [streamBehavior, setStreamBehavior] = useState<StreamingStreamBehavior>("continuous");
   const [useFpsReducer, setUseFpsReducer] = useState(false);
   const [fpsLimit, setFpsLimit] = useState("");
   const [motionSensitivity, setMotionSensitivity] = useState("0.01");
@@ -203,6 +205,7 @@ export function WizardCreatePipelineFromTransmission({
     setEnabled(true);
     setProcessingServerId(normalizeServerId(transmission?.host_server_id));
     setSourceBackend("auto");
+    setStreamBehavior("continuous");
     setUseFpsReducer(false);
     setFpsLimit("");
     setMotionSensitivity("0.01");
@@ -369,6 +372,7 @@ export function WizardCreatePipelineFromTransmission({
           enabled,
           processing_server_id: selectedProcessingServerId,
           source_backend: sourceBackend,
+          stream_behavior: streamBehavior,
           use_fps_reducer: useFpsReducer,
           fps_limit: toSafeFloat(fpsLimit),
           motion_sensitivity: toSafeFloat(motionSensitivity),
@@ -538,6 +542,31 @@ export function WizardCreatePipelineFromTransmission({
                 <div className="label">{t(selectedPreset.descriptionKey, {}, selectedPreset.fallbackDescription)}</div>
               </div>
 
+              <div className="field">
+                <label className="label">{t("ext.streaming.wizard.stream_behavior", {}, "Stream behavior")}</label>
+                <select
+                  className="input"
+                  value={streamBehavior}
+                  onChange={(event) => setStreamBehavior(event.target.value as StreamingStreamBehavior)}
+                >
+                  <option value="continuous">
+                    {t("ext.streaming.wizard.stream_behavior.continuous", {}, "Continuous video")}
+                  </option>
+                  <option value="event_gated">
+                    {t("ext.streaming.wizard.stream_behavior.event_gated", {}, "Events only")}
+                  </option>
+                </select>
+                {streamBehavior === "event_gated" ? (
+                  <div className="cardMeta" style={{ marginTop: 6 }}>
+                    {t(
+                      "ext.streaming.wizard.stream_behavior.event_gated_warning",
+                      {},
+                      "Events-only streams may intentionally stop sending frames when no motion or detection is present.",
+                    )}
+                  </div>
+                ) : null}
+              </div>
+
               <div className="rowWrap" style={{ gap: 10 }}>
                 <div className="field" style={{ flex: 1, minWidth: 220 }}>
                   <label className="label">{t("ext.streaming.wizard.pipeline_name", {}, "Nome do fluxo (opcional)")}</label>
@@ -648,14 +677,14 @@ export function WizardCreatePipelineFromTransmission({
                     onChange={(event) => setYoloFilterEnabled(event.target.checked)}
                   />
                   <span className="cardMeta">
-                    {t("ext.streaming.wizard.yolo_filter_enabled", {}, "Filter frames after vision (recommended)")}
+                    {t("ext.streaming.wizard.yolo_filter_enabled", {}, "Emit only vision events on the analytics branch")}
                   </span>
                 </label>
                 <div className="cardMeta" style={{ marginLeft: 28 }}>
                   {t(
                     "ext.streaming.wizard.yolo_filter_enabled.hint",
                     {},
-                    "When disabled, the pipeline still runs vision inference but keeps all frames.",
+                    "Continuous video keeps its own branch. In Events only mode, this gates video frames.",
                   )}
                 </div>
               </div>

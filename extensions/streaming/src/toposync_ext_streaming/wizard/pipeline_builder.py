@@ -12,6 +12,7 @@ WizardPresetId = Literal[
     "tracking_stream",
     "segmentation_stream",
 ]
+StreamBehavior = Literal["continuous", "event_gated"]
 
 STREAMING_WIZARD_PRESETS: tuple[WizardPresetId, ...] = (
     "simple_stream",
@@ -75,6 +76,12 @@ def build_streaming_wizard_graph(
     source_backend = _pick_choice(options.get("source_backend"), allowed={"auto", "opencv", "ffmpeg"}, default="auto")
     resize_mode = _pick_choice(options.get("resize_mode"), allowed={"contain", "none"}, default="contain")
     bypass_mode = _pick_choice(options.get("bypass_mode"), allowed={"auto", "force_on", "force_off"}, default="auto")
+    stream_behavior = _pick_choice(
+        options.get("stream_behavior"),
+        allowed={"continuous", "event_gated"},
+        default="continuous",
+    )
+    event_gated = stream_behavior == "event_gated"
     writer_priority = _coerce_int(options.get("writer_priority"), default=0)
 
     fps_limit = _coerce_float(options.get("fps_limit"), default=0.0, min_value=0.0, max_value=60.0)
@@ -88,7 +95,7 @@ def build_streaming_wizard_graph(
     motion_hold_seconds = _coerce_float(options.get("motion_hold_seconds"), default=6.0, min_value=0.0, max_value=120.0)
     yolo_confidence = _coerce_float(options.get("yolo_confidence_threshold"), default=0.55, min_value=0.01, max_value=1.0)
     yolo_filter_enabled = _coerce_bool(options.get("yolo_filter_enabled"), default=True)
-    detection_emit_mode = "filter" if yolo_filter_enabled else "annotate"
+    detection_emit_mode = "filter" if event_gated and yolo_filter_enabled else "annotate"
     tracking_emit_mode = "events" if yolo_filter_enabled else "annotate"
 
     detection_categories = _sanitize_categories(options.get("detection_categories"))
@@ -121,6 +128,22 @@ def build_streaming_wizard_graph(
         )
         _append_edge(edges, source_node_id=current_node_id, target_node_id="fps", maxsize=2)
         current_node_id = "fps"
+
+    continuous_stream_source_node_id = current_node_id
+    if not event_gated:
+        _append_stream_node(
+            nodes,
+            transmission_id=transmission_id,
+            resize_mode=resize_mode,
+            writer_priority=writer_priority,
+            bypass_mode=bypass_mode,
+        )
+        _append_edge(
+            edges,
+            source_node_id=continuous_stream_source_node_id,
+            target_node_id="stream",
+            maxsize=8,
+        )
 
     if preset_id == "motion_gate_stream":
         nodes.append(
@@ -198,6 +221,39 @@ def build_streaming_wizard_graph(
         _append_edge(edges, source_node_id=current_node_id, target_node_id="segment", maxsize=4)
         current_node_id = "segment"
 
+    if event_gated:
+        _append_stream_node(
+            nodes,
+            transmission_id=transmission_id,
+            resize_mode=resize_mode,
+            writer_priority=writer_priority,
+            bypass_mode=bypass_mode,
+        )
+        _append_edge(edges, source_node_id=current_node_id, target_node_id="stream", maxsize=8)
+
+    return {
+        "schema_version": 1,
+        "nodes": nodes,
+        "edges": edges,
+        "meta": {
+            "streaming": {
+                "transmission_id": transmission_id,
+                "camera_id": camera_id,
+                "preset_id": preset_id,
+                "stream_behavior": stream_behavior,
+            },
+        },
+    }
+
+
+def _append_stream_node(
+    nodes: list[dict[str, Any]],
+    *,
+    transmission_id: str,
+    resize_mode: str,
+    writer_priority: int,
+    bypass_mode: str,
+) -> None:
     nodes.append(
         {
             "id": "stream",
@@ -210,9 +266,6 @@ def build_streaming_wizard_graph(
             },
         }
     )
-    _append_edge(edges, source_node_id=current_node_id, target_node_id="stream", maxsize=8)
-
-    return {"schema_version": 1, "nodes": nodes, "edges": edges}
 
 
 def _append_edge(

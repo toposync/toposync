@@ -12,6 +12,7 @@ import {
   fetchStreamingHlsProbe,
   fetchStreamingRuntimeDiagnostics,
   fetchStreamingRuntimeHealth,
+  fetchStreamingRuntimePipelines,
   fetchStreamingSettings,
   fetchTransmissionUrls,
   fetchTransmissions,
@@ -29,6 +30,8 @@ import type {
   StreamingExtensionSettings,
   StreamingHlsProbeResponse,
   StreamingRuntimeHealthResponse,
+  StreamingRuntimePipelineLink,
+  StreamingRuntimePipelinesResponse,
   StreamingRuntimeOutputHealth,
   StreamingRuntimeStatus,
   StreamingRuntimeTransmissionHealth,
@@ -200,6 +203,11 @@ function boolLabel(value: boolean | undefined, t: TranslateFn): string {
   return value ? t("ext.streaming.common.yes", {}, "Yes") : t("ext.streaming.common.no", {}, "No");
 }
 
+function streamBehaviorLabel(value: string | undefined, t: TranslateFn): string {
+  if (value === "event_gated") return t("ext.streaming.runtime.stream_behavior.event_gated", {}, "Events only");
+  return t("ext.streaming.runtime.stream_behavior.continuous", {}, "Continuous");
+}
+
 function hlsProbeStatusLabel(status: StreamingHlsProbeResponse["status"] | undefined, t: TranslateFn): string {
   if (status === "ok") return t("ext.streaming.hls_probe.status.ok", {}, "OK");
   if (status === "engine_stopped") return t("ext.streaming.hls_probe.status.engine_stopped", {}, "Engine stopped");
@@ -236,6 +244,16 @@ function sortProcessingServers(servers: ProcessingServer[]): ProcessingServer[] 
   return local ? [local, ...rest] : [{ id: "local", name: "Local", kind: "inprocess", url: "" }, ...rest];
 }
 
+function openPipelineScreen(pipelineName: string): void {
+  if (typeof window === "undefined") return;
+  const name = String(pipelineName || "").trim();
+  if (!name) return;
+  const target = `/settings/pipelines/${encodeURIComponent(name)}`;
+  if (window.location.pathname === target) return;
+  window.history.pushState(null, "", target);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
 export function createStreamingSettingsPanel(): SettingsPanel {
   return {
     id: STREAMING_EXTENSION_ID,
@@ -268,6 +286,8 @@ function StreamingSettingsPanelContent({
   const [runtimeHealthLoading, setRuntimeHealthLoading] = useState(true);
   const [runtimeHealth, setRuntimeHealth] = useState<StreamingRuntimeHealthResponse | null>(null);
   const [runtimeHealthError, setRuntimeHealthError] = useState<string | null>(null);
+  const [runtimePipelines, setRuntimePipelines] = useState<StreamingRuntimePipelinesResponse | null>(null);
+  const [runtimePipelinesError, setRuntimePipelinesError] = useState<string | null>(null);
   const [runtimeDiagnosticsBusy, setRuntimeDiagnosticsBusy] = useState(false);
   const [runtimeDiagnosticsError, setRuntimeDiagnosticsError] = useState<string | null>(null);
   const [hlsProbeByKey, setHlsProbeByKey] = useState<Record<string, StreamingHlsProbeResponse>>({});
@@ -380,6 +400,18 @@ function StreamingSettingsPanelContent({
     }
   }, []);
 
+  const fetchRuntimePipelinesData = useCallback(async (signal?: AbortSignal) => {
+    setRuntimePipelinesError(null);
+    try {
+      const payload = await fetchStreamingRuntimePipelines(signal);
+      if (signal?.aborted) return;
+      setRuntimePipelines(payload);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setRuntimePipelinesError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
   const fetchSettingsData = useCallback(async (signal?: AbortSignal) => {
     setSettingsLoading(true);
     setSettingsError(null);
@@ -451,6 +483,7 @@ function StreamingSettingsPanelContent({
     void fetchHealthData(controller.signal);
     void fetchEngineData(controller.signal);
     void fetchRuntimeHealthData(controller.signal, true);
+    void fetchRuntimePipelinesData(controller.signal);
     void fetchSettingsData(controller.signal);
     void fetchTransmissionsData(controller.signal);
     void fetchProcessingServersData(controller.signal);
@@ -462,6 +495,7 @@ function StreamingSettingsPanelContent({
     fetchHealthData,
     fetchProcessingServersData,
     fetchRuntimeHealthData,
+    fetchRuntimePipelinesData,
     fetchSettingsData,
     fetchTransmissionsData,
   ]);
@@ -478,9 +512,10 @@ function StreamingSettingsPanelContent({
     const interval = window.setInterval(() => {
       if (document.visibilityState === "hidden") return;
       void fetchRuntimeHealthData();
+      void fetchRuntimePipelinesData();
     }, 2000);
     return () => window.clearInterval(interval);
-  }, [fetchRuntimeHealthData]);
+  }, [fetchRuntimeHealthData, fetchRuntimePipelinesData]);
 
   useEffect(() => {
     if (activeTransmissionId && transmissions.some((item) => item.id === activeTransmissionId)) return;
@@ -865,6 +900,17 @@ function StreamingSettingsPanelContent({
   }
 
   const activeUrls = activeTransmissionId ? urlsByTransmissionId[activeTransmissionId] ?? null : null;
+  const runtimePipelineLinksByTransmissionId = useMemo(() => {
+    const map = new Map<string, StreamingRuntimePipelineLink[]>();
+    for (const link of runtimePipelines?.pipelines ?? []) {
+      const transmissionId = String(link.transmission_id || "").trim();
+      if (!transmissionId) continue;
+      const current = map.get(transmissionId) ?? [];
+      current.push(link);
+      map.set(transmissionId, current);
+    }
+    return map;
+  }, [runtimePipelines?.pipelines]);
   const runtimeRows = useMemo(() => {
     const namesById = new Map<string, string>();
     for (const transmission of transmissions) {
@@ -880,11 +926,19 @@ function StreamingSettingsPanelContent({
       output: StreamingRuntimeOutputHealth | null;
       transmissionLabel: string;
       outputLabel: string;
+      pipelineLink: StreamingRuntimePipelineLink | null;
     }> = [];
 
     for (const transmission of runtimeHealth?.transmissions ?? []) {
       const transmissionId = String(transmission.transmission_id || "").trim();
       const transmissionLabel = namesById.get(transmissionId) ?? transmissionId;
+      const links = runtimePipelineLinksByTransmissionId.get(transmissionId) ?? [];
+      const writerIds = new Set(
+        [transmission.active_writer_id, transmission.selected_writer_id]
+          .map((value) => String(value || "").trim())
+          .filter(Boolean),
+      );
+      const pipelineLink = links.find((link) => writerIds.has(String(link.writer_id || "").trim())) ?? links[0] ?? null;
       const outputs = Array.isArray(transmission.outputs) ? transmission.outputs : [];
       if (outputs.length === 0) {
         rows.push({
@@ -893,6 +947,7 @@ function StreamingSettingsPanelContent({
           output: null,
           transmissionLabel,
           outputLabel: "-",
+          pipelineLink,
         });
         continue;
       }
@@ -905,11 +960,12 @@ function StreamingSettingsPanelContent({
           output,
           transmissionLabel,
           outputLabel: `${String(output.protocol || "").toUpperCase()} ${outputId || "-"}`,
+          pipelineLink,
         });
       }
     }
     return rows;
-  }, [runtimeHealth?.transmissions, transmissions]);
+  }, [runtimeHealth?.transmissions, runtimePipelineLinksByTransmissionId, transmissions]);
   const engineRunning = Boolean(engineStatus?.running);
   const orphanPids = Array.isArray(engineStatus?.orphan_pids) ? engineStatus.orphan_pids : [];
   const primaryEngineAction = engineRunning ? "restart" : "start";
@@ -1308,7 +1364,10 @@ function StreamingSettingsPanelContent({
                 className="chipButton"
                 type="button"
                 disabled={runtimeHealthLoading}
-                onClick={() => void fetchRuntimeHealthData(undefined, true)}
+                onClick={() => {
+                  void fetchRuntimeHealthData(undefined, true);
+                  void fetchRuntimePipelinesData();
+                }}
               >
                 <i className="fa-solid fa-rotate-right" aria-hidden="true" />{" "}
                 {runtimeHealthLoading
@@ -1353,6 +1412,8 @@ function StreamingSettingsPanelContent({
                     <th>{t("ext.streaming.runtime.table.selected_age", {}, "Selected age")}</th>
                     <th>{t("ext.streaming.runtime.table.incoming_age", {}, "Incoming age")}</th>
                     <th>{t("ext.streaming.runtime.table.active_writer", {}, "Active writer")}</th>
+                    <th>{t("ext.streaming.runtime.table.pipeline", {}, "Pipeline")}</th>
+                    <th>{t("ext.streaming.runtime.table.behavior", {}, "Behavior")}</th>
                     <th>{t("ext.streaming.runtime.table.fallback", {}, "Fallback")}</th>
                     <th>{t("ext.streaming.runtime.table.viewers", {}, "Viewers")}</th>
                     <th>{t("ext.streaming.runtime.table.publisher", {}, "Publisher")}</th>
@@ -1363,7 +1424,7 @@ function StreamingSettingsPanelContent({
                   </tr>
                 </thead>
                 <tbody>
-                  {runtimeRows.map(({ key, transmission, output, transmissionLabel, outputLabel }) => {
+                  {runtimeRows.map(({ key, transmission, output, transmissionLabel, outputLabel, pipelineLink }) => {
                     const status = output?.status ?? transmission.status;
                     const activeWriterId = String(transmission.active_writer_id || "").trim();
                     const fallbackText = transmission.fallback_active
@@ -1390,6 +1451,25 @@ function StreamingSettingsPanelContent({
                           </span>
                         </td>
                         <td title={activeWriterId}>{compactRuntimeId(activeWriterId)}</td>
+                        <td title={pipelineLink?.pipeline_name || ""}>
+                          {pipelineLink ? (
+                            <button className="chipButton" type="button" onClick={() => openPipelineScreen(pipelineLink.pipeline_name)}>
+                              {compactRuntimeId(pipelineLink.pipeline_name)}
+                            </button>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                        <td>
+                          <span className={["streamingRuntimeBadge", pipelineLink?.event_gated ? "is-stale" : "is-live"].join(" ")}>
+                            {streamBehaviorLabel(pipelineLink?.stream_behavior ?? transmission.stream_behavior, t)}
+                          </span>
+                          {transmission.event_gated_idle ? (
+                            <span className="streamingRuntimeSubtle">
+                              {t("ext.streaming.runtime.event_gated_idle", {}, "idle")}
+                            </span>
+                          ) : null}
+                        </td>
                         <td>{fallbackText}</td>
                         <td>{output ? output.viewer_count : "-"}</td>
                         <td>
@@ -1420,6 +1500,55 @@ function StreamingSettingsPanelContent({
                             "-"
                           )}
                         </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
+          {runtimePipelinesError ? <div className="errorText">{runtimePipelinesError}</div> : null}
+
+          {runtimePipelines?.pipelines?.length ? (
+            <div className="streamingRuntimeTableWrap">
+              <table className="streamingRuntimeTable">
+                <thead>
+                  <tr>
+                    <th>{t("ext.streaming.runtime.pipeline_table.pipeline", {}, "Pipeline")}</th>
+                    <th>{t("ext.streaming.runtime.pipeline_table.behavior", {}, "Behavior")}</th>
+                    <th>{t("ext.streaming.runtime.pipeline_table.writer", {}, "Writer")}</th>
+                    <th>{t("ext.streaming.runtime.pipeline_table.nodes", {}, "Nodes")}</th>
+                    <th>{t("ext.streaming.runtime.pipeline_table.warnings", {}, "Warnings")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runtimePipelines.pipelines.map((link) => {
+                    const nodesText = (link.nodes ?? [])
+                      .map((node) => {
+                        const suffix = node.stream_publish ? "*" : node.upstream_to_publish ? "^" : "";
+                        return `${node.node_id}:${node.operator_id}${suffix}`;
+                      })
+                      .join(" -> ");
+                    const edgeText = (link.edges ?? [])
+                      .map((edge) => `${edge.source_node_id}.${edge.source_port || "out"} -> ${edge.target_node_id}.${edge.target_port || "in"}`)
+                      .join("\n");
+                    const warnings = (link.warnings ?? []).join(" ");
+                    return (
+                      <tr key={`${link.transmission_id}:${link.pipeline_name}:${link.publish_node_id}`}>
+                        <td title={link.pipeline_name}>
+                          <button className="chipButton" type="button" onClick={() => openPipelineScreen(link.pipeline_name)}>
+                            {compactRuntimeId(link.pipeline_name)}
+                          </button>
+                        </td>
+                        <td>
+                          <span className={["streamingRuntimeBadge", link.event_gated ? "is-stale" : "is-live"].join(" ")}>
+                            {streamBehaviorLabel(link.stream_behavior, t)}
+                          </span>
+                        </td>
+                        <td title={link.writer_id}>{compactRuntimeId(link.writer_id)}</td>
+                        <td title={edgeText}>{nodesText || "-"}</td>
+                        <td title={warnings}>{warnings || "-"}</td>
                       </tr>
                     );
                   })}

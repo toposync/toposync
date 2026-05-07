@@ -88,7 +88,8 @@ def build_streaming_wizard_graph(
     motion_hold_seconds = _coerce_float(options.get("motion_hold_seconds"), default=6.0, min_value=0.0, max_value=120.0)
     yolo_confidence = _coerce_float(options.get("yolo_confidence_threshold"), default=0.55, min_value=0.01, max_value=1.0)
     yolo_filter_enabled = _coerce_bool(options.get("yolo_filter_enabled"), default=True)
-    yolo_emit_mode = "events" if yolo_filter_enabled else "annotate"
+    detection_emit_mode = "filter" if yolo_filter_enabled else "annotate"
+    tracking_emit_mode = "events" if yolo_filter_enabled else "annotate"
 
     detection_categories = _sanitize_categories(options.get("detection_categories"))
     tracking_categories = _sanitize_categories(options.get("tracking_categories"))
@@ -146,7 +147,7 @@ def build_streaming_wizard_graph(
                     "model_id": DEFAULT_STREAMING_DETECTION_MODEL_ID,
                     "categories": detection_categories,
                     "confidence_threshold": float(yolo_confidence),
-                    "emit_mode": yolo_emit_mode,
+                    "emit_mode": detection_emit_mode,
                 },
             }
         )
@@ -175,7 +176,7 @@ def build_streaming_wizard_graph(
                 "config": {
                     "tracker_id": "simple_iou_kalman",
                     "close_after_seconds": 5.0,
-                    "emit_mode": yolo_emit_mode,
+                    "emit_mode": tracking_emit_mode,
                 },
             }
         )

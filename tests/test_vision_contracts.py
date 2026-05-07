@@ -184,12 +184,15 @@ def test_classification_result_normalizes_and_sorts_labels() -> None:
     assert result.top_label.score == 1.0
 
 
-def test_vision_detect_config_defaults_to_filter_mode_and_normalizes_aliases() -> None:
+def test_vision_detect_config_defaults_to_events_mode_and_normalizes_aliases() -> None:
     default_config = VisionDetectConfig.model_validate({})
     assert default_config.emit_mode == "events"
 
     event_config = VisionDetectConfig.model_validate({"emit_mode": "event"})
     assert event_config.emit_mode == "events"
+
+    filter_config = VisionDetectConfig.model_validate({"emit_mode": "filter_frames"})
+    assert filter_config.emit_mode == "filter"
 
     annotate_config = VisionDetectConfig.model_validate({"emit_mode": "pass-through"})
     assert annotate_config.emit_mode == "annotate"

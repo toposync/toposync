@@ -273,14 +273,15 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
         registry.register_operator(
             operator_id="vision.detect",
             description=(
-                "Object detection. Can either filter the stream to frames that contain detections "
-                "or pass every frame through with detection payload attached. "
-                "Use vision.track for lifecycle and temporal identity."
+                "Object detection. Can emit finite per-detection events, filter the stream to "
+                "frames that contain detections, or pass every frame through with detection "
+                "payload attached. Use vision.track for temporal identity and long-lived "
+                "object lifecycle."
             ),
             config_model=VisionDetectConfig,
             inputs=[{"name": "in", "required": True}],
             outputs=[{"name": "out"}],
-            capabilities=["vision", "detection", "heavy_compute"],
+            capabilities=["vision", "detection", "heavy_compute", "split_stream"],
             defaults=VisionDetectConfig().model_dump(),
             execution_mode="thread_pool",
             max_concurrency=1,

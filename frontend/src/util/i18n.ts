@@ -599,7 +599,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_description.vision.classify_image":
       "Scores the full image against semantic labels such as nsfw, scene, or quality and attaches the ranked labels to the packet.",
     "core.ui.pipelines.operator_description.vision.detect":
-      "Finds supported objects in the frame and can either filter empty frames or keep every frame annotated for later steps.",
+      "Finds supported objects and can create finite detection events, filter empty frames, or keep every frame annotated.",
     "core.ui.pipelines.operator_description.vision.track":
       "Links detections over time and can either emit per-object events or keep active tracks on the frame.",
     "core.ui.pipelines.operator_description.vision.segment_instances":
@@ -1132,6 +1132,16 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Raise this if you are getting false positives. Lower it if the model is missing real objects.",
     "core.ui.pipelines.panels.yolo.filter_frames": "Filter frames (recommended)",
     "core.ui.pipelines.panels.yolo.filter_frames_hint": "When disabled, vision inference still runs but keeps all frames downstream.",
+    "core.ui.pipelines.panels.yolo.detect_emit_mode": "Detection result",
+    "core.ui.pipelines.panels.yolo.detect_emit_mode.events": "Create finite events",
+    "core.ui.pipelines.panels.yolo.detect_emit_mode.filter": "Filter frames with detections",
+    "core.ui.pipelines.panels.yolo.detect_emit_mode.annotate": "Keep detections on every frame",
+    "core.ui.pipelines.panels.yolo.detect_emit_mode_events_hint":
+      "Creates one short OPEN/CLOSE event per detected object. Use tracking when you need live object movement.",
+    "core.ui.pipelines.panels.yolo.detect_emit_mode_filter_hint":
+      "Passes only source frames that have detections. This is useful for detection-filtered video streams.",
+    "core.ui.pipelines.panels.yolo.detect_emit_mode_annotate_hint":
+      "Keeps every source frame and attaches detections to the payload for downstream tracking or overlays.",
     "core.ui.pipelines.panels.yolo.categories": "Objects of interest",
     "core.ui.pipelines.panels.yolo.categories_all": "Everything",
     "core.ui.pipelines.panels.yolo.category.person": "People",
@@ -2296,7 +2306,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_description.vision.classify_image":
       "Pontua a imagem inteira contra rótulos semânticos como nsfw, cena ou qualidade e anexa os rótulos ordenados ao pacote.",
     "core.ui.pipelines.operator_description.vision.detect":
-      "Encontra objetos suportados no frame e pode filtrar frames vazios ou manter todos anotados para as etapas seguintes.",
+      "Encontra objetos suportados e pode criar eventos finitos, filtrar frames vazios ou manter todos os frames anotados.",
     "core.ui.pipelines.operator_description.vision.track":
       "Liga detecções ao longo do tempo e pode gerar eventos por objeto ou manter os rastros no frame.",
     "core.ui.pipelines.operator_description.vision.segment_instances":
@@ -2835,6 +2845,16 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Aumente se estiver vendo falsos positivos. Reduza se o modelo estiver deixando passar objetos reais.",
     "core.ui.pipelines.panels.yolo.filter_frames": "Filtrar frames (recomendado)",
     "core.ui.pipelines.panels.yolo.filter_frames_hint": "Quando desligado, a inferência de visão ainda roda, mas mantém todos os frames no fluxo.",
+    "core.ui.pipelines.panels.yolo.detect_emit_mode": "Resultado da detecção",
+    "core.ui.pipelines.panels.yolo.detect_emit_mode.events": "Criar eventos finitos",
+    "core.ui.pipelines.panels.yolo.detect_emit_mode.filter": "Filtrar frames com detecção",
+    "core.ui.pipelines.panels.yolo.detect_emit_mode.annotate": "Manter detecções em todos os frames",
+    "core.ui.pipelines.panels.yolo.detect_emit_mode_events_hint":
+      "Cria um evento curto OPEN/CLOSE por objeto detectado. Use rastreamento quando precisar de movimento vivo do objeto.",
+    "core.ui.pipelines.panels.yolo.detect_emit_mode_filter_hint":
+      "Passa apenas frames de origem com detecção. Útil para streams de vídeo filtrados por detecção.",
+    "core.ui.pipelines.panels.yolo.detect_emit_mode_annotate_hint":
+      "Mantém todos os frames de origem e anexa as detecções ao payload para rastreamento ou overlays seguintes.",
     "core.ui.pipelines.panels.yolo.categories": "Objetos de interesse",
     "core.ui.pipelines.panels.yolo.categories_all": "Tudo",
     "core.ui.pipelines.panels.yolo.category.person": "Pessoas",

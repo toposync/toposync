@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from dataclasses import replace
 from typing import Any
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
 from toposync.runtime.pipelines.images import resolve_image_artifact_for_data
-from toposync.runtime.pipelines.runtime import Packet
+from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 from toposync.runtime.pipelines.telemetry import METRIC_VISION_CONFIDENCE
 
 from ...pipelines.schemas import VisionDetectConfig
@@ -173,15 +174,18 @@ class VisionDetectRuntime(TransformOperatorRuntime):
         detection: DetectionObject,
         *,
         source_stream_id: str,
+        event_id: str | None = None,
+        correlation_id: str | None = None,
     ) -> dict[str, Any]:
         item = self._serialize_contract_detection(detection)
         item.update(
             {
+                "event_id": event_id,
                 "category": detection.label,
                 "confidence": float(detection.score),
                 "tracking_id": None,
                 "tracker_track_id": None,
-                "correlation_id": None,
+                "correlation_id": correlation_id,
                 "source_stream_id": source_stream_id,
             }
         )
@@ -246,6 +250,87 @@ class VisionDetectRuntime(TransformOperatorRuntime):
         )
         return replace(packet, payload=payload, metadata=metadata)
 
+    def _build_detection_event_packets(
+        self,
+        packet: Packet,
+        *,
+        manifest: ModelManifest,
+        backend: DetectorBackend,
+        detections: list[DetectionObject],
+    ) -> list[Packet]:
+        outputs: list[Packet] = []
+        runtime_id = str(getattr(backend, "backend_id", "") or manifest.runtime)
+
+        for detection in detections:
+            event_id = uuid.uuid4().hex
+            correlation_id = uuid.uuid4().hex
+            stream_id = f"det:{packet.stream_id}:{event_id}"
+            object_data = self._serialize_compat_detection(
+                detection,
+                source_stream_id=packet.stream_id,
+                event_id=event_id,
+                correlation_id=correlation_id,
+            )
+            bbox = object_data.get("bbox01")
+            payload = dict(packet.payload)
+            payload["vision"] = {
+                "task": "detection",
+                "model_id": manifest.model_id,
+                "runtime": runtime_id,
+                "detections": [self._serialize_contract_detection(detection)],
+            }
+            payload.update(
+                {
+                    "event_id": event_id,
+                    "tracking_id": None,
+                    "tracker_track_id": None,
+                    "correlation_id": correlation_id,
+                    "source_stream_id": packet.stream_id,
+                    "object_category_label": object_data.get("label"),
+                    "object_confidence": float(object_data.get("score") or 0.0),
+                    "object_bbox01": list(bbox) if isinstance(bbox, list) else None,
+                    "detected_object": object_data,
+                    "detected_objects": [object_data],
+                }
+            )
+
+            metadata = dict(packet.metadata)
+            metadata.update(
+                {
+                    "operator_id": self._operator_id,
+                    "source_stream_id": packet.stream_id,
+                    "event_id": event_id,
+                    "tracking_id": None,
+                    "tracker_track_id": None,
+                    "correlation_id": correlation_id,
+                    "object_category": payload.get("object_category_label"),
+                    "object_confidence": payload.get("object_confidence"),
+                    "vision_task": "detection",
+                    "vision_model_id": manifest.model_id,
+                    "vision_runtime": runtime_id,
+                }
+            )
+
+            open_packet = Packet.create(
+                stream_id=stream_id,
+                lifecycle=Lifecycle.OPEN,
+                payload=payload,
+                artifacts=packet.artifacts,
+                metadata=metadata,
+                parent_packet_id=packet.packet_id,
+            )
+            close_packet = Packet.create(
+                stream_id=stream_id,
+                lifecycle=Lifecycle.CLOSE,
+                payload=payload,
+                artifacts=packet.artifacts,
+                metadata=metadata,
+                parent_packet_id=open_packet.packet_id,
+            )
+            outputs.extend([open_packet, close_packet])
+
+        return outputs
+
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         artifact_name, frame = resolve_image_artifact_for_data(
             packet,
@@ -274,7 +359,14 @@ class VisionDetectRuntime(TransformOperatorRuntime):
             )
 
         self._record_confidence_telemetry(packet=packet, context=context, detections=detections)
-        if self._parsed.emit_mode == "events" and not detections:
+        if self._parsed.emit_mode == "events":
+            return self._build_detection_event_packets(
+                packet,
+                manifest=manifest,
+                backend=backend,
+                detections=detections,
+            )
+        if self._parsed.emit_mode == "filter" and not detections:
             return []
         out = self._annotate_packet(packet, manifest=manifest, backend=backend, detections=detections)
         return [out]

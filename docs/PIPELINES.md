@@ -28,7 +28,8 @@ O runtime trafega **Packets** (eventos) entre operadores. Um Packet carrega:
 - **`stream_id`**: identifica um fluxo lógico (ex.: uma câmera, ou um objeto trackeado).
 - **`payload["event_id"]`**: identifica um **evento lógico** dentro do fluxo (opcional).
   - Em tracking (`vision.track`), é preenchido e fica estável durante `open→update→close` (um por objeto).
-  - Em detecção anotada (`vision.detect`), fica **nulo** por design. Lifecycle e identidade temporal pertencem a `vision.track`.
+  - Em detecção finita (`vision.detect emit_mode="events"`), identifica o evento curto `open→close` de uma detecção.
+  - Em detecção anotada/filtrada (`vision.detect emit_mode="annotate|filter"`), fica **nulo** por design. Identidade temporal pertence a `vision.track`.
   - Operadores stateful que fazem sentido “por objeto” (ex.: `camera.velocity_estimation`, `core.throttle`, `core.debounce`, `core.fps_reducer`) usam `event_id` quando existe e fazem fallback para `stream_id` quando não existe.
 - **`lifecycle`**: `open | update | close`
   - `open`: início de um stream/evento (ex.: “pessoa detectada”)
@@ -363,10 +364,12 @@ Hooks estruturais já reservados para futuro multi-câmera:
 
 Implementação: `extensions/vision/src/toposync_ext_vision/processing/tasks/tracking.py`.
 
-### `vision.detect` (annotate-first)
+### `vision.detect`
 
 Detecção task-oriented sem vendor público:
-- anota o packet com `payload["vision"] = {"task": "detection", "model_id", "runtime", "detections": [...]}`.
+- em `emit_mode="events"`, emite um par `open→close` por detecção, com `event_id` estável nesse par.
+- em `emit_mode="filter"`, passa apenas frames que tenham detecção, preservando o lifecycle do source packet.
+- em `emit_mode="annotate"`, mantém todos os frames e anota o packet com `payload["vision"] = {"task": "detection", "model_id", "runtime", "detections": [...]}`.
 - mantém os campos compatíveis já usados no ecossistema downstream:
   - `object_category_label`, `object_confidence`, `object_bbox01`
   - `detected_object`, `detected_objects`
@@ -376,7 +379,7 @@ Detecção task-oriented sem vendor público:
 - o editor escolhe modelos por tarefa usando o catálogo do processing server selecionado, com badges de recomendação e ocultação de modelos indisponíveis no seletor rápido
 - no fluxo básico, o usuário escolhe só o que faz sentido para a tarefa; detalhes técnicos de runtime/artifacts ficam no modo avançado
 - o usuário pode importar um manifesto customizado no modo avançado; o modelo entra no mesmo catálogo da tarefa, sem criar operador separado
-- não cria lifecycle por objeto; isso continua em `vision.track`.
+- eventos de detecção são curtos; lifecycle temporal por objeto, movimento e trail continuam em `vision.track`.
 
 Implementação: `extensions/vision/src/toposync_ext_vision/processing/tasks/detection.py`.
 

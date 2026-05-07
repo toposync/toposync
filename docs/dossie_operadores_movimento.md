@@ -254,6 +254,7 @@ Diferencas semanticas:
 
 - tracking em `emit_mode="events"` divide stream e emite lifecycle por objeto;
 - detection em `emit_mode="events"` emite evento curto por deteccao, normalmente `open` + `close`;
+- detection em `emit_mode="filter"` passa apenas frames com deteccao, preservando lifecycle do frame de origem;
 - ambos em `emit_mode="annotate"` mantem o packet original e apenas anotam o payload.
 
 ### 4.4 Payload de pos-processamento

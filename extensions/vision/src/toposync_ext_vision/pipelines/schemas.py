@@ -6,7 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-VisionDetectEmitMode = Literal["annotate", "events"]
+VisionDetectEmitMode = Literal["annotate", "events", "filter"]
 VisionTrackEmitMode = Literal["annotate", "events"]
 
 
@@ -17,9 +17,10 @@ class VisionDetectConfig(BaseModel):
     emit_mode: VisionDetectEmitMode = Field(
         default="events",
         description=(
-            "'events' keeps only packets where detections were found. 'annotate' always passes "
-            "the source frame through with detection payload attached. Use vision.track for "
-            "per-object lifecycle semantics."
+            "'events' emits finite OPEN/CLOSE packets per detection. 'filter' keeps only "
+            "source packets where detections were found. 'annotate' always passes the source "
+            "frame through with detection payload attached. Use vision.track for temporal "
+            "identity and long-lived per-object lifecycle semantics."
         ),
     )
     categories: list[str] = Field(default_factory=list)
@@ -38,13 +39,15 @@ class VisionDetectConfig(BaseModel):
     @classmethod
     def _normalize_emit_mode(cls, value: Any) -> str:
         if value is None:
-            return "annotate"
+            return "events"
         mode = str(value or "").strip().lower()
         if mode in {"annotate", "passthrough", "pass_through", "pass-through"}:
             return "annotate"
+        if mode in {"filter", "filters", "filter_frames", "filter-frames", "filtered"}:
+            return "filter"
         if mode in {"events", "event"}:
             return "events"
-        raise ValueError("emit_mode must be one of: annotate, events")
+        raise ValueError("emit_mode must be one of: events, filter, annotate")
 
     @field_validator("categories")
     @classmethod

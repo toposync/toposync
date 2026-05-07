@@ -948,7 +948,7 @@ Observação:
 ### 12.1 `vision.detect`
 
 #### Objetivo
-Executar detecção de objetos e anotar o packet.
+Executar detecção de objetos e produzir eventos finitos, filtro de frames ou anotação no packet.
 
 #### Inputs
 - `in`
@@ -958,8 +958,7 @@ Executar detecção de objetos e anotar o packet.
 
 #### Config
 - `model_id: str`
-- `emit_mode: "annotate" | "events"`  
-  primeira versão pode até lançar só com `annotate` e usar `vision.track` para `events`
+- `emit_mode: "events" | "filter" | "annotate"`
 - `categories: list[str]`
 - `confidence_threshold: float`
 - `iou_threshold: float`
@@ -974,8 +973,10 @@ Executar detecção de objetos e anotar o packet.
 - telemetria de confiança
 
 #### Observações
-- não criar lifecycle por objeto aqui
-- o operador pode gerar modo `events` depois, mas a arquitetura principal deve empurrar lifecycle para `vision.track`
+- `events` emite evento curto `open→close` por detecção.
+- `filter` mantém só frames com detecção.
+- `annotate` mantém todos os frames com detecções anexadas.
+- lifecycle temporal por objeto, movimento e trail continuam em `vision.track`.
 
 ### 12.2 `vision.track`
 

@@ -662,8 +662,10 @@ export function VisionConfigCard({
   const inferenceInterval = Number.isFinite(inferenceIntervalRaw) ? Math.max(0, Math.min(60, inferenceIntervalRaw)) : 0;
   const trackerId = String((config as any).tracker_id ?? "simple_iou_kalman").trim() || "simple_iou_kalman";
   const trackerPreset = TRACKER_CHOICES.find((item) => item.value === trackerId) ?? null;
-  const emitMode = String((config as any).emit_mode ?? "events").trim() || "events";
-  const detectionFilterFrames = String((config as any).emit_mode ?? "events").trim().toLowerCase() !== "annotate";
+  const emitModeRaw = String((config as any).emit_mode ?? "events").trim().toLowerCase() || "events";
+  const emitMode = ["events", "filter", "annotate"].includes(emitModeRaw) ? emitModeRaw : "events";
+  const trackEmitMode = emitMode === "annotate" ? "annotate" : "events";
+  const detectEmitMode = emitMode;
   const pauseWhenGateClosed = Boolean((config as any).pause_when_gate_closed ?? true);
   const useWorldAnchor = Boolean((config as any).use_world_anchor ?? false);
   const modelId = String((config as any).model_id ?? "").trim();
@@ -1251,7 +1253,7 @@ export function VisionConfigCard({
             <span>{t("core.ui.pipelines.panels.yolo.track_emit_mode")}</span>
             <select
               className="pipelinesInput"
-              value={emitMode}
+              value={trackEmitMode}
               onChange={(event) => {
                 onUpdateConfig((prev) => ({
                   ...prev,
@@ -1697,23 +1699,29 @@ export function VisionConfigCard({
 
       {isDetection ? (
         <>
-          <label className="pipelinesCheckboxLabel">
-            <input
-              type="checkbox"
-              checked={detectionFilterFrames}
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.yolo.detect_emit_mode")}</span>
+            <select
+              className="pipelinesInput"
+              value={detectEmitMode}
               onChange={(event) => {
                 onUpdateConfig((prev) => ({
                   ...prev,
-                  emit_mode: event.target.checked ? "events" : "annotate",
+                  emit_mode: event.target.value,
                 }));
               }}
-            />
-            <span>{t("core.ui.pipelines.panels.yolo.filter_frames")}</span>
+            >
+              <option value="events">{t("core.ui.pipelines.panels.yolo.detect_emit_mode.events")}</option>
+              <option value="filter">{t("core.ui.pipelines.panels.yolo.detect_emit_mode.filter")}</option>
+              <option value="annotate">{t("core.ui.pipelines.panels.yolo.detect_emit_mode.annotate")}</option>
+            </select>
           </label>
           <div className="pipelinesStepHint">
-            {detectionFilterFrames
-              ? t("core.ui.pipelines.panels.yolo.filter_frames_hint")
-              : t("core.ui.pipelines.panels.yolo.detect_annotate_only_hint")}
+            {detectEmitMode === "events"
+              ? t("core.ui.pipelines.panels.yolo.detect_emit_mode_events_hint")
+              : detectEmitMode === "filter"
+                ? t("core.ui.pipelines.panels.yolo.detect_emit_mode_filter_hint")
+                : t("core.ui.pipelines.panels.yolo.detect_emit_mode_annotate_hint")}
           </div>
         </>
       ) : null}

@@ -123,3 +123,43 @@ def test_hybrid_auth_allows_direct_login_when_local_user_exists(
     assert login.status_code == 200
     assert login.json()["user"]["username"] == "owner"
     assert pipelines.status_code == 200
+
+
+def test_ingress_owner_can_pair_local_access_user(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    headers = {
+        "x-remote-user-id": "ha-user-1",
+        "x-remote-user-name": "mateus",
+        "x-remote-user-display-name": "Mateus Calza",
+    }
+
+    with _create_ingress_client(tmp_path, monkeypatch) as client:
+        created = client.post(
+            "/api/access/users",
+            headers=headers,
+            json={
+                "username": "mobile_owner",
+                "display_name": "Mobile Owner",
+                "role": "owner",
+                "password": "password123",
+            },
+        )
+        assert created.status_code == 200
+        user_id = created.json()["id"]
+
+        start = client.post(
+            f"/api/access/users/{user_id}/pair/start",
+            headers=headers,
+            json={"device_label": "native app"},
+        )
+        assert start.status_code == 200
+        code = str(start.json()["code"])
+        assert code
+
+        complete = client.post(
+            "/api/auth/pair/complete",
+            json={"code": code, "device_label": "native app"},
+        )
+        assert complete.status_code == 200
+        assert complete.json()["user"]["id"] == user_id

@@ -1319,9 +1319,14 @@ def create_app() -> FastAPI:
         _require(request, action="core:auth:pair")
         auth: AuthRuntime = request.app.state.auth
         principal = auth.require_authenticated(_auth_context(request))
-        code, expires_at = auth.start_pairing(
-            user_id=principal.user_id, device_label=body.device_label
-        )
+        try:
+            code, expires_at = auth.start_pairing(
+                user_id=principal.user_id, device_label=body.device_label
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown local user") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return AuthPairStartResponse(code=code, expires_at=expires_at)
 
     @app.post("/api/auth/pair/complete", response_model=AuthLoginResponse)
@@ -1352,6 +1357,30 @@ def create_app() -> FastAPI:
             for item in auth.store.list_users()
         ]
         return AccessUsersResponse(users=users, grants_catalog=auth.configurable_actions)
+
+    @app.post("/api/access/users/{user_id}/pair/start", response_model=AuthPairStartResponse)
+    async def start_access_user_pairing(
+        request: Request, user_id: str, body: AuthPairStartRequest
+    ) -> AuthPairStartResponse:
+        _require(request, action="core:access:manage")
+        auth: AuthRuntime = request.app.state.auth
+        context = _auth_context(request)
+        target = auth.store.get_user_by_id(user_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Unknown user")
+        if (
+            context.principal is not None
+            and context.principal.role != "owner"
+            and target.role == "owner"
+        ):
+            raise HTTPException(status_code=403, detail="Only owners can pair owner accounts")
+        try:
+            code, expires_at = auth.start_pairing(
+                user_id=target.id, device_label=body.device_label
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return AuthPairStartResponse(code=code, expires_at=expires_at)
 
     @app.get("/api/access/users/{user_id}/sessions", response_model=AccessSessionsResponse)
     async def list_access_user_sessions(request: Request, user_id: str) -> AccessSessionsResponse:

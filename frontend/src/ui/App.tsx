@@ -38,7 +38,7 @@ import {
   putComposition,
   renameComposition,
   createAccessUser,
-  startPairing,
+  startAccessUserPairing,
 } from "../util/api";
 import type { AppSettings, AuthUser, NotificationsCount } from "../util/api";
 import { i18n, resolveLocalizedString } from "../util/i18n";
@@ -1110,7 +1110,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           onLogout={onLogout}
           listAccessUsers={listAccessUsers}
           createAccessUser={createAccessUser}
-          startPairing={startPairing}
+          startAccessUserPairing={startAccessUserPairing}
           patchAccessUser={patchAccessUser}
           deleteAccessUser={deleteAccessUser}
         />

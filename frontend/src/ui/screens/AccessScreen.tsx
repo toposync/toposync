@@ -22,7 +22,7 @@ type Props = {
     role: AuthRole;
     display_name?: string;
   }) => Promise<AuthUser>;
-  startPairing: (payload?: { device_label?: string }) => Promise<PairingCode>;
+  startAccessUserPairing: (userId: string, payload?: { device_label?: string }) => Promise<PairingCode>;
   patchAccessUser: (
     userId: string,
     payload: {
@@ -42,7 +42,7 @@ export function AccessScreen({
   onLogout,
   listAccessUsers,
   createAccessUser,
-  startPairing,
+  startAccessUserPairing,
   patchAccessUser,
   deleteAccessUser,
 }: Props): React.ReactElement {
@@ -111,8 +111,7 @@ export function AccessScreen({
     return () => window.clearInterval(timer);
   }, [pairingCode]);
 
-  const isCurrentSelectedUser = Boolean(selectedUser && currentUserId && selectedUser.id === currentUserId);
-  const canGeneratePairing = authMode !== "bypass" && isCurrentSelectedUser && !selectedUser?.is_disabled;
+  const canGeneratePairing = authMode !== "bypass" && canManage && Boolean(selectedUser) && !selectedUser?.is_disabled;
   const pairingSecondsRemaining = pairingCode ? Math.max(0, Math.ceil(pairingCode.expires_at - pairingNow)) : 0;
   const pairingExpired = Boolean(pairingCode && pairingSecondsRemaining <= 0);
 
@@ -207,11 +206,11 @@ export function AccessScreen({
   }, [busy, canManage, createAccessUser, createDisplayName, createPassword, createUsername, t]);
 
   const onStartPairing = useCallback(async () => {
-    if (!canGeneratePairing || pairingBusy) return;
+    if (!selectedUser || !canGeneratePairing || pairingBusy) return;
     setPairingBusy(true);
     setPairingError("");
     try {
-      const next = await startPairing({ device_label: "native app" });
+      const next = await startAccessUserPairing(selectedUser.id, { device_label: "native app" });
       setPairingCode(next);
       setPairingNow(Date.now() / 1000);
     } catch (err) {
@@ -219,7 +218,12 @@ export function AccessScreen({
     } finally {
       setPairingBusy(false);
     }
-  }, [canGeneratePairing, pairingBusy, startPairing]);
+  }, [canGeneratePairing, pairingBusy, selectedUser, startAccessUserPairing]);
+
+  useEffect(() => {
+    setPairingCode(null);
+    setPairingError("");
+  }, [selectedUserId]);
 
   const onDeleteUser = useCallback(async () => {
     if (!selectedUser || !canManage || busy) return;

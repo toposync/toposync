@@ -864,6 +864,21 @@ export async function createAccessUser(payload: {
   return res.json();
 }
 
+export async function startAccessUserPairing(
+  userId: string,
+  params?: { device_label?: string },
+): Promise<{ code: string; expires_at: number }> {
+  const res = await fetch(`/api/access/users/${encodeURIComponent(userId)}/pair/start`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      device_label: params?.device_label ?? "mobile",
+    }),
+  });
+  if (!res.ok) throw new Error(`Failed to start pairing for access user ${userId}: ${res.status}`);
+  return res.json();
+}
+
 export async function patchAccessUser(
   userId: string,
   payload: {

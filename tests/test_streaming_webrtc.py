@@ -265,6 +265,7 @@ def test_home_assistant_contract_returns_proxied_hls_url(
     assert payload["blocking_errors"] == []
     assert payload["network_contract"]["status"] == "ok"
     assert payload["network_contract"]["public_hls_mode"] == "proxy"
+    assert payload["network_contract"]["expected_ports"].get("hls") is None
     assert payload["network_contract"]["actual_ports"]["hls"] == 18888
 
 
@@ -314,6 +315,47 @@ def test_hls_output_is_omitted_when_direct_hls_port_mismatches_in_fail_mode(
     assert payload["blocking_errors"] == [
         "HLS active port 18888 does not match expected add-on port 18759."
     ]
+
+
+def test_signed_hls_treats_hls_port_as_internal_without_env_proxy(tmp_path: Path) -> None:
+    engine_manager = _EngineManagerStub(
+        data_dir=tmp_path / "data",
+        ports=MediaMtxPorts(
+            rtsp=18758,
+            hls=18888,
+            webrtc=18760,
+            api=18761,
+            rtp=50000,
+            rtcp=50001,
+        ),
+    )
+
+    with _create_client(tmp_path, engine_manager=engine_manager) as client:
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Signed HLS stream",
+                "path": "signed-main",
+                "outputs": [{"id": "main_hls", "protocol": "hls", "enabled": True}],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        urls_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/urls",
+            headers={"host": "192.168.0.100:18756"},
+        )
+
+    assert urls_res.status_code == 200
+    payload = urls_res.json()
+    assert payload["outputs"][0]["url"].startswith(
+        "http://192.168.0.100:18756/api/streams/media/hls/signed-main/index.m3u8?media_token="
+    )
+    assert payload["network_contract"]["public_hls_mode"] == "proxy"
+    assert payload["network_contract"]["expected_ports"].get("hls") is None
+    assert payload["network_contract"]["actual_ports"]["hls"] == 18888
+    assert payload["blocking_errors"] == []
 
 
 def test_direct_streaming_port_mismatch_is_reported_in_network_contract(

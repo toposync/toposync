@@ -288,6 +288,22 @@ def _public_hls_mode() -> Literal["direct", "proxy"]:
     return "proxy" if raw == "proxy" else "direct"
 
 
+def _effective_public_hls_mode(settings: StreamingExtensionSettings | None) -> Literal["direct", "proxy"]:
+    if settings is not None and settings.engine.media_auth.mode == "signed_proxy":
+        return "proxy"
+    return _public_hls_mode()
+
+
+def _public_expected_ports(
+    *,
+    expected_ports: StreamingNetworkContractPorts,
+    public_hls_mode: Literal["direct", "proxy"],
+) -> StreamingNetworkContractPorts:
+    if public_hls_mode != "proxy":
+        return expected_ports
+    return expected_ports.model_copy(update={"hls": None})
+
+
 def _network_contract_active(
     *,
     environment: str,
@@ -479,8 +495,11 @@ def _build_network_contract(
     running: bool,
 ) -> StreamingNetworkContract:
     environment = str(os.getenv("TOPOSYNC_DEPLOYMENT_TARGET") or "generic").strip() or "generic"
-    public_hls_mode = _public_hls_mode()
-    expected_ports = _network_contract_expected_ports()
+    public_hls_mode = _effective_public_hls_mode(settings)
+    expected_ports = _public_expected_ports(
+        expected_ports=_network_contract_expected_ports(),
+        public_hls_mode=public_hls_mode,
+    )
     preferred = settings.engine.preferred_ports if settings is not None else None
     additional_hosts = _merge_webrtc_additional_hosts(settings)
     actual_ports = StreamingNetworkContractPorts(

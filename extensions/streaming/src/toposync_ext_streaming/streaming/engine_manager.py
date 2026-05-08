@@ -59,6 +59,19 @@ def _env_address(name: str, *, default: str) -> str:
     return str(raw).strip()
 
 
+def _hls_public_mode() -> str:
+    raw = str(os.getenv("TOPOSYNC_STREAMING_HLS_PUBLIC_MODE") or "").strip().lower()
+    return "proxy" if raw == "proxy" else "direct"
+
+
+def _hls_should_bind_loopback(engine_settings: StreamingEngineSettings) -> bool:
+    media_auth = getattr(getattr(engine_settings, "media_auth", None), "mode", "signed_proxy")
+    return (
+        str(media_auth or "signed_proxy") == "signed_proxy"
+        or _hls_public_mode() == "proxy"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class MediaMtxPorts:
     rtsp: int
@@ -541,6 +554,9 @@ class MediaMtxEngineManager:
 
         config_text = render_mediamtx_config(
             bind_host=bind_host,
+            hls_bind_host=(
+                "127.0.0.1" if _hls_should_bind_loopback(engine_settings) else bind_host
+            ),
             ports=MediaMTXResolvedPorts(
                 rtsp=ports.rtsp,
                 hls=ports.hls,

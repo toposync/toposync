@@ -1343,7 +1343,8 @@ function StreamingSettingsPanelContent({
 
           {engineStatus?.bind_host && engineStatus?.ports ? (
             <div className="cardMeta" style={{ marginTop: 6 }}>
-              {engineStatus.bind_host} - RTSP {engineStatus.ports.rtsp ?? "-"} - HLS {engineStatus.ports.hls ?? "-"} - WebRTC{" "}
+              {engineStatus.bind_host} - RTSP {engineStatus.ports.rtsp ?? "-"} -{" "}
+              {t("ext.streaming.engine.meta_internal_hls", {}, "Internal HLS")} {engineStatus.ports.hls ?? "-"} - WebRTC{" "}
               {engineStatus.ports.webrtc ?? "-"} - Metrics {engineStatus.ports.metrics ?? "-"}
             </div>
           ) : null}
@@ -1591,6 +1592,13 @@ function StreamingSettingsPanelContent({
                           },
                           "Signed URLs expire after {{ttl}}s and renew {{renew}}s before expiry.",
                         )}
+                    {engineSettingsDraft.media_auth?.mode !== "open"
+                      ? ` ${t(
+                          "ext.streaming.engine.hls_proxy_main_port_hint",
+                          {},
+                          "App/web HLS uses the main Toposync port through the signed proxy; this HLS port is internal to MediaMTX.",
+                        )}`
+                      : ""}
                   </div>
                 </div>
               </div>
@@ -1612,7 +1620,7 @@ function StreamingSettingsPanelContent({
                   />
                 </div>
                 <div className="field">
-                  <label className="label">{t("ext.streaming.engine.port_hls", {}, "HLS port")}</label>
+                  <label className="label">{t("ext.streaming.engine.port_hls", {}, "Internal HLS port")}</label>
                   <input
                     className="input"
                     value={String(engineSettingsDraft.preferred_ports?.hls ?? "")}

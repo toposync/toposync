@@ -20,7 +20,10 @@ from toposync_ext_streaming.api.models import (
     resolve_output_engine_path,
 )
 from toposync_ext_streaming.api.routes import create_streaming_router
-from toposync_ext_streaming.streaming.engine_manager import MediaMtxEngineManager
+from toposync_ext_streaming.streaming.engine_manager import (
+    MediaMtxEngineManager,
+    _hls_should_bind_loopback,
+)
 from toposync_ext_streaming.streaming.mediamtx_config import MediaMTXResolvedPorts, render_mediamtx_config
 from toposync_ext_streaming.streaming.playback_events import PlaybackEventStore
 from toposync_ext_streaming.streaming.publisher_manager import PublisherManager
@@ -92,6 +95,36 @@ def test_mediamtx_config_enables_local_metrics_by_default() -> None:
 
     assert "metrics: true" in config_text
     assert "metricsAddress: 127.0.0.1:9998" in config_text
+
+
+def test_mediamtx_config_can_keep_hls_internal_when_lan_exposed() -> None:
+    config_text = render_mediamtx_config(
+        bind_host="0.0.0.0",
+        hls_bind_host="127.0.0.1",
+        ports=MediaMTXResolvedPorts(rtsp=8554, hls=8888, api=9997, webrtc=8889, metrics=9998),
+        paths=["demo"],
+        enable_webrtc=True,
+    )
+
+    assert "rtspAddress: :8554" in config_text
+    assert "hlsAddress: 127.0.0.1:8888" in config_text
+    assert "webrtcAddress: :8889" in config_text
+
+
+def test_hls_bind_policy_uses_loopback_for_signed_proxy(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.delenv("TOPOSYNC_STREAMING_HLS_PUBLIC_MODE", raising=False)
+    signed_settings = StreamingExtensionSettings(
+        engine={"expose_to_lan": True, "media_auth": {"mode": "signed_proxy"}}
+    ).engine
+    open_settings = StreamingExtensionSettings(
+        engine={"expose_to_lan": True, "media_auth": {"mode": "open"}}
+    ).engine
+
+    assert _hls_should_bind_loopback(signed_settings) is True
+    assert _hls_should_bind_loopback(open_settings) is False
+
+    monkeypatch.setenv("TOPOSYNC_STREAMING_HLS_PUBLIC_MODE", "proxy")
+    assert _hls_should_bind_loopback(open_settings) is True
 
 
 def test_outputs_with_different_encoder_modes_do_not_share_engine_path() -> None:

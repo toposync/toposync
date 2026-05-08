@@ -77,6 +77,7 @@ def render_mediamtx_config(
     bind_host: str,
     ports: MediaMTXResolvedPorts,
     paths: list[str],
+    hls_bind_host: str | None = None,
     enable_webrtc: bool = False,
     webrtc_ice_servers: list[str] | None = None,
     webrtc_additional_hosts: list[str] | None = None,
@@ -196,8 +197,9 @@ def render_mediamtx_config(
     lines.append("srt: false")
     lines.append("playback: false")
     lines.append("")
+    hls_host = str(hls_bind_host or bind_host or "").strip() or bind_host
     lines.append("hls: true")
-    lines.append(f"hlsAddress: {_address(bind_host, ports.hls)}")
+    lines.append(f"hlsAddress: {_address(hls_host, ports.hls)}")
     lines.append(f"hlsAllowOrigins: {_as_yaml_list(default_hls_origins)}")
     # Avoid LL-HLS by default (Safari may require TLS).
     lines.append("hlsVariant: mpegts")

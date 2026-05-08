@@ -26,12 +26,15 @@ export type StreamingNetworkContract = {
   actual_ports?: StreamingNetworkContractPorts;
   status?: StreamingNetworkContractStatus;
   public_hls_mode?: "direct" | "proxy";
+  webrtc_additional_hosts?: string[];
   warnings?: string[];
   blocking_errors?: string[];
 };
 
 export type EngineStatusResponse = {
   running?: boolean;
+  metrics_enabled?: boolean;
+  metrics_reachable?: boolean;
   pid?: number | null;
   uptime_seconds?: number | null;
   started_at_unix?: number | null;
@@ -40,7 +43,9 @@ export type EngineStatusResponse = {
     rtsp?: number;
     hls?: number;
     webrtc?: number;
+    webrtc_udp?: number;
     api?: number;
+    metrics?: number;
   };
   test_path?: string;
   urls?: {
@@ -65,6 +70,30 @@ export type TransmissionResolution = {
   height?: number;
 };
 
+export type StreamingQualityProfileId =
+  | "quad_grid"
+  | "stable_apple_tv"
+  | "fullscreen_quality"
+  | "diagnostic_low";
+
+export type StreamingLatencyProfile = "normal" | "low" | "ultra_low";
+
+export type StreamingQualityProfile = {
+  id: StreamingQualityProfileId;
+  label: string;
+  resolution: TransmissionResolution;
+  fps_limit: number;
+  bitrate_kbps: number;
+  latency_profile: StreamingLatencyProfile;
+  usage?: string;
+  default?: boolean;
+};
+
+export type StreamingQualityProfilesResponse = {
+  default_profile_id: StreamingQualityProfileId;
+  profiles: StreamingQualityProfile[];
+};
+
 export type StreamAuthentication = {
   enabled?: boolean;
   username?: string | null;
@@ -78,7 +107,9 @@ export type TransmissionOutput = {
   resolution?: TransmissionResolution | null;
   fps_limit?: number | null;
   bitrate_kbps?: number | null;
-  latency_profile?: "normal" | "low" | "ultra_low";
+  latency_profile?: StreamingLatencyProfile;
+  encoder_mode?: "inherit" | "auto" | "cpu";
+  quality_profile_id?: StreamingQualityProfileId | null;
   authentication?: StreamAuthentication | null;
 };
 
@@ -103,6 +134,14 @@ export type TransmissionOutputUrl = {
   url: string;
   requires_auth?: boolean;
   auth_username?: string | null;
+  media_auth_type?: "none" | "signed_url" | "basic";
+  url_expires_at_unix?: number | null;
+  renew_after_unix?: number | null;
+  quality_profile_id?: StreamingQualityProfileId | null;
+  resolution?: TransmissionResolution | null;
+  fps_limit?: number | null;
+  bitrate_kbps?: number | null;
+  latency_profile?: StreamingLatencyProfile | null;
 };
 
 export type TransmissionUrlsResponse = {
@@ -129,6 +168,17 @@ export type StreamingOutputRuntimeStatus = {
   publisher_active_codec?: string | null;
   publisher_hardware_accelerated?: boolean;
   publisher_restart_count?: number;
+  publisher_last_frame_at_unix?: number | null;
+  publisher_encoder_mode?: "auto" | "cpu";
+  publisher_encoder_state?: "candidate" | "trusted" | "quarantined";
+  publisher_encoder_reason?: string | null;
+  publisher_encoder_quarantined_until_unix?: number | null;
+  publisher_encoder_fallback_active?: boolean;
+  quality_profile_id?: StreamingQualityProfileId | null;
+  resolution?: TransmissionResolution | null;
+  fps_limit?: number | null;
+  bitrate_kbps?: number | null;
+  latency_profile?: StreamingLatencyProfile | null;
   status?: StreamingRuntimeStatus;
   active_writer_id?: string | null;
   selected_writer_id?: string | null;
@@ -143,6 +193,12 @@ export type StreamingOutputRuntimeStatus = {
   event_gated?: boolean;
   event_gated_idle?: boolean;
   event_gate_reasons?: string[];
+  classification?: StreamingObservabilityClassification;
+  evidence?: string[];
+  active_playback_session_count?: number;
+  last_playback_event_at_unix?: number | null;
+  publisher_frames_sent_rate?: number | null;
+  source_health?: StreamingRuntimeSourceHealth | null;
 };
 
 export type StreamingOutputsRuntimeResponse = {
@@ -152,6 +208,43 @@ export type StreamingOutputsRuntimeResponse = {
 
 export type StreamingRuntimeStatus = "live" | "degraded" | "stale" | "offline";
 export type StreamingStreamBehavior = "continuous" | "event_gated";
+export type StreamingObservabilityClassification =
+  | "healthy"
+  | "source_stale"
+  | "source_pipeline_stale"
+  | "publisher_down"
+  | "hls_playlist_stale"
+  | "hls_tail_unavailable"
+  | "webrtc_transport_error"
+  | "network_contract_error"
+  | "auth_url_error"
+  | "app_player_lifecycle"
+  | "event_gated_idle"
+  | "unknown";
+
+export type StreamingRuntimeSourceHealth = {
+  source_id: string;
+  camera_id?: string | null;
+  camera_name?: string | null;
+  pipeline_name?: string | null;
+  node_id?: string | null;
+  backend?: string | null;
+  configured_backend?: string;
+  source_frame_age_seconds?: number | null;
+  capture_fps?: number | null;
+  target_fps?: number | null;
+  opened?: boolean;
+  restarts_total?: number;
+  decode_failures?: number;
+  frames_captured?: number;
+  last_frame_at_unix?: number | null;
+  last_seen_at_unix?: number | null;
+  last_error?: string | null;
+  rtsp_transport?: string;
+  used_ingest?: boolean;
+  status?: "healthy" | "starting" | "stale" | "unreachable" | "unauthorized" | "error" | "idle" | "unknown";
+  recommended_action?: string;
+};
 
 export type StreamingFallbackReason =
   | "no_active_writer"
@@ -173,11 +266,28 @@ export type StreamingRuntimeOutputHealth = {
   publisher_active_codec?: string | null;
   publisher_hardware_accelerated?: boolean;
   publisher_restart_count?: number;
+  publisher_last_frame_at_unix?: number | null;
+  publisher_encoder_mode?: "auto" | "cpu";
+  publisher_encoder_state?: "candidate" | "trusted" | "quarantined";
+  publisher_encoder_reason?: string | null;
+  publisher_encoder_quarantined_until_unix?: number | null;
+  publisher_encoder_fallback_active?: boolean;
+  quality_profile_id?: StreamingQualityProfileId | null;
+  resolution?: TransmissionResolution | null;
+  fps_limit?: number | null;
+  bitrate_kbps?: number | null;
+  latency_profile?: StreamingLatencyProfile | null;
   status: StreamingRuntimeStatus;
   stream_behavior?: StreamingStreamBehavior;
   event_gated?: boolean;
   event_gated_idle?: boolean;
   event_gate_reasons?: string[];
+  classification?: StreamingObservabilityClassification;
+  evidence?: string[];
+  active_playback_session_count?: number;
+  last_playback_event_at_unix?: number | null;
+  publisher_frames_sent_rate?: number | null;
+  source_health?: StreamingRuntimeSourceHealth | null;
 };
 
 export type StreamingRuntimeTransmissionHealth = {
@@ -197,6 +307,11 @@ export type StreamingRuntimeTransmissionHealth = {
   event_gated?: boolean;
   event_gated_idle?: boolean;
   event_gate_reasons?: string[];
+  classification?: StreamingObservabilityClassification;
+  evidence?: string[];
+  active_playback_session_count?: number;
+  last_playback_event_at_unix?: number | null;
+  source_health?: StreamingRuntimeSourceHealth | null;
   outputs: StreamingRuntimeOutputHealth[];
 };
 
@@ -227,6 +342,9 @@ export type StreamingRuntimePipelineLink = {
   enabled?: boolean;
   processing_server_id?: string;
   publish_node_id: string;
+  source_node_id?: string | null;
+  source_id?: string | null;
+  camera_id?: string | null;
   writer_id: string;
   stream_behavior?: StreamingStreamBehavior;
   event_gated?: boolean;
@@ -239,6 +357,98 @@ export type StreamingRuntimePipelineLink = {
 export type StreamingRuntimePipelinesResponse = {
   updated_at_unix: number;
   pipelines: StreamingRuntimePipelineLink[];
+};
+
+export type StreamingPlaybackSessionSummary = {
+  playback_session_id: string;
+  transmission_id: string;
+  output_id?: string | null;
+  client_kind: "app" | "web";
+  platform: string;
+  app_state?: string | null;
+  pip_active?: boolean | null;
+  first_event_at_unix: number;
+  last_event_at_unix: number;
+  last_type: string;
+  last_severity: "debug" | "info" | "warn" | "error";
+};
+
+export type StreamingRuntimeObservabilityItem = {
+  transmission_id: string;
+  output_key?: string | null;
+  output_id?: string | null;
+  classification: StreamingObservabilityClassification;
+  evidence?: string[];
+  active_playback_sessions?: StreamingPlaybackSessionSummary[];
+  last_playback_event_at_unix?: number | null;
+  publisher_frames_sent_rate?: number | null;
+  health: StreamingRuntimeTransmissionHealth | StreamingRuntimeOutputHealth;
+  pipeline?: StreamingRuntimePipelineLink | null;
+  mediamtx?: Record<string, unknown>;
+  network_contract?: StreamingNetworkContract | null;
+  recent_events?: Array<Record<string, unknown>>;
+};
+
+export type StreamingRuntimeObservabilityResponse = {
+  updated_at_unix: number;
+  retention_seconds: number;
+  retained_event_count: number;
+  mediamtx?: Record<string, unknown>;
+  items: StreamingRuntimeObservabilityItem[];
+};
+
+export type StreamingRuntimeEncoderPolicyResponse = {
+  mode?: "auto" | "cpu";
+  quarantine_enabled?: boolean;
+  quarantine_after_restarts?: number;
+  quarantine_window_seconds?: number;
+  quarantine_duration_seconds?: number;
+  max_restarts_per_minute?: number;
+};
+
+export type StreamingRuntimeEncoderStateItem = {
+  host_id: string;
+  encoder: string;
+  state: "candidate" | "trusted" | "quarantined";
+  until_unix?: number | null;
+  reason?: string | null;
+  failure_count?: number;
+  last_failure_at_unix?: number | null;
+  last_output_id?: string | null;
+  last_error?: string | null;
+};
+
+export type StreamingRuntimeEncoderOutputItem = {
+  output_key: string;
+  output_id: string;
+  transmission_id: string;
+  engine_path: string;
+  running?: boolean;
+  active_codec?: string | null;
+  hardware_accelerated?: boolean;
+  encoder_mode?: "auto" | "cpu";
+  encoder_state?: "candidate" | "trusted" | "quarantined";
+  encoder_reason?: string | null;
+  encoder_quarantined_until_unix?: number | null;
+  encoder_fallback_active?: boolean;
+  restart_count?: number;
+  restart_window_count?: number;
+  frames_sent?: number;
+  last_frame_at_unix?: number | null;
+  last_error?: string | null;
+  log_path?: string | null;
+  stderr_tail?: string[];
+};
+
+export type StreamingRuntimeEncodersResponse = {
+  updated_at_unix: number;
+  host_id?: string;
+  ffmpeg_path?: string | null;
+  ffmpeg_source?: string | null;
+  supported_encoders?: string[];
+  policy?: StreamingRuntimeEncoderPolicyResponse;
+  states?: StreamingRuntimeEncoderStateItem[];
+  outputs?: StreamingRuntimeEncoderOutputItem[];
 };
 
 export type StreamingHlsProbeStatus =
@@ -282,15 +492,27 @@ export type StreamingPreferredPorts = {
   rtsp?: number;
   hls?: number;
   webrtc?: number;
+  webrtc_udp?: number;
   api?: number;
+  metrics?: number;
 };
 
 export type StreamingEngineSettings = {
   enabled?: boolean;
   expose_to_lan?: boolean;
+  metrics_enabled?: boolean;
+  encoder_policy?: StreamingRuntimeEncoderPolicyResponse;
+  media_auth?: StreamingMediaAuthSettings;
   preferred_ports?: StreamingPreferredPorts;
   mediamtx_version?: string;
   webrtc_ice_servers?: string[];
+  webrtc_additional_hosts?: string[];
+};
+
+export type StreamingMediaAuthSettings = {
+  mode?: "signed_proxy" | "open";
+  token_ttl_seconds?: number;
+  renew_margin_seconds?: number;
 };
 
 export type StreamingStalePolicySettings = {

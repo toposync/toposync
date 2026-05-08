@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { SettingsPanel, TopoSyncHost } from "@toposync/plugin-api";
 
 import {
+  clearStreamingEncoderQuarantine,
   createTransmission,
   deleteTransmission,
   fetchCamerasIndex,
@@ -10,12 +11,17 @@ import {
   fetchProcessingServers,
   fetchStreamsHealth,
   fetchStreamingHlsProbe,
-  fetchStreamingRuntimeDiagnostics,
+  fetchStreamingDiagnosticSnapshot,
+  fetchStreamingRuntimeObservability,
+  fetchStreamingRuntimeEncoders,
   fetchStreamingRuntimeHealth,
   fetchStreamingRuntimePipelines,
+  fetchStreamingQualityProfiles,
   fetchStreamingSettings,
   fetchTransmissionUrls,
   fetchTransmissions,
+  applyTransmissionQualityProfiles,
+  applyTransmissionWebRtcCompanion,
   patchStreamingSettings,
   postEngineAction,
   postEngineDownload,
@@ -30,11 +36,16 @@ import type {
   StreamingExtensionSettings,
   StreamingHlsProbeResponse,
   StreamingRuntimeHealthResponse,
+  StreamingRuntimeEncodersResponse,
+  StreamingRuntimeObservabilityResponse,
   StreamingRuntimePipelineLink,
   StreamingRuntimePipelinesResponse,
   StreamingRuntimeOutputHealth,
   StreamingRuntimeStatus,
   StreamingRuntimeTransmissionHealth,
+  StreamingQualityProfile,
+  StreamingQualityProfilesResponse,
+  StreamingQualityProfileId,
   StreamAuthentication,
   StreamsHealthResponse,
   Transmission,
@@ -137,6 +148,23 @@ function joinIceServers(values: string[] | undefined): string {
     .join("\n");
 }
 
+function parseStringList(value: string): string[] {
+  const rawItems = String(value || "")
+    .replace(/\r/g, "")
+    .split(/[\n,]/g);
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const item of rawItems) {
+    const text = String(item || "").trim();
+    if (!text) continue;
+    const lowered = text.toLowerCase();
+    if (seen.has(lowered)) continue;
+    seen.add(lowered);
+    normalized.push(text);
+  }
+  return normalized;
+}
+
 function formatDuration(seconds: number | null | undefined): string {
   if (!Number.isFinite(seconds) || !seconds || seconds < 1) return "-";
   const total = Math.max(0, Math.floor(seconds));
@@ -174,6 +202,14 @@ function compactRuntimeId(value: string | null | undefined): string {
   return `${text.slice(0, 10)}...${text.slice(-5)}`;
 }
 
+function sourceHealthTitle(source: { last_error?: string | null; recommended_action?: string; last_frame_at_unix?: number | null } | null | undefined): string {
+  if (!source) return "";
+  return [source.last_error || "", source.recommended_action || "", formatRuntimeUnixTime(source.last_frame_at_unix)]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
 function runtimeStatusLabel(status: StreamingRuntimeStatus | undefined, t: TranslateFn): string {
   if (status === "live") return t("ext.streaming.runtime.status.live", {}, "Live");
   if (status === "degraded") return t("ext.streaming.runtime.status.degraded", {}, "Degraded");
@@ -187,6 +223,39 @@ function runtimeStatusClass(status: StreamingRuntimeStatus | undefined): string 
   if (status === "degraded") return "is-degraded";
   if (status === "stale") return "is-stale";
   if (status === "offline") return "is-offline";
+  return "is-unknown";
+}
+
+function observabilityClassificationLabel(value: string | undefined): string {
+  if (value === "source_stale") return "Camera source stale";
+  if (value === "source_pipeline_stale") return "Source/pipeline stale";
+  if (value === "publisher_down") return "Publisher down";
+  if (value === "hls_playlist_stale") return "HLS playlist stale";
+  if (value === "hls_tail_unavailable") return "HLS tail unavailable";
+  if (value === "webrtc_transport_error") return "WebRTC transport";
+  if (value === "network_contract_error") return "Network contract";
+  if (value === "auth_url_error") return "Auth/URL error";
+  if (value === "app_player_lifecycle") return "Player lifecycle";
+  if (value === "event_gated_idle") return "Waiting event";
+  if (value === "healthy") return "Healthy";
+  return "Unknown";
+}
+
+function encoderModeLabel(value: string | undefined, t: TranslateFn): string {
+  if (value === "cpu") return t("ext.streaming.encoder.mode.cpu", {}, "CPU only");
+  if (value === "auto") return t("ext.streaming.encoder.mode.auto", {}, "Auto controlled");
+  return t("ext.streaming.encoder.mode.inherit", {}, "Inherit");
+}
+
+function encoderStateLabel(value: string | undefined, t: TranslateFn): string {
+  if (value === "trusted") return t("ext.streaming.encoder.state.trusted", {}, "Trusted");
+  if (value === "quarantined") return t("ext.streaming.encoder.state.quarantined", {}, "Quarantined");
+  return t("ext.streaming.encoder.state.candidate", {}, "Candidate");
+}
+
+function encoderStateClass(value: string | undefined): string {
+  if (value === "trusted") return "is-live";
+  if (value === "quarantined") return "is-stale";
   return "is-unknown";
 }
 
@@ -208,6 +277,34 @@ function streamBehaviorLabel(value: string | undefined, t: TranslateFn): string 
   return t("ext.streaming.runtime.stream_behavior.continuous", {}, "Continuous");
 }
 
+function qualityProfileLabel(profileId: string | null | undefined, profiles: StreamingQualityProfile[], t: TranslateFn): string {
+  const normalized = String(profileId || "").trim();
+  if (!normalized) return t("ext.streaming.quality.custom", {}, "Custom");
+  const profile = profiles.find((item) => item.id === normalized);
+  if (profile) return profile.label;
+  return normalized;
+}
+
+function formatResolution(resolution: { width?: number; height?: number } | null | undefined): string {
+  const width = Number(resolution?.width ?? 0);
+  const height = Number(resolution?.height ?? 0);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return "-";
+  return `${Math.round(width)}x${Math.round(height)}`;
+}
+
+function formatOutputNetworkCost(bitrateKbps: number | null | undefined, t: TranslateFn): string {
+  const value = Number(bitrateKbps ?? 0);
+  if (!Number.isFinite(value) || value <= 0) return t("ext.streaming.quality.network_custom", {}, "Network cost: custom");
+  if (value >= 1000) {
+    return t(
+      "ext.streaming.quality.network_mbps",
+      { mbps: (value / 1000).toFixed(1) },
+      `Network cost: ${(value / 1000).toFixed(1)} Mbps`,
+    );
+  }
+  return t("ext.streaming.quality.network_kbps", { kbps: Math.round(value) }, `Network cost: ${Math.round(value)} kbps`);
+}
+
 function hlsProbeStatusLabel(status: StreamingHlsProbeResponse["status"] | undefined, t: TranslateFn): string {
   if (status === "ok") return t("ext.streaming.hls_probe.status.ok", {}, "OK");
   if (status === "engine_stopped") return t("ext.streaming.hls_probe.status.engine_stopped", {}, "Engine stopped");
@@ -227,6 +324,8 @@ function defaultOutput(protocol: "hls" | "rtsp" | "webrtc"): TransmissionOutput 
     fps_limit: 12,
     bitrate_kbps: null,
     latency_profile: "normal",
+    encoder_mode: "inherit",
+    quality_profile_id: null,
     authentication: defaultAuthentication(),
   };
 }
@@ -288,6 +387,11 @@ function StreamingSettingsPanelContent({
   const [runtimeHealthError, setRuntimeHealthError] = useState<string | null>(null);
   const [runtimePipelines, setRuntimePipelines] = useState<StreamingRuntimePipelinesResponse | null>(null);
   const [runtimePipelinesError, setRuntimePipelinesError] = useState<string | null>(null);
+  const [runtimeObservability, setRuntimeObservability] = useState<StreamingRuntimeObservabilityResponse | null>(null);
+  const [runtimeObservabilityError, setRuntimeObservabilityError] = useState<string | null>(null);
+  const [runtimeEncoders, setRuntimeEncoders] = useState<StreamingRuntimeEncodersResponse | null>(null);
+  const [runtimeEncodersError, setRuntimeEncodersError] = useState<string | null>(null);
+  const [runtimeEncoderClearBusy, setRuntimeEncoderClearBusy] = useState(false);
   const [runtimeDiagnosticsBusy, setRuntimeDiagnosticsBusy] = useState(false);
   const [runtimeDiagnosticsError, setRuntimeDiagnosticsError] = useState<string | null>(null);
   const [hlsProbeByKey, setHlsProbeByKey] = useState<Record<string, StreamingHlsProbeResponse>>({});
@@ -306,6 +410,10 @@ function StreamingSettingsPanelContent({
   const [transmissionsError, setTransmissionsError] = useState<string | null>(null);
   const [transmissions, setTransmissions] = useState<Transmission[]>([]);
   const [transmissionQuery, setTransmissionQuery] = useState("");
+  const [qualityProfiles, setQualityProfiles] = useState<StreamingQualityProfilesResponse | null>(null);
+  const [qualityProfilesError, setQualityProfilesError] = useState<string | null>(null);
+  const [applyQualityProfilesBusy, setApplyQualityProfilesBusy] = useState(false);
+  const [applyWebRtcCompanionBusy, setApplyWebRtcCompanionBusy] = useState(false);
 
   const [activeTransmissionId, setActiveTransmissionId] = useState<string | null>(null);
   const [pendingTransmissionId, setPendingTransmissionId] = useState<string | null>(null);
@@ -412,6 +520,30 @@ function StreamingSettingsPanelContent({
     }
   }, []);
 
+  const fetchRuntimeObservabilityData = useCallback(async (signal?: AbortSignal) => {
+    setRuntimeObservabilityError(null);
+    try {
+      const payload = await fetchStreamingRuntimeObservability(signal);
+      if (signal?.aborted) return;
+      setRuntimeObservability(payload);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setRuntimeObservabilityError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
+  const fetchRuntimeEncodersData = useCallback(async (signal?: AbortSignal) => {
+    setRuntimeEncodersError(null);
+    try {
+      const payload = await fetchStreamingRuntimeEncoders(signal);
+      if (signal?.aborted) return;
+      setRuntimeEncoders(payload);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setRuntimeEncodersError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
   const fetchSettingsData = useCallback(async (signal?: AbortSignal) => {
     setSettingsLoading(true);
     setSettingsError(null);
@@ -442,6 +574,18 @@ function StreamingSettingsPanelContent({
       setTransmissionsError(error instanceof Error ? error.message : String(error));
     } finally {
       if (!signal?.aborted) setTransmissionsLoading(false);
+    }
+  }, []);
+
+  const fetchQualityProfilesData = useCallback(async (signal?: AbortSignal) => {
+    setQualityProfilesError(null);
+    try {
+      const payload = await fetchStreamingQualityProfiles(signal);
+      if (signal?.aborted) return;
+      setQualityProfiles(payload);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setQualityProfilesError(error instanceof Error ? error.message : String(error));
     }
   }, []);
 
@@ -484,8 +628,11 @@ function StreamingSettingsPanelContent({
     void fetchEngineData(controller.signal);
     void fetchRuntimeHealthData(controller.signal, true);
     void fetchRuntimePipelinesData(controller.signal);
+    void fetchRuntimeObservabilityData(controller.signal);
+    void fetchRuntimeEncodersData(controller.signal);
     void fetchSettingsData(controller.signal);
     void fetchTransmissionsData(controller.signal);
+    void fetchQualityProfilesData(controller.signal);
     void fetchProcessingServersData(controller.signal);
     void fetchAvailableCamerasData(controller.signal);
     return () => controller.abort();
@@ -495,9 +642,12 @@ function StreamingSettingsPanelContent({
     fetchHealthData,
     fetchProcessingServersData,
     fetchRuntimeHealthData,
+    fetchRuntimeEncodersData,
+    fetchRuntimeObservabilityData,
     fetchRuntimePipelinesData,
     fetchSettingsData,
     fetchTransmissionsData,
+    fetchQualityProfilesData,
   ]);
 
   useEffect(() => {
@@ -513,9 +663,11 @@ function StreamingSettingsPanelContent({
       if (document.visibilityState === "hidden") return;
       void fetchRuntimeHealthData();
       void fetchRuntimePipelinesData();
+      void fetchRuntimeObservabilityData();
+      void fetchRuntimeEncodersData();
     }, 2000);
     return () => window.clearInterval(interval);
-  }, [fetchRuntimeHealthData, fetchRuntimePipelinesData]);
+  }, [fetchRuntimeHealthData, fetchRuntimeEncodersData, fetchRuntimeObservabilityData, fetchRuntimePipelinesData]);
 
   useEffect(() => {
     if (activeTransmissionId && transmissions.some((item) => item.id === activeTransmissionId)) return;
@@ -632,13 +784,13 @@ function StreamingSettingsPanelContent({
     setRuntimeDiagnosticsBusy(true);
     setRuntimeDiagnosticsError(null);
     try {
-      const payload = await fetchStreamingRuntimeDiagnostics();
+      const payload = await fetchStreamingDiagnosticSnapshot();
       const text = JSON.stringify(payload, null, 2);
       const blob = new Blob([text], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = "toposync-streaming-runtime-diagnostics.json";
+      anchor.download = "toposync-streaming-diagnostic-snapshot.json";
       document.body.appendChild(anchor);
       anchor.click();
       document.body.removeChild(anchor);
@@ -675,6 +827,21 @@ function StreamingSettingsPanelContent({
     }
   }
 
+  async function retryHardwareEncoder(encoder?: string | null): Promise<void> {
+    setRuntimeEncoderClearBusy(true);
+    setRuntimeEncodersError(null);
+    try {
+      const payload = await clearStreamingEncoderQuarantine(encoder ?? null);
+      setRuntimeEncoders(payload);
+      void fetchRuntimeHealthData();
+      void fetchRuntimeObservabilityData();
+    } catch (error) {
+      setRuntimeEncodersError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRuntimeEncoderClearBusy(false);
+    }
+  }
+
   async function applyEngineSettings(): Promise<void> {
     if (!engineSettingsDraft) return;
     setEngineSettingsBusy(true);
@@ -683,14 +850,33 @@ function StreamingSettingsPanelContent({
       const payload = await patchStreamingSettings({
         engine: {
           expose_to_lan: Boolean(engineSettingsDraft.expose_to_lan),
+          metrics_enabled: engineSettingsDraft.metrics_enabled !== false,
+          encoder_policy: {
+            mode: engineSettingsDraft.encoder_policy?.mode === "cpu" ? "cpu" : "auto",
+            quarantine_enabled: engineSettingsDraft.encoder_policy?.quarantine_enabled !== false,
+            quarantine_after_restarts: engineSettingsDraft.encoder_policy?.quarantine_after_restarts ?? 2,
+            quarantine_window_seconds: engineSettingsDraft.encoder_policy?.quarantine_window_seconds ?? 600,
+            quarantine_duration_seconds: engineSettingsDraft.encoder_policy?.quarantine_duration_seconds ?? 3600,
+            max_restarts_per_minute: engineSettingsDraft.encoder_policy?.max_restarts_per_minute ?? 4,
+          },
+          media_auth: {
+            mode: engineSettingsDraft.media_auth?.mode === "open" ? "open" : "signed_proxy",
+            token_ttl_seconds: engineSettingsDraft.media_auth?.token_ttl_seconds ?? 300,
+            renew_margin_seconds: engineSettingsDraft.media_auth?.renew_margin_seconds ?? 60,
+          },
           preferred_ports: {
             rtsp: engineSettingsDraft.preferred_ports?.rtsp,
             hls: engineSettingsDraft.preferred_ports?.hls,
             api: engineSettingsDraft.preferred_ports?.api,
             webrtc: engineSettingsDraft.preferred_ports?.webrtc,
+            webrtc_udp: engineSettingsDraft.preferred_ports?.webrtc_udp,
+            metrics: engineSettingsDraft.preferred_ports?.metrics,
           },
           webrtc_ice_servers: Array.isArray(engineSettingsDraft.webrtc_ice_servers)
             ? engineSettingsDraft.webrtc_ice_servers
+            : [],
+          webrtc_additional_hosts: Array.isArray(engineSettingsDraft.webrtc_additional_hosts)
+            ? engineSettingsDraft.webrtc_additional_hosts
             : [],
         },
       });
@@ -863,6 +1049,64 @@ function StreamingSettingsPanelContent({
       setTransmissionDraftError(error instanceof Error ? error.message : String(error));
     } finally {
       setTransmissionDraftBusy(false);
+    }
+  }
+
+  async function applyQualityProfilesToDraft(): Promise<void> {
+    if (!transmissionDraft) return;
+    if (transmissionDraftDirty) {
+      setTransmissionDraftError(
+        t(
+          "ext.streaming.quality.apply_save_first",
+          {},
+          "Save or discard pending output changes before applying quality profile outputs.",
+        ),
+      );
+      return;
+    }
+    setApplyQualityProfilesBusy(true);
+    setTransmissionDraftError(null);
+    try {
+      const updated = await applyTransmissionQualityProfiles(transmissionDraft.id);
+      setTransmissions((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
+      setTransmissionDraft(deepClone(updated));
+      setTransmissionDraftDirty(false);
+      void loadUrls(updated.id);
+      void fetchRuntimeHealthData();
+      void fetchRuntimeObservabilityData();
+    } catch (error) {
+      setTransmissionDraftError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setApplyQualityProfilesBusy(false);
+    }
+  }
+
+  async function applyWebRtcCompanionToDraft(): Promise<void> {
+    if (!transmissionDraft) return;
+    if (transmissionDraftDirty) {
+      setTransmissionDraftError(
+        t(
+          "ext.streaming.webrtc.apply_save_first",
+          {},
+          "Save or discard pending output changes before applying the WebRTC low-latency output.",
+        ),
+      );
+      return;
+    }
+    setApplyWebRtcCompanionBusy(true);
+    setTransmissionDraftError(null);
+    try {
+      const updated = await applyTransmissionWebRtcCompanion(transmissionDraft.id);
+      setTransmissions((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
+      setTransmissionDraft(deepClone(updated));
+      setTransmissionDraftDirty(false);
+      void loadUrls(updated.id);
+      void fetchRuntimeHealthData();
+      void fetchRuntimeObservabilityData();
+    } catch (error) {
+      setTransmissionDraftError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setApplyWebRtcCompanionBusy(false);
     }
   }
 
@@ -1088,13 +1332,19 @@ function StreamingSettingsPanelContent({
               <div className="cardMeta">
                 {t("ext.streaming.engine.meta_api", {}, "API")}: {engineStatus.ports?.api ?? "-"}
               </div>
+              <div className="cardMeta">
+                {t("ext.streaming.engine.meta_metrics", {}, "Metrics")}:{" "}
+                {engineStatus.metrics_enabled === false
+                  ? t("ext.streaming.common.no", {}, "No")
+                  : `${engineStatus.ports?.metrics ?? "-"} ${engineStatus.metrics_reachable ? "ok" : "unreachable"}`}
+              </div>
             </div>
           ) : null}
 
           {engineStatus?.bind_host && engineStatus?.ports ? (
             <div className="cardMeta" style={{ marginTop: 6 }}>
               {engineStatus.bind_host} - RTSP {engineStatus.ports.rtsp ?? "-"} - HLS {engineStatus.ports.hls ?? "-"} - WebRTC{" "}
-              {engineStatus.ports.webrtc ?? "-"}
+              {engineStatus.ports.webrtc ?? "-"} - Metrics {engineStatus.ports.metrics ?? "-"}
             </div>
           ) : null}
 
@@ -1130,6 +1380,16 @@ function StreamingSettingsPanelContent({
           {engineNetworkContract?.public_hls_mode ? (
             <div className="cardMeta" style={{ marginTop: 6 }}>
               {t("ext.streaming.engine.hls_public_mode", {}, "HLS public mode")}: {engineNetworkContract.public_hls_mode}
+            </div>
+          ) : null}
+
+          {engineStatus?.ports?.webrtc_udp || engineNetworkContract?.webrtc_additional_hosts?.length ? (
+            <div className="cardMeta" style={{ marginTop: 6 }}>
+              {t("ext.streaming.engine.webrtc_contract", {}, "WebRTC contract")}: UDP{" "}
+              {engineStatus?.ports?.webrtc_udp ?? engineNetworkContract?.actual_ports?.webrtc_udp ?? "-"}
+              {engineNetworkContract?.webrtc_additional_hosts?.length
+                ? ` · hosts ${engineNetworkContract.webrtc_additional_hosts.join(", ")}`
+                : ""}
             </div>
           ) : null}
 
@@ -1245,6 +1505,94 @@ function StreamingSettingsPanelContent({
                   />
                   <span className="cardMeta">{t("ext.streaming.engine.expose_to_lan", {}, "Expor na LAN (0.0.0.0)")}</span>
                 </label>
+                <label className="rowWrap" style={{ gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={engineSettingsDraft.metrics_enabled !== false}
+                    onChange={(event) => {
+                      setEngineSettingsDraft((previous) => ({ ...(previous ?? {}), metrics_enabled: event.target.checked }));
+                      setEngineSettingsDirty(true);
+                    }}
+                  />
+                  <span className="cardMeta">{t("ext.streaming.engine.metrics_enabled", {}, "Enable MediaMTX metrics")}</span>
+                </label>
+              </div>
+
+              <div className="streamingFormGrid" style={{ marginTop: 10 }}>
+                <div className="field">
+                  <label className="label">{t("ext.streaming.encoder.global_mode", {}, "Encoder")}</label>
+                  <select
+                    className="input"
+                    value={engineSettingsDraft.encoder_policy?.mode ?? "auto"}
+                    onChange={(event) => {
+                      setEngineSettingsDraft((previous) => ({
+                        ...(previous ?? {}),
+                        encoder_policy: {
+                          ...(previous?.encoder_policy ?? {}),
+                          mode: event.target.value === "cpu" ? "cpu" : "auto",
+                        },
+                      }));
+                      setEngineSettingsDirty(true);
+                    }}
+                  >
+                    <option value="auto">{encoderModeLabel("auto", t)}</option>
+                    <option value="cpu">{encoderModeLabel("cpu", t)}</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label className="label">{t("ext.streaming.encoder.max_restarts", {}, "Restart limit/min")}</label>
+                  <input
+                    className="input"
+                    value={String(engineSettingsDraft.encoder_policy?.max_restarts_per_minute ?? 4)}
+                    onChange={(event) => {
+                      const value = toSafeInt(event.target.value, 4);
+                      setEngineSettingsDraft((previous) => ({
+                        ...(previous ?? {}),
+                        encoder_policy: {
+                          ...(previous?.encoder_policy ?? {}),
+                          max_restarts_per_minute: Math.max(1, value),
+                        },
+                      }));
+                      setEngineSettingsDirty(true);
+                    }}
+                  />
+                </div>
+                <div className="field">
+                  <label className="label">{t("ext.streaming.engine.media_auth", {}, "HLS media access")}</label>
+                  <select
+                    className="input"
+                    value={engineSettingsDraft.media_auth?.mode ?? "signed_proxy"}
+                    onChange={(event) => {
+                      setEngineSettingsDraft((previous) => ({
+                        ...(previous ?? {}),
+                        media_auth: {
+                          ...(previous?.media_auth ?? {}),
+                          mode: event.target.value === "open" ? "open" : "signed_proxy",
+                        },
+                      }));
+                      setEngineSettingsDirty(true);
+                    }}
+                  >
+                    <option value="signed_proxy">{t("ext.streaming.engine.media_auth_signed", {}, "Signed proxy")}</option>
+                    <option value="open">{t("ext.streaming.engine.media_auth_open", {}, "Open LAN")}</option>
+                  </select>
+                  <div className="cardMeta" style={{ marginTop: 6 }}>
+                    {engineSettingsDraft.media_auth?.mode === "open"
+                      ? t(
+                          "ext.streaming.engine.media_auth_open_warning",
+                          {},
+                          "Open LAN exposes HLS URLs without media tokens. Use only on trusted local networks.",
+                        )
+                      : t(
+                          "ext.streaming.engine.media_auth_signed_hint",
+                          {
+                            ttl: String(engineSettingsDraft.media_auth?.token_ttl_seconds ?? 300),
+                            renew: String(engineSettingsDraft.media_auth?.renew_margin_seconds ?? 60),
+                          },
+                          "Signed URLs expire after {{ttl}}s and renew {{renew}}s before expiry.",
+                        )}
+                  </div>
+                </div>
               </div>
 
               <div className="streamingFormGrid streamingFormGridEnginePorts" style={{ marginTop: 10 }}>
@@ -1294,6 +1642,21 @@ function StreamingSettingsPanelContent({
                   />
                 </div>
                 <div className="field">
+                  <label className="label">{t("ext.streaming.engine.port_webrtc_udp", {}, "WebRTC UDP port")}</label>
+                  <input
+                    className="input"
+                    value={String(engineSettingsDraft.preferred_ports?.webrtc_udp ?? "")}
+                    onChange={(event) => {
+                      const value = toOptionalInt(event.target.value);
+                      setEngineSettingsDraft((previous) => ({
+                        ...(previous ?? {}),
+                        preferred_ports: { ...(previous?.preferred_ports ?? {}), webrtc_udp: value ?? undefined },
+                      }));
+                      setEngineSettingsDirty(true);
+                    }}
+                  />
+                </div>
+                <div className="field">
                   <label className="label">{t("ext.streaming.engine.port_api", {}, "API port")}</label>
                   <input
                     className="input"
@@ -1303,6 +1666,21 @@ function StreamingSettingsPanelContent({
                       setEngineSettingsDraft((previous) => ({
                         ...(previous ?? {}),
                         preferred_ports: { ...(previous?.preferred_ports ?? {}), api: value ?? undefined },
+                      }));
+                      setEngineSettingsDirty(true);
+                    }}
+                  />
+                </div>
+                <div className="field">
+                  <label className="label">{t("ext.streaming.engine.port_metrics", {}, "Metrics port")}</label>
+                  <input
+                    className="input"
+                    value={String(engineSettingsDraft.preferred_ports?.metrics ?? "")}
+                    onChange={(event) => {
+                      const value = toOptionalInt(event.target.value);
+                      setEngineSettingsDraft((previous) => ({
+                        ...(previous ?? {}),
+                        preferred_ports: { ...(previous?.preferred_ports ?? {}), metrics: value ?? undefined },
                       }));
                       setEngineSettingsDirty(true);
                     }}
@@ -1332,6 +1710,32 @@ function StreamingSettingsPanelContent({
                     "ext.streaming.engine.ice_servers_hint",
                     {},
                     "Use only when you need to traverse NAT. On a simple LAN, leave it empty.",
+                  )}
+                </div>
+              </div>
+
+              <div className="field" style={{ marginTop: 10 }}>
+                <label className="label">
+                  {t("ext.streaming.engine.webrtc_hosts_label", {}, "WebRTC additional hosts (optional, one per line)")}
+                </label>
+                <textarea
+                  className="input"
+                  style={{ minHeight: 70, padding: "8px 10px" }}
+                  value={joinIceServers(engineSettingsDraft.webrtc_additional_hosts)}
+                  placeholder={"192.168.1.10\ncamera.example.com"}
+                  onChange={(event) => {
+                    setEngineSettingsDraft((previous) => ({
+                      ...(previous ?? {}),
+                      webrtc_additional_hosts: parseStringList(event.target.value),
+                    }));
+                    setEngineSettingsDirty(true);
+                  }}
+                />
+                <div className="cardMeta" style={{ marginTop: 6 }}>
+                  {t(
+                    "ext.streaming.engine.webrtc_hosts_hint",
+                    {},
+                    "Add the public/LAN hostnames that browsers use for WHEP so ICE candidates can include them.",
                   )}
                 </div>
               </div>
@@ -1394,6 +1798,8 @@ function StreamingSettingsPanelContent({
                 onClick={() => {
                   void fetchRuntimeHealthData(undefined, true);
                   void fetchRuntimePipelinesData();
+                  void fetchRuntimeObservabilityData();
+                  void fetchRuntimeEncodersData();
                 }}
               >
                 <i className="fa-solid fa-rotate-right" aria-hidden="true" />{" "}
@@ -1420,6 +1826,8 @@ function StreamingSettingsPanelContent({
           ) : null}
 
           {runtimeHealthError ? <div className="errorText">{runtimeHealthError}</div> : null}
+          {runtimeObservabilityError ? <div className="errorText">{runtimeObservabilityError}</div> : null}
+          {runtimeEncodersError ? <div className="errorText">{runtimeEncodersError}</div> : null}
           {runtimeDiagnosticsError ? <div className="errorText">{runtimeDiagnosticsError}</div> : null}
 
           {!runtimeHealthLoading && runtimeRows.length === 0 ? (
@@ -1433,17 +1841,21 @@ function StreamingSettingsPanelContent({
               <table className="streamingRuntimeTable">
                 <thead>
                   <tr>
-                    <th>{t("ext.streaming.runtime.table.transmission", {}, "Transmission")}</th>
-                    <th>{t("ext.streaming.runtime.table.output", {}, "Output")}</th>
-                    <th>{t("ext.streaming.runtime.table.status", {}, "Status")}</th>
+	                    <th>{t("ext.streaming.runtime.table.transmission", {}, "Transmission")}</th>
+	                    <th>{t("ext.streaming.runtime.table.output", {}, "Output")}</th>
+	                    <th>{t("ext.streaming.runtime.table.profile", {}, "Profile")}</th>
+	                    <th>{t("ext.streaming.runtime.table.status", {}, "Status")}</th>
                     <th>{t("ext.streaming.runtime.table.selected_age", {}, "Selected age")}</th>
                     <th>{t("ext.streaming.runtime.table.incoming_age", {}, "Incoming age")}</th>
                     <th>{t("ext.streaming.runtime.table.active_writer", {}, "Active writer")}</th>
                     <th>{t("ext.streaming.runtime.table.pipeline", {}, "Pipeline")}</th>
                     <th>{t("ext.streaming.runtime.table.behavior", {}, "Behavior")}</th>
+                    <th>{t("ext.streaming.runtime.table.source", {}, "Source")}</th>
                     <th>{t("ext.streaming.runtime.table.fallback", {}, "Fallback")}</th>
                     <th>{t("ext.streaming.runtime.table.viewers", {}, "Viewers")}</th>
                     <th>{t("ext.streaming.runtime.table.publisher", {}, "Publisher")}</th>
+                    <th>{t("ext.streaming.runtime.table.codec", {}, "Codec")}</th>
+                    <th>{t("ext.streaming.runtime.table.encoder", {}, "Encoder")}</th>
                     <th>{t("ext.streaming.runtime.table.frames", {}, "Frames")}</th>
                     <th>{t("ext.streaming.runtime.table.restarts", {}, "Restarts")}</th>
                     <th>{t("ext.streaming.runtime.table.last_error", {}, "Last error")}</th>
@@ -1457,11 +1869,30 @@ function StreamingSettingsPanelContent({
                     const fallbackText = transmission.fallback_active
                       ? fallbackReasonLabel(transmission.fallback_reason, t)
                       : boolLabel(false, t);
+                    const sourceHealth = output?.source_health ?? transmission.source_health ?? null;
                     return (
                       <tr key={key}>
-                        <td title={transmission.transmission_id}>{transmissionLabel}</td>
-                        <td title={output?.output_key || ""}>{outputLabel}</td>
-                        <td>
+	                        <td title={transmission.transmission_id}>{transmissionLabel}</td>
+	                        <td title={output?.output_key || ""}>{outputLabel}</td>
+	                        <td title={formatResolution(output?.resolution)}>
+	                          {output
+	                            ? (
+	                              <>
+	                                {qualityProfileLabel(output.quality_profile_id, qualityProfiles?.profiles ?? [], t)}
+	                                <span className="streamingRuntimeSubtle">
+                                      {output.protocol.toUpperCase()}
+                                      {output.latency_profile ? ` / ${output.latency_profile}` : ""}
+                                    </span>
+                                    <span className="streamingRuntimeSubtle">
+	                                  {formatResolution(output.resolution)}
+	                                  {output.fps_limit ? ` / ${output.fps_limit} FPS` : ""}
+	                                  {output.bitrate_kbps ? ` / ${output.bitrate_kbps} kbps` : ""}
+	                                </span>
+	                              </>
+	                            )
+	                            : "-"}
+	                        </td>
+	                        <td>
                           <span className={["streamingRuntimeBadge", runtimeStatusClass(status)].join(" ")}>
                             {runtimeStatusLabel(status, t)}
                           </span>
@@ -1497,6 +1928,34 @@ function StreamingSettingsPanelContent({
                             </span>
                           ) : null}
                         </td>
+                        <td title={sourceHealthTitle(sourceHealth) || pipelineLink?.source_id || ""}>
+                          {sourceHealth ? (
+                            <>
+                              <span
+                                className={[
+                                  "streamingRuntimeBadge",
+                                  sourceHealth.status === "healthy"
+                                    ? "is-live"
+                                    : sourceHealth.status === "unknown"
+                                      ? "is-unknown"
+                                      : "is-stale",
+                                ].join(" ")}
+                              >
+                                {sourceHealth.status || "unknown"}
+                              </span>
+                              <span className="streamingRuntimeSubtle">
+                                {formatRuntimeAge(sourceHealth.source_frame_age_seconds)}
+                              </span>
+                              <span className="streamingRuntimeSubtle">
+                                {sourceHealth.capture_fps != null ? `${Number(sourceHealth.capture_fps).toFixed(1)} fps` : "-"}
+                              </span>
+                            </>
+                          ) : pipelineLink?.source_node_id ? (
+                            compactRuntimeId(pipelineLink.source_node_id)
+                          ) : (
+                            "-"
+                          )}
+                        </td>
                         <td>{fallbackText}</td>
                         <td>{output ? output.viewer_count : "-"}</td>
                         <td>
@@ -1505,6 +1964,34 @@ function StreamingSettingsPanelContent({
                               ? t("ext.streaming.runtime.publisher.running", {}, "Running")
                               : t("ext.streaming.runtime.publisher.stopped", {}, "Stopped")
                             : "-"}
+                        </td>
+                        <td title={output?.publisher_active_codec || ""}>
+                          {output ? (
+                            <>
+                              {output.publisher_active_codec || "-"}
+                              {output.publisher_hardware_accelerated ? (
+                                <span className="streamingRuntimeSubtle">HW</span>
+                              ) : null}
+                            </>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                        <td title={output?.publisher_encoder_reason || ""}>
+                          {output ? (
+                            <>
+                              <span className={["streamingRuntimeBadge", encoderStateClass(output.publisher_encoder_state)].join(" ")}>
+                                {encoderStateLabel(output.publisher_encoder_state, t)}
+                              </span>
+                              {output.publisher_encoder_fallback_active ? (
+                                <span className="streamingRuntimeSubtle">
+                                  {t("ext.streaming.encoder.fallback_cpu", {}, "CPU fallback")}
+                                </span>
+                              ) : null}
+                            </>
+                          ) : (
+                            "-"
+                          )}
                         </td>
                         <td>{output ? output.publisher_frames_sent : "-"}</td>
                         <td>{output ? output.publisher_restart_count ?? 0 : "-"}</td>
@@ -1535,6 +2022,202 @@ function StreamingSettingsPanelContent({
             </div>
           ) : null}
 
+          {runtimeObservability?.items?.length ? (
+            <div className="streamingRuntimeTableWrap">
+              <div className="modalSectionTitle" style={{ margin: "10px 0 6px" }}>
+                {t("ext.streaming.observability.title", {}, "Streaming Health")}
+              </div>
+              <table className="streamingRuntimeTable">
+                <thead>
+                  <tr>
+                    <th>{t("ext.streaming.observability.table.stream", {}, "Stream")}</th>
+                    <th>{t("ext.streaming.observability.table.classification", {}, "Classification")}</th>
+                    <th>{t("ext.streaming.observability.table.source", {}, "Source")}</th>
+                    <th>{t("ext.streaming.observability.table.evidence", {}, "Evidence")}</th>
+                    <th>{t("ext.streaming.observability.table.sessions", {}, "Sessions")}</th>
+                    <th>{t("ext.streaming.observability.table.frames_rate", {}, "Frames/s")}</th>
+                    <th>{t("ext.streaming.observability.table.mediamtx", {}, "MediaMTX")}</th>
+                    <th>{t("ext.streaming.observability.table.last_event", {}, "Last event")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runtimeObservability.items.map((item) => {
+                    const pathInfo = (item.mediamtx?.path ?? {}) as Record<string, unknown>;
+                    const sessions = item.active_playback_sessions ?? [];
+                    const lastEvent = (item.recent_events ?? []).slice(-1)[0];
+                    const recentWebRtcEvent = [...(item.recent_events ?? [])]
+                      .reverse()
+                      .find((event) => String(event.type || "").startsWith("webrtc_"));
+                    const webRtcData = (recentWebRtcEvent?.data ?? {}) as Record<string, unknown>;
+                    const webRtcSummary = recentWebRtcEvent
+                      ? [
+                          webRtcData.iceConnectionState ?? webRtcData.ice_connection_state,
+                          webRtcData.rttMs != null ? `${webRtcData.rttMs}ms RTT` : null,
+                          webRtcData.packetLossPct != null ? `${Number(webRtcData.packetLossPct).toFixed(1)}% loss` : null,
+                          webRtcData.jitterMs != null ? `${webRtcData.jitterMs}ms jitter` : null,
+                          String(recentWebRtcEvent.type || "").includes("fallback") ? "HLS fallback" : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : "";
+                    const itemSourceHealth = item.health.source_health ?? null;
+                    return (
+                      <tr key={`${item.transmission_id}:${item.output_id || "transmission"}`}>
+                        <td title={item.output_key || item.transmission_id}>
+                          {compactRuntimeId(item.transmission_id)} / {item.output_id || "-"}
+                        </td>
+                        <td>
+                          <span
+                            className={[
+                              "streamingRuntimeBadge",
+                              item.classification === "healthy" ? "is-live" : item.classification === "unknown" ? "is-unknown" : "is-stale",
+                            ].join(" ")}
+                          >
+                            {observabilityClassificationLabel(item.classification)}
+                          </span>
+                        </td>
+                        <td title={sourceHealthTitle(itemSourceHealth)}>
+                          {itemSourceHealth ? (
+                            <>
+                              <span
+                                className={[
+                                  "streamingRuntimeBadge",
+                                  itemSourceHealth.status === "healthy" ? "is-live" : "is-stale",
+                                ].join(" ")}
+                              >
+                                {itemSourceHealth.status || "unknown"}
+                              </span>
+                              <span className="streamingRuntimeSubtle">
+                                {formatRuntimeAge(itemSourceHealth.source_frame_age_seconds)}
+                              </span>
+                            </>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                        <td title={(item.evidence ?? []).join(" ")}>
+                          {(item.evidence ?? []).slice(0, 2).join(" ") || "-"}
+                        </td>
+                        <td title={sessions.map((session) => `${session.client_kind}:${session.playback_session_id}`).join("\n")}>
+                          {sessions.length}
+                        </td>
+                        <td>
+                          {Number.isFinite(item.publisher_frames_sent_rate ?? NaN)
+                            ? Number(item.publisher_frames_sent_rate).toFixed(1)
+                            : "-"}
+                        </td>
+                        <td title={JSON.stringify(item.mediamtx ?? {})}>
+                          {pathInfo.ready === true ? "ready" : pathInfo.ready === false ? "not ready" : "-"}
+                          {webRtcSummary ? <span className="streamingRuntimeSubtle">{webRtcSummary}</span> : null}
+                        </td>
+                        <td title={lastEvent ? JSON.stringify(lastEvent) : ""}>
+                          {lastEvent ? String(lastEvent.type || "-") : "-"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
+          {(runtimeEncoders?.outputs?.length || runtimeEncoders?.states?.length) ? (
+            <div className="streamingRuntimeTableWrap">
+              <div className="modalSectionTitle" style={{ margin: "10px 0 6px" }}>
+                {t("ext.streaming.encoder.health_title", {}, "Encoder Health")}
+              </div>
+              <table className="streamingRuntimeTable">
+                <thead>
+                  <tr>
+                    <th>{t("ext.streaming.encoder.table.output", {}, "Output")}</th>
+                    <th>{t("ext.streaming.encoder.table.mode", {}, "Mode")}</th>
+                    <th>{t("ext.streaming.encoder.table.codec", {}, "Codec")}</th>
+                    <th>{t("ext.streaming.encoder.table.state", {}, "State")}</th>
+                    <th>{t("ext.streaming.encoder.table.restarts", {}, "Restarts")}</th>
+                    <th>{t("ext.streaming.encoder.table.stderr", {}, "Last stderr")}</th>
+                    <th>{t("ext.streaming.encoder.table.action", {}, "Action")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(runtimeEncoders.outputs ?? []).map((item) => {
+                    const tail = item.stderr_tail ?? [];
+                    const lastStderr = tail[tail.length - 1] ?? item.last_error ?? "";
+                    const quarantinedState = (runtimeEncoders.states ?? []).find(
+                      (state) => state.state === "quarantined" && state.last_output_id === item.output_key,
+                    );
+                    return (
+                      <tr key={item.output_key}>
+                        <td title={item.output_key}>{compactRuntimeId(item.output_key)}</td>
+                        <td>{encoderModeLabel(item.encoder_mode, t)}</td>
+                        <td title={item.active_codec || ""}>
+                          {item.active_codec || "-"}
+                          {item.hardware_accelerated ? <span className="streamingRuntimeSubtle">HW</span> : null}
+                        </td>
+                        <td title={item.encoder_reason || ""}>
+                          <span className={["streamingRuntimeBadge", encoderStateClass(item.encoder_state)].join(" ")}>
+                            {encoderStateLabel(item.encoder_state, t)}
+                          </span>
+                          {item.encoder_fallback_active ? (
+                            <span className="streamingRuntimeSubtle">{t("ext.streaming.encoder.fallback_cpu", {}, "CPU fallback")}</span>
+                          ) : null}
+                        </td>
+                        <td title={String(item.restart_window_count ?? 0)}>
+                          {item.restart_count ?? 0}
+                        </td>
+                        <td title={[...tail, item.log_path || ""].filter(Boolean).join("\n")}>
+                          {lastStderr || "-"}
+                        </td>
+                        <td>
+                          {quarantinedState ? (
+                            <button
+                              className="chipButton"
+                              type="button"
+                              disabled={runtimeEncoderClearBusy}
+                              onClick={() => void retryHardwareEncoder(quarantinedState.encoder)}
+                            >
+                              {t("ext.streaming.encoder.retry_hardware", {}, "Retry hardware")}
+                            </button>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {(runtimeEncoders.states ?? [])
+                    .filter((state) => state.state === "quarantined")
+                    .map((state) => (
+                      <tr key={`state:${state.encoder}`}>
+                        <td title={state.last_output_id || ""}>{state.encoder}</td>
+                        <td>{encoderModeLabel(runtimeEncoders.policy?.mode, t)}</td>
+                        <td>{state.encoder}</td>
+                        <td title={state.reason || state.last_error || ""}>
+                          <span className={["streamingRuntimeBadge", encoderStateClass(state.state)].join(" ")}>
+                            {encoderStateLabel(state.state, t)}
+                          </span>
+                          {state.until_unix ? (
+                            <span className="streamingRuntimeSubtle">{formatRuntimeUnixTime(state.until_unix)}</span>
+                          ) : null}
+                        </td>
+                        <td>{state.failure_count ?? 0}</td>
+                        <td title={state.last_error || ""}>{state.last_error || "-"}</td>
+                        <td>
+                          <button
+                            className="chipButton"
+                            type="button"
+                            disabled={runtimeEncoderClearBusy}
+                            onClick={() => void retryHardwareEncoder(state.encoder)}
+                          >
+                            {t("ext.streaming.encoder.retry_hardware", {}, "Retry hardware")}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
           {runtimePipelinesError ? <div className="errorText">{runtimePipelinesError}</div> : null}
 
           {runtimePipelines?.pipelines?.length ? (
@@ -1545,6 +2228,7 @@ function StreamingSettingsPanelContent({
                     <th>{t("ext.streaming.runtime.pipeline_table.pipeline", {}, "Pipeline")}</th>
                     <th>{t("ext.streaming.runtime.pipeline_table.behavior", {}, "Behavior")}</th>
                     <th>{t("ext.streaming.runtime.pipeline_table.writer", {}, "Writer")}</th>
+                    <th>{t("ext.streaming.runtime.pipeline_table.source", {}, "Source")}</th>
                     <th>{t("ext.streaming.runtime.pipeline_table.nodes", {}, "Nodes")}</th>
                     <th>{t("ext.streaming.runtime.pipeline_table.warnings", {}, "Warnings")}</th>
                   </tr>
@@ -1574,6 +2258,16 @@ function StreamingSettingsPanelContent({
                           </span>
                         </td>
                         <td title={link.writer_id}>{compactRuntimeId(link.writer_id)}</td>
+                        <td title={[link.source_id || "", link.camera_id || "", link.source_node_id || ""].filter(Boolean).join("\n")}>
+                          {link.camera_id || link.source_node_id ? (
+                            <>
+                              <span>{compactRuntimeId(link.source_node_id || link.camera_id || "")}</span>
+                              {link.camera_id ? <span className="streamingRuntimeSubtle">{compactRuntimeId(link.camera_id)}</span> : null}
+                            </>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
                         <td title={edgeText}>{nodesText || "-"}</td>
                         <td title={warnings}>{warnings || "-"}</td>
                       </tr>
@@ -2018,11 +2712,41 @@ function StreamingSettingsPanelContent({
                       <div className="cardMeta">
                         {t("ext.streaming.transmissions.outputs_hint", {}, "Cada saída pode ter resolução/FPS/bitrate diferentes.")}
                       </div>
-                    </div>
-                    <div className="rowWrap" style={{ gap: 8, justifyContent: "flex-end" }}>
-                      <button className="chipButton" type="button" onClick={() => addDraftOutput("hls")}>
-                        {t("ext.streaming.outputs.add_hls", {}, "+ HLS")}
+	                    </div>
+	                    <div className="rowWrap" style={{ gap: 8, justifyContent: "flex-end" }}>
+	                      <button
+	                        className="chipButton"
+	                        type="button"
+	                        disabled={applyQualityProfilesBusy || transmissionDraftDirty}
+	                        onClick={() => void applyQualityProfilesToDraft()}
+	                        title={
+	                          transmissionDraftDirty
+	                            ? t("ext.streaming.quality.apply_save_first_title", {}, "Save this transmission before applying generated profile outputs.")
+	                            : t("ext.streaming.quality.apply_title", {}, "Replace generated HLS profile outputs and preserve custom outputs.")
+	                        }
+	                      >
+	                        {applyQualityProfilesBusy
+	                          ? t("ext.streaming.quality.applying", {}, "Applying profiles...")
+	                          : t("ext.streaming.quality.apply", {}, "Apply quality profile outputs")}
+	                      </button>
+                      <button
+                        className="chipButton"
+                        type="button"
+                        disabled={applyWebRtcCompanionBusy || transmissionDraftDirty}
+                        onClick={() => void applyWebRtcCompanionToDraft()}
+                        title={
+                          transmissionDraftDirty
+                            ? t("ext.streaming.webrtc.apply_save_first_title", {}, "Save this transmission before applying the WebRTC low-latency output.")
+                            : t("ext.streaming.webrtc.apply_title", {}, "Create or update the WebRTC low-latency companion output.")
+                        }
+                      >
+                        {applyWebRtcCompanionBusy
+                          ? t("ext.streaming.webrtc.applying", {}, "Applying WebRTC...")
+                          : t("ext.streaming.webrtc.apply", {}, "Apply WebRTC low-latency output")}
                       </button>
+	                      <button className="chipButton" type="button" onClick={() => addDraftOutput("hls")}>
+	                        {t("ext.streaming.outputs.add_hls", {}, "+ HLS")}
+	                      </button>
                       <button className="chipButton" type="button" onClick={() => addDraftOutput("rtsp")}>
                         {t("ext.streaming.outputs.add_rtsp", {}, "+ RTSP")}
                       </button>
@@ -2032,9 +2756,10 @@ function StreamingSettingsPanelContent({
                     </div>
                   </div>
 
-                  {Array.isArray(transmissionDraft.outputs) && transmissionDraft.outputs.length === 0 ? (
-                    <div className="cardMeta">{t("ext.streaming.transmissions.outputs_empty", {}, "Nenhuma saída adicionada.")}</div>
-                  ) : null}
+	                  {Array.isArray(transmissionDraft.outputs) && transmissionDraft.outputs.length === 0 ? (
+	                    <div className="cardMeta">{t("ext.streaming.transmissions.outputs_empty", {}, "Nenhuma saída adicionada.")}</div>
+	                  ) : null}
+	                  {qualityProfilesError ? <div className="errorText">{qualityProfilesError}</div> : null}
 
                   {Array.isArray(transmissionDraft.outputs)
                     ? transmissionDraft.outputs.map((output) => {
@@ -2051,10 +2776,16 @@ function StreamingSettingsPanelContent({
                                       ({resolution.width ?? "-"}x{resolution.height ?? "-"})
                                     </span>
                                   </div>
-                                  <div className="settingsListItemMeta">
-                                    {t("ext.streaming.outputs.output_id", {}, "Output ID")}: {output.id}
-                                  </div>
-                                </div>
+	                                  <div className="settingsListItemMeta">
+	                                    {t("ext.streaming.outputs.output_id", {}, "Output ID")}: {output.id}
+	                                  </div>
+	                                  {output.protocol === "hls" ? (
+	                                    <div className="settingsListItemMeta">
+	                                      {qualityProfileLabel(output.quality_profile_id, qualityProfiles?.profiles ?? [], t)} ·{" "}
+	                                      {formatOutputNetworkCost(output.bitrate_kbps, t)}
+	                                    </div>
+	                                  ) : null}
+	                                </div>
                                 <div className="rowWrap" style={{ gap: 10, justifyContent: "flex-end" }}>
                                   <label className="rowWrap" style={{ gap: 8 }}>
                                     <input
@@ -2071,9 +2802,9 @@ function StreamingSettingsPanelContent({
                               </div>
 
                               <div className="streamingFormGrid streamingFormGridOutputMain" style={{ marginTop: 10 }}>
-                                <div className="field">
-                                  <label className="label">{t("ext.streaming.outputs.protocol", {}, "Protocolo")}</label>
-                                  <select
+	                                <div className="field">
+	                                  <label className="label">{t("ext.streaming.outputs.protocol", {}, "Protocolo")}</label>
+	                                  <select
                                     className="input"
                                     value={output.protocol}
                                     onChange={(event) =>
@@ -2082,12 +2813,47 @@ function StreamingSettingsPanelContent({
                                   >
                                     <option value="hls">HLS</option>
                                     <option value="rtsp">RTSP</option>
-                                    <option value="webrtc">WebRTC</option>
-                                  </select>
-                                </div>
+	                                    <option value="webrtc">WebRTC</option>
+	                                  </select>
+	                                </div>
 
-                                <div className="field">
-                                  <label className="label">{t("ext.streaming.outputs.width", {}, "Largura")}</label>
+	                                {output.protocol === "hls" ? (
+	                                  <div className="field">
+	                                    <label className="label">{t("ext.streaming.outputs.quality_profile", {}, "Quality profile")}</label>
+	                                    <select
+	                                      className="input"
+	                                      value={output.quality_profile_id ?? ""}
+	                                      onChange={(event) => {
+	                                        const profileId = event.target.value as StreamingQualityProfileId | "";
+	                                        if (!profileId) {
+	                                          updateDraftOutput(output.id, { quality_profile_id: null });
+	                                          return;
+	                                        }
+	                                        const profile = qualityProfiles?.profiles.find((item) => item.id === profileId);
+	                                        updateDraftOutput(output.id, {
+	                                          quality_profile_id: profileId,
+	                                          resolution: profile?.resolution ?? output.resolution ?? null,
+	                                          fps_limit: profile?.fps_limit ?? output.fps_limit ?? null,
+	                                          bitrate_kbps: profile?.bitrate_kbps ?? output.bitrate_kbps ?? null,
+	                                          latency_profile: profile?.latency_profile ?? output.latency_profile ?? "normal",
+	                                        });
+	                                      }}
+	                                    >
+	                                      <option value="">{t("ext.streaming.quality.custom", {}, "Custom")}</option>
+	                                      {(qualityProfiles?.profiles ?? []).map((profile) => (
+	                                        <option key={profile.id} value={profile.id}>
+	                                          {profile.label}
+	                                        </option>
+	                                      ))}
+	                                    </select>
+	                                    <div className="cardMeta" style={{ marginTop: 6 }}>
+	                                      {formatOutputNetworkCost(output.bitrate_kbps, t)}
+	                                    </div>
+	                                  </div>
+	                                ) : null}
+
+	                                <div className="field">
+	                                  <label className="label">{t("ext.streaming.outputs.width", {}, "Largura")}</label>
                                   <input
                                     className="input"
                                     value={String(resolution.width ?? "")}
@@ -2164,6 +2930,22 @@ function StreamingSettingsPanelContent({
                                     <option value="ultra_low">
                                       {t("ext.streaming.outputs.latency_option.ultra_low", {}, "Ultra low")}
                                     </option>
+                                  </select>
+                                </div>
+                                <div className="field">
+                                  <label className="label">{t("ext.streaming.outputs.encoder", {}, "Encoder")}</label>
+                                  <select
+                                    className="input"
+                                    value={output.encoder_mode ?? "inherit"}
+                                    onChange={(event) =>
+                                      updateDraftOutput(output.id, {
+                                        encoder_mode: event.target.value as "inherit" | "auto" | "cpu",
+                                      })
+                                    }
+                                  >
+                                    <option value="inherit">{encoderModeLabel("inherit", t)}</option>
+                                    <option value="auto">{encoderModeLabel("auto", t)}</option>
+                                    <option value="cpu">{encoderModeLabel("cpu", t)}</option>
                                   </select>
                                 </div>
                               </div>
@@ -2301,10 +3083,19 @@ function StreamingSettingsPanelContent({
                             <div className="settingsListItemTitle" style={{ marginBottom: 6 }}>
                               {item.protocol.toUpperCase()}
                             </div>
-                            <div className="cardMeta">
-                              {t("ext.streaming.transmissions.engine_path", {}, "Engine path")}: {item.resolved_engine_path}
-                            </div>
-                            {item.requires_auth ? (
+	                            <div className="cardMeta">
+	                              {t("ext.streaming.transmissions.engine_path", {}, "Engine path")}: {item.resolved_engine_path}
+	                            </div>
+	                            {item.protocol === "hls" ? (
+	                              <div className="cardMeta" style={{ marginTop: 6 }}>
+	                                {t("ext.streaming.transmissions.quality_profile", {}, "Quality profile")}:{" "}
+	                                {qualityProfileLabel(item.quality_profile_id, qualityProfiles?.profiles ?? [], t)} ·{" "}
+	                                {formatResolution(item.resolution)}
+	                                {item.fps_limit ? ` / ${item.fps_limit} FPS` : ""}
+	                                {item.bitrate_kbps ? ` / ${item.bitrate_kbps} kbps` : ""}
+	                              </div>
+	                            ) : null}
+	                            {item.requires_auth ? (
                               <div className="cardMeta" style={{ marginTop: 6 }}>
                                 {item.auth_username
                                   ? t(
@@ -2319,6 +3110,28 @@ function StreamingSettingsPanelContent({
                                 {t("ext.streaming.transmissions.auth_not_required", {}, "No authentication.")}
                               </div>
                             )}
+                            <div className="cardMeta" style={{ marginTop: 6 }}>
+                              {t("ext.streaming.transmissions.media_auth_type", {}, "Media auth")}:{" "}
+                              {item.media_auth_type === "signed_url"
+                                ? t("ext.streaming.transmissions.media_auth_signed", {}, "signed URL")
+                                : item.media_auth_type === "basic"
+                                  ? t("ext.streaming.transmissions.media_auth_basic", {}, "Basic auth")
+                                  : t("ext.streaming.transmissions.media_auth_none", {}, "none")}
+                              {item.url_expires_at_unix ? (
+                                <>
+                                  {" "}
+                                  - {t("ext.streaming.transmissions.url_expires", {}, "expires")}:{" "}
+                                  {formatRuntimeUnixTime(item.url_expires_at_unix)}
+                                </>
+                              ) : null}
+                              {item.renew_after_unix ? (
+                                <>
+                                  {" "}
+                                  - {t("ext.streaming.transmissions.url_renews", {}, "renews")}:{" "}
+                                  {formatRuntimeUnixTime(item.renew_after_unix)}
+                                </>
+                              ) : null}
+                            </div>
                             <div className="rowWrap" style={{ gap: 8, marginTop: 10 }}>
                               <input className="input" style={{ flex: 1 }} value={item.url} readOnly />
                               <button

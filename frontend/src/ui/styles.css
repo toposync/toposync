@@ -2460,6 +2460,17 @@ video {
   margin-left: auto;
 }
 
+.streamsTileQualitySelect {
+  height: 30px;
+  max-width: 112px;
+  border-radius: var(--radius-control);
+  border: 1px solid color-mix(in srgb, var(--color-border-subtle) 86%, transparent);
+  background: color-mix(in srgb, var(--color-surface-solid) 82%, transparent);
+  color: var(--color-text-primary);
+  font-size: 11px;
+  padding: 0 24px 0 8px;
+}
+
 .streamsTileOverlayButton.iconButton {
   width: 30px;
   height: 30px;

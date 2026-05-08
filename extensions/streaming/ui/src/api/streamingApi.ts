@@ -6,7 +6,10 @@ import type {
   StreamingOutputsRuntimeResponse,
   StreamingHlsProbeResponse,
   StreamingRuntimeHealthResponse,
+  StreamingRuntimeEncodersResponse,
+  StreamingRuntimeObservabilityResponse,
   StreamingRuntimePipelinesResponse,
+  StreamingQualityProfilesResponse,
   TransmissionDemandResponse,
   StreamingExtensionSettings,
   StreamingPreferredPorts,
@@ -39,9 +42,24 @@ type PatchStreamingSettingsRequest = {
   engine?: {
     enabled?: boolean;
     expose_to_lan?: boolean;
+    metrics_enabled?: boolean;
+    encoder_policy?: {
+      mode?: "auto" | "cpu";
+      quarantine_enabled?: boolean;
+      quarantine_after_restarts?: number;
+      quarantine_window_seconds?: number;
+      quarantine_duration_seconds?: number;
+      max_restarts_per_minute?: number;
+    };
+    media_auth?: {
+      mode?: "signed_proxy" | "open";
+      token_ttl_seconds?: number;
+      renew_margin_seconds?: number;
+    };
     preferred_ports?: StreamingPreferredPorts;
     mediamtx_version?: string;
     webrtc_ice_servers?: string[];
+    webrtc_additional_hosts?: string[];
   };
 };
 
@@ -107,6 +125,10 @@ export async function fetchTransmissions(signal?: AbortSignal): Promise<Transmis
   return requestJson<Transmission[]>("/api/streams/transmissions", { signal });
 }
 
+export async function fetchStreamingQualityProfiles(signal?: AbortSignal): Promise<StreamingQualityProfilesResponse> {
+  return requestJson<StreamingQualityProfilesResponse>("/api/streams/quality-profiles", { signal });
+}
+
 export async function createTransmission(payload: CreateTransmissionRequest): Promise<Transmission> {
   return requestJson<Transmission>("/api/streams/transmissions", {
     method: "POST",
@@ -134,6 +156,26 @@ export async function fetchTransmissionUrls(transmissionId: string): Promise<Tra
   return requestJson<TransmissionUrlsResponse>(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/urls`);
 }
 
+export async function applyTransmissionQualityProfiles(transmissionId: string): Promise<Transmission> {
+  const payload = await requestJson<{ transmission: Transmission }>(
+    `/api/streams/transmissions/${encodeURIComponent(transmissionId)}/quality-profiles/apply`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "replace_hls_profiles" }),
+    },
+  );
+  return payload.transmission;
+}
+
+export async function applyTransmissionWebRtcCompanion(transmissionId: string): Promise<Transmission> {
+  const payload = await requestJson<{ transmission: Transmission }>(
+    `/api/streams/transmissions/${encodeURIComponent(transmissionId)}/webrtc/companion/apply`,
+    { method: "POST" },
+  );
+  return payload.transmission;
+}
+
 export async function fetchStreamingOutputsRuntime(signal?: AbortSignal): Promise<StreamingOutputsRuntimeResponse> {
   return requestJson<StreamingOutputsRuntimeResponse>("/api/streams/runtime/outputs", { signal });
 }
@@ -146,8 +188,29 @@ export async function fetchStreamingRuntimePipelines(signal?: AbortSignal): Prom
   return requestJson<StreamingRuntimePipelinesResponse>("/api/streams/runtime/pipelines", { signal });
 }
 
+export async function fetchStreamingRuntimeObservability(signal?: AbortSignal): Promise<StreamingRuntimeObservabilityResponse> {
+  return requestJson<StreamingRuntimeObservabilityResponse>("/api/streams/runtime/observability", { signal });
+}
+
+export async function fetchStreamingRuntimeEncoders(signal?: AbortSignal): Promise<StreamingRuntimeEncodersResponse> {
+  return requestJson<StreamingRuntimeEncodersResponse>("/api/streams/runtime/encoders", { signal });
+}
+
+export async function clearStreamingEncoderQuarantine(encoder?: string | null): Promise<StreamingRuntimeEncodersResponse> {
+  const payload = await requestJson<{ encoders: StreamingRuntimeEncodersResponse }>("/api/streams/runtime/encoders/quarantine/clear", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ encoder: encoder ?? null }),
+  });
+  return payload.encoders;
+}
+
 export async function fetchStreamingRuntimeDiagnostics(signal?: AbortSignal): Promise<unknown> {
   return requestJson<unknown>("/api/streams/runtime/diagnostics", { signal });
+}
+
+export async function fetchStreamingDiagnosticSnapshot(signal?: AbortSignal): Promise<unknown> {
+  return requestJson<unknown>("/api/streams/runtime/diagnostic-snapshot", { signal });
 }
 
 export async function fetchStreamingHlsProbe(

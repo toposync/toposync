@@ -653,11 +653,46 @@ export type StreamingTransmissionOutput = {
   id: string;
   protocol: "hls" | "rtsp" | "webrtc";
   enabled?: boolean;
+  quality_profile_id?: StreamingQualityProfileId | null;
+  resolution?: StreamingResolution | null;
+  fps_limit?: number | null;
+  bitrate_kbps?: number | null;
+  latency_profile?: StreamingLatencyProfile | null;
+  encoder_mode?: "inherit" | "auto" | "cpu";
   authentication?: {
     enabled?: boolean;
     username?: string | null;
     password?: string | null;
   };
+};
+
+export type StreamingQualityProfileId =
+  | "quad_grid"
+  | "stable_apple_tv"
+  | "fullscreen_quality"
+  | "diagnostic_low";
+
+export type StreamingLatencyProfile = "normal" | "low" | "ultra_low";
+
+export type StreamingResolution = {
+  width?: number;
+  height?: number;
+};
+
+export type StreamingQualityProfile = {
+  id: StreamingQualityProfileId;
+  label: string;
+  resolution: StreamingResolution;
+  fps_limit: number;
+  bitrate_kbps: number;
+  latency_profile: StreamingLatencyProfile;
+  usage?: string;
+  default?: boolean;
+};
+
+export type StreamingQualityProfilesResponse = {
+  default_profile_id: StreamingQualityProfileId;
+  profiles: StreamingQualityProfile[];
 };
 
 export type StreamingTransmission = {
@@ -706,6 +741,14 @@ export type StreamingTransmissionUrlOutput = {
   url: string;
   requires_auth?: boolean;
   auth_username?: string | null;
+  media_auth_type?: "none" | "signed_url" | "basic";
+  url_expires_at_unix?: number | null;
+  renew_after_unix?: number | null;
+  quality_profile_id?: StreamingQualityProfileId | null;
+  resolution?: StreamingResolution | null;
+  fps_limit?: number | null;
+  bitrate_kbps?: number | null;
+  latency_profile?: StreamingLatencyProfile | null;
 };
 
 export type StreamingTransmissionUrlsResponse = {
@@ -723,10 +766,49 @@ export type StreamingTransmissionDemandPrimeResponse = {
 
 export type StreamingRuntimeStatus = "live" | "degraded" | "stale" | "offline";
 export type StreamingStreamBehavior = "continuous" | "event_gated";
+export type StreamingEncoderMode = "auto" | "cpu";
+export type StreamingEncoderTrustState = "candidate" | "trusted" | "quarantined";
+export type StreamingObservabilityClassification =
+  | "healthy"
+  | "source_stale"
+  | "source_pipeline_stale"
+  | "publisher_down"
+  | "hls_playlist_stale"
+  | "hls_tail_unavailable"
+  | "webrtc_transport_error"
+  | "network_contract_error"
+  | "auth_url_error"
+  | "app_player_lifecycle"
+  | "event_gated_idle"
+  | "unknown";
 export type StreamingFallbackReason =
   | "no_active_writer"
   | "selected_writer_missing_frame"
   | "no_frame";
+
+export type StreamingRuntimeSourceHealth = {
+  source_id: string;
+  camera_id?: string | null;
+  camera_name?: string | null;
+  pipeline_name?: string | null;
+  node_id?: string | null;
+  backend?: string | null;
+  configured_backend?: string;
+  source_frame_age_seconds?: number | null;
+  capture_fps?: number | null;
+  target_fps?: number | null;
+  opened?: boolean;
+  restarts_total?: number;
+  decode_failures?: number;
+  frames_captured?: number;
+  last_frame_at_unix?: number | null;
+  last_seen_at_unix?: number | null;
+  last_error?: string | null;
+  rtsp_transport?: string;
+  used_ingest?: boolean;
+  status?: "healthy" | "starting" | "stale" | "unreachable" | "unauthorized" | "error" | "idle" | "unknown";
+  recommended_action?: string;
+};
 
 export type StreamingOutputRuntimeStatus = {
   output_key: string;
@@ -743,6 +825,17 @@ export type StreamingOutputRuntimeStatus = {
   publisher_active_codec?: string | null;
   publisher_hardware_accelerated?: boolean;
   publisher_restart_count?: number;
+  publisher_last_frame_at_unix?: number | null;
+  publisher_encoder_mode?: StreamingEncoderMode;
+  publisher_encoder_state?: StreamingEncoderTrustState;
+  publisher_encoder_reason?: string | null;
+  publisher_encoder_quarantined_until_unix?: number | null;
+  publisher_encoder_fallback_active?: boolean;
+  quality_profile_id?: StreamingQualityProfileId | null;
+  resolution?: StreamingResolution | null;
+  fps_limit?: number | null;
+  bitrate_kbps?: number | null;
+  latency_profile?: StreamingLatencyProfile | null;
   status?: StreamingRuntimeStatus;
   active_writer_id?: string | null;
   selected_writer_id?: string | null;
@@ -757,6 +850,12 @@ export type StreamingOutputRuntimeStatus = {
   event_gated?: boolean;
   event_gated_idle?: boolean;
   event_gate_reasons?: string[];
+  classification?: StreamingObservabilityClassification;
+  evidence?: string[];
+  active_playback_session_count?: number;
+  last_playback_event_at_unix?: number | null;
+  publisher_frames_sent_rate?: number | null;
+  source_health?: StreamingRuntimeSourceHealth | null;
 };
 
 export type StreamingOutputsRuntimeResponse = {
@@ -779,11 +878,28 @@ export type StreamingRuntimeOutputHealth = {
   publisher_active_codec?: string | null;
   publisher_hardware_accelerated?: boolean;
   publisher_restart_count?: number;
+  publisher_last_frame_at_unix?: number | null;
+  publisher_encoder_mode?: StreamingEncoderMode;
+  publisher_encoder_state?: StreamingEncoderTrustState;
+  publisher_encoder_reason?: string | null;
+  publisher_encoder_quarantined_until_unix?: number | null;
+  publisher_encoder_fallback_active?: boolean;
+  quality_profile_id?: StreamingQualityProfileId | null;
+  resolution?: StreamingResolution | null;
+  fps_limit?: number | null;
+  bitrate_kbps?: number | null;
+  latency_profile?: StreamingLatencyProfile | null;
   status: StreamingRuntimeStatus;
   stream_behavior?: StreamingStreamBehavior;
   event_gated?: boolean;
   event_gated_idle?: boolean;
   event_gate_reasons?: string[];
+  classification?: StreamingObservabilityClassification;
+  evidence?: string[];
+  active_playback_session_count?: number;
+  last_playback_event_at_unix?: number | null;
+  publisher_frames_sent_rate?: number | null;
+  source_health?: StreamingRuntimeSourceHealth | null;
 };
 
 export type StreamingRuntimeTransmissionHealth = {
@@ -803,6 +919,11 @@ export type StreamingRuntimeTransmissionHealth = {
   event_gated?: boolean;
   event_gated_idle?: boolean;
   event_gate_reasons?: string[];
+  classification?: StreamingObservabilityClassification;
+  evidence?: string[];
+  active_playback_session_count?: number;
+  last_playback_event_at_unix?: number | null;
+  source_health?: StreamingRuntimeSourceHealth | null;
   outputs: StreamingRuntimeOutputHealth[];
 };
 
@@ -845,6 +966,23 @@ export type StreamingRuntimePipelineLink = {
 export type StreamingRuntimePipelinesResponse = {
   updated_at_unix: number;
   pipelines: StreamingRuntimePipelineLink[];
+};
+
+export type StreamingPlaybackEventsRequest = {
+  playback_session_id: string;
+  transmission_id: string;
+  output_id?: string | null;
+  client_kind: "app" | "web";
+  platform: string;
+  app_state?: string | null;
+  pip_active?: boolean | null;
+  events: Array<{
+    type: string;
+    severity?: "debug" | "info" | "warn" | "error";
+    at_unix: number;
+    message?: string;
+    data?: Record<string, unknown>;
+  }>;
 };
 
 async function _parseHttpError(res: Response, fallback: string): Promise<string> {
@@ -1801,16 +1939,43 @@ export async function listStreamingTransmissions(): Promise<StreamingTransmissio
   return (await res.json()) as StreamingTransmission[];
 }
 
-export async function getStreamingTransmissionUrls(transmissionId: string): Promise<StreamingTransmissionUrlsResponse> {
-  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/urls`);
+export async function getStreamingQualityProfiles(): Promise<StreamingQualityProfilesResponse> {
+  const res = await fetch("/api/streams/quality-profiles");
+  if (!res.ok) throw new Error(`Failed to fetch streaming quality profiles: ${res.status}`);
+  return (await res.json()) as StreamingQualityProfilesResponse;
+}
+
+export type StreamingTransmissionUrlSelectionOptions = {
+  outputId?: string | null;
+  qualityProfileId?: StreamingQualityProfileId | null;
+};
+
+function streamingTransmissionUrlSelectionQuery(options?: StreamingTransmissionUrlSelectionOptions): string {
+  const params = new URLSearchParams();
+  const outputId = String(options?.outputId || "").trim();
+  const qualityProfileId = String(options?.qualityProfileId || "").trim();
+  if (outputId) params.set("output_id", outputId);
+  if (qualityProfileId) params.set("quality_profile_id", qualityProfileId);
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+export async function getStreamingTransmissionUrls(
+  transmissionId: string,
+  options?: StreamingTransmissionUrlSelectionOptions,
+): Promise<StreamingTransmissionUrlsResponse> {
+  const query = streamingTransmissionUrlSelectionQuery(options);
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/urls${query}`);
   if (!res.ok) throw new Error(`Failed to fetch streaming URLs for ${transmissionId}: ${res.status}`);
   return (await res.json()) as StreamingTransmissionUrlsResponse;
 }
 
 export async function primeStreamingTransmissionDemand(
   transmissionId: string,
+  options?: StreamingTransmissionUrlSelectionOptions,
 ): Promise<StreamingTransmissionDemandPrimeResponse> {
-  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/demand/prime`, {
+  const query = streamingTransmissionUrlSelectionQuery(options);
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/demand/prime${query}`, {
     method: "POST",
   });
   if (!res.ok) throw new Error(`Failed to prime streaming demand for ${transmissionId}: ${res.status}`);
@@ -1898,4 +2063,13 @@ export async function getStreamingRuntimePipelines(): Promise<StreamingRuntimePi
   const res = await fetch("/api/streams/runtime/pipelines");
   if (!res.ok) throw new Error(`Failed to fetch streaming runtime pipelines: ${res.status}`);
   return (await res.json()) as StreamingRuntimePipelinesResponse;
+}
+
+export async function postStreamingPlaybackEvents(payload: StreamingPlaybackEventsRequest): Promise<void> {
+  const res = await fetch("/api/streams/runtime/playback-events", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Failed to post streaming playback events: ${res.status}`);
 }

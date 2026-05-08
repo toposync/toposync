@@ -239,16 +239,24 @@ test.describe("streaming dashboard chaos states", () => {
     ["publisher_down", "publisher_down"],
     ["webrtc_transport_error", "webrtc_transport_error"],
   ]) {
-    test(`shows ${scenario} without hiding the transport controls`, async ({ page }) => {
+    test(`shows ${scenario} with technical controls in the advanced modal`, async ({ page }) => {
       await mockStreamingDashboard(page, scenario);
       await page.goto("/");
 
       await expect(page.getByText("Front Door", { exact: true })).toBeVisible();
       await expect(page.getByText(expectedText, { exact: false })).toBeVisible();
+      await expect(page.getByLabel("Advanced stream settings")).toBeVisible();
+      await expect(page.getByLabel("Stream transport")).toHaveCount(0);
+
+      await page.getByLabel("Advanced stream settings").click();
+      await expect(page.getByRole("dialog", { name: "Stream details: Front Door" })).toBeVisible();
       await expect(page.getByLabel("Stream transport")).toBeVisible();
       await expect(page.getByLabel("Stream transport")).toContainText("Auto");
       await expect(page.getByLabel("Stream transport")).toContainText("Low latency");
       await expect(page.getByLabel("Stream transport")).toContainText("HLS");
+      await expect(page.getByLabel("Stream quality")).toBeVisible();
+      await expect(page.getByText("Selected output", { exact: true })).toBeVisible();
+      await expect(page.getByText("1280x720", { exact: false })).toBeVisible();
     });
   }
 
@@ -256,7 +264,9 @@ test.describe("streaming dashboard chaos states", () => {
     await mockStreamingDashboard(page, "webrtc_transport_error", "auto");
     await page.goto("/");
 
+    await page.getByLabel("Advanced stream settings").click();
     await expect(page.getByLabel("Stream transport")).toHaveValue("auto");
+    await page.keyboard.press("Escape");
     await expect(page.getByText("webrtc_transport_error", { exact: false })).toBeVisible();
     await page.getByLabel("Camera controls").click();
     await expect(page.getByRole("dialog", { name: "Camera controls" })).toBeVisible();

@@ -10,10 +10,12 @@ import {
   type StreamingQualityProfileId,
   type StreamingRuntimeTransmissionHealth,
   type StreamingTransmission,
+  type StreamingTransmissionUrlOutput,
   type StreamingTransmissionUrlsResponse,
 } from "../../util/api";
 import { i18n } from "../../util/i18n";
 import { Icon } from "../Icon";
+import { Modal } from "../Modal";
 import { StreamsPtzOverlay } from "./StreamsPtzOverlay";
 
 type GridMode = "1x1" | "2x2";
@@ -298,17 +300,6 @@ async function collectWebRtcStats(peerConnection: RTCPeerConnection): Promise<We
   };
 }
 
-function formatWebRtcStats(stats: WebRtcStatsSummary | null): string {
-  if (!stats) return "";
-  const parts = [
-    stats.iceConnectionState,
-    stats.rttMs !== null ? `${stats.rttMs}ms RTT` : null,
-    stats.packetLossPct !== null ? `${stats.packetLossPct.toFixed(1)}% loss` : null,
-    stats.framesPerSecond !== null ? `${Math.round(stats.framesPerSecond)}fps` : null,
-  ].filter(Boolean);
-  return parts.join(" · ");
-}
-
 function formatRuntimeAge(seconds: number | null | undefined): string {
   if (!Number.isFinite(seconds ?? NaN)) return "-";
   const value = Math.max(0, Number(seconds));
@@ -327,6 +318,71 @@ function formatLastLiveTime(unixSeconds: number | null | undefined): string {
   } catch {
     return "";
   }
+}
+
+function formatUnixDateTime(unixSeconds: number | null | undefined): string {
+  if (!Number.isFinite(unixSeconds ?? NaN) || !unixSeconds) return "-";
+  try {
+    return new Date(Number(unixSeconds) * 1000).toLocaleString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+  } catch {
+    return "-";
+  }
+}
+
+function formatTechnicalBoolean(value: boolean | null | undefined): string {
+  if (value === true) return "yes";
+  if (value === false) return "no";
+  return "-";
+}
+
+function formatTechnicalNumber(value: number | null | undefined, suffix = "", maximumFractionDigits = 1): string {
+  if (!Number.isFinite(value ?? NaN)) return "-";
+  return `${Number(value).toLocaleString([], { maximumFractionDigits })}${suffix}`;
+}
+
+function formatResolution(resolution: { width?: number; height?: number } | null | undefined): string {
+  const width = Number(resolution?.width);
+  const height = Number(resolution?.height);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return "-";
+  return `${Math.round(width)}x${Math.round(height)}`;
+}
+
+function formatLatencyProfile(value: string | null | undefined): string {
+  if (value === "ultra_low") return "Ultra low";
+  if (value === "low") return "Low";
+  if (value === "normal") return "Normal";
+  return "-";
+}
+
+function formatQualityProfileId(value: StreamingQualityProfileId | null | undefined): string {
+  if (value === "quad_grid") return "Low grid";
+  if (value === "stable_apple_tv") return "Stable";
+  if (value === "fullscreen_quality") return "High";
+  if (value === "diagnostic_low") return "Diagnostic";
+  return "-";
+}
+
+function findUrlOutput(
+  urls: StreamingTransmissionUrlsResponse | undefined,
+  outputId: string | null | undefined,
+): StreamingTransmissionUrlOutput | null {
+  if (!urls || !outputId) return null;
+  return urls.outputs.find((output) => output.output_id === outputId) ?? null;
+}
+
+function findRuntimeOutput(
+  health: StreamingRuntimeTransmissionHealth | undefined,
+  outputId: string | null | undefined,
+): StreamingRuntimeTransmissionHealth["outputs"][number] | null {
+  if (!health || !outputId) return null;
+  return health.outputs.find((output) => output.output_id === outputId) ?? null;
 }
 
 function buildRuntimeHealthHint(
@@ -508,6 +564,222 @@ function waitForPeerConnectionReady(peerConnection: RTCPeerConnection, timeoutMs
   });
 }
 
+function TechnicalDetailRow({ label, value }: { label: string; value: React.ReactNode }): React.ReactElement {
+  return (
+    <div className="streamsAdvancedDetailRow">
+      <div className="streamsAdvancedDetailLabel">{label}</div>
+      <div className="streamsAdvancedDetailValue">{value || "-"}</div>
+    </div>
+  );
+}
+
+function StreamAdvancedSettingsModal({
+  open,
+  label,
+  onClose,
+  urls,
+  runtimeHealth,
+  hlsOutputId,
+  webrtcOutputId,
+  selectedOutputId,
+  hlsQualityProfileId,
+  playbackStatus,
+  playbackTransport,
+  webRtcStats,
+  webRtcFallbackActive,
+  errorText,
+  sourceHint,
+  qualityPreference,
+  transportPreference,
+  onQualityPreferenceChange,
+  onTransportPreferenceChange,
+}: {
+  open: boolean;
+  label: string;
+  onClose: () => void;
+  urls?: StreamingTransmissionUrlsResponse;
+  runtimeHealth?: StreamingRuntimeTransmissionHealth;
+  hlsOutputId: string | null;
+  webrtcOutputId: string | null;
+  selectedOutputId: string | null;
+  hlsQualityProfileId: StreamingQualityProfileId | null;
+  playbackStatus: TilePlaybackStatus;
+  playbackTransport: TilePlaybackTransport;
+  webRtcStats: WebRtcStatsSummary | null;
+  webRtcFallbackActive: boolean;
+  errorText: string | null;
+  sourceHint: string | null;
+  qualityPreference: StreamQualityPreference;
+  transportPreference: StreamTransportPreference;
+  onQualityPreferenceChange: (preference: StreamQualityPreference) => void;
+  onTransportPreferenceChange: (preference: StreamTransportPreference) => void;
+}): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const activeOutputId =
+    playbackTransport === "webrtc"
+      ? webrtcOutputId
+      : playbackTransport === "hls"
+        ? hlsOutputId
+        : selectedOutputId;
+  const activeUrlOutput = findUrlOutput(urls, activeOutputId);
+  const activeRuntimeOutput = findRuntimeOutput(runtimeHealth, activeOutputId);
+  const sourceHealth = runtimeHealth?.source_health ?? null;
+  const evidence = runtimeHealth?.evidence ?? [];
+  const warnings = urls?.warnings ?? [];
+
+  return (
+    <Modal
+      open={open}
+      title={t("core.ui.streams.advanced.title", { label }, `Stream details: ${label}`)}
+      onClose={onClose}
+      panelClassName="streamsAdvancedModalPanel"
+      bodyClassName="streamsAdvancedModalBody"
+    >
+      <div className="streamsAdvancedControls">
+        <label className="streamsAdvancedControl">
+          <span>{t("core.ui.streams.transport.label", {}, "Stream transport")}</span>
+          <select
+            className="streamsAdvancedSelect"
+            value={transportPreference}
+            onChange={(event) => onTransportPreferenceChange(event.target.value as StreamTransportPreference)}
+          >
+            {(["auto", "webrtc", "hls"] as const).map((preference) => (
+              <option key={preference} value={preference}>
+                {transportPreferenceLabel(preference, t)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="streamsAdvancedControl">
+          <span>{t("core.ui.streams.quality.label", {}, "Stream quality")}</span>
+          <select
+            className="streamsAdvancedSelect"
+            value={qualityPreference}
+            onChange={(event) => onQualityPreferenceChange(event.target.value as StreamQualityPreference)}
+          >
+            {(["auto", "low", "stable", "high", "diagnostic"] as const).map((preference) => (
+              <option key={preference} value={preference}>
+                {qualityPreferenceLabel(preference, t)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <section className="streamsAdvancedSection">
+        <div className="streamsAdvancedSectionTitle">{t("core.ui.streams.advanced.playback", {}, "Playback")}</div>
+        <div className="streamsAdvancedDetailGrid">
+          <TechnicalDetailRow label="Player status" value={playbackStatus} />
+          <TechnicalDetailRow label="Active transport" value={playbackTransport === "none" ? "-" : playbackTransport.toUpperCase()} />
+          <TechnicalDetailRow label="Transport preference" value={transportPreferenceLabel(transportPreference, t)} />
+          <TechnicalDetailRow label="Quality preference" value={qualityPreferenceLabel(qualityPreference, t)} />
+          <TechnicalDetailRow label="HLS fallback" value={formatTechnicalBoolean(webRtcFallbackActive)} />
+          <TechnicalDetailRow label="Player error" value={errorText || "-"} />
+          <TechnicalDetailRow label="Current hint" value={sourceHint || "-"} />
+        </div>
+      </section>
+
+      <section className="streamsAdvancedSection">
+        <div className="streamsAdvancedSectionTitle">{t("core.ui.streams.advanced.selected_output", {}, "Selected output")}</div>
+        <div className="streamsAdvancedDetailGrid">
+          <TechnicalDetailRow label="Output ID" value={activeOutputId || "-"} />
+          <TechnicalDetailRow label="Protocol" value={activeUrlOutput?.protocol?.toUpperCase() || activeRuntimeOutput?.protocol?.toUpperCase() || "-"} />
+          <TechnicalDetailRow label="Engine path" value={activeUrlOutput?.resolved_engine_path || activeRuntimeOutput?.resolved_engine_path || "-"} />
+          <TechnicalDetailRow label="Quality profile" value={formatQualityProfileId(activeUrlOutput?.quality_profile_id ?? activeRuntimeOutput?.quality_profile_id ?? hlsQualityProfileId)} />
+          <TechnicalDetailRow label="Resolution" value={formatResolution(activeUrlOutput?.resolution ?? activeRuntimeOutput?.resolution)} />
+          <TechnicalDetailRow label="FPS limit" value={formatTechnicalNumber(activeUrlOutput?.fps_limit ?? activeRuntimeOutput?.fps_limit, " fps", 1)} />
+          <TechnicalDetailRow label="Bitrate" value={formatTechnicalNumber(activeUrlOutput?.bitrate_kbps ?? activeRuntimeOutput?.bitrate_kbps, " kbps", 0)} />
+          <TechnicalDetailRow label="Latency profile" value={formatLatencyProfile(activeUrlOutput?.latency_profile ?? activeRuntimeOutput?.latency_profile)} />
+          <TechnicalDetailRow label="Media auth" value={activeUrlOutput?.media_auth_type || "-"} />
+          <TechnicalDetailRow label="URL expires" value={formatUnixDateTime(activeUrlOutput?.url_expires_at_unix)} />
+          <TechnicalDetailRow label="Renew after" value={formatUnixDateTime(activeUrlOutput?.renew_after_unix)} />
+          <TechnicalDetailRow label="Publisher codec" value={activeRuntimeOutput?.publisher_active_codec || "-"} />
+          <TechnicalDetailRow label="Hardware encoder" value={formatTechnicalBoolean(activeRuntimeOutput?.publisher_hardware_accelerated)} />
+          <TechnicalDetailRow label="Frames sent" value={formatTechnicalNumber(activeRuntimeOutput?.publisher_frames_sent, "", 0)} />
+          <TechnicalDetailRow label="Frame rate" value={formatTechnicalNumber(activeRuntimeOutput?.publisher_frames_sent_rate, " fps", 1)} />
+          <TechnicalDetailRow label="Viewers" value={formatTechnicalNumber(activeRuntimeOutput?.viewer_count, "", 0)} />
+        </div>
+      </section>
+
+      <section className="streamsAdvancedSection">
+        <div className="streamsAdvancedSectionTitle">{t("core.ui.streams.advanced.runtime", {}, "Runtime health")}</div>
+        <div className="streamsAdvancedDetailGrid">
+          <TechnicalDetailRow label="Runtime status" value={runtimeStatusLabel(runtimeHealth?.status, t, Boolean(runtimeHealth?.event_gated_idle)) || "-"} />
+          <TechnicalDetailRow label="Classification" value={runtimeHealth?.classification || "-"} />
+          <TechnicalDetailRow label="Selected frame age" value={formatRuntimeAge(runtimeHealth?.selected_frame_age_seconds)} />
+          <TechnicalDetailRow label="Last incoming age" value={formatRuntimeAge(runtimeHealth?.last_incoming_frame_age_seconds)} />
+          <TechnicalDetailRow label="Last live frame" value={formatUnixDateTime(runtimeHealth?.last_live_frame_at_unix)} />
+          <TechnicalDetailRow label="Fallback active" value={formatTechnicalBoolean(runtimeHealth?.fallback_active)} />
+          <TechnicalDetailRow label="Fallback reason" value={runtimeHealth?.fallback_reason || "-"} />
+          <TechnicalDetailRow label="Placeholder active" value={formatTechnicalBoolean(runtimeHealth?.placeholder_active)} />
+          <TechnicalDetailRow label="Active writer" value={runtimeHealth?.active_writer_id || "-"} />
+          <TechnicalDetailRow label="Selected writer" value={runtimeHealth?.selected_writer_id || "-"} />
+          <TechnicalDetailRow label="Stream behavior" value={runtimeHealth?.stream_behavior || "-"} />
+          <TechnicalDetailRow label="Active sessions" value={formatTechnicalNumber(runtimeHealth?.active_playback_session_count, "", 0)} />
+        </div>
+        {evidence.length ? <div className="streamsAdvancedNote">{evidence.join(" ")}</div> : null}
+      </section>
+
+      <section className="streamsAdvancedSection">
+        <div className="streamsAdvancedSectionTitle">{t("core.ui.streams.advanced.source", {}, "Camera source")}</div>
+        <div className="streamsAdvancedDetailGrid">
+          <TechnicalDetailRow label="Source status" value={sourceHealth?.status || "-"} />
+          <TechnicalDetailRow label="Camera" value={sourceHealth?.camera_name || sourceHealth?.camera_id || "-"} />
+          <TechnicalDetailRow label="Backend" value={sourceHealth?.backend || sourceHealth?.configured_backend || "-"} />
+          <TechnicalDetailRow label="Transport" value={sourceHealth?.rtsp_transport || "-"} />
+          <TechnicalDetailRow label="Source age" value={formatRuntimeAge(sourceHealth?.source_frame_age_seconds)} />
+          <TechnicalDetailRow label="Capture FPS" value={formatTechnicalNumber(sourceHealth?.capture_fps, " fps", 1)} />
+          <TechnicalDetailRow label="Target FPS" value={formatTechnicalNumber(sourceHealth?.target_fps, " fps", 1)} />
+          <TechnicalDetailRow label="Frames captured" value={formatTechnicalNumber(sourceHealth?.frames_captured, "", 0)} />
+          <TechnicalDetailRow label="Restarts" value={formatTechnicalNumber(sourceHealth?.restarts_total, "", 0)} />
+          <TechnicalDetailRow label="Decode failures" value={formatTechnicalNumber(sourceHealth?.decode_failures, "", 0)} />
+          <TechnicalDetailRow label="Last camera frame" value={formatUnixDateTime(sourceHealth?.last_frame_at_unix)} />
+          <TechnicalDetailRow label="Recommended action" value={sourceHealth?.recommended_action || "-"} />
+        </div>
+        {sourceHealth?.last_error ? <div className="streamsAdvancedNote isError">{sourceHealth.last_error}</div> : null}
+      </section>
+
+      <section className="streamsAdvancedSection">
+        <div className="streamsAdvancedSectionTitle">{t("core.ui.streams.advanced.webrtc", {}, "WebRTC stats")}</div>
+        <div className="streamsAdvancedDetailGrid">
+          <TechnicalDetailRow label="ICE state" value={webRtcStats?.iceConnectionState || "-"} />
+          <TechnicalDetailRow label="Connection state" value={webRtcStats?.connectionState || "-"} />
+          <TechnicalDetailRow label="RTT" value={formatTechnicalNumber(webRtcStats?.rttMs, " ms", 0)} />
+          <TechnicalDetailRow label="Packet loss" value={formatTechnicalNumber(webRtcStats?.packetLossPct, "%", 1)} />
+          <TechnicalDetailRow label="Packets lost" value={formatTechnicalNumber(webRtcStats?.packetsLost, "", 0)} />
+          <TechnicalDetailRow label="Jitter" value={formatTechnicalNumber(webRtcStats?.jitterMs, " ms", 0)} />
+          <TechnicalDetailRow label="Decoded FPS" value={formatTechnicalNumber(webRtcStats?.framesPerSecond, " fps", 1)} />
+          <TechnicalDetailRow label="Frames decoded" value={formatTechnicalNumber(webRtcStats?.framesDecoded, "", 0)} />
+        </div>
+      </section>
+
+      <section className="streamsAdvancedSection">
+        <div className="streamsAdvancedSectionTitle">{t("core.ui.streams.advanced.outputs", {}, "Outputs")}</div>
+        <div className="streamsAdvancedOutputsTable">
+          <div className="streamsAdvancedOutputsHeader">
+            <span>Output</span>
+            <span>Profile</span>
+            <span>Video</span>
+            <span>Runtime</span>
+          </div>
+          {(runtimeHealth?.outputs ?? []).map((output) => (
+            <div key={output.output_key || output.output_id} className="streamsAdvancedOutputsRow">
+              <span title={output.output_id}>{output.protocol.toUpperCase()} · {output.output_id}</span>
+              <span>{formatQualityProfileId(output.quality_profile_id)} · {formatLatencyProfile(output.latency_profile)}</span>
+              <span>{formatResolution(output.resolution)} · {formatTechnicalNumber(output.fps_limit, " fps", 1)} · {formatTechnicalNumber(output.bitrate_kbps, " kbps", 0)}</span>
+              <span>{output.status} · {formatTechnicalNumber(output.publisher_frames_sent_rate, " fps", 1)} · {formatTechnicalNumber(output.viewer_count, " viewers", 0)}</span>
+            </div>
+          ))}
+          {!(runtimeHealth?.outputs ?? []).length ? (
+            <div className="streamsAdvancedOutputsEmpty">{t("core.ui.streams.advanced.no_runtime_outputs", {}, "No runtime outputs reported yet.")}</div>
+          ) : null}
+        </div>
+        {warnings.length ? <div className="streamsAdvancedNote isWarn">{warnings.join(" ")}</div> : null}
+      </section>
+    </Modal>
+  );
+}
+
 function StreamTilePlayer({
   transmissionId,
   outputId,
@@ -515,6 +787,7 @@ function StreamTilePlayer({
   hlsOutputId,
   hlsQualityProfileId,
   label,
+  urls,
   overlayVisible,
   sourceHint,
   sourceHintTone,
@@ -538,6 +811,7 @@ function StreamTilePlayer({
   hlsOutputId: string | null;
   hlsQualityProfileId: StreamingQualityProfileId | null;
   label: string;
+  urls?: StreamingTransmissionUrlsResponse;
   overlayVisible: boolean;
   sourceHint: string | null;
   sourceHintTone: "muted" | "warn" | "error";
@@ -566,6 +840,7 @@ function StreamTilePlayer({
   const [webRtcStats, setWebRtcStats] = useState<WebRtcStatsSummary | null>(null);
   const [webRtcFallbackActive, setWebRtcFallbackActive] = useState(false);
   const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const playbackActive = active || pictureInPictureActive;
 
   const recordWebPlaybackEvent = useCallback(
@@ -1223,8 +1498,6 @@ function StreamTilePlayer({
     return status;
   }, [runtimeHealth?.event_gated_idle, runtimeHealth?.status, status]);
 
-  const webRtcStatsLabel = transport === "webrtc" ? formatWebRtcStats(webRtcStats) : "";
-
   const toggleFullscreen = async () => {
     const el = frameRef.current;
     if (!el) return;
@@ -1279,6 +1552,12 @@ function StreamTilePlayer({
       Boolean((HTMLVideoElement.prototype as any).webkitSetPresentationMode));
 
   const fullscreenSupported = typeof document !== "undefined" && Boolean((document as any).fullscreenEnabled && (HTMLElement.prototype as any).requestFullscreen);
+  const openAdvancedSettings = () => {
+    if (typeof document !== "undefined" && document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+    }
+    setAdvancedOpen(true);
+  };
 
   return (
     <div className="streamsPlayerFrame" ref={frameRef}>
@@ -1294,40 +1573,18 @@ function StreamTilePlayer({
               {t("core.ui.streams.transport.hls_fallback", {}, "HLS fallback")}
             </span>
           ) : null}
-          {webRtcStatsLabel ? (
-            <span className="streamsTileOverlayMeta" title={webRtcStatsLabel}>
-              {webRtcStatsLabel}
-            </span>
-          ) : null}
         </div>
 
 	        <div className="streamsTileOverlayActions">
-          <select
-            className="streamsTileQualitySelect"
-            aria-label={t("core.ui.streams.transport.label", {}, "Stream transport")}
-            title={t("core.ui.streams.transport.label", {}, "Stream transport")}
-            value={transportPreference}
-            onChange={(event) => onTransportPreferenceChange(event.target.value as StreamTransportPreference)}
+          <button
+            type="button"
+            className="iconButton streamsTileOverlayButton"
+            aria-label={t("core.ui.streams.actions.advanced", {}, "Advanced stream settings")}
+            title={t("core.ui.streams.actions.advanced", {}, "Advanced stream settings")}
+            onClick={openAdvancedSettings}
           >
-            {(["auto", "webrtc", "hls"] as const).map((preference) => (
-              <option key={preference} value={preference}>
-                {transportPreferenceLabel(preference, t)}
-              </option>
-            ))}
-          </select>
-          <select
-            className="streamsTileQualitySelect"
-            aria-label={t("core.ui.streams.quality.label", {}, "Stream quality")}
-            title={t("core.ui.streams.quality.label", {}, "Stream quality")}
-            value={qualityPreference}
-            onChange={(event) => onQualityPreferenceChange(event.target.value as StreamQualityPreference)}
-          >
-            {(["auto", "low", "stable", "high", "diagnostic"] as const).map((preference) => (
-              <option key={preference} value={preference}>
-                {qualityPreferenceLabel(preference, t)}
-              </option>
-            ))}
-          </select>
+            <Icon name="sliders" />
+          </button>
 	          {ptzEnabled ? (
 	            <button
 	              type="button"
@@ -1367,6 +1624,28 @@ function StreamTilePlayer({
           {errorText || sourceHint}
         </div>
       ) : null}
+
+      <StreamAdvancedSettingsModal
+        open={advancedOpen}
+        label={label}
+        onClose={() => setAdvancedOpen(false)}
+        urls={urls}
+        runtimeHealth={runtimeHealth}
+        hlsOutputId={hlsOutputId}
+        webrtcOutputId={webrtcOutputId}
+        selectedOutputId={outputId}
+        hlsQualityProfileId={hlsQualityProfileId}
+        playbackStatus={status}
+        playbackTransport={transport}
+        webRtcStats={webRtcStats}
+        webRtcFallbackActive={webRtcFallbackActive}
+        errorText={errorText}
+        sourceHint={sourceHint}
+        qualityPreference={qualityPreference}
+        transportPreference={transportPreference}
+        onQualityPreferenceChange={onQualityPreferenceChange}
+        onTransportPreferenceChange={onTransportPreferenceChange}
+      />
     </div>
   );
 }
@@ -1719,6 +1998,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
                   hlsOutputId={hlsOutput?.outputId ?? null}
                   hlsQualityProfileId={hlsOutput?.qualityProfileId ?? null}
                   label={transmissionName}
+                  urls={urls}
                   overlayVisible={uiVisible}
                   sourceHint={sourceHint}
                   sourceHintTone={sourceHintTone}

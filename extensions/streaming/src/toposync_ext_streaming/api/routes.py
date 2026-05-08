@@ -11,7 +11,7 @@ import re
 import secrets
 import time
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
@@ -1836,12 +1836,42 @@ def _event_text(event: Any) -> str:
     return " ".join(parts).lower()
 
 
+def _event_type(event: Any) -> str:
+    return str(getattr(event, "type", "") or "").strip().lower()
+
+
+def _event_data(event: Any) -> dict[str, Any]:
+    data = getattr(event, "data", {}) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def _event_at_unix(event: Any) -> float:
+    return float(getattr(event, "at_unix", 0.0) or getattr(event, "received_at_unix", 0.0) or 0.0)
+
+
+def _latest_event_at(events: list[Any], predicate: Callable[[Any], bool]) -> float | None:
+    values = [_event_at_unix(event) for event in events if predicate(event)]
+    return max(values) if values else None
+
+
+def _runtime_playback_recovered(
+    health: StreamingRuntimeTransmissionHealth,
+    output: StreamingRuntimeOutputHealth | None,
+) -> bool:
+    target_status = output.status if output is not None else health.status
+    if target_status not in {"live", "degraded"} or health.stale:
+        return False
+    if output is not None and output.publisher_running is False:
+        return False
+    return True
+
+
 def _recent_events(events: list[Any], *, now_unix: float, window_seconds: float = 30.0) -> list[Any]:
     cutoff = float(now_unix) - max(1.0, float(window_seconds))
     return [
         event
         for event in events
-        if float(getattr(event, "at_unix", 0.0) or getattr(event, "received_at_unix", 0.0) or 0.0) >= cutoff
+        if _event_at_unix(event) >= cutoff
     ]
 
 
@@ -1919,31 +1949,86 @@ def _classify_observability(
     if any("stale_hls" in text or "playlist stopped" in text or "playlist stale" in text for text in texts):
         return "hls_playlist_stale", ["Recent HLS liveness event reports playlist stopped advancing."]
 
-    webrtc_terms = (
+    runtime_recovered = _runtime_playback_recovered(health, output)
+    webrtc_error_terms = (
         "webrtc_signaling_error",
         "webrtc_transport_error",
-        "webrtc_fallback_hls",
         "ice failed",
         "ice_state failed",
         "connectionstate failed",
     )
-    if any(any(term in text for term in webrtc_terms) for text in texts):
-        return "webrtc_transport_error", ["Recent WebRTC event reports signaling or ICE transport failure."]
+    webrtc_error_events = [
+        event
+        for event, text in zip(recent, texts, strict=False)
+        if any(term in text for term in webrtc_error_terms)
+    ]
+    if webrtc_error_events:
+        last_webrtc_error_at = max(_event_at_unix(event) for event in webrtc_error_events)
+        webrtc_forced = any(
+            str(_event_data(event).get("transport_preference") or "").lower() == "webrtc"
+            for event in webrtc_error_events
+        )
+        fallback_success_at = _latest_event_at(
+            recent,
+            lambda event: _event_type(event) == "webrtc_fallback_hls"
+            and _event_data(event).get("fallback_successful") is True,
+        )
+        hls_recovered_at = _latest_event_at(
+            recent,
+            lambda event: _event_type(event) in {"hls_start", "playing"}
+            and str(_event_data(event).get("playback_transport") or "hls").lower() in {"hls", ""},
+        )
+        recovered_after_error = (
+            runtime_recovered
+            and not webrtc_forced
+            and (
+                (fallback_success_at is not None and fallback_success_at >= last_webrtc_error_at)
+                or (hls_recovered_at is not None and hls_recovered_at >= last_webrtc_error_at)
+            )
+        )
+        if not recovered_after_error:
+            return "webrtc_transport_error", ["Recent WebRTC event reports signaling or ICE transport failure."]
 
-    lifecycle_terms = (
-        "player_error",
-        "playback_error",
-        "statuschange error",
+    transient_lifecycle_terms = (
         "bufferstall",
         "buffer_stall",
         "stalled",
         "waiting",
+    )
+    terminal_lifecycle_terms = (
+        "player_error",
+        "playback_error",
+        "statuschangeerror",
         "preparationtimeout",
         "probe_error",
         "exhausted",
     )
-    if any(any(term in text.replace(" ", "") for term in lifecycle_terms) for text in texts):
+    compact_texts = [text.replace(" ", "") for text in texts]
+    terminal_lifecycle_events = [
+        event
+        for event, compact_text in zip(recent, compact_texts, strict=False)
+        if any(term in compact_text for term in terminal_lifecycle_terms)
+    ]
+    if terminal_lifecycle_events:
         return "app_player_lifecycle", ["Recent playback/player lifecycle event indicates stall or error."]
+
+    transient_lifecycle_events = [
+        event
+        for event, compact_text in zip(recent, compact_texts, strict=False)
+        if any(term in compact_text for term in transient_lifecycle_terms)
+    ]
+    if transient_lifecycle_events:
+        last_lifecycle_at = max(_event_at_unix(event) for event in transient_lifecycle_events)
+        playback_recovered_at = _latest_event_at(
+            recent,
+            lambda event: _event_type(event) in {"playing", "hls_start", "ready_to_play"},
+        )
+        if not (
+            runtime_recovered
+            and playback_recovered_at is not None
+            and playback_recovered_at >= last_lifecycle_at
+        ):
+            return "app_player_lifecycle", ["Recent playback/player lifecycle event indicates stall or error."]
 
     if target_status == "live" and (output is None or output.publisher_running):
         return "healthy", ["Runtime health is live and no recent playback error was reported."]

@@ -751,11 +751,34 @@ export type StreamingTransmissionUrlOutput = {
   latency_profile?: StreamingLatencyProfile | null;
 };
 
+export type StreamingNetworkContractPorts = {
+  direct_api?: number | null;
+  rtsp?: number | null;
+  hls?: number | null;
+  webrtc?: number | null;
+  webrtc_udp?: number | null;
+  api?: number | null;
+};
+
+export type StreamingNetworkContract = {
+  environment: string;
+  mode?: "direct" | "proxy";
+  public_hls_mode?: "direct" | "proxy";
+  expected_ports?: StreamingNetworkContractPorts;
+  actual_ports?: StreamingNetworkContractPorts;
+  status?: "ok" | "not_applicable" | "port_mismatch" | "proxy_required" | "proxy_unavailable" | string;
+  webrtc_additional_hosts?: string[];
+  warnings?: string[];
+  blocking_errors?: string[];
+};
+
 export type StreamingTransmissionUrlsResponse = {
   transmission_id: string;
   engine_running: boolean;
   outputs: StreamingTransmissionUrlOutput[];
+  network_contract?: StreamingNetworkContract | null;
   warnings?: string[];
+  blocking_errors?: string[];
 };
 
 export type StreamingTransmissionDemandPrimeResponse = {

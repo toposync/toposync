@@ -225,13 +225,14 @@ def _event(
     message: str = "",
     severity: str = "warn",
     data: dict[str, object] | None = None,
+    at_unix: float | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         type=event_type,
         severity=severity,
         message=message,
         data=data or {},
-        at_unix=time.time(),
+        at_unix=at_unix if at_unix is not None else time.time(),
     )
 
 
@@ -412,6 +413,94 @@ def test_observability_classifies_streaming_chaos_root_causes() -> None:
         )
         assert classification == expected
         assert evidence
+
+
+def test_observability_ignores_recovered_webrtc_and_lifecycle_noise() -> None:
+    now = time.time()
+
+    auto_webrtc_fallback_events = [
+        _event(
+            "webrtc_signaling_error",
+            message="ICE failed",
+            data={"transport_preference": "auto", "fallback_transport": "hls"},
+            at_unix=now - 4,
+        ),
+        _event(
+            "hls_start",
+            severity="info",
+            data={"transport_preference": "auto", "playback_transport": "hls"},
+            at_unix=now - 3,
+        ),
+        _event(
+            "webrtc_fallback_hls",
+            severity="warn",
+            data={
+                "transport_preference": "auto",
+                "fallback_transport": "hls",
+                "fallback_successful": True,
+            },
+            at_unix=now - 2,
+        ),
+    ]
+    classification, evidence = _classify_observability(
+        health=_health(status="live"),
+        output=_output(status="live"),
+        events=auto_webrtc_fallback_events,
+        network_contract=None,
+    )
+    assert classification == "healthy"
+    assert evidence
+
+    forced_webrtc_events = [
+        _event(
+            "webrtc_signaling_error",
+            message="ICE failed",
+            data={"transport_preference": "webrtc", "fallback_transport": "hls"},
+            at_unix=now - 2,
+        ),
+        _event(
+            "hls_start",
+            severity="info",
+            data={"transport_preference": "webrtc", "playback_transport": "hls"},
+            at_unix=now - 1,
+        ),
+    ]
+    classification, _evidence = _classify_observability(
+        health=_health(status="live"),
+        output=_output(status="live"),
+        events=forced_webrtc_events,
+        network_contract=None,
+    )
+    assert classification == "webrtc_transport_error"
+
+    transient_lifecycle_events = [
+        _event("waiting", message="HTML video waiting", at_unix=now - 3),
+        _event("stalled", message="HTML video stalled", at_unix=now - 2),
+        _event(
+            "playing",
+            severity="info",
+            data={"transport_preference": "auto", "playback_transport": "hls"},
+            at_unix=now - 1,
+        ),
+    ]
+    classification, _evidence = _classify_observability(
+        health=_health(status="live"),
+        output=_output(status="live"),
+        events=transient_lifecycle_events,
+        network_contract=None,
+    )
+    assert classification == "healthy"
+
+    terminal_lifecycle_events = [
+        _event("playback_error", message="Retry exhausted", at_unix=now - 1),
+    ]
+    classification, _evidence = _classify_observability(
+        health=_health(status="live"),
+        output=_output(status="live"),
+        events=terminal_lifecycle_events,
+        network_contract=None,
+    )
+    assert classification == "app_player_lifecycle"
 
 
 def test_hls_port_mismatch_does_not_return_invalid_direct_playback_url(

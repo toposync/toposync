@@ -62,8 +62,28 @@ const URLS = {
       latency_profile: "ultra_low",
     },
   ],
+  network_contract: {
+    environment: "generic",
+    public_hls_mode: "proxy",
+    status: "ok",
+    expected_ports: { direct_api: 18756, hls: 18759, webrtc: 18760, webrtc_udp: 18762 },
+    actual_ports: { direct_api: 18756, hls: 18759, webrtc: 18760, webrtc_udp: 18762 },
+    webrtc_additional_hosts: ["127.0.0.1"],
+    warnings: [],
+    blocking_errors: [],
+  },
   warnings: [],
   blocking_errors: [],
+};
+
+const HOME_ASSISTANT_PROXY_URLS = {
+  ...URLS,
+  network_contract: {
+    ...URLS.network_contract,
+    environment: "home_assistant_addon",
+    public_hls_mode: "proxy",
+    webrtc_additional_hosts: ["192.168.1.20"],
+  },
 };
 
 function outputHealth(overrides = {}) {
@@ -162,7 +182,10 @@ function healthPayload(scenario) {
   return base;
 }
 
-async function mockStreamingDashboard(page, scenario, transportPreference = "hls") {
+async function mockStreamingDashboard(page, scenario, transportPreference = "hls", options = {}) {
+  const urlsPayload = options.urls || URLS;
+  const whepCalls = options.whepCalls || [];
+
   await page.addInitScript((preference) => {
     localStorage.setItem("toposync.locale", "en");
     localStorage.setItem("toposync.theme", "default");
@@ -175,7 +198,7 @@ async function mockStreamingDashboard(page, scenario, transportPreference = "hls
     await route.fulfill({ json: [TRANSMISSION] });
   });
   await page.route(/\/api\/streams\/transmissions\/front\/urls.*/, async (route) => {
-    await route.fulfill({ json: URLS });
+    await route.fulfill({ json: urlsPayload });
   });
   await page.route(/\/api\/streams\/transmissions\/front\/demand\/prime.*/, async (route) => {
     await route.fulfill({
@@ -226,6 +249,7 @@ async function mockStreamingDashboard(page, scenario, transportPreference = "hls
     await route.fulfill({ headers: { "content-type": "video/mp2t" }, body: "mock" });
   });
   await page.route(/\/mock-whep\/front\/whep$/, async (route) => {
+    whepCalls.push({ method: route.request().method(), url: route.request().url() });
     await route.fulfill({ status: 503, body: "ICE failed" });
   });
 }
@@ -237,7 +261,6 @@ test.describe("streaming dashboard chaos states", () => {
     ["stale_hls", "hls_playlist_stale"],
     ["tail_unavailable", "hls_tail_unavailable"],
     ["publisher_down", "publisher_down"],
-    ["webrtc_transport_error", "webrtc_transport_error"],
   ]) {
     test(`shows ${scenario} with technical controls in the advanced modal`, async ({ page }) => {
       await mockStreamingDashboard(page, scenario);
@@ -260,16 +283,109 @@ test.describe("streaming dashboard chaos states", () => {
     });
   }
 
-  test("keeps Auto WebRTC fallback to HLS available and opens PTZ controls", async ({ page }) => {
+  test("does not show recovered WebRTC transport noise as the main overlay cause", async ({ page }) => {
     await mockStreamingDashboard(page, "webrtc_transport_error", "auto");
     await page.goto("/");
 
-    await page.getByLabel("Advanced stream settings").click();
-    await expect(page.getByLabel("Stream transport")).toHaveValue("auto");
-    await page.keyboard.press("Escape");
+    await expect(page.getByText("webrtc_transport_error", { exact: false })).toHaveCount(0);
+    await page.getByLabel("Advanced stream settings").evaluate((element) => element.click());
+    await expect(page.getByText("Classification")).toBeVisible();
     await expect(page.getByText("webrtc_transport_error", { exact: false })).toBeVisible();
-    await page.getByLabel("Camera controls").click();
+  });
+
+  test("desktop Auto keeps WebRTC first and falls back to HLS", async ({ page }) => {
+    const whepCalls = [];
+    await mockStreamingDashboard(page, "live", "auto", { whepCalls });
+    await page.goto("/");
+
+    await expect
+      .poll(() => whepCalls.length, { timeout: 4000 })
+      .toBeGreaterThan(0);
+    await page.getByLabel("Advanced stream settings").dispatchEvent("click");
+    await expect(page.getByText("HLS fallback", { exact: false }).first()).toBeVisible();
+  });
+
+  test("Low latency forces WebRTC and shows the WHEP error", async ({ page }) => {
+    const whepCalls = [];
+    await mockStreamingDashboard(page, "live", "webrtc", { whepCalls });
+    await page.goto("/");
+
+    await expect.poll(() => whepCalls.length, { timeout: 4000 }).toBeGreaterThan(0);
+    await expect(page.getByText("WHEP negotiation failed", { exact: false })).toBeVisible();
+  });
+
+  test("Auto uses HLS when the WebRTC contract has warnings", async ({ page }) => {
+    const whepCalls = [];
+    await mockStreamingDashboard(page, "live", "auto", {
+      whepCalls,
+      urls: {
+        ...URLS,
+        network_contract: {
+          ...URLS.network_contract,
+          warnings: ["WebRTC/WHEP host is not covered by additional hosts."],
+        },
+      },
+    });
+    await page.goto("/");
+
+    await page.waitForTimeout(800);
+    expect(whepCalls).toHaveLength(0);
+    await page.getByLabel("Advanced stream settings").click({ force: true });
+    await expect(page.getByText("Auto -> HLS", { exact: false })).toBeVisible();
+    await expect(page.getByText("WebRTC/WHEP host is not covered", { exact: false })).toBeVisible();
+  });
+
+  test("opens PTZ controls without permanently changing the transport preference", async ({ page }) => {
+    await mockStreamingDashboard(page, "live", "auto");
+    await page.goto("/");
+
+    await page.getByLabel("Camera controls").evaluate((element) => element.click());
     await expect(page.getByRole("dialog", { name: "Camera controls" })).toBeVisible();
     await expect(page.getByText("Preset", { exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.getByLabel("Advanced stream settings").click();
+    await expect(page.getByLabel("Stream transport")).toHaveValue("auto");
+  });
+});
+
+test.describe("streaming dashboard mobile Home Assistant transport policy", () => {
+  test.use({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+    userAgent:
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+  });
+
+  test("uses HLS first in Auto for mobile Home Assistant proxy access", async ({ page }) => {
+    const whepCalls = [];
+    await mockStreamingDashboard(page, "live", "auto", {
+      urls: HOME_ASSISTANT_PROXY_URLS,
+      whepCalls,
+    });
+    await page.goto("/");
+
+    await page.waitForTimeout(800);
+    expect(whepCalls).toHaveLength(0);
+    await page.getByLabel("Advanced stream settings").evaluate((element) => element.click());
+    await expect(page.getByText("Auto -> HLS", { exact: false })).toBeVisible();
+  });
+
+  test("requests WebRTC only while PTZ is open, then falls back to HLS", async ({ page }) => {
+    const whepCalls = [];
+    await mockStreamingDashboard(page, "live", "auto", {
+      urls: HOME_ASSISTANT_PROXY_URLS,
+      whepCalls,
+    });
+    await page.goto("/");
+
+    await page.waitForTimeout(500);
+    expect(whepCalls).toHaveLength(0);
+    await page.getByLabel("Camera controls").evaluate((element) => element.click());
+    await expect(page.getByRole("dialog", { name: "Camera controls" })).toBeVisible();
+    await expect.poll(() => whepCalls.length, { timeout: 4000 }).toBeGreaterThan(0);
+    await page.keyboard.press("Escape");
+    await page.getByLabel("Advanced stream settings").evaluate((element) => element.click());
+    await expect(page.getByText("HLS fallback", { exact: false }).first()).toBeVisible();
   });
 });

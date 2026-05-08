@@ -31,6 +31,18 @@ type TilePlaybackTransport = "none" | "webrtc" | "hls";
 type StreamProtocol = "hls" | "rtsp" | "webrtc";
 type StreamQualityPreference = "auto" | "low" | "stable" | "high" | "diagnostic";
 type StreamTransportPreference = "auto" | "webrtc" | "hls";
+type EffectiveTransportMode = "auto_hls" | "auto_webrtc" | "ptz_webrtc" | "hls" | "webrtc" | "hls_fallback" | "auto";
+
+type StreamPlaybackPlan = {
+  allowHls: boolean;
+  allowWebRtc: boolean;
+  preferWebRtcFirst: boolean;
+  effectiveMode: EffectiveTransportMode;
+  webRtcBlocked: boolean;
+  webRtcIssueMessages: string[];
+  homeAssistantProxyHls: boolean;
+  mobileTouchBrowser: boolean;
+};
 
 type BasicAuthCredentials = {
   username: string;
@@ -141,6 +153,122 @@ function transportPreferenceLabel(preference: StreamTransportPreference, t: Retu
   if (preference === "webrtc") return t("core.ui.streams.transport.low_latency", {}, "Low latency");
   if (preference === "hls") return t("core.ui.streams.transport.hls", {}, "HLS");
   return t("core.ui.streams.transport.auto", {}, "Auto");
+}
+
+function effectiveTransportModeLabel(mode: EffectiveTransportMode, t: ReturnType<typeof i18n.useI18n>["t"]): string {
+  if (mode === "auto_hls") return t("core.ui.streams.transport.effective_auto_hls", {}, "Auto -> HLS");
+  if (mode === "auto_webrtc") return t("core.ui.streams.transport.effective_auto_webrtc", {}, "Auto -> WebRTC");
+  if (mode === "ptz_webrtc") return t("core.ui.streams.transport.effective_ptz_webrtc", {}, "PTZ -> WebRTC");
+  if (mode === "hls") return t("core.ui.streams.transport.hls", {}, "HLS");
+  if (mode === "webrtc") return t("core.ui.streams.transport.low_latency", {}, "Low latency");
+  if (mode === "hls_fallback") return t("core.ui.streams.transport.effective_hls_fallback", {}, "HLS fallback");
+  return t("core.ui.streams.transport.auto", {}, "Auto");
+}
+
+function isProbablyMobileTouchBrowser(): boolean {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return false;
+  const userAgent = String(navigator.userAgent || "").toLowerCase();
+  const platform = String((navigator as Navigator & { platform?: string }).platform || "").toLowerCase();
+  const touchPoints = Number(navigator.maxTouchPoints || 0);
+  const coarsePointer = typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+  const mobileUserAgent = /android|iphone|ipad|ipod|mobile|silk|kindle/.test(userAgent);
+  const ipadDesktopMode = platform === "macintel" && touchPoints > 1;
+  const compactTouchViewport = coarsePointer && Math.min(window.innerWidth || 0, window.innerHeight || 0) <= 900;
+  return mobileUserAgent || ipadDesktopMode || (touchPoints > 0 && compactTouchViewport);
+}
+
+function getWebRtcIssueMessages(urls: StreamingTransmissionUrlsResponse | undefined): string[] {
+  const contract = urls?.network_contract ?? null;
+  const rawMessages = [
+    ...(urls?.blocking_errors ?? []),
+    ...(urls?.warnings ?? []),
+    ...(contract?.blocking_errors ?? []),
+    ...(contract?.warnings ?? []),
+  ];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of rawMessages) {
+    const message = String(raw || "").trim();
+    if (!message) continue;
+    const lowered = message.toLowerCase();
+    if (!lowered.includes("webrtc") && !lowered.includes("whep") && !lowered.includes("ice")) continue;
+    if (seen.has(message)) continue;
+    seen.add(message);
+    out.push(message);
+  }
+  return out;
+}
+
+function hasHomeAssistantProxyHlsContract(urls: StreamingTransmissionUrlsResponse | undefined): boolean {
+  const contract = urls?.network_contract ?? null;
+  return contract?.environment === "home_assistant_addon" && contract?.public_hls_mode === "proxy";
+}
+
+function buildPlaybackPlan(options: {
+  transportPreference: StreamTransportPreference;
+  urls: StreamingTransmissionUrlsResponse | undefined;
+  hlsUrl: string | null;
+  webrtcUrl: string | null;
+  lowLatencyRequested: boolean;
+}): StreamPlaybackPlan {
+  const hasHls = Boolean(options.hlsUrl);
+  const hasWebRtc = Boolean(options.webrtcUrl);
+  const webRtcIssueMessages = getWebRtcIssueMessages(options.urls);
+  const webRtcBlocked = webRtcIssueMessages.length > 0;
+  const homeAssistantProxyHls = hasHomeAssistantProxyHlsContract(options.urls);
+  const mobileTouchBrowser = isProbablyMobileTouchBrowser();
+
+  if (options.transportPreference === "hls") {
+    return {
+      allowHls: hasHls,
+      allowWebRtc: false,
+      preferWebRtcFirst: false,
+      effectiveMode: "hls",
+      webRtcBlocked,
+      webRtcIssueMessages,
+      homeAssistantProxyHls,
+      mobileTouchBrowser,
+    };
+  }
+
+  if (options.transportPreference === "webrtc") {
+    return {
+      allowHls: false,
+      allowWebRtc: hasWebRtc,
+      preferWebRtcFirst: true,
+      effectiveMode: "webrtc",
+      webRtcBlocked,
+      webRtcIssueMessages,
+      homeAssistantProxyHls,
+      mobileTouchBrowser,
+    };
+  }
+
+  const hlsFirstForMobileHa = homeAssistantProxyHls && mobileTouchBrowser && hasHls && !options.lowLatencyRequested;
+  const hlsFirstForContract = webRtcBlocked && hasHls;
+  const preferHlsFirst = hlsFirstForMobileHa || hlsFirstForContract;
+  const allowWebRtc = hasWebRtc && !webRtcBlocked && (options.lowLatencyRequested || !preferHlsFirst || !hasHls);
+  const preferWebRtcFirst = allowWebRtc && (options.lowLatencyRequested || !preferHlsFirst);
+  const effectiveMode: EffectiveTransportMode = preferWebRtcFirst
+    ? options.lowLatencyRequested
+      ? "ptz_webrtc"
+      : "auto_webrtc"
+    : hasHls
+      ? "auto_hls"
+      : allowWebRtc
+        ? "auto_webrtc"
+        : "auto";
+
+  return {
+    allowHls: hasHls,
+    allowWebRtc,
+    preferWebRtcFirst,
+    effectiveMode,
+    webRtcBlocked,
+    webRtcIssueMessages,
+    homeAssistantProxyHls,
+    mobileTouchBrowser,
+  };
 }
 
 function hlsOutputsHaveProfiles(urls: StreamingTransmissionUrlsResponse | undefined): boolean {
@@ -385,9 +513,21 @@ function findRuntimeOutput(
   return health.outputs.find((output) => output.output_id === outputId) ?? null;
 }
 
+function hasHealthyHlsRuntime(health: StreamingRuntimeTransmissionHealth | undefined): boolean {
+  return Boolean(
+    health?.outputs?.some(
+      (output) =>
+        output.protocol === "hls" &&
+        (output.status === "live" || output.status === "degraded") &&
+        output.publisher_running !== false,
+    ),
+  );
+}
+
 function buildRuntimeHealthHint(
   health: StreamingRuntimeTransmissionHealth | undefined,
   t: ReturnType<typeof i18n.useI18n>["t"],
+  options: { suppressRecoveredClientTransportErrors?: boolean } = {},
 ): { message: string; tone: TileHealthTone } | null {
   if (!health) return null;
   if (health.event_gated_idle) {
@@ -442,6 +582,14 @@ function buildRuntimeHealthHint(
     };
   }
   if (health.classification && health.classification !== "healthy" && health.classification !== "unknown") {
+    if (
+      options.suppressRecoveredClientTransportErrors &&
+      (health.classification === "webrtc_transport_error" || health.classification === "app_player_lifecycle") &&
+      (health.status === "live" || health.status === "degraded") &&
+      hasHealthyHlsRuntime(health)
+    ) {
+      return null;
+    }
     const evidence = (health.evidence ?? []).slice(0, 2).join(" ");
     const message = evidence
       ? `${health.classification}: ${evidence}`
@@ -587,6 +735,8 @@ function StreamAdvancedSettingsModal({
   playbackTransport,
   webRtcStats,
   webRtcFallbackActive,
+  playbackPlan,
+  lowLatencyRequested,
   errorText,
   sourceHint,
   qualityPreference,
@@ -607,6 +757,8 @@ function StreamAdvancedSettingsModal({
   playbackTransport: TilePlaybackTransport;
   webRtcStats: WebRtcStatsSummary | null;
   webRtcFallbackActive: boolean;
+  playbackPlan: StreamPlaybackPlan;
+  lowLatencyRequested: boolean;
   errorText: string | null;
   sourceHint: string | null;
   qualityPreference: StreamQualityPreference;
@@ -626,6 +778,14 @@ function StreamAdvancedSettingsModal({
   const sourceHealth = runtimeHealth?.source_health ?? null;
   const evidence = runtimeHealth?.evidence ?? [];
   const warnings = urls?.warnings ?? [];
+  const webRtcGuidance =
+    playbackPlan.homeAssistantProxyHls && (playbackPlan.webRtcBlocked || lowLatencyRequested || transportPreference === "webrtc")
+      ? t(
+          "core.ui.streams.transport.webrtc_addon_hint",
+          {},
+          "WebRTC low latency from Home Assistant direct access requires 18760/tcp, 18762/udp, and the browser host/IP in WebRTC additional hosts.",
+        )
+      : "";
 
   return (
     <Modal
@@ -671,12 +831,17 @@ function StreamAdvancedSettingsModal({
         <div className="streamsAdvancedDetailGrid">
           <TechnicalDetailRow label="Player status" value={playbackStatus} />
           <TechnicalDetailRow label="Active transport" value={playbackTransport === "none" ? "-" : playbackTransport.toUpperCase()} />
+          <TechnicalDetailRow label="Effective mode" value={webRtcFallbackActive ? effectiveTransportModeLabel("hls_fallback", t) : effectiveTransportModeLabel(playbackPlan.effectiveMode, t)} />
           <TechnicalDetailRow label="Transport preference" value={transportPreferenceLabel(transportPreference, t)} />
           <TechnicalDetailRow label="Quality preference" value={qualityPreferenceLabel(qualityPreference, t)} />
+          <TechnicalDetailRow label="Low latency requested" value={formatTechnicalBoolean(lowLatencyRequested)} />
           <TechnicalDetailRow label="HLS fallback" value={formatTechnicalBoolean(webRtcFallbackActive)} />
+          <TechnicalDetailRow label="WebRTC contract" value={playbackPlan.webRtcBlocked ? "warning" : "ok"} />
           <TechnicalDetailRow label="Player error" value={errorText || "-"} />
           <TechnicalDetailRow label="Current hint" value={sourceHint || "-"} />
         </div>
+        {playbackPlan.webRtcIssueMessages.length ? <div className="streamsAdvancedNote isWarn">{playbackPlan.webRtcIssueMessages.join(" ")}</div> : null}
+        {webRtcGuidance ? <div className="streamsAdvancedNote">{webRtcGuidance}</div> : null}
       </section>
 
       <section className="streamsAdvancedSection">
@@ -799,6 +964,7 @@ function StreamTilePlayer({
   runtimeHealth,
   active,
   ptzEnabled,
+  lowLatencyRequested,
   qualityPreference,
   transportPreference,
   onQualityPreferenceChange,
@@ -823,6 +989,7 @@ function StreamTilePlayer({
   runtimeHealth?: StreamingRuntimeTransmissionHealth;
   active: boolean;
   ptzEnabled: boolean;
+  lowLatencyRequested: boolean;
   qualityPreference: StreamQualityPreference;
   transportPreference: StreamTransportPreference;
   onQualityPreferenceChange: (preference: StreamQualityPreference) => void;
@@ -842,6 +1009,42 @@ function StreamTilePlayer({
   const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const playbackActive = active || pictureInPictureActive;
+  const playbackPlan = useMemo(
+    () =>
+      buildPlaybackPlan({
+        transportPreference,
+        urls,
+        hlsUrl,
+        webrtcUrl,
+        lowLatencyRequested,
+      }),
+    [hlsUrl, lowLatencyRequested, transportPreference, urls, webrtcUrl],
+  );
+  const { allowHls, allowWebRtc, preferWebRtcFirst } = playbackPlan;
+  const transportTelemetryBase = useMemo(
+    () => ({
+      transport_preference: transportPreference,
+      effective_transport: playbackPlan.effectiveMode,
+      low_latency_requested: lowLatencyRequested,
+      webrtc_blocked: playbackPlan.webRtcBlocked,
+      webrtc_issue_count: playbackPlan.webRtcIssueMessages.length,
+      home_assistant_proxy_hls: playbackPlan.homeAssistantProxyHls,
+      mobile_touch_browser: playbackPlan.mobileTouchBrowser,
+    }),
+    [
+      lowLatencyRequested,
+      playbackPlan.effectiveMode,
+      playbackPlan.homeAssistantProxyHls,
+      playbackPlan.mobileTouchBrowser,
+      playbackPlan.webRtcBlocked,
+      playbackPlan.webRtcIssueMessages.length,
+      transportPreference,
+    ],
+  );
+  const withTransportTelemetry = useCallback(
+    (data: Record<string, unknown> = {}) => ({ ...transportTelemetryBase, ...data }),
+    [transportTelemetryBase],
+  );
 
   const recordWebPlaybackEvent = useCallback(
     (
@@ -913,15 +1116,31 @@ function StreamTilePlayer({
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !playbackActive) return;
-    const onPlay = () => recordWebPlaybackEvent("play", { severity: "debug" });
-    const onPlaying = () => recordWebPlaybackEvent("playing", { severity: "info" });
-    const onWaiting = () => recordWebPlaybackEvent("waiting", { severity: "warn" });
-    const onStalled = () => recordWebPlaybackEvent("stalled", { severity: "warn" });
+    const onPlay = () =>
+      recordWebPlaybackEvent("play", {
+        severity: "debug",
+        data: withTransportTelemetry({ playback_transport: transport }),
+      });
+    const onPlaying = () =>
+      recordWebPlaybackEvent("playing", {
+        severity: "info",
+        data: withTransportTelemetry({ playback_transport: transport }),
+      });
+    const onWaiting = () =>
+      recordWebPlaybackEvent("waiting", {
+        severity: "warn",
+        data: withTransportTelemetry({ playback_transport: transport }),
+      });
+    const onStalled = () =>
+      recordWebPlaybackEvent("stalled", {
+        severity: "warn",
+        data: withTransportTelemetry({ playback_transport: transport }),
+      });
     const onError = () =>
       recordWebPlaybackEvent("error", {
         severity: "error",
         message: video.error?.message || "HTML video playback error.",
-        data: { code: video.error?.code },
+        data: withTransportTelemetry({ code: video.error?.code, playback_transport: transport }),
       });
     video.addEventListener("play", onPlay);
     video.addEventListener("playing", onPlaying);
@@ -935,7 +1154,7 @@ function StreamTilePlayer({
       video.removeEventListener("stalled", onStalled);
       video.removeEventListener("error", onError);
     };
-  }, [playbackActive, recordWebPlaybackEvent]);
+  }, [playbackActive, recordWebPlaybackEvent, transport, withTransportTelemetry]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -948,9 +1167,6 @@ function StreamTilePlayer({
     let whepSessionUrl: string | null = null;
     let webrtcAbortController: AbortController | null = null;
     let webrtcStatsTimerId: number | null = null;
-    const allowWebRtc = transportPreference !== "hls";
-    const allowHls = transportPreference !== "webrtc";
-
     const clearRetryTimer = () => {
       if (retryTimerId == null) return;
       window.clearTimeout(retryTimerId);
@@ -1042,7 +1258,7 @@ function StreamTilePlayer({
       recordWebPlaybackEvent("retry_scheduled", {
         severity: "warn",
         message: reason,
-        data: { attempt, delay_ms: delayMs },
+        data: withTransportTelemetry({ attempt, delay_ms: delayMs }),
       });
       retryTimerId = window.setTimeout(() => {
         retryTimerId = null;
@@ -1165,10 +1381,10 @@ function StreamTilePlayer({
             : "debug";
         recordWebPlaybackEvent("webrtc_ice_state", {
           severity,
-          data: {
+          data: withTransportTelemetry({
             ice_connection_state: nextPeerConnection.iceConnectionState,
             connection_state: nextPeerConnection.connectionState,
-          },
+          }),
         });
       };
       nextPeerConnection.addEventListener("iceconnectionstatechange", recordIceState);
@@ -1267,7 +1483,10 @@ function StreamTilePlayer({
           .then((stats) => {
             if (cancelled) return;
             setWebRtcStats(stats);
-            recordWebPlaybackEvent("webrtc_stats", { severity: "debug", data: stats });
+            recordWebPlaybackEvent("webrtc_stats", {
+              severity: "debug",
+              data: withTransportTelemetry(stats as unknown as Record<string, unknown>),
+            });
           })
           .catch(() => {});
       };
@@ -1302,7 +1521,7 @@ function StreamTilePlayer({
         });
         recordWebPlaybackEvent("demand_prime", {
           severity: "debug",
-          data: { output_id: selectedOutputId, quality_profile_id: selectedQualityProfileId },
+          data: withTransportTelemetry({ output_id: selectedOutputId, quality_profile_id: selectedQualityProfileId }),
         });
       } catch (primeError) {
         recordWebPlaybackEvent("demand_prime_error", {
@@ -1328,7 +1547,13 @@ function StreamTilePlayer({
       }
       recordWebPlaybackEvent("load", {
         severity: "info",
-        data: { has_webrtc: Boolean(webrtcUrl), has_hls: Boolean(hlsUrl), transport_preference: transportPreference },
+        data: withTransportTelemetry({
+          has_webrtc: Boolean(webrtcUrl),
+          has_hls: Boolean(hlsUrl),
+          selected_hls_output_id: hlsOutputId,
+          selected_webrtc_output_id: webrtcOutputId,
+          fallback_transport: preferWebRtcFirst && allowHls ? "hls" : null,
+        }),
       });
 
       destroyPlayback();
@@ -1340,11 +1565,66 @@ function StreamTilePlayer({
       if (cancelled) return;
 
       let webRtcError: string | null = null;
-      if (allowWebRtc && webrtcUrl) {
+      const startHlsWithTelemetry = async (fallbackFromWebRtcError: string | null): Promise<void> => {
+        await primePlaybackOutput(hlsOutputId ?? outputId, hlsQualityProfileId);
+        recordWebPlaybackEvent("hls_start", {
+          severity: "info",
+          data: withTransportTelemetry({
+            output_id: hlsOutputId ?? outputId,
+            quality_profile_id: hlsQualityProfileId,
+            fallback_transport: fallbackFromWebRtcError ? "hls" : null,
+            fallback_successful: fallbackFromWebRtcError ? true : null,
+          }),
+        });
+        if (fallbackFromWebRtcError) {
+          setWebRtcFallbackActive(true);
+        }
+        await startHlsPlayback(video);
+        if (fallbackFromWebRtcError) {
+          recordWebPlaybackEvent("webrtc_fallback_hls", {
+            severity: "warn",
+            message: fallbackFromWebRtcError,
+            data: withTransportTelemetry({
+              output_id: hlsOutputId ?? outputId,
+              fallback_transport: "hls",
+              fallback_successful: true,
+              effective_transport: "hls_fallback",
+            }),
+          });
+        }
+      };
+
+      if (!preferWebRtcFirst && allowHls && hlsUrl) {
+        try {
+          await startHlsWithTelemetry(null);
+          return;
+        } catch (error) {
+          const hlsError = asErrorMessage(error);
+          setStatus("error");
+          setErrorText(hlsError);
+          recordWebPlaybackEvent("playback_error", {
+            severity: "error",
+            message: hlsError,
+            data: withTransportTelemetry({ output_id: hlsOutputId ?? outputId, playback_transport: "hls" }),
+          });
+          destroyPlayback();
+          scheduleRetry(hlsError);
+          return;
+        }
+      }
+
+      if (preferWebRtcFirst && allowWebRtc && webrtcUrl) {
         await primePlaybackOutput(webrtcOutputId ?? outputId, null);
         for (let attemptIndex = 0; attemptIndex < WEBRTC_WHEP_READY_ATTEMPTS; attemptIndex += 1) {
           try {
-            recordWebPlaybackEvent("webrtc_start", { severity: "info", data: { attempt_index: attemptIndex } });
+            recordWebPlaybackEvent("webrtc_start", {
+              severity: "info",
+              data: withTransportTelemetry({
+                attempt_index: attemptIndex,
+                output_id: webrtcOutputId ?? outputId,
+                fallback_transport: allowHls ? "hls" : null,
+              }),
+            });
             await startWebRtcPlayback(video);
             return;
           } catch (error) {
@@ -1353,7 +1633,12 @@ function StreamTilePlayer({
             recordWebPlaybackEvent("webrtc_signaling_error", {
               severity: "warn",
               message,
-              data: { attempt_index: attemptIndex },
+              data: withTransportTelemetry({
+                attempt_index: attemptIndex,
+                output_id: webrtcOutputId ?? outputId,
+                fallback_transport: allowHls ? "hls" : null,
+                fallback_successful: false,
+              }),
             });
             const normalizedMessage = message.toLowerCase();
 
@@ -1372,17 +1657,7 @@ function StreamTilePlayer({
 
       if (allowHls && hlsUrl) {
         try {
-          if (webRtcError) {
-            setWebRtcFallbackActive(true);
-            recordWebPlaybackEvent("webrtc_fallback_hls", {
-              severity: "warn",
-              message: webRtcError,
-              data: { transport_preference: transportPreference },
-            });
-          }
-          await primePlaybackOutput(hlsOutputId ?? outputId, hlsQualityProfileId);
-          recordWebPlaybackEvent("hls_start", { severity: "info" });
-          await startHlsPlayback(video);
+          await startHlsWithTelemetry(webRtcError);
           return;
         } catch (error) {
           const hlsError = asErrorMessage(error);
@@ -1398,6 +1673,11 @@ function StreamTilePlayer({
           recordWebPlaybackEvent("playback_error", {
             severity: "error",
             message: combinedError,
+            data: withTransportTelemetry({
+              output_id: hlsOutputId ?? outputId,
+              fallback_transport: webRtcError ? "hls" : null,
+              fallback_successful: webRtcError ? false : null,
+            }),
           });
           destroyPlayback();
           scheduleRetry(combinedError);
@@ -1412,6 +1692,10 @@ function StreamTilePlayer({
       recordWebPlaybackEvent("playback_error", {
         severity: "error",
         message,
+        data: withTransportTelemetry({
+          fallback_transport: webRtcError && allowHls ? "hls" : null,
+          fallback_successful: webRtcError && allowHls ? false : null,
+        }),
       });
       destroyPlayback();
       scheduleRetry(message);
@@ -1448,10 +1732,16 @@ function StreamTilePlayer({
     hlsUrl,
     hlsOutputId,
     outputId,
+    allowHls,
+    allowWebRtc,
+    preferWebRtcFirst,
     playbackActive,
+    playbackPlan.effectiveMode,
+    playbackPlan.webRtcBlocked,
+    playbackPlan.webRtcIssueMessages.length,
     recordWebPlaybackEvent,
     transmissionId,
-    transportPreference,
+    withTransportTelemetry,
     webrtcAuthHeader,
     webrtcOutputId,
     webrtcUrl,
@@ -1569,7 +1859,7 @@ function StreamTilePlayer({
           <span className="streamsTileOverlayTitle">{label}</span>
           <span className="streamsTileOverlayMeta">{playbackStatusLabel}</span>
           {webRtcFallbackActive ? (
-            <span className="streamsTileOverlayMeta" title={t("core.ui.streams.transport.hls_fallback_hint", {}, "WebRTC failed; using HLS fallback.")}>
+            <span className="streamsTileOverlayMeta" title={t("core.ui.streams.transport.hls_fallback_hint", {}, "Low latency unavailable; using HLS fallback.")}>
               {t("core.ui.streams.transport.hls_fallback", {}, "HLS fallback")}
             </span>
           ) : null}
@@ -1639,6 +1929,8 @@ function StreamTilePlayer({
         playbackTransport={transport}
         webRtcStats={webRtcStats}
         webRtcFallbackActive={webRtcFallbackActive}
+        playbackPlan={playbackPlan}
+        lowLatencyRequested={lowLatencyRequested}
         errorText={errorText}
         sourceHint={sourceHint}
         qualityPreference={qualityPreference}
@@ -1952,7 +2244,6 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
             const urlError = urlErrorByTransmissionId[transmissionId];
             const urlLoading = Boolean(urlsLoadingByTransmissionId[transmissionId]);
             const runtimeHealth = runtimeHealthByTransmissionId[transmissionId];
-            const runtimeHint = buildRuntimeHealthHint(runtimeHealth, t);
             const webrtcUrl = webrtcOutput?.url ?? null;
             const hlsUrl = hlsOutput?.url ?? null;
             const webrtcAuthHeader = buildBasicAuthHeader(webrtcOutput?.auth ?? null);
@@ -1965,6 +2256,10 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
                   (transportPreference !== "webrtc" && hlsUrl),
               );
             const ptzEnabled = Boolean(transmission.camera_controls?.enabled);
+            const lowLatencyRequested = ptzOverlay?.transmissionId === transmissionId && transportPreference === "auto";
+            const runtimeHint = buildRuntimeHealthHint(runtimeHealth, t, {
+              suppressRecoveredClientTransportErrors: transportPreference !== "webrtc",
+            });
 
             let sourceHint: string | null = null;
             let sourceHintTone: "muted" | "warn" | "error" = "muted";
@@ -2010,6 +2305,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
                   runtimeHealth={runtimeHealth}
                   active={tileActive}
                   ptzEnabled={ptzEnabled}
+                  lowLatencyRequested={lowLatencyRequested}
                   qualityPreference={qualityPreference}
                   transportPreference={transportPreference}
                   onQualityPreferenceChange={(preference) => {
@@ -2031,12 +2327,6 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
                     }));
                   }}
                   onOpenPtz={() => {
-                    if (transportPreference === "hls" && webrtcUrl) {
-                      setTransportPreferenceByTransmissionId((previous) => ({
-                        ...previous,
-                        [transmissionId]: "auto",
-                      }));
-                    }
                     setPtzOverlay({ transmissionId, label: transmissionName });
                   }}
                 />

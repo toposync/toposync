@@ -81,6 +81,46 @@ class MediaMtxApiClient:
             for item in paths
         }
 
+    async def get_hls_muxers(self) -> list[dict[str, Any]]:
+        payload = await self._get_json("/v3/hlsmuxers/list")
+        if not isinstance(payload, dict):
+            return []
+        raw_items = payload.get("items")
+        items = raw_items if isinstance(raw_items, list) else []
+        return [self._compact_dict(item) for item in items if isinstance(item, dict)]
+
+    async def get_metrics(self) -> dict[str, Any]:
+        text = await self._get_text_metrics()
+        if text is None:
+            return {"reachable": False, "values": {}}
+        return {
+            "reachable": True,
+            "values": self._parse_prometheus_metrics(text),
+        }
+
+    async def snapshot(self) -> dict[str, Any]:
+        paths = await self.get_paths()
+        hls_muxers = await self.get_hls_muxers()
+        metrics = await self.get_metrics()
+        return {
+            "paths": [
+                {
+                    "name": item.name,
+                    "ready": item.ready,
+                    "available": item.available,
+                    "online": item.online,
+                    "reader_count": item.reader_count,
+                }
+                for item in paths
+            ],
+            "viewer_count_by_path": {
+                item.name: item.reader_count
+                for item in paths
+            },
+            "hls_muxers": hls_muxers,
+            "metrics": metrics,
+        }
+
     async def _get_json(self, route: str) -> dict[str, Any] | list[Any] | None:
         base_url = await self._resolve_base_url()
         if not base_url:
@@ -88,6 +128,16 @@ class MediaMtxApiClient:
         url = f"{base_url}{route}"
         try:
             return await asyncio.to_thread(self._fetch_json_sync, url, self._request_timeout_s)
+        except Exception:
+            return None
+
+    async def _get_text_metrics(self) -> str | None:
+        status = await self._engine_manager.get_status()
+        if not status.running or not status.metrics_enabled:
+            return None
+        url = f"http://127.0.0.1:{int(status.ports.metrics)}/metrics"
+        try:
+            return await asyncio.to_thread(self._fetch_text_sync, url, self._request_timeout_s)
         except Exception:
             return None
 
@@ -107,3 +157,42 @@ class MediaMtxApiClient:
             return json.loads(body)
         except Exception:
             return None
+
+    @staticmethod
+    def _fetch_text_sync(url: str, timeout_s: float) -> str:
+        request = urllib.request.Request(url=url, headers={"accept": "text/plain"})
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            return response.read().decode("utf-8", errors="ignore")
+
+    @staticmethod
+    def _parse_prometheus_metrics(text: str) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for raw_line in str(text or "").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.rsplit(None, 1)
+            if len(parts) != 2:
+                continue
+            name = parts[0].split("{", 1)[0].strip()
+            if not name:
+                continue
+            try:
+                value = float(parts[1])
+            except Exception:
+                continue
+            out[name] = out.get(name, 0.0) + value
+        return out
+
+    @staticmethod
+    def _compact_dict(value: dict[str, Any]) -> dict[str, Any]:
+        allowed = {
+            "name",
+            "created",
+            "bytesSent",
+            "bytesReceived",
+            "readers",
+            "readerCount",
+            "lastRequest",
+        }
+        return {key: item for key, item in value.items() if key in allowed}

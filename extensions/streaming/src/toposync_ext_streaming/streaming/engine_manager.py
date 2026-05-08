@@ -36,6 +36,22 @@ def _split_env_list(name: str) -> list[str]:
     return out
 
 
+def _merge_string_lists(*values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for items in values:
+        for item in items:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(text)
+    return out
+
+
 def _env_address(name: str, *, default: str) -> str:
     raw = os.getenv(name)
     if raw is None:
@@ -53,6 +69,8 @@ class MediaMtxPorts:
     # They must be consecutive (RTP/RTCP).
     rtp: int
     rtcp: int
+    metrics: int = 9998
+    webrtc_udp: int = 18762
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +90,7 @@ class MediaMtxEngineStatus:
     test_path: str
     warnings: tuple[str, ...]
     restart_count: int
+    metrics_enabled: bool = True
 
 
 class MediaMtxEngineManager:
@@ -85,7 +104,17 @@ class MediaMtxEngineManager:
 
         self._bind_host = "127.0.0.1"
         # Defaults are fallback values; actual ports are resolved on start.
-        self._ports = MediaMtxPorts(rtsp=8554, hls=8888, webrtc=8889, api=9997, rtp=50000, rtcp=50001)
+        self._ports = MediaMtxPorts(
+            rtsp=8554,
+            hls=8888,
+            webrtc=8889,
+            webrtc_udp=18762,
+            api=9997,
+            metrics=9998,
+            rtp=50000,
+            rtcp=50001,
+        )
+        self._metrics_enabled = True
         self._warnings: tuple[str, ...] = ()
 
         self._config_hash: str | None = None
@@ -260,6 +289,7 @@ class MediaMtxEngineManager:
             urls = self._urls_for_path_locked(path_slug=status.test_path, host=host)
             return {
                 "running": status.running,
+                "metrics_enabled": status.metrics_enabled,
                 "pid": status.pid,
                 "uptime_seconds": status.uptime_seconds,
                 "started_at_unix": status.started_at_unix,
@@ -268,7 +298,9 @@ class MediaMtxEngineManager:
                     "rtsp": status.ports.rtsp,
                     "hls": status.ports.hls,
                     "webrtc": status.ports.webrtc,
+                    "webrtc_udp": status.ports.webrtc_udp,
                     "api": status.ports.api,
+                    "metrics": status.ports.metrics,
                 },
                 "last_error": status.last_error,
                 "mediamtx_version": status.mediamtx_version,
@@ -299,6 +331,7 @@ class MediaMtxEngineManager:
 
         return MediaMtxEngineStatus(
             running=running,
+            metrics_enabled=bool(self._metrics_enabled),
             pid=pid,
             uptime_seconds=uptime,
             started_at_unix=self._started_at_unix,
@@ -469,11 +502,14 @@ class MediaMtxEngineManager:
                 preferred_rtsp=int(preferred.rtsp),
                 preferred_hls=int(preferred.hls),
                 preferred_webrtc=int(preferred.webrtc),
+                preferred_webrtc_udp=int(getattr(preferred, "webrtc_udp", 18762)),
                 preferred_api=int(preferred.api),
+                preferred_metrics=int(getattr(preferred, "metrics", 9998)),
             )
 
         version = str(getattr(engine_settings, "mediamtx_version", MEDIAMTX_VERSION) or MEDIAMTX_VERSION).strip() or MEDIAMTX_VERSION
         self._mediamtx_version = version
+        self._metrics_enabled = bool(getattr(engine_settings, "metrics_enabled", True))
 
         platform = detect_mediamtx_platform()
         binary = extract_mediamtx_binary(data_dir=self._data_dir, platform=platform, version=version)
@@ -510,13 +546,18 @@ class MediaMtxEngineManager:
                 hls=ports.hls,
                 api=ports.api,
                 webrtc=ports.webrtc,
+                webrtc_udp=ports.webrtc_udp,
+                metrics=ports.metrics,
                 rtp=ports.rtp,
                 rtcp=ports.rtcp,
             ),
             paths=list(self._engine_paths),
             enable_webrtc=True,
             webrtc_ice_servers=list(getattr(engine_settings, "webrtc_ice_servers", []) or []),
-            webrtc_additional_hosts=_split_env_list("TOPOSYNC_STREAMING_WEBRTC_ADDITIONAL_HOSTS"),
+            webrtc_additional_hosts=_merge_string_lists(
+                list(getattr(engine_settings, "webrtc_additional_hosts", []) or []),
+                _split_env_list("TOPOSYNC_STREAMING_WEBRTC_ADDITIONAL_HOSTS"),
+            ),
             path_auth=path_auth_entries,
             path_configs=dict(self._path_configs_by_path),
             api_allow_origins=["*"],
@@ -524,12 +565,13 @@ class MediaMtxEngineManager:
             webrtc_allow_origins=["*"],
             webrtc_local_udp_address=_env_address(
                 "TOPOSYNC_STREAMING_WEBRTC_LOCAL_UDP_ADDRESS",
-                default=":0",
+                default=f":{ports.webrtc_udp}",
             ),
             webrtc_local_tcp_address=_env_address(
                 "TOPOSYNC_STREAMING_WEBRTC_LOCAL_TCP_ADDRESS",
                 default="",
             ),
+            metrics_enabled=self._metrics_enabled,
         )
 
         config_hash = hashlib.sha256(config_text.encode("utf-8")).hexdigest()
@@ -694,7 +736,9 @@ def _resolve_ports(
     preferred_rtsp: int,
     preferred_hls: int,
     preferred_webrtc: int,
+    preferred_webrtc_udp: int,
     preferred_api: int,
+    preferred_metrics: int,
 ) -> tuple[MediaMtxPorts, tuple[str, ...]]:
     used: set[int] = set()
     warnings: list[str] = []
@@ -714,9 +758,20 @@ def _resolve_ports(
     if changed:
         warnings.append(f"WebRTC port {preferred_webrtc} unavailable; using {webrtc}.")
 
+    webrtc_udp, udp_changed = _pick_udp_port(bind_host=bind_host, preferred=preferred_webrtc_udp, used=used)
+    used.add(webrtc_udp)
+    if udp_changed:
+        warnings.append(f"WebRTC UDP port {preferred_webrtc_udp} unavailable; using {webrtc_udp}.")
+
     api, changed = _pick_port(bind_host=bind_host, preferred=preferred_api, used=used)
+    used.add(api)
     if changed:
         warnings.append(f"API port {preferred_api} unavailable; using {api}.")
+
+    metrics, changed = _pick_port(bind_host="127.0.0.1", preferred=preferred_metrics, used=used)
+    used.add(metrics)
+    if changed:
+        warnings.append(f"Metrics port {preferred_metrics} unavailable; using {metrics}.")
 
     # MediaMTX defaults to RTP/RTCP (UDP) on 8000/8001 and fails to start if they're already in use.
     # Since 8000 is commonly taken by dev servers, we automatically pick a free consecutive pair.
@@ -725,7 +780,16 @@ def _resolve_ports(
     if udp_changed:
         warnings.append(f"RTP/RTCP port pair {preferred_rtp}/{preferred_rtp + 1} unavailable; using {rtp}/{rtcp}.")
 
-    return MediaMtxPorts(rtsp=rtsp, hls=hls, webrtc=webrtc, api=api, rtp=rtp, rtcp=rtcp), tuple(warnings)
+    return MediaMtxPorts(
+        rtsp=rtsp,
+        hls=hls,
+        webrtc=webrtc,
+        webrtc_udp=webrtc_udp,
+        api=api,
+        metrics=metrics,
+        rtp=rtp,
+        rtcp=rtcp,
+    ), tuple(warnings)
 
 
 def _pick_port(*, bind_host: str, preferred: int, used: set[int]) -> tuple[int, bool]:
@@ -744,6 +808,25 @@ def _pick_port(*, bind_host: str, preferred: int, used: set[int]) -> tuple[int, 
         dynamic = int(sock.getsockname()[1])
     if dynamic in used:
         raise RuntimeError("Failed to find free TCP port for MediaMTX")
+    return dynamic, True
+
+
+def _pick_udp_port(*, bind_host: str, preferred: int, used: set[int]) -> tuple[int, bool]:
+    normalized = max(1, min(65535, int(preferred)))
+    if normalized not in used and _can_bind_udp(bind_host, normalized):
+        return normalized, False
+
+    for candidate in range(max(1024, normalized + 1), min(65535, normalized + 300)):
+        if candidate in used:
+            continue
+        if _can_bind_udp(bind_host, candidate):
+            return candidate, True
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.bind((bind_host, 0))
+        dynamic = int(sock.getsockname()[1])
+    if dynamic in used:
+        raise RuntimeError("Failed to find free UDP port for MediaMTX WebRTC")
     return dynamic, True
 
 

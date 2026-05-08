@@ -15,6 +15,7 @@ from typing import Any, Literal
 import numpy
 
 from . import FFMPEG_VERSION
+from .encoder_state import EncoderTrustStore, _sanitize_log_line
 from .ffmpeg_binary import resolve_ffmpeg_binary
 
 
@@ -79,6 +80,17 @@ class PublisherEncodingSettings:
     bitrate_kbps: int | None = None
     latency_profile: Literal["normal", "low", "ultra_low"] = "normal"
     prefer_hardware: bool = False
+    encoder_mode: Literal["auto", "cpu"] = "auto"
+
+
+@dataclass(frozen=True, slots=True)
+class PublisherEncoderPolicy:
+    mode: Literal["auto", "cpu"] = "auto"
+    quarantine_enabled: bool = True
+    quarantine_after_restarts: int = 2
+    quarantine_window_seconds: float = 600.0
+    quarantine_duration_seconds: float = 3600.0
+    max_restarts_per_minute: int = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +120,12 @@ class PublisherStatus:
     last_error: str | None
     active_codec: str | None
     hardware_accelerated: bool
+    encoder_mode: str
+    encoder_state: str
+    encoder_reason: str | None
+    encoder_quarantined_until_unix: float | None
+    encoder_fallback_active: bool
+    restart_window_count: int
     log_path: str | None
     stderr_tail: list[str]
 
@@ -144,13 +162,17 @@ class _PublisherRuntime:
         supported_encoders: set[str],
         config: PublisherRuntimeConfig,
         logs_dir: Path,
-        max_restarts_per_minute: int = 12,
+        encoder_store: EncoderTrustStore,
+        encoder_policy: PublisherEncoderPolicy | None = None,
     ) -> None:
         self._ffmpeg_path = ffmpeg_path
         self._ffmpeg_source = ffmpeg_source
         self._supported_encoders = {str(item).strip() for item in supported_encoders if str(item).strip()}
         self._disabled_encoders: set[str] = set()
+        self._quarantined_encoders: set[str] = set()
         self._config = config
+        self._encoder_store = encoder_store
+        self._encoder_policy = encoder_policy or PublisherEncoderPolicy()
         self._latest_frame = _LatestFrameSlot()
         self._run_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
@@ -159,8 +181,9 @@ class _PublisherRuntime:
         self._logs_dir = logs_dir
         self._log_file = None
         self._log_path: Path | None = None
-        self._max_restarts_per_minute = max(1, int(max_restarts_per_minute))
+        self._max_restarts_per_minute = max(1, int(self._encoder_policy.max_restarts_per_minute))
         self._restart_times: deque[float] = deque(maxlen=max(64, self._max_restarts_per_minute * 3))
+        self._encoder_restart_times: deque[float] = deque(maxlen=128)
         self._consecutive_failures = 0
 
         self.frames_sent = 0
@@ -169,6 +192,7 @@ class _PublisherRuntime:
         self.last_error: str | None = None
         self.active_codec: str | None = None
         self.hardware_accelerated = False
+        self.encoder_fallback_active = False
         self._stderr_tail: deque[str] = deque(maxlen=160)
 
     @property
@@ -181,6 +205,10 @@ class _PublisherRuntime:
 
     def update_config(self, config: PublisherRuntimeConfig) -> None:
         self._config = config
+
+    def update_encoder_policy(self, policy: PublisherEncoderPolicy) -> None:
+        self._encoder_policy = policy
+        self._max_restarts_per_minute = max(1, int(policy.max_restarts_per_minute))
 
     async def start(self) -> None:
         if self._run_task is not None and not self._run_task.done():
@@ -213,6 +241,7 @@ class _PublisherRuntime:
     async def status(self) -> PublisherStatus:
         running = self._process is not None and self._process.returncode is None
         pid = self._process.pid if running and self._process is not None else None
+        encoder_state = await self._encoder_status_for_active_codec()
         return PublisherStatus(
             output_id=self.output_id,
             running=running,
@@ -230,6 +259,12 @@ class _PublisherRuntime:
             last_error=self.last_error,
             active_codec=self.active_codec,
             hardware_accelerated=bool(self.hardware_accelerated),
+            encoder_mode=self._effective_encoder_mode(),
+            encoder_state=str(encoder_state.get("state") or "candidate"),
+            encoder_reason=encoder_state.get("reason"),
+            encoder_quarantined_until_unix=encoder_state.get("until_unix"),
+            encoder_fallback_active=bool(self.encoder_fallback_active),
+            restart_window_count=self._restart_window_count(time.monotonic()),
             log_path=str(self._log_path) if self._log_path else None,
             stderr_tail=list(self._stderr_tail),
         )
@@ -243,8 +278,8 @@ class _PublisherRuntime:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self.last_error = str(exc)
-                if self._maybe_disable_failed_auto_encoder():
+                self.last_error = _sanitize_log_line(str(exc))
+                if await self._maybe_quarantine_failed_auto_encoder():
                     self._consecutive_failures = 0
                 else:
                     self._consecutive_failures += 1
@@ -262,6 +297,7 @@ class _PublisherRuntime:
                 break
 
             self.restart_count += 1
+            await self._maybe_quarantine_after_restart_threshold()
             delay_s = min(0.6 * (2 ** max(0, self._consecutive_failures - 1)), 12.0)
             await asyncio.sleep(delay_s)
 
@@ -273,10 +309,16 @@ class _PublisherRuntime:
             self._restart_times.popleft()
         return len(self._restart_times) <= self._max_restarts_per_minute
 
+    def _restart_window_count(self, now_monotonic: float) -> int:
+        cutoff = float(now_monotonic) - max(1.0, float(self._encoder_policy.quarantine_window_seconds))
+        return len([item for item in self._encoder_restart_times if float(item) >= cutoff])
+
     async def _spawn_process(self) -> None:
+        await self._refresh_quarantined_encoders()
         args, codec, hardware_accelerated = self._build_ffmpeg_args()
         self.active_codec = codec
         self.hardware_accelerated = hardware_accelerated
+        self.encoder_fallback_active = self._is_encoder_fallback_active(codec)
         self._open_log_file()
 
         stdout_target = self._log_file if self._log_file is not None else asyncio.subprocess.DEVNULL
@@ -335,6 +377,8 @@ class _PublisherRuntime:
             await stdin.drain()
             self.frames_sent += 1
             self.last_frame_at_unix = time.time()
+            if self.hardware_accelerated and self.active_codec:
+                await self._encoder_store.mark_trusted(self.active_codec)
 
     async def _shutdown_process(self) -> None:
         stderr_task = self._stderr_task
@@ -373,7 +417,7 @@ class _PublisherRuntime:
             chunk = await stream.readline()
             if not chunk:
                 break
-            line = chunk.decode("utf-8", errors="ignore").strip()
+            line = _sanitize_log_line(chunk.decode("utf-8", errors="ignore").strip())
             if not line:
                 continue
             self._stderr_tail.append(line)
@@ -433,6 +477,8 @@ class _PublisherRuntime:
             if tune:
                 args.extend(["-tune", tune])
             args.extend(["-pix_fmt", "yuv420p"])
+            if self._config.encoding.latency_profile in {"low", "ultra_low"}:
+                args.extend(["-bf", "0"])
         elif codec == "h264_nvenc":
             args.extend(["-preset", _nvenc_preset_for_latency(self._config.encoding.latency_profile)])
             if self._config.encoding.latency_profile in {"low", "ultra_low"}:
@@ -442,6 +488,8 @@ class _PublisherRuntime:
             if self._config.encoding.latency_profile in {"low", "ultra_low"}:
                 args.extend(["-realtime", "true"])
             args.extend(["-pix_fmt", "yuv420p"])
+        if self._config.encoding.latency_profile in {"low", "ultra_low"} and "-bf" not in args:
+            args.extend(["-bf", "0"])
 
         filters: list[str] = []
         if self._config.input_settings.mode == "rtsp_pull":
@@ -480,13 +528,18 @@ class _PublisherRuntime:
 
     def _pick_video_codec(self) -> str:
         requested = str(self._config.encoding.video_codec or "").strip().lower()
+        if self._effective_encoder_mode() == "cpu":
+            return _CPU_H264_ENCODER
+
         if requested and requested != "auto":
+            if requested in self._quarantined_encoders:
+                return _CPU_H264_ENCODER
             return requested
 
         if not self._config.encoding.prefer_hardware:
             return _CPU_H264_ENCODER
 
-        available = self._supported_encoders - self._disabled_encoders
+        available = self._supported_encoders - self._disabled_encoders - self._quarantined_encoders
         platform = sys.platform.lower()
         ordered_candidates: list[str] = []
         if platform.startswith("darwin"):
@@ -501,7 +554,7 @@ class _PublisherRuntime:
                 return candidate
         return _CPU_H264_ENCODER
 
-    def _maybe_disable_failed_auto_encoder(self) -> bool:
+    async def _maybe_quarantine_failed_auto_encoder(self) -> bool:
         codec = str(self.active_codec or "").strip()
         if not codec or codec == _CPU_H264_ENCODER or codec not in _HARDWARE_H264_ENCODERS:
             return False
@@ -517,19 +570,86 @@ class _PublisherRuntime:
             return False
 
         self._disabled_encoders.add(codec)
+        self._quarantined_encoders.add(codec)
         detail = _last_log_line(stderr_tail)
         suffix = f" Last FFmpeg error: {detail}" if detail else ""
-        self.last_error = (
+        self.last_error = _sanitize_log_line(
             f"FFmpeg encoder '{codec}' failed at runtime; falling back to '{_CPU_H264_ENCODER}'."
             f"{suffix}"
         )
+        if self._encoder_policy.quarantine_enabled:
+            await self._encoder_store.quarantine(
+                codec,
+                reason="runtime_failure",
+                duration_seconds=self._encoder_policy.quarantine_duration_seconds,
+                output_id=self.output_id,
+                error=detail or self.last_error,
+            )
         LOGGER.warning(
-            "Disabled FFmpeg encoder '%s' for streaming publisher '%s' after runtime failure.%s",
+            "Quarantined FFmpeg encoder '%s' for streaming publisher '%s' after runtime failure.%s",
             codec,
             self.output_id,
             f" Last FFmpeg error: {detail}" if detail else "",
         )
         return True
+
+    async def _maybe_quarantine_after_restart_threshold(self) -> None:
+        codec = str(self.active_codec or "").strip()
+        if not self._encoder_policy.quarantine_enabled:
+            return
+        if not codec or codec == _CPU_H264_ENCODER or codec not in _HARDWARE_H264_ENCODERS:
+            return
+        now = time.monotonic()
+        self._encoder_restart_times.append(now)
+        cutoff = now - max(1.0, float(self._encoder_policy.quarantine_window_seconds))
+        while self._encoder_restart_times and self._encoder_restart_times[0] < cutoff:
+            self._encoder_restart_times.popleft()
+        if len(self._encoder_restart_times) <= int(self._encoder_policy.quarantine_after_restarts):
+            return
+
+        self._disabled_encoders.add(codec)
+        self._quarantined_encoders.add(codec)
+        await self._encoder_store.quarantine(
+            codec,
+            reason="restart_threshold",
+            duration_seconds=self._encoder_policy.quarantine_duration_seconds,
+            output_id=self.output_id,
+            error=self.last_error,
+        )
+        self.last_error = (
+            f"FFmpeg encoder '{codec}' exceeded restart threshold; falling back to '{_CPU_H264_ENCODER}'."
+        )
+
+    async def _refresh_quarantined_encoders(self) -> None:
+        quarantined: set[str] = set()
+        for encoder in self._supported_encoders:
+            if await self._encoder_store.is_quarantined(encoder):
+                quarantined.add(encoder)
+        self._quarantined_encoders = quarantined
+
+    def _effective_encoder_mode(self) -> Literal["auto", "cpu"]:
+        mode = str(self._config.encoding.encoder_mode or self._encoder_policy.mode or "auto").strip().lower()
+        return "cpu" if mode == "cpu" else "auto"
+
+    def _is_encoder_fallback_active(self, codec: str) -> bool:
+        if codec != _CPU_H264_ENCODER:
+            return False
+        if self._effective_encoder_mode() == "cpu":
+            return False
+        hardware_supported = bool(self._supported_encoders & _HARDWARE_H264_ENCODERS)
+        return hardware_supported and (
+            bool(self._disabled_encoders & _HARDWARE_H264_ENCODERS)
+            or bool(self._quarantined_encoders & _HARDWARE_H264_ENCODERS)
+        )
+
+    async def _encoder_status_for_active_codec(self) -> dict[str, Any]:
+        codec = str(self.active_codec or "").strip()
+        if codec and codec != _CPU_H264_ENCODER:
+            return (await self._encoder_store.state_for(codec)).as_dict()
+        for encoder in sorted(self._quarantined_encoders):
+            if encoder in _HARDWARE_H264_ENCODERS:
+                return (await self._encoder_store.state_for(encoder)).as_dict()
+        return {"state": "candidate", "reason": None, "until_unix": None}
 
     def _resolve_latency_profile(self) -> tuple[str, str]:
         profile = str(self._config.encoding.latency_profile or "normal").strip().lower()
@@ -574,6 +694,7 @@ class PublisherManager:
         data_dir: Path,
         logger: logging.Logger | None = None,
         ffmpeg_version: str = FFMPEG_VERSION,
+        host_id: str = "local",
     ) -> None:
         self._lock = asyncio.Lock()
         self._publishers: dict[str, _PublisherRuntime] = {}
@@ -584,6 +705,12 @@ class PublisherManager:
         self._ffmpeg_version = str(ffmpeg_version or FFMPEG_VERSION).strip() or FFMPEG_VERSION
         self._data_dir = Path(data_dir)
         self._logger = logger or LOGGER
+        self._host_id = str(host_id or "local").strip() or "local"
+        self._encoder_policy = PublisherEncoderPolicy()
+        self._encoder_store = EncoderTrustStore(
+            path=self._data_dir / "runtime" / "streaming" / "encoder-state.json",
+            host_id=self._host_id,
+        )
 
     def ffmpeg_path(self) -> str | None:
         return self._ffmpeg_path
@@ -593,6 +720,12 @@ class PublisherManager:
 
     def ffmpeg_last_probe_error(self) -> str | None:
         return self._ffmpeg_last_probe_error
+
+    def encoder_policy(self) -> PublisherEncoderPolicy:
+        return self._encoder_policy
+
+    def set_encoder_policy(self, policy: PublisherEncoderPolicy) -> None:
+        self._encoder_policy = policy
 
     def probe_ffmpeg(self) -> str | None:
         resolved = resolve_ffmpeg_binary(data_dir=self._data_dir, version=self._ffmpeg_version)
@@ -616,8 +749,11 @@ class PublisherManager:
         publish_url: str,
         encoding_settings: PublisherEncodingSettings,
         input_settings: PublisherInputSettings | None = None,
+        encoder_policy: PublisherEncoderPolicy | None = None,
     ) -> PublisherStatus:
         async with self._lock:
+            if encoder_policy is not None:
+                self._encoder_policy = encoder_policy
             ffmpeg_path = self._ffmpeg_path or self.probe_ffmpeg()
             if not ffmpeg_path:
                 return PublisherStatus(
@@ -637,6 +773,12 @@ class PublisherManager:
                     last_error=self._ffmpeg_last_probe_error,
                     active_codec=None,
                     hardware_accelerated=False,
+                    encoder_mode=str(encoding_settings.encoder_mode or self._encoder_policy.mode or "auto"),
+                    encoder_state="candidate",
+                    encoder_reason=None,
+                    encoder_quarantined_until_unix=None,
+                    encoder_fallback_active=False,
+                    restart_window_count=0,
                     log_path=None,
                     stderr_tail=[],
                 )
@@ -663,10 +805,13 @@ class PublisherManager:
                     supported_encoders=set(self._ffmpeg_supported_encoders),
                     config=config,
                     logs_dir=runtime_logs_dir,
+                    encoder_store=self._encoder_store,
+                    encoder_policy=self._encoder_policy,
                 )
                 self._publishers[output.output_id] = existing
             else:
                 existing.update_config(config)
+                existing.update_encoder_policy(self._encoder_policy)
 
             await existing.start()
             return await existing.status()
@@ -715,11 +860,14 @@ class PublisherManager:
 
     async def snapshot(self) -> dict[str, Any]:
         statuses = await self.list_status()
+        encoder_snapshot = await self._encoder_store.snapshot()
         return {
             "ffmpeg_path": self._ffmpeg_path,
             "ffmpeg_source": self._ffmpeg_source,
             "ffmpeg_supported_encoders": sorted(self._ffmpeg_supported_encoders),
             "ffmpeg_last_probe_error": self._ffmpeg_last_probe_error,
+            "encoder_policy": self._encoder_policy_snapshot(),
+            "encoder_state": encoder_snapshot,
             "outputs": {
                 key: {
                     "running": status.running,
@@ -731,15 +879,95 @@ class PublisherManager:
                     "fps": status.fps,
                     "frames_sent": status.frames_sent,
                     "restart_count": status.restart_count,
+                    "restart_window_count": status.restart_window_count,
                     "last_frame_at_unix": status.last_frame_at_unix,
                     "last_error": status.last_error,
                     "active_codec": status.active_codec,
                     "hardware_accelerated": status.hardware_accelerated,
+                    "encoder_mode": status.encoder_mode,
+                    "encoder_state": status.encoder_state,
+                    "encoder_reason": status.encoder_reason,
+                    "encoder_quarantined_until_unix": status.encoder_quarantined_until_unix,
+                    "encoder_fallback_active": status.encoder_fallback_active,
                     "log_path": status.log_path,
                     "stderr_tail": list(status.stderr_tail),
                 }
                 for key, status in statuses.items()
             },
+        }
+
+    async def encoders_snapshot(self) -> dict[str, Any]:
+        statuses = await self.list_status()
+        state_snapshot = await self._encoder_store.snapshot()
+        return {
+            "updated_at_unix": time.time(),
+            "host_id": self._host_id,
+            "ffmpeg_path": self._ffmpeg_path,
+            "ffmpeg_source": self._ffmpeg_source,
+            "supported_encoders": sorted(self._ffmpeg_supported_encoders),
+            "policy": self._encoder_policy_snapshot(),
+            "states": list(state_snapshot.get("states") or []),
+            "outputs": [
+                {
+                    "output_key": key,
+                    "output_id": status.output_id,
+                    "transmission_id": _split_output_key(key)[0],
+                    "engine_path": status.engine_path,
+                    "running": status.running,
+                    "active_codec": status.active_codec,
+                    "hardware_accelerated": status.hardware_accelerated,
+                    "encoder_mode": status.encoder_mode,
+                    "encoder_state": status.encoder_state,
+                    "encoder_reason": status.encoder_reason,
+                    "encoder_quarantined_until_unix": status.encoder_quarantined_until_unix,
+                    "encoder_fallback_active": status.encoder_fallback_active,
+                    "restart_count": status.restart_count,
+                    "restart_window_count": status.restart_window_count,
+                    "frames_sent": status.frames_sent,
+                    "last_frame_at_unix": status.last_frame_at_unix,
+                    "last_error": status.last_error,
+                    "log_path": status.log_path,
+                    "stderr_tail": status.stderr_tail[-20:],
+                }
+                for key, status in sorted(statuses.items())
+            ],
+        }
+
+    async def clear_encoder_quarantine(self, encoder: str | None = None) -> int:
+        cleared = await self._encoder_store.clear(encoder)
+        async with self._lock:
+            runtimes = list(self._publishers.values())
+        normalized = str(encoder or "").strip().lower()
+        to_restart: list[_PublisherRuntime] = []
+        for runtime in runtimes:
+            if normalized:
+                affected = normalized in runtime._disabled_encoders or normalized in runtime._quarantined_encoders
+            else:
+                affected = bool(
+                    runtime.encoder_fallback_active
+                    or runtime._quarantined_encoders
+                    or (runtime._disabled_encoders & _HARDWARE_H264_ENCODERS)
+                )
+            if normalized:
+                runtime._disabled_encoders.discard(normalized)
+                runtime._quarantined_encoders.discard(normalized)
+            else:
+                runtime._disabled_encoders.clear()
+                runtime._quarantined_encoders.clear()
+            if affected:
+                to_restart.append(runtime)
+        for runtime in to_restart:
+            await runtime.stop()
+        return cleared
+
+    def _encoder_policy_snapshot(self) -> dict[str, Any]:
+        return {
+            "mode": self._encoder_policy.mode,
+            "quarantine_enabled": self._encoder_policy.quarantine_enabled,
+            "quarantine_after_restarts": self._encoder_policy.quarantine_after_restarts,
+            "quarantine_window_seconds": self._encoder_policy.quarantine_window_seconds,
+            "quarantine_duration_seconds": self._encoder_policy.quarantine_duration_seconds,
+            "max_restarts_per_minute": self._encoder_policy.max_restarts_per_minute,
         }
 
 
@@ -758,6 +986,14 @@ def _sanitize_component(value: str, *, fallback: str) -> str:
     out = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in text)
     out = out.strip("-_")
     return out or fallback
+
+
+def _split_output_key(value: str) -> tuple[str, str]:
+    text = str(value or "").strip()
+    if ":" not in text:
+        return "", text
+    left, right = text.split(":", 1)
+    return left, right
 
 
 def _probe_ffmpeg_encoders(path: str, *, logger: logging.Logger) -> set[str]:

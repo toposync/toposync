@@ -15,10 +15,47 @@ EXTENSION_ID = "com.toposync.streaming"
 TEST_PATH = "test"
 StreamingRuntimeStatus = Literal["live", "degraded", "stale", "offline"]
 StreamingStreamBehavior = Literal["continuous", "event_gated"]
+StreamingEncoderMode = Literal["auto", "cpu"]
+StreamingOutputEncoderMode = Literal["inherit", "auto", "cpu"]
+StreamingEncoderTrustState = Literal["candidate", "trusted", "quarantined"]
+StreamingMediaAuthMode = Literal["signed_proxy", "open"]
+StreamingMediaAuthType = Literal["none", "signed_url", "basic"]
+StreamingQualityProfileId = Literal[
+    "quad_grid",
+    "stable_apple_tv",
+    "fullscreen_quality",
+    "diagnostic_low",
+]
 StreamingFallbackReason = Literal[
     "no_active_writer",
     "selected_writer_missing_frame",
     "no_frame",
+]
+StreamingObservabilityClassification = Literal[
+    "healthy",
+    "source_stale",
+    "source_pipeline_stale",
+    "publisher_down",
+    "hls_playlist_stale",
+    "hls_tail_unavailable",
+    "webrtc_transport_error",
+    "network_contract_error",
+    "auth_url_error",
+    "app_player_lifecycle",
+    "event_gated_idle",
+    "unknown",
+]
+StreamingPlaybackClientKind = Literal["app", "web"]
+StreamingPlaybackEventSeverity = Literal["debug", "info", "warn", "error"]
+StreamingCameraSourceStatus = Literal[
+    "healthy",
+    "starting",
+    "stale",
+    "unreachable",
+    "unauthorized",
+    "error",
+    "idle",
+    "unknown",
 ]
 
 
@@ -49,6 +86,31 @@ def _normalize_ice_servers_value(value: Any) -> list[str]:
         if lowered in seen:
             continue
         seen.add(lowered)
+        normalized.append(text)
+    return normalized
+
+
+def _normalize_string_list_value(value: Any) -> list[str]:
+    raw_items: list[Any]
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_items = [item.strip() for item in value.replace("\n", ",").split(",")]
+    elif isinstance(value, list):
+        raw_items = value
+    else:
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
         normalized.append(text)
     return normalized
 
@@ -84,7 +146,36 @@ class TransmissionOutput(BaseModel):
     fps_limit: int | None = Field(default=None, ge=1, le=120)
     bitrate_kbps: int | None = Field(default=None, ge=64, le=250000)
     latency_profile: Literal["normal", "low", "ultra_low"] = "normal"
+    encoder_mode: StreamingOutputEncoderMode = "inherit"
+    quality_profile_id: StreamingQualityProfileId | None = None
     authentication: StreamAuthentication | None = None
+
+
+class StreamingQualityProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: StreamingQualityProfileId
+    label: str
+    resolution: Resolution
+    fps_limit: int = Field(ge=1, le=120)
+    bitrate_kbps: int = Field(ge=64, le=250000)
+    latency_profile: Literal["normal", "low", "ultra_low"] = "normal"
+    usage: str
+    default: bool = False
+
+
+class StreamingQualityProfilesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    default_profile_id: StreamingQualityProfileId = "stable_apple_tv"
+    profiles: list[StreamingQualityProfile] = Field(default_factory=list)
+
+
+class StreamingApplyQualityProfilesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["replace_hls_profiles"] = "replace_hls_profiles"
+    profile_ids: list[StreamingQualityProfileId] | None = None
 
 
 class TransmissionCameraControls(BaseModel):
@@ -138,6 +229,86 @@ class Transmission(BaseModel):
         # Keep a safe slug for URLs and for the engine.
         fallback = str(getattr(info, "data", {}).get("id") or "test")
         return normalize_path_slug(str(value or ""), fallback=fallback)
+
+
+class StreamingApplyQualityProfilesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transmission_id: str
+    applied_profile_ids: list[StreamingQualityProfileId]
+    transmission: Transmission
+
+
+class StreamingApplyWebRtcCompanionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transmission_id: str
+    output_id: str
+    transmission: Transmission
+
+
+DEFAULT_QUALITY_PROFILE_ID: StreamingQualityProfileId = "stable_apple_tv"
+QUALITY_PROFILE_ORDER: tuple[StreamingQualityProfileId, ...] = (
+    "quad_grid",
+    "stable_apple_tv",
+    "fullscreen_quality",
+    "diagnostic_low",
+)
+QUALITY_PROFILE_DEFINITIONS: dict[StreamingQualityProfileId, dict[str, Any]] = {
+    "quad_grid": {
+        "label": "Quad grid",
+        "resolution": {"width": 640, "height": 360},
+        "fps_limit": 10,
+        "bitrate_kbps": 500,
+        "latency_profile": "low",
+        "usage": "4 simultaneous cameras.",
+    },
+    "stable_apple_tv": {
+        "label": "Stable Apple TV",
+        "resolution": {"width": 1280, "height": 720},
+        "fps_limit": 15,
+        "bitrate_kbps": 1800,
+        "latency_profile": "normal",
+        "usage": "Default stable playback.",
+    },
+    "fullscreen_quality": {
+        "label": "Fullscreen quality",
+        "resolution": {"width": 1920, "height": 1080},
+        "fps_limit": 15,
+        "bitrate_kbps": 3500,
+        "latency_profile": "normal",
+        "usage": "Fullscreen on a good network.",
+    },
+    "diagnostic_low": {
+        "label": "Diagnostic low",
+        "resolution": {"width": 426, "height": 240},
+        "fps_limit": 5,
+        "bitrate_kbps": 250,
+        "latency_profile": "low",
+        "usage": "Poor network or remote diagnostics.",
+    },
+}
+
+
+def build_quality_profiles() -> list[StreamingQualityProfile]:
+    profiles: list[StreamingQualityProfile] = []
+    for profile_id in QUALITY_PROFILE_ORDER:
+        payload = dict(QUALITY_PROFILE_DEFINITIONS[profile_id])
+        payload["id"] = profile_id
+        payload["default"] = profile_id == DEFAULT_QUALITY_PROFILE_ID
+        profiles.append(StreamingQualityProfile.model_validate(payload))
+    return profiles
+
+
+def quality_profile_by_id(profile_id: str | None) -> StreamingQualityProfile | None:
+    normalized = str(profile_id or "").strip()
+    matched_profile_id = next((item for item in QUALITY_PROFILE_ORDER if item == normalized), None)
+    if matched_profile_id is None:
+        return None
+    payload = dict(QUALITY_PROFILE_DEFINITIONS[matched_profile_id])
+    payload["id"] = matched_profile_id
+    payload["default"] = matched_profile_id == DEFAULT_QUALITY_PROFILE_ID
+    return StreamingQualityProfile.model_validate(payload)
 
 
 def resolve_output_engine_path(transmission: Transmission, output: TransmissionOutput) -> str:
@@ -208,7 +379,15 @@ def _normalize_output_encoding_key(payload: dict[str, Any]) -> tuple[Any, ...]:
         resolved_bitrate,
         latency_profile,
         resize_mode,
+        _normalize_output_encoder_mode(payload.get("encoder_mode")),
     )
+
+
+def _normalize_output_encoder_mode(value: Any) -> str:
+    normalized = str(value or "inherit").strip().lower()
+    if normalized in {"inherit", "auto", "cpu"}:
+        return normalized
+    return "inherit"
 
 
 def _normalize_output_auth_key(output: TransmissionOutput) -> tuple[Any, ...]:
@@ -243,7 +422,9 @@ class StreamingPreferredPorts(BaseModel):
     rtsp: int = Field(default=8554, ge=1, le=65535)
     hls: int = Field(default=8888, ge=1, le=65535)
     webrtc: int = Field(default=8889, ge=1, le=65535)
+    webrtc_udp: int = Field(default=18762, ge=1, le=65535)
     api: int = Field(default=9997, ge=1, le=65535)
+    metrics: int = Field(default=9998, ge=1, le=65535)
 
 
 class StreamingPreferredPortsPatch(BaseModel):
@@ -252,7 +433,53 @@ class StreamingPreferredPortsPatch(BaseModel):
     rtsp: int | None = Field(default=None, ge=1, le=65535)
     hls: int | None = Field(default=None, ge=1, le=65535)
     webrtc: int | None = Field(default=None, ge=1, le=65535)
+    webrtc_udp: int | None = Field(default=None, ge=1, le=65535)
     api: int | None = Field(default=None, ge=1, le=65535)
+    metrics: int | None = Field(default=None, ge=1, le=65535)
+
+
+class StreamingEncoderPolicySettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: StreamingEncoderMode = "auto"
+    quarantine_enabled: bool = True
+    quarantine_after_restarts: int = Field(default=2, ge=1, le=100)
+    quarantine_window_seconds: float = Field(default=600.0, ge=1.0, le=86400.0)
+    quarantine_duration_seconds: float = Field(default=3600.0, ge=1.0, le=604800.0)
+    max_restarts_per_minute: int = Field(default=4, ge=1, le=120)
+
+
+class StreamingEncoderPolicySettingsPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: StreamingEncoderMode | None = None
+    quarantine_enabled: bool | None = None
+    quarantine_after_restarts: int | None = Field(default=None, ge=1, le=100)
+    quarantine_window_seconds: float | None = Field(default=None, ge=1.0, le=86400.0)
+    quarantine_duration_seconds: float | None = Field(default=None, ge=1.0, le=604800.0)
+    max_restarts_per_minute: int | None = Field(default=None, ge=1, le=120)
+
+
+class StreamingMediaAuthSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: StreamingMediaAuthMode = "signed_proxy"
+    token_ttl_seconds: float = Field(default=300.0, ge=30.0, le=86400.0)
+    renew_margin_seconds: float = Field(default=60.0, ge=1.0, le=3600.0)
+
+    @model_validator(mode="after")
+    def _validate_renew_margin(self) -> "StreamingMediaAuthSettings":
+        if float(self.renew_margin_seconds) >= float(self.token_ttl_seconds):
+            raise ValueError("renew_margin_seconds must be lower than token_ttl_seconds")
+        return self
+
+
+class StreamingMediaAuthSettingsPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: StreamingMediaAuthMode | None = None
+    token_ttl_seconds: float | None = Field(default=None, ge=30.0, le=86400.0)
+    renew_margin_seconds: float | None = Field(default=None, ge=1.0, le=3600.0)
 
 
 class StreamingEngineSettings(BaseModel):
@@ -260,14 +487,23 @@ class StreamingEngineSettings(BaseModel):
 
     enabled: bool = False
     expose_to_lan: bool = False
+    metrics_enabled: bool = True
+    encoder_policy: StreamingEncoderPolicySettings = Field(default_factory=StreamingEncoderPolicySettings)
+    media_auth: StreamingMediaAuthSettings = Field(default_factory=StreamingMediaAuthSettings)
     preferred_ports: StreamingPreferredPorts = Field(default_factory=StreamingPreferredPorts)
     mediamtx_version: str = MEDIAMTX_VERSION
     webrtc_ice_servers: list[str] = Field(default_factory=list)
+    webrtc_additional_hosts: list[str] = Field(default_factory=list)
 
     @field_validator("webrtc_ice_servers", mode="before")
     @classmethod
     def _normalize_webrtc_ice_servers(cls, value: Any) -> list[str]:
         return _normalize_ice_servers_value(value)
+
+    @field_validator("webrtc_additional_hosts", mode="before")
+    @classmethod
+    def _normalize_webrtc_additional_hosts(cls, value: Any) -> list[str]:
+        return _normalize_string_list_value(value)
 
 
 class StreamingCameraIngestSettings(BaseModel):
@@ -307,14 +543,23 @@ class StreamingEngineSettingsPatch(BaseModel):
 
     enabled: bool | None = None
     expose_to_lan: bool | None = None
+    metrics_enabled: bool | None = None
+    encoder_policy: StreamingEncoderPolicySettingsPatch | None = None
+    media_auth: StreamingMediaAuthSettingsPatch | None = None
     preferred_ports: StreamingPreferredPortsPatch | None = None
     mediamtx_version: str | None = None
     webrtc_ice_servers: list[str] | None = None
+    webrtc_additional_hosts: list[str] | None = None
 
     @field_validator("webrtc_ice_servers", mode="before")
     @classmethod
     def _normalize_webrtc_ice_servers(cls, value: Any) -> list[str]:
         return _normalize_ice_servers_value(value)
+
+    @field_validator("webrtc_additional_hosts", mode="before")
+    @classmethod
+    def _normalize_webrtc_additional_hosts(cls, value: Any) -> list[str]:
+        return _normalize_string_list_value(value)
 
 
 class StreamingExtensionSettings(BaseModel):
@@ -372,7 +617,9 @@ class StreamingEngineActivePorts(BaseModel):
     rtsp: int = Field(ge=1, le=65535)
     hls: int = Field(ge=1, le=65535)
     webrtc: int = Field(ge=1, le=65535)
+    webrtc_udp: int = Field(ge=1, le=65535)
     api: int = Field(ge=1, le=65535)
+    metrics: int = Field(ge=1, le=65535)
 
 
 StreamingNetworkContractStatus = Literal[
@@ -404,6 +651,7 @@ class StreamingNetworkContract(BaseModel):
     actual_ports: StreamingNetworkContractPorts = Field(default_factory=StreamingNetworkContractPorts)
     status: StreamingNetworkContractStatus = "not_applicable"
     public_hls_mode: Literal["direct", "proxy"] = "direct"
+    webrtc_additional_hosts: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     blocking_errors: list[str] = Field(default_factory=list)
 
@@ -420,6 +668,8 @@ class StreamingEngineStatusResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     running: bool
+    metrics_enabled: bool = True
+    metrics_reachable: bool = False
     pid: int | None = None
     uptime_seconds: float | None = None
     started_at_unix: float | None = None
@@ -461,6 +711,14 @@ class TransmissionOutputUrl(BaseModel):
     url: str
     requires_auth: bool = False
     auth_username: str | None = None
+    media_auth_type: StreamingMediaAuthType = "none"
+    url_expires_at_unix: float | None = None
+    renew_after_unix: float | None = None
+    quality_profile_id: StreamingQualityProfileId | None = None
+    resolution: Resolution | None = None
+    fps_limit: int | None = None
+    bitrate_kbps: int | None = None
+    latency_profile: Literal["normal", "low", "ultra_low"] | None = None
 
 
 class TransmissionUrlsResponse(BaseModel):
@@ -592,6 +850,32 @@ class TransmissionDemandResponse(BaseModel):
     outputs: list[TransmissionDemandOutputStatus] = Field(default_factory=list)
 
 
+class StreamingRuntimeSourceHealth(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str
+    camera_id: str | None = None
+    camera_name: str | None = None
+    pipeline_name: str | None = None
+    node_id: str | None = None
+    backend: str | None = None
+    configured_backend: str = "auto"
+    source_frame_age_seconds: float | None = None
+    capture_fps: float | None = None
+    target_fps: float | None = None
+    opened: bool = False
+    restarts_total: int = Field(default=0, ge=0)
+    decode_failures: int = Field(default=0, ge=0)
+    frames_captured: int = Field(default=0, ge=0)
+    last_frame_at_unix: float | None = None
+    last_seen_at_unix: float | None = None
+    last_error: str | None = None
+    rtsp_transport: str = "rtsp"
+    used_ingest: bool = False
+    status: StreamingCameraSourceStatus = "unknown"
+    recommended_action: str = ""
+
+
 class StreamingOutputRuntimeStatus(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -600,6 +884,11 @@ class StreamingOutputRuntimeStatus(BaseModel):
     transmission_id: str
     protocol: Literal["hls", "rtsp", "webrtc"]
     resolved_engine_path: str
+    quality_profile_id: StreamingQualityProfileId | None = None
+    resolution: Resolution | None = None
+    fps_limit: int | None = None
+    bitrate_kbps: int | None = None
+    latency_profile: Literal["normal", "low", "ultra_low"] | None = None
     viewer_count: int = Field(ge=0)
     demand_signal: bool
     publisher_running: bool
@@ -609,6 +898,12 @@ class StreamingOutputRuntimeStatus(BaseModel):
     publisher_active_codec: str | None = None
     publisher_hardware_accelerated: bool = False
     publisher_restart_count: int = Field(default=0, ge=0)
+    publisher_last_frame_at_unix: float | None = None
+    publisher_encoder_mode: StreamingEncoderMode = "auto"
+    publisher_encoder_state: StreamingEncoderTrustState = "candidate"
+    publisher_encoder_reason: str | None = None
+    publisher_encoder_quarantined_until_unix: float | None = None
+    publisher_encoder_fallback_active: bool = False
     status: StreamingRuntimeStatus = "offline"
     active_writer_id: str | None = None
     selected_writer_id: str | None = None
@@ -623,6 +918,12 @@ class StreamingOutputRuntimeStatus(BaseModel):
     event_gated: bool = False
     event_gated_idle: bool = False
     event_gate_reasons: list[str] = Field(default_factory=list)
+    classification: StreamingObservabilityClassification = "unknown"
+    evidence: list[str] = Field(default_factory=list)
+    active_playback_session_count: int = Field(default=0, ge=0)
+    last_playback_event_at_unix: float | None = None
+    publisher_frames_sent_rate: float | None = None
+    source_health: StreamingRuntimeSourceHealth | None = None
 
 
 class StreamingOutputsRuntimeResponse(BaseModel):
@@ -640,6 +941,11 @@ class StreamingRuntimeOutputHealth(BaseModel):
     transmission_id: str
     protocol: Literal["hls", "rtsp", "webrtc"]
     resolved_engine_path: str
+    quality_profile_id: StreamingQualityProfileId | None = None
+    resolution: Resolution | None = None
+    fps_limit: int | None = None
+    bitrate_kbps: int | None = None
+    latency_profile: Literal["normal", "low", "ultra_low"] | None = None
     viewer_count: int = Field(ge=0)
     demand_signal: bool
     publisher_running: bool
@@ -649,11 +955,23 @@ class StreamingRuntimeOutputHealth(BaseModel):
     publisher_active_codec: str | None = None
     publisher_hardware_accelerated: bool = False
     publisher_restart_count: int = Field(default=0, ge=0)
+    publisher_last_frame_at_unix: float | None = None
+    publisher_encoder_mode: StreamingEncoderMode = "auto"
+    publisher_encoder_state: StreamingEncoderTrustState = "candidate"
+    publisher_encoder_reason: str | None = None
+    publisher_encoder_quarantined_until_unix: float | None = None
+    publisher_encoder_fallback_active: bool = False
     status: StreamingRuntimeStatus
     stream_behavior: StreamingStreamBehavior = "continuous"
     event_gated: bool = False
     event_gated_idle: bool = False
     event_gate_reasons: list[str] = Field(default_factory=list)
+    classification: StreamingObservabilityClassification = "unknown"
+    evidence: list[str] = Field(default_factory=list)
+    active_playback_session_count: int = Field(default=0, ge=0)
+    last_playback_event_at_unix: float | None = None
+    publisher_frames_sent_rate: float | None = None
+    source_health: StreamingRuntimeSourceHealth | None = None
 
 
 class StreamingRuntimeTransmissionHealth(BaseModel):
@@ -675,6 +993,11 @@ class StreamingRuntimeTransmissionHealth(BaseModel):
     event_gated: bool = False
     event_gated_idle: bool = False
     event_gate_reasons: list[str] = Field(default_factory=list)
+    classification: StreamingObservabilityClassification = "unknown"
+    evidence: list[str] = Field(default_factory=list)
+    active_playback_session_count: int = Field(default=0, ge=0)
+    last_playback_event_at_unix: float | None = None
+    source_health: StreamingRuntimeSourceHealth | None = None
     outputs: list[StreamingRuntimeOutputHealth] = Field(default_factory=list)
 
 
@@ -713,6 +1036,9 @@ class StreamingRuntimePipelineLink(BaseModel):
     enabled: bool = True
     processing_server_id: str = "local"
     publish_node_id: str
+    source_node_id: str | None = None
+    source_id: str | None = None
+    camera_id: str | None = None
     writer_id: str
     stream_behavior: StreamingStreamBehavior = "continuous"
     event_gated: bool = False
@@ -727,6 +1053,155 @@ class StreamingRuntimePipelinesResponse(BaseModel):
 
     updated_at_unix: float
     pipelines: list[StreamingRuntimePipelineLink] = Field(default_factory=list)
+
+
+class StreamingPlaybackEventItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: str = Field(min_length=1, max_length=80)
+    severity: StreamingPlaybackEventSeverity = "info"
+    at_unix: float
+    message: str | None = Field(default=None, max_length=500)
+    data: dict[str, Any] | None = None
+
+
+class StreamingPlaybackEventsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    playback_session_id: str = Field(min_length=1, max_length=160)
+    transmission_id: str = Field(min_length=1, max_length=160)
+    output_id: str | None = Field(default=None, max_length=160)
+    client_kind: StreamingPlaybackClientKind
+    platform: str = Field(min_length=1, max_length=80)
+    app_state: str | None = Field(default=None, max_length=80)
+    pip_active: bool | None = None
+    events: list[StreamingPlaybackEventItem] = Field(min_length=1, max_length=50)
+
+
+class StreamingPlaybackEventsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    accepted: int = Field(ge=0)
+    retained: int = Field(ge=0)
+
+
+class StreamingPlaybackSessionSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    playback_session_id: str
+    transmission_id: str
+    output_id: str | None = None
+    client_kind: StreamingPlaybackClientKind
+    platform: str
+    app_state: str | None = None
+    pip_active: bool | None = None
+    first_event_at_unix: float
+    last_event_at_unix: float
+    last_type: str
+    last_severity: StreamingPlaybackEventSeverity
+
+
+class StreamingRuntimeObservabilityItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transmission_id: str
+    output_key: str | None = None
+    output_id: str | None = None
+    classification: StreamingObservabilityClassification
+    evidence: list[str] = Field(default_factory=list)
+    active_playback_sessions: list[StreamingPlaybackSessionSummary] = Field(default_factory=list)
+    last_playback_event_at_unix: float | None = None
+    publisher_frames_sent_rate: float | None = None
+    health: StreamingRuntimeTransmissionHealth | StreamingRuntimeOutputHealth
+    pipeline: StreamingRuntimePipelineLink | None = None
+    mediamtx: dict[str, Any] = Field(default_factory=dict)
+    network_contract: StreamingNetworkContract | None = None
+    recent_events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class StreamingRuntimeObservabilityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    updated_at_unix: float
+    retention_seconds: float
+    retained_event_count: int = Field(ge=0)
+    mediamtx: dict[str, Any] = Field(default_factory=dict)
+    items: list[StreamingRuntimeObservabilityItem] = Field(default_factory=list)
+
+
+class StreamingRuntimeEncoderPolicyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: StreamingEncoderMode = "auto"
+    quarantine_enabled: bool = True
+    quarantine_after_restarts: int = Field(default=2, ge=1)
+    quarantine_window_seconds: float = Field(default=600.0, ge=1.0)
+    quarantine_duration_seconds: float = Field(default=3600.0, ge=1.0)
+    max_restarts_per_minute: int = Field(default=4, ge=1)
+
+
+class StreamingRuntimeEncoderStateItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    host_id: str
+    encoder: str
+    state: StreamingEncoderTrustState
+    until_unix: float | None = None
+    reason: str | None = None
+    failure_count: int = Field(default=0, ge=0)
+    last_failure_at_unix: float | None = None
+    last_output_id: str | None = None
+    last_error: str | None = None
+
+
+class StreamingRuntimeEncoderOutputItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    output_key: str
+    output_id: str
+    transmission_id: str
+    engine_path: str
+    running: bool = False
+    active_codec: str | None = None
+    hardware_accelerated: bool = False
+    encoder_mode: StreamingEncoderMode = "auto"
+    encoder_state: StreamingEncoderTrustState = "candidate"
+    encoder_reason: str | None = None
+    encoder_quarantined_until_unix: float | None = None
+    encoder_fallback_active: bool = False
+    restart_count: int = Field(default=0, ge=0)
+    restart_window_count: int = Field(default=0, ge=0)
+    frames_sent: int = Field(default=0, ge=0)
+    last_frame_at_unix: float | None = None
+    last_error: str | None = None
+    log_path: str | None = None
+    stderr_tail: list[str] = Field(default_factory=list)
+
+
+class StreamingRuntimeEncodersResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    updated_at_unix: float
+    host_id: str = "local"
+    ffmpeg_path: str | None = None
+    ffmpeg_source: str | None = None
+    supported_encoders: list[str] = Field(default_factory=list)
+    policy: StreamingRuntimeEncoderPolicyResponse = Field(default_factory=StreamingRuntimeEncoderPolicyResponse)
+    states: list[StreamingRuntimeEncoderStateItem] = Field(default_factory=list)
+    outputs: list[StreamingRuntimeEncoderOutputItem] = Field(default_factory=list)
+
+
+class StreamingEncoderQuarantineClearRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    encoder: str | None = Field(default=None, max_length=120)
+
+
+class StreamingEncoderQuarantineClearResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cleared: int = Field(ge=0)
+    encoders: StreamingRuntimeEncodersResponse
 
 
 StreamingWizardPresetId = Literal[

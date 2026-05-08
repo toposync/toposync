@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib import parse as urllib_parse
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -18,10 +19,17 @@ from toposync_ext_streaming.streaming.mediamtx_config import MediaMTXResolvedPor
 
 class _WriterBridgeStub:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, Any]] = []
+        self.calls: list[tuple[str, Any, Any, Any]] = []
 
-    async def prime_transmission_demand(self, transmission_id: str, *, ttl_s: float | None = None) -> int:
-        self.calls.append((transmission_id, ttl_s))
+    async def prime_transmission_demand(
+        self,
+        transmission_id: str,
+        *,
+        ttl_s: float | None = None,
+        output_id: str | None = None,
+        quality_profile_id: str | None = None,
+    ) -> int:
+        self.calls.append((transmission_id, ttl_s, output_id, quality_profile_id))
         return 1
 
 
@@ -140,6 +148,7 @@ def test_transmission_urls_use_request_host_when_exposed_to_lan(tmp_path: Path) 
                 "engine": {
                     "expose_to_lan": True,
                     "preferred_ports": {"hls": 18759, "webrtc": 18760},
+                    "webrtc_additional_hosts": ["192.168.0.100"],
                 }
             },
         )
@@ -164,6 +173,42 @@ def test_transmission_urls_use_request_host_when_exposed_to_lan(tmp_path: Path) 
         payload = urls_res.json()
 
         assert payload["outputs"][0]["url"] == "http://192.168.0.100:18760/lan-main/whep"
+
+
+def test_webrtc_url_is_omitted_when_exposed_host_is_not_in_additional_hosts(tmp_path: Path) -> None:
+    with _create_client(tmp_path) as client:
+        settings_res = client.patch(
+            "/api/streams/settings",
+            json={
+                "engine": {
+                    "expose_to_lan": True,
+                    "preferred_ports": {"webrtc": 18760, "webrtc_udp": 18762},
+                    "webrtc_additional_hosts": ["homeassistant.local"],
+                }
+            },
+        )
+        assert settings_res.status_code == 200
+
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Blocked WHEP stream",
+                "path": "blocked-whep",
+                "outputs": [{"id": "main_webrtc", "protocol": "webrtc", "enabled": True}],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        urls_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/urls",
+            headers={"host": "192.168.0.100:18756"},
+        )
+        assert urls_res.status_code == 200
+        payload = urls_res.json()
+        assert payload["outputs"] == []
+        assert payload["network_contract"]["actual_ports"]["webrtc_udp"] == 18762
+        assert any("WebRTC WHEP host" in message for message in payload["warnings"])
 
 
 def test_home_assistant_contract_returns_proxied_hls_url(
@@ -210,9 +255,13 @@ def test_home_assistant_contract_returns_proxied_hls_url(
 
     assert urls_res.status_code == 200
     payload = urls_res.json()
-    assert payload["outputs"][0]["url"] == (
-        "http://192.168.0.100:18756/api/streams/media/hls/lan-main/index.m3u8"
+    output = payload["outputs"][0]
+    assert output["url"].startswith(
+        "http://192.168.0.100:18756/api/streams/media/hls/lan-main/index.m3u8?media_token="
     )
+    assert output["requires_auth"] is False
+    assert output["media_auth_type"] == "signed_url"
+    assert output["url_expires_at_unix"] > output["renew_after_unix"]
     assert payload["blocking_errors"] == []
     assert payload["network_contract"]["status"] == "ok"
     assert payload["network_contract"]["public_hls_mode"] == "proxy"
@@ -240,6 +289,11 @@ def test_hls_output_is_omitted_when_direct_hls_port_mismatches_in_fail_mode(
     )
 
     with _create_client(tmp_path, engine_manager=engine_manager) as client:
+        settings_res = client.patch(
+            "/api/streams/settings",
+            json={"engine": {"media_auth": {"mode": "open"}}},
+        )
+        assert settings_res.status_code == 200
         created_res = client.post(
             "/api/streams/transmissions",
             json={
@@ -344,11 +398,146 @@ def test_hls_media_proxy_forwards_to_active_hls_port(
     )
 
     with _create_client(tmp_path, engine_manager=engine_manager) as client:
+        settings_res = client.patch(
+            "/api/streams/settings",
+            json={"engine": {"media_auth": {"mode": "open"}}},
+        )
+        assert settings_res.status_code == 200
         response = client.get("/api/streams/media/hls/lan-main/index.m3u8")
 
     assert response.status_code == 200
     assert response.text == "#EXTM3U\n"
     assert requested_urls == ["http://127.0.0.1:18888/lan-main/index.m3u8"]
+
+
+def test_signed_hls_media_proxy_rewrites_playlist_uris(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    requested_urls: list[str] = []
+
+    def fake_urlopen(request, timeout=0):  # noqa: ANN001
+        _ = timeout
+        requested_urls.append(str(request.full_url))
+        body = (
+            b"#EXTM3U\n"
+            b"#EXT-X-MAP:URI=\"init.mp4\"\n"
+            b"#EXT-X-KEY:METHOD=AES-128,URI=\"keys/key.bin\"\n"
+            b"#EXTINF:1,\n"
+            b"segment1.ts\n"
+        )
+        return _UrlOpenResponse(body)
+
+    monkeypatch.setattr("toposync_ext_streaming.api.routes.urllib_request.urlopen", fake_urlopen)
+    engine_manager = _EngineManagerStub(
+        data_dir=tmp_path / "data",
+        ports=MediaMtxPorts(
+            rtsp=18758,
+            hls=18888,
+            webrtc=18760,
+            api=18761,
+            rtp=50000,
+            rtcp=50001,
+        ),
+    )
+
+    with _create_client(tmp_path, engine_manager=engine_manager) as client:
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Signed HLS stream",
+                "path": "signed-main",
+                "outputs": [{"id": "main_hls", "protocol": "hls", "enabled": True}],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+        urls_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/urls",
+            headers={"host": "toposync.example.test"},
+        )
+        signed_url = urls_res.json()["outputs"][0]["url"]
+
+        response = client.get(signed_url.replace("http://toposync.example.test", ""))
+
+    assert response.status_code == 200
+    assert requested_urls == ["http://127.0.0.1:18888/signed-main/index.m3u8"]
+    parsed = urllib_parse.urlsplit(signed_url)
+    media_token = urllib_parse.parse_qs(parsed.query)["media_token"][0]
+    assert f"/api/streams/media/hls/signed-main/init.mp4?media_token={media_token}" in response.text
+    assert f"/api/streams/media/hls/signed-main/keys/key.bin?media_token={media_token}" in response.text
+    assert f"/api/streams/media/hls/signed-main/segment1.ts?media_token={media_token}" in response.text
+
+
+def test_signed_hls_media_proxy_rejects_missing_invalid_and_expired_token(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    engine_manager = _EngineManagerStub(data_dir=tmp_path / "data")
+    with _create_client(tmp_path, engine_manager=engine_manager) as client:
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Signed HLS stream",
+                "path": "signed-expiring",
+                "outputs": [{"id": "main_hls", "protocol": "hls", "enabled": True}],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+        urls_res = client.get(f"/api/streams/transmissions/{transmission_id}/urls")
+        signed_output = urls_res.json()["outputs"][0]
+        signed_url = str(signed_output["url"])
+
+        missing_res = client.get("/api/streams/media/hls/signed-expiring/index.m3u8")
+        invalid_res = client.get(
+            "/api/streams/media/hls/signed-expiring/index.m3u8?media_token=bad"
+        )
+        monkeypatch.setattr(
+            "toposync_ext_streaming.api.routes.time.time",
+            lambda: float(signed_output["url_expires_at_unix"]) + 1.0,
+        )
+        expired_res = client.get(signed_url.replace("http://testserver", ""))
+
+    assert missing_res.status_code == 401
+    assert missing_res.json()["detail"] == "media_token_invalid"
+    assert invalid_res.status_code == 401
+    assert invalid_res.json()["detail"] == "media_token_invalid"
+    assert expired_res.status_code == 401
+    assert expired_res.json()["detail"] == "media_token_expired"
+
+
+def test_open_hls_media_auth_preserves_plain_proxy_url(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    monkeypatch.setenv("TOPOSYNC_STREAMING_HLS_PUBLIC_MODE", "proxy")
+    with _create_client(tmp_path, engine_manager=_EngineManagerStub(data_dir=tmp_path / "data")) as client:
+        settings_res = client.patch(
+            "/api/streams/settings",
+            json={"engine": {"media_auth": {"mode": "open"}}},
+        )
+        assert settings_res.status_code == 200
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Open HLS stream",
+                "path": "open-main",
+                "outputs": [{"id": "main_hls", "protocol": "hls", "enabled": True}],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        urls_res = client.get(f"/api/streams/transmissions/{transmission_id}/urls")
+
+    assert urls_res.status_code == 200
+    payload = urls_res.json()
+    output = payload["outputs"][0]
+    assert output["url"] == "http://testserver/api/streams/media/hls/open-main/index.m3u8"
+    assert output["media_auth_type"] == "none"
+    assert output["url_expires_at_unix"] is None
+    assert any("Open HLS media access is enabled" in item for item in payload["warnings"])
 
 
 def test_transmission_urls_primes_demand_hint(tmp_path: Path) -> None:
@@ -369,7 +558,7 @@ def test_transmission_urls_primes_demand_hint(tmp_path: Path) -> None:
 
         urls_res = client.get(f"/api/streams/transmissions/{transmission_id}/urls")
         assert urls_res.status_code == 200
-        assert bridge.calls == [(transmission_id, None)]
+        assert bridge.calls == [(transmission_id, None, None, None)]
 
         prime_res = client.post(f"/api/streams/transmissions/{transmission_id}/demand/prime")
         assert prime_res.status_code == 200
@@ -377,6 +566,57 @@ def test_transmission_urls_primes_demand_hint(tmp_path: Path) -> None:
         assert payload["primed"] is True
         assert payload["primed_outputs"] == 1
         assert bridge.calls[-1][0] == transmission_id
+
+
+def test_transmission_urls_and_prime_accept_quality_profile_selection(tmp_path: Path) -> None:
+    with _create_client(tmp_path) as client:
+        bridge = _WriterBridgeStub()
+        client.app.state.streaming_writer_bridge = bridge
+
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Profile stream",
+                "path": "profile-main",
+                "outputs": [
+                    {
+                        "id": "hls_stable_apple_tv",
+                        "protocol": "hls",
+                        "enabled": True,
+                        "quality_profile_id": "stable_apple_tv",
+                        "resolution": {"width": 1280, "height": 720},
+                        "fps_limit": 15,
+                        "bitrate_kbps": 1800,
+                    },
+                    {
+                        "id": "hls_diagnostic_low",
+                        "protocol": "hls",
+                        "enabled": True,
+                        "quality_profile_id": "diagnostic_low",
+                        "resolution": {"width": 426, "height": 240},
+                        "fps_limit": 5,
+                        "bitrate_kbps": 250,
+                    },
+                ],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        urls_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/urls?quality_profile_id=diagnostic_low"
+        )
+        assert urls_res.status_code == 200
+        payload = urls_res.json()
+        assert [item["output_id"] for item in payload["outputs"]] == ["hls_diagnostic_low"]
+        assert payload["outputs"][0]["quality_profile_id"] == "diagnostic_low"
+        assert bridge.calls[-1] == (transmission_id, None, None, "diagnostic_low")
+
+        prime_res = client.post(
+            f"/api/streams/transmissions/{transmission_id}/demand/prime?output_id=hls_stable_apple_tv"
+        )
+        assert prime_res.status_code == 200
+        assert bridge.calls[-1] == (transmission_id, None, "hls_stable_apple_tv", None)
 
 
 def test_engine_status_exposes_webrtc_port_and_test_url(tmp_path: Path) -> None:
@@ -389,7 +629,53 @@ def test_engine_status_exposes_webrtc_port_and_test_url(tmp_path: Path) -> None:
         assert isinstance(ports, dict)
         assert isinstance(urls, dict)
         assert ports.get("webrtc") == 8889
+        assert ports.get("webrtc_udp") == 18762
         assert urls.get("webrtc_url") == "http://127.0.0.1:8889/test/whep"
+
+
+def test_apply_webrtc_companion_creates_low_latency_output_and_preserves_hls(tmp_path: Path) -> None:
+    with _create_client(tmp_path) as client:
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Companion stream",
+                "path": "companion-main",
+                "outputs": [
+                    {
+                        "id": "hls_stable_apple_tv",
+                        "protocol": "hls",
+                        "enabled": True,
+                        "quality_profile_id": "stable_apple_tv",
+                        "resolution": {"width": 1280, "height": 720},
+                        "fps_limit": 15,
+                        "bitrate_kbps": 1800,
+                    },
+                    {
+                        "id": "custom_rtsp",
+                        "protocol": "rtsp",
+                        "enabled": True,
+                    },
+                ],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        apply_res = client.post(
+            f"/api/streams/transmissions/{transmission_id}/webrtc/companion/apply"
+        )
+        assert apply_res.status_code == 200
+        payload = apply_res.json()
+        outputs = payload["transmission"]["outputs"]
+        output_ids = {item["id"] for item in outputs}
+        assert {"hls_stable_apple_tv", "custom_rtsp", "webrtc_low_latency"} <= output_ids
+        companion = next(item for item in outputs if item["id"] == "webrtc_low_latency")
+        assert companion["protocol"] == "webrtc"
+        assert companion["resolution"] == {"width": 1280, "height": 720}
+        assert companion["fps_limit"] == 15
+        assert companion["bitrate_kbps"] == 1800
+        assert companion["latency_profile"] == "ultra_low"
+        assert companion["encoder_mode"] == "inherit"
 
 
 def test_mediamtx_config_renders_webrtc_and_optional_ice_servers() -> None:

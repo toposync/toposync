@@ -6,7 +6,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import numpy
 
@@ -31,6 +31,7 @@ from .mediamtx_config import normalize_path_slug
 from .placeholder import get_placeholder_frame
 from .publisher_manager import (
     PublisherEncodingSettings,
+    PublisherEncoderPolicy,
     PublisherInputSettings,
     PublisherManager,
     PublisherOutput,
@@ -46,6 +47,7 @@ class ResolvedOutputTarget:
     transmission_id: str
     arbitration_mode: str
     protocol: str
+    quality_profile_id: str | None
     publish_path: str
     placeholder_mode: str
     width: int
@@ -53,6 +55,7 @@ class ResolvedOutputTarget:
     fps: float
     bitrate_kbps: int | None
     latency_profile: str
+    encoder_mode: str
     resize_mode: str
     stale_after_seconds: float
     placeholder_after_seconds: float
@@ -171,6 +174,7 @@ class StreamWriterBridge:
                     "transmission_id": target.transmission_id,
                     "arbitration_mode": target.arbitration_mode,
                     "protocol": target.protocol,
+                    "quality_profile_id": target.quality_profile_id,
                     "publish_path": target.publish_path,
                     "placeholder_mode": target.placeholder_mode,
                     "width": target.width,
@@ -178,6 +182,7 @@ class StreamWriterBridge:
                     "fps": target.fps,
                     "bitrate_kbps": target.bitrate_kbps,
                     "latency_profile": target.latency_profile,
+                    "encoder_mode": target.encoder_mode,
                     "resize_mode": target.resize_mode,
                     "stale_after_seconds": target.stale_after_seconds,
                     "placeholder_after_seconds": target.placeholder_after_seconds,
@@ -205,10 +210,19 @@ class StreamWriterBridge:
             "enable_bypass": bool(self._enable_bypass),
         }
 
-    async def prime_transmission_demand(self, transmission_id: str, *, ttl_s: float | None = None) -> int:
+    async def prime_transmission_demand(
+        self,
+        transmission_id: str,
+        *,
+        ttl_s: float | None = None,
+        output_id: str | None = None,
+        quality_profile_id: str | None = None,
+    ) -> int:
         normalized_transmission_id = _as_str(transmission_id)
         if not normalized_transmission_id:
             return 0
+        selected_output_id = _as_str(output_id)
+        selected_profile_id = _as_str(quality_profile_id)
 
         now_monotonic = self._monotonic()
         ttl = self._on_demand_prime_ttl_s if ttl_s is None else min(120.0, max(1.0, float(ttl_s)))
@@ -218,6 +232,10 @@ class StreamWriterBridge:
         until_monotonic = now_monotonic + ttl
         for target in targets:
             if target.transmission_id != normalized_transmission_id:
+                continue
+            if selected_output_id and target.output_id != selected_output_id:
+                continue
+            if selected_profile_id and target.quality_profile_id != selected_profile_id:
                 continue
             publisher_id = _publisher_id_for_target(target)
             previous_until = float(self._primed_demand_until_by_publisher.get(publisher_id, 0.0))
@@ -438,9 +456,11 @@ class StreamWriterBridge:
                     fps=target.fps,
                     bitrate_kbps=target.bitrate_kbps,
                     latency_profile=_resolve_latency_profile(target.latency_profile),
-                    prefer_hardware=True,
+                    prefer_hardware=_effective_encoder_mode(engine_settings, target) == "auto",
+                    encoder_mode=_effective_encoder_mode(engine_settings, target),
                 ),
                 input_settings=input_settings,
+                encoder_policy=_publisher_encoder_policy(engine_settings),
             )
 
             due_at = self._next_due_by_publisher.get(publisher_id, 0.0)
@@ -816,10 +836,11 @@ def _resolve_output_targets(
                 fps = _resolve_fps(output_raw)
                 bitrate_kbps = _resolve_bitrate(output_raw)
                 latency_profile = _resolve_latency_profile(output_raw.get("latency_profile"))
+                encoder_mode = _resolve_output_encoder_mode(output_raw.get("encoder_mode"))
                 resize_mode = _as_str(output_raw.get("resize_mode")).lower() or "contain"
                 if resize_mode not in {"contain", "none"}:
                     resize_mode = "contain"
-                encoding_keys.add((width, height, round(float(fps), 3), bitrate_kbps, latency_profile, resize_mode))
+                encoding_keys.add((width, height, round(float(fps), 3), bitrate_kbps, latency_profile, encoder_mode, resize_mode))
                 auth_keys.add(_resolve_output_auth_key(output_raw))
 
             share_publish_path = (not has_direct_path and len(encoding_keys) == 1 and len(auth_keys) == 1)
@@ -829,11 +850,13 @@ def _resolve_output_targets(
             protocol = _as_str(output_raw.get("protocol")).lower() or "rtsp"
             if protocol not in {"rtsp", "hls", "webrtc", "all"}:
                 continue
+            quality_profile_id = _as_str(output_raw.get("quality_profile_id")) or None
 
             width, height = _resolve_resolution(output_raw)
             fps = _resolve_fps(output_raw)
             bitrate_kbps = _resolve_bitrate(output_raw)
             latency_profile = _resolve_latency_profile(output_raw.get("latency_profile"))
+            encoder_mode = _resolve_output_encoder_mode(output_raw.get("encoder_mode"))
             resize_mode = _as_str(output_raw.get("resize_mode")).lower() or "contain"
             if resize_mode not in {"contain", "none"}:
                 resize_mode = "contain"
@@ -854,6 +877,7 @@ def _resolve_output_targets(
                     transmission_id=transmission_id,
                     arbitration_mode=arbitration_mode,
                     protocol=protocol,
+                    quality_profile_id=quality_profile_id,
                     publish_path=output_path,
                     placeholder_mode=placeholder_mode,
                     width=width,
@@ -861,6 +885,7 @@ def _resolve_output_targets(
                     fps=fps,
                     bitrate_kbps=bitrate_kbps,
                     latency_profile=latency_profile,
+                    encoder_mode=encoder_mode,
                     resize_mode=resize_mode,
                     stale_after_seconds=stale_after,
                     placeholder_after_seconds=placeholder_after,
@@ -928,6 +953,34 @@ def _resolve_latency_profile(value: Any) -> str:
     if normalized in {"normal", "low", "ultra_low"}:
         return normalized
     return "normal"
+
+
+def _resolve_output_encoder_mode(value: Any) -> str:
+    normalized = str(value or "inherit").strip().lower()
+    if normalized in {"inherit", "auto", "cpu"}:
+        return normalized
+    return "inherit"
+
+
+def _effective_encoder_mode(engine_settings: StreamingEngineSettings, target: ResolvedOutputTarget) -> Literal["auto", "cpu"]:
+    if target.encoder_mode == "cpu":
+        return "cpu"
+    if target.encoder_mode == "auto":
+        return "auto"
+    mode = str(getattr(getattr(engine_settings, "encoder_policy", None), "mode", "auto") or "auto").strip().lower()
+    return "cpu" if mode == "cpu" else "auto"
+
+
+def _publisher_encoder_policy(engine_settings: StreamingEngineSettings) -> PublisherEncoderPolicy:
+    policy = getattr(engine_settings, "encoder_policy", None)
+    return PublisherEncoderPolicy(
+        mode="cpu" if str(getattr(policy, "mode", "auto") or "auto").strip().lower() == "cpu" else "auto",
+        quarantine_enabled=bool(getattr(policy, "quarantine_enabled", True)),
+        quarantine_after_restarts=max(1, int(getattr(policy, "quarantine_after_restarts", 2) or 2)),
+        quarantine_window_seconds=max(1.0, float(getattr(policy, "quarantine_window_seconds", 600.0) or 600.0)),
+        quarantine_duration_seconds=max(1.0, float(getattr(policy, "quarantine_duration_seconds", 3600.0) or 3600.0)),
+        max_restarts_per_minute=max(1, int(getattr(policy, "max_restarts_per_minute", 4) or 4)),
+    )
 
 
 def _as_bool(value: Any, *, default: bool) -> bool:

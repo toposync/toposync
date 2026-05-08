@@ -80,6 +80,11 @@ def test_list_path_read_auth_for_host_respects_enabled_outputs() -> None:
 
 def test_transmission_urls_include_auth_hints(tmp_path: Path) -> None:
     with _create_client(tmp_path) as client:
+        settings_res = client.patch(
+            "/api/streams/settings",
+            json={"engine": {"media_auth": {"mode": "open"}}},
+        )
+        assert settings_res.status_code == 200
         created_res = client.post(
             "/api/streams/transmissions",
             json={

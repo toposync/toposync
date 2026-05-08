@@ -68,8 +68,9 @@ class _PublisherManagerStub:
         publish_url: str,
         encoding_settings: PublisherEncodingSettings,
         input_settings=None,
+        encoder_policy=None,
     ):  # noqa: ANN001
-        _ = engine_path, publish_url, encoding_settings, input_settings
+        _ = engine_path, publish_url, encoding_settings, input_settings, encoder_policy
         self.started.add(output.output_id)
         self.start_calls.append(output.output_id)
         return None

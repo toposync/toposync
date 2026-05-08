@@ -9,10 +9,12 @@ class MediaMTXResolvedPorts:
     hls: int
     api: int
     webrtc: int | None = None
+    webrtc_udp: int = 18762
     # Used only when RTSP over UDP is enabled.
     # MediaMTX requires RTP/RTCP ports to be consecutive.
     rtp: int = 8000
     rtcp: int = 8001
+    metrics: int = 9998
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,8 +85,9 @@ def render_mediamtx_config(
     api_allow_origins: list[str] | None = None,
     hls_allow_origins: list[str] | None = None,
     webrtc_allow_origins: list[str] | None = None,
-    webrtc_local_udp_address: str = ":0",
+    webrtc_local_udp_address: str = "",
     webrtc_local_tcp_address: str = "",
+    metrics_enabled: bool = True,
 ) -> str:
     """Generate a MediaMTX YAML config with per-path auth and internal publish credentials.
 
@@ -173,7 +176,8 @@ def render_mediamtx_config(
     lines.append(f"apiAddress: {_address(bind_host, ports.api)}")
     lines.append(f"apiAllowOrigins: {_as_yaml_list(default_api_origins)}")
     lines.append("")
-    lines.append("metrics: false")
+    lines.append(f"metrics: {'true' if metrics_enabled else 'false'}")
+    lines.append(f"metricsAddress: {_address('127.0.0.1', int(ports.metrics))}")
     lines.append("pprof: false")
     lines.append("")
     lines.append("rtsp: true")
@@ -209,7 +213,8 @@ def render_mediamtx_config(
         ]
         if normalized_additional_hosts:
             lines.append(f"webrtcAdditionalHosts: {_as_yaml_list(normalized_additional_hosts)}")
-        lines.append(f"webrtcLocalUDPAddress: {_yaml_single_quote(str(webrtc_local_udp_address or ':0'))}")
+        udp_address = str(webrtc_local_udp_address or f":{int(getattr(ports, 'webrtc_udp', 18762) or 18762)}")
+        lines.append(f"webrtcLocalUDPAddress: {_yaml_single_quote(udp_address)}")
         local_tcp = str(webrtc_local_tcp_address or "").strip()
         if local_tcp:
             lines.append(f"webrtcLocalTCPAddress: {_yaml_single_quote(local_tcp)}")

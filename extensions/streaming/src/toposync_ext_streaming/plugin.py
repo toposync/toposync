@@ -23,6 +23,7 @@ from .pipelines import StreamingRuntimeBindings, register_streaming_pipeline_ope
 from .streaming.camera_ingest import build_camera_ingest_definitions, build_camera_ingest_path_configs
 from .streaming.distributed_sync import DistributedSettingsSync
 from .streaming.engine_manager import MediaMtxEngineManager
+from .streaming.playback_events import PlaybackEventStore
 from .streaming.publisher_manager import PublisherManager
 from .streaming.runtime_state import TransmissionRuntimeState
 from .streaming.writer_bridge import StreamWriterBridge
@@ -70,7 +71,8 @@ class StreamingExtension(BaseExtension):
 
             engine_manager = MediaMtxEngineManager(data_dir=config_store.paths.data_dir)
             runtime_state = TransmissionRuntimeState()
-            publisher_manager = PublisherManager(data_dir=config_store.paths.data_dir, logger=logger)
+            playback_event_store = PlaybackEventStore(retention_seconds=900.0, max_events=500)
+            publisher_manager = PublisherManager(data_dir=config_store.paths.data_dir, logger=logger, host_id=server_id)
             writer_bridge = StreamWriterBridge(
                 config_store=config_store,
                 engine_manager=engine_manager,
@@ -82,6 +84,7 @@ class StreamingExtension(BaseExtension):
 
             app.state.streaming_engine_manager = engine_manager
             app.state.streaming_runtime_state = runtime_state
+            app.state.streaming_playback_event_store = playback_event_store
             app.state.streaming_publisher_manager = publisher_manager
             app.state.streaming_writer_bridge = writer_bridge
             app.state.streaming_settings_sync = None

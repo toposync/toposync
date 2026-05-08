@@ -16,6 +16,8 @@ function installInteractionGuards(): void {
   if (win.__toposyncInteractionGuards) return;
   win.__toposyncInteractionGuards = true;
 
+  let lastTouchEndAt = 0;
+
   // Prevent browser zoom (trackpad pinch on macOS => wheel with ctrlKey in Chromium).
   window.addEventListener(
     "wheel",
@@ -30,6 +32,17 @@ function installInteractionGuards(): void {
   document.addEventListener("gesturestart" as any, prevent, { passive: false, capture: true });
   document.addEventListener("gesturechange" as any, prevent, { passive: false, capture: true });
   document.addEventListener("gestureend" as any, prevent, { passive: false, capture: true });
+
+  // Prevent double-tap page zoom on mobile browsers while preserving ordinary taps.
+  document.addEventListener(
+    "touchend",
+    (e) => {
+      const now = Date.now();
+      if (now - lastTouchEndAt <= 300) e.preventDefault();
+      lastTouchEndAt = now;
+    },
+    { passive: false, capture: true },
+  );
 }
 
 installInteractionGuards();

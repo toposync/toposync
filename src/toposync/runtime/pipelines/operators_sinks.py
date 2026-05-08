@@ -9,7 +9,7 @@ import time
 import struct
 import zlib
 from collections import OrderedDict, deque
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 

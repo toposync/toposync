@@ -2501,7 +2501,7 @@ wheels = [
 
 [[package]]
 name = "toposync-core"
-version = "0.4.5"
+version = "0.4.6"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -2577,7 +2577,7 @@ requires-dist = [
 
 [[package]]
 name = "toposync-ext-cameras"
-version = "0.1.5"
+version = "0.1.6"
 source = { editable = "extensions/cameras" }
 dependencies = [
     { name = "numpy" },
@@ -2635,7 +2635,7 @@ requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
 
 [[package]]
 name = "toposync-ext-streaming"
-version = "0.1.5"
+version = "0.1.6"
 source = { editable = "extensions/streaming" }
 dependencies = [
     { name = "numpy" },

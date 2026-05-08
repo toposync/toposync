@@ -5,19 +5,28 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import numpy
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+from toposync.runtime.config_store import ConfigStore, UserDataPaths
 from toposync.runtime.pipelines.runtime import Lifecycle
 from toposync_ext_streaming.api.models import (
+    EXTENSION_ID,
     StreamingNetworkContract,
     StreamingNetworkContractPorts,
     StreamingRuntimeOutputHealth,
     StreamingRuntimeSourceHealth,
     StreamingRuntimeTransmissionHealth,
 )
-from toposync_ext_streaming.api.routes import _classify_observability
-from toposync_ext_streaming.streaming.engine_manager import MediaMtxEngineManager, MediaMtxPorts
+from toposync_ext_streaming.api.routes import _classify_observability, create_streaming_router
+from toposync_ext_streaming.streaming.engine_manager import (
+    MediaMtxEngineManager,
+    MediaMtxEngineStatus,
+    MediaMtxPorts,
+)
 from toposync_ext_streaming.streaming.encoder_state import EncoderTrustStore
 from toposync_ext_streaming.streaming.publisher_manager import (
     PublisherEncoderPolicy,
@@ -29,14 +38,6 @@ from toposync_ext_streaming.streaming.publisher_manager import (
 )
 from toposync_ext_streaming.streaming.runtime_state import TransmissionRuntimeState
 from toposync_ext_streaming.streaming.writer_bridge import StreamWriterBridge
-
-from tests.test_streaming_on_demand_writer_bridge import (
-    _ConfigStoreStub,
-    _EngineManagerStub as _BridgeEngineManagerStub,
-    _MediaMtxApiClientStub,
-    _PublisherManagerStub,
-)
-from tests.test_streaming_webrtc import _EngineManagerStub, _create_client
 
 
 @dataclass(slots=True)
@@ -51,6 +52,128 @@ class _ManualClock:
 
     def advance(self, seconds: float) -> None:
         self.value += float(seconds)
+
+
+class _ConfigStoreStub:
+    def __init__(self, extension_payload: dict[str, Any]) -> None:
+        self._extension_payload = extension_payload
+
+    async def get_settings(self) -> SimpleNamespace:
+        return SimpleNamespace(extensions={EXTENSION_ID: self._extension_payload})
+
+
+class _BridgeEngineManagerStub:
+    async def ensure_running(  # noqa: ANN001
+        self,
+        _engine_settings,
+        *,
+        engine_paths=None,
+        path_auth=None,
+        path_configs=None,
+    ) -> None:
+        _ = engine_paths, path_auth, path_configs
+
+    async def get_publish_url_for_path(self, path_slug: str, *, host: str | None = None) -> str:
+        _ = host
+        return f"rtsp://127.0.0.1:8554/{path_slug}"
+
+
+class _PublisherManagerStub:
+    def __init__(self) -> None:
+        self.started: set[str] = set()
+        self.start_calls: list[str] = []
+        self.stop_calls: list[str] = []
+
+    async def start_publisher(
+        self,
+        *,
+        output: PublisherOutput,
+        engine_path: str,
+        publish_url: str,
+        encoding_settings: PublisherEncodingSettings,
+        input_settings=None,
+        encoder_policy=None,
+    ) -> None:
+        _ = engine_path, publish_url, encoding_settings, input_settings, encoder_policy
+        self.started.add(output.output_id)
+        self.start_calls.append(output.output_id)
+
+    async def submit_frame(self, output_id: str, frame: numpy.ndarray) -> None:
+        _ = output_id, frame
+
+    async def stop_publisher(self, output_id: str) -> None:
+        self.started.discard(output_id)
+        self.stop_calls.append(output_id)
+
+    async def stop_missing(self, desired_output_ids: set[str]) -> None:
+        for output_id in list(self.started):
+            if output_id not in desired_output_ids:
+                await self.stop_publisher(output_id)
+
+
+@dataclass(slots=True)
+class _MediaMtxApiClientStub:
+    viewers_by_path: dict[str, int]
+
+    async def get_viewer_count_by_path(self) -> dict[str, int]:
+        return dict(self.viewers_by_path)
+
+
+class _EngineManagerStub(MediaMtxEngineManager):
+    def __init__(self, *, data_dir: Path, running: bool = True, ports: MediaMtxPorts | None = None) -> None:
+        super().__init__(data_dir=data_dir)
+        self._running = running
+        self._stub_ports = ports or MediaMtxPorts(
+            rtsp=18758,
+            hls=18759,
+            webrtc=18760,
+            webrtc_udp=18762,
+            api=18761,
+            metrics=9998,
+            rtp=50000,
+            rtcp=50001,
+        )
+
+    async def get_status(self) -> MediaMtxEngineStatus:
+        return MediaMtxEngineStatus(
+            running=self._running,
+            pid=123 if self._running else None,
+            uptime_seconds=12.0 if self._running else None,
+            started_at_unix=1_700_000_000.0 if self._running else None,
+            bind_host="127.0.0.1",
+            ports=self._stub_ports,
+            last_error=None,
+            mediamtx_version="test",
+            platform="test",
+            binary_path=None,
+            config_path=None,
+            log_path=None,
+            test_path="test",
+            warnings=(),
+            restart_count=0,
+        )
+
+
+def _create_client(
+    tmp_path: Path,
+    *,
+    engine_manager: MediaMtxEngineManager | None = None,
+) -> TestClient:
+    data_dir = tmp_path / "data"
+    paths = UserDataPaths(
+        data_dir=data_dir,
+        config_path=data_dir / "config.json",
+        files_dir=data_dir / "files",
+    )
+
+    app = FastAPI()
+    config_store = ConfigStore(paths=paths)
+    app.state.config_store = config_store
+    app.state.streaming_engine_manager = engine_manager or MediaMtxEngineManager(
+        data_dir=paths.data_dir
+    )
+    app.include_router(create_streaming_router())
+    return TestClient(app)
 
 
 def _health(

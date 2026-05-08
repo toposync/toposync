@@ -2501,7 +2501,7 @@ wheels = [
 
 [[package]]
 name = "toposync-core"
-version = "0.4.7"
+version = "0.4.8"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -2635,7 +2635,7 @@ requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
 
 [[package]]
 name = "toposync-ext-streaming"
-version = "0.1.7"
+version = "0.1.8"
 source = { editable = "extensions/streaming" }
 dependencies = [
     { name = "numpy" },

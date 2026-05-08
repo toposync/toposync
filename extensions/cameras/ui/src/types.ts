@@ -26,6 +26,60 @@ export type CamerasIndex = {
   cameras: Array<{ id: string; name: string; connection_type: CameraConnectionType | string }>;
 };
 
+export type CameraSourceHealthStatus =
+  | "healthy"
+  | "starting"
+  | "stale"
+  | "unreachable"
+  | "unauthorized"
+  | "error"
+  | "idle"
+  | "unknown";
+
+export type CameraSourceHealthItem = {
+  source_id: string;
+  camera_id?: string | null;
+  camera_name?: string | null;
+  pipeline_name?: string | null;
+  node_id?: string | null;
+  backend?: string | null;
+  configured_backend: string;
+  source_frame_age_seconds?: number | null;
+  capture_fps?: number | null;
+  target_fps?: number | null;
+  opened: boolean;
+  restarts_total: number;
+  decode_failures: number;
+  frames_captured: number;
+  last_frame_at_unix?: number | null;
+  last_seen_at_unix?: number | null;
+  last_error?: string | null;
+  rtsp_transport: string;
+  used_ingest: boolean;
+  status: CameraSourceHealthStatus;
+  recommended_action: string;
+};
+
+export type CameraSourceHealthResponse = {
+  updated_at_unix: number;
+  stale_after_seconds: number;
+  offline_after_seconds: number;
+  retention_seconds: number;
+  sources: CameraSourceHealthItem[];
+};
+
+export type RtspProbeStatus = "ok" | "unreachable" | "unauthorized" | "timeout" | "probe_error";
+
+export type RtspProbeResponse = {
+  status: RtspProbeStatus;
+  url: string;
+  transports_tested: string[];
+  latency_ms: number;
+  backend: string;
+  source: string;
+  error?: string | null;
+};
+
 export type CameraControlPoint = {
   id: string;
   label: string;

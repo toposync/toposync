@@ -4,6 +4,7 @@ import type {
   CameraPipelineWizardRequest,
   CameraPipelineWizardResponse,
   CameraPtzPreset,
+  CameraSourceHealthResponse,
   CamerasIndex,
   OnvifDiscoverRequest,
   OnvifDiscoverResponse,
@@ -12,6 +13,7 @@ import type {
   OnvifStreamUriRequest,
   OnvifStreamUriResponse,
   PanTiltZoomState,
+  RtspProbeResponse,
 } from "../types";
 import { readRecord } from "../parsing";
 
@@ -30,6 +32,12 @@ export async function fetchCamerasIndex(): Promise<CamerasIndex> {
   return {
     cameras: Array.isArray(record.cameras) ? (record.cameras as any[]).filter(Boolean) : [],
   };
+}
+
+export async function fetchCameraSourceHealth(signal?: AbortSignal): Promise<CameraSourceHealthResponse> {
+  const response = await fetch("/api/cameras/runtime/source-health", { signal });
+  if (!response.ok) throw new Error(`Failed to load camera source health: ${response.status}`);
+  return response.json();
 }
 
 export async function fetchRtspSnapshot(
@@ -51,6 +59,46 @@ export async function fetchRtspSnapshot(
     throw new Error(detail || `Snapshot failed: ${response.status}`);
   }
   return response.blob();
+}
+
+export async function probeRtsp(
+  options: { url: string; username?: string; password?: string; timeout_ms?: number },
+  signal?: AbortSignal,
+): Promise<RtspProbeResponse> {
+  const response = await fetch("/api/cameras/rtsp/probe", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: options.url,
+      username: options.username ?? "",
+      password: options.password ?? "",
+      timeout_ms: options.timeout_ms ?? 5000,
+    }),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `RTSP probe failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function probeCameraRtsp(
+  cameraId: string,
+  options: { timeout_ms?: number } = {},
+  signal?: AbortSignal,
+): Promise<RtspProbeResponse> {
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/rtsp/probe`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ timeout_ms: options.timeout_ms ?? 5000 }),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `RTSP probe failed: ${response.status}`);
+  }
+  return response.json();
 }
 
 export async function fetchCameraSnapshot(cameraId: string, signal?: AbortSignal): Promise<Blob> {

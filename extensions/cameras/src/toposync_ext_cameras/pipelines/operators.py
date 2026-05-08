@@ -43,6 +43,7 @@ from ..processing.camera_hub import CameraHub
 from ..processing.motion import MotionDetector
 from ..processing.motion_bgsub import AdaptiveBackgroundMotionDetector
 from ..processing.motion_sample_bg import SampleBackgroundMotionDetector
+from ..source_health import get_global_source_health_store, source_health_source_id
 from ..onvif import OnvifClient, OnvifError, OnvifProfile
 from ..settings import get_camera_device, get_primary_video_channel, normalize_cameras_settings
 from .postprocess import register_camera_postprocess_operators
@@ -750,6 +751,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._backend_override: str | None = None
         self._backend_override_until_monotonic = 0.0
         self._last_reacquire_monotonic = 0.0
+        self._source_health_id = ""
         self._reacquire_after_s = _read_env_float(
             "TOPOSYNC_CAMERA_SOURCE_REACQUIRE_AFTER_S",
             15.0,
@@ -901,6 +903,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         if self._grabber is None:
             return
         hub_key = self._hub_key
+        source_health_id = self._source_health_id
         self._grabber = None
         self._grabber_started_monotonic = 0.0
         self._source_uses_ingest = False
@@ -908,6 +911,8 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         if hub_key:
             await _GLOBAL_CAMERA_HUB.release(key=hub_key)
         self._last_ts = 0.0
+        if source_health_id:
+            get_global_source_health_store().mark_shutdown(source_id=source_health_id)
 
     def _capture_metrics_snapshot(self) -> dict[str, Any]:
         if self._grabber is None:
@@ -917,6 +922,57 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         except Exception:
             return {}
         return payload if isinstance(payload, dict) else {}
+
+    def _source_health_key(self, context) -> str:  # noqa: ANN001
+        camera_id = self._camera_id or str(self._config.camera_id or "").strip()
+        self._source_health_id = source_health_source_id(
+            pipeline_name=str(getattr(context, "pipeline_name", "") or ""),
+            node_id=str(getattr(context, "node_id", "") or ""),
+            camera_id=camera_id,
+            rtsp_url=str(self._config.rtsp_url or "").strip(),
+        )
+        return self._source_health_id
+
+    def _record_source_health(
+        self,
+        context,  # noqa: ANN001
+        *,
+        status: str | None = None,
+        metrics: dict[str, Any] | None = None,
+        last_error: str | None = None,
+        frame_ts: float | None = None,
+    ) -> dict[str, Any]:
+        store = get_global_source_health_store()
+        source_id = self._source_health_key(context)
+        camera_id = self._camera_id or str(self._config.camera_id or "").strip()
+        if frame_ts is not None and frame_ts > 0.0:
+            record = store.record_frame(
+                source_id=source_id,
+                camera_id=camera_id,
+                camera_name=self._camera_name,
+                pipeline_name=str(getattr(context, "pipeline_name", "") or ""),
+                node_id=str(getattr(context, "node_id", "") or ""),
+                configured_backend=str(self._config.backend or "auto"),
+                rtsp_transport=self._transport or "rtsp",
+                used_ingest=self._source_uses_ingest,
+                frame_ts=float(frame_ts),
+                metrics=metrics,
+            )
+        else:
+            record = store.record_tick(
+                source_id=source_id,
+                camera_id=camera_id,
+                camera_name=self._camera_name,
+                pipeline_name=str(getattr(context, "pipeline_name", "") or ""),
+                node_id=str(getattr(context, "node_id", "") or ""),
+                configured_backend=str(self._config.backend or "auto"),
+                rtsp_transport=self._transport or "rtsp",
+                used_ingest=self._source_uses_ingest,
+                status=status,  # type: ignore[arg-type]
+                last_error=last_error,
+                metrics=metrics,
+            )
+        return record.as_dict()
 
     async def _maybe_reacquire_grabber(
         self, context, *, metrics: dict[str, Any] | None = None
@@ -998,18 +1054,27 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 failover_note,
                 last_error or "-",
             )
+        self._record_source_health(
+            context,
+            status="stale",
+            metrics=details,
+            last_error=last_error or None,
+        )
         await self._stop_grabber_if_needed()
 
     async def produce(self, context) -> Packet | None:  # noqa: ANN001
         await self._consume_gate_packets(context)
         if not self._gate_open:
+            self._record_source_health(context, status="idle")
             await self._stop_grabber_if_needed()
             return None
 
         try:
+            self._record_source_health(context, status="starting")
             await self._ensure_grabber()
         except _CameraSourcePendingError as exc:
             self._waiting_for_source_config = True
+            self._record_source_health(context, status="starting", last_error=str(exc))
             now = time.monotonic()
             if (now - self._last_wait_log_monotonic) >= 5.0:
                 context.logger.warning(
@@ -1022,6 +1087,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             return None
         except _CameraSourceTransientError as exc:
             self._waiting_for_source_config = True
+            self._record_source_health(context, status="starting", last_error=str(exc))
             now = time.monotonic()
             if (now - self._last_wait_log_monotonic) >= 5.0:
                 context.logger.warning(
@@ -1038,6 +1104,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         frame, frame_ts = self._grabber.get_latest()
         if frame is None or not frame_ts:
             capture_metrics = self._capture_metrics_snapshot()
+            self._record_source_health(context, status="starting", metrics=capture_metrics)
             await self._maybe_reacquire_grabber(context, metrics=capture_metrics)
             return None
         if frame_ts <= self._last_ts:
@@ -1056,6 +1123,19 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         )
         stream_suffix = self._camera_id or "adhoc"
         capture_metrics = self._capture_metrics_snapshot()
+        source_health = self._record_source_health(
+            context,
+            metrics=capture_metrics,
+            frame_ts=float(frame_ts),
+        )
+        capture_metrics = {
+            **capture_metrics,
+            "source_id": source_health.get("source_id"),
+            "source_frame_age_seconds": source_health.get("source_frame_age_seconds"),
+            "source_status": source_health.get("status"),
+            "rtsp_transport": source_health.get("rtsp_transport") or self._transport or "rtsp",
+            "used_ingest": bool(source_health.get("used_ingest")),
+        }
         frame_artifacts = {
             MAIN_ARTIFACT_NAME: Artifact(
                 name=MAIN_ARTIFACT_NAME,
@@ -1100,6 +1180,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 "camera_id": self._camera_id or None,
                 "camera_name": self._camera_name or None,
                 "capture_backend": str(capture_metrics.get("backend") or ""),
+                "source_status": str(capture_metrics.get("source_status") or ""),
             },
         )
 

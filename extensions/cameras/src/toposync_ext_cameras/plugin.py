@@ -32,6 +32,7 @@ from toposync.runtime.services import ServiceRegistry
 from .pipelines.operators import register_camera_pipeline_operators
 from .processing.mapping import ControlPointMapper
 from .pipelines.postprocess import _parse_control_point_sets  # noqa: PLC2701
+from .source_health import get_global_source_health_store
 from .settings import (
     flatten_camera_device_for_ui,
     get_camera_device,
@@ -59,6 +60,59 @@ class RtspSnapshotRequest(BaseModel):
     username: str = ""
     password: str = ""
     timeout_ms: int = Field(default=9000, ge=1500, le=30000)
+
+
+class RtspProbeRequest(BaseModel):
+    url: str
+    username: str = ""
+    password: str = ""
+    timeout_ms: int = Field(default=5000, ge=1000, le=30000)
+
+
+class CameraRtspProbeRequest(BaseModel):
+    timeout_ms: int = Field(default=5000, ge=1000, le=30000)
+
+
+class RtspProbeResponse(BaseModel):
+    status: Literal["ok", "unreachable", "unauthorized", "timeout", "probe_error"]
+    url: str
+    transports_tested: list[str] = Field(default_factory=list)
+    latency_ms: int = 0
+    backend: str = "ffmpeg"
+    source: str = "configured"
+    error: str | None = None
+
+
+class CameraSourceHealthItem(BaseModel):
+    source_id: str
+    camera_id: str | None = None
+    camera_name: str | None = None
+    pipeline_name: str | None = None
+    node_id: str | None = None
+    backend: str | None = None
+    configured_backend: str = "auto"
+    source_frame_age_seconds: float | None = None
+    capture_fps: float | None = None
+    target_fps: float | None = None
+    opened: bool = False
+    restarts_total: int = 0
+    decode_failures: int = 0
+    frames_captured: int = 0
+    last_frame_at_unix: float | None = None
+    last_seen_at_unix: float = 0.0
+    last_error: str | None = None
+    rtsp_transport: str = "rtsp"
+    used_ingest: bool = False
+    status: Literal["healthy", "starting", "stale", "unreachable", "unauthorized", "error", "idle", "unknown"]
+    recommended_action: str = ""
+
+
+class CameraSourceHealthResponse(BaseModel):
+    updated_at_unix: float
+    stale_after_seconds: float
+    offline_after_seconds: float
+    retention_seconds: float
+    sources: list[CameraSourceHealthItem] = Field(default_factory=list)
 
 
 class OnvifInspectRequest(BaseModel):
@@ -367,6 +421,133 @@ async def _ffmpeg_snapshot(rtsp_url: str, *, timeout_ms: int) -> RtspSnapshotRes
                 last_error = f"Failed to capture RTSP snapshot (transport={name}, source={source})"
 
     raise HTTPException(status_code=502, detail=last_error)
+
+
+async def _ffmpeg_rtsp_probe(rtsp_url: str, *, timeout_ms: int) -> RtspProbeResponse:
+    redacted_url = _redact_rtsp_credentials(str(rtsp_url or "").strip())
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path is None:
+        return RtspProbeResponse(
+            status="probe_error",
+            url=redacted_url,
+            backend="ffmpeg",
+            error="ffmpeg is required to probe RTSP streams",
+        )
+
+    timeout_s = max(1.0, float(timeout_ms) / 1000.0)
+    timeout_us = int(max(0, int(timeout_ms)) * 1000)
+    attempts: list[tuple[str, str, list[str]]] = []
+    url_candidates: list[tuple[str, str]] = [("configured", rtsp_url)]
+    stream2 = _rtsp_stream2_fallback(rtsp_url)
+    if stream2 and stream2 != rtsp_url:
+        url_candidates.append(("fallback_stream2", stream2))
+    for source, url in url_candidates:
+        attempts.append((source, "tcp", ["-rtsp_transport", "tcp", "-i", url]))
+        attempts.append((source, "udp", ["-rtsp_transport", "udp", "-i", url]))
+
+    started = time.monotonic()
+    transports_tested: list[str] = []
+    last_error = "RTSP probe failed"
+    last_source = "configured"
+    last_status: Literal["unreachable", "unauthorized", "timeout", "probe_error"] = "probe_error"
+    for source, transport, input_args in attempts:
+        last_source = source
+        transports_tested.append(f"{source}:{transport}")
+        args = [
+            ffmpeg_path,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-timeout",
+            str(timeout_us),
+            *input_args,
+            "-an",
+            "-sn",
+            "-dn",
+            "-frames:v",
+            "1",
+            "-f",
+            "null",
+            "-",
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s + 2.0)
+        except TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            last_status = "timeout"
+            last_error = f"RTSP probe timed out (transport={transport}, source={source})"
+            continue
+
+        if proc.returncode == 0:
+            return RtspProbeResponse(
+                status="ok",
+                url=redacted_url,
+                transports_tested=transports_tested,
+                latency_ms=max(0, int(round((time.monotonic() - started) * 1000))),
+                backend="ffmpeg",
+                source=source,
+                error=None,
+            )
+
+        message = _sanitize_rtsp_probe_error((stderr or b"").decode("utf-8", errors="ignore"))
+        last_error = message or f"RTSP probe failed (transport={transport}, source={source})"
+        classified = _classify_rtsp_probe_error(last_error)
+        if classified == "unauthorized":
+            last_status = "unauthorized"
+            break
+        last_status = classified
+
+    return RtspProbeResponse(
+        status=last_status,
+        url=redacted_url,
+        transports_tested=transports_tested,
+        latency_ms=max(0, int(round((time.monotonic() - started) * 1000))),
+        backend="ffmpeg",
+        source=last_source,
+        error=last_error,
+    )
+
+
+def _sanitize_rtsp_probe_error(value: str) -> str | None:
+    text = _redact_rtsp_credentials(str(value or "").strip())
+    if not text:
+        return None
+    lowered = text.lower()
+    for marker in ("authorization:", "password", "token=", "token:", "cookie:", "secret"):
+        if marker in lowered:
+            return "[REDACTED]"
+    if len(text) > 600:
+        return text[:597].rstrip() + "..."
+    return text
+
+
+def _classify_rtsp_probe_error(value: str) -> Literal["unreachable", "unauthorized", "timeout", "probe_error"]:
+    text = str(value or "").strip().lower()
+    if any(term in text for term in ("401", "403", "unauthorized", "forbidden", "auth", "credential")):
+        return "unauthorized"
+    if any(term in text for term in ("timed out", "timeout")):
+        return "timeout"
+    if any(
+        term in text
+        for term in (
+            "connection refused",
+            "connection reset",
+            "no route",
+            "host is down",
+            "not found",
+            "404",
+            "error opening input files",
+        )
+    ):
+        return "unreachable"
+    return "probe_error"
 
 
 class CamerasExtension(BaseExtension):
@@ -836,6 +1017,19 @@ class CamerasExtension(BaseExtension):
         services.register("cameras.ptz.get_status", _svc_ptz_get_status)
         services.register("cameras.ptz.continuous_move", _svc_ptz_continuous_move)
         services.register("cameras.ptz.stop", _svc_ptz_stop)
+        app.state.camera_source_health_store = get_global_source_health_store()
+
+        def _svc_source_health_snapshot(
+            *,
+            camera_id: str | None = None,
+            source_id: str | None = None,
+        ) -> dict[str, Any]:
+            return get_global_source_health_store().snapshot(
+                camera_id=camera_id,
+                source_id=source_id,
+            )
+
+        services.register("cameras.source_health.snapshot", _svc_source_health_snapshot)
 
         def _get_lock(key: str) -> asyncio.Lock:
             lock = snapshot_locks.get(key)
@@ -843,6 +1037,55 @@ class CamerasExtension(BaseExtension):
                 lock = asyncio.Lock()
                 snapshot_locks[key] = lock
             return lock
+
+        async def _resolve_camera_rtsp_url_for_probe(request: Request, camera_id: str) -> str:
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+            ext = await _read_ext_settings(request)
+            camera = get_camera_device(ext, camera_id=cid)
+            if camera is None:
+                raise HTTPException(status_code=404, detail="Unknown camera")
+            channel = get_primary_video_channel(camera)
+            if not isinstance(channel, dict):
+                raise HTTPException(status_code=404, detail="Unknown camera")
+            ctype = str(channel.get("connection_type", "rtsp")).strip().lower() or "rtsp"
+            if ctype not in {"rtsp", "onvif"}:
+                raise HTTPException(status_code=400, detail="Unsupported camera connection type")
+            url_raw = str(channel.get("rtsp_url", "")).strip()
+            if not url_raw:
+                raise HTTPException(status_code=400, detail="Camera RTSP URL is not configured")
+            username = str(channel.get("username", "")).strip()
+            password = str(channel.get("password", "")).strip()
+            try:
+                return _rtsp_url_with_auth(url_raw, username, password)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        @app.get("/api/cameras/runtime/source-health", response_model=CameraSourceHealthResponse)
+        async def cameras_source_health(request: Request) -> CameraSourceHealthResponse:
+            _require_auth(request, action="core:settings:read")
+            return CameraSourceHealthResponse.model_validate(get_global_source_health_store().snapshot())
+
+        @app.post("/api/cameras/rtsp/probe", response_model=RtspProbeResponse)
+        async def rtsp_probe(request: Request, body: RtspProbeRequest) -> RtspProbeResponse:
+            _require_auth(request, action="core:settings:read")
+            try:
+                url = _rtsp_url_with_auth(body.url, body.username, body.password)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return await _ffmpeg_rtsp_probe(url, timeout_ms=body.timeout_ms)
+
+        @app.post("/api/cameras/cameras/{camera_id}/rtsp/probe", response_model=RtspProbeResponse)
+        async def camera_rtsp_probe(
+            request: Request,
+            camera_id: str,
+            body: CameraRtspProbeRequest | None = None,
+        ) -> RtspProbeResponse:
+            _require_auth(request, action="core:settings:read")
+            url = await _resolve_camera_rtsp_url_for_probe(request, camera_id)
+            timeout_ms = int(body.timeout_ms if body is not None else 5000)
+            return await _ffmpeg_rtsp_probe(url, timeout_ms=timeout_ms)
 
         @app.get("/api/cameras/index")
         async def cameras_index(request: Request) -> dict[str, Any]:

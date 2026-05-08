@@ -5,19 +5,25 @@ import type { HostI18n, SettingsPanel } from "@toposync/plugin-api";
 import {
   discoverOnvifDevices,
   fetchCamerasIndex,
+  fetchCameraSourceHealth,
   fetchOnvifStreamUri,
   fetchRtspSnapshot,
   inspectOnvif,
+  probeCameraRtsp,
+  probeRtsp,
 } from "../api/camerasApi";
 import { CAMERAS_EXTENSION_ID } from "../constants";
 import { createUniqueId, parseCameras, serializeCameras } from "../parsing";
 import type {
   CameraConfig,
   CameraOnvifConfig,
+  CameraSourceHealthItem,
+  CameraSourceHealthResponse,
   OnvifDiscoverResponse,
   OnvifDiscoveredDeviceInfo,
   OnvifInspectResponse,
   OnvifProfileInfo,
+  RtspProbeResponse,
 } from "../types";
 import { SubModal } from "../ui/SubModal";
 import { CameraPipelineWizardModal } from "../wizard/CameraPipelineWizardModal";
@@ -46,6 +52,50 @@ function includesQuery(value: string, query: string): boolean {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function formatSeconds(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "n/a";
+  if (value < 1) return `${Math.round(value * 1000)} ms`;
+  if (value < 60) return `${value.toFixed(1)} s`;
+  return `${Math.round(value / 60)} min`;
+}
+
+function formatUnixTime(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "n/a";
+  return new Date(value * 1000).toLocaleString();
+}
+
+function formatNumber(value: number | null | undefined, fractionDigits = 1): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "n/a";
+  return value.toFixed(fractionDigits);
+}
+
+function statusBadgeClass(status: string): string {
+  if (status === "healthy") return "statusBadge statusBadgeSuccess";
+  if (status === "starting" || status === "idle") return "statusBadge statusBadgeWarning";
+  if (status === "stale" || status === "unreachable" || status === "unauthorized" || status === "error") {
+    return "statusBadge statusBadgeDanger";
+  }
+  return "statusBadge";
+}
+
+function statusBadgeStyle(status: string): React.CSSProperties {
+  const danger = status === "stale" || status === "unreachable" || status === "unauthorized" || status === "error";
+  const warning = status === "starting" || status === "idle" || status === "timeout" || status === "probe_error";
+  const color = status === "healthy" || status === "ok" ? "#19b56b" : danger ? "#ef4444" : warning ? "#f59e0b" : "#8a94a6";
+  return {
+    border: `1px solid ${color}`,
+    borderRadius: 999,
+    color,
+    fontSize: 12,
+    fontWeight: 700,
+    lineHeight: "22px",
+    minHeight: 24,
+    padding: "0 10px",
+    textTransform: "uppercase",
+    whiteSpace: "nowrap",
+  };
 }
 
 function CamerasSettingsPanelContent({
@@ -79,6 +129,13 @@ function CamerasSettingsPanelContent({
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const snapshotAbortRef = React.useRef<AbortController | null>(null);
 
+  const [sourceHealth, setSourceHealth] = useState<CameraSourceHealthResponse | null>(null);
+  const [sourceHealthError, setSourceHealthError] = useState<string | null>(null);
+  const [rtspProbeResult, setRtspProbeResult] = useState<RtspProbeResponse | null>(null);
+  const [rtspProbeError, setRtspProbeError] = useState<string | null>(null);
+  const [rtspProbeBusy, setRtspProbeBusy] = useState(false);
+  const rtspProbeAbortRef = React.useRef<AbortController | null>(null);
+
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [suggestionsErrorMessage, setSuggestionsErrorMessage] = useState<string | null>(null);
   const [suggestionsResult, setSuggestionsResult] = useState<OnvifDiscoverResponse | null>(null);
@@ -103,6 +160,8 @@ function CamerasSettingsPanelContent({
     return () => {
       snapshotAbortRef.current?.abort();
       snapshotAbortRef.current = null;
+      rtspProbeAbortRef.current?.abort();
+      rtspProbeAbortRef.current = null;
     };
   }, []);
 
@@ -132,6 +191,11 @@ function CamerasSettingsPanelContent({
     setOnvifStreamLoading(false);
     onvifAbortRef.current?.abort();
     onvifAbortRef.current = null;
+    setRtspProbeResult(null);
+    setRtspProbeError(null);
+    setRtspProbeBusy(false);
+    rtspProbeAbortRef.current?.abort();
+    rtspProbeAbortRef.current = null;
   }, [activeCameraId]);
 
   const filteredCameras = useMemo(() => {
@@ -239,6 +303,35 @@ function CamerasSettingsPanelContent({
       });
     } finally {
       if (!controller.signal.aborted) setSnapshotLoading(false);
+    }
+  }
+
+  async function runRtspProbe(camera: CameraConfig): Promise<void> {
+    rtspProbeAbortRef.current?.abort();
+    const controller = new AbortController();
+    rtspProbeAbortRef.current = controller;
+    setRtspProbeBusy(true);
+    setRtspProbeError(null);
+    setRtspProbeResult(null);
+    try {
+      const result = camera.id
+        ? await probeCameraRtsp(camera.id, { timeout_ms: 5000 }, controller.signal)
+        : await probeRtsp(
+            {
+              url: camera.rtsp_url,
+              username: camera.username,
+              password: camera.password,
+              timeout_ms: 5000,
+            },
+            controller.signal,
+          );
+      if (controller.signal.aborted) return;
+      setRtspProbeResult(result);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setRtspProbeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (!controller.signal.aborted) setRtspProbeBusy(false);
     }
   }
 
@@ -353,6 +446,38 @@ function CamerasSettingsPanelContent({
   }, []);
 
   const activeCamera = activeCameraId ? cameras.find((camera) => camera.id === activeCameraId) ?? null : null;
+  const activeSourceHealth = useMemo<CameraSourceHealthItem | null>(() => {
+    if (!activeCamera) return null;
+    const sources = sourceHealth?.sources ?? [];
+    return sources.find((item) => item.camera_id === activeCamera.id) ?? null;
+  }, [activeCamera, sourceHealth]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let controller: AbortController | null = null;
+
+    async function refresh(): Promise<void> {
+      controller?.abort();
+      controller = new AbortController();
+      try {
+        const result = await fetchCameraSourceHealth(controller.signal);
+        if (cancelled) return;
+        setSourceHealth(result);
+        setSourceHealthError(null);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setSourceHealthError(error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      controller?.abort();
+    };
+  }, []);
 
   async function discoverOnvifProfiles(camera: CameraConfig): Promise<void> {
     const xaddr = camera.onvif?.xaddr?.trim() ?? "";
@@ -652,6 +777,140 @@ function CamerasSettingsPanelContent({
                       <i className="fa-solid fa-trash" aria-hidden="true" />
                     )}
                   </button>
+                </div>
+              </div>
+
+              <div className="sectionDivider" />
+
+              <div className="card">
+                <div className="cardBody">
+                  <div className="rowWrap" style={{ justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                    <div>
+                      <div className="modalSectionTitle" style={{ marginBottom: 4 }}>
+                        {t("ext.cameras.settings.source_health.title", {}, "Source Health")}
+                      </div>
+                      <div className="cardMeta">
+                        {activeSourceHealth
+                          ? t(
+                              "ext.cameras.settings.source_health.meta",
+                              {},
+                              "Live camera-source status reported by running pipelines.",
+                            )
+                          : t(
+                              "ext.cameras.settings.source_health.none",
+                              {},
+                              "No running camera.source has reported for this camera yet.",
+                            )}
+                      </div>
+                    </div>
+                    <div className="rowWrap" style={{ justifyContent: "flex-end", gap: 8 }}>
+                      {activeSourceHealth ? (
+                        <span className={statusBadgeClass(activeSourceHealth.status)} style={statusBadgeStyle(activeSourceHealth.status)}>
+                          {activeSourceHealth.status}
+                        </span>
+                      ) : null}
+                      <button
+                        className="chipButton"
+                        type="button"
+                        disabled={rtspProbeBusy || !activeCamera.rtsp_url.trim()}
+                        onClick={() => void runRtspProbe(activeCamera)}
+                      >
+                        {rtspProbeBusy
+                          ? t("ext.cameras.settings.rtsp_probe.running", {}, "Testing RTSP…")
+                          : t("ext.cameras.settings.rtsp_probe.action", {}, "Test RTSP")}
+                      </button>
+                    </div>
+                  </div>
+
+                  {sourceHealthError ? (
+                    <div className="card" style={{ marginTop: 10 }}>
+                      <div className="cardBody">{sourceHealthError}</div>
+                    </div>
+                  ) : null}
+
+                  {activeSourceHealth ? (
+                    <div
+                      className="settingsGrid"
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                        gap: 12,
+                        marginTop: 12,
+                      }}
+                    >
+                      <div>
+                        <div className="label">{t("ext.cameras.settings.source_health.age", {}, "Source age")}</div>
+                        <div>{formatSeconds(activeSourceHealth.source_frame_age_seconds)}</div>
+                      </div>
+                      <div>
+                        <div className="label">{t("ext.cameras.settings.source_health.fps", {}, "Capture FPS")}</div>
+                        <div>
+                          {formatNumber(activeSourceHealth.capture_fps)} / {formatNumber(activeSourceHealth.target_fps)}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="label">{t("ext.cameras.settings.source_health.backend", {}, "Backend")}</div>
+                        <div>{activeSourceHealth.backend || activeSourceHealth.configured_backend || "auto"}</div>
+                      </div>
+                      <div>
+                        <div className="label">{t("ext.cameras.settings.source_health.restarts", {}, "Restarts")}</div>
+                        <div>{activeSourceHealth.restarts_total}</div>
+                      </div>
+                      <div>
+                        <div className="label">{t("ext.cameras.settings.source_health.path", {}, "Path")}</div>
+                        <div>{activeSourceHealth.used_ingest ? "ingest" : "direct"}</div>
+                      </div>
+                      <div>
+                        <div className="label">{t("ext.cameras.settings.source_health.last_frame", {}, "Last frame")}</div>
+                        <div>{formatUnixTime(activeSourceHealth.last_frame_at_unix)}</div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {activeSourceHealth?.last_error ? (
+                    <div className="cardMeta" style={{ marginTop: 10, overflowWrap: "anywhere" }}>
+                      {t("ext.cameras.settings.source_health.last_error", {}, "Last error")}: {activeSourceHealth.last_error}
+                    </div>
+                  ) : null}
+
+                  {activeSourceHealth?.recommended_action ? (
+                    <div className="cardMeta" style={{ marginTop: 6 }}>
+                      {activeSourceHealth.recommended_action}
+                    </div>
+                  ) : null}
+
+                  {rtspProbeError ? (
+                    <div className="card" style={{ marginTop: 10 }}>
+                      <div className="cardBody" style={{ overflowWrap: "anywhere" }}>
+                        {rtspProbeError}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {rtspProbeResult ? (
+                    <div className="card" style={{ marginTop: 10 }}>
+                      <div className="cardBody">
+                        <div className="rowWrap" style={{ justifyContent: "space-between", gap: 10 }}>
+                          <span className={statusBadgeClass(rtspProbeResult.status)} style={statusBadgeStyle(rtspProbeResult.status)}>
+                            {rtspProbeResult.status}
+                          </span>
+                          <span className="cardMeta">{rtspProbeResult.latency_ms} ms</span>
+                        </div>
+                        <div className="cardMeta" style={{ marginTop: 8, overflowWrap: "anywhere" }}>
+                          {rtspProbeResult.url}
+                        </div>
+                        <div className="cardMeta" style={{ marginTop: 6 }}>
+                          {t("ext.cameras.settings.rtsp_probe.transports", {}, "Transports")}:{" "}
+                          {rtspProbeResult.transports_tested.join(", ") || "n/a"}
+                        </div>
+                        {rtspProbeResult.error ? (
+                          <div className="cardMeta" style={{ marginTop: 6, overflowWrap: "anywhere" }}>
+                            {rtspProbeResult.error}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
 

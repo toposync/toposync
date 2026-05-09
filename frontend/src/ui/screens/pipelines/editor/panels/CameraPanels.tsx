@@ -2558,21 +2558,22 @@ export function ImageResizeConfigCard({ config, onUpdateConfig }: ImageResizePro
   );
 }
 
-type ObjectSegmentationProps = {
+type ObjectCropProps = {
   config: Record<string, unknown>;
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
 };
 
-export function ObjectSegmentationConfigCard({
+export function ObjectCropConfigCard({
   config,
   showAdvanced,
   onUpdateConfig,
-}: ObjectSegmentationProps): React.ReactElement {
+}: ObjectCropProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const paddingRatio = Number((config as any).padding_ratio ?? 0.08);
   const minCropSizePx = Number((config as any).min_crop_size_px ?? 8);
   const bboxField = textConfigValue((config as any).bbox_field, "object_bbox01");
+  const cropCloseFrames = Boolean((config as any).crop_close_frames ?? false);
 
   const clamp = (value: number, min: number, max: number, fallback: number) => {
     if (!Number.isFinite(value)) return fallback;
@@ -2583,7 +2584,7 @@ export function ObjectSegmentationConfigCard({
     <div className="pipelinesOperatorConfigCard">
       <div className="pipelinesScalarGrid" style={{ marginTop: 8 }}>
         <label className="pipelinesLabel pipelinesScalarLabel">
-          <span>{t("core.ui.pipelines.panels.object_segmentation.padding")}</span>
+          <span>{t("core.ui.pipelines.panels.object_crop.padding")}</span>
           <PipelinesNumberInput
             className="pipelinesInput"
             min={0}
@@ -2595,7 +2596,7 @@ export function ObjectSegmentationConfigCard({
         </label>
 
         <label className="pipelinesLabel pipelinesScalarLabel">
-          <span>{t("core.ui.pipelines.panels.object_segmentation.min_crop_size_px")}</span>
+          <span>{t("core.ui.pipelines.panels.object_crop.min_crop_size_px")}</span>
           <PipelinesNumberInput
             className="pipelinesInput"
             min={1}
@@ -2607,7 +2608,7 @@ export function ObjectSegmentationConfigCard({
         </label>
       </div>
       <div className="pipelinesStepHint" style={{ marginTop: 8 }}>
-        {t("core.ui.pipelines.panels.object_segmentation.hint")}
+        {t("core.ui.pipelines.panels.object_crop.hint")}
       </div>
 
       {showAdvanced ? (
@@ -2615,12 +2616,21 @@ export function ObjectSegmentationConfigCard({
           <div className="sectionDivider" />
 
           <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.object_segmentation.bbox_field")}</span>
+            <span>{t("core.ui.pipelines.panels.object_crop.bbox_field")}</span>
             <input
               className="pipelinesInput"
               type="text"
               value={bboxField}
               onChange={(event) => onUpdateConfig((prev) => ({ ...prev, bbox_field: event.target.value }))}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.object_crop.crop_close_frames")}</span>
+            <input
+              type="checkbox"
+              checked={cropCloseFrames}
+              onChange={(event) => onUpdateConfig((prev) => ({ ...prev, crop_close_frames: event.target.checked }))}
             />
           </label>
         </>

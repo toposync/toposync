@@ -574,10 +574,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.vision.classify_image": "Image classification",
     "core.ui.pipelines.operator_name.vision.detect": "Object detection",
     "core.ui.pipelines.operator_name.vision.segment_instances": "Instance segmentation",
+    "core.ui.pipelines.operator_name.vision.crop_objects": "Object crop",
     "core.ui.pipelines.operator_name.vision.pose_estimate": "Pose estimation",
     "core.ui.pipelines.operator_name.core.category_gate": "Category filter",
     "core.ui.pipelines.operator_name.core.filter": "Rule filter",
-    "core.ui.pipelines.operator_name.camera.object_crop": "Object crop",
     "core.ui.pipelines.operator_name.camera.camera_mapping": "World mapping",
     "core.ui.pipelines.operator_name.camera.area_restriction": "Area restriction",
     "core.ui.pipelines.operator_name.camera.velocity_estimation": "Speed estimation",
@@ -631,14 +631,14 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Links detections over time and can either emit per-object events or keep active tracks on the frame.",
     "core.ui.pipelines.operator_description.vision.segment_instances":
       "Generates one mask per detected instance and keeps masks and bounding boxes together.",
+    "core.ui.pipelines.operator_description.vision.crop_objects":
+      "Crops the current object event by its bounding box and preserves per-object lifecycle identifiers.",
     "core.ui.pipelines.operator_description.vision.pose_estimate":
       "Reserved operator for future pose models. It keeps the contract ready but is not a launch feature yet.",
     "core.ui.pipelines.operator_description.core.category_gate":
       "Keeps or blocks packets according to the detected object categories.",
     "core.ui.pipelines.operator_description.core.filter":
       "Applies a safe rule to payload and metadata, keeping only packets that match.",
-    "core.ui.pipelines.operator_description.camera.object_crop":
-      "Crops the detected object's bounding box into a separate image artifact.",
     "core.ui.pipelines.operator_description.camera.camera_mapping":
       "Converts image position into world coordinates using configured camera control points.",
     "core.ui.pipelines.operator_description.camera.area_restriction":
@@ -770,11 +770,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.filter.hint":
       "Tip: place Filter before camera.source only when you are filtering gate packets (schedule, HA, etc.).",
 
-    "core.ui.pipelines.panels.object_segmentation.padding": "Padding ratio",
-    "core.ui.pipelines.panels.object_segmentation.min_crop_size_px": "Min crop size (px)",
-    "core.ui.pipelines.panels.object_segmentation.hint":
+    "core.ui.pipelines.panels.object_crop.padding": "Padding ratio",
+    "core.ui.pipelines.panels.object_crop.min_crop_size_px": "Min crop size (px)",
+    "core.ui.pipelines.panels.object_crop.hint":
       "Crops the object bbox into the main image. If the object is far away, the crop may still be small because it occupies few pixels.",
-    "core.ui.pipelines.panels.object_segmentation.bbox_field": "BBox field",
+    "core.ui.pipelines.panels.object_crop.bbox_field": "BBox field",
+    "core.ui.pipelines.panels.object_crop.crop_close_frames": "Crop close frames",
 
     "core.ui.pipelines.panels.throttle.interval_seconds": "Interval (seconds)",
     "core.ui.pipelines.panels.throttle.mode": "Mode",
@@ -2306,10 +2307,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.vision.classify_image": "Classificação de imagem",
     "core.ui.pipelines.operator_name.vision.detect": "Detecção de objetos",
     "core.ui.pipelines.operator_name.vision.segment_instances": "Segmentação de instâncias",
+    "core.ui.pipelines.operator_name.vision.crop_objects": "Recorte de objeto",
     "core.ui.pipelines.operator_name.vision.pose_estimate": "Estimativa de pose",
     "core.ui.pipelines.operator_name.core.category_gate": "Filtro por categoria",
     "core.ui.pipelines.operator_name.core.filter": "Filtro por regra",
-    "core.ui.pipelines.operator_name.camera.object_crop": "Recorte de objeto",
     "core.ui.pipelines.operator_name.camera.camera_mapping": "Mapeamento para o mundo",
     "core.ui.pipelines.operator_name.camera.area_restriction": "Restrição de área",
     "core.ui.pipelines.operator_name.camera.velocity_estimation": "Estimativa de velocidade",
@@ -2363,14 +2364,14 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Liga detecções ao longo do tempo e pode gerar eventos por objeto ou manter os rastros no frame.",
     "core.ui.pipelines.operator_description.vision.segment_instances":
       "Gera uma máscara por instância detectada e mantém máscara e bounding box juntas.",
+    "core.ui.pipelines.operator_description.vision.crop_objects":
+      "Recorta o evento de objeto atual pela bounding box e preserva os identificadores do lifecycle por objeto.",
     "core.ui.pipelines.operator_description.vision.pose_estimate":
       "Operador reservado para pose no futuro. O contrato já existe, mas isso ainda não é um recurso lançado.",
     "core.ui.pipelines.operator_description.core.category_gate":
       "Mantém ou bloqueia pacotes conforme as categorias de objeto detectadas.",
     "core.ui.pipelines.operator_description.core.filter":
       "Aplica uma regra segura sobre payload e metadata, mantendo só os pacotes que combinam.",
-    "core.ui.pipelines.operator_description.camera.object_crop":
-      "Recorta a bounding box do objeto detectado em um artifact de imagem separado.",
     "core.ui.pipelines.operator_description.camera.camera_mapping":
       "Converte a posição da imagem em coordenadas do mundo usando pontos de controle da câmera.",
     "core.ui.pipelines.operator_description.camera.area_restriction":
@@ -2503,11 +2504,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.filter.hint":
       "Dica: coloque Filter antes de camera.source apenas quando estiver filtrando pacotes de gate (schedule, HA, etc.).",
 
-    "core.ui.pipelines.panels.object_segmentation.padding": "Padding",
-    "core.ui.pipelines.panels.object_segmentation.min_crop_size_px": "Tamanho mínimo do recorte (px)",
-    "core.ui.pipelines.panels.object_segmentation.hint":
+    "core.ui.pipelines.panels.object_crop.padding": "Padding",
+    "core.ui.pipelines.panels.object_crop.min_crop_size_px": "Tamanho mínimo do recorte (px)",
+    "core.ui.pipelines.panels.object_crop.hint":
       "Recorta a bbox do objeto na imagem principal. Se o objeto estiver longe, o recorte pode ser pequeno porque ele ocupa poucos pixels.",
-    "core.ui.pipelines.panels.object_segmentation.bbox_field": "Campo de bbox",
+    "core.ui.pipelines.panels.object_crop.bbox_field": "Campo de bbox",
+    "core.ui.pipelines.panels.object_crop.crop_close_frames": "Recortar frames de fechamento",
 
     "core.ui.pipelines.panels.throttle.interval_seconds": "Intervalo (segundos)",
     "core.ui.pipelines.panels.throttle.mode": "Modo",

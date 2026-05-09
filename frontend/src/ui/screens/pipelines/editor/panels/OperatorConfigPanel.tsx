@@ -32,7 +32,7 @@ import {
   MotionBgSubAdaptiveConfigCard,
   MotionGateConfigCard,
   MotionSampleBgConfigCard,
-  ObjectSegmentationConfigCard,
+  ObjectCropConfigCard,
   VelocityEstimationConfigCard,
 } from "./CameraPanels";
 import { VisionConfigCard } from "./VisionPanels";
@@ -293,8 +293,8 @@ export function OperatorConfigPanel({
   if (operatorId === "camera.image_resize") {
     return <ImageResizeConfigCard config={config} onUpdateConfig={onUpdateConfig} />;
   }
-  if (operatorId === "camera.object_crop") {
-    return <ObjectSegmentationConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
+  if (operatorId === "vision.crop_objects") {
+    return <ObjectCropConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "core.debug") {
     return (

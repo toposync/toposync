@@ -243,7 +243,7 @@ export function CameraPipelineWizardModal({
                   {t("ext.cameras.wizard.preset.people.title", {}, "People")}
                 </div>
                 <div className="cardMeta">
-                  {t("ext.cameras.wizard.preset.people.desc", {}, "Motion gate + person tracking + 5s throttle + segmentation + notification.")}
+                  {t("ext.cameras.wizard.preset.people.desc", {}, "Motion gate + person tracking + 5s throttle + object crop + notification.")}
                 </div>
               </div>
             </button>
@@ -274,7 +274,7 @@ export function CameraPipelineWizardModal({
                   {t("ext.cameras.wizard.preset.pets.title", {}, "Pets")}
                 </div>
                 <div className="cardMeta">
-                  {t("ext.cameras.wizard.preset.pets.desc", {}, "Motion gate + cat/dog tracking + throttle + segmentation + notification.")}
+                  {t("ext.cameras.wizard.preset.pets.desc", {}, "Motion gate + cat/dog tracking + throttle + object crop + notification.")}
                 </div>
               </div>
             </button>

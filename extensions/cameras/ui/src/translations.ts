@@ -41,12 +41,12 @@ export const camerasTranslations = {
     "ext.cameras.wizard.missing_rtsp_url":
       "This camera has no RTSP URL configured yet. Create the pipeline disabled, then enable it after setting the URL.",
     "ext.cameras.wizard.preset.people.title": "People",
-    "ext.cameras.wizard.preset.people.desc": "Motion gate + person tracking + 5s throttle + segmentation + notification.",
+    "ext.cameras.wizard.preset.people.desc": "Motion gate + person tracking + 5s throttle + object crop + notification.",
     "ext.cameras.wizard.preset.vehicles.title": "Stopped vehicles",
     "ext.cameras.wizard.preset.vehicles.desc":
       "Motion gate + vehicle tracking + mapping + stopped-speed detection + optional area restriction + notification.",
     "ext.cameras.wizard.preset.pets.title": "Pets",
-    "ext.cameras.wizard.preset.pets.desc": "Motion gate + cat/dog tracking + throttle + segmentation + notification.",
+    "ext.cameras.wizard.preset.pets.desc": "Motion gate + cat/dog tracking + throttle + object crop + notification.",
     "ext.cameras.wizard.notify.people": "Person detected",
     "ext.cameras.wizard.notify.vehicles_stopped": "Vehicle stopped",
     "ext.cameras.wizard.notify.pets": "Pet detected",
@@ -165,12 +165,12 @@ export const camerasTranslations = {
     "ext.cameras.wizard.missing_rtsp_url":
       "Esta câmera ainda não tem URL RTSP configurada. Crie o fluxo desativado e ative depois de configurar a URL.",
     "ext.cameras.wizard.preset.people.title": "Pessoas",
-    "ext.cameras.wizard.preset.people.desc": "Gate de movimento + tracking de pessoas + throttle 5s + segmentação + notificação.",
+    "ext.cameras.wizard.preset.people.desc": "Gate de movimento + tracking de pessoas + throttle 5s + recorte de objeto + notificação.",
     "ext.cameras.wizard.preset.vehicles.title": "Veículos parados",
     "ext.cameras.wizard.preset.vehicles.desc":
       "Gate de movimento + tracking de veículos + mapping + detecção de velocidade (parado) + restrição de área (opcional) + notificação.",
     "ext.cameras.wizard.preset.pets.title": "Pets",
-    "ext.cameras.wizard.preset.pets.desc": "Gate de movimento + tracking de gato/cachorro + throttle + segmentação + notificação.",
+    "ext.cameras.wizard.preset.pets.desc": "Gate de movimento + tracking de gato/cachorro + throttle + recorte de objeto + notificação.",
     "ext.cameras.wizard.notify.people": "Pessoa detectada",
     "ext.cameras.wizard.notify.vehicles_stopped": "Veículo parado",
     "ext.cameras.wizard.notify.pets": "Pet detectado",

@@ -365,3 +365,15 @@ def test_register_vision_pipeline_operators_exposes_classification() -> None:
     assert operator is not None
     assert operator.owner == "com.toposync.vision"
     assert "classification" in list(operator.definition.capabilities or [])
+
+
+def test_register_vision_pipeline_operators_exposes_object_crop() -> None:
+    registry = OperatorRegistry()
+
+    register_vision_pipeline_operators(registry)
+    operator = registry.get("vision.crop_objects")
+
+    assert operator is not None
+    assert operator.owner == "com.toposync.vision"
+    assert "crop" in list(operator.definition.capabilities or [])
+    assert operator.definition.defaults.get("crop_close_frames") is False

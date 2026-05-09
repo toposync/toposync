@@ -9,8 +9,11 @@ import pytest
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.runtime import Artifact, Packet
-from toposync_ext_cameras.pipelines.postprocess import ObjectCropRuntime
-from toposync_ext_vision.processing.tasks import VisionDetectRuntime, VisionTrackRuntime
+from toposync_ext_vision.processing.tasks import (
+    VisionCropObjectsRuntime,
+    VisionDetectRuntime,
+    VisionTrackRuntime,
+)
 from toposync_ext_vision.registry import build_default_model_registry
 
 
@@ -79,7 +82,7 @@ def _write_rtmdet_manifest(path: Path, model_path: Path, *, model_id: str) -> Pa
     return path
 
 
-def test_rtmdet_detection_runtime_reprojects_crop_and_feeds_object_crop(
+def test_rtmdet_detection_runtime_reprojects_crop_and_feeds_vision_object_crop(
     tmp_path: Path,
     monkeypatch,
 ) -> None:  # noqa: ANN001
@@ -94,7 +97,7 @@ def test_rtmdet_detection_runtime_reprojects_crop_and_feeds_object_crop(
 
         deps = PipelineRuntimeDependencies(vision_model_registry=build_default_model_registry())
         detect = VisionDetectRuntime({"model_id": "rtmdet.crop", "emit_mode": "annotate"}, deps)
-        crop = ObjectCropRuntime(
+        crop = VisionCropObjectsRuntime(
             {
                 "bbox_field": "object_bbox01",
                 "output_artifact_name": "object_crop",

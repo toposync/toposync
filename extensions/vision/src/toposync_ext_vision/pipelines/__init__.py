@@ -46,6 +46,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "toposync_ext_vision.pipelines.schemas",
         "VisionClassifyImageConfig",
     ),
+    "VisionCropObjectsConfig": (
+        "toposync_ext_vision.pipelines.schemas",
+        "VisionCropObjectsConfig",
+    ),
     "VisionDetectConfig": ("toposync_ext_vision.pipelines.schemas", "VisionDetectConfig"),
     "VisionPoseEstimateConfig": (
         "toposync_ext_vision.pipelines.schemas",
@@ -59,6 +63,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "VisionClassifyImageRuntime": (
         "toposync_ext_vision.processing.tasks",
         "VisionClassifyImageRuntime",
+    ),
+    "VisionCropObjectsRuntime": (
+        "toposync_ext_vision.processing.tasks",
+        "VisionCropObjectsRuntime",
     ),
     "VisionDetectRuntime": ("toposync_ext_vision.processing.tasks", "VisionDetectRuntime"),
     "VisionPoseEstimateRuntime": (

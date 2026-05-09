@@ -19,7 +19,6 @@ from .postprocess import (
     ImagePerspectiveCropConfig,
     ImageAdjustConfig,
     ImageResizeConfig,
-    ObjectCropConfig,
     VelocityEstimationConfig,
     register_camera_postprocess_operators,
 )
@@ -43,7 +42,6 @@ __all__ = [
     "YoloObject",
     "YoloBackend",
     "YoloBackendConfig",
-    "ObjectCropConfig",
     "ArtifactPrivacyConfig",
     "ImageCropConfig",
     "ImagePrivacyConfig",

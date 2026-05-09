@@ -128,7 +128,7 @@ def _main_frame_artifacts(frame: Any) -> dict[str, Artifact]:
     }
 
 
-def test_segmentation_reprojects_bbox_for_cropped_stream_frame() -> None:
+def test_object_crop_reprojects_bbox_for_cropped_stream_frame() -> None:
     async def scenario() -> None:
         main = np.zeros((100, 100, 3), dtype=np.uint8)
         main[30:50, 30:50] = 123
@@ -162,8 +162,8 @@ def test_segmentation_reprojects_bbox_for_cropped_stream_frame() -> None:
                     "config": {"stream_id": "camera:test"},
                 },
                 {
-                    "id": "segment",
-                    "operator": "camera.object_crop",
+                    "id": "crop",
+                    "operator": "vision.crop_objects",
                     "config": {
                         "output_artifact_name": "main",
                         "bbox_field": "object_bbox01",
@@ -176,12 +176,12 @@ def test_segmentation_reprojects_bbox_for_cropped_stream_frame() -> None:
             "edges": [
                 {
                     "from": {"node": "source", "port": "out"},
-                    "to": {"node": "segment", "port": "in"},
+                    "to": {"node": "crop", "port": "in"},
                     "maxsize": 4,
                     "drop_policy": "drop_oldest",
                 },
                 {
-                    "from": {"node": "segment", "port": "out"},
+                    "from": {"node": "crop", "port": "out"},
                     "to": {"node": "sink", "port": "in"},
                     "maxsize": 8,
                     "drop_policy": "drop_oldest",
@@ -206,7 +206,7 @@ def test_segmentation_reprojects_bbox_for_cropped_stream_frame() -> None:
     asyncio.run(scenario())
 
 
-def test_segmentation_reprojects_bbox_for_perspective_warped_stream_frame() -> None:
+def test_object_crop_reprojects_bbox_for_perspective_warped_stream_frame() -> None:
     async def scenario() -> None:
         try:
             import cv2  # type: ignore
@@ -253,8 +253,8 @@ def test_segmentation_reprojects_bbox_for_perspective_warped_stream_frame() -> N
                     "config": {"stream_id": "camera:test"},
                 },
                 {
-                    "id": "segment",
-                    "operator": "camera.object_crop",
+                    "id": "crop",
+                    "operator": "vision.crop_objects",
                     "config": {
                         "output_artifact_name": "main",
                         "bbox_field": "object_bbox01",
@@ -267,12 +267,12 @@ def test_segmentation_reprojects_bbox_for_perspective_warped_stream_frame() -> N
             "edges": [
                 {
                     "from": {"node": "source", "port": "out"},
-                    "to": {"node": "segment", "port": "in"},
+                    "to": {"node": "crop", "port": "in"},
                     "maxsize": 4,
                     "drop_policy": "drop_oldest",
                 },
                 {
-                    "from": {"node": "segment", "port": "out"},
+                    "from": {"node": "crop", "port": "out"},
                     "to": {"node": "sink", "port": "in"},
                     "maxsize": 8,
                     "drop_policy": "drop_oldest",

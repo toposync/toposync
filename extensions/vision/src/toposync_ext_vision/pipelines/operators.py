@@ -7,6 +7,7 @@ from toposync.runtime.pipelines.operator_registry import OperatorDiagnostic, Ope
 
 from ..processing.tasks import (
     VisionClassifyImageRuntime,
+    VisionCropObjectsRuntime,
     VisionDetectRuntime,
     VisionPoseEstimateRuntime,
     VisionSegmentInstancesRuntime,
@@ -15,6 +16,7 @@ from ..processing.tasks import (
 from ..registry import ModelRegistry, build_default_model_registry
 from .schemas import (
     VisionClassifyImageConfig,
+    VisionCropObjectsConfig,
     VisionDetectConfig,
     VisionPoseEstimateConfig,
     VisionSegmentInstancesConfig,
@@ -230,6 +232,31 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
                 operator_id="vision.segment_instances",
             ),
             diagnostics_factory=_vision_model_diagnostics("segmentation"),
+        )
+    if registry.get("vision.crop_objects") is None:
+        registry.register_operator(
+            operator_id="vision.crop_objects",
+            description=(
+                "Object crop by bbox. Consumes one object lifecycle packet and writes the "
+                "configured artifact without merging independent object streams."
+            ),
+            config_model=VisionCropObjectsConfig,
+            inputs=[{"name": "in", "required": True}],
+            outputs=[{"name": "out"}],
+            capabilities=["vision", "artifact", "crop"],
+            defaults=VisionCropObjectsConfig().model_dump(),
+            execution_mode="thread_pool",
+            requires_payload_keys=["object_bbox01"],
+            requires_artifacts=[MAIN_ARTIFACT_NAME],
+            produces_payload_keys=[],
+            produces_artifacts=[MAIN_ARTIFACT_NAME],
+            expression_hints=_vision_expression_hints(),
+            share_strategy="by_signature",
+            owner="com.toposync.vision",
+            runtime_factory=lambda config, _deps: VisionCropObjectsRuntime(
+                config,
+                operator_id="vision.crop_objects",
+            ),
         )
     if registry.get("vision.track") is None:
         registry.register_operator(

@@ -5,6 +5,7 @@ import time
 from collections import defaultdict
 from typing import Any
 
+import numpy as np
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -76,19 +77,20 @@ class _FrameSourceRuntime(SourceOperatorRuntime):
             await context.sleep(self._next_tick - now)
         self._next_tick = max(self._next_tick + self._interval_s, time.monotonic())
         self._counters["source_frames"] = int(self._counters.get("source_frames", 0)) + 1
-        frame = {"seq": self._sequence}
+        frame = np.zeros((80, 120, 3), dtype=np.uint8)
+        frame[:, :, 0] = self._sequence % 255
         packet = Packet.create(
             stream_id=self._stream_id,
             lifecycle=Lifecycle.UPDATE,
             payload={"frame_index": self._sequence},
             artifacts={
                 "main": Artifact(
-                    name="main", data=frame, mime_type="application/json"
+                    name="main", data=frame, mime_type="image/raw"
                 ),
                 "aux": Artifact(
                     name="aux",
                     data=frame,
-                    mime_type="application/json",
+                    mime_type="image/raw",
                     metadata={"derived_from": "main"},
                 ),
             },
@@ -388,6 +390,164 @@ def test_vision_track_splits_two_objects_and_closes_lifecycle() -> None:
         source_frames = int(counters.get("source_frames", 0))
         detect_calls = int(counters.get("detect_calls", 0))
         assert 0 < detect_calls <= source_frames
+
+    asyncio.run(scenario())
+
+
+def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_path) -> None:  # noqa: ANN001
+    async def scenario() -> None:
+        counters: dict[str, Any] = {}
+        notifications: list[dict[str, Any]] = []
+
+        async def upsert(**kwargs) -> None:  # noqa: ANN003
+            notifications.append(dict(kwargs))
+
+        registry = OperatorRegistry()
+        register_builtin_operators(registry)
+        register_camera_pipeline_operators(registry)
+        _register_test_source_and_sink(registry, counters, source_shareable=False)
+
+        sequence = _build_detection_sequence(
+            [
+                [
+                    ("person", 0.98, (0.05, 0.10, 0.18, 0.55)),
+                    ("person", 0.96, (0.40, 0.12, 0.54, 0.58)),
+                    ("person", 0.94, (0.72, 0.08, 0.88, 0.56)),
+                ],
+                [
+                    ("person", 0.97, (0.06, 0.10, 0.19, 0.55)),
+                    ("person", 0.95, (0.41, 0.12, 0.55, 0.58)),
+                    ("person", 0.93, (0.73, 0.08, 0.89, 0.56)),
+                ],
+                [
+                    ("person", 0.97, (0.07, 0.10, 0.20, 0.55)),
+                    ("person", 0.95, (0.42, 0.12, 0.56, 0.58)),
+                    ("person", 0.93, (0.74, 0.08, 0.90, 0.56)),
+                ],
+                [],
+                [],
+                [],
+            ]
+        )
+        dependencies = PipelineRuntimeDependencies(
+            detector_backend_factory=lambda manifest: _SequenceDetectorBackend(sequence, counters),
+            vision_model_registry=_build_registry(),
+            files_dir=tmp_path / "files",
+            notifications_upsert=upsert,
+        )
+
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {
+                    "id": "source",
+                    "operator": "test.frame_source",
+                    "config": {"stream_id": "camera:test", "max_frames": 10, "interval_ms": 20},
+                },
+                {
+                    "id": "detect",
+                    "operator": "vision.detect",
+                    "config": {
+                        "model_id": "fake.detector",
+                        "emit_mode": "annotate",
+                        "categories": ["person"],
+                    },
+                },
+                {
+                    "id": "track",
+                    "operator": "vision.track",
+                    "config": {
+                        "tracker_id": "simple_iou_kalman",
+                        "default_interval_seconds": 0.0,
+                        "close_after_seconds": 0.05,
+                        "emit_mode": "events",
+                    },
+                },
+                {
+                    "id": "crop",
+                    "operator": "vision.crop_objects",
+                    "config": {"padding_ratio": 0.0, "min_crop_size_px": 1},
+                },
+                {"id": "collect", "operator": "test.collect_sink", "config": {"sink_name": "crop"}},
+                {
+                    "id": "store",
+                    "operator": "core.store_images",
+                    "config": {"subdir": "pipelines", "format": "jpg"},
+                },
+                {
+                    "id": "notify",
+                    "operator": "core.notify",
+                    "config": {
+                        "notification_type": "pipelines.tracking",
+                        "title": "{{object_category_label}}",
+                        "update_interval_seconds": 0.0,
+                    },
+                },
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "detect", "port": "in"}},
+                {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}},
+                {"from": {"node": "track", "port": "out"}, "to": {"node": "crop", "port": "in"}},
+                {"from": {"node": "crop", "port": "out"}, "to": {"node": "collect", "port": "in"}},
+                {"from": {"node": "crop", "port": "out"}, "to": {"node": "store", "port": "in"}},
+                {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}},
+            ],
+        }
+        pipeline = Pipeline(name="tracked_object_crop_notifications", graph=graph)
+        compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+        runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
+        await runtime.run_for(0.6)
+
+        crop_packets = [record["packet"] for record in counters.get("packets", [])]
+        grouped_by_tracking: dict[str, list[Packet]] = defaultdict(list)
+        for packet in crop_packets:
+            tracking_id = str(packet.payload.get("tracking_id") or "")
+            if tracking_id:
+                grouped_by_tracking[tracking_id].append(packet)
+
+        assert len(grouped_by_tracking) == 3
+        stream_ids = {packets[0].stream_id for packets in grouped_by_tracking.values()}
+        assert len(stream_ids) == 3
+        for tracking_id, packets in grouped_by_tracking.items():
+            assert packets[0].lifecycle == Lifecycle.OPEN, tracking_id
+            assert any(packet.lifecycle == Lifecycle.CLOSE for packet in packets), tracking_id
+            assert all(packet.payload.get("event_id") == tracking_id for packet in packets)
+            assert len({str(packet.payload.get("correlation_id") or "") for packet in packets}) == 1
+            assert all("main" in packet.artifacts for packet in packets if packet.lifecycle != Lifecycle.CLOSE)
+            assert all("main" not in packet.artifacts for packet in packets if packet.lifecycle == Lifecycle.CLOSE)
+
+        assert notifications
+        notification_lifecycles: dict[str, set[str]] = defaultdict(set)
+        notification_tracking_ids: dict[str, set[str]] = defaultdict(set)
+        stored_paths_by_tracking: dict[str, set[str]] = defaultdict(set)
+        for item in notifications:
+            dedupe_key = str(item.get("dedupe_key") or "")
+            payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            notification_lifecycles[dedupe_key].add(str(payload.get("lifecycle") or ""))
+            tracking_id = str(payload.get("tracking_id") or "")
+            if tracking_id:
+                notification_tracking_ids[dedupe_key].add(tracking_id)
+            stored_images = payload.get("stored_images") if isinstance(payload, dict) else {}
+            if isinstance(stored_images, dict):
+                for entries in stored_images.values():
+                    if not isinstance(entries, list):
+                        continue
+                    for entry in entries:
+                        if isinstance(entry, dict) and tracking_id:
+                            rel_path = str(entry.get("rel_path") or "")
+                            if rel_path:
+                                stored_paths_by_tracking[tracking_id].add(rel_path)
+
+        assert len(notification_lifecycles) == 3
+        for lifecycles in notification_lifecycles.values():
+            assert {"open", "close"}.issubset(lifecycles)
+        assert {next(iter(ids)) for ids in notification_tracking_ids.values()} == set(grouped_by_tracking)
+        assert set(stored_paths_by_tracking) == set(grouped_by_tracking)
+        for tracking_id, paths in stored_paths_by_tracking.items():
+            assert paths
+            safe_tracking_id = tracking_id.replace(":", "_")
+            assert any(safe_tracking_id in path for path in paths)
+            assert all((tmp_path / "files" / path).is_file() for path in paths)
 
     asyncio.run(scenario())
 

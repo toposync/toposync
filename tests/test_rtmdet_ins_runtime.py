@@ -10,8 +10,7 @@ import pytest
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.operators_sinks import StoreImagesRuntime
 from toposync.runtime.pipelines.runtime import Artifact, Packet
-from toposync_ext_cameras.pipelines.postprocess import ObjectCropRuntime
-from toposync_ext_vision.processing.tasks import VisionSegmentInstancesRuntime
+from toposync_ext_vision.processing.tasks import VisionCropObjectsRuntime, VisionSegmentInstancesRuntime
 from toposync_ext_vision.registry import build_default_model_registry
 
 
@@ -203,7 +202,7 @@ def test_rtmdet_ins_downstream_storage_can_choose_mask_or_bbox_crop(
             files_dir=files_dir,
         )
         segment = VisionSegmentInstancesRuntime({"model_id": "rtmdet.ins.store"}, deps)
-        crop = ObjectCropRuntime(
+        crop = VisionCropObjectsRuntime(
             {
                 "bbox_field": "object_bbox01",
                 "output_artifact_name": "debug_crop",

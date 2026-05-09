@@ -1793,6 +1793,7 @@ class CamerasExtension(BaseExtension):
                         "config": {
                             "close_after_seconds": 5.0,
                             "tracker_id": "simple_iou_kalman",
+                            "emit_mode": "events",
                         },
                     },
                     {"id": "map", "operator": "camera.camera_mapping", "config": {}},
@@ -1801,7 +1802,7 @@ class CamerasExtension(BaseExtension):
                         "operator": "core.throttle",
                         "config": {"interval_seconds": 5.0},
                     },
-                    {"id": "segment", "operator": "camera.object_crop", "config": {}},
+                    {"id": "crop", "operator": "vision.crop_objects", "config": {}},
                     {
                         "id": "store",
                         "operator": "core.store_images",
@@ -1854,12 +1855,12 @@ class CamerasExtension(BaseExtension):
                     },
                     {
                         "from": {"node": "throttle", "port": "out"},
-                        "to": {"node": "segment", "port": "in"},
+                        "to": {"node": "crop", "port": "in"},
                         "maxsize": 8,
                         "drop_policy": "drop_oldest",
                     },
                     {
-                        "from": {"node": "segment", "port": "out"},
+                        "from": {"node": "crop", "port": "out"},
                         "to": {"node": "store", "port": "in"},
                         "maxsize": 16,
                         "drop_policy": "drop_oldest",
@@ -1891,6 +1892,7 @@ class CamerasExtension(BaseExtension):
                         "config": {
                             "tracker_id": "simple_iou_kalman",
                             "close_after_seconds": 5.0,
+                            "emit_mode": "events",
                         },
                     },
                     {"id": "map", "operator": "camera.camera_mapping", "config": {}},
@@ -1900,8 +1902,8 @@ class CamerasExtension(BaseExtension):
                         "config": {"interval_seconds": 8.0},
                     },
                     {
-                        "id": "segment",
-                        "operator": "camera.object_crop",
+                        "id": "crop",
+                        "operator": "vision.crop_objects",
                         "config": {"padding_ratio": 0.12},
                     },
                     {
@@ -1956,12 +1958,12 @@ class CamerasExtension(BaseExtension):
                     },
                     {
                         "from": {"node": "throttle", "port": "out"},
-                        "to": {"node": "segment", "port": "in"},
+                        "to": {"node": "crop", "port": "in"},
                         "maxsize": 8,
                         "drop_policy": "drop_oldest",
                     },
                     {
-                        "from": {"node": "segment", "port": "out"},
+                        "from": {"node": "crop", "port": "out"},
                         "to": {"node": "store", "port": "in"},
                         "maxsize": 16,
                         "drop_policy": "drop_oldest",
@@ -1999,6 +2001,7 @@ class CamerasExtension(BaseExtension):
                             "close_after_seconds": 8.0,
                             "default_interval_seconds": 0.25,
                             "tracker_id": "simple_iou_kalman",
+                            "emit_mode": "events",
                             "pause_when_gate_closed": True,
                             "max_paused_seconds": 900.0,
                         },
@@ -2039,8 +2042,8 @@ class CamerasExtension(BaseExtension):
                         },
                     },
                     {
-                        "id": "segment",
-                        "operator": "camera.object_crop",
+                        "id": "crop",
+                        "operator": "vision.crop_objects",
                         "config": {"padding_ratio": 0.16},
                     },
                     {
@@ -2107,12 +2110,12 @@ class CamerasExtension(BaseExtension):
                     },
                     {
                         "from": {"node": "throttle", "port": "out"},
-                        "to": {"node": "segment", "port": "in"},
+                        "to": {"node": "crop", "port": "in"},
                         "maxsize": 8,
                         "drop_policy": "drop_oldest",
                     },
                     {
-                        "from": {"node": "segment", "port": "out"},
+                        "from": {"node": "crop", "port": "out"},
                         "to": {"node": "store", "port": "in"},
                         "maxsize": 16,
                         "drop_policy": "drop_oldest",

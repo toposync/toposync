@@ -21,12 +21,12 @@ def test_contract_alerts_when_required_payload_keys_are_missing() -> None:
             "schema_version": 1,
             "nodes": [
                 {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
-                {"id": "seg", "operator": "camera.object_crop", "config": {}},
+                {"id": "crop", "operator": "vision.crop_objects", "config": {}},
                 {"id": "sink", "operator": "core.sink", "config": {}},
             ],
             "edges": [
-                {"from": {"node": "source", "port": "out"}, "to": {"node": "seg", "port": "in"}},
-                {"from": {"node": "seg", "port": "out"}, "to": {"node": "sink", "port": "in"}},
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "crop", "port": "in"}},
+                {"from": {"node": "crop", "port": "out"}, "to": {"node": "sink", "port": "in"}},
             ],
         },
     )
@@ -35,7 +35,7 @@ def test_contract_alerts_when_required_payload_keys_are_missing() -> None:
 
     assert any(
         alert.code == "missing_required_payload_keys"
-        and alert.node_id == "seg"
+        and alert.node_id == "crop"
         and "object_bbox01" in alert.message
         for alert in alerts
     )

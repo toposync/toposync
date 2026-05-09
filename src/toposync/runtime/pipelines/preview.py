@@ -31,7 +31,6 @@ _SKIP_OPERATOR_IDS: set[str] = {
 
 _UNSUPPORTED_OPERATOR_IDS: set[str] = {
     "camera.frame_attach",
-    "camera.object_crop",
     "core.notify",
     "core.store_images",
     "dist.project_to_origin",
@@ -39,6 +38,7 @@ _UNSUPPORTED_OPERATOR_IDS: set[str] = {
     "dist.target_filter",
     "home_assistant.notify",
     "stream.publish_video",
+    "vision.crop_objects",
     "vision.detect",
     "vision.pose_estimate",
     "vision.segment_instances",

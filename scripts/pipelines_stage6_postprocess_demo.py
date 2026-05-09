@@ -105,10 +105,10 @@ def build_graph(args: argparse.Namespace) -> dict[str, Any]:
                 "config": {"stream_id": "camera:stage6"},
             },
             {
-                "id": "segment",
-                "operator": "camera.object_crop",
+                "id": "crop",
+                "operator": "vision.crop_objects",
                 "config": {
-                    "input_artifact_names": ["face", "frame_original"],
+                    "input_artifact_name": "face",
                     "output_artifact_name": "segmented",
                     "bbox_field": "object_bbox01",
                 },
@@ -169,12 +169,12 @@ def build_graph(args: argparse.Namespace) -> dict[str, Any]:
         "edges": [
             {
                 "from": {"node": "source", "port": "out"},
-                "to": {"node": "segment", "port": "in"},
+                "to": {"node": "crop", "port": "in"},
                 "maxsize": int(args.queue_size),
                 "drop_policy": str(args.drop_policy),
             },
             {
-                "from": {"node": "segment", "port": "out"},
+                "from": {"node": "crop", "port": "out"},
                 "to": {"node": "mapping", "port": "in"},
                 "maxsize": int(args.queue_size),
                 "drop_policy": str(args.drop_policy),

@@ -76,6 +76,30 @@ class VisionClassifyImageConfig(BaseModel):
         return str(value or "").strip()
 
 
+class VisionCropObjectsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    input_artifact_name: str = ""
+    output_artifact_name: str = "main"
+    bbox_field: str = "object_bbox01"
+    padding_ratio: float = Field(default=0.08, ge=0.0, le=1.0)
+    min_crop_size_px: int = Field(default=8, ge=1, le=4096)
+    crop_close_frames: bool = False
+
+    @field_validator("input_artifact_name", "bbox_field")
+    @classmethod
+    def _trim_optional_strings(cls, value: str) -> str:
+        return str(value or "").strip()
+
+    @field_validator("output_artifact_name")
+    @classmethod
+    def _validate_output_artifact_name(cls, value: str) -> str:
+        name = str(value or "").strip()
+        if not name:
+            raise ValueError("output_artifact_name is required")
+        return name
+
+
 class VisionTrackConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

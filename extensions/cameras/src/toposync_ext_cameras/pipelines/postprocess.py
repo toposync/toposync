@@ -277,23 +277,6 @@ def _velocity_expression_hints() -> list[Any]:
     ]
 
 
-class ObjectCropConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    input_artifact_name: str = ""
-    output_artifact_name: str = MAIN_ARTIFACT_NAME
-    bbox_field: str = "object_bbox01"
-    padding_ratio: float = Field(default=0.08, ge=0.0, le=1.0)
-    min_crop_size_px: int = Field(default=8, ge=1, le=4096)
-
-    @field_validator("output_artifact_name")
-    @classmethod
-    def _validate_output_artifact_name(cls, value: str) -> str:
-        name = str(value or "").strip()
-        if not name:
-            raise ValueError("output_artifact_name is required")
-        return name
-
-
 class ImageResizeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input_artifact_name: str = ""
@@ -858,98 +841,6 @@ class VelocityEstimationConfig(BaseModel):
     @classmethod
     def _normalize_min_elapsed_seconds(cls, value: float) -> float:
         return float(value)
-
-
-class ObjectCropRuntime(TransformOperatorRuntime):
-    def __init__(self, config: dict[str, Any]) -> None:
-        self._config = ObjectCropConfig.model_validate(config)
-
-    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
-        packet = _ensure_original_artifact(packet)
-        selected_name, image = _resolve_input_image(
-            packet,
-            input_artifact_name=self._config.input_artifact_name,
-        )
-        if image is None:
-            payload = _annotate_artifact_contract(
-                packet.payload,
-                packet=packet,
-                input_artifact_name=self._config.input_artifact_name,
-                selected_input_artifact_name=None,
-            )
-            return [replace(packet, payload=payload)]
-
-        bbox01: tuple[float, float, float, float] | None = None
-        bbox_source = ""
-        if selected_name:
-            selected_artifact = packet.artifacts.get(selected_name)
-            if selected_artifact is not None:
-                bbox01 = _read_bbox01_from_artifact(selected_artifact)
-                if bbox01 is not None:
-                    bbox_source = f"artifact:{selected_name}"
-
-        if bbox01 is None:
-            bbox01 = _read_bbox01(packet, bbox_field=self._config.bbox_field)
-            if bbox01 is not None:
-                bbox_source = f"payload:{self._config.bbox_field}"
-        if bbox01 is None:
-            payload = _annotate_artifact_contract(
-                packet.payload,
-                packet=packet,
-                input_artifact_name=self._config.input_artifact_name,
-                selected_input_artifact_name=selected_name,
-            )
-            return [replace(packet, payload=payload)]
-
-        bbox01_input = bbox01
-        bbox01_selected = bbox01_input
-        crop_bbox01 = _read_frame_crop_bbox01(packet, selected_artifact_name=selected_name)
-        if crop_bbox01 is not None:
-            reproj = _reproject_bbox01_to_crop(bbox01_selected, crop_bbox01)
-            if reproj is not None:
-                bbox01_selected = reproj
-                bbox_source = f"{bbox_source}|reproject:frame_crop" if bbox_source else "reproject:frame_crop"
-        frame_warp = _read_frame_warp(packet, selected_artifact_name=selected_name)
-        if frame_warp is not None:
-            warped_bbox01 = _reproject_bbox01_to_warp(bbox01_selected, frame_warp)
-            if warped_bbox01 is not None:
-                bbox01_selected = warped_bbox01
-                bbox_source = f"{bbox_source}|reproject:frame_warp" if bbox_source else "reproject:frame_warp"
-
-        bbox01_used = _expand_bbox01(bbox01_selected, padding_ratio=float(self._config.padding_ratio))
-        crop = _crop_bbox01(image=image, bbox01=bbox01_used, min_crop_size_px=self._config.min_crop_size_px)
-        if crop is None:
-            payload = _annotate_artifact_contract(
-                packet.payload,
-                packet=packet,
-                input_artifact_name=self._config.input_artifact_name,
-                selected_input_artifact_name=selected_name,
-            )
-            return [replace(packet, payload=payload)]
-
-        out = packet.with_artifact(
-            Artifact(
-                name=self._config.output_artifact_name,
-                data=crop,
-                mime_type="image/raw",
-                metadata={
-                    "source_artifact_name": selected_name,
-                    "bbox01": list(bbox01_used),
-                    "bbox01_original": list(bbox01_input),
-                    "bbox01_selected": list(bbox01_selected),
-                    "bbox_source": bbox_source,
-                    "padding_ratio": float(self._config.padding_ratio),
-                },
-            ),
-        )
-        payload = _annotate_artifact_contract(
-            out.payload,
-            packet=out,
-            input_artifact_name=self._config.input_artifact_name,
-            selected_input_artifact_name=selected_name,
-            latest_artifact_name=self._config.output_artifact_name,
-        )
-        return [replace(out, payload=payload)]
 
 
 class ImageCropRuntime(TransformOperatorRuntime):
@@ -3660,23 +3551,6 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
         share_strategy="by_signature",
         owner="com.toposync.cameras",
         runtime_factory=lambda config, _deps: FrameAttachRuntime(config),
-    )
-    registry.register_operator(
-        operator_id="camera.object_crop",
-        description="Crops object image by bbox and writes artifact.",
-        config_model=ObjectCropConfig,
-        inputs=[{"name": "in", "required": True}],
-        outputs=[{"name": "out"}],
-        capabilities=["camera", "vision", "artifact"],
-        defaults=ObjectCropConfig().model_dump(),
-        requires_payload_keys=["object_bbox01"],
-        requires_artifacts=[MAIN_ARTIFACT_NAME],
-        produces_payload_keys=[],
-        produces_artifacts=[MAIN_ARTIFACT_NAME],
-        expression_hints=[],
-        share_strategy="by_signature",
-        owner="com.toposync.cameras",
-        runtime_factory=lambda config, _deps: ObjectCropRuntime(config),
     )
     registry.register_operator(
         operator_id="camera.image_crop",

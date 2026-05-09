@@ -28,7 +28,7 @@ import {
   putPipeline,
   resetPipelineStats,
 } from "../../util/api";
-import { InteractivePipelineEditor } from "./pipelines/InteractivePipelineEditor";
+import { InteractivePipelineEditor, PipelineStorageCard } from "./pipelines/InteractivePipelineEditor";
 import { PipelineDuplicateModal } from "./pipelines/PipelineDuplicateModal";
 import { PipelineTelemetryFieldModal } from "./pipelines/PipelineTelemetryFieldModal";
 import { PipelineTelemetryOverviewCard } from "./pipelines/PipelineTelemetryOverviewCard";
@@ -855,8 +855,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                     interactiveWarning={interactiveWarning}
                     setInteractiveWarning={setInteractiveWarning}
                     interactiveGraph={interactiveGraph}
-                    pipelineStorageLimitBytes={pipelineStorageLimitBytes}
-                    onUpdatePipelineStorageLimitBytes={updatePipelineStorageLimitBytes}
                     pipelineAlerts={recommendations}
                     operatorPanels={operatorPanels}
                     onOpenTelemetryField={openTelemetryFieldInspector}
@@ -895,6 +893,12 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                   externalRefreshNonce={telemetryResetNonce}
                   resetting={telemetryResetting}
                   onReset={resetTelemetryAndStats}
+                />
+                <PipelineStorageCard
+                  pipelineName={draft?.name ?? null}
+                  limitBytes={pipelineStorageLimitBytes}
+                  onUpdateLimitBytes={updatePipelineStorageLimitBytes}
+                  steps={interactiveSteps}
                 />
               </div>
             )}

@@ -1,8 +1,8 @@
 import React, { useCallback, useMemo, useState } from "react";
 import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 
-import { cleanupPipelineStorage } from "../../../util/api";
 import type { CamerasIndexResponse, PipelineAlert, PipelineOperatorDefinition } from "../../../util/api";
+import { cleanupPipelineStorage } from "../../../util/api";
 import { i18n } from "../../../util/i18n";
 
 import { NODE_ID_RE, PIPELINE_PRESET_OPERATOR_IDS } from "./constants";
@@ -35,8 +35,6 @@ type Props = {
   interactiveWarning: string | null;
   setInteractiveWarning: React.Dispatch<React.SetStateAction<string | null>>;
   interactiveGraph: InteractiveBuildResult;
-  pipelineStorageLimitBytes: number | null;
-  onUpdatePipelineStorageLimitBytes: (value: number | null) => void;
   pipelineAlerts?: PipelineAlert[];
   operatorPanels?: Record<string, PipelineOperatorPanel>;
   onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
@@ -61,7 +59,7 @@ type PipelineStorageCardProps = {
   steps: InteractiveStep[];
 };
 
-function PipelineStorageCard({
+export function PipelineStorageCard({
   pipelineName,
   limitBytes,
   onUpdateLimitBytes,
@@ -250,8 +248,6 @@ export function InteractivePipelineEditor({
   interactiveWarning,
   setInteractiveWarning,
   interactiveGraph,
-  pipelineStorageLimitBytes,
-  onUpdatePipelineStorageLimitBytes,
   pipelineAlerts = [],
   operatorPanels = {},
   onOpenTelemetryField,
@@ -668,13 +664,6 @@ export function InteractivePipelineEditor({
           </div>
         </div>
       ) : null}
-
-      <PipelineStorageCard
-        pipelineName={pipelineName}
-        limitBytes={pipelineStorageLimitBytes}
-        onUpdateLimitBytes={onUpdatePipelineStorageLimitBytes}
-        steps={interactiveSteps}
-      />
 
       <InteractiveStepsList
         steps={interactiveSteps}

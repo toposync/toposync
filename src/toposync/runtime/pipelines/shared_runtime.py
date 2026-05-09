@@ -132,6 +132,7 @@ def build_merged_pipeline_plan(
             )
         ),
         topological_order=tuple(topological_order),
+        limits={},
     )
     normalized_occurrences = {
         merged_node_id: tuple(items) for merged_node_id, items in occurrences_by_merged_id.items()
@@ -160,6 +161,9 @@ class PipelineBundleRuntime:
         self.dependencies.pipeline_stats_node_occurrences = _build_bundle_stats_node_occurrences(
             plan=self.plan
         )
+        self.dependencies.pipeline_graph_limits_by_pipeline = {
+            pipeline.name: dict(pipeline.limits) for pipeline in self.report.pipelines
+        }
         self._runtime = PipelineRuntime(
             compiled=self.plan.merged_pipeline,
             registry=self.registry,

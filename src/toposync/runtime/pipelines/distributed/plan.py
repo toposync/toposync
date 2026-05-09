@@ -41,6 +41,7 @@ def build_distributed_graphs(
 ) -> DistributedGraphs:
     graph = dict(pipeline.graph or {})
     schema_version = int(graph.get("schema_version") or 1)
+    limits = dict(graph.get("limits") or {}) if isinstance(graph.get("limits"), dict) else {}
     nodes = list(graph.get("nodes") or [])
     edges = list(graph.get("edges") or [])
 
@@ -139,6 +140,7 @@ def build_distributed_graphs(
             "schema_version": schema_version,
             "nodes": proc_nodes,
             "edges": proc_edges,
+            "limits": limits,
         }
 
     if origin_nodes:
@@ -191,6 +193,7 @@ def build_distributed_graphs(
             "schema_version": schema_version,
             "nodes": orig_nodes,
             "edges": orig_edges,
+            "limits": limits,
         }
 
     return DistributedGraphs(
@@ -199,4 +202,3 @@ def build_distributed_graphs(
         processing_graph=processing_graph,
         cross_edges=tuple(cross_edges),
     )
-

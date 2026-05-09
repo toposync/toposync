@@ -288,6 +288,8 @@ class PipelinesOrchestrator:
             processing_emit_projected_event=base.processing_emit_projected_event,
             pipeline_stats_store=base.pipeline_stats_store,
             pipeline_telemetry_store=base.pipeline_telemetry_store,
+            pipeline_storage_manager=base.pipeline_storage_manager,
+            pipeline_graph_limits_by_pipeline=base.pipeline_graph_limits_by_pipeline,
             execution_scheduler=base.execution_scheduler,
             artifact_max_bytes_per_packet=base.artifact_max_bytes_per_packet,
             artifact_max_total_bytes_per_pipeline=base.artifact_max_total_bytes_per_pipeline,

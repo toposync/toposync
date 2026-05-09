@@ -125,7 +125,6 @@ def build_pipeline_from_legacy_camera_rule(
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "subdir": "pipelines",
                         "format": "webp",
                         "drop_data_after_store": True,
                     },
@@ -215,7 +214,6 @@ def build_pipeline_from_legacy_camera_rule(
                 "id": "store",
                 "operator": "core.store_images",
                 "config": {
-                    "subdir": "pipelines",
                     "format": "webp",
                     "drop_data_after_store": True,
                 },

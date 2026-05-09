@@ -49,6 +49,8 @@ class PipelineRuntimeDependencies:
     pipeline_stats_store: PipelineStatsStore | None = None
     pipeline_stats_node_occurrences: dict[str, tuple[tuple[str, str], ...]] | None = None
     pipeline_telemetry_store: PipelineTelemetryStore | None = None
+    pipeline_storage_manager: Any | None = None
+    pipeline_graph_limits_by_pipeline: dict[str, dict[str, Any]] | None = None
     preview_packet_collector: Callable[[Packet, str, str], Awaitable[None] | None] | None = None
     execution_scheduler: ExecutionScheduler | None = None
     artifact_max_bytes_per_packet: int | None = 128 * 1024 * 1024
@@ -108,6 +110,8 @@ class NodeExecutionContext:
     logger: logging.Logger
     stats_store: PipelineStatsStore | None = None
     telemetry_store: PipelineTelemetryStore | None = None
+    storage_manager: Any | None = None
+    pipeline_graph_limits_by_pipeline: dict[str, dict[str, Any]] = field(default_factory=dict)
     stats_node_occurrences: tuple[tuple[str, str], ...] = ()
     stats_count_outputs_on_read: bool = False
     stats_count_terminal_outputs_on_emit: bool = False
@@ -230,6 +234,8 @@ class NodeExecutionContext:
         ts_s: float | None = None,
         image_key: str | None = None,
         confidence: float | None = None,
+        layer_label: str | None = None,
+        size_bytes: int | None = None,
     ) -> None:
         store = self.telemetry_store
         if store is None:
@@ -244,9 +250,17 @@ class NodeExecutionContext:
                     ts_s=ts_s,
                     image_key=image_key,
                     confidence=confidence,
+                    layer_label=layer_label,
+                    size_bytes=size_bytes,
                 )
             except Exception:
                 continue
+
+    def graph_limits_for_pipeline(self, pipeline_name: str) -> dict[str, Any]:
+        name = self._normalize_telemetry_pipeline_name(str(pipeline_name or "").strip())
+        if name in self.pipeline_graph_limits_by_pipeline:
+            return dict(self.pipeline_graph_limits_by_pipeline.get(name) or {})
+        return dict(self.pipeline_graph_limits_by_pipeline.get(self.pipeline_name) or {})
 
 
 class BaseOperatorRuntime:
@@ -501,6 +515,12 @@ class PipelineRuntime:
                 logger=self.logger,
                 stats_store=self.dependencies.pipeline_stats_store,
                 telemetry_store=self.dependencies.pipeline_telemetry_store,
+                storage_manager=self.dependencies.pipeline_storage_manager,
+                pipeline_graph_limits_by_pipeline=(
+                    dict(self.dependencies.pipeline_graph_limits_by_pipeline)
+                    if self.dependencies.pipeline_graph_limits_by_pipeline is not None
+                    else {self.compiled.name: dict(self.compiled.limits)}
+                ),
             )
             occurrences_map = self.dependencies.pipeline_stats_node_occurrences
             if occurrences_map is not None:

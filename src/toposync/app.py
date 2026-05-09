@@ -68,6 +68,11 @@ from toposync.runtime.pipelines.python_dsl import (
 from toposync.runtime.pipelines.recommendations import PipelineAlert, analyze_compiled_pipeline
 from toposync.runtime.pipelines.safe_expression import SafeExpression, SafeExpressionError
 from toposync.runtime.pipelines.stats import PipelineStatsStore
+from toposync.runtime.pipelines.storage import (
+    PipelineStorageManager,
+    storage_limits_from_pipeline,
+    storage_settings_from_core_settings,
+)
 from toposync.runtime.pipelines.telemetry import (
     MAX_IMAGE_MARKER_QUERY_LIMIT,
     METRIC_AI_CONDITION_CONFIDENCE,
@@ -560,6 +565,35 @@ class PipelineStatsResponse(BaseModel):
     updated_at: float = 0.0
 
 
+class PipelineStorageLayerResponse(BaseModel):
+    layer_key: str = ""
+    layer_label: str = ""
+    node_id: str = ""
+    artifact_name: str = ""
+    used_bytes: int = 0
+    limit_bytes: int | None = None
+    file_count: int = 0
+    avg_file_bytes: int = 0
+    oldest_at: float = 0.0
+    newest_at: float = 0.0
+    over_limit: bool = False
+
+
+class PipelineStorageResponse(BaseModel):
+    pipeline_name: str
+    used_bytes: int = 0
+    limit_bytes: int | None = None
+    file_count: int = 0
+    avg_file_bytes: int = 0
+    oldest_at: float = 0.0
+    newest_at: float = 0.0
+    last_cleanup: float = 0.0
+    over_limit: bool = False
+    free_bytes: int = 0
+    min_free_bytes: int = 0
+    layers: list[PipelineStorageLayerResponse] = Field(default_factory=list)
+
+
 class PipelineTelemetryNumericPoint(BaseModel):
     bucket_start_s: float = 0.0
     count: int = 0
@@ -593,6 +627,8 @@ class PipelineTelemetryImageMarker(BaseModel):
     rel_path: str = ""
     image_key: str | None = None
     confidence: float | None = None
+    layer_label: str | None = None
+    size_bytes: int | None = None
 
 
 class PipelineTelemetryImageMarkersResponse(BaseModel):
@@ -776,6 +812,7 @@ def _build_preview_runtime_dependencies(
             files_dir=config_store.paths.files_dir,
             pipeline_stats_store=getattr(request.app.state, "pipeline_stats_store", None),
             pipeline_telemetry_store=getattr(request.app.state, "pipeline_telemetry_store", None),
+            pipeline_storage_manager=getattr(request.app.state, "pipeline_storage_manager", None),
             execution_scheduler=ExecutionScheduler(),
         )
     deps.preview_packet_collector = collector
@@ -999,6 +1036,13 @@ async def _lifespan(app: FastAPI):
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to start telemetry checkpoint loop: %s", exc)
 
+    pipeline_storage_manager = PipelineStorageManager(
+        data_dir=config_store.paths.data_dir,
+        files_dir=config_store.paths.files_dir,
+        settings=storage_settings_from_core_settings(await config_store.get_settings()),
+    )
+    app.state.pipeline_storage_manager = pipeline_storage_manager
+
     def _env_int(name: str, default: int) -> int:
         raw = str(os.getenv(name) or "").strip()
         if not raw:
@@ -1053,6 +1097,7 @@ async def _lifespan(app: FastAPI):
             services=services,
             pipeline_stats_store=pipeline_stats_store,
             pipeline_telemetry_store=pipeline_telemetry_store,
+            pipeline_storage_manager=pipeline_storage_manager,
             pipeline_snapshot_store=PipelineStepSnapshotStore(
                 files_dir=config_store.paths.files_dir
             ),
@@ -1091,6 +1136,10 @@ async def _lifespan(app: FastAPI):
                 await pipeline_telemetry_checkpoint.close()
             except Exception:
                 pass
+        try:
+            pipeline_storage_manager.close()
+        except Exception:
+            pass
 
 
 def create_app() -> FastAPI:
@@ -1750,7 +1799,11 @@ def create_app() -> FastAPI:
     async def put_settings(request: Request, settings: AppSettings) -> AppSettings:
         _require(request, action="core:settings:write")
         config_store: ConfigStore = request.app.state.config_store
-        return await config_store.replace_settings(settings)
+        saved = await config_store.replace_settings(settings)
+        storage_manager = getattr(request.app.state, "pipeline_storage_manager", None)
+        if isinstance(storage_manager, PipelineStorageManager):
+            storage_manager.configure(storage_settings_from_core_settings(saved))
+        return saved
 
     @app.patch("/api/settings/extensions/{extension_id}", response_model=ExtensionSettingsResponse)
     async def patch_extension_settings(
@@ -3427,6 +3480,73 @@ def create_app() -> FastAPI:
                     node_ids.add(node_id)
         snapshot = stats_store.snapshot(pipeline.name, node_ids=node_ids or None)
         return PipelineStatsResponse.model_validate(snapshot)
+
+    @app.get("/api/pipelines/{pipeline_name}/storage", response_model=PipelineStorageResponse)
+    async def get_pipeline_storage(
+        request: Request,
+        pipeline_name: str,
+    ) -> PipelineStorageResponse:
+        _require(request, action="core:pipelines:read")
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            pipeline = await config_store.get_pipeline(pipeline_name)
+        except PipelineValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if pipeline is None:
+            raise HTTPException(status_code=404, detail="Unknown pipeline")
+        storage_manager = getattr(request.app.state, "pipeline_storage_manager", None)
+        if not isinstance(storage_manager, PipelineStorageManager):
+            return PipelineStorageResponse(pipeline_name=pipeline.name)
+
+        settings = storage_settings_from_core_settings(await config_store.get_settings())
+        storage_manager.configure(settings)
+        limits = storage_limits_from_pipeline(pipeline, settings=settings)
+        summary = await asyncio.to_thread(
+            storage_manager.summarize_pipeline,
+            pipeline.name,
+            limits=limits,
+        )
+        return PipelineStorageResponse.model_validate(summary)
+
+    @app.post("/api/pipelines/{pipeline_name}/storage/cleanup", response_model=PipelineStorageResponse)
+    async def cleanup_pipeline_storage(
+        request: Request,
+        pipeline_name: str,
+    ) -> PipelineStorageResponse:
+        _require(request, action="core:pipelines:write")
+        config_store: ConfigStore = request.app.state.config_store
+        try:
+            pipeline = await config_store.get_pipeline(pipeline_name)
+        except PipelineValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if pipeline is None:
+            raise HTTPException(status_code=404, detail="Unknown pipeline")
+        storage_manager = getattr(request.app.state, "pipeline_storage_manager", None)
+        if not isinstance(storage_manager, PipelineStorageManager):
+            return PipelineStorageResponse(pipeline_name=pipeline.name)
+
+        settings = storage_settings_from_core_settings(await config_store.get_settings())
+        storage_manager.configure(settings)
+        limits = storage_limits_from_pipeline(pipeline, settings=settings)
+        cleanup_result = await asyncio.to_thread(
+            storage_manager.cleanup_pipeline,
+            pipeline.name,
+            limits=limits,
+        )
+        telemetry_store = getattr(request.app.state, "pipeline_telemetry_store", None)
+        if telemetry_store is not None and cleanup_result.deleted_rel_paths:
+            remove = getattr(telemetry_store, "remove_image_markers_by_rel_paths", None)
+            if callable(remove):
+                try:
+                    remove(pipeline.name, cleanup_result.deleted_rel_paths)
+                except Exception:
+                    pass
+        summary = await asyncio.to_thread(
+            storage_manager.summarize_pipeline,
+            pipeline.name,
+            limits=limits,
+        )
+        return PipelineStorageResponse.model_validate(summary)
 
     @app.get(
         "/api/pipelines/telemetry/all/numeric",

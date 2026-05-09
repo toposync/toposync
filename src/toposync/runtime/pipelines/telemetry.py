@@ -423,6 +423,8 @@ class PipelineTelemetryStore:
         ts_s: float | None = None,
         image_key: str | None = None,
         confidence: float | None = None,
+        layer_label: str | None = None,
+        size_bytes: int | None = None,
     ) -> bool:
         if self.max_image_markers_per_pipeline <= 0 or self.max_image_pipelines <= 0:
             return False
@@ -470,10 +472,43 @@ class PipelineTelemetryStore:
                 parsed_confidence = 0.0
             if math.isfinite(parsed_confidence):
                 marker["confidence"] = max(0.0, min(1.0, parsed_confidence))
+        layer = str(layer_label or "").strip()
+        if layer:
+            marker["layer_label"] = layer
+        if size_bytes is not None:
+            try:
+                parsed_size = int(size_bytes)
+            except Exception:
+                parsed_size = 0
+            if parsed_size > 0:
+                marker["size_bytes"] = parsed_size
         markers.append(marker)
         self._image_pipeline_updated_at[pipeline] = timestamp
         self._dirty = True
         return True
+
+    def remove_image_markers_by_rel_paths(
+        self,
+        pipeline_name: str,
+        rel_paths: list[str] | tuple[str, ...] | set[str],
+    ) -> int:
+        pipeline = self._sanitize_pipeline_name(pipeline_name)
+        if not pipeline:
+            return 0
+        targets = {str(item or "").strip() for item in rel_paths if str(item or "").strip()}
+        if not targets:
+            return 0
+        markers = self._image_markers_by_pipeline.get(pipeline)
+        if markers is None:
+            return 0
+        kept = [item for item in markers if str(item.get("rel_path") or "").strip() not in targets]
+        removed = len(markers) - len(kept)
+        if removed <= 0:
+            return 0
+        markers.clear()
+        markers.extend(kept)
+        self._dirty = True
+        return removed
 
     def reset(self, pipeline_name: str) -> None:
         pipeline = self._sanitize_pipeline_name(pipeline_name)
@@ -987,7 +1022,7 @@ def _write_persisted_view_atomic(
 
 
 def _write_persisted_payload(writer: _PersistWriter, view: _TelemetryPersistenceView, *, include_hist: bool) -> None:
-    writer.u32(1)  # payload version
+    writer.u32(2)  # payload version
     flags = 1 if include_hist else 0
     writer.u32(flags)
     writer.f64(float(view.captured_at or 0.0))
@@ -1042,6 +1077,11 @@ def _write_persisted_payload(writer: _PersistWriter, view: _TelemetryPersistence
                     writer.f64(float(confidence))
                 except Exception:
                     writer.f64(float("nan"))
+            writer.text(str(marker.get("layer_label") or ""))
+            try:
+                writer.f64(float(marker.get("size_bytes") or 0.0))
+            except Exception:
+                writer.f64(0.0)
 
 
 def _decode_persisted_payload(
@@ -1140,7 +1180,7 @@ def _sanitize_marker_confidence(value: Any) -> float | None:
 def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: bytes) -> None:
     reader = _PersistReader(payload)
     version = reader.u32()
-    if version != 1:
+    if version not in {1, 2}:
         raise ValueError("unsupported telemetry checkpoint version")
     flags = reader.u32()
     include_hist = bool(flags & 1)
@@ -1264,6 +1304,14 @@ def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: b
             image_key = _sanitize_marker_key(reader.text())
             confidence_raw = reader.f64()
             confidence = None if _is_nan(confidence_raw) else _sanitize_marker_confidence(confidence_raw)
+            layer_label = ""
+            size_bytes = 0
+            if version >= 2:
+                layer_label = _sanitize_marker_text(reader.text())
+                try:
+                    size_bytes = max(0, int(reader.f64()))
+                except Exception:
+                    size_bytes = 0
 
             if should_store and rel_path and node_id:
                 marker: dict[str, Any] = {
@@ -1276,6 +1324,10 @@ def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: b
                     marker["image_key"] = image_key
                 if confidence is not None:
                     marker["confidence"] = confidence
+                if layer_label:
+                    marker["layer_label"] = layer_label
+                if size_bytes > 0:
+                    marker["size_bytes"] = int(size_bytes)
                 store._image_markers_by_pipeline[pipeline_name].append(marker)
                 if ts > max_ts:
                     max_ts = ts

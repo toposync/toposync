@@ -34,11 +34,18 @@ from .packet_contract import (
     resolve_source_name,
 )
 from .runtime import Artifact, Lifecycle, Packet
+from .storage import (
+    PipelineStorageLayerLimit,
+    PipelineStorageLimits,
+    PipelineStorageLowDiskError,
+    PipelineStorageManager,
+    build_storage_layer_key,
+    normalize_layer_label,
+)
 from .telemetry import METRIC_STORE_IMAGE
 
 
 _SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_.-]+")
-_SAFE_DIR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _TEMPLATE_RE = re.compile(r"\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}")
 
 ImageStorageFormat = Literal["jpg", "png", "webp"]
@@ -78,6 +85,21 @@ def _resolve_logical_pipeline_name(context: Any) -> str:
     return name
 
 
+def _resolve_logical_node_id(context: Any) -> str:
+    node_id = str(getattr(context, "node_id", "") or "").strip()
+    if node_id:
+        return node_id
+
+    occurrences = getattr(context, "stats_node_occurrences", None)
+    if isinstance(occurrences, tuple) and len(occurrences) == 1:
+        first = occurrences[0]
+        if isinstance(first, tuple) and len(first) >= 2:
+            occ_node = str(first[1] or "").strip()
+            if occ_node:
+                return occ_node
+    return "store_images"
+
+
 def _resolve_ts(packet: Packet, field: str) -> float:
     if field in {"frame_ts", "ts"}:
         return float(resolve_media_ts(packet))
@@ -99,6 +121,16 @@ def _as_finite_float(value: Any) -> float | None:
     if not math.isfinite(parsed):
         return None
     return float(parsed)
+
+
+def _positive_int_or_none(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except Exception:
+        return None
+    if parsed <= 0:
+        return None
+    return int(parsed)
 
 
 def _resolve_image_confidence(packet: Packet, artifact: Artifact) -> float | None:
@@ -317,18 +349,6 @@ def _sanitize_for_json(value: Any, *, max_depth: int = 4) -> Any:
     return str(value)
 
 
-def _build_rel_path(
-    *,
-    files_dir: Path,
-    components: list[str],
-    filename: str,
-) -> tuple[Path, str]:
-    safe_components = [_safe_component(item) for item in components]
-    path = files_dir.joinpath(*safe_components, filename)
-    rel = "/".join([*safe_components, filename])
-    return path, rel
-
-
 async def _write_bytes(path: Path, blob: bytes, *, overwrite: bool) -> None:
     def _sync() -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -342,6 +362,7 @@ async def _write_bytes(path: Path, blob: bytes, *, overwrite: bool) -> None:
 class StoreImagesConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input_artifact_name: str = ""
+    layer_label: str = ""
     min_frame_width: int = Field(
         default=0,
         ge=0,
@@ -354,11 +375,11 @@ class StoreImagesConfig(BaseModel):
         le=16384,
         description="Optional minimum payload.frame_height required to store images. 0 disables the check.",
     )
-    subdir: str = "pipelines"
     format: ImageStorageFormat = "webp"
     jpeg_quality: int = Field(default=85, ge=1, le=100)
     drop_data_after_store: bool = True
-    overwrite: bool = False
+    max_bytes_per_layer: int = Field(default=0, ge=0)
+    max_files_per_layer: int = Field(default=0, ge=0)
 
     @model_validator(mode="before")
     @classmethod
@@ -370,24 +391,17 @@ class StoreImagesConfig(BaseModel):
                 values["format"] = "jpg"
         return values
 
-    @field_validator("input_artifact_name")
+    @field_validator("input_artifact_name", "layer_label")
     @classmethod
-    def _trim_input_artifact_name(cls, value: str) -> str:
+    def _trim_text(cls, value: str) -> str:
         return str(value or "").strip()
-
-    @field_validator("subdir")
-    @classmethod
-    def _validate_subdir(cls, value: str) -> str:
-        subdir = str(value or "").strip()
-        if not subdir or not _SAFE_DIR_RE.match(subdir):
-            raise ValueError("subdir must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-        return subdir
 
 
 class StoreImagesRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = StoreImagesConfig.model_validate(config)
         self._dependencies = dependencies
+        self._fallback_storage_manager: PipelineStorageManager | None = None
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         min_width = int(self._config.min_frame_width)
@@ -402,6 +416,7 @@ class StoreImagesRuntime(TransformOperatorRuntime):
         files_dir = _resolve_files_dir(self._dependencies)
 
         pipeline_name = _resolve_logical_pipeline_name(context)
+        node_id = _resolve_logical_node_id(context)
         camera_id = _resolve_string(packet, "camera_id") or "no_camera"
         token = (
             _resolve_string(packet, "event_id")
@@ -423,8 +438,13 @@ class StoreImagesRuntime(TransformOperatorRuntime):
         if artifact is not None:
             rel: str | None = str(artifact.reference) if artifact.reference else None
             mime: str | None = str(artifact.mime_type) if artifact.mime_type else None
+            layer_label = normalize_layer_label(
+                self._config.layer_label,
+                artifact_name=artifact_name,
+            )
+            stored_size_bytes: int | None = None
 
-            should_write = bool(artifact.data is not None) and (bool(self._config.overwrite) or not bool(artifact.reference))
+            should_write = bool(artifact.data is not None)
             if should_write:
                 blob, ext, mime = await context.run_blocking(
                     _encode_image_bytes,
@@ -441,21 +461,64 @@ class StoreImagesRuntime(TransformOperatorRuntime):
                 if token:
                     parts.append(_safe_component(token, max_len=80))
                 parts.append(_safe_component(packet.packet_id[:8], max_len=16))
-                filename = "__".join(parts) + ext
-                abs_path, rel_path = _build_rel_path(
-                    files_dir=files_dir,
-                    components=[
-                        self._config.subdir,
-                        pipeline_name,
-                    ],
-                    filename=filename,
+                filename_hint = "__".join(parts)
+                manager = self._storage_manager(files_dir)
+                layer_key = build_storage_layer_key(
+                    node_id=node_id,
+                    layer_label=layer_label,
+                    artifact_name=artifact_name,
                 )
-                await _write_bytes(abs_path, blob, overwrite=bool(self._config.overwrite))
-                rel = rel_path
+                limits = self._storage_limits_for_context(
+                    context,
+                    pipeline_name=pipeline_name,
+                    layer_key=layer_key,
+                )
+                try:
+                    stored = await context.run_blocking(
+                        manager.store_blob,
+                        pipeline_name=pipeline_name,
+                        node_id=node_id,
+                        artifact_name=artifact_name,
+                        layer_label=layer_label,
+                        filename_hint=filename_hint,
+                        ext=ext,
+                        mime_type=mime or "",
+                        blob=blob,
+                        frame_ts=ts,
+                        limits=limits,
+                        concurrency_key="core.store_images.storage",
+                    )
+                except PipelineStorageLowDiskError as exc:
+                    context.metrics.error_count += 1
+                    context.logger.warning(
+                        "Store Images skipped packet for pipeline=%s node=%s: %s",
+                        pipeline_name,
+                        node_id,
+                        exc,
+                    )
+                    return [packet]
+                except Exception as exc:  # noqa: BLE001
+                    context.metrics.error_count += 1
+                    context.logger.warning(
+                        "Store Images failed for pipeline=%s node=%s: %s",
+                        pipeline_name,
+                        node_id,
+                        exc,
+                    )
+                    return [packet]
+                rel = stored.rel_path
+                stored_size_bytes = int(stored.size_bytes)
+                if stored.deleted_rel_paths:
+                    self._remove_deleted_telemetry_markers(
+                        pipeline_name=pipeline_name,
+                        rel_paths=stored.deleted_rel_paths,
+                    )
 
                 meta = dict(artifact.metadata)
                 meta["stored_rel_path"] = rel
                 meta["stored_ts_ms"] = ts_ms
+                meta["stored_size_bytes"] = stored_size_bytes
+                meta["storage_layer"] = stored.layer_label
                 packet = packet.with_artifact(
                     Artifact(
                         name=artifact.name,
@@ -485,11 +548,74 @@ class StoreImagesRuntime(TransformOperatorRuntime):
                             ts_s=ts,
                             image_key=artifact_name,
                             confidence=confidence,
+                            layer_label=layer_label,
+                            size_bytes=stored_size_bytes,
                         )
                     except Exception:
                         pass
 
         return [packet]
+
+    def _storage_manager(self, files_dir: Path) -> PipelineStorageManager:
+        manager = getattr(self._dependencies, "pipeline_storage_manager", None)
+        if isinstance(manager, PipelineStorageManager):
+            return manager
+        if self._fallback_storage_manager is None:
+            data_dir = files_dir.parent
+            store = self._dependencies.config_store
+            if isinstance(store, ConfigStore):
+                data_dir = store.paths.data_dir
+            self._fallback_storage_manager = PipelineStorageManager(
+                data_dir=data_dir,
+                files_dir=files_dir,
+            )
+        return self._fallback_storage_manager
+
+    def _storage_limits_for_context(
+        self,
+        context,  # noqa: ANN001
+        *,
+        pipeline_name: str,
+        layer_key: str,
+    ) -> PipelineStorageLimits:
+        manager = self._storage_manager(_resolve_files_dir(self._dependencies))
+        raw_limits: dict[str, Any] = {}
+        getter = getattr(context, "graph_limits_for_pipeline", None)
+        if callable(getter):
+            try:
+                raw = getter(pipeline_name)
+                if isinstance(raw, dict):
+                    raw_limits = raw
+            except Exception:
+                raw_limits = {}
+        pipeline_limit = _positive_int_or_none(raw_limits.get("storage_max_bytes"))
+        if pipeline_limit is None:
+            pipeline_limit = int(manager.settings.default_max_bytes_per_pipeline)
+        layer_limit = PipelineStorageLayerLimit(
+            max_bytes=_positive_int_or_none(self._config.max_bytes_per_layer),
+            max_files=_positive_int_or_none(self._config.max_files_per_layer),
+        )
+        return PipelineStorageLimits(
+            max_bytes_per_pipeline=pipeline_limit,
+            cleanup_target_ratio=float(manager.settings.cleanup_target_ratio),
+            min_free_bytes=int(manager.settings.min_free_bytes),
+            layer_limits={layer_key: layer_limit},
+        )
+
+    def _remove_deleted_telemetry_markers(
+        self,
+        *,
+        pipeline_name: str,
+        rel_paths: tuple[str, ...],
+    ) -> None:
+        store = getattr(self._dependencies, "pipeline_telemetry_store", None)
+        remove = getattr(store, "remove_image_markers_by_rel_paths", None)
+        if not callable(remove):
+            return
+        try:
+            remove(pipeline_name, rel_paths)
+        except Exception:
+            return
 
 
 class NotifyConfig(BaseModel):

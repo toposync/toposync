@@ -104,6 +104,7 @@ class CompiledPipeline:
     nodes: tuple[CompiledNode, ...]
     edges: tuple[CompiledEdge, ...]
     topological_order: tuple[str, ...]
+    limits: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +269,7 @@ class PipelineGraphCompiler:
             nodes=tuple(compiled_nodes),
             edges=tuple(compiled_edges),
             topological_order=tuple(topological_order),
+            limits=dict(graph.limits),
         )
 
     def compile_many(self, pipelines: list[Pipeline]) -> CompilationReport:

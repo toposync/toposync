@@ -788,12 +788,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                         </option>
                       ))}
                     </select>
-                    {onOpenProcessingServers ? (
-                      <button className="pillButton" type="button" onClick={onOpenProcessingServers}>
-                        <i className="fa-solid fa-server" aria-hidden="true" />
-                        {t("core.ui.pipelines.form.processing_server.manage")}
-                      </button>
-                    ) : null}
                   </div>
                 </label>
 

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "com.toposync.home_assistant",
   "name": "Home Assistant",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "frontend": {
     "kind": "module-federation",
     "remote_entry": "remoteEntry.js",

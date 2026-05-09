@@ -1807,7 +1807,6 @@ class CamerasExtension(BaseExtension):
                         "id": "store",
                         "operator": "core.store_images",
                         "config": {
-                            "subdir": "pipelines",
                             "format": "webp",
                         },
                     },
@@ -1910,7 +1909,6 @@ class CamerasExtension(BaseExtension):
                         "id": "store",
                         "operator": "core.store_images",
                         "config": {
-                            "subdir": "pipelines",
                             "format": "webp",
                         },
                     },
@@ -2050,7 +2048,6 @@ class CamerasExtension(BaseExtension):
                         "id": "store",
                         "operator": "core.store_images",
                         "config": {
-                            "subdir": "pipelines",
                             "format": "webp",
                         },
                     },

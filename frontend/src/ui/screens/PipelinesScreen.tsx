@@ -8,8 +8,6 @@ import type {
   CamerasIndexResponse,
   Pipeline,
   PipelineAlert,
-  PipelineCompileOutput,
-  PipelineCompilePythonOutput,
   PipelineOperatorDefinition,
   PipelineStats,
   ProcessingServer,
@@ -105,7 +103,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   const [graphText, setGraphText] = useState<string>("");
   const [pythonText, setPythonText] = useState<string>("");
   const [mode, setMode] = useState<EditorMode>("interactive");
-  const [compileOutput, setCompileOutput] = useState<(PipelineCompileOutput | PipelineCompilePythonOutput) | null>(null);
 
   const [recommendations, setRecommendations] = useState<PipelineAlert[]>([]);
   const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
@@ -224,7 +221,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       setGraphText("");
       setPythonText("");
       setMode("interactive");
-      setCompileOutput(null);
       setInteractiveSteps([]);
       setInteractiveWarning(null);
       return;
@@ -234,7 +230,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     setGraphText(jsonPretty(selected.graph ?? emptyGraph()));
     setPythonText(String(selected.python_source ?? ""));
     setMode((selected.editor_mode as EditorMode) ?? "interactive");
-    setCompileOutput(null);
     setTelemetryFieldInspector(null);
 
     const loaded = buildInteractiveStepsFromGraph(selected.graph, operatorsById);
@@ -477,7 +472,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   const handleSave = async () => {
     if (!draft) return;
     setError(null);
-    setCompileOutput(null);
 
     let updated: Pipeline;
 
@@ -524,38 +518,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       );
       setDraft(saved);
       setGraphText(jsonPretty(saved.graph ?? emptyGraph()));
-    } catch (err: any) {
-      setError(String(err?.message ?? err));
-    }
-  };
-
-  const handleCompile = async () => {
-    if (!draft) return;
-    setError(null);
-    setCompileOutput(null);
-
-    try {
-      if (mode === "python") {
-        if (!pythonText.trim()) {
-          setError("Python source is required in Python mode.");
-          return;
-        }
-        const output = await compilePipelinePython({
-          ...draft,
-          editor_mode: "python",
-          python_source: pythonText,
-        });
-        setCompileOutput(output);
-        setGraphText(jsonPretty(output.graph ?? emptyGraph()));
-        return;
-      }
-      const resolved = resolveGraphFromActiveMode();
-      if (!resolved.ok) {
-        setError(resolved.message);
-        return;
-      }
-      const output = await compilePipeline({ ...draft, graph: resolved.graph });
-      setCompileOutput(output);
     } catch (err: any) {
       setError(String(err?.message ?? err));
     }
@@ -708,10 +670,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
               <div className="pipelinesEditorHeader">
                 <div className="pipelinesEditorTitle">{draft.name}</div>
                 <div className="pipelinesEditorActions">
-                  <button className="pillButton" type="button" onClick={() => void handleCompile()}>
-                    <i className="fa-solid fa-gears" aria-hidden="true" />
-                    {t("core.ui.pipelines.actions.compile")}
-                  </button>
                   <button className="pillButton pillButtonPrimary" type="button" onClick={() => void handleSave()}>
                     <i className="fa-solid fa-floppy-disk" aria-hidden="true" />
                     {t("core.actions.save")}
@@ -877,28 +835,19 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                 )}
               </div>
 
-              {compileOutput ? (
-                <div className="card">
-                  <div className="cardTitle">{t("core.ui.pipelines.compile_output.title")}</div>
-                  <div className="cardBody">
-                    <pre className="pipelinesPre">{JSON.stringify(compileOutput, null, 2)}</pre>
-                  </div>
-                </div>
-              ) : null}
-
-                <PipelineTelemetryOverviewCard
-                  pipelineName={draft?.name ?? null}
-                  steps={interactiveSteps}
-                  externalRefreshNonce={telemetryResetNonce}
-                  resetting={telemetryResetting}
-                  onReset={resetTelemetryAndStats}
-                />
-                <PipelineStorageCard
-                  pipelineName={draft?.name ?? null}
-                  limitBytes={pipelineStorageLimitBytes}
-                  onUpdateLimitBytes={updatePipelineStorageLimitBytes}
-                  steps={interactiveSteps}
-                />
+              <PipelineTelemetryOverviewCard
+                pipelineName={draft?.name ?? null}
+                steps={interactiveSteps}
+                externalRefreshNonce={telemetryResetNonce}
+                resetting={telemetryResetting}
+                onReset={resetTelemetryAndStats}
+              />
+              <PipelineStorageCard
+                pipelineName={draft?.name ?? null}
+                limitBytes={pipelineStorageLimitBytes}
+                onUpdateLimitBytes={updatePipelineStorageLimitBytes}
+                steps={interactiveSteps}
+              />
               </div>
             )}
         </div>

@@ -470,7 +470,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.sidebar.processing_servers.desc": "Configure remote servers in Settings.",
     "core.ui.pipelines.sidebar.processing_servers.manage": "Manage servers",
     "core.ui.pipelines.empty": "Select or create a pipeline.",
-    "core.ui.pipelines.actions.compile": "Compile",
     "core.ui.pipelines.actions.duplicate": "Duplicate",
     "core.ui.pipelines.stats.title": "Step stats",
     "core.ui.pipelines.stats.window_hint": "Rolling window: last ~{{days}} days.",
@@ -597,7 +596,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.modes.interactive": "Interactive",
     "core.ui.pipelines.modes.json": "JSON",
     "core.ui.pipelines.modes.python_one_way": "Python (one-way)",
-    "core.ui.pipelines.compile_output.title": "Compile output",
     "core.ui.pipelines.confirm_delete": "Delete pipeline '{{name}}'?",
     "core.ui.pipelines.error.no_selection": "No pipeline selected.",
 
@@ -2278,7 +2276,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.sidebar.processing_servers.desc": "Configure servidores remotos nas Configurações.",
     "core.ui.pipelines.sidebar.processing_servers.manage": "Gerenciar servidores",
     "core.ui.pipelines.empty": "Selecione ou crie um fluxo.",
-    "core.ui.pipelines.actions.compile": "Compilar",
     "core.ui.pipelines.actions.duplicate": "Duplicar",
     "core.ui.pipelines.stats.title": "Estatísticas por etapa",
     "core.ui.pipelines.stats.window_hint": "Janela móvel: últimos ~{{days}} dias.",
@@ -2409,7 +2406,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.modes.interactive": "Interativo",
     "core.ui.pipelines.modes.json": "JSON",
     "core.ui.pipelines.modes.python_one_way": "Python (sem volta)",
-    "core.ui.pipelines.compile_output.title": "Resultado da compilação",
     "core.ui.pipelines.confirm_delete": "Excluir fluxo '{{name}}'?",
     "core.ui.pipelines.error.no_selection": "Nenhum fluxo selecionado.",
 

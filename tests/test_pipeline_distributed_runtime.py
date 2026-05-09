@@ -47,7 +47,6 @@ def test_distributed_projection_runs_processing_and_origin_with_same_definition(
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "subdir": "pipelines",
                         "format": "png",
                     },
                 },

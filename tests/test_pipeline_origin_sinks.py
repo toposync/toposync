@@ -25,6 +25,8 @@ from toposync.runtime.pipelines import (
     SourceOperatorRuntime,
     register_builtin_operators,
 )
+from toposync.runtime.pipelines.storage import PipelineStorageManager
+from toposync.runtime.pipelines.telemetry import PipelineTelemetryStore
 
 
 class _SequenceSourceConfig(BaseModel):
@@ -141,9 +143,7 @@ def test_store_images_writes_files_and_sets_references(tmp_path: Path) -> None:
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "subdir": "pipelines",
                         "format": "png",
-                        "overwrite": False,
                     },
                 },
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
@@ -235,7 +235,6 @@ def test_store_images_defaults_to_webp(tmp_path: Path) -> None:
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "subdir": "pipelines",
                         "drop_data_after_store": True,
                     },
                 },
@@ -271,6 +270,125 @@ def test_store_images_defaults_to_webp(tmp_path: Path) -> None:
         blob = (files_dir / str(art.reference)).read_bytes()
         assert blob[:4] == b"RIFF"
         assert blob[8:12] == b"WEBP"
+
+    asyncio.run(scenario())
+
+
+def test_store_images_layers_share_pipeline_budget_and_cleanup_telemetry(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        files_dir = tmp_path / "files"
+        storage_manager = PipelineStorageManager(
+            data_dir=tmp_path / "data",
+            files_dir=files_dir,
+        )
+        telemetry_store = PipelineTelemetryStore(
+            metric_specs=[],
+            max_numeric_series=8,
+            max_image_markers_per_pipeline=16,
+            max_image_pipelines=4,
+        )
+        deps = PipelineRuntimeDependencies(
+            files_dir=files_dir,
+            pipeline_storage_manager=storage_manager,
+            pipeline_telemetry_store=telemetry_store,
+        )
+
+        frame = np.full((48, 48, 3), 180, dtype=np.uint8)
+        crop = np.full((24, 24, 3), 90, dtype=np.uint8)
+        sequence = [
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {"frame_ts": 456.789, "camera_id": "camera-main"},
+                "artifacts": {
+                    "main": Artifact(name="main", data=frame, mime_type="image/raw"),
+                    "crop": Artifact(name="crop", data=crop, mime_type="image/raw"),
+                },
+            }
+        ]
+        collector: dict[str, list[Packet]] = {}
+
+        registry = OperatorRegistry()
+        register_builtin_operators(registry)
+        _register_test_source_and_sink(registry, sequence=sequence, collector=collector)
+
+        graph = {
+            "schema_version": 1,
+            "limits": {"storage_max_bytes": 1},
+            "nodes": [
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
+                {
+                    "id": "store_original",
+                    "operator": "core.store_images",
+                    "config": {
+                        "input_artifact_name": "main",
+                        "layer_label": "Original",
+                        "format": "jpg",
+                        "drop_data_after_store": False,
+                    },
+                },
+                {
+                    "id": "store_crop",
+                    "operator": "core.store_images",
+                    "config": {
+                        "input_artifact_name": "crop",
+                        "layer_label": "Recorte",
+                        "format": "jpg",
+                        "drop_data_after_store": True,
+                    },
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
+            ],
+            "edges": [
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "store_original", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "store_original", "port": "out"},
+                    "to": {"node": "store_crop", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "store_crop", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 8,
+                    "drop_policy": "drop_oldest",
+                },
+            ],
+        }
+
+        try:
+            pipeline = Pipeline(name="stage7_store_images_layers", graph=graph)
+            compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+            runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
+            await runtime.run_for(0.4)
+
+            packets = collector.get("sink", [])
+            assert len(packets) == 1
+            out_packet = packets[0]
+            main_ref = str(out_packet.artifacts["main"].reference or "")
+            crop_ref = str(out_packet.artifacts["crop"].reference or "")
+            assert main_ref
+            assert crop_ref
+            assert out_packet.artifacts["main"].data is not None
+            assert out_packet.artifacts["crop"].data is None
+            assert not (files_dir / main_ref).exists()
+            assert (files_dir / crop_ref).is_file()
+
+            markers = telemetry_store.list_image_markers("stage7_store_images_layers")
+            assert len(markers) == 1
+            assert markers[0]["rel_path"] == crop_ref
+            assert markers[0]["layer_label"] == "Recorte"
+            assert int(markers[0]["size_bytes"]) > 0
+        finally:
+            storage_manager.close()
 
     asyncio.run(scenario())
 
@@ -329,9 +447,7 @@ def test_store_images_saves_with_correct_color_channels(tmp_path: Path) -> None:
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "subdir": "pipelines",
                         "format": "png",
-                        "overwrite": False,
                     },
                 },
                 {"id": "sink", "operator": "test.collect_sink", "config": {"sink_name": "sink"}},
@@ -425,9 +541,7 @@ def test_store_images_in_bundle_uses_logical_pipeline_folder(tmp_path: Path) -> 
                         "id": "store",
                         "operator": "core.store_images",
                         "config": {
-                            "subdir": "pipelines",
                             "format": "png",
-                            "overwrite": False,
                         },
                     },
                     {
@@ -572,9 +686,7 @@ def test_notify_upserts_single_notification_with_templates_and_no_spam(tmp_path:
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "subdir": "pipelines",
                         "format": "png",
-                        "overwrite": False,
                     },
                 },
                 {
@@ -725,7 +837,6 @@ def test_notify_thumbnail_shows_latest_when_live_and_best_confidence_on_close(
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "subdir": "pipelines",
                         "format": "png",
                     },
                 },
@@ -881,7 +992,6 @@ def test_notify_close_prefers_earliest_frame_on_confidence_tie(tmp_path: Path) -
                     "id": "store",
                     "operator": "core.store_images",
                     "config": {
-                        "subdir": "pipelines",
                         "format": "png",
                     },
                 },

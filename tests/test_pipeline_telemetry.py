@@ -423,6 +423,8 @@ def test_pipeline_telemetry_store_roundtrips_checkpoint_bytes() -> None:
         ts_s=103.0,
         image_key="main",
         confidence=0.5,
+        layer_label="Original",
+        size_bytes=1234,
     )
 
     checkpoint = store.dump_checkpoint_bytes(include_hist=True, now_s=110.0)
@@ -456,6 +458,33 @@ def test_pipeline_telemetry_store_roundtrips_checkpoint_bytes() -> None:
     markers = restored.list_image_markers("pipe")
     assert len(markers) == 1
     assert str(markers[0].get("rel_path") or "") == "pipelines/test/frame_0.png"
+    assert str(markers[0].get("layer_label") or "") == "Original"
+    assert int(markers[0].get("size_bytes") or 0) == 1234
+
+
+def test_pipeline_telemetry_removes_image_markers_by_rel_path() -> None:
+    store = PipelineTelemetryStore(
+        metric_specs=[],
+        max_numeric_series=8,
+        max_image_markers_per_pipeline=16,
+        max_image_pipelines=4,
+    )
+    assert store.record_image_marker(
+        "pipe",
+        node_id="store",
+        rel_path="pipelines/pipe/a.png",
+        ts_s=100.0,
+    )
+    assert store.record_image_marker(
+        "pipe",
+        node_id="store",
+        rel_path="pipelines/pipe/b.png",
+        ts_s=101.0,
+    )
+
+    assert store.remove_image_markers_by_rel_paths("pipe", ("pipelines/pipe/a.png",)) == 1
+    markers = store.list_image_markers("pipe")
+    assert [item["rel_path"] for item in markers] == ["pipelines/pipe/b.png"]
 
 
 def test_default_pipeline_telemetry_store_supports_ui_range_presets(monkeypatch) -> None:  # noqa: ANN001

@@ -472,7 +472,7 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
                 {
                     "id": "store",
                     "operator": "core.store_images",
-                    "config": {"subdir": "pipelines", "format": "jpg"},
+                    "config": {"format": "jpg"},
                 },
                 {
                     "id": "notify",

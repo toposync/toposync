@@ -514,6 +514,97 @@ def test_pipelines_telemetry_aggregate_endpoints_filter_by_pipeline_name(
         assert [item["rel_path"] for item in markers_body["markers"]] == ["pipelines/b/frame.png"]
 
 
+def test_pipeline_storage_summary_and_cleanup_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        payload = Pipeline(
+            name="storage_api",
+            enabled=False,
+            graph={
+                "schema_version": 1,
+                "limits": {"storage_max_bytes": 80},
+                "nodes": [
+                    {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
+                    {
+                        "id": "store",
+                        "operator": "core.store_images",
+                        "config": {"format": "png", "max_files_per_layer": 1},
+                    },
+                ],
+                "edges": [
+                    {
+                        "from": {"node": "source", "port": "out"},
+                        "to": {"node": "store", "port": "in"},
+                    }
+                ],
+            },
+        ).model_dump(mode="json")
+        created = client.post("/api/pipelines", json=payload)
+        assert created.status_code == 201
+
+        storage_manager = getattr(client.app.state, "pipeline_storage_manager", None)
+        telemetry_store = getattr(client.app.state, "pipeline_telemetry_store", None)
+        assert storage_manager is not None
+        assert telemetry_store is not None
+
+        first = storage_manager.store_blob(
+            pipeline_name="storage_api",
+            node_id="store",
+            artifact_name="main",
+            layer_label="Original",
+            filename_hint="first",
+            ext=".bin",
+            mime_type="application/octet-stream",
+            blob=b"a" * 50,
+            frame_ts=time.time() - 10,
+        )
+        second = storage_manager.store_blob(
+            pipeline_name="storage_api",
+            node_id="store",
+            artifact_name="main",
+            layer_label="Original",
+            filename_hint="second",
+            ext=".bin",
+            mime_type="application/octet-stream",
+            blob=b"b" * 50,
+            frame_ts=time.time(),
+        )
+        telemetry_store.record_image_marker(
+            "storage_api",
+            node_id="store",
+            rel_path=first.rel_path,
+            metric_id="store.image",
+            ts_s=time.time() - 10,
+        )
+        telemetry_store.record_image_marker(
+            "storage_api",
+            node_id="store",
+            rel_path=second.rel_path,
+            metric_id="store.image",
+            ts_s=time.time(),
+        )
+
+        summary_res = client.get("/api/pipelines/storage_api/storage")
+        assert summary_res.status_code == 200
+        summary = summary_res.json()
+        assert summary["used_bytes"] == 100
+        assert summary["limit_bytes"] == 80
+        assert summary["file_count"] == 2
+        assert summary["over_limit"] is True
+        assert summary["layers"][0]["layer_label"] == "Original"
+
+        cleanup_res = client.post("/api/pipelines/storage_api/storage/cleanup")
+        assert cleanup_res.status_code == 200
+        cleaned = cleanup_res.json()
+        assert cleaned["file_count"] == 1
+        assert cleaned["used_bytes"] == 50
+        assert cleaned["layers"][0]["file_count"] == 1
+
+        markers = telemetry_store.list_image_markers("storage_api")
+        assert [item["rel_path"] for item in markers] == [second.rel_path]
+
+
 def test_processing_servers_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         res = client.get("/api/processing-servers")

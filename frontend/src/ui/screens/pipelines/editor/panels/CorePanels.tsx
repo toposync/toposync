@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import Select, { type MultiValue } from "react-select";
+import Select, { type MultiValue, type SingleValue } from "react-select";
 import CreatableSelect from "react-select/creatable";
 
 import {
@@ -8,11 +8,11 @@ import {
   listStreamingTransmissions,
   type HomeAssistantServerInfo,
   type HomeAssistantServiceInfo,
+  type PipelineStorageSummary,
   type PipelineOperatorDefinition,
   type StreamingTransmission,
 } from "../../../../../util/api";
 import {
-  buildArtifactSuggestions,
   buildPacketArtifactSuggestions,
   buildScheduleWeekdayOptions,
   pipelinesReactSelectStyles,
@@ -26,6 +26,14 @@ import type { PipelineStepSnapshotKey } from "./pipelineStepSnapshots";
 import { FilterExpressionEditor } from "./FilterExpressionEditor";
 import { buildFilterExpressionUpstreamContext } from "./filterExpressionContext";
 import { buildPipelineStepSnapshotUrl } from "./pipelineStepSnapshots";
+import {
+  bytesToGiBValue,
+  findStorageLayerForNode,
+  formatStorageBytes,
+  formatStorageTime,
+  giBToBytes,
+  loadCachedPipelineStorage,
+} from "../../storageMetrics";
 
 type UpdateConfig = (updater: (config: Record<string, unknown>) => Record<string, unknown>) => void;
 
@@ -873,19 +881,110 @@ export function DebugConfigCard({ config, pipelineName, steps, index, showAdvanc
 
 type StoreImagesProps = {
   config: Record<string, unknown>;
+  pipelineName: string | null;
+  nodeId: string;
+  steps: InteractiveStep[];
+  index: number;
+  operatorsById: Record<string, PipelineOperatorDefinition>;
   showAdvanced: boolean;
   onUpdateConfig: UpdateConfig;
 };
 
-export function StoreImagesConfigCard({ config, showAdvanced, onUpdateConfig }: StoreImagesProps): React.ReactElement {
-  const { t } = i18n.useI18n();
+function defaultStoreLayerLabel(artifactName: string): string {
+  const normalized = String(artifactName || "").trim() || "main";
+  const lower = normalized.toLowerCase();
+  if (normalized === "main") return "Original";
+  if (lower.includes("crop") || lower.includes("recorte")) return "Recorte";
+  if (lower.includes("debug")) return "Debug";
+  return normalized;
+}
+
+export function StoreImagesConfigCard({
+  config,
+  pipelineName,
+  nodeId,
+  steps,
+  index,
+  operatorsById,
+  showAdvanced,
+  onUpdateConfig,
+}: StoreImagesProps): React.ReactElement {
+  const { t, locale } = i18n.useI18n();
   const formatRaw = String((config as any).format ?? "webp").trim().toLowerCase() || "webp";
   const format =
     formatRaw === "jpg" || formatRaw === "jpeg" ? "jpg" : formatRaw === "png" ? "png" : "webp";
-  const subdir = textConfigValue((config as any).subdir, "pipelines");
   const jpegQualityRaw = Number((config as any).jpeg_quality ?? 85);
   const jpegQuality = Number.isFinite(jpegQualityRaw) ? Math.max(1, Math.min(100, jpegQualityRaw)) : 85;
-  const overwrite = Boolean((config as any).overwrite ?? false);
+  const artifactName = textConfigValue((config as any).input_artifact_name, "main").trim() || "main";
+  const layerLabel = textConfigValue((config as any).layer_label, defaultStoreLayerLabel(artifactName)).trim() || defaultStoreLayerLabel(artifactName);
+  const maxLayerBytesRaw = Number((config as any).max_bytes_per_layer ?? 0);
+  const maxFilesRaw = Number((config as any).max_files_per_layer ?? 0);
+  const maxLayerGiB = bytesToGiBValue(Number.isFinite(maxLayerBytesRaw) ? maxLayerBytesRaw : 0);
+  const maxFiles = Number.isFinite(maxFilesRaw) ? Math.max(0, Math.round(maxFilesRaw)) : 0;
+  const upstreamContext = useMemo(
+    () => buildFilterExpressionUpstreamContext(steps, index, operatorsById),
+    [index, operatorsById, steps],
+  );
+  const artifactOptions = useMemo(() => {
+    const defaults = buildPacketArtifactSuggestions(t);
+    const byValue = new Map(defaults.map((option) => [String(option.value || "").trim(), option] as const));
+    const out: SelectOption[] = [];
+    const seen = new Set<string>();
+    for (const rawValue of [
+      artifactName,
+      ...upstreamContext.artifactNames,
+      ...defaults.map((option) => option.value),
+    ]) {
+      const value = String(rawValue || "").trim();
+      if (!value || seen.has(value)) continue;
+      seen.add(value);
+      out.push(byValue.get(value) ?? { value, label: value });
+    }
+    return out;
+  }, [artifactName, t, upstreamContext.artifactNames]);
+  const selectedArtifactOption = artifactOptions.find((option) => option.value === artifactName) ?? {
+    value: artifactName,
+    label: artifactName,
+  };
+  const [storage, setStorage] = useState<PipelineStorageSummary | null>(null);
+  const [storageLoading, setStorageLoading] = useState(false);
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const [storageRefreshNonce, setStorageRefreshNonce] = useState(0);
+
+  useEffect(() => {
+    if (!pipelineName) {
+      setStorage(null);
+      setStorageLoading(false);
+      setStorageError(null);
+      return;
+    }
+    const controller = new AbortController();
+    setStorageLoading(true);
+    setStorageError(null);
+    void loadCachedPipelineStorage(pipelineName, {
+      force: storageRefreshNonce > 0,
+      signal: controller.signal,
+    })
+      .then((summary) => {
+        if (controller.signal.aborted) return;
+        setStorage(summary);
+      })
+      .catch((err: any) => {
+        if (controller.signal.aborted) return;
+        setStorage(null);
+        setStorageError(String(err?.message ?? err));
+      })
+      .finally(() => {
+        if (controller.signal.aborted) return;
+        setStorageLoading(false);
+      });
+    return () => controller.abort();
+  }, [pipelineName, storageRefreshNonce]);
+
+  const storageLayer = useMemo(
+    () => findStorageLayerForNode(storage, nodeId, layerLabel),
+    [layerLabel, nodeId, storage],
+  );
 
   const dropDataRaw = (config as any).drop_data_after_store;
   const legacyKeepData = Boolean((config as any).keep_data ?? false);
@@ -895,21 +994,33 @@ export function StoreImagesConfigCard({ config, showAdvanced, onUpdateConfig }: 
     <div className="pipelinesOperatorConfigCard">
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.store_images.hint")}</div>
 
-      {showAdvanced ? (
-        <label className="pipelinesLabel">
-          <span>{t("core.ui.pipelines.panels.store_images.subdir")}</span>
-          <input
-            className="pipelinesInput"
-            type="text"
-            value={subdir}
-            placeholder="pipelines"
-            onChange={(event) => {
-              const nextValue = String(event.target.value ?? "");
-              onUpdateConfig((prev) => ({ ...prev, subdir: nextValue }));
-            }}
-          />
-        </label>
-      ) : null}
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.store_images.input_artifact", {}, "Image")}</span>
+        <CreatableSelect<SelectOption, false>
+          styles={pipelinesReactSelectStyles}
+          options={artifactOptions}
+          value={selectedArtifactOption}
+          placeholder={t("core.ui.pipelines.panels.store_images.input_artifact_placeholder", {}, "main")}
+          onChange={(value: SingleValue<SelectOption>) => {
+            const nextValue = String(value?.value || "main").trim() || "main";
+            onUpdateConfig((prev) => ({ ...prev, input_artifact_name: nextValue }));
+          }}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.store_images.layer_label", {}, "Layer")}</span>
+        <input
+          className="pipelinesInput"
+          type="text"
+          value={layerLabel}
+          placeholder={defaultStoreLayerLabel(artifactName)}
+          onChange={(event) => {
+            const nextValue = String(event.target.value ?? "");
+            onUpdateConfig((prev) => ({ ...prev, layer_label: nextValue }));
+          }}
+        />
+      </label>
 
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.store_images.format")}</span>
@@ -962,15 +1073,95 @@ export function StoreImagesConfigCard({ config, showAdvanced, onUpdateConfig }: 
       </label>
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.store_images.drop_data_after_store_hint")}</div>
 
+      <div className="pipelinesStorageInlinePanel">
+        <div className="pipelinesStorageInlineHeader">
+          <span>{t("core.ui.pipelines.panels.store_images.layer_stats", {}, "Layer usage")}</span>
+          <button
+            className="iconButton"
+            type="button"
+            onClick={() => setStorageRefreshNonce((prev) => prev + 1)}
+            title={t("core.actions.refresh", {}, "Refresh")}
+          >
+            <i className="fa-solid fa-rotate" aria-hidden="true" />
+          </button>
+        </div>
+        {storageLoading ? (
+          <div className="pipelinesStepHint">{t("core.ui.loading")}</div>
+        ) : storageError ? (
+          <div className="pipelinesStorageNotice isDanger">{storageError}</div>
+        ) : storageLayer ? (
+          <div className="pipelinesStorageMetricsGrid">
+            <div>
+              <span>{t("core.ui.pipelines.panels.store_images.used", {}, "Used")}</span>
+              <strong>{formatStorageBytes(storageLayer.used_bytes)}</strong>
+            </div>
+            <div>
+              <span>{t("core.ui.pipelines.panels.store_images.files", {}, "Files")}</span>
+              <strong>{storageLayer.file_count}</strong>
+            </div>
+            <div>
+              <span>{t("core.ui.pipelines.panels.store_images.avg_file", {}, "Average")}</span>
+              <strong>{formatStorageBytes(storageLayer.avg_file_bytes)}</strong>
+            </div>
+            <div>
+              <span>{t("core.ui.pipelines.panels.store_images.last_saved", {}, "Last")}</span>
+              <strong>{formatStorageTime(storageLayer.newest_at, locale) || "-"}</strong>
+            </div>
+            <div>
+              <span>{t("core.ui.pipelines.panels.store_images.cleanup_state", {}, "Retention")}</span>
+              <strong>
+                {storageLayer.over_limit
+                  ? t("core.ui.pipelines.storage.over_limit_short", {}, "Over limit")
+                  : t("core.ui.pipelines.storage.ok", {}, "OK")}
+              </strong>
+            </div>
+          </div>
+        ) : (
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.storage.empty", {}, "No stored files yet.")}</div>
+        )}
+      </div>
+
       {showAdvanced ? (
-        <label className="pipelinesLabel">
-          <span>{t("core.ui.pipelines.panels.store_images.overwrite")}</span>
-          <input
-            type="checkbox"
-            checked={overwrite}
-            onChange={(event) => onUpdateConfig((prev) => ({ ...prev, overwrite: event.target.checked }))}
-          />
-        </label>
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.store_images.max_bytes_per_layer_gib", {}, "Layer budget (GiB)")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={4096}
+              step={0.25}
+              value={maxLayerGiB}
+              onChange={(nextValue) => {
+                const nextBytes = giBToBytes(nextValue);
+                onUpdateConfig((prev) => {
+                  const next = { ...prev };
+                  if (nextBytes) (next as any).max_bytes_per_layer = nextBytes;
+                  else delete (next as any).max_bytes_per_layer;
+                  return next;
+                });
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.store_images.max_files_per_layer", {}, "Layer file limit")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={1_000_000}
+              step={1}
+              value={maxFiles}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.round(nextValue)) : 0;
+                onUpdateConfig((prev) => {
+                  const next = { ...prev };
+                  if (normalized > 0) (next as any).max_files_per_layer = normalized;
+                  else delete (next as any).max_files_per_layer;
+                  return next;
+                });
+              }}
+            />
+          </label>
+        </>
       ) : null}
     </div>
   );

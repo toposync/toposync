@@ -139,8 +139,8 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   );
 
   const interactiveGraph = useMemo(
-    () => buildGraphFromInteractiveSteps(interactiveSteps, operatorsById),
-    [interactiveSteps, operatorsById],
+    () => buildGraphFromInteractiveSteps(interactiveSteps, operatorsById, draft?.graph),
+    [draft?.graph, interactiveSteps, operatorsById],
   );
 
   const reload = useCallback(async () => {
@@ -391,6 +391,32 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     if (!raw || typeof raw !== "object") return null;
     return raw as Record<string, number>;
   }, [pipelineStats]);
+
+  const pipelineStorageLimitBytes = useMemo(() => {
+    if (!draft || !isRecord(draft.graph) || !isRecord((draft.graph as any).limits)) return null;
+    const value = Number(((draft.graph as any).limits as Record<string, unknown>).storage_max_bytes ?? 0);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return Math.round(value);
+  }, [draft?.graph]);
+
+  const updatePipelineStorageLimitBytes = useCallback((value: number | null) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const graph = isRecord(prev.graph) ? { ...prev.graph } : emptyGraph();
+      const limits = isRecord((graph as any).limits) ? { ...((graph as any).limits as Record<string, unknown>) } : {};
+      if (value && Number.isFinite(value) && value > 0) {
+        limits.storage_max_bytes = Math.round(value);
+      } else {
+        delete limits.storage_max_bytes;
+      }
+      if (Object.keys(limits).length > 0) {
+        graph.limits = limits;
+      } else {
+        delete graph.limits;
+      }
+      return { ...prev, graph };
+    });
+  }, []);
 
   const openTelemetryFieldInspector = useCallback((request: TelemetryFieldInspectorRequest) => {
     setTelemetryFieldInspector(request);
@@ -829,6 +855,8 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                     interactiveWarning={interactiveWarning}
                     setInteractiveWarning={setInteractiveWarning}
                     interactiveGraph={interactiveGraph}
+                    pipelineStorageLimitBytes={pipelineStorageLimitBytes}
+                    onUpdatePipelineStorageLimitBytes={updatePipelineStorageLimitBytes}
                     pipelineAlerts={recommendations}
                     operatorPanels={operatorPanels}
                     onOpenTelemetryField={openTelemetryFieldInspector}

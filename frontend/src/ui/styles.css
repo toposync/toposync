@@ -1320,6 +1320,201 @@ video {
   line-height: 1.4;
 }
 
+.pipelinesStorageCard {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(15, 23, 48, 0.48);
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.pipelinesStorageInlinePanel {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.pipelinesStorageHeader,
+.pipelinesStorageInlineHeader,
+.pipelinesStorageUsageRow,
+.pipelinesStorageActions,
+.pipelinesStorageLayerRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pipelinesStorageHeader {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.pipelinesStorageTitle,
+.pipelinesStorageInlineHeader {
+  font-size: 13px;
+  font-weight: 750;
+  color: var(--text);
+}
+
+.pipelinesStorageActions {
+  margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.pipelinesStorageUsageRow {
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.pipelinesStorageUsageMain {
+  flex: 1 1 260px;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pipelinesStorageUsageText {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pipelinesStorageUsageText span:first-child {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.pipelinesStorageBar,
+.pipelinesStorageMiniBar {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.pipelinesStorageMiniBar {
+  height: 5px;
+}
+
+.pipelinesStorageBarFill,
+.pipelinesStorageMiniBarFill {
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--color-accent-teal) 76%, white 4%);
+  min-width: 0;
+}
+
+.pipelinesStorageBarFill.isWarn,
+.pipelinesStorageMiniBarFill.isWarn {
+  background: color-mix(in srgb, var(--color-warning) 82%, white 4%);
+}
+
+.pipelinesStorageLimitField {
+  display: grid;
+  gap: 6px;
+  min-width: min(220px, 100%);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pipelinesStorageNotice {
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.35;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.pipelinesStorageNotice.isWarn {
+  color: color-mix(in srgb, var(--color-warning) 88%, var(--text));
+  border-color: color-mix(in srgb, var(--color-warning) 38%, transparent);
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+}
+
+.pipelinesStorageNotice.isDanger {
+  color: color-mix(in srgb, var(--color-danger) 90%, var(--text));
+  border-color: color-mix(in srgb, var(--color-danger) 38%, transparent);
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+}
+
+.pipelinesStorageLayerList {
+  display: grid;
+  gap: 8px;
+}
+
+.pipelinesStorageLayerRow {
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(12, 18, 37, 0.34);
+}
+
+.pipelinesStorageLayerMain {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.pipelinesStorageLayerName {
+  font-size: 13px;
+  font-weight: 750;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipelinesStorageLayerMeta {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+
+.pipelinesStorageMetricsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 8px;
+}
+
+.pipelinesStorageMetricsGrid > div {
+  min-width: 0;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  display: grid;
+  gap: 3px;
+}
+
+.pipelinesStorageMetricsGrid span {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.pipelinesStorageMetricsGrid strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
 .pipelinesContextList {
   display: grid;
   gap: 8px;
@@ -1868,6 +2063,19 @@ video {
   background: var(--panelSolid);
   object-fit: contain;
   object-position: center;
+}
+
+.pipelinesTelemetryClusterTileMissing {
+  width: min(100%, 168px);
+  aspect-ratio: 4 / 3;
+  min-height: 96px;
+  border-radius: 9px;
+  border: 1px dashed color-mix(in srgb, var(--border) 85%, transparent);
+  background: color-mix(in srgb, var(--panelSolid) 78%, transparent);
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  font-size: 22px;
 }
 
 .pipelinesTelemetryClusterTileMeta {

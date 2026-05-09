@@ -309,7 +309,18 @@ export function OperatorConfigPanel({
     );
   }
   if (operatorId === "core.store_images") {
-    return <StoreImagesConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
+    return (
+      <StoreImagesConfigCard
+        config={config}
+        pipelineName={pipelineName}
+        nodeId={step.nodeId}
+        steps={steps}
+        index={index}
+        operatorsById={operatorsById}
+        showAdvanced={showAdvanced}
+        onUpdateConfig={onUpdateConfig}
+      />
+    );
   }
   if (operatorId === "core.notify") {
     return <NotifyConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;

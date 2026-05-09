@@ -102,6 +102,26 @@ type MarkerCluster = {
   visualWidth: number;
 };
 
+function TelemetryMarkerImage({ src, alt }: { src: string; alt: string }): React.ReactElement {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <div className="pipelinesTelemetryClusterTileMissing" aria-label={alt}>
+        <i className="fa-regular fa-image" aria-hidden="true" />
+      </div>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className="pipelinesTelemetryClusterTileImage"
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 const RANGE_SHORT_SECONDS = 2 * 60 * 60;
 const RANGE_DEFAULT_SECONDS = 24 * 60 * 60;
 const RANGE_LONG_SECONDS = 3 * 24 * 60 * 60;
@@ -943,23 +963,23 @@ export function PipelineTelemetryOverviewCard({
           <div className="pipelinesTelemetryClusterMasonry">
             {activeClusterMarkers.map((marker) => {
               const markerKey = `${marker.rel_path}|${marker.ts}|${marker.node_id}`;
+              const markerUrl = resolveToposyncUrl(`/files/${encodeURI(String(marker.rel_path || ""))}`);
               return (
                 <a
                   key={markerKey}
                   className="pipelinesTelemetryClusterTile"
-                  href={resolveToposyncUrl(`/files/${encodeURI(String(marker.rel_path || ""))}`)}
+                  href={markerUrl}
                   target={pinnedClusterKey ? "_blank" : undefined}
                   rel={pinnedClusterKey ? "noreferrer" : undefined}
                   title={timeFormatter.format(new Date(Number(marker.ts || 0) * 1000))}
                 >
-                  <img
-                    src={resolveToposyncUrl(`/files/${encodeURI(String(marker.rel_path || ""))}`)}
-                    alt="marker preview"
-                    className="pipelinesTelemetryClusterTileImage"
-                    loading="lazy"
+                  <TelemetryMarkerImage
+                    src={markerUrl}
+                    alt={t("core.ui.pipelines.telemetry.overview.image_removed", {}, "Image removed by retention")}
                   />
                   <div className="pipelinesTelemetryClusterTileMeta">
-                    <span>{marker.pipeline_name || marker.node_id}</span>
+                    <span>{marker.layer_label || marker.pipeline_name || marker.node_id}</span>
+                    {marker.size_bytes ? <span>{Math.round(Number(marker.size_bytes || 0) / 1024)} KB</span> : null}
                     <span>{timeFormatter.format(new Date(Number(marker.ts || 0) * 1000))}</span>
                   </div>
                 </a>

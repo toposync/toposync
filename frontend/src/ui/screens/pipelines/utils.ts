@@ -195,6 +195,7 @@ function resolveGatePortName(definition: PipelineOperatorDefinition | null): str
 export function buildGraphFromInteractiveSteps(
   steps: InteractiveStep[],
   operatorsById: Record<string, PipelineOperatorDefinition>,
+  baseGraph?: unknown,
 ): InteractiveBuildResult {
   const usedNodeIds = new Set<string>();
   const nodes: Array<Record<string, unknown>> = [];
@@ -319,12 +320,17 @@ export function buildGraphFromInteractiveSteps(
     }
   }
 
+  const graph: Record<string, unknown> = {
+    schema_version: 1,
+    nodes,
+    edges,
+  };
+  if (isRecord(baseGraph) && isRecord(baseGraph.limits) && Object.keys(baseGraph.limits).length > 0) {
+    graph.limits = { ...baseGraph.limits };
+  }
+
   return {
-    graph: {
-      schema_version: 1,
-      nodes,
-      edges,
-    },
+    graph,
     error: null,
   };
 }

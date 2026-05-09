@@ -1,16 +1,27 @@
 import React, { useCallback, useMemo, useState } from "react";
 import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 
+import { cleanupPipelineStorage } from "../../../util/api";
 import type { CamerasIndexResponse, PipelineAlert, PipelineOperatorDefinition } from "../../../util/api";
 import { i18n } from "../../../util/i18n";
 
 import { NODE_ID_RE, PIPELINE_PRESET_OPERATOR_IDS } from "./constants";
 import type { DragInsertPosition, InteractiveBuildResult, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "./types";
 import { createInteractiveStep, isRecord, jsonPretty, moveStep, prettyOperatorName, safeJsonParse } from "./utils";
+import {
+  bytesToGiBValue,
+  findStorageLayerForNode,
+  formatStorageBytes,
+  formatStorageTime,
+  giBToBytes,
+  loadCachedPipelineStorage,
+  updatePipelineStorageCache,
+} from "./storageMetrics";
 
 import { InteractiveStepsList } from "./editor/InteractiveStepsList";
 import { InteractiveStepsToolbar } from "./editor/InteractiveStepsToolbar";
 import { useCameraContexts } from "./editor/useCameraContexts";
+import { PipelinesNumberInput } from "./editor/PipelinesNumberInput";
 
 type Props = {
   operatorsById: Record<string, PipelineOperatorDefinition>;
@@ -24,6 +35,8 @@ type Props = {
   interactiveWarning: string | null;
   setInteractiveWarning: React.Dispatch<React.SetStateAction<string | null>>;
   interactiveGraph: InteractiveBuildResult;
+  pipelineStorageLimitBytes: number | null;
+  onUpdatePipelineStorageLimitBytes: (value: number | null) => void;
   pipelineAlerts?: PipelineAlert[];
   operatorPanels?: Record<string, PipelineOperatorPanel>;
   onOpenTelemetryField?: (request: TelemetryFieldInspectorRequest) => void;
@@ -41,6 +54,190 @@ function alertToneClass(severity: PipelineAlert["severity"]): string {
   return "isInfo";
 }
 
+type PipelineStorageCardProps = {
+  pipelineName: string | null;
+  limitBytes: number | null;
+  onUpdateLimitBytes: (value: number | null) => void;
+  steps: InteractiveStep[];
+};
+
+function PipelineStorageCard({
+  pipelineName,
+  limitBytes,
+  onUpdateLimitBytes,
+  steps,
+}: PipelineStorageCardProps): React.ReactElement {
+  const { t, locale } = i18n.useI18n();
+  const [storage, setStorage] = useState<Awaited<ReturnType<typeof loadCachedPipelineStorage>> | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+
+  React.useEffect(() => {
+    if (!pipelineName) {
+      setStorage(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    const controller = new AbortController();
+    setLoading(true);
+    setError(null);
+    void loadCachedPipelineStorage(pipelineName, {
+      force: refreshNonce > 0,
+      signal: controller.signal,
+    })
+      .then((summary) => {
+        if (controller.signal.aborted) return;
+        setStorage(summary);
+      })
+      .catch((err: any) => {
+        if (controller.signal.aborted) return;
+        setStorage(null);
+        setError(String(err?.message ?? err));
+      })
+      .finally(() => {
+        if (controller.signal.aborted) return;
+        setLoading(false);
+      });
+    return () => controller.abort();
+  }, [pipelineName, refreshNonce]);
+
+  const effectiveLimitBytes = limitBytes ?? storage?.limit_bytes ?? null;
+  const usedBytes = Number(storage?.used_bytes ?? 0);
+  const usageRatio = effectiveLimitBytes && effectiveLimitBytes > 0 ? Math.min(1, usedBytes / effectiveLimitBytes) : 0;
+  const displayLimitGiB = bytesToGiBValue(limitBytes ?? storage?.limit_bytes ?? 0);
+  const isLowDisk = Boolean(storage && Number(storage.free_bytes || 0) < Number(storage.min_free_bytes || 0));
+  const layers = Array.isArray(storage?.layers) ? storage.layers : [];
+  const storeNodeIds = new Set(steps.filter((step) => step.operatorId === "core.store_images").map((step) => step.nodeId));
+  const visibleLayers = layers.length > 0
+    ? layers
+    : [...storeNodeIds].map((nodeId) => ({
+        layer_key: nodeId,
+        layer_label: nodeId,
+        node_id: nodeId,
+        artifact_name: "",
+        used_bytes: 0,
+        limit_bytes: null,
+        file_count: 0,
+        avg_file_bytes: 0,
+        oldest_at: 0,
+        newest_at: 0,
+        over_limit: false,
+      }));
+
+  const runCleanup = async () => {
+    if (!pipelineName) return;
+    setCleaning(true);
+    setError(null);
+    try {
+      const summary = await cleanupPipelineStorage(pipelineName);
+      updatePipelineStorageCache(summary);
+      setStorage(summary);
+    } catch (err: any) {
+      setError(String(err?.message ?? err));
+    } finally {
+      setCleaning(false);
+    }
+  };
+
+  return (
+    <div className="pipelinesStorageCard">
+      <div className="pipelinesStorageHeader">
+        <div>
+          <div className="pipelinesStorageTitle">{t("core.ui.pipelines.storage.title", {}, "Storage")}</div>
+          <div className="pipelinesStepHint">
+            {t("core.ui.pipelines.storage.subtitle", {}, "Managed retention for files written by Store Images.")}
+          </div>
+        </div>
+        <div className="pipelinesStorageActions">
+          <button className="iconButton" type="button" onClick={() => setRefreshNonce((prev) => prev + 1)} title={t("core.actions.refresh", {}, "Refresh")}>
+            <i className="fa-solid fa-rotate" aria-hidden="true" />
+          </button>
+          <button className="pillButton" type="button" onClick={() => void runCleanup()} disabled={!pipelineName || cleaning}>
+            <i className="fa-solid fa-broom" aria-hidden="true" />
+            {cleaning ? t("core.ui.pipelines.storage.cleaning", {}, "Cleaning") : t("core.ui.pipelines.storage.clean_now", {}, "Clean now")}
+          </button>
+        </div>
+      </div>
+
+      <div className="pipelinesStorageUsageRow">
+        <div className="pipelinesStorageUsageMain">
+          <div className="pipelinesStorageUsageText">
+            <span>{formatStorageBytes(usedBytes)}</span>
+            <span>{effectiveLimitBytes ? `/ ${formatStorageBytes(effectiveLimitBytes)}` : ""}</span>
+          </div>
+          <div className="pipelinesStorageBar" aria-hidden="true">
+            <div
+              className={["pipelinesStorageBarFill", storage?.over_limit ? "isWarn" : ""].filter(Boolean).join(" ")}
+              style={{ width: `${Math.round(usageRatio * 100)}%` }}
+            />
+          </div>
+        </div>
+        <label className="pipelinesStorageLimitField">
+          <span>{t("core.ui.pipelines.storage.limit_gib", {}, "Pipeline budget (GiB)")}</span>
+          <PipelinesNumberInput
+            className="pipelinesInput"
+            min={0}
+            max={4096}
+            step={0.25}
+            value={displayLimitGiB}
+            onChange={(nextValue) => {
+              onUpdateLimitBytes(giBToBytes(nextValue));
+            }}
+          />
+        </label>
+      </div>
+
+      {loading ? <div className="pipelinesStepHint">{t("core.ui.loading")}</div> : null}
+      {error ? <div className="pipelinesStorageNotice isDanger">{error}</div> : null}
+      {storage?.over_limit ? (
+        <div className="pipelinesStorageNotice isWarn">{t("core.ui.pipelines.storage.over_limit", {}, "Usage is above the current budget. Retention will remove older files first.")}</div>
+      ) : null}
+      {isLowDisk ? (
+        <div className="pipelinesStorageNotice isDanger">
+          {t("core.ui.pipelines.storage.low_disk", {}, "Disk free space is below the configured safety margin. New images may be skipped.")}
+        </div>
+      ) : null}
+
+      <div className="pipelinesStorageLayerList">
+        {visibleLayers.length > 0 ? (
+          visibleLayers.map((layer) => {
+            const layerUsed = Number(layer.used_bytes || 0);
+            const layerLimit = layer.limit_bytes == null ? null : Number(layer.limit_bytes || 0);
+            const layerRatio = layerLimit && layerLimit > 0 ? Math.min(1, layerUsed / layerLimit) : 0;
+            const matchedLayer = findStorageLayerForNode(storage, layer.node_id, layer.layer_label);
+            const newestAt = matchedLayer?.newest_at ?? layer.newest_at;
+            return (
+              <div key={layer.layer_key} className="pipelinesStorageLayerRow">
+                <div className="pipelinesStorageLayerMain">
+                  <div className="pipelinesStorageLayerName">{layer.layer_label || layer.node_id}</div>
+                  <div className="pipelinesStorageLayerMeta">
+                    {formatStorageBytes(layerUsed)}
+                    {" · "}
+                    {t("core.ui.pipelines.storage.files", { count: layer.file_count }, `${layer.file_count} files`)}
+                    {" · "}
+                    {t("core.ui.pipelines.storage.avg", {}, "avg")} {formatStorageBytes(layer.avg_file_bytes)}
+                    {newestAt ? ` · ${formatStorageTime(newestAt, locale)}` : ""}
+                  </div>
+                  {layerLimit ? (
+                    <div className="pipelinesStorageMiniBar" aria-hidden="true">
+                      <div className={["pipelinesStorageMiniBarFill", layer.over_limit ? "isWarn" : ""].filter(Boolean).join(" ")} style={{ width: `${Math.round(layerRatio * 100)}%` }} />
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })
+        ) : (
+          <div className="pipelinesStepHint">{t("core.ui.pipelines.storage.empty", {}, "No stored files yet.")}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function InteractivePipelineEditor({
   operatorsById,
   camerasIndex,
@@ -53,6 +250,8 @@ export function InteractivePipelineEditor({
   interactiveWarning,
   setInteractiveWarning,
   interactiveGraph,
+  pipelineStorageLimitBytes,
+  onUpdatePipelineStorageLimitBytes,
   pipelineAlerts = [],
   operatorPanels = {},
   onOpenTelemetryField,
@@ -469,6 +668,13 @@ export function InteractivePipelineEditor({
           </div>
         </div>
       ) : null}
+
+      <PipelineStorageCard
+        pipelineName={pipelineName}
+        limitBytes={pipelineStorageLimitBytes}
+        onUpdateLimitBytes={onUpdatePipelineStorageLimitBytes}
+        steps={interactiveSteps}
+      />
 
       <InteractiveStepsList
         steps={interactiveSteps}

@@ -196,6 +196,35 @@ export type PipelineStats = {
   updated_at: number;
 };
 
+export type PipelineStorageLayer = {
+  layer_key: string;
+  layer_label: string;
+  node_id: string;
+  artifact_name: string;
+  used_bytes: number;
+  limit_bytes?: number | null;
+  file_count: number;
+  avg_file_bytes: number;
+  oldest_at: number;
+  newest_at: number;
+  over_limit: boolean;
+};
+
+export type PipelineStorageSummary = {
+  pipeline_name: string;
+  used_bytes: number;
+  limit_bytes?: number | null;
+  file_count: number;
+  avg_file_bytes: number;
+  oldest_at: number;
+  newest_at: number;
+  last_cleanup: number;
+  over_limit: boolean;
+  free_bytes: number;
+  min_free_bytes: number;
+  layers: PipelineStorageLayer[];
+};
+
 export type PipelineTelemetryNumericPoint = {
   bucket_start_s: number;
   count: number;
@@ -252,6 +281,8 @@ export type PipelineTelemetryImageMarker = {
   rel_path: string;
   image_key?: string | null;
   confidence?: number | null;
+  layer_label?: string | null;
+  size_bytes?: number | null;
 };
 
 export type PipelineTelemetryImageMarkers = {
@@ -1683,6 +1714,23 @@ export async function getPipelineStats(name: string): Promise<PipelineStats> {
 export async function resetPipelineStats(name: string): Promise<PipelineStats> {
   const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/stats/reset`, { method: "POST" });
   if (!res.ok) throw new Error(`Failed to reset pipeline stats ${name}: ${res.status}`);
+  return res.json();
+}
+
+export async function getPipelineStorage(
+  name: string,
+  signal?: AbortSignal,
+): Promise<PipelineStorageSummary> {
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/storage`, { signal });
+  if (!res.ok) throw new Error(`Failed to fetch pipeline storage ${name}: ${res.status}`);
+  return res.json();
+}
+
+export async function cleanupPipelineStorage(name: string): Promise<PipelineStorageSummary> {
+  const res = await fetch(`/api/pipelines/${encodeURIComponent(name)}/storage/cleanup`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`Failed to clean pipeline storage ${name}: ${res.status}`);
   return res.json();
 }
 

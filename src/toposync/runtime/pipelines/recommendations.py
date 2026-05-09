@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .compiler import CompiledPipeline
 from .images import MAIN_ARTIFACT_NAME, normalize_artifact_name
@@ -19,6 +19,7 @@ class PipelineAlert(BaseModel):
     node_id: str | None = None
     operator_id: str | None = None
     edge: dict[str, Any] | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 def analyze_compiled_pipeline(
@@ -164,6 +165,7 @@ def analyze_compiled_pipeline(
                     operator_id=node.operator_id,
                     message=diagnostic.message,
                     suggestion=diagnostic.suggestion,
+                    details=dict(diagnostic.details),
                 )
             )
 
@@ -196,6 +198,7 @@ def analyze_compiled_pipeline(
                             f"{', '.join(sorted(missing_payload_keys))}."
                         ),
                         suggestion="Move this step after the producer, or add a step that produces these keys upstream.",
+                        details={"missing_payload_keys": sorted(missing_payload_keys)},
                     )
                 )
 
@@ -218,6 +221,7 @@ def analyze_compiled_pipeline(
                             f"{', '.join(sorted(missing_artifacts))}."
                         ),
                         suggestion="Move this step after the producer, or add a step that produces these artifacts upstream.",
+                        details={"missing_artifacts": sorted(missing_artifacts)},
                     )
                 )
 
@@ -252,6 +256,7 @@ def analyze_compiled_pipeline(
                         f"(close_after_seconds={close_after:g}). This can look 'flickery' under frame drops/occlusions."
                     ),
                     suggestion="Increase close_after_seconds (e.g. 4.0) to keep tracks stable through short gaps.",
+                    details={"close_after_seconds": close_after},
                 )
             )
 
@@ -309,6 +314,10 @@ def analyze_compiled_pipeline(
                         operator_id="core.notify",
                         message=f"Notify reads artifact '{desired}', but upstream Store Images stores {', '.join(sorted(stored_artifacts))}.",
                         suggestion="Store the same artifact that Notify reads, or set both steps to the same advanced artifact name.",
+                        details={
+                            "input_artifact_name": desired,
+                            "stored_artifacts": sorted(stored_artifacts),
+                        },
                     )
                 )
 
@@ -339,6 +348,7 @@ def analyze_compiled_pipeline(
                         operator_id="camera.velocity_estimation",
                         message=f"Velocity Estimation runs after {src_node.operator_id}, which reduces update frequency and can make 'stopped_now/moving_now' less responsive.",
                         suggestion="Place 'Velocity Estimation' right after 'Camera Mapping' and apply rate control later (e.g. before storage/notify).",
+                        details={"source_operator_id": src_node.operator_id},
                     )
                 )
                 break
@@ -469,6 +479,7 @@ def analyze_compiled_pipeline(
                     operator_id="core.store_images",
                     message=f"Store Images reads artifacts that are not produced upstream: {', '.join(missing)}.",
                     suggestion="Store the main artifact, or set input_artifact_name to an artifact produced upstream.",
+                    details={"missing_artifacts": missing},
                 )
             )
 
@@ -496,6 +507,10 @@ def analyze_compiled_pipeline(
                             "maxsize": int(edge.channel_maxsize),
                             "drop_policy": edge.channel_drop_policy.value,
                         },
+                        details={
+                            "maxsize": int(edge.channel_maxsize),
+                            "drop_policy": edge.channel_drop_policy.value,
+                        },
                     )
                 )
             elif int(edge.channel_maxsize) <= 2 and edge.channel_drop_policy in {DropPolicy.DROP_OLDEST, DropPolicy.DROP_NEWEST}:
@@ -508,6 +523,10 @@ def analyze_compiled_pipeline(
                         edge={
                             "from": {"node": edge.source_node_id, "port": edge.source_port},
                             "to": {"node": edge.target_node_id, "port": edge.target_port},
+                            "maxsize": int(edge.channel_maxsize),
+                            "drop_policy": edge.channel_drop_policy.value,
+                        },
+                        details={
                             "maxsize": int(edge.channel_maxsize),
                             "drop_policy": edge.channel_drop_policy.value,
                         },

@@ -31,6 +31,7 @@ class OperatorDiagnostic(BaseModel):
     code: str
     message: str
     suggestion: str = ""
+    details: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("code", "message", "suggestion")
     @classmethod
@@ -398,6 +399,7 @@ class OperatorRegistry:
                     severity="warning",
                     code="operator_diagnostics_failed",
                     message=f"Could not check operator diagnostics: {exc}",
+                    details={"error": str(exc)},
                 )
             ]
 

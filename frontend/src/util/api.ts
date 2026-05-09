@@ -162,6 +162,7 @@ export type PipelineAlert = {
   node_id?: string | null;
   operator_id?: string | null;
   edge?: unknown;
+  details?: Record<string, unknown>;
 };
 
 export type PipelineCompileOutput = {

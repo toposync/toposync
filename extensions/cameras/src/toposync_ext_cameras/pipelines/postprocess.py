@@ -113,6 +113,7 @@ def _camera_mapping_diagnostics(config: dict[str, Any], context: dict[str, Any])
                     code="camera_mapping_composition_missing",
                     message=f"Camera Mapping references composition '{composition_id}', but that composition does not exist.",
                     suggestion="Select an existing composition or clear composition_id to use any calibrated composition for this camera.",
+                    details={"composition_id": composition_id},
                 )
             ]
         return _diagnose_camera_mapping_composition(
@@ -143,6 +144,10 @@ def _camera_mapping_diagnostics(config: dict[str, Any], context: dict[str, Any])
                     "but none has at least four valid control point pairs."
                 ),
                 suggestion="Add at least four control point pairs to the camera element, or provide inline control_point_sets.",
+                details={
+                    "camera_id": camera_id,
+                    "composition_labels": [_diagnostic_composition_label(item) for item in matched_without_mapping],
+                },
             )
         ]
 
@@ -152,6 +157,7 @@ def _camera_mapping_diagnostics(config: dict[str, Any], context: dict[str, Any])
             code="camera_mapping_camera_not_in_composition",
             message=f"Camera '{camera_id}' is not placed in any composition available to Camera Mapping.",
             suggestion="Add the camera to a composition and calibrate it with at least four control point pairs.",
+            details={"camera_id": camera_id, "scope_kind": "any"},
         )
     ]
 
@@ -201,6 +207,11 @@ def _diagnose_camera_mapping_composition(
                 code="camera_mapping_camera_not_in_composition",
                 message=f"Camera '{camera_id}' is not placed in the {scope}.",
                 suggestion="Add the camera to the selected composition or choose a composition that contains this camera.",
+                details={
+                    "camera_id": camera_id,
+                    "scope_kind": "selected" if selected_composition else "composition",
+                    "composition_label": composition_label,
+                },
             )
         ]
     if not result["has_mapping"]:
@@ -213,6 +224,7 @@ def _diagnose_camera_mapping_composition(
                     "but it does not have a control point set with at least four pairs."
                 ),
                 suggestion="Add at least four control point pairs to the camera element, or provide inline control_point_sets.",
+                details={"camera_id": camera_id, "composition_labels": [composition_label]},
             )
         ]
     return []

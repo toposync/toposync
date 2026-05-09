@@ -105,6 +105,7 @@ def _vision_model_diagnostics(task: str) -> Any:
                         "Open this step and select an available model, import a model manifest, "
                         "or configure the model_id expected by this processing server."
                     ),
+                    details={"task": task, "model_id": model_id, "error": str(exc)},
                 )
             ]
 
@@ -122,6 +123,7 @@ def _vision_model_diagnostics(task: str) -> Any:
                     "Open this step and prepare or upload the ONNX model file, "
                     "or choose another model that is already available."
                 ),
+                details={"task": task, "model_id": manifest.model_id, "model": display_name},
             )
         ]
 

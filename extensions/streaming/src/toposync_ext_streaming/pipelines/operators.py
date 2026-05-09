@@ -119,7 +119,7 @@ def _publish_video_diagnostics(_config: dict[str, Any], context: dict[str, Any])
     diagnostics: list[OperatorDiagnostic] = []
     seen_codes: set[str] = set()
 
-    def add(code: str, message: str, suggestion: str) -> None:
+    def add(code: str, message: str, suggestion: str, details: dict[str, Any] | None = None) -> None:
         if code in seen_codes:
             return
         seen_codes.add(code)
@@ -129,6 +129,7 @@ def _publish_video_diagnostics(_config: dict[str, Any], context: dict[str, Any])
                 code=code,
                 message=message,
                 suggestion=suggestion,
+                details=details or {},
             )
         )
 
@@ -144,6 +145,7 @@ def _publish_video_diagnostics(_config: dict[str, Any], context: dict[str, Any])
                 "stream_publish_video_event_gated_motion",
                 f"stream.publish_video is downstream of motion gate '{node_id}' with emit_when_idle=false.",
                 "Use a continuous branch into stream.publish_video and keep motion gate on a separate analytics/event branch.",
+                {"source_node_id": node_id},
             )
             continue
 
@@ -153,6 +155,7 @@ def _publish_video_diagnostics(_config: dict[str, Any], context: dict[str, Any])
                 "stream_publish_video_event_gated_detection",
                 f"stream.publish_video is downstream of detection '{node_id}' in emit_mode={emit_mode}.",
                 "Use emit_mode='annotate' for visual streaming, or split detection onto a separate analytics/event branch.",
+                {"source_node_id": node_id, "emit_mode": emit_mode},
             )
             continue
 
@@ -161,6 +164,7 @@ def _publish_video_diagnostics(_config: dict[str, Any], context: dict[str, Any])
                 "stream_publish_video_event_gated_tracking",
                 f"stream.publish_video is downstream of tracking '{node_id}' in emit_mode={emit_mode}.",
                 "Use emit_mode='annotate' for visual streaming, or split tracking onto a separate analytics/event branch.",
+                {"source_node_id": node_id, "emit_mode": emit_mode},
             )
 
     return diagnostics

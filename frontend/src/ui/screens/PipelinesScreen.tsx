@@ -40,6 +40,8 @@ import {
   emptyGraph,
   isRecord,
   jsonPretty,
+  localizePipelineAlert,
+  pipelineAlertSeverityLabel,
   safeJsonParse,
 } from "./pipelines/utils";
 
@@ -738,25 +740,28 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                   <div className="cardTitle">{t("core.ui.pipelines.recommendations.title")}</div>
                   <div className="cardBody">
                     <div className="pipelinesAlerts">
-                      {recommendations.map((alert, index) => (
-                        <div
-                          key={`${alert.code}:${alert.node_id ?? ""}:${index}`}
-                          className={[
-                            "pipelinesAlertRow",
-                            alert.severity === "error" ? "isError" : alert.severity === "warning" ? "isWarning" : "isInfo",
-                          ]
-                            .filter(Boolean)
-                            .join(" ")}
-                        >
-                          <div className="pipelinesAlertBadge">{alert.severity}</div>
-                          <div className="pipelinesAlertText">
-                            <div className="pipelinesAlertMessage">{alert.message}</div>
-                            {alert.suggestion ? <div className="pipelinesAlertSuggestion">{alert.suggestion}</div> : null}
-                            {alert.node_id ? <div className="pipelinesHint">{t("core.ui.pipelines.recommendations.node", { node_id: alert.node_id })}</div> : null}
-                            {alert.edge ? <pre className="pipelinesPre">{JSON.stringify(alert.edge, null, 2)}</pre> : null}
+                      {recommendations.map((alert, index) => {
+                        const localizedAlert = localizePipelineAlert(alert, t);
+                        return (
+                          <div
+                            key={`${alert.code}:${alert.node_id ?? ""}:${index}`}
+                            className={[
+                              "pipelinesAlertRow",
+                              alert.severity === "error" ? "isError" : alert.severity === "warning" ? "isWarning" : "isInfo",
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
+                          >
+                            <div className="pipelinesAlertBadge">{pipelineAlertSeverityLabel(alert.severity, t)}</div>
+                            <div className="pipelinesAlertText">
+                              <div className="pipelinesAlertMessage">{localizedAlert.message}</div>
+                              {localizedAlert.suggestion ? <div className="pipelinesAlertSuggestion">{localizedAlert.suggestion}</div> : null}
+                              {alert.node_id ? <div className="pipelinesHint">{t("core.ui.pipelines.recommendations.node", { node_id: alert.node_id })}</div> : null}
+                              {alert.edge ? <pre className="pipelinesPre">{JSON.stringify(alert.edge, null, 2)}</pre> : null}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 </div>

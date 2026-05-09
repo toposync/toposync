@@ -1,8 +1,10 @@
-import type { Pipeline, PipelineOperatorDefinition } from "../../../util/api";
+import type { Pipeline, PipelineAlert, PipelineOperatorDefinition } from "../../../util/api";
 import { i18n } from "../../../util/i18n";
 
 import { HUMANIZE_ACRONYMS, NODE_ID_RE, OPERATOR_FRIENDLY_NAMES, PIPELINE_PRESET_OPERATOR_IDS } from "./constants";
 import type { DragInsertPosition, InteractiveBuildResult, InteractiveFromGraphResult, InteractiveStep } from "./types";
+
+type TranslationFunction = typeof i18n.t;
 
 let interactiveStepCounter = 0;
 
@@ -89,6 +91,91 @@ export function prettyOperatorDescription(
   const localized = i18n.t(`core.ui.pipelines.operator_description.${operatorId}`, {}, "");
   if (localized) return localized;
   return fallbackDescription || prettyOperatorName(operatorId);
+}
+
+function normalizeAlertParam(value: unknown): string | number | boolean {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item ?? "").trim())
+      .filter(Boolean)
+      .join(", ");
+  }
+  if (typeof value === "number") return Number.isFinite(value) ? value : "";
+  if (typeof value === "boolean") return value;
+  if (isRecord(value)) {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "";
+    }
+  }
+  return String(value ?? "").trim();
+}
+
+function alertDetails(alert: PipelineAlert): Record<string, unknown> {
+  return isRecord(alert.details) ? alert.details : {};
+}
+
+function alertDetailString(details: Record<string, unknown>, key: string): string {
+  return String(normalizeAlertParam(details[key]) ?? "").trim();
+}
+
+function localizedAlertParams(alert: PipelineAlert, t: TranslationFunction): Record<string, unknown> {
+  const details = alertDetails(alert);
+  const params: Record<string, unknown> = {
+    node_id: alert.node_id ?? "",
+    operator_id: alert.operator_id ?? "",
+    operator_name: alert.operator_id ? prettyOperatorName(alert.operator_id) : "",
+  };
+
+  for (const [key, value] of Object.entries(details)) {
+    params[key] = normalizeAlertParam(value);
+  }
+
+  const sourceOperatorId = alertDetailString(details, "source_operator_id");
+  if (sourceOperatorId) {
+    params.source_operator = prettyOperatorName(sourceOperatorId);
+  }
+
+  const task = alertDetailString(details, "task");
+  if (task) {
+    params.task = t(`core.ui.pipelines.alerts.vision.task.${task}`, {}, task);
+  }
+
+  if (alert.code === "camera_mapping_camera_not_in_composition") {
+    const scopeKind = alertDetailString(details, "scope_kind") || "any";
+    const composition = alertDetailString(details, "composition_label");
+    const scopeKey = `core.ui.pipelines.alerts.camera_mapping_camera_not_in_composition.scope.${scopeKind}`;
+    params.scope = t(
+      scopeKey,
+      { composition },
+      t("core.ui.pipelines.alerts.camera_mapping_camera_not_in_composition.scope.any", {}, "in any composition available to Camera Mapping"),
+    );
+  }
+
+  return params;
+}
+
+export function localizePipelineAlert(alert: PipelineAlert, t: TranslationFunction = i18n.t): PipelineAlert {
+  const code = String(alert.code || "").trim();
+  if (!code) return alert;
+
+  const params = localizedAlertParams(alert, t);
+  const message = t(`core.ui.pipelines.alerts.${code}.message`, params, "");
+  const suggestion = t(`core.ui.pipelines.alerts.${code}.suggestion`, params, "");
+
+  return {
+    ...alert,
+    message: message || alert.message,
+    suggestion: suggestion || alert.suggestion,
+  };
+}
+
+export function pipelineAlertSeverityLabel(
+  severity: PipelineAlert["severity"],
+  t: TranslationFunction = i18n.t,
+): string {
+  return t(`core.ui.pipelines.checks.severity.${severity}`, {}, severity);
 }
 
 export function emptyGraph(): Record<string, unknown> {

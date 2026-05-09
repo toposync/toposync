@@ -7,7 +7,16 @@ import { i18n } from "../../../util/i18n";
 
 import { NODE_ID_RE, PIPELINE_PRESET_OPERATOR_IDS } from "./constants";
 import type { DragInsertPosition, InteractiveBuildResult, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "./types";
-import { createInteractiveStep, isRecord, jsonPretty, moveStep, prettyOperatorName, safeJsonParse } from "./utils";
+import {
+  createInteractiveStep,
+  isRecord,
+  jsonPretty,
+  localizePipelineAlert,
+  moveStep,
+  pipelineAlertSeverityLabel,
+  prettyOperatorName,
+  safeJsonParse,
+} from "./utils";
 import {
   bytesToGiBValue,
   findStorageLayerForNode,
@@ -252,7 +261,7 @@ export function InteractivePipelineEditor({
   operatorPanels = {},
   onOpenTelemetryField,
 }: Props): React.ReactElement {
-  const { t } = i18n.useI18n();
+  const { t, locale } = i18n.useI18n();
   const [draggingStepUid, setDraggingStepUid] = useState<string | null>(null);
   const [dragOverStep, setDragOverStep] = useState<{ uid: string; position: DragInsertPosition } | null>(null);
 
@@ -406,11 +415,16 @@ export function InteractivePipelineEditor({
       }
     });
     return alerts;
-  }, [interactiveSteps, operatorsById, t]);
+  }, [interactiveSteps, locale, operatorsById, t]);
+
+  const localizedPipelineAlerts = useMemo(
+    () => pipelineAlerts.map((alert) => localizePipelineAlert(alert, t)),
+    [locale, pipelineAlerts, t],
+  );
 
   const visibleAlerts = useMemo(() => {
     const seen = new Set<string>();
-    const combined = [...localStepAlerts, ...pipelineAlerts].filter((alert) => {
+    const combined = [...localStepAlerts, ...localizedPipelineAlerts].filter((alert) => {
       const message = String(alert.message || "").trim();
       if (!message) return false;
       const key = [
@@ -433,7 +447,7 @@ export function InteractivePipelineEditor({
       if (aIndex !== bIndex) return aIndex - bIndex;
       return String(a.message || "").localeCompare(String(b.message || ""));
     });
-  }, [interactiveSteps, localStepAlerts, pipelineAlerts]);
+  }, [interactiveSteps, localStepAlerts, localizedPipelineAlerts]);
 
   const alertsByNodeId = useMemo(() => {
     const map = new Map<string, PipelineAlert[]>();
@@ -646,7 +660,7 @@ export function InteractivePipelineEditor({
                     onClick={() => focusAlertStep(alert)}
                     title={canFocus ? t("core.ui.pipelines.checks.open_step", {}, "Open step") : undefined}
                   >
-                    <div className="pipelinesAlertBadge">{alert.severity}</div>
+                    <div className="pipelinesAlertBadge">{pipelineAlertSeverityLabel(alert.severity, t)}</div>
                     <div className="pipelinesAlertText">
                       <div className="pipelinesAlertMessage">{alert.message}</div>
                       {alert.suggestion ? <div className="pipelinesAlertSuggestion">{alert.suggestion}</div> : null}

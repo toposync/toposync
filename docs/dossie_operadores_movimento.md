@@ -462,7 +462,7 @@ Catalogo real obtido do registry com builtins + cameras + streaming.
 ### 6.4 Pos-processamento e contratos de imagem
 
 - `camera.frame_attach`: anexa frame de outro stream.
-- `camera.object_crop`: crop por bbox, gera `segmented`.
+- `vision.crop_objects`: crop por bbox, gera `segmented`.
 - `camera.image_crop`: crop retangular, pode atualizar stream frame e anota `frame_crop`.
 - `camera.image_perspective_crop`: warp perspectivo, pode atualizar stream frame e anota `frame_warp`.
 - `camera.image_adjust`: brilho/contraste/gamma/saturacao.
@@ -581,7 +581,7 @@ O compilador/recommender usa `requires_*` e `produces_*` para alertar a UI.
 Exemplos ja cobertos por testes:
 
 - `camera.motion_gate` alerta se upstream nao garante `frame_original`;
-- `camera.object_crop` alerta se upstream nao garante `object_bbox01`.
+- `vision.crop_objects` alerta se upstream nao garante `object_bbox01`.
 
 Isso e importante para novos operadores de movimento porque melhora UX e reduz pipelines invalidos.
 

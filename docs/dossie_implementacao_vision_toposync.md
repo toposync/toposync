@@ -130,7 +130,7 @@ Os operadores registrados hoje na extensão incluem:
 - `camera.motion_gate`
 - `vision.object_tracking_yolo`
 - `vision.object_detection_yolo`
-- `camera.object_segmentation`
+- `vision.crop_objects`
 - `camera.camera_mapping`
 - `camera.area_restriction`
 - `camera.velocity_estimation`
@@ -217,14 +217,14 @@ Conclusão:
 - tracking **não é um detalhe cosmético**
 - ele precisa virar um operador de primeira classe, separado do detector
 
-### 3.5 “Segmentation” hoje não é segmentação real
+### 3.5 Crop por bbox não é segmentação real
 
-Hoje o operador `camera.object_segmentation` é, na prática, um **crop por bbox**.  
+O operador `vision.crop_objects` é um **crop por bbox**.
 Ele não produz máscara de instância real.
 
 Isso precisa ser corrigido conceitualmente:
 
-- `camera.object_crop` = crop por bbox
+- `vision.crop_objects` = crop por bbox
 - `vision.segment_instances` = máscara real de instância
 
 ### 3.6 Captura RTSP e ingest já estão bem encaminhados
@@ -377,9 +377,9 @@ Operadores que permanecem em `cameras`:
 - preprocessamentos
 - crop de imagem
 
-Operador renomeado:
+Operador de crop por bbox:
 
-- `camera.object_segmentation` -> `camera.object_crop`
+- `vision.crop_objects`
 
 ### 5.3 Backend first-party principal
 
@@ -444,7 +444,7 @@ Não manter compatibilidade.
 
 Fluxo recomendado:
 
-`camera.source -> camera.motion_* -> vision.detect -> vision.track -> camera.camera_mapping -> camera.area_restriction -> camera.velocity_estimation -> camera.best_frame_selector / camera.object_crop / vision.segment_instances -> sinks`
+`camera.source -> camera.motion_* -> vision.detect -> vision.track -> camera.camera_mapping -> camera.area_restriction -> camera.velocity_estimation -> camera.best_frame_selector / vision.crop_objects / vision.segment_instances -> sinks`
 
 Observação:
 - `vision.segment_instances` pode rodar:
@@ -919,7 +919,7 @@ extensions/vision/
 #### Mudanças
 - remover registro de `vision.object_tracking_yolo`
 - remover registro de `vision.object_detection_yolo`
-- renomear `camera.object_segmentation` para `camera.object_crop`
+- expor crop por bbox como `vision.crop_objects`
 
 ### 11.3 Extensão opcional `vision_ultralytics`
 
@@ -1035,7 +1035,7 @@ Produzir máscaras reais de instância.
 - deve produzir artifacts para máscara, quando habilitado
 - o lançamento não precisa de recorte “bonitinho” por alpha compositing; máscara binária já basta
 
-### 12.4 `camera.object_crop`
+### 12.4 `vision.crop_objects`
 
 #### Objetivo
 Substituir o operador mal nomeado atual.
@@ -1242,7 +1242,7 @@ Separar visão de câmera e eliminar dependência conceitual de YOLO no núcleo.
 - criar `extensions/vision`
 - mover registro de operadores de visão para essa extensão
 - remover operadores públicos `vision.object_tracking_yolo` e `vision.object_detection_yolo`
-- renomear `camera.object_segmentation` para `camera.object_crop`
+- expor crop por bbox como `vision.crop_objects`
 - atualizar docs e wizards
 - garantir que nada no núcleo oficial fale em YOLO como tarefa pública
 
@@ -1322,7 +1322,7 @@ Colocar a primeira família first-party real em produção local.
 - detectar pessoas e objetos COCO em fluxo real
 - funcionar em CPU pelo menos
 - bbox/anotação corretas após crop/warp
-- qualidade suficiente para alimentar `camera.object_crop` e downstream
+- qualidade suficiente para alimentar `vision.crop_objects` e downstream
 
 ---
 
@@ -1362,7 +1362,7 @@ Adicionar segmentação real de instância.
 ## Critérios de aceite
 - máscaras produzidas corretamente
 - bbox + máscara coexistem
-- `camera.object_crop` continua existindo e separado semanticamente
+- `vision.crop_objects` continua existindo e separado semanticamente
 - downstream de armazenamento consegue escolher bbox crop ou máscara
 
 ---
@@ -1454,13 +1454,13 @@ Não implementar agora, mas deixar os ganchos certos.
 Os presets existentes devem migrar conceitualmente para:
 
 #### people
-`camera.source -> motion -> vision.detect(model=...) -> vision.track(tracker=...) -> camera.camera_mapping -> throttle -> camera.object_crop -> store -> notify`
+`camera.source -> motion -> vision.detect(model=...) -> vision.track(tracker=...) -> camera.camera_mapping -> throttle -> vision.crop_objects -> store -> notify`
 
 #### pets
 igual, com categorias `cat`, `dog`
 
 #### vehicles_stopped
-`camera.source -> motion -> vision.detect -> vision.track -> camera.camera_mapping -> camera.area_restriction -> camera.velocity_estimation -> velocity_throttle -> camera.object_crop -> store -> notify`
+`camera.source -> motion -> vision.detect -> vision.track -> camera.camera_mapping -> camera.area_restriction -> camera.velocity_estimation -> velocity_throttle -> vision.crop_objects -> store -> notify`
 
 ### 19.2 Regras
 - wizard não deve mais inserir operadores vendor-specific
@@ -1489,7 +1489,7 @@ Cobrir:
 - `camera.source -> vision.detect`
 - `camera.source -> vision.detect -> vision.track`
 - `... -> camera.camera_mapping -> camera.velocity_estimation`
-- `... -> camera.object_crop`
+- `... -> vision.crop_objects`
 - `... -> vision.segment_instances`
 - `... -> store / notify`
 
@@ -1624,7 +1624,7 @@ A camada nova estará pronta para o lançamento quando, no mínimo:
 1. `camera.source` continua robusto
 2. `vision.detect` funciona com modelos first-party oficiais permissivos
 3. `vision.track` funciona desacoplado do detector
-4. `camera.object_crop` substitui corretamente o antigo “segmentation”
+4. `vision.crop_objects` substitui corretamente o antigo “segmentation”
 5. `vision.segment_instances` funciona com pelo menos um modelo oficial
 6. o usuário consegue configurar isso pela UI com recomendação simples
 7. não há dependência oficial obrigatória de Ultralytics / BoxMOT / MMYOLO

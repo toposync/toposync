@@ -29,7 +29,6 @@ The old per-camera detections runtime (`/api/cameras/detections/*`, `cameras.tra
 
 - `camera.source`
 - `camera.motion_gate`
-- `camera.object_crop`
 - `camera.camera_mapping`
 - `camera.area_restriction`
 - `camera.velocity_estimation`
@@ -38,6 +37,7 @@ Public vision operators are registered by the `com.toposync.vision` extension:
 
 - `vision.detect`
 - `vision.track`
+- `vision.crop_objects`
 
 Legacy vendor-specific YOLO/Ultralytics runtimes are not part of the official first-party path in this extension. If you need one of those integrations in the future, ship it as a separate package and keep `vision.detect` / `vision.track` as the public operator contract.
 

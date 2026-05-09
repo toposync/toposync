@@ -1186,7 +1186,7 @@ Semantica:
 - `vision.track`
 - `vision.detect`
 - `camera.frame_attach`
-- `camera.object_crop`
+- `vision.crop_objects`
 - `camera.image_crop`
 - `camera.image_adjust`
 - `camera.image_resize`

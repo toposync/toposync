@@ -289,7 +289,7 @@ Distribuído:
 Extensão `com.toposync.cameras`:
 - `camera.source`, `camera.motion_gate`
 - `vision.track`, `vision.detect`, `vision.segment_instances`
-- `camera.object_crop`, `camera.image_resize`
+- `vision.crop_objects`, `camera.image_resize`
 - `camera.camera_mapping`, `camera.area_restriction`, `camera.velocity_estimation`
 
 ---
@@ -409,8 +409,8 @@ Implementação: `extensions/vision/src/toposync_ext_vision/processing/tasks/pos
 
 ### Pós-processamento e artefatos
 
-- `camera.object_crop`: recorte por bbox; por padrão sobrescreve `main` e não é segmentação
-- downstream pode continuar escolhendo entre bbox crop, máscara de instância e, no futuro, pose/keypoints, sem conflitar semanticamente com `camera.object_crop`
+- `vision.crop_objects`: recorte por bbox; por padrão sobrescreve `main` e não é segmentação
+- downstream pode continuar escolhendo entre bbox crop, máscara de instância e, no futuro, pose/keypoints, sem conflitar semanticamente com `vision.crop_objects`
 - manifests de visão também podem declarar `capabilities` opcionais, por exemplo `reid`, para preparar catálogos futuros sem trocar o schema do registry
 - `camera.image_resize`: redimensiona artifacts em memória (reduce payload/storage)
 

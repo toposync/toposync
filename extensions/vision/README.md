@@ -6,6 +6,7 @@ First-party extension focused on public task-oriented vision operators for the P
 
 - `vision.detect`
 - `vision.track`
+- `vision.crop_objects`
 - `vision.segment_instances`
 - `vision.pose_estimate` (skeleton only; not launched yet)
 
@@ -95,4 +96,4 @@ The public surface is task-based, not vendor-based. The official first-party run
   - `emit_mode="events"` for split-stream lifecycle packets per object
   - `emit_mode="annotate"` for frame passthrough with `payload["vision"]["tracks"]`
 - `vision.detect` events are short OPEN/CLOSE notifications; use `vision.track` when you need temporal identity, movement, and long-lived per-object lifecycle.
-- Crop by bbox remains in `com.toposync.cameras` as `camera.object_crop`; it is not instance segmentation.
+- `vision.crop_objects` crops the bbox from a single object lifecycle packet and preserves event/tracking identifiers. It is not instance segmentation.

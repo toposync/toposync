@@ -61,6 +61,12 @@ function alertToneClass(severity: PipelineAlert["severity"]): string {
   return "isInfo";
 }
 
+function hasActiveTextSelection(): boolean {
+  if (typeof window === "undefined") return false;
+  const selection = window.getSelection();
+  return Boolean(selection && !selection.isCollapsed && selection.toString().trim());
+}
+
 type PipelineStorageCardProps = {
   pipelineName: string | null;
   limitBytes: number | null;
@@ -657,7 +663,10 @@ export function InteractivePipelineEditor({
                     className={["pipelinesAlertRow", "pipelinesCheckRow", alertToneClass(alert.severity)].join(" ")}
                     type="button"
                     disabled={!canFocus}
-                    onClick={() => focusAlertStep(alert)}
+                    onClick={() => {
+                      if (hasActiveTextSelection()) return;
+                      focusAlertStep(alert);
+                    }}
                     title={canFocus ? t("core.ui.pipelines.checks.open_step", {}, "Open step") : undefined}
                   >
                     <div className="pipelinesAlertBadge">{pipelineAlertSeverityLabel(alert.severity, t)}</div>

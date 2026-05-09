@@ -1023,6 +1023,8 @@ video {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: rgba(15, 23, 48, 0.55);
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .pipelinesAlertRow.isError {
@@ -1047,6 +1049,8 @@ video {
   color: var(--muted);
   margin-top: 2px;
   min-width: 72px;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .pipelinesAlertText {
@@ -1054,16 +1058,23 @@ video {
   min-width: 0;
   display: grid;
   gap: 4px;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .pipelinesAlertMessage {
   font-weight: 650;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .pipelinesAlertSuggestion {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .pipelinesChecksCard .cardBody {
@@ -1093,6 +1104,8 @@ video {
   color: var(--muted);
   font-size: 12px;
   align-self: center;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .pipelinesInteractiveRoot {

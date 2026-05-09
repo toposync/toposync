@@ -851,7 +851,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.storage.low_disk": "Disk free space is below the configured safety margin. New images may be skipped.",
     "core.ui.pipelines.storage.over_limit_short": "Over limit",
     "core.ui.pipelines.storage.ok": "OK",
-    "core.ui.pipelines.storage.files": "{count} files",
+    "core.ui.pipelines.storage.files": "{{count}} files",
     "core.ui.pipelines.storage.avg": "avg",
 
     "core.ui.pipelines.panels.notify.title_template": "Title template",
@@ -2607,7 +2607,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.storage.low_disk": "O espaço livre em disco está abaixo da margem de segurança. Novas imagens podem ser ignoradas.",
     "core.ui.pipelines.storage.over_limit_short": "Acima do limite",
     "core.ui.pipelines.storage.ok": "OK",
-    "core.ui.pipelines.storage.files": "{count} arquivos",
+    "core.ui.pipelines.storage.files": "{{count}} arquivos",
     "core.ui.pipelines.storage.avg": "média",
 
     "core.ui.pipelines.panels.notify.title_template": "Template do título",

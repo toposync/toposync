@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { DEFAULT_THEME_ID } from "../../util/theme";
 
 const RENDER_DIR_ID = "render2d";
-const RENDER_VERSION = 8 as const;
+const RENDER_VERSION = 9 as const;
 const HOME_ASSISTANT_ELEMENT_TYPE_ID = "com.toposync.home_assistant.item";
 const MODEL_ELEMENT_TYPE_ID = "com.toposync.models.gltf";
 const IMAGE_ELEMENT_TYPE_ID = "com.toposync.images.image";
@@ -554,6 +554,18 @@ function pickOverlayTargets(elements: CompositionElement[]): Array<{ elementId: 
   return out;
 }
 
+function shouldCaptureElementInBaseSnapshot(element: CompositionElement, elementTypesById: Record<string, ElementType>): boolean {
+  const def = elementTypesById[element.type];
+  if (!def?.create3D) return false;
+  if (!def.getMain2DMarker) return true;
+  try {
+    return !def.getMain2DMarker({ element });
+  } catch (err) {
+    console.warn(`[main2d:baseSnapshotMarker:${element.type}]`, err);
+    return true;
+  }
+}
+
 type AirflowOverlayMode = "cool" | "heat" | "neutral";
 
 function forceHomeAssistantVisualOn(
@@ -636,7 +648,7 @@ async function captureBaseAndOverlays(args: {
 > {
   const { compositionId, elements, elementTypesById } = args;
   const overlayTargets = pickOverlayTargets(elements);
-  const nonHomeAssistantElements = elements.filter((el) => el.type !== HOME_ASSISTANT_ELEMENT_TYPE_ID);
+  const baseElements = elements.filter((el) => shouldCaptureElementInBaseSnapshot(el, elementTypesById));
 
   const paddingRatio = 0.08;
   const view: ViewSettings = {
@@ -646,7 +658,7 @@ async function captureBaseAndOverlays(args: {
     graphicsQuality: "detailed",
   };
 
-  const boundsXZ = computeBoundsFromElements(nonHomeAssistantElements, overlayTargets);
+  const boundsXZ = computeBoundsFromElements(elements, overlayTargets);
   const boundsBox = new THREE.Box3(new THREE.Vector3(boundsXZ.minX, 0, boundsXZ.minZ), new THREE.Vector3(boundsXZ.maxX, 0, boundsXZ.maxZ));
   const { viewBounds, viewWidth, viewHeight } = computeViewBoundsXZ(boundsBox, paddingRatio);
   const { renderWidth, renderHeight } = computeRenderSize(viewWidth, viewHeight, args.maximumRenderSize);
@@ -656,7 +668,7 @@ async function captureBaseAndOverlays(args: {
   const camera = buildCamera(viewBounds, viewWidth, viewHeight);
   const defaultLights = addDefaultLights(scene);
 
-  const baseInstances = createInstances(scene, camera, renderer, nonHomeAssistantElements, elementTypesById, view, compositionId);
+  const baseInstances = createInstances(scene, camera, renderer, baseElements, elementTypesById, view, compositionId);
   await warmupCapture(
     baseInstances.map((entry) => ({ element: entry.element, instance: entry.instance })),
     renderer,

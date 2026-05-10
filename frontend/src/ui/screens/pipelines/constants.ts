@@ -193,7 +193,7 @@ export const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "vision.segment_instances": "Separate objects from scene",
   "vision.crop_objects": "Crop objects",
   "vision.pose_estimate": "Estimate pose",
-  "ai.condition_filter": "Filter by visual condition",
+  "ai.condition_filter": "Filter by visual condition with AI",
   "ai.smart_crop": "Crop with AI",
   "core.category_gate": "Filter by category",
   "core.filter": "Apply rule",

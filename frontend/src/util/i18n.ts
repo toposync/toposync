@@ -624,8 +624,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.demo_frame_sequence_source": "Use demo frames",
     "core.ui.pipelines.operator_name.camera.source": "Use camera",
     "core.ui.pipelines.operator_name.core.schedule_gate": "Limit by schedule",
-    "core.ui.pipelines.operator_name.camera.motion_bgsub_adaptive": "Detect motion",
-    "core.ui.pipelines.operator_name.camera.motion_sample_bg": "Detect motion with samples",
+    "core.ui.pipelines.operator_name.camera.motion_bgsub_adaptive": "Filter motion with the default detector",
+    "core.ui.pipelines.operator_name.camera.motion_sample_bg": "Filter motion with samples",
     "core.ui.pipelines.operator_name.camera.motion_gate": "Filter by motion",
     "core.ui.pipelines.operator_name.core.fps_reducer": "Reduce frames",
     "core.ui.pipelines.operator_name.camera.frame_attach": "Attach frame",
@@ -672,11 +672,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_description.camera.source": "Reads frames from the selected camera or from an RTSP source.",
     "core.ui.pipelines.operator_description.core.schedule_gate": "Keeps the flow active only on the selected days and times.",
     "core.ui.pipelines.operator_description.camera.motion_bgsub_adaptive":
-      "Detects motion with the recommended default mode and adds motion score and state to the flow.",
+      "Detects motion with adaptive background subtraction and, by default, lets frames pass only while motion is active or during the configured hold time.",
     "core.ui.pipelines.operator_description.camera.motion_sample_bg":
-      "Detects motion by comparing the frame with background samples, useful when the default mode fails.",
+      "Detects motion by comparing frames with background samples and, by default, lets frames pass only while motion is active or during the configured hold time.",
     "core.ui.pipelines.operator_description.camera.motion_gate":
-      "Detects motion and lets frames pass only while motion is active or during the configured hold time.",
+      "Detects motion on each incoming frame and lets frames pass only while motion is active or during the configured hold time.",
     "core.ui.pipelines.operator_description.core.fps_reducer":
       "Reduces the number of frames before heavier steps to save processing.",
     "core.ui.pipelines.operator_description.camera.image_crop":
@@ -2465,8 +2465,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.demo_frame_sequence_source": "Usar frames de demonstração",
     "core.ui.pipelines.operator_name.camera.source": "Usar câmera",
     "core.ui.pipelines.operator_name.core.schedule_gate": "Limitar por horário",
-    "core.ui.pipelines.operator_name.camera.motion_bgsub_adaptive": "Detectar movimento",
-    "core.ui.pipelines.operator_name.camera.motion_sample_bg": "Detectar movimento por amostras",
+    "core.ui.pipelines.operator_name.camera.motion_bgsub_adaptive": "Filtrar movimento com detector padrão",
+    "core.ui.pipelines.operator_name.camera.motion_sample_bg": "Filtrar movimento com amostras",
     "core.ui.pipelines.operator_name.camera.motion_gate": "Filtrar por movimento",
     "core.ui.pipelines.operator_name.core.fps_reducer": "Reduzir frames",
     "core.ui.pipelines.operator_name.camera.frame_attach": "Anexar frame",
@@ -2513,11 +2513,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_description.camera.source": "Lê frames da câmera selecionada ou de uma fonte RTSP.",
     "core.ui.pipelines.operator_description.core.schedule_gate": "Deixa o fluxo ativo apenas nos dias e horários escolhidos.",
     "core.ui.pipelines.operator_description.camera.motion_bgsub_adaptive":
-      "Detecta movimento com o modo padrão recomendado e adiciona score e estado de movimento ao fluxo.",
+      "Detecta movimento com subtração adaptativa de fundo e, por padrão, deixa passar frames apenas enquanto há movimento ou durante o tempo de espera configurado.",
     "core.ui.pipelines.operator_description.camera.motion_sample_bg":
-      "Detecta movimento comparando o frame com amostras do fundo, útil em cenas onde o modo padrão falha.",
+      "Detecta movimento comparando frames com amostras do fundo e, por padrão, deixa passar frames apenas enquanto há movimento ou durante o tempo de espera configurado.",
     "core.ui.pipelines.operator_description.camera.motion_gate":
-      "Detecta movimento e deixa passar frames apenas enquanto há movimento ou durante o tempo de espera configurado.",
+      "Detecta movimento em cada frame de entrada e deixa passar frames apenas enquanto há movimento ou durante o tempo de espera configurado.",
     "core.ui.pipelines.operator_description.core.fps_reducer":
       "Reduz a quantidade de frames antes de etapas mais pesadas para economizar processamento.",
     "core.ui.pipelines.operator_description.camera.image_crop":

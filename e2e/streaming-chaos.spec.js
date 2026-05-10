@@ -257,7 +257,7 @@ async function mockStreamingDashboard(page, scenario, transportPreference = "hls
 test.describe("streaming dashboard chaos states", () => {
   for (const [scenario, expectedText] of [
     ["live", "Front Door"],
-    ["source_stale", "Camera source stale."],
+    ["source_stale", "error (HLS)"],
     ["stale_hls", "hls_playlist_stale"],
     ["tail_unavailable", "hls_tail_unavailable"],
     ["publisher_down", "publisher_down"],
@@ -280,6 +280,9 @@ test.describe("streaming dashboard chaos states", () => {
       await expect(page.getByLabel("Stream quality")).toBeVisible();
       await expect(page.getByText("Selected output", { exact: true })).toBeVisible();
       await expect(page.getByText("1280x720", { exact: false })).toBeVisible();
+      if (scenario === "source_stale") {
+        await expect(page.getByText("source_stale", { exact: false })).toBeVisible();
+      }
     });
   }
 

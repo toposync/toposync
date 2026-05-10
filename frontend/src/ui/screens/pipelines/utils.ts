@@ -1,10 +1,23 @@
 import type { Pipeline, PipelineAlert, PipelineOperatorDefinition } from "../../../util/api";
 import { i18n } from "../../../util/i18n";
 
-import { HUMANIZE_ACRONYMS, NODE_ID_RE, OPERATOR_FRIENDLY_NAMES, PIPELINE_PRESET_OPERATOR_IDS } from "./constants";
+import {
+  HUMANIZE_ACRONYMS,
+  NODE_ID_RE,
+  OPERATOR_FRIENDLY_NAMES,
+  PIPELINE_OPERATOR_GROUP_ORDER,
+  PIPELINE_OPERATOR_GROUPS,
+  PIPELINE_OPERATOR_UX,
+  PIPELINE_PRESET_OPERATOR_IDS,
+} from "./constants";
+import type { PipelineOperatorGroupId, PipelineOperatorLevel, PipelineOperatorUxMetadata } from "./constants";
 import type { DragInsertPosition, InteractiveBuildResult, InteractiveFromGraphResult, InteractiveStep } from "./types";
 
 type TranslationFunction = typeof i18n.t;
+
+const PIPELINE_OPERATOR_GROUP_RANK = new Map<PipelineOperatorGroupId, number>(
+  PIPELINE_OPERATOR_GROUP_ORDER.map((groupId, index) => [groupId, index]),
+);
 
 let interactiveStepCounter = 0;
 
@@ -93,6 +106,117 @@ export function prettyOperatorDescription(
   return fallbackDescription || prettyOperatorName(operatorId);
 }
 
+export type ResolvedPipelineOperatorUx = PipelineOperatorUxMetadata & {
+  aliases: string[];
+};
+
+const DEFAULT_PIPELINE_OPERATOR_UX: ResolvedPipelineOperatorUx = {
+  group: "extensions",
+  level: "advanced",
+  order: 1000,
+  aliases: [],
+};
+
+function isPipelineOperatorGroupId(value: string): value is PipelineOperatorGroupId {
+  return Object.prototype.hasOwnProperty.call(PIPELINE_OPERATOR_GROUPS, value);
+}
+
+function normalizePipelineOperatorLevel(value: unknown): PipelineOperatorLevel | null {
+  const level = String(value || "").trim().toLowerCase();
+  return level === "basic" || level === "advanced" ? level : null;
+}
+
+function normalizePipelineOperatorOrder(value: unknown): number | null {
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  const order = Number(value);
+  return Number.isFinite(order) ? order : null;
+}
+
+function normalizePipelineOperatorAliases(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const alias = String(item || "").trim();
+    if (!alias) continue;
+    const key = alias.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    out.push(alias);
+    seen.add(key);
+  }
+  return out;
+}
+
+function resolvePipelineOperatorCapabilityUx(operator: PipelineOperatorDefinition): ResolvedPipelineOperatorUx {
+  const capabilities = operatorCapabilities(operator);
+
+  if (capabilities.has("source")) {
+    return { group: "input", level: "basic", order: 1000, aliases: [] };
+  }
+  if (capabilities.has("sink") || capabilities.has("origin_only")) {
+    return { group: "output", level: "basic", order: 1000, aliases: [] };
+  }
+  if (capabilities.has("heavy_compute")) {
+    return { group: "vision", level: "advanced", order: 1000, aliases: [] };
+  }
+  if (capabilities.has("rate_control")) {
+    return { group: "rate", level: "advanced", order: 1000, aliases: [] };
+  }
+  if (capabilities.has("filter") || capabilities.has("gate_control")) {
+    return { group: "rules", level: "advanced", order: 1000, aliases: [] };
+  }
+  if (capabilities.has("debug")) {
+    return { group: "diagnostics", level: "advanced", order: 1000, aliases: [] };
+  }
+
+  return DEFAULT_PIPELINE_OPERATOR_UX;
+}
+
+export function resolvePipelineOperatorUx(operator: PipelineOperatorDefinition): ResolvedPipelineOperatorUx {
+  const local = PIPELINE_OPERATOR_UX[operator.id as keyof typeof PIPELINE_OPERATOR_UX] as
+    | PipelineOperatorUxMetadata
+    | undefined;
+  const capabilityFallback = resolvePipelineOperatorCapabilityUx(operator);
+  const ui = operator.ui ?? null;
+  const uiGroupValue = String(ui?.pipeline_group || "").trim().toLowerCase();
+  const uiGroup = isPipelineOperatorGroupId(uiGroupValue) ? uiGroupValue : null;
+  const uiLevel = normalizePipelineOperatorLevel(ui?.pipeline_level);
+  const uiOrder = normalizePipelineOperatorOrder(ui?.pipeline_order);
+  const uiAliases = normalizePipelineOperatorAliases(ui?.aliases);
+  const localAliases = normalizePipelineOperatorAliases(local?.aliases);
+
+  return {
+    group: uiGroup ?? local?.group ?? capabilityFallback.group,
+    level: uiLevel ?? local?.level ?? capabilityFallback.level,
+    order: uiOrder ?? local?.order ?? capabilityFallback.order,
+    aliases: [...uiAliases, ...localAliases],
+  };
+}
+
+export function comparePipelineOperatorsByUx(
+  left: PipelineOperatorDefinition,
+  right: PipelineOperatorDefinition,
+): number {
+  const leftUx = resolvePipelineOperatorUx(left);
+  const rightUx = resolvePipelineOperatorUx(right);
+  const leftGroupRank = PIPELINE_OPERATOR_GROUP_RANK.get(leftUx.group) ?? Number.MAX_SAFE_INTEGER;
+  const rightGroupRank = PIPELINE_OPERATOR_GROUP_RANK.get(rightUx.group) ?? Number.MAX_SAFE_INTEGER;
+
+  if (leftGroupRank !== rightGroupRank) return leftGroupRank - rightGroupRank;
+  if (leftUx.level !== rightUx.level) return leftUx.level === "basic" ? -1 : 1;
+  if (leftUx.order !== rightUx.order) return leftUx.order - rightUx.order;
+
+  const nameComparison = prettyOperatorName(left.id).localeCompare(prettyOperatorName(right.id));
+  if (nameComparison !== 0) return nameComparison;
+  return left.id.localeCompare(right.id);
+}
+
+export function sortPipelineOperatorsForToolbar(
+  operators: PipelineOperatorDefinition[],
+): PipelineOperatorDefinition[] {
+  return [...operators].sort(comparePipelineOperatorsByUx);
+}
+
 function normalizeAlertParam(value: unknown): string | number | boolean {
   if (Array.isArray(value)) {
     return value
@@ -149,7 +273,7 @@ function localizedAlertParams(alert: PipelineAlert, t: TranslationFunction): Rec
     params.scope = t(
       scopeKey,
       { composition },
-      t("core.ui.pipelines.alerts.camera_mapping_camera_not_in_composition.scope.any", {}, "in any composition available to Camera Mapping"),
+      t("core.ui.pipelines.alerts.camera_mapping_camera_not_in_composition.scope.any", {}, "in any composition available to Map position in space"),
     );
   }
 

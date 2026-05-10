@@ -1123,6 +1123,14 @@ video {
   gap: 10px;
 }
 
+.pipelinesInteractiveToolbarHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .pipelinesInteractiveLabel {
   font-weight: 650;
 }
@@ -1131,6 +1139,75 @@ video {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.pipelinesOperatorGroups {
+  display: grid;
+  gap: 12px;
+}
+
+.pipelinesOperatorGroup {
+  --operator-group-color: #64748b;
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--operator-group-color) 38%, var(--color-border-subtle));
+  border-left-color: color-mix(in srgb, var(--operator-group-color) 72%, var(--color-border-subtle));
+  border-left-width: 3px;
+  border-radius: var(--radius-panel);
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--operator-group-color) 8%, transparent),
+      transparent 55%
+    ),
+    var(--color-surface-frost);
+}
+
+.pipelinesOperatorGroupHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pipelinesOperatorGroupDot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--operator-group-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--operator-group-color) 14%, transparent);
+}
+
+.pipelinesOperatorGroupTitle {
+  min-width: 0;
+  font-weight: 700;
+}
+
+.pipelinesOperatorGroupButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pipelinesOperatorButton {
+  height: auto;
+  min-height: var(--control-height-m);
+  max-width: 100%;
+  padding-block: 8px;
+  border-color: color-mix(in srgb, var(--operator-group-color) 45%, var(--color-border-subtle));
+  line-height: 1.2;
+  text-align: left;
+  white-space: normal;
+}
+
+.pipelinesOperatorButton:hover {
+  background: color-mix(in srgb, var(--operator-group-color) 10%, var(--color-surface-frost));
+}
+
+.pipelinesAdvancedToggle {
+  flex: 0 0 auto;
 }
 
 .pipelinesStepsList {
@@ -6144,6 +6221,17 @@ video {
   font-weight: var(--font-weight-semibold);
 }
 
+.pipelinesOperatorGroup .pipelinesOperatorButton {
+  height: auto;
+  min-height: var(--control-height-m);
+  max-width: 100%;
+  padding-block: 8px;
+  border-color: color-mix(in srgb, var(--operator-group-color) 45%, var(--color-border-subtle));
+  line-height: 1.2;
+  text-align: left;
+  white-space: normal;
+}
+
 .iconButton,
 .sceneIconButton {
   width: 36px;
@@ -6164,6 +6252,11 @@ video {
   background: var(--color-surface-frost);
   box-shadow: var(--shadow-elevation-2), var(--shadow-inner-highlight);
   transform: translateY(var(--hover-translate-y));
+}
+
+.pipelinesOperatorGroup .pipelinesOperatorButton:hover {
+  border-color: color-mix(in srgb, var(--operator-group-color) 62%, var(--color-border-strong));
+  background: color-mix(in srgb, var(--operator-group-color) 10%, var(--color-surface-frost));
 }
 
 .chipButton:active,

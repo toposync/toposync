@@ -5,7 +5,7 @@ import type { CamerasIndexResponse, PipelineAlert, PipelineOperatorDefinition } 
 import { cleanupPipelineStorage } from "../../../util/api";
 import { i18n } from "../../../util/i18n";
 
-import { NODE_ID_RE, PIPELINE_PRESET_OPERATOR_IDS } from "./constants";
+import { NODE_ID_RE } from "./constants";
 import type { DragInsertPosition, InteractiveBuildResult, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "./types";
 import {
   createInteractiveStep,
@@ -16,6 +16,7 @@ import {
   pipelineAlertSeverityLabel,
   prettyOperatorName,
   safeJsonParse,
+  sortPipelineOperatorsForToolbar,
 } from "./utils";
 import {
   bytesToGiBValue,
@@ -161,7 +162,7 @@ export function PipelineStorageCard({
         <div>
           <div className="pipelinesStorageTitle">{t("core.ui.pipelines.storage.title", {}, "Storage")}</div>
           <div className="pipelinesStepHint">
-            {t("core.ui.pipelines.storage.subtitle", {}, "Managed retention for files written by Store Images.")}
+            {t("core.ui.pipelines.storage.subtitle", {}, "Managed retention for files written by Save images.")}
           </div>
         </div>
         <div className="pipelinesStorageActions">
@@ -281,24 +282,8 @@ export function InteractivePipelineEditor({
   );
 
   const presetOperators = useMemo(
-    () => {
-      const seen = new Set<string>();
-      const out: PipelineOperatorDefinition[] = [];
-      for (const id of PIPELINE_PRESET_OPERATOR_IDS) {
-        const operator = operatorsById[id];
-        if (!operator) continue;
-        seen.add(id);
-        out.push(operator);
-      }
-      for (const id of Object.keys(operatorPanels).sort()) {
-        const operator = operatorsById[id];
-        if (!operator || seen.has(id)) continue;
-        seen.add(id);
-        out.push(operator);
-      }
-      return out;
-    },
-    [operatorPanels, operatorsById],
+    () => sortPipelineOperatorsForToolbar(Object.values(operatorsById)),
+    [locale, operatorsById],
   );
 
   const interactiveCameraId = useMemo(() => {

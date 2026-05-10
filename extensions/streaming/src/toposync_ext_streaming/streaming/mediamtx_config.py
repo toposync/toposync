@@ -22,8 +22,10 @@ class MediaMTXPathAuth:
     path: str
     read_username: str | None = None
     read_password: str | None = None
+    read_ips: tuple[str, ...] = ()
     publish_username: str | None = None
     publish_password: str | None = None
+    publish_enabled: bool = True
 
 
 def normalize_path_slug(value: str, *, fallback: str = "test") -> str:
@@ -112,8 +114,10 @@ def render_mediamtx_config(
             path=path_key,
             read_username=str(item.read_username or "").strip() or None,
             read_password=str(item.read_password or "").strip() or None,
+            read_ips=tuple(str(ip or "").strip() for ip in (item.read_ips or ()) if str(ip or "").strip()),
             publish_username=str(item.publish_username or "").strip() or None,
             publish_password=str(item.publish_password or "").strip() or None,
+            publish_enabled=bool(item.publish_enabled),
         )
 
     default_api_origins = list(api_allow_origins or ["*"])
@@ -139,20 +143,23 @@ def render_mediamtx_config(
         auth = normalized_auth_by_path.get(path)
         read_username = str(getattr(auth, "read_username", "") or "").strip()
         read_password = str(getattr(auth, "read_password", "") or "").strip()
+        read_ips = [str(ip or "").strip() for ip in getattr(auth, "read_ips", ()) if str(ip or "").strip()]
         publish_username = str(getattr(auth, "publish_username", "") or "").strip()
         publish_password = str(getattr(auth, "publish_password", "") or "").strip()
+        publish_enabled = bool(getattr(auth, "publish_enabled", True))
 
         if read_username and read_password:
-            add_permission(user=read_username, password=read_password, ips=[], action="read", path=path)
-            add_permission(user=read_username, password=read_password, ips=[], action="playback", path=path)
+            add_permission(user=read_username, password=read_password, ips=read_ips, action="read", path=path)
+            add_permission(user=read_username, password=read_password, ips=read_ips, action="playback", path=path)
         else:
             add_permission(user="any", password="", ips=[], action="read", path=path)
             add_permission(user="any", password="", ips=[], action="playback", path=path)
 
-        if publish_username and publish_password:
-            add_permission(user=publish_username, password=publish_password, ips=localhost_ips, action="publish", path=path)
-        else:
-            add_permission(user="any", password="", ips=localhost_ips, action="publish", path=path)
+        if publish_enabled:
+            if publish_username and publish_password:
+                add_permission(user=publish_username, password=publish_password, ips=localhost_ips, action="publish", path=path)
+            else:
+                add_permission(user="any", password="", ips=localhost_ips, action="publish", path=path)
 
     lines: list[str] = []
     lines.append("logLevel: info")

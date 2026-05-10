@@ -20,9 +20,16 @@ from .api.models import (
 )
 from .api.routes import create_streaming_router, ensure_streaming_settings_defaults
 from .pipelines import StreamingRuntimeBindings, register_streaming_pipeline_operators, set_streaming_runtime_bindings
-from .streaming.camera_ingest import build_camera_ingest_definitions, build_camera_ingest_path_configs
+from .streaming.camera_ingest import (
+    CameraIngestDefinition,
+    build_camera_ingest_definitions,
+    build_camera_ingest_path_auth,
+    build_camera_ingest_path_configs,
+)
 from .streaming.distributed_sync import DistributedSettingsSync
 from .streaming.engine_manager import MediaMtxEngineManager
+from .streaming.ingest_auth import CameraIngestCredentialStore
+from .streaming.mediamtx_config import MediaMTXPathAuth
 from .streaming.playback_events import PlaybackEventStore
 from .streaming.publisher_manager import PublisherManager
 from .streaming.runtime_state import TransmissionRuntimeState
@@ -70,6 +77,7 @@ class StreamingExtension(BaseExtension):
             settings = StreamingExtensionSettings.model_validate(current)
 
             engine_manager = MediaMtxEngineManager(data_dir=config_store.paths.data_dir)
+            ingest_credential_store = CameraIngestCredentialStore(data_dir=config_store.paths.data_dir)
             runtime_state = TransmissionRuntimeState()
             playback_event_store = PlaybackEventStore(retention_seconds=900.0, max_events=500)
             publisher_manager = PublisherManager(data_dir=config_store.paths.data_dir, logger=logger, host_id=server_id)
@@ -83,6 +91,7 @@ class StreamingExtension(BaseExtension):
             )
 
             app.state.streaming_engine_manager = engine_manager
+            app.state.streaming_ingest_credential_store = ingest_credential_store
             app.state.streaming_runtime_state = runtime_state
             app.state.streaming_playback_event_store = playback_event_store
             app.state.streaming_publisher_manager = publisher_manager
@@ -132,7 +141,12 @@ class StreamingExtension(BaseExtension):
 
                 engine_paths = list_engine_paths_for_host(streaming_settings, host_server_id=server_id)
                 engine_paths.extend([item.path_slug for item in ingest_by_id.values()])
-                path_auth = list_path_read_auth_for_host(streaming_settings, host_server_id=server_id)
+                path_auth = _path_auth_with_camera_ingest(
+                    settings=streaming_settings,
+                    host_server_id=server_id,
+                    camera_ingest_by_id=ingest_by_id,
+                    credential_store=ingest_credential_store,
+                )
                 path_configs = build_camera_ingest_path_configs(ingest_by_id)
 
                 await engine_manager.ensure_running(
@@ -141,8 +155,7 @@ class StreamingExtension(BaseExtension):
                     path_auth=path_auth,
                     path_configs=path_configs,
                 )
-                status = await engine_manager.get_status()
-                return f"rtsp://127.0.0.1:{status.ports.rtsp}/{ingest.path_slug}"
+                return await engine_manager.get_read_url_for_path(ingest.path_slug, host="127.0.0.1")
 
             services.register("streaming.ingest.resolve_rtsp_url", _resolve_camera_ingest_rtsp_url)
 
@@ -156,7 +169,12 @@ class StreamingExtension(BaseExtension):
                 await engine_manager.ensure_running(
                     settings.engine,
                     engine_paths=list_engine_paths_for_host(settings, host_server_id=server_id) + camera_ingest_paths,
-                    path_auth=list_path_read_auth_for_host(settings, host_server_id=server_id),
+                    path_auth=_path_auth_with_camera_ingest(
+                        settings=settings,
+                        host_server_id=server_id,
+                        camera_ingest_by_id=camera_ingest_by_id,
+                        credential_store=ingest_credential_store,
+                    ),
                     path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
                 )
             except Exception:
@@ -190,6 +208,27 @@ def _resolve_streaming_server_id() -> str:
             fallback="local",
         )
     return "local"
+
+
+def _path_auth_with_camera_ingest(
+    *,
+    settings: StreamingExtensionSettings,
+    host_server_id: str,
+    camera_ingest_by_id: dict[str, CameraIngestDefinition],
+    credential_store: CameraIngestCredentialStore,
+) -> dict[str, tuple[str, str] | MediaMTXPathAuth]:
+    path_auth: dict[str, tuple[str, str] | MediaMTXPathAuth] = dict(
+        list_path_read_auth_for_host(settings, host_server_id=host_server_id)
+    )
+    if camera_ingest_by_id:
+        path_auth.update(
+            build_camera_ingest_path_auth(
+                camera_ingest_by_id,
+                credentials=credential_store.load_or_create(),
+                ingest_settings=settings.camera_ingest,
+            )
+        )
+    return path_auth
 
 
 def _build_distributed_settings_sync(

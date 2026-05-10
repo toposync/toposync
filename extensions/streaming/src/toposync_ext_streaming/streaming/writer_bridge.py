@@ -6,6 +6,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Literal
 
 import numpy
@@ -22,12 +23,14 @@ from .engine_manager import MediaMtxEngineManager
 from .camera_ingest import (
     CameraIngestDefinition,
     build_camera_ingest_definitions,
+    build_camera_ingest_path_auth,
     build_camera_ingest_path_configs,
     iter_camera_devices_from_app_settings,
     resolve_camera_video_channel,
 )
+from .ingest_auth import CameraIngestCredentialStore
 from .mediamtx_api_client import MediaMtxApiClient
-from .mediamtx_config import normalize_path_slug
+from .mediamtx_config import MediaMTXPathAuth, normalize_path_slug
 from .placeholder import get_placeholder_frame
 from .publisher_manager import (
     PublisherEncodingSettings,
@@ -113,9 +116,10 @@ class StreamWriterBridge:
         self._last_settings_load_monotonic = 0.0
         self._cached_engine: StreamingEngineSettings | None = None
         self._cached_targets: tuple[ResolvedOutputTarget, ...] = ()
-        self._cached_path_auth_by_path: dict[str, tuple[str, str]] = {}
+        self._cached_path_auth_by_path: dict[str, tuple[str, str] | MediaMTXPathAuth] = {}
         self._cached_camera_ingest_by_id: dict[str, CameraIngestDefinition] = {}
         self._cached_camera_ingest_path_configs: dict[str, dict[str, Any]] = {}
+        self._ingest_credential_store: CameraIngestCredentialStore | None = None
         self._enable_bypass = bool(int(str(os.getenv("TOPOSYNC_STREAMING_ENABLE_BYPASS", "0") or "0").strip() or "0"))
         self._cached_bypass_by_writer: dict[str, WriterBypassCandidate] = {}
         self._cached_viewer_count_by_path: dict[str, int] = {}
@@ -194,7 +198,7 @@ class StreamWriterBridge:
                 writer_id: {
                     "transmission_id": candidate.transmission_id,
                     "source_backend": candidate.source_backend,
-                    "source_rtsp_url": candidate.source_rtsp_url,
+                    "source_rtsp_url": _redact_url_userinfo(candidate.source_rtsp_url),
                     "source_fps": candidate.source_fps,
                     "bypass_mode": candidate.bypass_mode,
                 }
@@ -425,7 +429,10 @@ class StreamWriterBridge:
                 if camera_id:
                     ingest = camera_ingest_by_id.get(camera_id)
                     if ingest is not None:
-                        resolved_rtsp_url = f"rtsp://127.0.0.1:{engine_status.ports.rtsp}/{ingest.path_slug}"
+                        resolved_rtsp_url = await self._engine_manager.get_read_url_for_path(
+                            ingest.path_slug,
+                            host="127.0.0.1",
+                        )
                 input_settings = PublisherInputSettings(
                     mode="rtsp_pull",
                     rtsp_url=resolved_rtsp_url,
@@ -517,7 +524,7 @@ class StreamWriterBridge:
     ) -> tuple[
         StreamingEngineSettings,
         tuple[ResolvedOutputTarget, ...],
-        dict[str, tuple[str, str]],
+        dict[str, tuple[str, str] | MediaMTXPathAuth],
         dict[str, WriterBypassCandidate],
         dict[str, CameraIngestDefinition],
         dict[str, dict[str, Any]],
@@ -551,11 +558,21 @@ class StreamWriterBridge:
             placeholder_after_s=stale_policy.placeholder_after_seconds,
         )
 
-        path_auth_by_path = list_path_read_auth_for_host(normalized_settings, host_server_id=self._host_server_id)
+        path_auth_by_path: dict[str, tuple[str, str] | MediaMTXPathAuth] = dict(
+            list_path_read_auth_for_host(normalized_settings, host_server_id=self._host_server_id)
+        )
         camera_ingest_by_id = build_camera_ingest_definitions(
             app_settings=settings,
             ingest_settings=normalized_settings.camera_ingest,
         )
+        if camera_ingest_by_id:
+            path_auth_by_path.update(
+                build_camera_ingest_path_auth(
+                    camera_ingest_by_id,
+                    credentials=self._get_ingest_credential_store().load_or_create(),
+                    ingest_settings=normalized_settings.camera_ingest,
+                )
+            )
         camera_ingest_path_configs = build_camera_ingest_path_configs(camera_ingest_by_id)
         bypass_by_writer: dict[str, WriterBypassCandidate] = {}
         if self._enable_bypass:
@@ -595,6 +612,16 @@ class StreamWriterBridge:
             self._last_viewer_load_monotonic = now_monotonic
 
         return self._cached_viewer_count_by_path
+
+    def _get_ingest_credential_store(self) -> CameraIngestCredentialStore:
+        if self._ingest_credential_store is not None:
+            return self._ingest_credential_store
+        paths = getattr(self._config_store, "paths", None)
+        data_dir = getattr(paths, "data_dir", None)
+        if data_dir is None:
+            data_dir = Path(os.getenv("TOPOSYNC_DATA_DIR") or ".toposync-data")
+        self._ingest_credential_store = CameraIngestCredentialStore(data_dir=Path(data_dir))
+        return self._ingest_credential_store
 
     async def _scan_engine_logs_for_no_stream_demand(self, engine_status: Any, now_monotonic: float) -> None:
         """Update synthetic demand by scanning the MediaMTX logs.
@@ -1166,6 +1193,13 @@ def _apply_rtsp_auth(url: str, username: str, password: str) -> str:
             return f"rtsp://{user}:{pwd}@{rest}"
         return f"rtsp://{user}@{rest}"
     return raw
+
+
+def _redact_url_userinfo(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    return re.sub(r"(?i)([a-z][a-z0-9+.-]*://)([^/@]+)@", r"\1[REDACTED]@", raw)
 
 
 def _coerce_float(value: Any) -> float | None:

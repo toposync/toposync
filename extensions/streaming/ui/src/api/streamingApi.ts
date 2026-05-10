@@ -4,6 +4,7 @@ import type {
   ProcessingServer,
   ProcessingServersListResponse,
   StreamingOutputsRuntimeResponse,
+  StreamingCameraIngestAuthResponse,
   StreamingHlsProbeResponse,
   StreamingRuntimeHealthResponse,
   StreamingRuntimeEncodersResponse,
@@ -203,6 +204,18 @@ export async function clearStreamingEncoderQuarantine(encoder?: string | null): 
     body: JSON.stringify({ encoder: encoder ?? null }),
   });
   return payload.encoders;
+}
+
+export async function fetchCameraIngestAuth(signal?: AbortSignal): Promise<StreamingCameraIngestAuthResponse> {
+  return requestJson<StreamingCameraIngestAuthResponse>("/api/streams/runtime/camera-ingest/auth", { signal });
+}
+
+export async function revealCameraIngestAuth(): Promise<StreamingCameraIngestAuthResponse> {
+  return requestJson<StreamingCameraIngestAuthResponse>("/api/streams/runtime/camera-ingest/auth/reveal", { method: "POST" });
+}
+
+export async function rotateCameraIngestAuth(): Promise<StreamingCameraIngestAuthResponse> {
+  return requestJson<StreamingCameraIngestAuthResponse>("/api/streams/runtime/camera-ingest/auth/rotate", { method: "POST" });
 }
 
 export async function fetchStreamingRuntimeDiagnostics(signal?: AbortSignal): Promise<unknown> {

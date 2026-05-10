@@ -34,11 +34,18 @@ from toposync.runtime.services import ServiceRegistry
 from ..streaming.engine_manager import MediaMtxEngineManager
 from ..streaming.camera_ingest import (
     build_camera_ingest_definitions,
+    build_camera_ingest_path_auth,
     build_camera_ingest_path_configs,
     iter_camera_devices_from_app_settings,
 )
+from ..streaming.ingest_auth import (
+    CameraIngestCredentialStore,
+    CameraIngestCredentials,
+    REDACTED_PASSWORD,
+    redact_ingest_secret,
+)
 from ..streaming.mediamtx_api_client import MediaMtxApiClient
-from ..streaming.mediamtx_config import normalize_path_slug
+from ..streaming.mediamtx_config import MediaMTXPathAuth, normalize_path_slug
 from ..streaming.mediamtx_binary import extract_mediamtx_binary, find_installed_mediamtx_binary
 from ..streaming.platform import detect_mediamtx_platform
 from ..streaming.mediamtx_processes import (
@@ -63,6 +70,8 @@ from .models import (
     StreamingApplyWebRtcCompanionResponse,
     StreamingApplyQualityProfilesRequest,
     StreamingApplyQualityProfilesResponse,
+    StreamingCameraIngestAuthPath,
+    StreamingCameraIngestAuthResponse,
     StreamingNetworkContract,
     StreamingNetworkContractPorts,
     StreamingEncoderQuarantineClearRequest,
@@ -153,6 +162,54 @@ def _playback_event_store(request: Request) -> PlaybackEventStore:
     store = PlaybackEventStore(retention_seconds=900.0, max_events=500)
     request.app.state.streaming_playback_event_store = store
     return store
+
+
+def _ingest_credential_store(request: Request) -> CameraIngestCredentialStore:
+    store = getattr(request.app.state, "streaming_ingest_credential_store", None)
+    if isinstance(store, CameraIngestCredentialStore):
+        return store
+    config_store = _config_store(request)
+    store = CameraIngestCredentialStore(data_dir=config_store.paths.data_dir)
+    request.app.state.streaming_ingest_credential_store = store
+    return store
+
+
+def _path_auth_with_camera_ingest(
+    *,
+    settings: StreamingExtensionSettings,
+    host_server_id: str,
+    camera_ingest_by_id: dict[str, Any],
+    ingest_credentials: CameraIngestCredentials,
+) -> dict[str, tuple[str, str] | MediaMTXPathAuth]:
+    path_auth: dict[str, tuple[str, str] | MediaMTXPathAuth] = dict(
+        list_path_read_auth_for_host(settings, host_server_id=host_server_id)
+    )
+    if camera_ingest_by_id:
+        path_auth.update(
+            build_camera_ingest_path_auth(
+                camera_ingest_by_id,
+                credentials=ingest_credentials,
+                ingest_settings=settings.camera_ingest,
+            )
+        )
+    return path_auth
+
+
+def _path_auth_for_camera_ingest_request(
+    request: Request,
+    *,
+    settings: StreamingExtensionSettings,
+    camera_ingest_by_id: dict[str, Any],
+) -> dict[str, tuple[str, str] | MediaMTXPathAuth]:
+    host_server_id = _current_server_id(request)
+    if not camera_ingest_by_id:
+        return dict(list_path_read_auth_for_host(settings, host_server_id=host_server_id))
+    return _path_auth_with_camera_ingest(
+        settings=settings,
+        host_server_id=host_server_id,
+        camera_ingest_by_id=camera_ingest_by_id,
+        ingest_credentials=_ingest_credential_store(request).load_or_create(),
+    )
 
 
 def _maybe_auth(request: Request) -> tuple[AuthRuntime, AuthContext] | None:
@@ -1442,6 +1499,17 @@ def _rtsp_url(host: str, port: int, path: str) -> str:
     return f"rtsp://{host}:{port}/{path}"
 
 
+def _rtsp_url_with_userinfo(host: str, port: int, path: str, *, username: str, password: str) -> str:
+    user = urllib_parse.quote(str(username or ""), safe="")
+    pwd = urllib_parse.quote(str(password or ""), safe="")
+    return f"rtsp://{user}:{pwd}@{host}:{port}/{path}"
+
+
+def _redacted_rtsp_url_with_userinfo(host: str, port: int, path: str, *, username: str) -> str:
+    user = urllib_parse.quote(str(username or ""), safe="")
+    return f"rtsp://{user}:{REDACTED_PASSWORD}@{host}:{port}/{path}"
+
+
 def _hls_url(host: str, port: int, path: str) -> str:
     return f"http://{host}:{port}/{path}/index.m3u8"
 
@@ -1474,6 +1542,63 @@ def _quality_profile_output(profile_id: str) -> TransmissionOutput:
         latency_profile=profile.latency_profile,
         encoder_mode="inherit",
         quality_profile_id=profile.id,
+    )
+
+
+async def _build_camera_ingest_auth_response(
+    request: Request,
+    *,
+    reveal: bool,
+) -> StreamingCameraIngestAuthResponse:
+    config_store = _config_store(request)
+    settings = await _load_settings(config_store)
+    manager = _engine_manager(request)
+    credentials = _ingest_credential_store(request).load_or_create()
+    app_settings = await config_store.get_settings()
+    camera_ingest_by_id = build_camera_ingest_definitions(
+        app_settings=app_settings,
+        ingest_settings=settings.camera_ingest,
+    )
+    status = await manager.get_status()
+    rtsp_port = int(status.ports.rtsp if status.running else settings.engine.preferred_ports.rtsp)
+    host = _status_host(request, settings)
+    paths: list[StreamingCameraIngestAuthPath] = []
+    for camera_id, ingest in sorted(camera_ingest_by_id.items(), key=lambda item: item[0]):
+        redacted_url = _redacted_rtsp_url_with_userinfo(
+            host,
+            rtsp_port,
+            ingest.path_slug,
+            username=credentials.username,
+        )
+        full_url = (
+            _rtsp_url_with_userinfo(
+                host,
+                rtsp_port,
+                ingest.path_slug,
+                username=credentials.username,
+                password=credentials.password,
+            )
+            if reveal
+            else None
+        )
+        paths.append(
+            StreamingCameraIngestAuthPath(
+                camera_id=camera_id,
+                path=ingest.path_slug,
+                redacted_rtsp_url=redacted_url,
+                rtsp_url=full_url,
+            )
+        )
+    return StreamingCameraIngestAuthResponse(
+        enabled=bool(settings.camera_ingest.enabled),
+        credential_active=True,
+        username=credentials.username,
+        password=credentials.password if reveal else None,
+        created_at_unix=credentials.created_at_unix,
+        rotated_at_unix=credentials.rotated_at_unix,
+        rtsp_port=rtsp_port,
+        allowed_cidrs=list(settings.camera_ingest.allowed_cidrs or []),
+        paths=paths,
     )
 
 
@@ -2571,8 +2696,10 @@ def create_streaming_router() -> APIRouter:
                 list_engine_paths_for_host(updated, host_server_id=_current_server_id(request))
                 + ingest_paths
             )
-            path_auth = list_path_read_auth_for_host(
-                updated, host_server_id=_current_server_id(request)
+            path_auth = _path_auth_for_camera_ingest_request(
+                request,
+                settings=updated,
+                camera_ingest_by_id=camera_ingest_by_id,
             )
             path_configs = build_camera_ingest_path_configs(camera_ingest_by_id)
             if patch.engine is not None:
@@ -2741,8 +2868,10 @@ def create_streaming_router() -> APIRouter:
                     settings, host_server_id=_current_server_id(request)
                 )
                 + [item.path_slug for item in camera_ingest_by_id.values()],
-                path_auth=list_path_read_auth_for_host(
-                    settings, host_server_id=_current_server_id(request)
+                path_auth=_path_auth_for_camera_ingest_request(
+                    request,
+                    settings=settings,
+                    camera_ingest_by_id=camera_ingest_by_id,
                 ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
@@ -2798,8 +2927,10 @@ def create_streaming_router() -> APIRouter:
                     settings, host_server_id=_current_server_id(request)
                 )
                 + [item.path_slug for item in camera_ingest_by_id.values()],
-                path_auth=list_path_read_auth_for_host(
-                    settings, host_server_id=_current_server_id(request)
+                path_auth=_path_auth_for_camera_ingest_request(
+                    request,
+                    settings=settings,
+                    camera_ingest_by_id=camera_ingest_by_id,
                 ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
@@ -2850,8 +2981,10 @@ def create_streaming_router() -> APIRouter:
                         settings, host_server_id=_current_server_id(request)
                     )
                     + [item.path_slug for item in camera_ingest_by_id.values()],
-                    path_auth=list_path_read_auth_for_host(
-                        settings, host_server_id=_current_server_id(request)
+                    path_auth=_path_auth_for_camera_ingest_request(
+                        request,
+                        settings=settings,
+                        camera_ingest_by_id=camera_ingest_by_id,
                     ),
                     path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
                 )
@@ -2927,8 +3060,10 @@ def create_streaming_router() -> APIRouter:
                     saved, host_server_id=_current_server_id(request)
                 )
                 + [item.path_slug for item in camera_ingest_by_id.values()],
-                path_auth=list_path_read_auth_for_host(
-                    saved, host_server_id=_current_server_id(request)
+                path_auth=_path_auth_for_camera_ingest_request(
+                    request,
+                    settings=saved,
+                    camera_ingest_by_id=camera_ingest_by_id,
                 ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
@@ -3015,8 +3150,10 @@ def create_streaming_router() -> APIRouter:
                     saved, host_server_id=_current_server_id(request)
                 )
                 + [item.path_slug for item in camera_ingest_by_id.values()],
-                path_auth=list_path_read_auth_for_host(
-                    saved, host_server_id=_current_server_id(request)
+                path_auth=_path_auth_for_camera_ingest_request(
+                    request,
+                    settings=saved,
+                    camera_ingest_by_id=camera_ingest_by_id,
                 ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
@@ -3081,8 +3218,10 @@ def create_streaming_router() -> APIRouter:
                     saved, host_server_id=_current_server_id(request)
                 )
                 + [item.path_slug for item in camera_ingest_by_id.values()],
-                path_auth=list_path_read_auth_for_host(
-                    saved, host_server_id=_current_server_id(request)
+                path_auth=_path_auth_for_camera_ingest_request(
+                    request,
+                    settings=saved,
+                    camera_ingest_by_id=camera_ingest_by_id,
                 ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
@@ -3149,8 +3288,10 @@ def create_streaming_router() -> APIRouter:
                     saved, host_server_id=_current_server_id(request)
                 )
                 + [item.path_slug for item in camera_ingest_by_id.values()],
-                path_auth=list_path_read_auth_for_host(
-                    saved, host_server_id=_current_server_id(request)
+                path_auth=_path_auth_for_camera_ingest_request(
+                    request,
+                    settings=saved,
+                    camera_ingest_by_id=camera_ingest_by_id,
                 ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
@@ -3194,8 +3335,10 @@ def create_streaming_router() -> APIRouter:
                     saved, host_server_id=_current_server_id(request)
                 )
                 + [item.path_slug for item in camera_ingest_by_id.values()],
-                path_auth=list_path_read_auth_for_host(
-                    saved, host_server_id=_current_server_id(request)
+                path_auth=_path_auth_for_camera_ingest_request(
+                    request,
+                    settings=saved,
+                    camera_ingest_by_id=camera_ingest_by_id,
                 ),
                 path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
             )
@@ -3939,6 +4082,60 @@ def create_streaming_router() -> APIRouter:
         snapshot = StreamingRuntimeEncodersResponse.model_validate(await manager.encoders_snapshot())
         return StreamingEncoderQuarantineClearResponse(cleared=cleared, encoders=snapshot)
 
+    @router.get("/runtime/camera-ingest/auth", response_model=StreamingCameraIngestAuthResponse)
+    async def streaming_camera_ingest_auth(request: Request) -> StreamingCameraIngestAuthResponse:
+        _require_auth(request, action="core:settings:read")
+        return await _build_camera_ingest_auth_response(request, reveal=False)
+
+    @router.post("/runtime/camera-ingest/auth/reveal", response_model=StreamingCameraIngestAuthResponse)
+    async def streaming_camera_ingest_auth_reveal(request: Request) -> StreamingCameraIngestAuthResponse:
+        _require_auth(
+            request,
+            action="core:extension:settings:write",
+            resource_type="core:extension",
+            resource_selector=EXTENSION_ID,
+        )
+        return await _build_camera_ingest_auth_response(request, reveal=True)
+
+    @router.post("/runtime/camera-ingest/auth/rotate", response_model=StreamingCameraIngestAuthResponse)
+    async def streaming_camera_ingest_auth_rotate(request: Request) -> StreamingCameraIngestAuthResponse:
+        _require_auth(
+            request,
+            action="core:extension:settings:write",
+            resource_type="core:extension",
+            resource_selector=EXTENSION_ID,
+        )
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        credentials = _ingest_credential_store(request).rotate()
+        if settings.engine.enabled:
+            manager = _engine_manager(request)
+            try:
+                app_settings = await config_store.get_settings()
+                camera_ingest_by_id = build_camera_ingest_definitions(
+                    app_settings=app_settings,
+                    ingest_settings=settings.camera_ingest,
+                )
+                await manager.restart(
+                    settings.engine,
+                    engine_paths=list_engine_paths_for_host(
+                        settings, host_server_id=_current_server_id(request)
+                    )
+                    + [item.path_slug for item in camera_ingest_by_id.values()],
+                    path_auth=_path_auth_with_camera_ingest(
+                        settings=settings,
+                        host_server_id=_current_server_id(request),
+                        camera_ingest_by_id=camera_ingest_by_id,
+                        ingest_credentials=credentials,
+                    ),
+                    path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=500, detail=f"Failed to rotate ingest credentials: {exc}"
+                ) from exc
+        return await _build_camera_ingest_auth_response(request, reveal=False)
+
     @router.get("/runtime/diagnostic-snapshot")
     async def streaming_runtime_diagnostic_snapshot(request: Request) -> dict[str, Any]:
         _require_auth(request, action="core:settings:read")
@@ -4027,11 +4224,15 @@ def create_streaming_router() -> APIRouter:
         publisher = _publisher_manager(request)
         bridge = _writer_bridge(request)
         playback_events = _playback_event_store(request)
+        ingest_credentials = _ingest_credential_store(request).load_or_create()
 
         bridge_snapshot: dict[str, Any] | None = None
         if bridge is not None and callable(getattr(bridge, "snapshot", None)):
             try:
-                bridge_snapshot = await bridge.snapshot()
+                bridge_snapshot = redact_ingest_secret(
+                    await bridge.snapshot(),
+                    credentials=ingest_credentials,
+                )
             except Exception as exc:
                 bridge_snapshot = {"error": str(exc)}
 
@@ -4046,8 +4247,14 @@ def create_streaming_router() -> APIRouter:
             },
             "engine": await manager.status_payload(host=_status_host(request, settings)),
             "media_auth": settings.engine.media_auth.model_dump(mode="python"),
+            "camera_ingest_auth": (
+                await _build_camera_ingest_auth_response(request, reveal=False)
+            ).model_dump(mode="python"),
             "mediamtx": await _mediamtx_snapshot(request),
-            "publisher": await publisher.snapshot(),
+            "publisher": redact_ingest_secret(
+                await publisher.snapshot(),
+                credentials=ingest_credentials,
+            ),
             "runtime_state": await runtime_state.snapshot(
                 stale_after_s=settings.stale_policy.stale_after_seconds,
                 placeholder_after_s=settings.stale_policy.placeholder_after_seconds,

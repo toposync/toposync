@@ -511,11 +511,17 @@ class StreamingCameraIngestSettings(BaseModel):
 
     enabled: bool = True
     path_prefix: str = "ingest"
+    allowed_cidrs: list[str] = Field(default_factory=list)
 
     @field_validator("path_prefix", mode="before")
     @classmethod
     def _normalize_path_prefix(cls, value: Any) -> str:
         return normalize_path_slug(str(value or ""), fallback="ingest")
+
+    @field_validator("allowed_cidrs", mode="before")
+    @classmethod
+    def _normalize_allowed_cidrs(cls, value: Any) -> list[str]:
+        return _normalize_string_list_value(value)
 
 
 class StreamingStalePolicySettings(BaseModel):
@@ -609,6 +615,29 @@ class StreamingSettingsPatchRequest(BaseModel):
 class StreamingHealthResponse(BaseModel):
     status: str
     extension: str
+
+
+class StreamingCameraIngestAuthPath(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    camera_id: str
+    path: str
+    redacted_rtsp_url: str
+    rtsp_url: str | None = None
+
+
+class StreamingCameraIngestAuthResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    credential_active: bool
+    username: str
+    password: str | None = None
+    created_at_unix: float | None = None
+    rotated_at_unix: float | None = None
+    rtsp_port: int | None = None
+    allowed_cidrs: list[str] = Field(default_factory=list)
+    paths: list[StreamingCameraIngestAuthPath] = Field(default_factory=list)
 
 
 class StreamingEngineActivePorts(BaseModel):

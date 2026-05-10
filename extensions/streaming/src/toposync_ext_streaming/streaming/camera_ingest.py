@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..api.models import StreamingCameraIngestSettings
+from .ingest_auth import CameraIngestCredentials
+from .mediamtx_config import MediaMTXPathAuth
 from .mediamtx_config import normalize_path_slug
 
 
@@ -156,6 +158,28 @@ def build_camera_ingest_path_configs(definitions: dict[str, CameraIngestDefiniti
             "source": source,
             "sourceOnDemand": True,
         }
+    return out
+
+
+def build_camera_ingest_path_auth(
+    definitions: dict[str, CameraIngestDefinition],
+    *,
+    credentials: CameraIngestCredentials,
+    ingest_settings: StreamingCameraIngestSettings,
+) -> dict[str, MediaMTXPathAuth]:
+    allowed_cidrs = tuple(str(item or "").strip() for item in ingest_settings.allowed_cidrs if str(item or "").strip())
+    out: dict[str, MediaMTXPathAuth] = {}
+    for item in definitions.values():
+        path_slug = normalize_path_slug(item.path_slug, fallback="")
+        if not path_slug:
+            continue
+        out[path_slug] = MediaMTXPathAuth(
+            path=path_slug,
+            read_username=credentials.username,
+            read_password=credentials.password,
+            read_ips=allowed_cidrs,
+            publish_enabled=False,
+        )
     return out
 
 

@@ -156,7 +156,7 @@ class MediaMtxEngineManager:
         engine_settings: StreamingEngineSettings,
         *,
         engine_paths: list[str] | None = None,
-        path_auth: dict[str, tuple[str, str]] | None = None,
+        path_auth: dict[str, tuple[str, str] | MediaMTXPathAuth] | None = None,
         path_configs: dict[str, dict[str, object]] | None = None,
     ) -> MediaMtxEngineStatus:
         async with self._lock:
@@ -197,7 +197,7 @@ class MediaMtxEngineManager:
         *,
         previous_engine_settings: StreamingEngineSettings | None = None,
         engine_paths: list[str] | None = None,
-        path_auth: dict[str, tuple[str, str]] | None = None,
+        path_auth: dict[str, tuple[str, str] | MediaMTXPathAuth] | None = None,
         path_configs: dict[str, dict[str, object]] | None = None,
     ) -> MediaMtxEngineStatus:
         _ = previous_engine_settings
@@ -238,7 +238,7 @@ class MediaMtxEngineManager:
         engine_settings: StreamingEngineSettings,
         *,
         engine_paths: list[str] | None = None,
-        path_auth: dict[str, tuple[str, str]] | None = None,
+        path_auth: dict[str, tuple[str, str] | MediaMTXPathAuth] | None = None,
         path_configs: dict[str, dict[str, object]] | None = None,
     ) -> MediaMtxEngineStatus:
         async with self._lock:
@@ -291,6 +291,19 @@ class MediaMtxEngineManager:
                 candidate = str(host or "").strip()
                 resolved_host = candidate if candidate and candidate != "0.0.0.0" else "127.0.0.1"
             username, password = self._publish_credentials_by_path.get(normalized_path, ("", ""))
+            if username and password:
+                return f"rtsp://{username}:{password}@{resolved_host}:{self._ports.rtsp}/{normalized_path}"
+            return f"rtsp://{resolved_host}:{self._ports.rtsp}/{normalized_path}"
+
+    async def get_read_url_for_path(self, path_slug: str, *, host: str | None = None) -> str:
+        async with self._lock:
+            normalized_path = _normalize_path(path_slug)
+            if self._bind_host == "127.0.0.1":
+                resolved_host = "127.0.0.1"
+            else:
+                candidate = str(host or "").strip()
+                resolved_host = candidate if candidate and candidate != "0.0.0.0" else "127.0.0.1"
+            username, password = self._read_auth_by_path.get(normalized_path, ("", ""))
             if username and password:
                 return f"rtsp://{username}:{password}@{resolved_host}:{self._ports.rtsp}/{normalized_path}"
             return f"rtsp://{resolved_host}:{self._ports.rtsp}/{normalized_path}"
@@ -499,7 +512,7 @@ class MediaMtxEngineManager:
         self,
         engine_settings: StreamingEngineSettings,
         *,
-        path_auth: dict[str, tuple[str, str]] | None = None,
+        path_auth: dict[str, tuple[str, str] | MediaMTXPathAuth] | None = None,
         preserve_ports_if_running: bool = False,
     ) -> _RuntimeConfig:
         expose_to_lan = bool(engine_settings.expose_to_lan)
@@ -536,19 +549,35 @@ class MediaMtxEngineManager:
             publish_username, publish_password = self._derive_publish_credentials(normalized_path)
             publish_credentials_by_path[normalized_path] = (publish_username, publish_password)
 
-            read_pair = path_auth_source.get(normalized_path) or ("", "")
-            read_username = str(read_pair[0] or "").strip()
-            read_password = str(read_pair[1] or "").strip()
+            read_ips: tuple[str, ...] = ()
+            publish_enabled = True
+            auth_rule = path_auth_source.get(normalized_path)
+            if isinstance(auth_rule, MediaMTXPathAuth):
+                read_username = str(auth_rule.read_username or "").strip()
+                read_password = str(auth_rule.read_password or "").strip()
+                read_ips = tuple(str(ip or "").strip() for ip in (auth_rule.read_ips or ()) if str(ip or "").strip())
+                publish_enabled = bool(auth_rule.publish_enabled)
+                if auth_rule.publish_username and auth_rule.publish_password:
+                    publish_username = str(auth_rule.publish_username).strip()
+                    publish_password = str(auth_rule.publish_password).strip()
+            else:
+                read_pair = auth_rule or ("", "")
+                read_username = str(read_pair[0] or "").strip()
+                read_password = str(read_pair[1] or "").strip()
             if read_username and read_password:
                 read_auth_by_path[normalized_path] = (read_username, read_password)
+            if not publish_enabled:
+                publish_credentials_by_path.pop(normalized_path, None)
 
             path_auth_entries.append(
                 MediaMTXPathAuth(
                     path=normalized_path,
                     read_username=read_username or None,
                     read_password=read_password or None,
+                    read_ips=read_ips,
                     publish_username=publish_username,
                     publish_password=publish_password,
+                    publish_enabled=publish_enabled,
                 )
             )
 

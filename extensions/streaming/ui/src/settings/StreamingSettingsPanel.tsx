@@ -6,6 +6,7 @@ import {
   clearStreamingEncoderQuarantine,
   createTransmission,
   deleteTransmission,
+  fetchCameraIngestAuth,
   fetchCamerasIndex,
   fetchEngineStatus,
   fetchProcessingServers,
@@ -25,6 +26,8 @@ import {
   patchStreamingSettings,
   postEngineAction,
   postEngineDownload,
+  revealCameraIngestAuth,
+  rotateCameraIngestAuth,
   updateTransmission,
 } from "../api/streamingApi";
 import { STREAMING_EXTENSION_ID } from "../constants";
@@ -32,6 +35,7 @@ import type {
   CameraIndexItem,
   EngineStatusResponse,
   ProcessingServer,
+  StreamingCameraIngestAuthResponse,
   StreamingEngineSettings,
   StreamingExtensionSettings,
   StreamingHlsProbeResponse,
@@ -392,6 +396,12 @@ function StreamingSettingsPanelContent({
   const [runtimeEncoders, setRuntimeEncoders] = useState<StreamingRuntimeEncodersResponse | null>(null);
   const [runtimeEncodersError, setRuntimeEncodersError] = useState<string | null>(null);
   const [runtimeEncoderClearBusy, setRuntimeEncoderClearBusy] = useState(false);
+  const [cameraIngestAuth, setCameraIngestAuth] = useState<StreamingCameraIngestAuthResponse | null>(null);
+  const [cameraIngestAuthLoading, setCameraIngestAuthLoading] = useState(false);
+  const [cameraIngestAuthBusy, setCameraIngestAuthBusy] = useState(false);
+  const [cameraIngestAuthError, setCameraIngestAuthError] = useState<string | null>(null);
+  const [cameraIngestRevealed, setCameraIngestRevealed] = useState(false);
+  const [cameraIngestCopied, setCameraIngestCopied] = useState<string | null>(null);
   const [runtimeDiagnosticsBusy, setRuntimeDiagnosticsBusy] = useState(false);
   const [runtimeDiagnosticsError, setRuntimeDiagnosticsError] = useState<string | null>(null);
   const [hlsProbeByKey, setHlsProbeByKey] = useState<Record<string, StreamingHlsProbeResponse>>({});
@@ -544,6 +554,22 @@ function StreamingSettingsPanelContent({
     }
   }, []);
 
+  const fetchCameraIngestAuthData = useCallback(async (signal?: AbortSignal) => {
+    setCameraIngestAuthLoading(true);
+    setCameraIngestAuthError(null);
+    try {
+      const payload = await fetchCameraIngestAuth(signal);
+      if (signal?.aborted) return;
+      setCameraIngestAuth(payload);
+      setCameraIngestRevealed(Boolean(payload.password));
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setCameraIngestAuthError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (!signal?.aborted) setCameraIngestAuthLoading(false);
+    }
+  }, []);
+
   const fetchSettingsData = useCallback(async (signal?: AbortSignal) => {
     setSettingsLoading(true);
     setSettingsError(null);
@@ -630,6 +656,7 @@ function StreamingSettingsPanelContent({
     void fetchRuntimePipelinesData(controller.signal);
     void fetchRuntimeObservabilityData(controller.signal);
     void fetchRuntimeEncodersData(controller.signal);
+    void fetchCameraIngestAuthData(controller.signal);
     void fetchSettingsData(controller.signal);
     void fetchTransmissionsData(controller.signal);
     void fetchQualityProfilesData(controller.signal);
@@ -640,6 +667,7 @@ function StreamingSettingsPanelContent({
     fetchAvailableCamerasData,
     fetchEngineData,
     fetchHealthData,
+    fetchCameraIngestAuthData,
     fetchProcessingServersData,
     fetchRuntimeHealthData,
     fetchRuntimeEncodersData,
@@ -839,6 +867,44 @@ function StreamingSettingsPanelContent({
       setRuntimeEncodersError(error instanceof Error ? error.message : String(error));
     } finally {
       setRuntimeEncoderClearBusy(false);
+    }
+  }
+
+  async function revealIngestCredentials(): Promise<void> {
+    setCameraIngestAuthBusy(true);
+    setCameraIngestAuthError(null);
+    try {
+      const payload = await revealCameraIngestAuth();
+      setCameraIngestAuth(payload);
+      setCameraIngestRevealed(true);
+    } catch (error) {
+      setCameraIngestAuthError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCameraIngestAuthBusy(false);
+    }
+  }
+
+  async function rotateIngestCredentials(): Promise<void> {
+    const ok = confirm(
+      t(
+        "ext.streaming.ingest_auth.rotate_confirm",
+        {},
+        "This will invalidate current camera ingest RTSP URLs. Update Frigate/dev consumers after rotating. Continue?",
+      ),
+    );
+    if (!ok) return;
+    setCameraIngestAuthBusy(true);
+    setCameraIngestAuthError(null);
+    try {
+      const payload = await rotateCameraIngestAuth();
+      setCameraIngestAuth(payload);
+      setCameraIngestRevealed(false);
+      setCameraIngestCopied(null);
+      void fetchEngineData();
+    } catch (error) {
+      setCameraIngestAuthError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCameraIngestAuthBusy(false);
     }
   }
 
@@ -1269,6 +1335,157 @@ function StreamingSettingsPanelContent({
               <li>{t("ext.streaming.settings.quickstart_step_3", {}, "Salve, carregue URLs e use o wizard para gerar o fluxo.")}</li>
             </ol>
           </div>
+        </div>
+      </div>
+
+      <div className="sectionDivider" />
+
+      <div className="card">
+        <div className="cardBody">
+          <div className="settingsDetailHeader" style={{ marginBottom: 8 }}>
+            <div>
+              <div className="modalSectionTitle" style={{ marginBottom: 4 }}>
+                {t("ext.streaming.ingest_auth.title", {}, "Camera ingest access")}
+              </div>
+              <div className="cardMeta">
+                {t(
+                  "ext.streaming.ingest_auth.subtitle",
+                  {},
+                  "RTSP ingest paths are password protected. Expose 18758/tcp only when Frigate or development instances need direct ingest access.",
+                )}
+              </div>
+            </div>
+            <div className="rowWrap" style={{ gap: 8, justifyContent: "flex-end" }}>
+              <button
+                className="chipButton"
+                type="button"
+                disabled={cameraIngestAuthLoading || cameraIngestAuthBusy}
+                onClick={() => void fetchCameraIngestAuthData()}
+              >
+                <i className="fa-solid fa-rotate-right" aria-hidden="true" />{" "}
+                {cameraIngestAuthLoading
+                  ? t("ext.streaming.ingest_auth.loading", {}, "Loading...")
+                  : t("ext.streaming.ingest_auth.refresh", {}, "Refresh")}
+              </button>
+              <button
+                className="chipButton"
+                type="button"
+                disabled={cameraIngestAuthBusy}
+                onClick={() => void revealIngestCredentials()}
+              >
+                <i className="fa-solid fa-eye" aria-hidden="true" />{" "}
+                {cameraIngestRevealed
+                  ? t("ext.streaming.ingest_auth.reveal_again", {}, "Reveal again")
+                  : t("ext.streaming.ingest_auth.reveal", {}, "Reveal credentials")}
+              </button>
+              <button
+                className="chipButton"
+                type="button"
+                disabled={cameraIngestAuthBusy}
+                onClick={() => void rotateIngestCredentials()}
+              >
+                <i className="fa-solid fa-arrows-rotate" aria-hidden="true" />{" "}
+                {t("ext.streaming.ingest_auth.rotate", {}, "Rotate credentials")}
+              </button>
+            </div>
+          </div>
+
+          {cameraIngestAuthError ? <div className="errorText">{cameraIngestAuthError}</div> : null}
+          {cameraIngestAuth ? (
+            <>
+              <div className="streamingFormGrid" style={{ marginBottom: 10 }}>
+                <div className="settingsInfoBlock">
+                  <div className="cardMeta">{t("ext.streaming.ingest_auth.status", {}, "Status")}</div>
+                  <strong>
+                    {cameraIngestAuth.credential_active
+                      ? t("ext.streaming.ingest_auth.protected", {}, "Password protected")
+                      : t("ext.streaming.ingest_auth.not_ready", {}, "Not ready")}
+                  </strong>
+                </div>
+                <div className="settingsInfoBlock">
+                  <div className="cardMeta">{t("ext.streaming.ingest_auth.username", {}, "Username")}</div>
+                  <strong>{cameraIngestAuth.username || "-"}</strong>
+                </div>
+                <div className="settingsInfoBlock">
+                  <div className="cardMeta">{t("ext.streaming.ingest_auth.rtsp_port", {}, "RTSP port")}</div>
+                  <strong>{cameraIngestAuth.rtsp_port ?? "-"}</strong>
+                </div>
+                <div className="settingsInfoBlock">
+                  <div className="cardMeta">{t("ext.streaming.ingest_auth.rotated", {}, "Last rotation")}</div>
+                  <strong>{formatRuntimeUnixTime(cameraIngestAuth.rotated_at_unix ?? cameraIngestAuth.created_at_unix)}</strong>
+                </div>
+              </div>
+              <div className="cardMeta" style={{ marginBottom: 8 }}>
+                {cameraIngestAuth.password
+                  ? t(
+                      "ext.streaming.ingest_auth.revealed_hint",
+                      {},
+                      "Use these RTSP URLs in Frigate/dev. Diagnostic JSON and logs keep the password redacted.",
+                    )
+                  : t(
+                      "ext.streaming.ingest_auth.hidden_hint",
+                      {},
+                      "Reveal credentials only when you need to configure an external consumer.",
+                    )}
+              </div>
+              <div className="streamingRuntimeTableWrap">
+                <table className="streamingRuntimeTable">
+                  <thead>
+                    <tr>
+                      <th>{t("ext.streaming.ingest_auth.table.camera", {}, "Camera")}</th>
+                      <th>{t("ext.streaming.ingest_auth.table.path", {}, "Path")}</th>
+                      <th>{t("ext.streaming.ingest_auth.table.url", {}, "RTSP URL")}</th>
+                      <th>{t("ext.streaming.ingest_auth.table.action", {}, "Action")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(cameraIngestAuth.paths ?? []).map((item) => {
+                      const visibleUrl = item.rtsp_url || item.redacted_rtsp_url;
+                      return (
+                        <tr key={item.path}>
+                          <td title={item.camera_id}>{compactRuntimeId(item.camera_id)}</td>
+                          <td title={item.path}>{item.path}</td>
+                          <td title={visibleUrl}>{visibleUrl}</td>
+                          <td>
+                            {item.rtsp_url ? (
+                              <button
+                                className="chipButton"
+                                type="button"
+                                onClick={() => {
+                                  void copyToClipboard(item.rtsp_url || "").then(() => {
+                                    setCameraIngestCopied(item.path);
+                                    window.setTimeout(() => setCameraIngestCopied(null), 1400);
+                                  });
+                                }}
+                              >
+                                <i className="fa-solid fa-copy" aria-hidden="true" />{" "}
+                                {cameraIngestCopied === item.path
+                                  ? t("ext.streaming.ingest_auth.copied", {}, "Copied")
+                                  : t("ext.streaming.ingest_auth.copy", {}, "Copy")}
+                              </button>
+                            ) : (
+                              t("ext.streaming.ingest_auth.hidden", {}, "Hidden")
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {!(cameraIngestAuth.paths ?? []).length ? (
+                <div className="cardMeta" style={{ marginTop: 8 }}>
+                  {t("ext.streaming.ingest_auth.empty", {}, "No camera ingest paths are available yet. Add cameras with RTSP sources first.")}
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div className="settingsStatusMuted">
+              {cameraIngestAuthLoading
+                ? t("ext.streaming.ingest_auth.loading", {}, "Loading...")
+                : t("ext.streaming.ingest_auth.empty_state", {}, "Camera ingest auth has not been loaded yet.")}
+            </div>
+          )}
         </div>
       </div>
 

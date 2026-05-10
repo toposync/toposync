@@ -520,10 +520,36 @@ export type StreamingStalePolicySettings = {
   placeholder_after_seconds?: number;
 };
 
+export type StreamingCameraIngestSettings = {
+  enabled?: boolean;
+  path_prefix?: string;
+  allowed_cidrs?: string[];
+};
+
 export type StreamingExtensionSettings = {
   transmissions?: Transmission[];
   engine?: StreamingEngineSettings;
+  camera_ingest?: StreamingCameraIngestSettings;
   stale_policy?: StreamingStalePolicySettings;
+};
+
+export type StreamingCameraIngestAuthPath = {
+  camera_id: string;
+  path: string;
+  redacted_rtsp_url: string;
+  rtsp_url?: string | null;
+};
+
+export type StreamingCameraIngestAuthResponse = {
+  enabled: boolean;
+  credential_active: boolean;
+  username: string;
+  password?: string | null;
+  created_at_unix?: number | null;
+  rotated_at_unix?: number | null;
+  rtsp_port?: number | null;
+  allowed_cidrs?: string[];
+  paths?: StreamingCameraIngestAuthPath[];
 };
 
 export type CameraIndexItem = {

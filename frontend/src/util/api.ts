@@ -622,6 +622,13 @@ export type PipelineOperatorExpressionHint = {
   enum_values?: string[];
 };
 
+export type PipelineOperatorUiMetadata = {
+  pipeline_group?: string;
+  pipeline_level?: "basic" | "advanced" | string;
+  pipeline_order?: number;
+  aliases?: string[];
+};
+
 export type PipelineOperatorDefinition = {
   id: string;
   description: string;
@@ -642,6 +649,7 @@ export type PipelineOperatorDefinition = {
   input_modalities?: string[];
   output_modalities?: string[];
   expression_hints?: PipelineOperatorExpressionHint[];
+  ui?: PipelineOperatorUiMetadata | null;
 };
 
 export type FilterExpressionValidationMarker = {

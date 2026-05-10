@@ -229,6 +229,32 @@ def test_operator_registry_preserves_expression_hints() -> None:
     ]
 
 
+def test_operator_registry_preserves_ui_metadata() -> None:
+    registry = OperatorRegistry()
+    registry.register_operator(
+        operator_id="test.ui_node",
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        defaults={},
+        ui={
+            "pipeline_group": "Vision",
+            "pipeline_level": "BASIC",
+            "pipeline_order": "42",
+            "aliases": ["Detect", "detect", " Objects "],
+        },
+    )
+
+    registered = registry.get("test.ui_node")
+    assert registered is not None
+    assert registered.definition.ui is not None
+    assert registered.definition.ui.model_dump(mode="json") == {
+        "pipeline_group": "vision",
+        "pipeline_level": "basic",
+        "pipeline_order": 42.0,
+        "aliases": ["Detect", "Objects"],
+    }
+
+
 def test_operator_diagnostics_are_collected_as_pipeline_alerts() -> None:
     registry = OperatorRegistry()
     registry.register_operator(

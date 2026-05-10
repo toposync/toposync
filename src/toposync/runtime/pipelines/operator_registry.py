@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
@@ -16,6 +17,7 @@ CONTRACT_ITEM_RE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
 EXPRESSION_HINT_PATH_RE = re.compile(r"^(payload|metadata)(?:\.[a-z][a-z0-9_]{0,127}|\[[0-9]+\])*$")
 EXECUTION_MODE = Literal["in_event_loop", "thread_pool", "process_pool", "external"]
 OPERATOR_DIAGNOSTIC_SEVERITY = Literal["error", "warning", "info"]
+PIPELINE_OPERATOR_UI_LEVEL = Literal["basic", "advanced"]
 
 
 class OperatorRegistrationError(ValueError):
@@ -37,6 +39,56 @@ class OperatorDiagnostic(BaseModel):
     @classmethod
     def _normalize_text(cls, value: str) -> str:
         return str(value or "").strip()
+
+
+class OperatorUiMetadata(BaseModel):
+    pipeline_group: str | None = None
+    pipeline_level: PIPELINE_OPERATOR_UI_LEVEL | None = None
+    pipeline_order: float | None = None
+    aliases: list[str] = Field(default_factory=list)
+
+    @field_validator("pipeline_group", mode="before")
+    @classmethod
+    def _normalize_pipeline_group(cls, value: Any) -> str | None:
+        group = str(value or "").strip().lower()
+        return group or None
+
+    @field_validator("pipeline_level", mode="before")
+    @classmethod
+    def _normalize_pipeline_level(cls, value: Any) -> str | None:
+        level = str(value or "").strip().lower()
+        return level if level in {"basic", "advanced"} else None
+
+    @field_validator("pipeline_order", mode="before")
+    @classmethod
+    def _normalize_pipeline_order(cls, value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            order = float(value)
+        except (TypeError, ValueError):
+            return None
+        return order if math.isfinite(order) else None
+
+    @field_validator("aliases", mode="before")
+    @classmethod
+    def _normalize_aliases(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            value = [value]
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            alias = str(item or "").strip()
+            if not alias:
+                continue
+            key = alias.casefold()
+            if key in seen:
+                continue
+            out.append(alias)
+            seen.add(key)
+        return out
 
 
 class OperatorPort(BaseModel):
@@ -183,6 +235,7 @@ class OperatorDefinition(BaseModel):
     input_modalities: list[str] = Field(default_factory=list)
     output_modalities: list[str] = Field(default_factory=list)
     expression_hints: list[ExpressionHint] = Field(default_factory=list)
+    ui: OperatorUiMetadata | None = None
 
     @field_validator("id")
     @classmethod
@@ -303,6 +356,7 @@ class OperatorRegistry:
         input_modalities: list[str] | None = None,
         output_modalities: list[str] | None = None,
         expression_hints: list[ExpressionHint | dict[str, Any]] | None = None,
+        ui: OperatorUiMetadata | dict[str, Any] | None = None,
         owner: str | None = None,
         runtime_factory: Callable[[dict[str, Any], Any], Any] | None = None,
         diagnostics_factory: Callable[[dict[str, Any], dict[str, Any]], list[OperatorDiagnostic | dict[str, Any]]] | None = None,
@@ -318,6 +372,13 @@ class OperatorRegistry:
             item if isinstance(item, ExpressionHint) else ExpressionHint.model_validate(item)
             for item in (expression_hints or [])
         ]
+        parsed_ui = (
+            ui
+            if isinstance(ui, OperatorUiMetadata)
+            else OperatorUiMetadata.model_validate(ui)
+            if ui
+            else None
+        )
         if outputs is None and not parsed_outputs:
             parsed_outputs = [OperatorPort(name="out")]
 
@@ -356,6 +417,7 @@ class OperatorRegistry:
             input_modalities=list(input_modalities or []),
             output_modalities=list(output_modalities or []),
             expression_hints=parsed_expression_hints,
+            ui=parsed_ui,
         )
 
         self._items[definition.id] = RegisteredOperator(

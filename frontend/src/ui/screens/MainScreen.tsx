@@ -15,11 +15,17 @@ import { i18n } from "../../util/i18n";
 
 import { Modal } from "../Modal";
 import { CompositionSelectorModal } from "../CompositionSelectorModal";
+import { FullscreenImageViewer, requestFullscreenImageViewer, type FullscreenImageViewerItem } from "../FullscreenImageViewer";
 import { Icon } from "../Icon";
 import { Viewport3D } from "../Viewport3D";
 import { MainViewport2D } from "../main2d/MainViewport2D";
 import { MainViewportVector2D } from "../main2d/MainViewportVector2D";
-import { notificationImageItems, notificationPriority, notificationThumbnailUrl } from "../notifications/pipelinesNotifications";
+import {
+  notificationImageItems,
+  notificationPriority,
+  notificationThumbnailUrl,
+  type NotificationImageItem,
+} from "../notifications/pipelinesNotifications";
 import { StreamsDashboard } from "../streams/StreamsDashboard";
 
 type Props = {
@@ -250,6 +256,8 @@ export function MainScreen({
   const [imageModal, setImageModal] = useState<{ url: string; title: string; subtitle?: string } | null>(null);
   const [isNotificationDetailsOpen, setIsNotificationDetailsOpen] = useState(false);
   const [notificationImageIndex, setNotificationImageIndex] = useState(0);
+  const [fullscreenNotificationImageOpen, setFullscreenNotificationImageOpen] = useState(false);
+  const [fullscreenNotificationImageIndex, setFullscreenNotificationImageIndex] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(() => loadNotificationsOpen());
   const [filter, setFilter] = useState<NotificationsFilter>(() => loadNotificationsFilter());
   const [isFilterPopoverOpen, setIsFilterPopoverOpen] = useState(false);
@@ -393,18 +401,39 @@ export function MainScreen({
     return parts.join(" • ");
   }, [activeNotification]);
 
-  const activeNotificationImageMeta = useMemo(() => {
-    if (!activeNotificationImage) return null;
+  const formatNotificationImageMeta = useCallback((item: NotificationImageItem): string | null => {
     const parts: string[] = [
-      t(`core.ui.notifications.details.image_source.${activeNotificationImage.source}`, {}, activeNotificationImage.source),
+      t(`core.ui.notifications.details.image_source.${item.source}`, {}, item.source),
     ];
-    if (typeof activeNotificationImage.confidence === "number") {
-      parts.push(`${Math.round(activeNotificationImage.confidence * 100)}%`);
+    if (typeof item.confidence === "number") {
+      parts.push(`${Math.round(item.confidence * 100)}%`);
     }
-    const tsLabel = formatTimestampMillis(locale, activeNotificationImage.storedTsMs);
+    const tsLabel = formatTimestampMillis(locale, item.storedTsMs);
     if (tsLabel) parts.push(tsLabel);
     return parts.join(" • ");
-  }, [activeNotificationImage, locale, t]);
+  }, [locale, t]);
+
+  const activeNotificationImageMeta = useMemo(() => {
+    if (!activeNotificationImage) return null;
+    return formatNotificationImageMeta(activeNotificationImage);
+  }, [activeNotificationImage, formatNotificationImageMeta]);
+
+  const fullscreenNotificationImageItems = useMemo<FullscreenImageViewerItem[]>(
+    () =>
+      activeNotificationImages.map((item) => ({
+        id: item.id,
+        url: item.url,
+        label: item.label,
+        meta: formatNotificationImageMeta(item) ?? undefined,
+      })),
+    [activeNotificationImages, formatNotificationImageMeta],
+  );
+
+  const openFullscreenNotificationImage = useCallback((index: number) => {
+    requestFullscreenImageViewer();
+    setFullscreenNotificationImageIndex(index);
+    setFullscreenNotificationImageOpen(true);
+  }, []);
 
   const showPrevNotificationImage = useCallback(() => {
     setNotificationImageIndex((prev) => {
@@ -464,10 +493,14 @@ export function MainScreen({
     if (activeNotification) return;
     setIsNotificationDetailsOpen(false);
     setNotificationImageIndex(0);
+    setFullscreenNotificationImageOpen(false);
+    setFullscreenNotificationImageIndex(0);
   }, [activeNotification]);
 
   useEffect(() => {
     setNotificationImageIndex(0);
+    setFullscreenNotificationImageOpen(false);
+    setFullscreenNotificationImageIndex(0);
   }, [activeNotificationId]);
 
   useEffect(() => {
@@ -1134,7 +1167,15 @@ export function MainScreen({
                     <Icon name="chevron-left" />
                   </button>
 
-                  <img className="notificationGalleryImage" src={activeNotificationImage.url} alt="" />
+                  <button
+                    className="notificationGalleryImageButton"
+                    type="button"
+                    onClick={() => openFullscreenNotificationImage(notificationImageIndex)}
+                    aria-label={t("core.ui.image_viewer.open", {}, "Open image fullscreen")}
+                    title={t("core.ui.image_viewer.open", {}, "Open image fullscreen")}
+                  >
+                    <img className="notificationGalleryImage" src={activeNotificationImage.url} alt="" />
+                  </button>
 
                   <button
                     className="iconButton notificationGalleryNav"
@@ -1201,6 +1242,14 @@ export function MainScreen({
           <div className="cardBody">{t("core.ui.notifications.details.no_selection", {}, "Select a notification to inspect it.")}</div>
         )}
       </Modal>
+
+      <FullscreenImageViewer
+        open={fullscreenNotificationImageOpen}
+        items={fullscreenNotificationImageItems}
+        index={fullscreenNotificationImageIndex}
+        onIndexChange={setFullscreenNotificationImageIndex}
+        onClose={() => setFullscreenNotificationImageOpen(false)}
+      />
 
       <Modal
         open={isActionModalOpen}

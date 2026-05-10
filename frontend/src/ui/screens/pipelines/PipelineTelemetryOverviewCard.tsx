@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import Select, { type MultiValue } from "react-select";
 import { resolveToposyncUrl } from "@toposync/plugin-api";
@@ -13,6 +13,7 @@ import {
   type PipelineTelemetryNumeric,
 } from "../../../util/api";
 import { i18n } from "../../../util/i18n";
+import { FullscreenImageViewer, requestFullscreenImageViewer, type FullscreenImageViewerItem } from "../../FullscreenImageViewer";
 import { pipelinesReactSelectStyles } from "./constants";
 import type { InteractiveStep, SelectOption } from "./types";
 
@@ -450,6 +451,9 @@ export function PipelineTelemetryOverviewCard({
   const [pinnedClusterKey, setPinnedClusterKey] = useState<string | null>(null);
   const [hoverTimeline, setHoverTimeline] = useState<HoverTimelineState | null>(null);
   const [hiddenSeriesKeys, setHiddenSeriesKeys] = useState<Set<string>>(() => new Set());
+  const [fullscreenImageOpen, setFullscreenImageOpen] = useState(false);
+  const [fullscreenImageItems, setFullscreenImageItems] = useState<FullscreenImageViewerItem[]>([]);
+  const [fullscreenImageIndex, setFullscreenImageIndex] = useState(0);
   const pipelineOptions = useMemo(() => {
     const items = Array.isArray(availablePipelines) ? availablePipelines : [];
     const next = items
@@ -487,6 +491,28 @@ export function PipelineTelemetryOverviewCard({
       }),
     [locale],
   );
+  const buildMarkerImageViewerItem = useCallback(
+    (marker: PipelineTelemetryImageMarker): FullscreenImageViewerItem => {
+      const relPath = String(marker.rel_path || "");
+      const label = String(marker.layer_label || marker.pipeline_name || marker.node_id || "").trim();
+      const metaParts: string[] = [];
+      if (marker.size_bytes) metaParts.push(`${Math.round(Number(marker.size_bytes || 0) / 1024)} KB`);
+      metaParts.push(timeFormatter.format(new Date(Number(marker.ts || 0) * 1000)));
+      return {
+        id: `${relPath}|${marker.ts}|${marker.node_id}`,
+        url: resolveToposyncUrl(`/files/${encodeURI(relPath)}`),
+        label: label || t("core.ui.pipelines.telemetry.overview.images", {}, "Stored images"),
+        meta: metaParts.join(" • "),
+      };
+    },
+    [t, timeFormatter],
+  );
+  const openFullscreenMarkerImages = useCallback((items: FullscreenImageViewerItem[], index: number) => {
+    requestFullscreenImageViewer();
+    setFullscreenImageItems(items);
+    setFullscreenImageIndex(index);
+    setFullscreenImageOpen(true);
+  }, []);
   const metricTargets = useMemo(() => {
     if (isAggregate) {
       return AGGREGATE_METRIC_IDS.map((metricId) => ({
@@ -909,6 +935,7 @@ export function PipelineTelemetryOverviewCard({
   }, [activeCluster, timeFormatter]);
   const clusterOverlayNode = useMemo(() => {
     if (!activeCluster) return null;
+    const viewerItems = activeClusterMarkers.map((marker) => buildMarkerImageViewerItem(marker));
     return (
       <div
         className={[
@@ -961,17 +988,16 @@ export function PipelineTelemetryOverviewCard({
         </div>
         <div className="pipelinesTelemetryClusterOverlayBody">
           <div className="pipelinesTelemetryClusterMasonry">
-            {activeClusterMarkers.map((marker) => {
+            {activeClusterMarkers.map((marker, index) => {
               const markerKey = `${marker.rel_path}|${marker.ts}|${marker.node_id}`;
               const markerUrl = resolveToposyncUrl(`/files/${encodeURI(String(marker.rel_path || ""))}`);
               return (
-                <a
+                <button
                   key={markerKey}
                   className="pipelinesTelemetryClusterTile"
-                  href={markerUrl}
-                  target={pinnedClusterKey ? "_blank" : undefined}
-                  rel={pinnedClusterKey ? "noreferrer" : undefined}
+                  type="button"
                   title={timeFormatter.format(new Date(Number(marker.ts || 0) * 1000))}
+                  onClick={() => openFullscreenMarkerImages(viewerItems, index)}
                 >
                   <TelemetryMarkerImage
                     src={markerUrl}
@@ -982,7 +1008,7 @@ export function PipelineTelemetryOverviewCard({
                     {marker.size_bytes ? <span>{Math.round(Number(marker.size_bytes || 0) / 1024)} KB</span> : null}
                     <span>{timeFormatter.format(new Date(Number(marker.ts || 0) * 1000))}</span>
                   </div>
-                </a>
+                </button>
               );
             })}
           </div>
@@ -1002,8 +1028,10 @@ export function PipelineTelemetryOverviewCard({
     activeCluster,
     activeClusterMarkers,
     activeClusterTimeLabel,
+    buildMarkerImageViewerItem,
     pinnedClusterKey,
     pinnedClusterIndex,
+    openFullscreenMarkerImages,
     sortedClusters,
     hasPrevCluster,
     hasNextCluster,
@@ -1367,6 +1395,13 @@ export function PipelineTelemetryOverviewCard({
         ) : null}
       </div>
       {clusterOverlayNode && typeof document !== "undefined" ? createPortal(clusterOverlayNode, document.body) : null}
+      <FullscreenImageViewer
+        open={fullscreenImageOpen}
+        items={fullscreenImageItems}
+        index={fullscreenImageIndex}
+        onIndexChange={setFullscreenImageIndex}
+        onClose={() => setFullscreenImageOpen(false)}
+      />
     </div>
   );
 }

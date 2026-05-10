@@ -335,6 +335,20 @@ test.describe("streaming dashboard chaos states", () => {
     await expect(page.getByText("WebRTC/WHEP host is not covered", { exact: false })).toBeVisible();
   });
 
+  test("Auto uses HLS first for Home Assistant proxy access on desktop", async ({ page }) => {
+    const whepCalls = [];
+    await mockStreamingDashboard(page, "live", "auto", {
+      urls: HOME_ASSISTANT_PROXY_URLS,
+      whepCalls,
+    });
+    await page.goto("/");
+
+    await page.waitForTimeout(800);
+    expect(whepCalls).toHaveLength(0);
+    await page.getByLabel("Advanced stream settings").click({ force: true });
+    await expect(page.getByText("Auto -> HLS", { exact: false })).toBeVisible();
+  });
+
   test("opens PTZ controls without permanently changing the transport preference", async ({ page }) => {
     await mockStreamingDashboard(page, "live", "auto");
     await page.goto("/");

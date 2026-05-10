@@ -415,6 +415,74 @@ def test_engine_status_uses_hls_proxy_url_when_contract_requests_proxy(
     assert payload["network_contract"]["public_hls_mode"] == "proxy"
 
 
+def test_ingress_hls_url_contract_uses_public_base_path(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    requested_urls: list[str] = []
+
+    def fake_urlopen(request, timeout=0):  # noqa: ANN001
+        _ = timeout
+        requested_urls.append(str(request.full_url))
+        body = (
+            b"#EXTM3U\n"
+            b"#EXT-X-MEDIA-SEQUENCE:7\n"
+            b"#EXTINF:1,\n"
+            b"segment7.ts\n"
+        )
+        return _UrlOpenResponse(body)
+
+    monkeypatch.setenv("TOPOSYNC_DEPLOYMENT_TARGET", "home_assistant_addon")
+    monkeypatch.setenv("TOPOSYNC_EXPECTED_DIRECT_API_PORT", "18756")
+    monkeypatch.setenv("TOPOSYNC_STREAMING_HLS_PUBLIC_MODE", "proxy")
+    monkeypatch.setattr("toposync_ext_streaming.api.routes.urllib_request.urlopen", fake_urlopen)
+    engine_manager = _EngineManagerStub(data_dir=tmp_path / "data")
+
+    ingress_prefix = "/api/hassio_ingress/session-token"
+    headers = {"host": "homeassistant.local:8090", "x-ingress-path": ingress_prefix}
+    with _create_client(tmp_path, engine_manager=engine_manager) as client:
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Ingress HLS stream",
+                "path": "ingress-main",
+                "outputs": [{"id": "main_hls", "protocol": "hls", "enabled": True}],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        urls_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/urls",
+            headers=headers,
+        )
+        assert urls_res.status_code == 200
+        payload = urls_res.json()
+        signed_url = payload["outputs"][0]["url"]
+        assert signed_url.startswith(
+            "http://homeassistant.local:8090/api/hassio_ingress/session-token/api/streams/media/hls/ingress-main/index.m3u8?media_token="
+        )
+        assert payload["public_base_path"] == ingress_prefix
+        assert payload["media_url_origin"] == f"http://homeassistant.local:8090{ingress_prefix}"
+        assert payload["network_contract"]["status"] == "ok"
+        assert not any(
+            "Direct API active port 8090" in warning
+            for warning in payload["network_contract"]["warnings"]
+        )
+
+        parsed = urllib_parse.urlsplit(signed_url)
+        backend_path = parsed.path.removeprefix(ingress_prefix)
+        response = client.get(f"{backend_path}?{parsed.query}", headers=headers)
+
+    assert response.status_code == 200
+    assert requested_urls == ["http://127.0.0.1:18759/ingress-main/index.m3u8"]
+    media_token = urllib_parse.parse_qs(parsed.query)["media_token"][0]
+    assert (
+        f"{ingress_prefix}/api/streams/media/hls/ingress-main/segment7.ts?media_token={media_token}"
+        in response.text
+    )
+
+
 def test_hls_media_proxy_forwards_to_active_hls_port(
     tmp_path: Path,
     monkeypatch,  # noqa: ANN001
@@ -608,6 +676,21 @@ def test_transmission_urls_primes_demand_hint(tmp_path: Path) -> None:
         assert payload["primed"] is True
         assert payload["primed_outputs"] == 1
         assert bridge.calls[-1][0] == transmission_id
+
+        heartbeat_res = client.post(
+            f"/api/streams/transmissions/{transmission_id}/demand/heartbeat",
+            json={
+                "playback_session_id": "session-1",
+                "output_id": "prime_hls",
+                "quality_profile_id": None,
+                "transport": "hls",
+            },
+        )
+        assert heartbeat_res.status_code == 200
+        heartbeat_payload = heartbeat_res.json()
+        assert heartbeat_payload["renewed"] is True
+        assert heartbeat_payload["lease_seconds"] == 45.0
+        assert bridge.calls[-1] == (transmission_id, 45.0, "prime_hls", None)
 
 
 def test_transmission_urls_and_prime_accept_quality_profile_selection(tmp_path: Path) -> None:

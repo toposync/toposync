@@ -11,6 +11,7 @@ import re
 import secrets
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Literal
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
@@ -94,6 +95,8 @@ from .models import (
     TransmissionCameraStatusResponse,
     TransmissionCameraStopRequest,
     TransmissionCreateRequest,
+    TransmissionDemandHeartbeatRequest,
+    TransmissionDemandHeartbeatResponse,
     TransmissionDemandOutputStatus,
     TransmissionDemandResponse,
     TransmissionOutput,
@@ -232,6 +235,32 @@ def _request_public_port(request: Request) -> int | None:
     return None
 
 
+def _normalize_public_base_path(value: str | None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "/"
+    text = text.split("?", 1)[0].split("#", 1)[0].strip()
+    if not text.startswith("/"):
+        text = f"/{text}"
+    text = re.sub(r"/+", "/", text).rstrip("/")
+    return text or "/"
+
+
+def _request_public_base_path(request: Request) -> str:
+    for header_name in ("x-ingress-path", "x-forwarded-prefix", "x-script-name"):
+        raw = str(request.headers.get(header_name) or "").strip()
+        if raw:
+            return _normalize_public_base_path(raw.split(",", 1)[0].strip())
+    root_path = str(request.scope.get("root_path") or "").strip()
+    if root_path:
+        return _normalize_public_base_path(root_path)
+    return "/"
+
+
+def _request_uses_public_base_path(request: Request) -> bool:
+    return _request_public_base_path(request) != "/"
+
+
 def _status_host(request: Request, settings: StreamingExtensionSettings) -> str:
     if settings.engine.expose_to_lan:
         return _request_host(request)
@@ -270,6 +299,25 @@ def _env_udp_port_from_address(name: str) -> int | None:
     if 1 <= value <= 65535:
         return value
     return None
+
+
+def _addon_network_snapshot() -> dict[str, Any]:
+    path = str(os.getenv("TOPOSYNC_ADDON_NETWORK_SNAPSHOT_PATH") or "").strip()
+    if not path:
+        return {}
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _addon_published_port_keys() -> set[str]:
+    snapshot = _addon_network_snapshot()
+    raw_ports = snapshot.get("network") or snapshot.get("ports") or snapshot.get("published_ports")
+    if not isinstance(raw_ports, dict):
+        return set()
+    return {str(key).strip().lower() for key, value in raw_ports.items() if value not in {None, "", 0}}
 
 
 def _network_contract_expected_ports() -> StreamingNetworkContractPorts:
@@ -332,6 +380,14 @@ def _hls_proxy_origin(request: Request) -> str | None:
     return f"{_request_public_scheme(request)}://{netloc}"
 
 
+def _media_url_origin(request: Request) -> str | None:
+    origin = _hls_proxy_origin(request)
+    if not origin:
+        return None
+    base_path = _request_public_base_path(request)
+    return origin if base_path == "/" else f"{origin}{base_path}"
+
+
 MEDIA_TOKEN_SCOPE = "stream:hls:read"
 
 
@@ -342,7 +398,7 @@ def _hls_proxy_url(
     *,
     media_token: str = "",
 ) -> str | None:
-    origin = _hls_proxy_origin(request)
+    origin = _media_url_origin(request)
     if not origin:
         return None
     quoted_engine_path = urllib_parse.quote(str(engine_path or "").strip(), safe="")
@@ -520,6 +576,8 @@ def _build_network_contract(
     )
     warnings: list[str] = []
     blocking_errors: list[str] = []
+    public_base_path = _request_public_base_path(request)
+    media_url_origin = _media_url_origin(request)
     if settings is not None and bool(settings.engine.expose_to_lan):
         whep_host = _request_host(request)
         covered_hosts = {item.lower() for item in additional_hosts}
@@ -541,6 +599,8 @@ def _build_network_contract(
             status="not_applicable",
             webrtc_additional_hosts=additional_hosts,
             warnings=warnings,
+            public_base_path=public_base_path,
+            media_url_origin=media_url_origin,
         )
 
     fail_on_mismatch = _env_bool("TOPOSYNC_FAIL_STREAM_URLS_ON_PORT_MISMATCH")
@@ -567,7 +627,11 @@ def _build_network_contract(
         if blocking_when_failed and fail_on_mismatch:
             blocking_errors.append(message)
 
-    compare_port("direct_api", "Direct API")
+    compare_port(
+        "direct_api",
+        "Direct API",
+        skip=environment == "home_assistant_addon" and _request_uses_public_base_path(request),
+    )
     compare_port("rtsp", "RTSP")
     compare_port(
         "hls",
@@ -577,6 +641,14 @@ def _build_network_contract(
     )
     compare_port("webrtc", "WebRTC")
     compare_port("webrtc_udp", "WebRTC UDP")
+    if environment == "home_assistant_addon":
+        published_port_keys = _addon_published_port_keys()
+        expected_webrtc_udp = expected_ports.webrtc_udp
+        if published_port_keys and expected_webrtc_udp is not None and f"{expected_webrtc_udp}/udp" not in published_port_keys:
+            warnings.append(
+                f"WebRTC UDP port {expected_webrtc_udp}/udp is not published by the Home Assistant add-on; "
+                "HLS proxy playback is unaffected, but low latency WebRTC media may fail."
+            )
 
     if public_hls_mode == "proxy" and _hls_proxy_origin(request) is None:
         message = "HLS media proxy is unavailable because the request host is missing."
@@ -600,6 +672,8 @@ def _build_network_contract(
         webrtc_additional_hosts=additional_hosts,
         warnings=warnings,
         blocking_errors=blocking_errors,
+        public_base_path=public_base_path,
+        media_url_origin=media_url_origin,
     )
 
 
@@ -1228,6 +1302,8 @@ async def _resolve_local_transmission_urls(
         network_contract=network_contract,
         warnings=warnings,
         blocking_errors=blocking_errors,
+        public_base_path=_request_public_base_path(request),
+        media_url_origin=_media_url_origin(request),
     )
 
 
@@ -1335,6 +1411,8 @@ async def _resolve_remote_transmission_urls(
         network_contract=resolved.network_contract,
         warnings=warnings,
         blocking_errors=list(resolved.blocking_errors),
+        public_base_path=resolved.public_base_path,
+        media_url_origin=resolved.media_url_origin,
     )
 
 
@@ -1854,6 +1932,16 @@ def _latest_event_at(events: list[Any], predicate: Callable[[Any], bool]) -> flo
     return max(values) if values else None
 
 
+def _transport_selected_from_events(events: list[Any]) -> str | None:
+    for event in reversed(events):
+        data = _event_data(event)
+        for key in ("effective_transport", "playback_transport", "transport_preference"):
+            value = str(data.get(key) or "").strip()
+            if value:
+                return value
+    return None
+
+
 def _runtime_playback_recovered(
     health: StreamingRuntimeTransmissionHealth,
     output: StreamingRuntimeOutputHealth | None,
@@ -1911,8 +1999,8 @@ def _classify_observability(
             ["Stream is event-gated and currently has no event frames."],
         )
 
-    if network_contract is not None and network_contract.status not in {"ok", "not_applicable"}:
-        details = list(network_contract.blocking_errors or network_contract.warnings or [])
+    if network_contract is not None and network_contract.blocking_errors:
+        details = list(network_contract.blocking_errors)
         evidence.extend(details[:3] or [f"Network contract status is {network_contract.status}."])
         return "network_contract_error", evidence
 
@@ -2188,6 +2276,7 @@ async def _build_runtime_observability(
             for item in summarize_active_sessions(events, now_unix=now_unix)
         ]
         recent_event_dicts = [event.as_dict() for event in events[-20:]]
+        transport_selected = _transport_selected_from_events(events)
         pipeline = pipeline_by_transmission.get(transmission.transmission_id)
         if not transmission.outputs:
             items.append(
@@ -2202,6 +2291,7 @@ async def _build_runtime_observability(
                     mediamtx={},
                     network_contract=network_contract,
                     recent_events=recent_event_dicts,
+                    transport_selected=transport_selected,
                 )
             )
             continue
@@ -2224,6 +2314,7 @@ async def _build_runtime_observability(
                     ),
                     network_contract=network_contract,
                     recent_events=recent_event_dicts,
+                    transport_selected=transport_selected,
                 )
             )
 
@@ -2234,6 +2325,10 @@ async def _build_runtime_observability(
         retained_event_count=await store.retained_count(),
         mediamtx=mediamtx,
         items=items,
+        public_base_path=_request_public_base_path(request),
+        media_url_origin=_media_url_origin(request),
+        hls_proxy_reachable=_media_url_origin(request) is not None,
+        hls_playlist_rewrite_ok=True,
     )
 
 
@@ -2380,6 +2475,10 @@ async def _build_runtime_health(
         stale_after_seconds=stale_after_s,
         placeholder_after_seconds=placeholder_after_s,
         transmissions=transmission_health,
+        public_base_path=_request_public_base_path(request),
+        media_url_origin=_media_url_origin(request),
+        hls_proxy_reachable=_media_url_origin(request) is not None,
+        hls_playlist_rewrite_ok=True,
     )
 
 
@@ -3939,6 +4038,12 @@ def create_streaming_router() -> APIRouter:
         return {
             "server_id": _current_server_id(request),
             "quality_profiles": [profile.model_dump(mode="python") for profile in build_quality_profiles()],
+            "public_media": {
+                "public_base_path": _request_public_base_path(request),
+                "media_url_origin": _media_url_origin(request),
+                "hls_proxy_reachable": _media_url_origin(request) is not None,
+                "hls_playlist_rewrite_ok": True,
+            },
             "engine": await manager.status_payload(host=_status_host(request, settings)),
             "media_auth": settings.engine.media_auth.model_dump(mode="python"),
             "mediamtx": await _mediamtx_snapshot(request),
@@ -4056,5 +4161,62 @@ def create_streaming_router() -> APIRouter:
             "primed": primed_outputs > 0,
             "primed_outputs": primed_outputs,
         }
+
+    @router.post(
+        "/transmissions/{transmission_id}/demand/heartbeat",
+        response_model=TransmissionDemandHeartbeatResponse,
+    )
+    async def transmission_demand_heartbeat(
+        request: Request,
+        transmission_id: str,
+        payload: TransmissionDemandHeartbeatRequest,
+    ) -> TransmissionDemandHeartbeatResponse:
+        _require_auth(request, action="core:settings:read")
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        transmission = next((item for item in settings.transmissions if item.id == transmission_id), None)
+        if transmission is None:
+            raise HTTPException(status_code=404, detail="Transmission not found")
+
+        lease_seconds = float(payload.ttl_seconds or 45.0)
+        if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(request):
+            return TransmissionDemandHeartbeatResponse(
+                transmission_id=transmission_id,
+                playback_session_id=payload.playback_session_id,
+                renewed=False,
+                renewed_outputs=0,
+                lease_seconds=lease_seconds,
+            )
+
+        bridge = _writer_bridge(request)
+        prime_demand = getattr(bridge, "prime_transmission_demand", None)
+        if not callable(prime_demand):
+            return TransmissionDemandHeartbeatResponse(
+                transmission_id=transmission_id,
+                playback_session_id=payload.playback_session_id,
+                renewed=False,
+                renewed_outputs=0,
+                lease_seconds=lease_seconds,
+            )
+
+        try:
+            renewed_outputs = int(
+                await prime_demand(
+                    transmission_id,
+                    ttl_s=lease_seconds,
+                    output_id=str(payload.output_id or "").strip() or None,
+                    quality_profile_id=payload.quality_profile_id,
+                )
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to renew streaming demand: {exc}") from exc
+
+        return TransmissionDemandHeartbeatResponse(
+            transmission_id=transmission_id,
+            playback_session_id=payload.playback_session_id,
+            renewed=renewed_outputs > 0,
+            renewed_outputs=renewed_outputs,
+            lease_seconds=lease_seconds,
+        )
 
     return router

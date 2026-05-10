@@ -654,6 +654,8 @@ class StreamingNetworkContract(BaseModel):
     webrtc_additional_hosts: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     blocking_errors: list[str] = Field(default_factory=list)
+    public_base_path: str = "/"
+    media_url_origin: str | None = None
 
 
 class StreamingEngineUrls(BaseModel):
@@ -730,6 +732,8 @@ class TransmissionUrlsResponse(BaseModel):
     network_contract: StreamingNetworkContract | None = None
     warnings: list[str] = Field(default_factory=list)
     blocking_errors: list[str] = Field(default_factory=list)
+    public_base_path: str = "/"
+    media_url_origin: str | None = None
 
 
 StreamingHlsProbeStatus = Literal[
@@ -848,6 +852,26 @@ class TransmissionDemandResponse(BaseModel):
     demand_signal: bool
     viewer_count_total: int = Field(ge=0)
     outputs: list[TransmissionDemandOutputStatus] = Field(default_factory=list)
+
+
+class TransmissionDemandHeartbeatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    playback_session_id: str = Field(min_length=1, max_length=256)
+    output_id: str | None = None
+    quality_profile_id: StreamingQualityProfileId | None = None
+    transport: Literal["hls", "webrtc", "rtsp"] = "hls"
+    ttl_seconds: float | None = Field(default=None, ge=5.0, le=120.0)
+
+
+class TransmissionDemandHeartbeatResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transmission_id: str
+    playback_session_id: str
+    renewed: bool
+    renewed_outputs: int = Field(ge=0)
+    lease_seconds: float
 
 
 class StreamingRuntimeSourceHealth(BaseModel):
@@ -1008,6 +1032,10 @@ class StreamingRuntimeHealthResponse(BaseModel):
     stale_after_seconds: float
     placeholder_after_seconds: float
     transmissions: list[StreamingRuntimeTransmissionHealth] = Field(default_factory=list)
+    public_base_path: str = "/"
+    media_url_origin: str | None = None
+    hls_proxy_reachable: bool | None = None
+    hls_playlist_rewrite_ok: bool | None = None
 
 
 class StreamingRuntimePipelineNode(BaseModel):
@@ -1117,6 +1145,7 @@ class StreamingRuntimeObservabilityItem(BaseModel):
     mediamtx: dict[str, Any] = Field(default_factory=dict)
     network_contract: StreamingNetworkContract | None = None
     recent_events: list[dict[str, Any]] = Field(default_factory=list)
+    transport_selected: str | None = None
 
 
 class StreamingRuntimeObservabilityResponse(BaseModel):
@@ -1127,6 +1156,10 @@ class StreamingRuntimeObservabilityResponse(BaseModel):
     retained_event_count: int = Field(ge=0)
     mediamtx: dict[str, Any] = Field(default_factory=dict)
     items: list[StreamingRuntimeObservabilityItem] = Field(default_factory=list)
+    public_base_path: str = "/"
+    media_url_origin: str | None = None
+    hls_proxy_reachable: bool | None = None
+    hls_playlist_rewrite_ok: bool | None = None
 
 
 class StreamingRuntimeEncoderPolicyResponse(BaseModel):

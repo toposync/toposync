@@ -796,6 +796,8 @@ export type StreamingNetworkContract = {
   environment: string;
   mode?: "direct" | "proxy";
   public_hls_mode?: "direct" | "proxy";
+  public_base_path?: string;
+  media_url_origin?: string | null;
   expected_ports?: StreamingNetworkContractPorts;
   actual_ports?: StreamingNetworkContractPorts;
   status?: "ok" | "not_applicable" | "port_mismatch" | "proxy_required" | "proxy_unavailable" | string;
@@ -811,12 +813,30 @@ export type StreamingTransmissionUrlsResponse = {
   network_contract?: StreamingNetworkContract | null;
   warnings?: string[];
   blocking_errors?: string[];
+  public_base_path?: string;
+  media_url_origin?: string | null;
 };
 
 export type StreamingTransmissionDemandPrimeResponse = {
   transmission_id: string;
   primed: boolean;
   primed_outputs: number;
+};
+
+export type StreamingTransmissionDemandHeartbeatRequest = {
+  playbackSessionId: string;
+  outputId?: string | null;
+  qualityProfileId?: StreamingQualityProfileId | null;
+  transport: "hls" | "webrtc" | "rtsp";
+  ttlSeconds?: number | null;
+};
+
+export type StreamingTransmissionDemandHeartbeatResponse = {
+  transmission_id: string;
+  playback_session_id: string;
+  renewed: boolean;
+  renewed_outputs: number;
+  lease_seconds: number;
 };
 
 export type StreamingRuntimeStatus = "live" | "degraded" | "stale" | "offline";
@@ -986,6 +1006,10 @@ export type StreamingRuntimeHealthResponse = {
   updated_at_unix: number;
   stale_after_seconds: number;
   placeholder_after_seconds: number;
+  public_base_path?: string;
+  media_url_origin?: string | null;
+  hls_proxy_reachable?: boolean | null;
+  hls_playlist_rewrite_ok?: boolean | null;
   transmissions: StreamingRuntimeTransmissionHealth[];
 };
 
@@ -2052,6 +2076,25 @@ export async function primeStreamingTransmissionDemand(
   });
   if (!res.ok) throw new Error(`Failed to prime streaming demand for ${transmissionId}: ${res.status}`);
   return (await res.json()) as StreamingTransmissionDemandPrimeResponse;
+}
+
+export async function heartbeatStreamingTransmissionDemand(
+  transmissionId: string,
+  request: StreamingTransmissionDemandHeartbeatRequest,
+): Promise<StreamingTransmissionDemandHeartbeatResponse> {
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/demand/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      playback_session_id: request.playbackSessionId,
+      output_id: request.outputId ?? null,
+      quality_profile_id: request.qualityProfileId ?? null,
+      transport: request.transport,
+      ttl_seconds: request.ttlSeconds ?? null,
+    }),
+  });
+  if (!res.ok) throw new Error(`Failed to renew streaming demand for ${transmissionId}: ${res.status}`);
+  return (await res.json()) as StreamingTransmissionDemandHeartbeatResponse;
 }
 
 export async function getStreamingTransmissionCameraPresets(

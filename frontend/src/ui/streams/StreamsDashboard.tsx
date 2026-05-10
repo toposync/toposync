@@ -4,6 +4,7 @@ import type Hls from "hls.js";
 import {
   getStreamingTransmissionUrls,
   getStreamingRuntimeHealth,
+  heartbeatStreamingTransmissionDemand,
   listStreamingTransmissions,
   postStreamingPlaybackEvents,
   primeStreamingTransmissionDemand,
@@ -81,6 +82,8 @@ const WEBRTC_CONNECT_TIMEOUT_MS = 5000;
 const WEBRTC_WHEP_READY_ATTEMPTS = 8;
 const WEBRTC_WHEP_READY_RETRY_MS = 500;
 const RUNTIME_HEALTH_REFRESH_MS = 2000;
+const HLS_BROWSER_PROBE_TIMEOUT_MS = 2500;
+const DEMAND_HEARTBEAT_INTERVAL_MS = 10000;
 
 function readGridMode(): GridMode {
   if (typeof window === "undefined") return "2x2";
@@ -244,9 +247,9 @@ function buildPlaybackPlan(options: {
     };
   }
 
-  const hlsFirstForMobileHa = homeAssistantProxyHls && mobileTouchBrowser && hasHls && !options.lowLatencyRequested;
+  const hlsFirstForHomeAssistant = homeAssistantProxyHls && hasHls && !options.lowLatencyRequested;
   const hlsFirstForContract = webRtcBlocked && hasHls;
-  const preferHlsFirst = hlsFirstForMobileHa || hlsFirstForContract;
+  const preferHlsFirst = hlsFirstForHomeAssistant || hlsFirstForContract;
   const allowWebRtc = hasWebRtc && !webRtcBlocked && (options.lowLatencyRequested || !preferHlsFirst || !hasHls);
   const preferWebRtcFirst = allowWebRtc && (options.lowLatencyRequested || !preferHlsFirst);
   const effectiveMode: EffectiveTransportMode = preferWebRtcFirst
@@ -375,6 +378,11 @@ function asErrorMessage(error: unknown): string {
   return String(error || i18n.t("core.ui.streams.error_unknown", {}, "unknown error"));
 }
 
+function isHlsAuthProbeErrorMessage(message: string): boolean {
+  const lowered = String(message || "").toLowerCase();
+  return lowered.includes("(401)") || lowered.includes("(403)") || lowered.includes("media_token_expired");
+}
+
 function canPlayNativeHls(video: HTMLVideoElement): boolean {
   const check = video.canPlayType("application/vnd.apple.mpegurl");
   return check === "probably" || check === "maybe";
@@ -382,6 +390,98 @@ function canPlayNativeHls(video: HTMLVideoElement): boolean {
 
 function canUseWebRtc(): boolean {
   return typeof RTCPeerConnection !== "undefined";
+}
+
+function resolveHlsRelativeUrl(baseUrl: string, rawUrl: string): string {
+  return new URL(String(rawUrl || "").trim(), baseUrl).toString();
+}
+
+function hlsPlaylistUris(playlistText: string): string[] {
+  return String(playlistText || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+}
+
+function hlsAttributeUris(playlistText: string): string[] {
+  const out: string[] = [];
+  const uriPattern = /URI="([^"]+)"/gi;
+  for (const line of String(playlistText || "").split(/\r?\n/)) {
+    uriPattern.lastIndex = 0;
+    let match = uriPattern.exec(line);
+    while (match) {
+      out.push(match[1]);
+      match = uriPattern.exec(line);
+    }
+  }
+  return out;
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+  const abortController = new AbortController();
+  const timeoutId = window.setTimeout(() => abortController.abort(), HLS_BROWSER_PROBE_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: abortController.signal });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+async function fetchHlsPlaylistText(url: string, authHeader: string | null): Promise<string> {
+  const headers: Record<string, string> = {
+    accept: "application/vnd.apple.mpegurl, application/x-mpegurl, text/plain, */*",
+  };
+  if (authHeader) headers.authorization = authHeader;
+  const response = await fetchWithTimeout(url, { cache: "no-store", headers });
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(`Secure HLS URL expired or was rejected (${response.status}).`);
+    }
+    throw new Error(`HLS playlist probe failed (${response.status}).`);
+  }
+  const text = await response.text();
+  if (!text.includes("#EXTM3U")) {
+    throw new Error("HLS playlist probe failed: response is not an HLS playlist.");
+  }
+  return text;
+}
+
+async function probeBrowserHlsPlayback(
+  masterPlaylistUrl: string,
+  authHeader: string | null,
+): Promise<{ mediaPlaylistUrl: string; tailSegmentUrl: string; mediaSequence: string | null; targetDuration: string | null }> {
+  const masterText = await fetchHlsPlaylistText(masterPlaylistUrl, authHeader);
+  const masterUris = hlsPlaylistUris(masterText);
+  const mediaPlaylistUrl =
+    masterText.includes("#EXT-X-STREAM-INF") && masterUris.length
+      ? resolveHlsRelativeUrl(masterPlaylistUrl, masterUris[0])
+      : masterPlaylistUrl;
+  const mediaText = mediaPlaylistUrl === masterPlaylistUrl ? masterText : await fetchHlsPlaylistText(mediaPlaylistUrl, authHeader);
+  const mediaUris = hlsPlaylistUris(mediaText);
+  const attributeUris = hlsAttributeUris(mediaText);
+  const tailCandidates = [...mediaUris, ...attributeUris].filter((uri) => !uri.startsWith("data:"));
+  const tailUri = tailCandidates.length ? tailCandidates[tailCandidates.length - 1] : undefined;
+  if (!tailUri) {
+    throw new Error("HLS playlist probe failed: no media segment was found.");
+  }
+  const tailSegmentUrl = resolveHlsRelativeUrl(mediaPlaylistUrl, tailUri);
+  const headers: Record<string, string> = { range: "bytes=0-1", accept: "*/*" };
+  if (authHeader) headers.authorization = authHeader;
+  const response = await fetchWithTimeout(tailSegmentUrl, { cache: "no-store", headers });
+  if (!response.ok && response.status !== 206) {
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(`Secure HLS URL expired or was rejected (${response.status}).`);
+    }
+    throw new Error(`HLS tail segment probe failed (${response.status}).`);
+  }
+  const sequenceMatch = mediaText.match(/#EXT-X-MEDIA-SEQUENCE:(\d+)/);
+  const targetDurationMatch = mediaText.match(/#EXT-X-TARGETDURATION:(\d+(?:\.\d+)?)/);
+  return {
+    mediaPlaylistUrl,
+    tailSegmentUrl,
+    mediaSequence: sequenceMatch?.[1] ?? null,
+    targetDuration: targetDurationMatch?.[1] ?? null,
+  };
 }
 
 async function collectWebRtcStats(peerConnection: RTCPeerConnection): Promise<WebRtcStatsSummary> {
@@ -735,6 +835,8 @@ function StreamAdvancedSettingsModal({
   playbackTransport,
   webRtcStats,
   webRtcFallbackActive,
+  hlsProbeSummary,
+  hlsUrl,
   playbackPlan,
   lowLatencyRequested,
   errorText,
@@ -757,6 +859,8 @@ function StreamAdvancedSettingsModal({
   playbackTransport: TilePlaybackTransport;
   webRtcStats: WebRtcStatsSummary | null;
   webRtcFallbackActive: boolean;
+  hlsProbeSummary: string | null;
+  hlsUrl: string | null;
   playbackPlan: StreamPlaybackPlan;
   lowLatencyRequested: boolean;
   errorText: string | null;
@@ -778,6 +882,10 @@ function StreamAdvancedSettingsModal({
   const sourceHealth = runtimeHealth?.source_health ?? null;
   const evidence = runtimeHealth?.evidence ?? [];
   const warnings = urls?.warnings ?? [];
+  const publicBasePath = urls?.public_base_path || urls?.network_contract?.public_base_path || "/";
+  const mediaOrigin = urls?.media_url_origin || urls?.network_contract?.media_url_origin || "-";
+  const hlsUsesPublicBasePath =
+    Boolean(hlsUrl) && publicBasePath !== "/" && String(hlsUrl || "").includes(publicBasePath);
   const webRtcGuidance =
     playbackPlan.homeAssistantProxyHls && (playbackPlan.webRtcBlocked || lowLatencyRequested || transportPreference === "webrtc")
       ? t(
@@ -836,6 +944,10 @@ function StreamAdvancedSettingsModal({
           <TechnicalDetailRow label="Quality preference" value={qualityPreferenceLabel(qualityPreference, t)} />
           <TechnicalDetailRow label="Low latency requested" value={formatTechnicalBoolean(lowLatencyRequested)} />
           <TechnicalDetailRow label="HLS fallback" value={formatTechnicalBoolean(webRtcFallbackActive)} />
+          <TechnicalDetailRow label="HLS public base path" value={publicBasePath || "/"} />
+          <TechnicalDetailRow label="HLS ingress prefix in URL" value={formatTechnicalBoolean(hlsUsesPublicBasePath)} />
+          <TechnicalDetailRow label="HLS media origin" value={mediaOrigin} />
+          <TechnicalDetailRow label="Last HLS probe" value={hlsProbeSummary || "-"} />
           <TechnicalDetailRow label="WebRTC contract" value={playbackPlan.webRtcBlocked ? "warning" : "ok"} />
           <TechnicalDetailRow label="Player error" value={errorText || "-"} />
           <TechnicalDetailRow label="Current hint" value={sourceHint || "-"} />
@@ -969,6 +1081,7 @@ function StreamTilePlayer({
   transportPreference,
   onQualityPreferenceChange,
   onTransportPreferenceChange,
+  onRefreshUrls,
   onOpenPtz,
 }: {
   transmissionId: string;
@@ -994,21 +1107,27 @@ function StreamTilePlayer({
   transportPreference: StreamTransportPreference;
   onQualityPreferenceChange: (preference: StreamQualityPreference) => void;
   onTransportPreferenceChange: (preference: StreamTransportPreference) => void;
+  onRefreshUrls: () => Promise<void>;
   onOpenPtz: () => void;
 }): React.ReactElement {
   const { t } = i18n.useI18n();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const playbackSessionIdRef = useRef<string | null>(null);
+  const onRefreshUrlsRef = useRef(onRefreshUrls);
 
   const [status, setStatus] = useState<TilePlaybackStatus>("idle");
   const [transport, setTransport] = useState<TilePlaybackTransport>("none");
   const [errorText, setErrorText] = useState<string | null>(null);
   const [webRtcStats, setWebRtcStats] = useState<WebRtcStatsSummary | null>(null);
   const [webRtcFallbackActive, setWebRtcFallbackActive] = useState(false);
+  const [hlsProbeSummary, setHlsProbeSummary] = useState<string | null>(null);
   const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const playbackActive = active || pictureInPictureActive;
+  useEffect(() => {
+    onRefreshUrlsRef.current = onRefreshUrls;
+  }, [onRefreshUrls]);
   const playbackPlan = useMemo(
     () =>
       buildPlaybackPlan({
@@ -1157,6 +1276,62 @@ function StreamTilePlayer({
   }, [playbackActive, recordWebPlaybackEvent, transport, withTransportTelemetry]);
 
   useEffect(() => {
+    if (!playbackActive || !transmissionId) return;
+
+    let cancelled = false;
+    const renewDemandLease = () => {
+      const playbackSessionId = playbackSessionIdRef.current;
+      if (!playbackSessionId || cancelled) return;
+      const heartbeatTransport = transport === "webrtc" && !webRtcFallbackActive ? "webrtc" : "hls";
+      const selectedOutputId =
+        heartbeatTransport === "webrtc" ? webrtcOutputId ?? outputId : hlsOutputId ?? outputId;
+      if (!selectedOutputId) return;
+      void heartbeatStreamingTransmissionDemand(transmissionId, {
+        playbackSessionId,
+        outputId: selectedOutputId,
+        qualityProfileId: heartbeatTransport === "hls" ? hlsQualityProfileId : null,
+        transport: heartbeatTransport,
+      })
+        .then((response) => {
+          recordWebPlaybackEvent("demand_heartbeat", {
+            severity: "debug",
+            data: withTransportTelemetry({
+              output_id: selectedOutputId,
+              transport: heartbeatTransport,
+              renewed_outputs: response.renewed_outputs,
+              lease_seconds: response.lease_seconds,
+            }),
+          });
+        })
+        .catch((error) => {
+          recordWebPlaybackEvent("demand_heartbeat_error", {
+            severity: "debug",
+            message: asErrorMessage(error),
+            data: withTransportTelemetry({ output_id: selectedOutputId, transport: heartbeatTransport }),
+          });
+        });
+    };
+
+    renewDemandLease();
+    const intervalId = window.setInterval(renewDemandLease, DEMAND_HEARTBEAT_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [
+    hlsOutputId,
+    hlsQualityProfileId,
+    outputId,
+    playbackActive,
+    recordWebPlaybackEvent,
+    transmissionId,
+    transport,
+    webRtcFallbackActive,
+    webrtcOutputId,
+    withTransportTelemetry,
+  ]);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
     let cancelled = false;
     let nativeCleanup: (() => void) | null = null;
@@ -1276,19 +1451,75 @@ function StreamTilePlayer({
       video.controls = false;
     };
 
+    const probeHlsUrlForBrowser = async (sourceUrl: string): Promise<void> => {
+      const probe = await probeBrowserHlsPlayback(sourceUrl, hlsAuthHeader);
+      const summary = [
+        "ok",
+        probe.mediaSequence ? `seq ${probe.mediaSequence}` : null,
+        probe.targetDuration ? `target ${probe.targetDuration}s` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      setHlsProbeSummary(summary);
+      recordWebPlaybackEvent("hls_browser_probe", {
+        severity: "debug",
+        data: withTransportTelemetry({
+          media_playlist_url: probe.mediaPlaylistUrl,
+          tail_segment_url: probe.tailSegmentUrl,
+          media_sequence: probe.mediaSequence,
+          target_duration_seconds: probe.targetDuration,
+        }),
+      });
+    };
+
     const startNativeHlsPlayback = async (video: HTMLVideoElement): Promise<void> => {
       setTransport("hls");
       const sourceUrl = String(hlsNativeUrl || hlsUrl || "").trim();
+      await probeHlsUrlForBrowser(sourceUrl);
+      if (cancelled) return;
+      let nativeRecovering = false;
+      let healthyProbeRecoveries = 0;
       const onPlaying = () => {
         setStatus("playing");
         setErrorText(null);
       };
       const onError = () => {
-        setStatus("error");
+        if (nativeRecovering) return;
+        nativeRecovering = true;
         const message = i18n.t("core.ui.streams.errors.hls_native_error", {}, "Native HLS playback error.");
-        setErrorText(message);
-        destroyPlayback();
-        scheduleRetry(message);
+        void probeHlsUrlForBrowser(sourceUrl)
+          .then(() => {
+            if (cancelled) return;
+            healthyProbeRecoveries += 1;
+            if (healthyProbeRecoveries > 2) {
+              setStatus("error");
+              setErrorText(message);
+              destroyPlayback();
+              scheduleRetry(message);
+              return;
+            }
+            setStatus("loading");
+            setErrorText(null);
+            video.src = sourceUrl;
+            try {
+              video.load();
+            } catch {
+              // ignore
+            }
+            void video.play().catch(() => {});
+          })
+          .catch((probeError) => {
+            if (cancelled) return;
+            const probeMessage = asErrorMessage(probeError) || message;
+            setHlsProbeSummary(`failed: ${probeMessage}`);
+            setStatus("error");
+            setErrorText(probeMessage);
+            destroyPlayback();
+            scheduleRetry(probeMessage);
+          })
+          .finally(() => {
+            nativeRecovering = false;
+          });
       };
 
       video.addEventListener("playing", onPlaying);
@@ -1310,6 +1541,8 @@ function StreamTilePlayer({
 
     const startHlsJsPlayback = async (video: HTMLVideoElement): Promise<void> => {
       setTransport("hls");
+      await probeHlsUrlForBrowser(hlsUrl ?? "");
+      if (cancelled) return;
       const hlsModule = await import("hls.js");
       if (cancelled) return;
       const HlsConstructor = hlsModule.default;
@@ -1348,9 +1581,26 @@ function StreamTilePlayer({
         const details = String(
           data.details || data.type || i18n.t("core.ui.streams.errors.hlsjs_fatal", {}, "hls.js fatal error"),
         );
-        setErrorText(details);
-        destroyPlayback();
-        scheduleRetry(details);
+        void probeHlsUrlForBrowser(hlsUrl ?? "")
+          .then(() => {
+            if (cancelled) return;
+            setStatus("loading");
+            setErrorText(null);
+            try {
+              hls.recoverMediaError();
+            } catch {
+              destroyPlayback();
+              scheduleRetry(details);
+            }
+          })
+          .catch((probeError) => {
+            if (cancelled) return;
+            const probeMessage = asErrorMessage(probeError) || details;
+            setHlsProbeSummary(`failed: ${probeMessage}`);
+            setErrorText(probeMessage);
+            destroyPlayback();
+            scheduleRetry(probeMessage);
+          });
       });
 
       hls.attachMedia(video);
@@ -1538,6 +1788,24 @@ function StreamTilePlayer({
       }
     };
 
+    const refreshSignedHlsAfterAuthError = async (message: string): Promise<boolean> => {
+      if (!isHlsAuthProbeErrorMessage(message)) return false;
+      const renewalMessage = i18n.t(
+        "core.ui.streams.errors.hls_signed_url_renewing",
+        {},
+        "Secure HLS URL expired. Renewing...",
+      );
+      setStatus("loading");
+      setErrorText(renewalMessage);
+      recordWebPlaybackEvent("hls_auth_expired", {
+        severity: "warn",
+        message,
+        data: withTransportTelemetry({ output_id: hlsOutputId ?? outputId }),
+      });
+      await onRefreshUrlsRef.current();
+      return true;
+    };
+
     const startPlayback = async () => {
       if (cancelled || !playbackActive || ((!allowHls || !hlsUrl) && (!allowWebRtc || !webrtcUrl))) return;
       const video = videoRef.current;
@@ -1600,6 +1868,7 @@ function StreamTilePlayer({
           return;
         } catch (error) {
           const hlsError = asErrorMessage(error);
+          if (await refreshSignedHlsAfterAuthError(hlsError)) return;
           setStatus("error");
           setErrorText(hlsError);
           recordWebPlaybackEvent("playback_error", {
@@ -1630,16 +1899,6 @@ function StreamTilePlayer({
           } catch (error) {
             const message = asErrorMessage(error);
             webRtcError = message;
-            recordWebPlaybackEvent("webrtc_signaling_error", {
-              severity: "warn",
-              message,
-              data: withTransportTelemetry({
-                attempt_index: attemptIndex,
-                output_id: webrtcOutputId ?? outputId,
-                fallback_transport: allowHls ? "hls" : null,
-                fallback_successful: false,
-              }),
-            });
             const normalizedMessage = message.toLowerCase();
 
             const shouldRetry =
@@ -1647,6 +1906,17 @@ function StreamTilePlayer({
               (normalizedMessage.includes("(404)") ||
                 normalizedMessage.includes("no stream is available") ||
                 normalizedMessage.includes("path has no one publishing"));
+            recordWebPlaybackEvent("webrtc_signaling_error", {
+              severity: shouldRetry ? "debug" : "warn",
+              message,
+              data: withTransportTelemetry({
+                attempt_index: attemptIndex,
+                output_id: webrtcOutputId ?? outputId,
+                fallback_transport: allowHls ? "hls" : null,
+                fallback_successful: false,
+                retryable: shouldRetry,
+              }),
+            });
             if (!shouldRetry) break;
 
             await new Promise((resolve) => window.setTimeout(resolve, WEBRTC_WHEP_READY_RETRY_MS));
@@ -1661,6 +1931,7 @@ function StreamTilePlayer({
           return;
         } catch (error) {
           const hlsError = asErrorMessage(error);
+          if (await refreshSignedHlsAfterAuthError(hlsError)) return;
           const combinedError = webRtcError
             ? i18n.t(
                 "core.ui.streams.errors.webrtc_hls_fallback_failed",
@@ -1710,6 +1981,7 @@ function StreamTilePlayer({
       setTransport("none");
       setErrorText(null);
       setWebRtcFallbackActive(false);
+      setHlsProbeSummary(null);
       return () => {
         cancelled = true;
         destroyPlayback();
@@ -1929,6 +2201,8 @@ function StreamTilePlayer({
         playbackTransport={transport}
         webRtcStats={webRtcStats}
         webRtcFallbackActive={webRtcFallbackActive}
+        hlsProbeSummary={hlsProbeSummary}
+        hlsUrl={hlsUrl}
         playbackPlan={playbackPlan}
         lowLatencyRequested={lowLatencyRequested}
         errorText={errorText}
@@ -2325,6 +2599,31 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
                       ...previous,
                       [transmissionId]: preference,
                     }));
+                  }}
+                  onRefreshUrls={async () => {
+                    setUrlsLoadingByTransmissionId((previous) => ({ ...previous, [transmissionId]: true }));
+                    try {
+                      const hasProfiledHls = hlsOutputsHaveProfiles(urls);
+                      const payload = await getStreamingTransmissionUrls(transmissionId, {
+                        outputId: hasProfiledHls ? null : hlsOutput?.outputId ?? null,
+                        qualityProfileId: hasProfiledHls ? desiredQualityProfileId : null,
+                      });
+                      setUrlsByTransmissionId((previous) => ({ ...previous, [transmissionId]: payload }));
+                      setUrlErrorByTransmissionId((previous) => {
+                        if (!previous[transmissionId]) return previous;
+                        const next = { ...previous };
+                        delete next[transmissionId];
+                        return next;
+                      });
+                    } catch (refreshError) {
+                      setUrlErrorByTransmissionId((previous) => ({
+                        ...previous,
+                        [transmissionId]: asErrorMessage(refreshError),
+                      }));
+                      throw refreshError;
+                    } finally {
+                      setUrlsLoadingByTransmissionId((previous) => ({ ...previous, [transmissionId]: false }));
+                    }
                   }}
                   onOpenPtz={() => {
                     setPtzOverlay({ transmissionId, label: transmissionName });

@@ -2501,7 +2501,7 @@ wheels = [
 
 [[package]]
 name = "toposync-core"
-version = "0.4.12"
+version = "0.4.13"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -2558,7 +2558,7 @@ extensions = [
 
 [[package]]
 name = "toposync-ext-ai"
-version = "0.1.8"
+version = "0.1.9"
 source = { editable = "extensions/ai" }
 dependencies = [
     { name = "httpx" },
@@ -2577,7 +2577,7 @@ requires-dist = [
 
 [[package]]
 name = "toposync-ext-cameras"
-version = "0.1.11"
+version = "0.1.12"
 source = { editable = "extensions/cameras" }
 dependencies = [
     { name = "numpy" },
@@ -2596,7 +2596,7 @@ requires-dist = [
 
 [[package]]
 name = "toposync-ext-home-assistant"
-version = "0.1.8"
+version = "0.1.9"
 source = { editable = "extensions/home_assistant" }
 dependencies = [
     { name = "httpx" },
@@ -2613,7 +2613,7 @@ requires-dist = [
 
 [[package]]
 name = "toposync-ext-images"
-version = "0.1.6"
+version = "0.1.7"
 source = { editable = "extensions/images" }
 dependencies = [
     { name = "toposync-core" },
@@ -2624,7 +2624,7 @@ requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
 
 [[package]]
 name = "toposync-ext-models"
-version = "0.1.6"
+version = "0.1.7"
 source = { editable = "extensions/models" }
 dependencies = [
     { name = "toposync-core" },
@@ -2635,7 +2635,7 @@ requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
 
 [[package]]
 name = "toposync-ext-streaming"
-version = "0.1.12"
+version = "0.1.13"
 source = { editable = "extensions/streaming" }
 dependencies = [
     { name = "numpy" },
@@ -2652,7 +2652,7 @@ requires-dist = [
 
 [[package]]
 name = "toposync-ext-structural"
-version = "0.1.6"
+version = "0.1.7"
 source = { editable = "extensions/structural" }
 dependencies = [
     { name = "toposync-core" },
@@ -2663,7 +2663,7 @@ requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
 
 [[package]]
 name = "toposync-ext-vision"
-version = "0.1.12"
+version = "0.1.13"
 source = { editable = "extensions/vision" }
 dependencies = [
     { name = "huggingface-hub" },

@@ -204,6 +204,33 @@ class PipelineGraphCompiler:
                     f"Node '{edge.target.node}' has no input port '{edge.target.port}'",
                 )
 
+        def _has_downstream_operator(start_node_id: str, operator_id: str) -> bool:
+            seen: set[str] = set()
+            q: deque[str] = deque(adjacency.get(start_node_id, ()))
+            while q:
+                node_id = q.popleft()
+                if node_id in seen:
+                    continue
+                seen.add(node_id)
+                node = node_map.get(node_id)
+                if node is not None and node.operator_id == operator_id:
+                    return True
+                q.extend(adjacency.get(node_id, ()))
+            return False
+
+        for node in graph.nodes:
+            if node.operator_id != "vision.detect":
+                continue
+            cfg = normalized_config_by_node.get(node.id, {})
+            emit_mode = str(cfg.get("emit_mode") or "events").strip().lower()
+            if emit_mode == "event":
+                emit_mode = "events"
+            if emit_mode == "events" and _has_downstream_operator(node.id, "vision.track"):
+                raise GraphCompileError(
+                    "vision.detect emit_mode='events' cannot feed vision.track; "
+                    "use emit_mode='annotate' before tracking",
+                )
+
         topological_order = _topological_sort(
             node_map=node_map, adjacency=adjacency, indegree=indegree
         )

@@ -4,13 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from toposync.runtime.config_store import (
-    AppConfig,
-    ConfigStore,
-    Pipeline,
-    UserDataPaths,
-    _normalize_config,
-)
+from toposync.runtime.config_store import ConfigStore, Pipeline, UserDataPaths
 
 
 def _create_store(tmp_path: Path) -> ConfigStore:
@@ -63,71 +57,3 @@ def test_config_store_write_does_not_clobber_external_pipeline_changes(tmp_path:
     saved = json.loads(store.paths.config_path.read_text(encoding="utf-8"))
     names = {item.get("name") for item in saved.get("pipelines") or []}
     assert names == {"p1", "p2"}
-
-
-def test_normalize_config_migrates_detect_events_before_tracking_to_annotate() -> None:
-    config = AppConfig(
-        pipelines=[
-            Pipeline(
-                name="tracked_people",
-                graph={
-                    "schema_version": 1,
-                    "nodes": [
-                        {
-                            "id": "detect",
-                            "operator": "vision.detect",
-                            "config": {"model_id": "fake.detector", "emit_mode": "events"},
-                        },
-                        {
-                            "id": "track",
-                            "operator": "vision.track",
-                            "config": {"tracker_id": "simple_iou_kalman"},
-                        },
-                    ],
-                    "edges": [
-                        {
-                            "from": {"node": "detect", "port": "out"},
-                            "to": {"node": "track", "port": "in"},
-                        }
-                    ],
-                },
-            )
-        ]
-    )
-
-    normalized = _normalize_config(config)
-
-    detect = normalized.pipelines[0].graph["nodes"][0]
-    assert detect["config"]["emit_mode"] == "annotate"
-
-
-def test_normalize_config_keeps_detect_events_without_tracking() -> None:
-    config = AppConfig(
-        pipelines=[
-            Pipeline(
-                name="detection_events",
-                graph={
-                    "schema_version": 1,
-                    "nodes": [
-                        {
-                            "id": "detect",
-                            "operator": "vision.detect",
-                            "config": {"model_id": "fake.detector", "emit_mode": "events"},
-                        },
-                        {"id": "notify", "operator": "core.notify", "config": {}},
-                    ],
-                    "edges": [
-                        {
-                            "from": {"node": "detect", "port": "out"},
-                            "to": {"node": "notify", "port": "in"},
-                        }
-                    ],
-                },
-            )
-        ]
-    )
-
-    normalized = _normalize_config(config)
-
-    detect = normalized.pipelines[0].graph["nodes"][0]
-    assert detect["config"]["emit_mode"] == "events"

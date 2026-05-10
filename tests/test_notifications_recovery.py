@@ -69,3 +69,54 @@ def test_close_open_pipeline_notifications_marks_stale_open_as_closed(tmp_path: 
 
     asyncio.run(scenario())
 
+
+def test_notifications_upsert_archives_closed_dedupe_before_new_open(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        notifications = NotificationsRuntime(data_dir=tmp_path / "data")
+        dedupe_key = "pipeline:test:camera:front:token:track-1"
+
+        first = await notifications.upsert(
+            type="pipelines.event",
+            title="First",
+            payload={
+                "source": "pipelines",
+                "status": "closed",
+                "lifecycle": "close",
+                "event": {"started_ts": 1.0, "ts": 2.0, "duration_seconds": 1.0},
+            },
+            dedupe_key=dedupe_key,
+        )
+        second = await notifications.upsert(
+            type="pipelines.event",
+            title="Second",
+            payload={
+                "source": "pipelines",
+                "status": "open",
+                "lifecycle": "open",
+                "event": {"started_ts": 10.0, "ts": 10.0, "duration_seconds": 0.0},
+            },
+            dedupe_key=dedupe_key,
+        )
+        second_closed = await notifications.upsert(
+            type="pipelines.event",
+            title="Second",
+            payload={
+                "source": "pipelines",
+                "status": "closed",
+                "lifecycle": "close",
+                "event": {"started_ts": 10.0, "ts": 12.0, "duration_seconds": 2.0},
+            },
+            dedupe_key=dedupe_key,
+        )
+
+        assert first["id"] != second["id"]
+        assert second_closed["id"] == second["id"]
+
+        items, _cursor = await notifications.list(limit=20)
+        assert len(items) == 2
+        by_id = {str(item.get("id")): item for item in items}
+        assert by_id[first["id"]]["payload"]["event"]["started_ts"] == 1.0
+        assert by_id[second["id"]]["payload"]["event"]["started_ts"] == 10.0
+        assert by_id[second["id"]]["payload"]["status"] == "closed"
+
+    asyncio.run(scenario())

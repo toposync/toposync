@@ -313,43 +313,6 @@ def _normalize_config(config: AppConfig) -> AppConfig:
         nodes_raw = graph.get("nodes")
         if not isinstance(nodes_raw, list):
             return graph
-        edges_raw = graph.get("edges")
-        outgoing: dict[str, list[str]] = {}
-        if isinstance(edges_raw, list):
-            for edge in edges_raw:
-                if not isinstance(edge, dict):
-                    continue
-                src_raw = edge.get("from")
-                dst_raw = edge.get("to")
-                if not isinstance(src_raw, dict) or not isinstance(dst_raw, dict):
-                    continue
-                src = str(src_raw.get("node") or "").strip()
-                dst = str(dst_raw.get("node") or "").strip()
-                if src and dst:
-                    outgoing.setdefault(src, []).append(dst)
-
-        operator_by_node: dict[str, str] = {}
-        for item in nodes_raw:
-            if not isinstance(item, dict):
-                continue
-            node_id = str(item.get("id") or "").strip()
-            operator_id = str(item.get("operator") or "").strip()
-            if node_id and operator_id:
-                operator_by_node[node_id] = operator_id
-
-        def _has_downstream_operator(start_node_id: str, operator_id: str) -> bool:
-            seen: set[str] = set()
-            stack = list(outgoing.get(start_node_id, ()))
-            while stack:
-                node_id = stack.pop()
-                if node_id in seen:
-                    continue
-                seen.add(node_id)
-                if operator_by_node.get(node_id) == operator_id:
-                    return True
-                stack.extend(outgoing.get(node_id, ()))
-            return False
-
         changed = False
         migrated_nodes: list[Any] = []
 
@@ -367,25 +330,6 @@ def _normalize_config(config: AppConfig) -> AppConfig:
                 migrated_nodes.append(item)
                 continue
             operator_id = str(item.get("operator") or "").strip()
-            node_id = str(item.get("id") or "").strip()
-            if operator_id == "vision.detect":
-                cfg_raw = item.get("config")
-                cfg = dict(cfg_raw) if isinstance(cfg_raw, dict) else {}
-                emit_mode = str(cfg.get("emit_mode") or "events").strip().lower()
-                if emit_mode == "event":
-                    emit_mode = "events"
-                if (
-                    emit_mode == "events"
-                    and node_id
-                    and _has_downstream_operator(node_id, "vision.track")
-                ):
-                    # Migration: detect/events is a finite detection event now; tracking needs frame annotations.
-                    cfg["emit_mode"] = "annotate"
-                    changed = True
-                    migrated_nodes.append({**item, "config": cfg})
-                else:
-                    migrated_nodes.append(item)
-                continue
             if operator_id != "vision.track":
                 migrated_nodes.append(item)
                 continue

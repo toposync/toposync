@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import threading
 import time
@@ -38,6 +39,22 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _payload_is_closed(payload: dict[str, Any] | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    status = str(payload.get("status") or "").strip().lower()
+    lifecycle = str(payload.get("lifecycle") or "").strip().lower()
+    return status == "closed" or lifecycle == "close"
+
+
+def _archived_dedupe_key(dedupe_key: str, notification_id: str) -> str:
+    raw = f"{dedupe_key}:archived:{notification_id}"
+    if len(raw) <= 512:
+        return raw
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+    return f"{dedupe_key[:450]}:archived:{digest}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,8 +103,12 @@ class NotificationStore:
                 },
             )
 
-            self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_dedupe_key ON notification(dedupe_key)")
-            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_notification_seq_desc ON notification(seq DESC)")
+            self._conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_dedupe_key ON notification(dedupe_key)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_notification_seq_desc ON notification(seq DESC)"
+            )
 
     def _row_to_record(self, row: sqlite3.Row) -> NotificationRecord:
         try:
@@ -125,7 +146,9 @@ class NotificationStore:
             row = cur.fetchone()
         return self._row_to_record(row) if row is not None else None
 
-    def list(self, *, before: int | None = None, limit: int = 50) -> tuple[list[NotificationRecord], int | None]:
+    def list(
+        self, *, before: int | None = None, limit: int = 50
+    ) -> tuple[list[NotificationRecord], int | None]:
         limit = max(1, min(250, int(limit)))
         before_n = int(before) if before is not None else None
         with self._lock:
@@ -176,39 +199,64 @@ class NotificationStore:
 
         desc = description.strip()
         dedupe = dedupe_key.strip() if dedupe_key else ""
-        blob = json.dumps(payload or {}, ensure_ascii=False, separators=(",", ":")) if payload is not None else None
+        incoming_payload = payload if isinstance(payload, dict) else {}
+        blob = (
+            json.dumps(payload or {}, ensure_ascii=False, separators=(",", ":"))
+            if payload is not None
+            else None
+        )
         ts = float(now or time.time())
 
         with self._lock:
             if dedupe:
                 cur = self._conn.execute(
-                    "SELECT id FROM notification WHERE dedupe_key = ? LIMIT 1",
+                    "SELECT id, payload_json FROM notification WHERE dedupe_key = ? LIMIT 1",
                     (dedupe,),
                 )
                 row = cur.fetchone()
                 if row is not None:
                     nid = str(row["id"])
-                    self._conn.execute(
-                        """
-                        UPDATE notification
-                        SET
-                          type = ?,
-                          title = ?,
-                          description = ?,
-                          image_path = COALESCE(?, image_path),
-                          payload_json = COALESCE(?, payload_json),
-                          updated_at = ?
-                        WHERE id = ?
-                        """,
-                        (ntype, ttl, desc, image_path, blob, ts, nid),
-                    )
-                    rec = self.get(nid)
-                    if rec is None:
-                        raise RuntimeError("Failed to read notification after update")
-                    return rec, False
+                    existing_payload: dict[str, Any] = {}
+                    try:
+                        parsed_payload = json.loads(str(row["payload_json"] or "{}"))
+                        if isinstance(parsed_payload, dict):
+                            existing_payload = parsed_payload
+                    except Exception:
+                        existing_payload = {}
+
+                    if _payload_is_closed(existing_payload) and not _payload_is_closed(
+                        incoming_payload
+                    ):
+                        self._conn.execute(
+                            "UPDATE notification SET dedupe_key = ? WHERE id = ?",
+                            (_archived_dedupe_key(dedupe, nid), nid),
+                        )
+                    else:
+                        self._conn.execute(
+                            """
+                            UPDATE notification
+                            SET
+                              type = ?,
+                              title = ?,
+                              description = ?,
+                              image_path = COALESCE(?, image_path),
+                              payload_json = COALESCE(?, payload_json),
+                              updated_at = ?
+                            WHERE id = ?
+                            """,
+                            (ntype, ttl, desc, image_path, blob, ts, nid),
+                        )
+                        rec = self.get(nid)
+                        if rec is None:
+                            raise RuntimeError("Failed to read notification after update")
+                        return rec, False
 
             nid = uuid.uuid4().hex
-            blob_insert = blob if blob is not None else json.dumps({}, ensure_ascii=False, separators=(",", ":"))
+            blob_insert = (
+                blob
+                if blob is not None
+                else json.dumps({}, ensure_ascii=False, separators=(",", ":"))
+            )
             self._conn.execute(
                 """
                 INSERT INTO notification(

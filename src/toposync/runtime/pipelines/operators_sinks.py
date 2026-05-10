@@ -67,7 +67,9 @@ def _resolve_files_dir(dependencies: PipelineRuntimeDependencies) -> Path:
     store = dependencies.config_store
     if isinstance(store, ConfigStore):
         return store.paths.files_dir
-    raise RuntimeError("files_dir is required (set PipelineRuntimeDependencies.files_dir or config_store)")
+    raise RuntimeError(
+        "files_dir is required (set PipelineRuntimeDependencies.files_dir or config_store)"
+    )
 
 
 def _resolve_logical_pipeline_name(context: Any) -> str:
@@ -244,7 +246,9 @@ def _pil_image_from_array(image: Any) -> Any:
     return Image.fromarray(np.ascontiguousarray(arr))
 
 
-def _encode_image_bytes(image: Any, *, fmt: ImageStorageFormat, jpeg_quality: int) -> tuple[bytes, str, str]:
+def _encode_image_bytes(
+    image: Any, *, fmt: ImageStorageFormat, jpeg_quality: int
+) -> tuple[bytes, str, str]:
     ext, mime = _image_ext_mime(fmt)
 
     if isinstance(image, (bytes, bytearray, memoryview)):
@@ -326,7 +330,12 @@ def _encode_png(image: Any) -> bytes:
     compressed = zlib.compress(bytes(raw), level=6)
     header = b"\x89PNG\r\n\x1a\n"
     ihdr = struct.pack("!IIBBBBB", width, height, 8, color_type, 0, 0, 0)
-    return header + _png_chunk(b"IHDR", ihdr) + _png_chunk(b"IDAT", compressed) + _png_chunk(b"IEND", b"")
+    return (
+        header
+        + _png_chunk(b"IHDR", ihdr)
+        + _png_chunk(b"IDAT", compressed)
+        + _png_chunk(b"IEND", b"")
+    )
 
 
 def _sanitize_for_json(value: Any, *, max_depth: int = 4) -> Any:
@@ -629,7 +638,9 @@ class NotifyConfig(BaseModel):
     input_artifact_name: str = ""
     dedupe_key_template: str = ""
 
-    @field_validator("notification_type", "title", "description", "input_artifact_name", "dedupe_key_template")
+    @field_validator(
+        "notification_type", "title", "description", "input_artifact_name", "dedupe_key_template"
+    )
     @classmethod
     def _trim_fields(cls, value: str) -> str:
         return str(value or "").strip()
@@ -638,6 +649,7 @@ class NotifyConfig(BaseModel):
 @dataclass(slots=True)
 class _NotifyState:
     started_ts: float
+    store_dedupe_key: str
     last_emit_monotonic: float = 0.0
     last_signature: str = ""
     last_title: str = ""
@@ -660,7 +672,9 @@ class NotifyRuntime(SinkRuntime):
             return []
         upsert = getattr(self._dependencies, "notifications_upsert", None)
         if not callable(upsert):
-            raise RuntimeError("core.notify requires PipelineRuntimeDependencies.notifications_upsert")
+            raise RuntimeError(
+                "core.notify requires PipelineRuntimeDependencies.notifications_upsert"
+            )
 
         dedupe_key = self._dedupe_key(packet, context)
         now_monotonic = time.monotonic()
@@ -668,7 +682,11 @@ class NotifyRuntime(SinkRuntime):
 
         state = self._state.get(dedupe_key)
         if state is None:
-            state = _NotifyState(started_ts=ts, last_emit_monotonic=0.0)
+            state = _NotifyState(
+                started_ts=ts,
+                store_dedupe_key=self._store_dedupe_key(dedupe_key, packet),
+                last_emit_monotonic=0.0,
+            )
             self._state[dedupe_key] = state
         self._state.move_to_end(dedupe_key)
 
@@ -682,8 +700,16 @@ class NotifyRuntime(SinkRuntime):
                 x = 0.0
                 z = 0.0
             if math.isfinite(x) and math.isfinite(z):
-                mapping = packet.payload.get("mapping") if isinstance(packet.payload.get("mapping"), dict) else {}
-                composition_id = str(mapping.get("composition_id") or "").strip() if isinstance(mapping, dict) else ""
+                mapping = (
+                    packet.payload.get("mapping")
+                    if isinstance(packet.payload.get("mapping"), dict)
+                    else {}
+                )
+                composition_id = (
+                    str(mapping.get("composition_id") or "").strip()
+                    if isinstance(mapping, dict)
+                    else ""
+                )
                 point = {
                     "ts": float(ts),
                     "x": float(x),
@@ -716,7 +742,9 @@ class NotifyRuntime(SinkRuntime):
                 if not entries:
                     continue
                 current = state.stored_images.get(key, [])
-                known_paths = {str(item.get("rel_path") or "") for item in current if isinstance(item, dict)}
+                known_paths = {
+                    str(item.get("rel_path") or "") for item in current if isinstance(item, dict)
+                }
                 next_list = list(current)
                 for entry in entries:
                     if not isinstance(entry, dict):
@@ -768,7 +796,11 @@ class NotifyRuntime(SinkRuntime):
                 "revision": int(state.revision),
             },
         )
-        if lifecycle == Lifecycle.UPDATE and state.last_signature and signature == state.last_signature:
+        if (
+            lifecycle == Lifecycle.UPDATE
+            and state.last_signature
+            and signature == state.last_signature
+        ):
             return []
 
         state.last_emit_monotonic = now_monotonic
@@ -798,9 +830,7 @@ class NotifyRuntime(SinkRuntime):
             "event_id": _resolve_string(packet, "event_id") or None,
             "tracking_id": _resolve_string(packet, "tracking_id") or None,
             "artifacts": {
-                name: art.reference
-                for name, art in packet.artifacts.items()
-                if art.reference
+                name: art.reference for name, art in packet.artifacts.items() if art.reference
             },
             "trail": list(state.trail),
             "stored_images": state.stored_images,
@@ -814,7 +844,7 @@ class NotifyRuntime(SinkRuntime):
                 description=description,
                 image_path=image_path,
                 payload=payload,
-                dedupe_key=dedupe_key,
+                dedupe_key=state.store_dedupe_key,
             )
         finally:
             if lifecycle == Lifecycle.CLOSE:
@@ -859,7 +889,7 @@ class NotifyRuntime(SinkRuntime):
                             "duration_seconds": max(0.0, float(now_ts) - float(state.started_ts)),
                         },
                     },
-                    dedupe_key=dedupe_key,
+                    dedupe_key=state.store_dedupe_key,
                 )
             except Exception:
                 # Best-effort: o pipeline pode estar encerrando por erro/cancel.
@@ -886,6 +916,18 @@ class NotifyRuntime(SinkRuntime):
             return raw
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
         return f"pipeline:{node_id}:camera:{camera_id}:token:{digest}"
+
+    def _store_dedupe_key(self, logical_dedupe_key: str, packet: Packet) -> str:
+        packet_id = str(packet.packet_id or "").strip()
+        if not packet_id:
+            packet_id = hashlib.sha256(
+                f"{packet.stream_id}:{packet.created_at}".encode("utf-8")
+            ).hexdigest()[:32]
+        raw = f"{logical_dedupe_key}:instance:{packet_id}"
+        if len(raw) <= 512:
+            return raw
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+        return f"{logical_dedupe_key[:450]}:instance:{digest}"
 
     async def _select_thumbnail_path(self, packet: Packet, context) -> str | None:
         _artifact_name, rel = resolve_image_artifact_for_reference(
@@ -916,7 +958,9 @@ def _iter_stored_image_entries(stored_images: dict[str, Any]) -> list[tuple[str,
     return out
 
 
-def _select_latest_stored_image(stored_images: dict[str, Any], *, preferred_key: str = MAIN_ARTIFACT_NAME) -> str | None:
+def _select_latest_stored_image(
+    stored_images: dict[str, Any], *, preferred_key: str = MAIN_ARTIFACT_NAME
+) -> str | None:
     best_rel: str | None = None
     best_ts = -1
     best_key_rank = 1_000_000

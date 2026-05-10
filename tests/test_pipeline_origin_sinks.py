@@ -752,6 +752,123 @@ def test_notify_upserts_single_notification_with_templates_and_no_spam(tmp_path:
     asyncio.run(scenario())
 
 
+def test_throttle_after_store_images_preserves_notification_image_history(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        files_dir = tmp_path / "files"
+        notifications = NotificationsRuntime(data_dir=tmp_path / "data")
+        deps = PipelineRuntimeDependencies(
+            files_dir=files_dir,
+            notifications_upsert=notifications.upsert,
+        )
+
+        frame = np.full((16, 16, 3), 180, dtype=np.uint8)
+        artifacts = {
+            "main": Artifact(
+                name="main",
+                data=frame,
+                mime_type="image/raw",
+                metadata={"source": "test"},
+            ),
+        }
+        common_payload = {
+            "camera_id": "camera-main",
+            "tracking_id": "trk-throttle",
+            "event_id": "trk-throttle",
+            "object_category_label": "person",
+        }
+        sequence = [
+            {
+                "lifecycle": Lifecycle.OPEN,
+                "payload": {**common_payload, "frame_ts": 100.0},
+                "artifacts": artifacts,
+            },
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {**common_payload, "frame_ts": 101.0},
+                "artifacts": artifacts,
+            },
+            {
+                "lifecycle": Lifecycle.UPDATE,
+                "payload": {**common_payload, "frame_ts": 102.0},
+                "artifacts": artifacts,
+            },
+            {
+                "lifecycle": Lifecycle.CLOSE,
+                "payload": {**common_payload, "frame_ts": 103.0},
+                "artifacts": {},
+            },
+        ]
+
+        registry = OperatorRegistry()
+        register_builtin_operators(registry)
+        _register_test_source_and_sink(registry, sequence=sequence, collector={})
+
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {
+                    "id": "source",
+                    "operator": "test.sequence_source",
+                    "config": {"stream_id": "camera:test"},
+                },
+                {"id": "store", "operator": "core.store_images", "config": {"format": "png"}},
+                {
+                    "id": "throttle",
+                    "operator": "core.throttle",
+                    "config": {"interval_seconds": 120.0, "key_field": "payload.event_id"},
+                },
+                {
+                    "id": "notify",
+                    "operator": "core.notify",
+                    "config": {
+                        "notification_type": "pipelines.tracking",
+                        "title": "{{object_category_label}}",
+                        "update_interval_seconds": 60.0,
+                    },
+                },
+            ],
+            "edges": [
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "store", "port": "in"},
+                    "maxsize": 32,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "store", "port": "out"},
+                    "to": {"node": "throttle", "port": "in"},
+                    "maxsize": 32,
+                    "drop_policy": "drop_oldest",
+                },
+                {
+                    "from": {"node": "throttle", "port": "out"},
+                    "to": {"node": "notify", "port": "in"},
+                    "maxsize": 32,
+                    "drop_policy": "drop_oldest",
+                },
+            ],
+        }
+
+        pipeline = Pipeline(name="stage7_notify_throttled_images", graph=graph)
+        compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+        runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
+        await runtime.run_for(0.35)
+
+        items, _cursor = await notifications.list(limit=20)
+        assert len(items) == 1
+        payload = items[0].get("payload")
+        assert isinstance(payload, dict)
+        assert payload.get("status") == "closed"
+        stored_images = payload.get("stored_images")
+        assert isinstance(stored_images, dict)
+        main_images = stored_images.get("main")
+        assert isinstance(main_images, list)
+        assert len(main_images) == 3
+        assert all((files_dir / str(item.get("rel_path") or "")).is_file() for item in main_images)
+
+    asyncio.run(scenario())
+
+
 def test_notify_thumbnail_shows_latest_when_live_and_best_confidence_on_close(
     tmp_path: Path,
 ) -> None:

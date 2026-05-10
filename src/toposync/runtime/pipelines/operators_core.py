@@ -12,7 +12,12 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .execution import PassThroughRuntime, SinkRuntime, SourceOperatorRuntime, TransformOperatorRuntime
+from .execution import (
+    PassThroughRuntime,
+    SinkRuntime,
+    SourceOperatorRuntime,
+    TransformOperatorRuntime,
+)
 from .images import MAIN_ARTIFACT_NAME
 from .operator_registry import OperatorRegistry
 from .packet_contract import build_media_descriptor, build_source_descriptor
@@ -98,14 +103,21 @@ class LifecycleFromBooleanConfig(BaseModel):
         default="metadata.motion_gate_open",
         description="Boolean field that defines open/closed state (payload.* or metadata.* with dotted paths).",
     )
-    key_field: str = Field(default="stream_id", description="Key used to track open/closed state per stream.")
-    drop_updates_when_closed: bool = Field(default=True, description="When closed, drop UPDATE packets instead of passing them through.")
+    key_field: str = Field(
+        default="stream_id", description="Key used to track open/closed state per stream."
+    )
+    drop_updates_when_closed: bool = Field(
+        default=True,
+        description="When closed, drop UPDATE packets instead of passing them through.",
+    )
 
 
 _DEBUG_SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
-def _debug_safe_component(value: str | None, *, fallback: str = "unknown", max_len: int = 80) -> str:
+def _debug_safe_component(
+    value: str | None, *, fallback: str = "unknown", max_len: int = 80
+) -> str:
     raw = str(value or "").strip()
     if not raw:
         raw = fallback
@@ -175,7 +187,9 @@ def _debug_sanitize_for_json(
             if idx >= max_items:
                 out["…"] = f"<truncated {len(value) - max_items} items>"
                 break
-            out[str(k)] = _debug_sanitize_for_json(v, max_depth=max_depth - 1, max_items=max_items, max_string=max_string)
+            out[str(k)] = _debug_sanitize_for_json(
+                v, max_depth=max_depth - 1, max_items=max_items, max_string=max_string
+            )
         return out
     if isinstance(value, (list, tuple)):
         out_list: list[Any] = []
@@ -183,7 +197,11 @@ def _debug_sanitize_for_json(
             if idx >= max_items:
                 out_list.append(f"<truncated {len(value) - max_items} items>")
                 break
-            out_list.append(_debug_sanitize_for_json(item, max_depth=max_depth - 1, max_items=max_items, max_string=max_string))
+            out_list.append(
+                _debug_sanitize_for_json(
+                    item, max_depth=max_depth - 1, max_items=max_items, max_string=max_string
+                )
+            )
         return out_list
     try:
         text = str(value)
@@ -208,12 +226,18 @@ def _debug_iter_payload_images(
         out: list[tuple[str, Any]] = []
         for key, item in value.items():
             key_str = str(key)
-            out.extend(_debug_iter_payload_images(item, prefix=f"{prefix}.{key_str}", max_depth=max_depth - 1))
+            out.extend(
+                _debug_iter_payload_images(
+                    item, prefix=f"{prefix}.{key_str}", max_depth=max_depth - 1
+                )
+            )
         return out
     if isinstance(value, list):
         out_list: list[tuple[str, Any]] = []
         for idx, item in enumerate(value):
-            out_list.extend(_debug_iter_payload_images(item, prefix=f"{prefix}[{idx}]", max_depth=max_depth - 1))
+            out_list.extend(
+                _debug_iter_payload_images(item, prefix=f"{prefix}[{idx}]", max_depth=max_depth - 1)
+            )
         return out_list
     return []
 
@@ -264,7 +288,9 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
         ):
             image = self._resolve_snapshot_image(packet)
             if image is not None:
-                camera_id = str(packet.payload.get("camera_id") or packet.metadata.get("camera_id") or "").strip()
+                camera_id = str(
+                    packet.payload.get("camera_id") or packet.metadata.get("camera_id") or ""
+                ).strip()
                 source_id = camera_id or str(packet.stream_id or "").strip() or "-"
                 occurrences = getattr(context, "stats_node_occurrences", None)
                 if isinstance(occurrences, (list, tuple)) and occurrences:
@@ -296,7 +322,9 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
         saved: list[dict[str, str]] = []
         if self._config.save_images and self._config.max_images_per_packet > 0:
             try:
-                saved = await self._save_images(packet, context=context, pipeline_name=pipeline_name, node_id=node_id)
+                saved = await self._save_images(
+                    packet, context=context, pipeline_name=pipeline_name, node_id=node_id
+                )
             except Exception as exc:  # noqa: BLE001
                 print(f"[pipelines debug] failed to save images: {exc}", flush=True)
 
@@ -373,10 +401,24 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
 
         return None
 
-    async def _save_images(self, packet: Packet, *, context, pipeline_name: str, node_id: str) -> list[dict[str, str]]:  # noqa: ANN001
+    async def _save_images(
+        self, packet: Packet, *, context, pipeline_name: str, node_id: str
+    ) -> list[dict[str, str]]:  # noqa: ANN001
         root = await self._ensure_root_dir()
-        camera_id = str(packet.payload.get("camera_id") or packet.metadata.get("camera_id") or "no_camera").strip() or "no_camera"
-        token = str(packet.payload.get("tracking_id") or packet.payload.get("correlation_id") or packet.stream_id).strip() or packet.stream_id
+        camera_id = (
+            str(
+                packet.payload.get("camera_id") or packet.metadata.get("camera_id") or "no_camera"
+            ).strip()
+            or "no_camera"
+        )
+        token = (
+            str(
+                packet.payload.get("tracking_id")
+                or packet.payload.get("correlation_id")
+                or packet.stream_id
+            ).strip()
+            or packet.stream_id
+        )
         stream_safe = _debug_safe_component(packet.stream_id, fallback="stream")
         camera_safe = _debug_safe_component(camera_id, fallback="camera")
         token_safe = _debug_safe_component(token, fallback="token")
@@ -405,9 +447,13 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
             try:
                 run_blocking = getattr(context, "run_blocking", None)
                 if callable(run_blocking):
-                    blob, ext, _mime = await run_blocking(_encode_image_bytes, image, fmt="png", jpeg_quality=85)
+                    blob, ext, _mime = await run_blocking(
+                        _encode_image_bytes, image, fmt="png", jpeg_quality=85
+                    )
                 else:
-                    blob, ext, _mime = await asyncio.to_thread(_encode_image_bytes, image, fmt="png", jpeg_quality=85)
+                    blob, ext, _mime = await asyncio.to_thread(
+                        _encode_image_bytes, image, fmt="png", jpeg_quality=85
+                    )
             except Exception as exc:  # noqa: BLE001
                 written.append({"source": source, "error": str(exc)})
                 continue
@@ -422,7 +468,11 @@ class DebugStdoutRuntime(TransformOperatorRuntime):
 
     async def _ensure_root_dir(self) -> Path:
         if self._root_dir is None:
-            base = Path(self._config.output_dir) if self._config.output_dir else Path(tempfile.gettempdir()) / "toposync-pipeline-debug"
+            base = (
+                Path(self._config.output_dir)
+                if self._config.output_dir
+                else Path(tempfile.gettempdir()) / "toposync-pipeline-debug"
+            )
             self._root_dir = base
         if not self._root_dir_ready:
             await asyncio.to_thread(self._root_dir.mkdir, parents=True, exist_ok=True)
@@ -438,7 +488,9 @@ class StreamStateSnapshotConfig(BaseModel):
         le=60.0,
         description="Minimum seconds between UPDATE snapshots per stream.",
     )
-    max_streams: int = Field(default=512, ge=1, le=100_000, description="Maximum streams tracked in-memory (LRU).")
+    max_streams: int = Field(
+        default=512, ge=1, le=100_000, description="Maximum streams tracked in-memory (LRU)."
+    )
     artifact_names: list[str] = Field(
         default_factory=list,
         description="Optional allowlist of artifact names to include (as references only). Empty = include all.",
@@ -536,7 +588,9 @@ class StreamStateSnapshotRuntime(TransformOperatorRuntime):
 
         return [packet]
 
-    def _build_snapshot_packet(self, packet: Packet, *, state: _StreamSnapshotState, context) -> Packet:  # noqa: ANN001
+    def _build_snapshot_packet(
+        self, packet: Packet, *, state: _StreamSnapshotState, context
+    ) -> Packet:  # noqa: ANN001
         payload = dict(packet.payload)
         metadata = dict(packet.metadata)
 
@@ -576,7 +630,11 @@ class StreamStateSnapshotRuntime(TransformOperatorRuntime):
             metadata=metadata,
             parent_packet_id=packet.packet_id,
         )
-        return replace(snapshot, created_at=float(packet.created_at), created_monotonic_ns=int(packet.created_monotonic_ns))
+        return replace(
+            snapshot,
+            created_at=float(packet.created_at),
+            created_monotonic_ns=int(packet.created_monotonic_ns),
+        )
 
 
 class SyntheticSourceRuntime(SourceOperatorRuntime):
@@ -626,7 +684,9 @@ class DemoFrameSequenceSourceConfig(BaseModel):
     width: int = Field(default=64, ge=8, le=4096)
     height: int = Field(default=64, ge=8, le=4096)
 
-    @field_validator("stream_id", "camera_id", "camera_name", "tracking_id", "object_category_label")
+    @field_validator(
+        "stream_id", "camera_id", "camera_name", "tracking_id", "object_category_label"
+    )
     @classmethod
     def _trim(cls, value: str) -> str:
         return str(value or "").strip()
@@ -710,7 +770,9 @@ class DemoFrameSequenceSourceRuntime(SourceOperatorRuntime):
             ),
         }
         self._index += 1
-        return Packet.create(stream_id=self._stream_id, lifecycle=lifecycle, payload=payload, artifacts=artifacts)
+        return Packet.create(
+            stream_id=self._stream_id, lifecycle=lifecycle, payload=payload, artifacts=artifacts
+        )
 
 
 class FPSReducerRuntime(TransformOperatorRuntime):
@@ -718,16 +780,26 @@ class FPSReducerRuntime(TransformOperatorRuntime):
         parsed = FPSReducerConfig.model_validate(config)
         self._min_interval = 1.0 / float(parsed.target_fps)
         self._last_emit_by_key: dict[str, float] = {}
+        self._pending_stored_images_by_key: dict[str, dict[str, list[dict[str, Any]]]] = {}
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         key = _resolve_key(packet, "payload.event_id")
         now = time.monotonic()
-        if packet.lifecycle in {Lifecycle.OPEN, Lifecycle.CLOSE}:
+        if packet.lifecycle == Lifecycle.OPEN:
+            self._pending_stored_images_by_key.pop(key, None)
             self._last_emit_by_key[key] = now
             return [packet]
-        if not _emit_if_interval_elapsed(now, state=self._last_emit_by_key, key=key, interval_seconds=self._min_interval):
+        if packet.lifecycle == Lifecycle.CLOSE:
+            self._last_emit_by_key[key] = now
+            return [
+                _emit_with_pending_stored_images(self._pending_stored_images_by_key, key, packet)
+            ]
+        if not _emit_if_interval_elapsed(
+            now, state=self._last_emit_by_key, key=key, interval_seconds=self._min_interval
+        ):
+            _remember_stored_images(self._pending_stored_images_by_key, key, packet)
             return []
-        return [packet]
+        return [_emit_with_pending_stored_images(self._pending_stored_images_by_key, key, packet)]
 
 
 class ThrottleRuntime(TransformOperatorRuntime):
@@ -736,16 +808,26 @@ class ThrottleRuntime(TransformOperatorRuntime):
         self._interval_seconds = float(parsed.interval_seconds)
         self._key_field = parsed.key_field.strip() or "stream_id"
         self._last_emit: dict[str, float] = {}
+        self._pending_stored_images_by_key: dict[str, dict[str, list[dict[str, Any]]]] = {}
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         key = _resolve_key(packet, self._key_field)
         now = time.monotonic()
-        if packet.lifecycle in {Lifecycle.OPEN, Lifecycle.CLOSE}:
+        if packet.lifecycle == Lifecycle.OPEN:
+            self._pending_stored_images_by_key.pop(key, None)
             self._last_emit[key] = now
             return [packet]
-        if not _emit_if_interval_elapsed(now, state=self._last_emit, key=key, interval_seconds=self._interval_seconds):
+        if packet.lifecycle == Lifecycle.CLOSE:
+            self._last_emit[key] = now
+            return [
+                _emit_with_pending_stored_images(self._pending_stored_images_by_key, key, packet)
+            ]
+        if not _emit_if_interval_elapsed(
+            now, state=self._last_emit, key=key, interval_seconds=self._interval_seconds
+        ):
+            _remember_stored_images(self._pending_stored_images_by_key, key, packet)
             return []
-        return [packet]
+        return [_emit_with_pending_stored_images(self._pending_stored_images_by_key, key, packet)]
 
 
 class VelocityThrottleRuntime(TransformOperatorRuntime):
@@ -758,13 +840,20 @@ class VelocityThrottleRuntime(TransformOperatorRuntime):
         self._default_moving = bool(parsed.default_moving)
         self._last_emit_by_key: dict[str, float] = {}
         self._last_moving_by_key: dict[str, bool] = {}
+        self._pending_stored_images_by_key: dict[str, dict[str, list[dict[str, Any]]]] = {}
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         key = _resolve_key(packet, self._key_field)
         now = time.monotonic()
-        if packet.lifecycle in {Lifecycle.OPEN, Lifecycle.CLOSE}:
+        if packet.lifecycle == Lifecycle.OPEN:
+            self._pending_stored_images_by_key.pop(key, None)
             self._last_emit_by_key[key] = now
             return [packet]
+        if packet.lifecycle == Lifecycle.CLOSE:
+            self._last_emit_by_key[key] = now
+            return [
+                _emit_with_pending_stored_images(self._pending_stored_images_by_key, key, packet)
+            ]
 
         moving = _resolve_bool_field(packet, self._moving_field)
         if moving is None:
@@ -772,10 +861,15 @@ class VelocityThrottleRuntime(TransformOperatorRuntime):
         else:
             self._last_moving_by_key[key] = bool(moving)
 
-        interval_seconds = self._moving_interval_seconds if bool(moving) else self._stopped_interval_seconds
-        if not _emit_if_interval_elapsed(now, state=self._last_emit_by_key, key=key, interval_seconds=interval_seconds):
+        interval_seconds = (
+            self._moving_interval_seconds if bool(moving) else self._stopped_interval_seconds
+        )
+        if not _emit_if_interval_elapsed(
+            now, state=self._last_emit_by_key, key=key, interval_seconds=interval_seconds
+        ):
+            _remember_stored_images(self._pending_stored_images_by_key, key, packet)
             return []
-        return [packet]
+        return [_emit_with_pending_stored_images(self._pending_stored_images_by_key, key, packet)]
 
 
 class DebounceRuntime(TransformOperatorRuntime):
@@ -784,6 +878,7 @@ class DebounceRuntime(TransformOperatorRuntime):
         self._quiet_period_seconds = float(parsed.quiet_period_seconds)
         self._key_field = parsed.key_field.strip() or "stream_id"
         self._state: dict[str, dict[str, float | bool]] = {}
+        self._pending_stored_images_by_key: dict[str, dict[str, list[dict[str, Any]]]] = {}
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
         key = _resolve_key(packet, self._key_field)
@@ -795,14 +890,21 @@ class DebounceRuntime(TransformOperatorRuntime):
             state["armed"] = False
 
         state["last_seen"] = now
-        if packet.lifecycle in {Lifecycle.OPEN, Lifecycle.CLOSE}:
+        if packet.lifecycle == Lifecycle.OPEN:
+            self._pending_stored_images_by_key.pop(key, None)
             state["armed"] = False
             return [packet]
+        if packet.lifecycle == Lifecycle.CLOSE:
+            state["armed"] = False
+            return [
+                _emit_with_pending_stored_images(self._pending_stored_images_by_key, key, packet)
+            ]
 
         if bool(state.get("armed", False)):
+            _remember_stored_images(self._pending_stored_images_by_key, key, packet)
             return []
         state["armed"] = True
-        return [packet]
+        return [_emit_with_pending_stored_images(self._pending_stored_images_by_key, key, packet)]
 
 
 def _deep_get(container: Any, dotted_key: str) -> Any:
@@ -884,7 +986,11 @@ class LifecycleFromBooleanRuntime(TransformOperatorRuntime):
         self._last_open_packet_by_key.pop(key, None)
         if self._drop_updates_when_closed and packet.lifecycle == Lifecycle.UPDATE:
             return []
-        return [packet.with_lifecycle(Lifecycle.UPDATE)] if packet.lifecycle != Lifecycle.UPDATE else [packet]
+        return (
+            [packet.with_lifecycle(Lifecycle.UPDATE)]
+            if packet.lifecycle != Lifecycle.UPDATE
+            else [packet]
+        )
 
 
 def register_core_operators(registry: OperatorRegistry) -> None:
@@ -896,7 +1002,14 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         outputs=[{"name": "out"}],
         capabilities=["source", "test"],
         defaults=SyntheticSourceConfig().model_dump(),
-        produces_source_fields=["device_id", "kind", "modality", "name", "transport", "clock_domain"],
+        produces_source_fields=[
+            "device_id",
+            "kind",
+            "modality",
+            "name",
+            "transport",
+            "clock_domain",
+        ],
         produces_media_fields=["modality", "ts"],
         output_modalities=["data"],
         share_strategy="by_signature",
@@ -923,7 +1036,15 @@ def register_core_operators(registry: OperatorRegistry) -> None:
             "area_label",
         ],
         produces_artifacts=[MAIN_ARTIFACT_NAME],
-        produces_source_fields=["device_id", "channel_id", "kind", "modality", "name", "transport", "clock_domain"],
+        produces_source_fields=[
+            "device_id",
+            "channel_id",
+            "kind",
+            "modality",
+            "name",
+            "transport",
+            "clock_domain",
+        ],
         produces_media_fields=["modality", "ts", "width", "height", "frame_rate"],
         output_modalities=["video"],
         share_strategy="never",
@@ -1070,7 +1191,9 @@ def _resolve_key(packet: Packet, key_field: str) -> str:
     return key
 
 
-def _emit_if_interval_elapsed(now: float, *, state: dict[str, float], key: str, interval_seconds: float) -> bool:
+def _emit_if_interval_elapsed(
+    now: float, *, state: dict[str, float], key: str, interval_seconds: float
+) -> bool:
     if interval_seconds <= 0.0:
         state[key] = now
         return True
@@ -1079,3 +1202,76 @@ def _emit_if_interval_elapsed(now: float, *, state: dict[str, float], key: str, 
         return False
     state[key] = now
     return True
+
+
+def _stored_images_from_packet(packet: Packet) -> dict[str, list[dict[str, Any]]]:
+    stored = packet.payload.get("stored_images")
+    if not isinstance(stored, dict):
+        return {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for key_raw, entries_raw in stored.items():
+        key = str(key_raw or "").strip()
+        if not key or not isinstance(entries_raw, list):
+            continue
+        entries: list[dict[str, Any]] = []
+        for entry_raw in entries_raw:
+            if not isinstance(entry_raw, dict):
+                continue
+            rel_path = str(entry_raw.get("rel_path") or "").strip()
+            if not rel_path:
+                continue
+            entries.append(dict(entry_raw))
+        if entries:
+            out[key] = entries
+    return out
+
+
+def _merge_stored_images(
+    target: dict[str, list[dict[str, Any]]],
+    incoming: dict[str, list[dict[str, Any]]],
+) -> None:
+    for key, entries in incoming.items():
+        current = target.get(key, [])
+        known_paths = {
+            str(item.get("rel_path") or "") for item in current if isinstance(item, dict)
+        }
+        next_entries = list(current)
+        for entry in entries:
+            rel_path = str(entry.get("rel_path") or "").strip()
+            if not rel_path or rel_path in known_paths:
+                continue
+            known_paths.add(rel_path)
+            next_entries.append(dict(entry))
+        if len(next_entries) > 64:
+            next_entries = next_entries[-64:]
+        target[key] = next_entries
+
+
+def _remember_stored_images(
+    pending_by_key: dict[str, dict[str, list[dict[str, Any]]]],
+    key: str,
+    packet: Packet,
+) -> None:
+    stored = _stored_images_from_packet(packet)
+    if not stored:
+        return
+    pending = pending_by_key.setdefault(key, {})
+    _merge_stored_images(pending, stored)
+
+
+def _emit_with_pending_stored_images(
+    pending_by_key: dict[str, dict[str, list[dict[str, Any]]]],
+    key: str,
+    packet: Packet,
+) -> Packet:
+    pending = pending_by_key.pop(key, {})
+    if not pending:
+        return packet
+    merged: dict[str, list[dict[str, Any]]] = {}
+    _merge_stored_images(merged, pending)
+    _merge_stored_images(merged, _stored_images_from_packet(packet))
+    if not merged:
+        return packet
+    payload = dict(packet.payload)
+    payload["stored_images"] = merged
+    return replace(packet, payload=payload)

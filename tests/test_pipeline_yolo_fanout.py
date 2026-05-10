@@ -84,9 +84,7 @@ class _FrameSourceRuntime(SourceOperatorRuntime):
             lifecycle=Lifecycle.UPDATE,
             payload={"frame_index": self._sequence},
             artifacts={
-                "main": Artifact(
-                    name="main", data=frame, mime_type="image/raw"
-                ),
+                "main": Artifact(name="main", data=frame, mime_type="image/raw"),
                 "aux": Artifact(
                     name="aux",
                     data=frame,
@@ -513,8 +511,16 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
             assert any(packet.lifecycle == Lifecycle.CLOSE for packet in packets), tracking_id
             assert all(packet.payload.get("event_id") == tracking_id for packet in packets)
             assert len({str(packet.payload.get("correlation_id") or "") for packet in packets}) == 1
-            assert all("main" in packet.artifacts for packet in packets if packet.lifecycle != Lifecycle.CLOSE)
-            assert all("main" not in packet.artifacts for packet in packets if packet.lifecycle == Lifecycle.CLOSE)
+            assert all(
+                "main" in packet.artifacts
+                for packet in packets
+                if packet.lifecycle != Lifecycle.CLOSE
+            )
+            assert all(
+                "main" not in packet.artifacts
+                for packet in packets
+                if packet.lifecycle == Lifecycle.CLOSE
+            )
 
         assert notifications
         notification_lifecycles: dict[str, set[str]] = defaultdict(set)
@@ -541,7 +547,9 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
         assert len(notification_lifecycles) == 3
         for lifecycles in notification_lifecycles.values():
             assert {"open", "close"}.issubset(lifecycles)
-        assert {next(iter(ids)) for ids in notification_tracking_ids.values()} == set(grouped_by_tracking)
+        assert {next(iter(ids)) for ids in notification_tracking_ids.values()} == set(
+            grouped_by_tracking
+        )
         assert set(stored_paths_by_tracking) == set(grouped_by_tracking)
         for tracking_id, paths in stored_paths_by_tracking.items():
             assert paths

@@ -165,7 +165,9 @@ def test_contract_tracks_explicit_custom_artifact_names() -> None:
     compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
     alerts = analyze_compiled_pipeline(pipeline=compiled, registry=registry)
 
-    assert not any(alert.code == "missing_required_artifacts" and alert.node_id == "adjust" for alert in alerts)
+    assert not any(
+        alert.code == "missing_required_artifacts" and alert.node_id == "adjust" for alert in alerts
+    )
 
 
 def test_contract_does_not_fallback_to_main_for_missing_custom_input() -> None:
@@ -198,5 +200,42 @@ def test_contract_does_not_fallback_to_main_for_missing_custom_input() -> None:
         and alert.node_id == "adjust"
         and "debug_crop" in alert.message
         and "main" not in alert.message
+        for alert in alerts
+    )
+
+
+def test_contract_alerts_when_detect_events_feed_tracking() -> None:
+    registry = OperatorRegistry()
+    register_builtin_operators(registry)
+    register_camera_pipeline_operators(registry)
+
+    pipeline = Pipeline(
+        name="detect_events_before_tracking",
+        graph={
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
+                {
+                    "id": "detect",
+                    "operator": "vision.detect",
+                    "config": {"model_id": "fake.detector", "emit_mode": "events"},
+                },
+                {"id": "track", "operator": "vision.track", "config": {}},
+                {"id": "sink", "operator": "core.sink", "config": {}},
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "detect", "port": "in"}},
+                {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}},
+                {"from": {"node": "track", "port": "out"}, "to": {"node": "sink", "port": "in"}},
+            ],
+        },
+    )
+    compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+    alerts = analyze_compiled_pipeline(pipeline=compiled, registry=registry)
+
+    assert any(
+        alert.code == "detect_events_before_tracking"
+        and alert.node_id == "detect"
+        and alert.severity == "error"
         for alert in alerts
     )

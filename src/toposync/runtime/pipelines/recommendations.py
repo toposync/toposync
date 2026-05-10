@@ -42,7 +42,9 @@ def analyze_compiled_pipeline(
     for node in pipeline.nodes:
         operator = registry.get(node.operator_id)
         caps = operator.definition.capabilities if operator is not None else []
-        capabilities_by_node_id[node.node_id] = {str(item).strip().lower() for item in caps if str(item).strip()}
+        capabilities_by_node_id[node.node_id] = {
+            str(item).strip().lower() for item in caps if str(item).strip()
+        }
 
     def _operator_ids_upstream(start_node_id: str) -> set[str]:
         seen: set[str] = set()
@@ -179,13 +181,19 @@ def analyze_compiled_pipeline(
         upstream_payload_keys: set[str] = set()
         upstream_artifacts: set[str] = set()
         for edge in incoming.get(node_id, []):
-            upstream_payload_keys.update(available_payload_keys_out.get(str(edge.source_node_id), set()))
+            upstream_payload_keys.update(
+                available_payload_keys_out.get(str(edge.source_node_id), set())
+            )
             upstream_artifacts.update(available_artifacts_out.get(str(edge.source_node_id), set()))
 
         registered = registry.get(node.operator_id)
         if registered is not None:
             cfg = node.normalized_config if isinstance(node.normalized_config, dict) else {}
-            missing_payload_keys = [key for key in registered.definition.requires_payload_keys if key not in upstream_payload_keys]
+            missing_payload_keys = [
+                key
+                for key in registered.definition.requires_payload_keys
+                if key not in upstream_payload_keys
+            ]
             if missing_payload_keys:
                 alerts.append(
                     PipelineAlert(
@@ -203,12 +211,16 @@ def analyze_compiled_pipeline(
                 )
 
             required_artifacts = set(registered.definition.requires_artifacts)
-            input_artifact_name = normalize_artifact_name(cfg.get("input_artifact_name"), default="")
+            input_artifact_name = normalize_artifact_name(
+                cfg.get("input_artifact_name"), default=""
+            )
             if input_artifact_name and MAIN_ARTIFACT_NAME in required_artifacts:
                 required_artifacts.remove(MAIN_ARTIFACT_NAME)
                 required_artifacts.add(input_artifact_name)
 
-            missing_artifacts = [name for name in required_artifacts if name not in upstream_artifacts]
+            missing_artifacts = [
+                name for name in required_artifacts if name not in upstream_artifacts
+            ]
             if missing_artifacts:
                 alerts.append(
                     PipelineAlert(
@@ -228,7 +240,9 @@ def analyze_compiled_pipeline(
             upstream_payload_keys.update(registered.definition.produces_payload_keys)
 
             produced_artifacts = set(registered.definition.produces_artifacts)
-            output_artifact_name = normalize_artifact_name(cfg.get("output_artifact_name"), default="")
+            output_artifact_name = normalize_artifact_name(
+                cfg.get("output_artifact_name"), default=""
+            )
             if output_artifact_name and MAIN_ARTIFACT_NAME in produced_artifacts:
                 produced_artifacts.remove(MAIN_ARTIFACT_NAME)
                 produced_artifacts.add(output_artifact_name)
@@ -236,6 +250,34 @@ def analyze_compiled_pipeline(
 
         available_payload_keys_out[node_id] = upstream_payload_keys
         available_artifacts_out[node_id] = upstream_artifacts
+
+    for detect_node_id in _node_ids_by_operator("vision.detect"):
+        cfg = _resolve_config(detect_node_id)
+        emit_mode = str(cfg.get("emit_mode") or "events").strip().lower()
+        if emit_mode == "event":
+            emit_mode = "events"
+        if emit_mode != "events":
+            continue
+        tracking_downstream = [
+            nid
+            for nid in _downstream_nodes(detect_node_id)
+            if nodes_by_id.get(nid, None) and nodes_by_id[nid].operator_id == "vision.track"
+        ]
+        if tracking_downstream:
+            alerts.append(
+                PipelineAlert(
+                    severity="error",
+                    code="detect_events_before_tracking",
+                    node_id=detect_node_id,
+                    operator_id="vision.detect",
+                    message=(
+                        "Vision Detect is emitting finite detection events before Vision Track. "
+                        "Tracking needs annotated frames to maintain object lifecycle."
+                    ),
+                    suggestion="Set Vision Detect result to annotate before Vision Track.",
+                    details={"tracking_nodes": tracking_downstream},
+                )
+            )
 
     # Tracking defaults: too-aggressive closing and unthrottled update emission cause flicker under drops.
     for tracking_node_id in _node_ids_by_operator("vision.track"):
@@ -265,7 +307,11 @@ def analyze_compiled_pipeline(
         except Exception:
             default_interval = 0.0
         if default_interval <= 0.0:
-            downstream_ops = {nodes_by_id[nid].operator_id for nid in _downstream_nodes(tracking_node_id) if nid in nodes_by_id}
+            downstream_ops = {
+                nodes_by_id[nid].operator_id
+                for nid in _downstream_nodes(tracking_node_id)
+                if nid in nodes_by_id
+            }
             if downstream_ops & {"core.debug", "core.store_images", "core.notify"}:
                 alerts.append(
                     PipelineAlert(
@@ -286,7 +332,11 @@ def analyze_compiled_pipeline(
 
     # Notify requires stored artifact references (it never stores images itself).
     for notify_node_id in _node_ids_by_operator("core.notify"):
-        store_nodes = [nid for nid in _upstream_nodes(notify_node_id) if nodes_by_id.get(nid, None) and nodes_by_id[nid].operator_id == "core.store_images"]
+        store_nodes = [
+            nid
+            for nid in _upstream_nodes(notify_node_id)
+            if nodes_by_id.get(nid, None) and nodes_by_id[nid].operator_id == "core.store_images"
+        ]
         if not store_nodes:
             alerts.append(
                 PipelineAlert(
@@ -339,7 +389,12 @@ def analyze_compiled_pipeline(
             src_node = nodes_by_id.get(src_id)
             if src_node is None:
                 continue
-            if src_node.operator_id in {"core.throttle", "core.velocity_throttle", "core.debounce", "core.fps_reducer"}:
+            if src_node.operator_id in {
+                "core.throttle",
+                "core.velocity_throttle",
+                "core.debounce",
+                "core.fps_reducer",
+            }:
                 alerts.append(
                     PipelineAlert(
                         severity="info",
@@ -410,7 +465,11 @@ def analyze_compiled_pipeline(
         if not bool(drop_data_after_store):
             continue
         # If Store Images is fed directly by split/track streams without downstream rate control, it can be very heavy.
-        tracking_ids = [nid for nid in _upstream_nodes(store_node_id) if nid in nodes_by_id and nodes_by_id[nid].operator_id == "vision.track"]
+        tracking_ids = [
+            nid
+            for nid in _upstream_nodes(store_node_id)
+            if nid in nodes_by_id and nodes_by_id[nid].operator_id == "vision.track"
+        ]
         if tracking_ids:
             tracking_idx = min(order_index.get(nid, 0) for nid in tracking_ids)
             store_idx = order_index.get(store_node_id, tracking_idx + 1)
@@ -421,7 +480,12 @@ def analyze_compiled_pipeline(
                 idx = order_index.get(nid, -1)
                 if idx <= tracking_idx or idx >= store_idx:
                     continue
-                if nodes_by_id[nid].operator_id in {"core.fps_reducer", "core.throttle", "core.velocity_throttle", "core.debounce"}:
+                if nodes_by_id[nid].operator_id in {
+                    "core.fps_reducer",
+                    "core.throttle",
+                    "core.velocity_throttle",
+                    "core.debounce",
+                }:
                     has_rate_control_after_tracking = True
                     break
             if not has_rate_control_after_tracking:
@@ -484,7 +548,11 @@ def analyze_compiled_pipeline(
             )
 
     # Split streams + tiny buffers: maxsize=1 latest_only is usually wrong after split.
-    split_nodes = [node.node_id for node in pipeline.nodes if "split_stream" in capabilities_by_node_id.get(node.node_id, set())]
+    split_nodes = [
+        node.node_id
+        for node in pipeline.nodes
+        if "split_stream" in capabilities_by_node_id.get(node.node_id, set())
+    ]
     if split_nodes:
         reachable_after_split: set[str] = set()
         for split_id in split_nodes:
@@ -494,7 +562,10 @@ def analyze_compiled_pipeline(
         for edge in edges:
             if edge.source_node_id not in reachable_after_split:
                 continue
-            if int(edge.channel_maxsize) <= 1 and edge.channel_drop_policy == DropPolicy.LATEST_ONLY:
+            if (
+                int(edge.channel_maxsize) <= 1
+                and edge.channel_drop_policy == DropPolicy.LATEST_ONLY
+            ):
                 alerts.append(
                     PipelineAlert(
                         severity="warning",
@@ -513,7 +584,10 @@ def analyze_compiled_pipeline(
                         },
                     )
                 )
-            elif int(edge.channel_maxsize) <= 2 and edge.channel_drop_policy in {DropPolicy.DROP_OLDEST, DropPolicy.DROP_NEWEST}:
+            elif int(edge.channel_maxsize) <= 2 and edge.channel_drop_policy in {
+                DropPolicy.DROP_OLDEST,
+                DropPolicy.DROP_NEWEST,
+            }:
                 alerts.append(
                     PipelineAlert(
                         severity="info",

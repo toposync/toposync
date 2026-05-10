@@ -116,19 +116,24 @@ def test_vision_detect_respects_frame_crop_geometry() -> None:
         runtime = VisionDetectRuntime({"model_id": "fake.detector", "emit_mode": "annotate"}, deps)
         packet = Packet.create(
             stream_id="camera:test",
-                payload={
-                    "frame_crop": {
-                        "bbox01": [0.25, 0.1, 0.75, 0.9],
-                        "output_artifact_name": "main",
-                    }
-                },
+            payload={
+                "frame_crop": {
+                    "bbox01": [0.25, 0.1, 0.75, 0.9],
+                    "output_artifact_name": "main",
+                }
+            },
             artifacts={"main": Artifact(name="main", data=object(), mime_type="image/raw")},
         )
 
         out_packets = await runtime.process_packet(packet, _Context())
         assert len(out_packets) == 1
         out = out_packets[0]
-        assert out.payload.get("object_bbox01") == [0.35, 0.30000000000000004, 0.65, 0.7000000000000001]
+        assert out.payload.get("object_bbox01") == [
+            0.35,
+            0.30000000000000004,
+            0.65,
+            0.7000000000000001,
+        ]
         detections = out.payload.get("vision", {}).get("detections")
         assert isinstance(detections, list)
         assert detections[0]["bbox01"] == [0.35, 0.30000000000000004, 0.65, 0.7000000000000001]
@@ -356,5 +361,134 @@ def test_vision_detect_events_mode_closes_core_notification(tmp_path: Path) -> N
         assert payload.get("status") == "closed"
         assert payload.get("lifecycle") == "close"
         assert payload.get("event_id") == out_packets[0].payload.get("event_id")
+
+    asyncio.run(scenario())
+
+
+def test_core_notify_creates_new_record_when_logical_event_reopens(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        notifications = NotificationsRuntime(data_dir=tmp_path / "data")
+        deps = PipelineRuntimeDependencies(notifications_upsert=notifications.upsert)
+        notify = NotifyRuntime(
+            {
+                "notification_type": "pipelines.tracking",
+                "title": "{{object_category_label}}",
+                "update_interval_seconds": 0.0,
+            },
+            deps,
+        )
+
+        for started_ts in (10.0, 30.0):
+            common_payload = {
+                "camera_id": "camera-main",
+                "object_category_label": "person",
+                "tracking_id": "track-reused",
+                "event_id": "track-reused",
+            }
+            await notify.process_packet(
+                Packet.create(
+                    stream_id="obj:camera-main:track-reused",
+                    lifecycle=Lifecycle.OPEN,
+                    payload={**common_payload, "frame_ts": started_ts},
+                ),
+                _NotifyContext(),
+            )
+            await notify.process_packet(
+                Packet.create(
+                    stream_id="obj:camera-main:track-reused",
+                    lifecycle=Lifecycle.CLOSE,
+                    payload={**common_payload, "frame_ts": started_ts + 2.0},
+                ),
+                _NotifyContext(),
+            )
+
+        items, _cursor = await notifications.list(limit=20)
+        assert len(items) == 2
+        payloads = [item.get("payload") for item in items]
+        assert all(isinstance(payload, dict) for payload in payloads)
+        assert {payload.get("status") for payload in payloads if isinstance(payload, dict)} == {
+            "closed"
+        }
+        starts = sorted(
+            float(payload.get("event", {}).get("started_ts"))
+            for payload in payloads
+            if isinstance(payload, dict) and isinstance(payload.get("event"), dict)
+        )
+        assert starts == [10.0, 30.0]
+
+    asyncio.run(scenario())
+
+
+def test_core_notify_accumulates_stored_images_for_one_tracking_lifecycle(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        notifications = NotificationsRuntime(data_dir=tmp_path / "data")
+        deps = PipelineRuntimeDependencies(notifications_upsert=notifications.upsert)
+        notify = NotifyRuntime(
+            {
+                "notification_type": "pipelines.tracking",
+                "title": "{{object_category_label}}",
+                "update_interval_seconds": 60.0,
+            },
+            deps,
+        )
+        common_payload = {
+            "camera_id": "camera-main",
+            "object_category_label": "person",
+            "tracking_id": "track-1",
+            "event_id": "track-1",
+        }
+
+        await notify.process_packet(
+            Packet.create(
+                stream_id="obj:camera-main:track-1",
+                lifecycle=Lifecycle.OPEN,
+                payload={
+                    **common_payload,
+                    "frame_ts": 10.0,
+                    "stored_images": {
+                        "main": [
+                            {"rel_path": "first.jpg", "stored_ts_ms": 10_000, "confidence": 0.7}
+                        ]
+                    },
+                },
+            ),
+            _NotifyContext(),
+        )
+        await notify.process_packet(
+            Packet.create(
+                stream_id="obj:camera-main:track-1",
+                lifecycle=Lifecycle.UPDATE,
+                payload={
+                    **common_payload,
+                    "frame_ts": 11.0,
+                    "stored_images": {
+                        "main": [
+                            {"rel_path": "second.jpg", "stored_ts_ms": 11_000, "confidence": 0.9}
+                        ]
+                    },
+                },
+            ),
+            _NotifyContext(),
+        )
+        await notify.process_packet(
+            Packet.create(
+                stream_id="obj:camera-main:track-1",
+                lifecycle=Lifecycle.CLOSE,
+                payload={**common_payload, "frame_ts": 12.0},
+            ),
+            _NotifyContext(),
+        )
+
+        items, _cursor = await notifications.list(limit=20)
+        assert len(items) == 1
+        payload = items[0].get("payload")
+        assert isinstance(payload, dict)
+        assert payload.get("status") == "closed"
+        stored_images = payload.get("stored_images")
+        assert isinstance(stored_images, dict)
+        assert [item.get("rel_path") for item in stored_images.get("main", [])] == [
+            "first.jpg",
+            "second.jpg",
+        ]
 
     asyncio.run(scenario())

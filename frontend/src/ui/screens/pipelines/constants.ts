@@ -130,7 +130,7 @@ export const PIPELINE_OPERATOR_UX = {
 
   "vision.detect": { group: "vision", level: "basic", order: 10 },
   "vision.track": { group: "vision", level: "basic", order: 20 },
-  "vision.classify_image": { group: "vision", level: "basic", order: 30 },
+  "vision.classify_image": { group: "vision", level: "advanced", order: 30 },
   "vision.segment_instances": { group: "vision", level: "basic", order: 40 },
   "vision.crop_objects": { group: "vision", level: "basic", order: 50 },
   "ai.condition_filter": { group: "vision", level: "basic", order: 60 },

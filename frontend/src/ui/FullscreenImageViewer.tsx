@@ -170,7 +170,9 @@ export function FullscreenImageViewer({ open, items, index, onIndexChange, onClo
           <Icon name="chevron-left" />
         </button>
 
-        <img className="fullscreenImageViewerImage" src={activeItem.url} alt={activeItem.label || ""} />
+        <div className="fullscreenImageViewerImageBox">
+          <img className="fullscreenImageViewerImage" src={activeItem.url} alt={activeItem.label || ""} />
+        </div>
 
         <button
           className="iconButton fullscreenImageViewerButton fullscreenImageViewerNav isNext"

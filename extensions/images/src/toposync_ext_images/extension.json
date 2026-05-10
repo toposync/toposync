@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "com.toposync.images",
   "name": "Images",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "frontend": {
     "kind": "module-federation",
     "remote_entry": "remoteEntry.js",

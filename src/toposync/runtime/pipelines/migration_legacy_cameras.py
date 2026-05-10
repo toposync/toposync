@@ -55,6 +55,8 @@ def extract_legacy_camera_rules(settings: dict[str, Any]) -> list[LegacyCameraRu
         if isinstance(extensions.get(CAMERAS_EXTENSION_ID), dict)
         else {}
     )
+    if isinstance(ext.get("devices"), list):
+        return []
     cameras_raw = _as_list(ext.get("cameras"))
 
     rules: list[LegacyCameraRule] = []

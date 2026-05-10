@@ -52,7 +52,7 @@ def camera_names_by_id(extensions_settings: dict[str, Any]) -> dict[str, str]:
             continue
         name = _as_str(camera.get("name")).strip()
         out[camera_id] = name
-    if out:
+    if isinstance(ext_record.get("devices"), list):
         return out
 
     cameras_raw = _as_list(ext_record.get("cameras"))

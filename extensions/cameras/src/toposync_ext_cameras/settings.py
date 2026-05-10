@@ -231,8 +231,15 @@ def normalize_cameras_settings(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         devices_raw = value.get("devices")
         if isinstance(devices_raw, list):
+            # The generic extension settings endpoint merges patches. When a UI migrates
+            # legacy flat "cameras" settings to "devices", stale legacy keys can remain.
+            # Validate only the v2 schema fields so the new device list remains canonical.
+            candidate = {
+                "schema_version": value.get("schema_version", 2),
+                "devices": devices_raw,
+            }
             try:
-                settings = CamerasExtensionSettings.model_validate(value)
+                settings = CamerasExtensionSettings.model_validate(candidate)
             except Exception:
                 settings = CamerasExtensionSettings()
             return settings.model_dump(mode="json")

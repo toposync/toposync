@@ -1135,74 +1135,42 @@ video {
   font-weight: 650;
 }
 
-.pipelinesPresetButtons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.pipelinesOperatorGroups {
-  display: grid;
-  gap: 12px;
-}
-
-.pipelinesOperatorGroup {
-  --operator-group-color: #64748b;
-  display: grid;
-  gap: 10px;
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--operator-group-color) 38%, var(--color-border-subtle));
-  border-left-color: color-mix(in srgb, var(--operator-group-color) 72%, var(--color-border-subtle));
-  border-left-width: 3px;
-  border-radius: var(--radius-panel);
-  background:
-    linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--operator-group-color) 8%, transparent),
-      transparent 55%
-    ),
-    var(--color-surface-frost);
-}
-
-.pipelinesOperatorGroupHeader {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.pipelinesOperatorGroupDot {
-  width: 10px;
-  height: 10px;
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: var(--operator-group-color);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--operator-group-color) 14%, transparent);
-}
-
-.pipelinesOperatorGroupTitle {
-  min-width: 0;
-  font-weight: 700;
-}
-
-.pipelinesOperatorGroupButtons {
+.pipelinesPresetButtons,
+.pipelinesOperatorButtons {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
 .pipelinesOperatorButton {
+  --operator-group-color: #64748b;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   height: auto;
   min-height: var(--control-height-m);
   max-width: 100%;
   padding-block: 8px;
   border-color: color-mix(in srgb, var(--operator-group-color) 45%, var(--color-border-subtle));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--operator-group-color) 11%, transparent), transparent 62%),
+    var(--color-surface-frost);
   line-height: 1.2;
   text-align: left;
   white-space: normal;
 }
 
+.pipelinesOperatorButtonAccent {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--operator-group-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--operator-group-color) 14%, transparent);
+}
+
 .pipelinesOperatorButton:hover {
+  border-color: color-mix(in srgb, var(--operator-group-color) 62%, var(--color-border-strong));
   background: color-mix(in srgb, var(--operator-group-color) 10%, var(--color-surface-frost));
 }
 
@@ -6221,7 +6189,10 @@ video {
   font-weight: var(--font-weight-semibold);
 }
 
-.pipelinesOperatorGroup .pipelinesOperatorButton {
+.pipelinesOperatorButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   height: auto;
   min-height: var(--control-height-m);
   max-width: 100%;
@@ -6254,7 +6225,7 @@ video {
   transform: translateY(var(--hover-translate-y));
 }
 
-.pipelinesOperatorGroup .pipelinesOperatorButton:hover {
+.pipelinesOperatorButton:hover {
   border-color: color-mix(in srgb, var(--operator-group-color) 62%, var(--color-border-strong));
   background: color-mix(in srgb, var(--operator-group-color) 10%, var(--color-surface-frost));
 }

@@ -763,6 +763,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.weekday.sun": "Sun",
 
     "core.ui.pipelines.editor.add_step": "Add step",
+    "core.ui.pipelines.editor.operator_group_tooltip": "Group: {{group}}",
     "core.ui.pipelines.editor.show_advanced_steps": "Show advanced",
     "core.ui.pipelines.editor.hide_advanced_steps": "Hide advanced",
     "core.ui.pipelines.editor.no_steps": "No steps yet. Add steps to build the flow.",
@@ -2604,6 +2605,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.weekday.sun": "Dom",
 
     "core.ui.pipelines.editor.add_step": "Adicionar etapa",
+    "core.ui.pipelines.editor.operator_group_tooltip": "Grupo: {{group}}",
     "core.ui.pipelines.editor.show_advanced_steps": "Mostrar avançados",
     "core.ui.pipelines.editor.hide_advanced_steps": "Ocultar avançados",
     "core.ui.pipelines.editor.no_steps": "Nenhuma etapa ainda. Adicione etapas para montar o fluxo.",

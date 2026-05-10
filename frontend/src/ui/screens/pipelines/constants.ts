@@ -102,7 +102,7 @@ export const PIPELINE_OPERATOR_GROUP_ORDER = Object.keys(PIPELINE_OPERATOR_GROUP
 
 export const PIPELINE_OPERATOR_UX = {
   "camera.source": { group: "input", level: "basic", order: 10 },
-  "core.schedule_gate": { group: "input", level: "basic", order: 20 },
+  "core.schedule_gate": { group: "input", level: "advanced", order: 20 },
   "core.source": { group: "input", level: "advanced", order: 900 },
   "core.synthetic_source": { group: "input", level: "advanced", order: 910 },
   "core.demo_frame_sequence_source": { group: "input", level: "advanced", order: 920 },
@@ -113,7 +113,7 @@ export const PIPELINE_OPERATOR_UX = {
   "camera.motion_gate": { group: "motion", level: "basic", order: 30 },
 
   "camera.frame_attach": { group: "image", level: "advanced", order: 5 },
-  "core.fps_reducer": { group: "image", level: "advanced", order: 10 },
+  "core.fps_reducer": { group: "image", level: "basic", order: 10 },
   "camera.image_crop": { group: "image", level: "basic", order: 20 },
   "camera.image_perspective_crop": { group: "image", level: "advanced", order: 30 },
   "camera.local_contrast_clahe": { group: "image", level: "advanced", order: 40 },
@@ -122,7 +122,7 @@ export const PIPELINE_OPERATOR_UX = {
   "camera.auto_gamma": { group: "image", level: "advanced", order: 70 },
   "camera.global_stabilize": { group: "image", level: "advanced", order: 80 },
   "camera.image_adjust": { group: "image", level: "advanced", order: 90 },
-  "camera.image_resize": { group: "image", level: "advanced", order: 100 },
+  "camera.image_resize": { group: "image", level: "basic", order: 100 },
   "camera.lens_undistort": { group: "image", level: "advanced", order: 110 },
 
   "camera.artifact_privacy": { group: "privacy", level: "advanced", order: 10 },
@@ -130,26 +130,26 @@ export const PIPELINE_OPERATOR_UX = {
 
   "vision.detect": { group: "vision", level: "basic", order: 10 },
   "vision.track": { group: "vision", level: "basic", order: 20 },
-  "vision.classify_image": { group: "vision", level: "advanced", order: 30 },
-  "vision.segment_instances": { group: "vision", level: "advanced", order: 40 },
+  "vision.classify_image": { group: "vision", level: "basic", order: 30 },
+  "vision.segment_instances": { group: "vision", level: "basic", order: 40 },
   "vision.crop_objects": { group: "vision", level: "basic", order: 50 },
   "ai.condition_filter": { group: "vision", level: "basic", order: 60 },
-  "ai.smart_crop": { group: "vision", level: "advanced", order: 70 },
+  "ai.smart_crop": { group: "vision", level: "basic", order: 70 },
   "vision.pose_estimate": { group: "vision", level: "advanced", order: 80 },
 
-  "core.category_gate": { group: "rules", level: "basic", order: 10 },
+  "core.category_gate": { group: "rules", level: "advanced", order: 10 },
   "core.filter": { group: "rules", level: "advanced", order: 20 },
   "core.lifecycle_from_boolean": { group: "rules", level: "advanced", order: 30 },
   "core.passthrough": { group: "rules", level: "advanced", order: 900 },
   "dist.target_filter": { group: "rules", level: "advanced", order: 910 },
 
-  "camera.camera_mapping": { group: "space", level: "advanced", order: 10 },
+  "camera.camera_mapping": { group: "space", level: "basic", order: 10 },
   "camera.area_restriction": { group: "space", level: "basic", order: 20 },
-  "camera.velocity_estimation": { group: "space", level: "advanced", order: 30 },
+  "camera.velocity_estimation": { group: "space", level: "basic", order: 30 },
 
-  "core.throttle": { group: "rate", level: "advanced", order: 10 },
-  "core.velocity_throttle": { group: "rate", level: "advanced", order: 20 },
-  "core.debounce": { group: "rate", level: "advanced", order: 30 },
+  "core.throttle": { group: "rate", level: "basic", order: 10 },
+  "core.velocity_throttle": { group: "rate", level: "basic", order: 20 },
+  "core.debounce": { group: "rate", level: "basic", order: 30 },
 
   "core.store_images": { group: "output", level: "basic", order: 10 },
   "core.notify": { group: "output", level: "basic", order: 20 },

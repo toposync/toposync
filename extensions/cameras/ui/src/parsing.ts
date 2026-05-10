@@ -6,6 +6,7 @@ import type {
   CameraOnvifConfig,
   CameraPoseReference,
   CameraMappingQuality,
+  CameraStreamProfile,
 } from "./types";
 
 export function readString(value: unknown, fallback = ""): string {
@@ -207,16 +208,27 @@ export function parseCameras(settings: Record<string, unknown>): CameraConfig[] 
         }
       }
       if (!selectedChannel) continue;
+      const connectionType = readCameraConnectionType(selectedChannel.connection_type);
+      const onvif = readOnvifConfig(selectedChannel.onvif, {
+        legacyUsername: connectionType === "onvif" ? readString(selectedChannel.username).trim() : "",
+        legacyPassword: connectionType === "onvif" ? readString(selectedChannel.password).trim() : "",
+      });
+      const streamProfile = readCameraStreamProfile(selectedChannel.stream_profile, connectionType);
       output.push({
         id,
         name: readString(device.name).trim(),
-        connection_type: readCameraConnectionType(selectedChannel.connection_type),
+        connection_type: connectionType,
         channel_id: readString(selectedChannel.id).trim() || "video_main",
+        stream_profile: streamProfile,
         rtsp_url: readString(selectedChannel.rtsp_url).trim(),
-        username: readString(selectedChannel.username).trim(),
-        password: readString(selectedChannel.password).trim(),
+        stream_username:
+          readString(selectedChannel.stream_username).trim() ||
+          (connectionType === "rtsp" ? readString(selectedChannel.username).trim() : ""),
+        stream_password:
+          readString(selectedChannel.stream_password).trim() ||
+          (connectionType === "rtsp" ? readString(selectedChannel.password).trim() : ""),
         fps: Math.max(1, Math.min(60, readFiniteNumber(selectedChannel.fps, 5))),
-        onvif: readOnvifConfig(selectedChannel.onvif),
+        onvif,
       });
     }
     return output;
@@ -230,14 +242,23 @@ export function parseCameras(settings: Record<string, unknown>): CameraConfig[] 
     const id = readString(record.id).trim();
     if (!id) continue;
     const connectionType = readCameraConnectionType(record.connection_type);
-    const onvif = readOnvifConfig(record.onvif);
+    const onvif = readOnvifConfig(record.onvif, {
+      legacyUsername: connectionType === "onvif" ? readString(record.username).trim() : "",
+      legacyPassword: connectionType === "onvif" ? readString(record.password).trim() : "",
+    });
+    const streamProfile = readCameraStreamProfile(record.stream_profile, connectionType);
     output.push({
       id,
       name: readString(record.name).trim(),
       connection_type: connectionType,
+      stream_profile: streamProfile,
       rtsp_url: readString(record.rtsp_url).trim(),
-      username: readString(record.username).trim(),
-      password: readString(record.password).trim(),
+      stream_username:
+        readString(record.stream_username).trim() ||
+        (connectionType === "rtsp" ? readString(record.username).trim() : ""),
+      stream_password:
+        readString(record.stream_password).trim() ||
+        (connectionType === "rtsp" ? readString(record.password).trim() : ""),
       fps: Math.max(1, Math.min(60, readFiniteNumber(record.fps, 5))),
       onvif,
     });
@@ -263,9 +284,10 @@ export function serializeCameras(settings: CameraConfig[]): Record<string, unkno
           is_default: true,
           connection_type: camera.connection_type,
           transport: "rtsp",
+          stream_profile: camera.connection_type === "onvif" ? camera.stream_profile : "custom",
           rtsp_url: camera.rtsp_url,
-          username: camera.username ?? "",
-          password: camera.password ?? "",
+          stream_username: camera.stream_username ?? "",
+          stream_password: camera.stream_password ?? "",
           fps: camera.fps,
           onvif: camera.onvif ?? null,
           metadata: {},
@@ -282,23 +304,39 @@ export function readCameraConnectionType(value: unknown): CameraConnectionType {
   return "rtsp";
 }
 
-export function readOnvifConfig(value: unknown): CameraOnvifConfig | null {
+export function readCameraStreamProfile(value: unknown, connectionType: CameraConnectionType): CameraStreamProfile {
+  if (connectionType !== "onvif") return "custom";
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (raw === "custom") return "custom";
+  return "onvif";
+}
+
+export function readOnvifConfig(
+  value: unknown,
+  legacy?: { legacyUsername?: string; legacyPassword?: string },
+): CameraOnvifConfig | null {
   const record = readRecord(value);
   const deviceId = readString(record.device_id).trim();
   const xaddr = readString(record.xaddr).trim();
   if (!xaddr) return null;
+  const username = readString(record.username).trim() || legacy?.legacyUsername?.trim() || "";
+  const password = readString(record.password).trim() || legacy?.legacyPassword?.trim() || "";
   const mediaXaddr = readString(record.media_xaddr).trim();
   const ptzXaddr = readString(record.ptz_xaddr).trim();
   const profileToken = readString(record.profile_token).trim();
   const profileName = readString(record.profile_name).trim();
+  const ptzProfileToken = readString(record.ptz_profile_token).trim();
   const hardware = readString(record.hardware).trim();
   return {
     device_id: deviceId || undefined,
     xaddr,
+    username: username || undefined,
+    password: password || undefined,
     media_xaddr: mediaXaddr || undefined,
     ptz_xaddr: ptzXaddr || undefined,
     profile_token: profileToken || undefined,
     profile_name: profileName || undefined,
+    ptz_profile_token: ptzProfileToken || undefined,
     hardware: hardware || undefined,
   };
 }

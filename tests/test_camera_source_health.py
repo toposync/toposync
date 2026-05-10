@@ -225,3 +225,134 @@ def test_saved_camera_rtsp_probe_uses_camera_credentials(
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_saved_onvif_custom_stream_probe_uses_stream_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_probe(rtsp_url: str, *, timeout_ms: int) -> RtspProbeResponse:
+        assert timeout_ms == 5000
+        assert rtsp_url == "rtsp://stream-user:stream-pass@ingest.local/front"
+        return RtspProbeResponse(
+            status="ok",
+            url="rtsp://***@ingest.local/front",
+            transports_tested=["configured:tcp"],
+            latency_ms=7,
+            backend="ffmpeg",
+            source="configured",
+            error=None,
+        )
+
+    monkeypatch.setattr("toposync_ext_cameras.plugin._ffmpeg_rtsp_probe", fake_probe)
+
+    with _create_client_with_cameras(tmp_path, monkeypatch) as client:
+        config_store = client.app.state.config_store
+        client.portal.call(
+            config_store.save_config,
+            AppConfig(
+                settings=AppSettings(
+                    extensions={
+                        "com.toposync.cameras": {
+                            "devices": [
+                                {
+                                    "id": "cam1",
+                                    "name": "Camera 1",
+                                    "kind": "camera",
+                                    "channels": [
+                                        {
+                                            "id": "video_main",
+                                            "modality": "video",
+                                            "is_default": True,
+                                            "connection_type": "onvif",
+                                            "stream_profile": "custom",
+                                            "rtsp_url": "rtsp://ingest.local/front",
+                                            "stream_username": "stream-user",
+                                            "stream_password": "stream-pass",
+                                            "onvif": {
+                                                "xaddr": "192.168.0.10",
+                                                "username": "camera-user",
+                                                "password": "camera-pass",
+                                            },
+                                        }
+                                    ],
+                                }
+                            ]
+                        }
+                    }
+                )
+            ),
+        )
+        response = client.post("/api/cameras/cameras/cam1/rtsp/probe", json={})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
+def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from toposync_ext_cameras.onvif import OnvifPtzStatus
+
+    class FakeOnvifClient:
+        def __init__(self, *, xaddr: str, username: str, password: str, timeout_s: float, auth_mode: str) -> None:  # noqa: ARG002
+            assert xaddr == "http://192.168.0.10/onvif/device_service"
+            assert username == "camera-user"
+            assert password == "camera-pass"
+            _ = timeout_s, auth_mode
+
+        async def get_ptz_status(self, ptz_xaddr: str, *, profile_token: str) -> OnvifPtzStatus:
+            assert ptz_xaddr == "http://192.168.0.10/onvif/ptz_service"
+            assert profile_token == "ptz-token"
+            return OnvifPtzStatus(pan=0.1, tilt=0.2, zoom=0.3, move_status="IDLE")
+
+    monkeypatch.setattr("toposync_ext_cameras.plugin.OnvifClient", FakeOnvifClient)
+
+    with _create_client_with_cameras(tmp_path, monkeypatch) as client:
+        config_store = client.app.state.config_store
+        client.portal.call(
+            config_store.save_config,
+            AppConfig(
+                settings=AppSettings(
+                    extensions={
+                        "com.toposync.cameras": {
+                            "devices": [
+                                {
+                                    "id": "cam1",
+                                    "name": "Camera 1",
+                                    "kind": "camera",
+                                    "channels": [
+                                        {
+                                            "id": "video_main",
+                                            "modality": "video",
+                                            "is_default": True,
+                                            "connection_type": "onvif",
+                                            "stream_profile": "custom",
+                                            "rtsp_url": "rtsp://ingest.local/front",
+                                            "stream_username": "stream-user",
+                                            "stream_password": "stream-pass",
+                                            "onvif": {
+                                                "xaddr": "192.168.0.10",
+                                                "username": "camera-user",
+                                                "password": "camera-pass",
+                                                "media_xaddr": "http://192.168.0.10/onvif/media_service",
+                                                "ptz_xaddr": "http://192.168.0.10/onvif/ptz_service",
+                                                "profile_token": "stream-token",
+                                                "ptz_profile_token": "ptz-token",
+                                            },
+                                        }
+                                    ],
+                                }
+                            ]
+                        }
+                    }
+                )
+            ),
+        )
+        async def get_status() -> dict[str, object]:
+            return await client.app.state.services.call("cameras.ptz.get_status", camera_id="cam1")
+
+        status = client.portal.call(get_status)
+
+    assert status["move_status"] == "IDLE"

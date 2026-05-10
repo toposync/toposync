@@ -45,7 +45,14 @@ from ..processing.motion_bgsub import AdaptiveBackgroundMotionDetector
 from ..processing.motion_sample_bg import SampleBackgroundMotionDetector
 from ..source_health import get_global_source_health_store, source_health_source_id
 from ..onvif import OnvifClient, OnvifError, OnvifProfile
-from ..settings import get_camera_device, get_primary_video_channel, normalize_cameras_settings
+from ..settings import (
+    get_camera_device,
+    get_camera_onvif_credentials,
+    get_camera_stream_credentials,
+    get_camera_stream_profile,
+    get_primary_video_channel,
+    normalize_cameras_settings,
+)
 from .postprocess import register_camera_postprocess_operators
 
 
@@ -247,7 +254,6 @@ def _pick_best_onvif_profile(profiles: list[OnvifProfile]) -> OnvifProfile | Non
 
     def score(item: OnvifProfile) -> tuple[int, int, int, int, str]:
         encoding = str(item.encoding or "").strip().upper()
-        # Prefer broadly compatible codecs.
         enc_score = 0
         if encoding in {"H264", "H.264"}:
             enc_score = 3
@@ -258,8 +264,7 @@ def _pick_best_onvif_profile(profiles: list[OnvifProfile]) -> OnvifProfile | Non
         pixels = int(item.width or 0) * int(item.height or 0)
         fps = int(item.fps or 0)
         has_name = 1 if str(item.name or "").strip() else 0
-        # Stable last tie-breaker to avoid non-deterministic selection.
-        return (enc_score, pixels, fps, has_name, str(item.token or ""))
+        return (pixels, fps, enc_score, has_name, str(item.token or ""))
 
     return max(profiles, key=score)
 
@@ -275,8 +280,7 @@ async def _resolve_onvif_rtsp_url_cached(*, camera_id: str, camera: dict[str, An
     if not xaddr:
         raise OnvifError("Missing ONVIF xaddr")
 
-    username = str(camera.get("username") or "").strip()
-    password = str(camera.get("password") or "").strip()
+    username, password = get_camera_onvif_credentials(camera)
     media_xaddr = str(onvif.get("media_xaddr") or "").strip()
     profile_token = str(onvif.get("profile_token") or "").strip()
     signature = _onvif_stream_signature(
@@ -717,6 +721,13 @@ class ResolvedCameraSource:
     clock_domain: str
     transport: str
     used_ingest: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedCameraStream:
+    rtsp_url: str
+    username: str
+    password: str
 
 
 class _CameraSourcePendingError(RuntimeError):
@@ -2686,6 +2697,45 @@ class _UltralyticsYoloBackend:
         ]
 
 
+async def _resolve_camera_stream(
+    *,
+    camera_id: str,
+    camera: dict[str, Any],
+    channel: dict[str, Any],
+) -> _ResolvedCameraStream:
+    connection_type = str(channel.get("connection_type") or "rtsp").strip().lower() or "rtsp"
+    stream_profile = get_camera_stream_profile(channel)
+    rtsp_url = str(channel.get("rtsp_url", "")).strip()
+
+    if connection_type == "onvif" and stream_profile == "onvif" and not rtsp_url:
+        onvif_raw = channel.get("onvif")
+        onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
+        if str(onvif.get("xaddr") or "").strip():
+            try:
+                rtsp_url = await _resolve_onvif_rtsp_url_cached(
+                    camera_id=camera_id,
+                    camera={**camera, **channel, "onvif": onvif},
+                )
+            except OnvifError as exc:
+                raise _CameraSourcePendingError(
+                    f"Camera '{camera_id}' ONVIF stream resolution failed: {exc}"
+                ) from exc
+            except Exception as exc:  # noqa: BLE001
+                raise _CameraSourcePendingError(
+                    f"Camera '{camera_id}' ONVIF stream resolution failed"
+                ) from exc
+
+    if not rtsp_url:
+        if connection_type == "onvif" and stream_profile == "custom":
+            raise _CameraSourcePendingError(
+                f"Camera '{camera_id}' custom stream profile requires rtsp_url"
+            )
+        raise _CameraSourcePendingError(f"Camera '{camera_id}' has empty rtsp_url")
+
+    username, password = get_camera_stream_credentials(channel)
+    return _ResolvedCameraStream(rtsp_url=rtsp_url, username=username, password=password)
+
+
 async def _resolve_camera_source(
     config: CameraSourceConfig,
     dependencies: PipelineRuntimeDependencies,
@@ -2736,31 +2786,8 @@ async def _resolve_camera_source(
     if channel is None:
         raise _CameraSourcePendingError(f"Camera '{camera_id}' has no video channel configured")
 
-    rtsp_url = str(channel.get("rtsp_url", "")).strip()
-    if not rtsp_url:
-        onvif_raw = channel.get("onvif")
-        onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
-        if str(onvif.get("xaddr") or "").strip():
-            try:
-                rtsp_url = await _resolve_onvif_rtsp_url_cached(
-                    camera_id=camera_id,
-                    camera={**camera, **channel, "onvif": onvif},
-                )
-            except OnvifError as exc:
-                raise _CameraSourcePendingError(
-                    f"Camera '{camera_id}' ONVIF stream resolution failed: {exc}"
-                ) from exc
-            except Exception as exc:  # noqa: BLE001
-                raise _CameraSourcePendingError(
-                    f"Camera '{camera_id}' ONVIF stream resolution failed"
-                ) from exc
-
-    if not rtsp_url:
-        raise _CameraSourcePendingError(f"Camera '{camera_id}' has empty rtsp_url")
-
-    username = str(channel.get("username", "")).strip()
-    password = str(channel.get("password", "")).strip()
-    url = _apply_rtsp_auth(rtsp_url, username, password)
+    stream = await _resolve_camera_stream(camera_id=camera_id, camera=camera, channel=channel)
+    url = _apply_rtsp_auth(stream.rtsp_url, stream.username, stream.password)
 
     camera_fps = float(channel.get("fps", 5.0) or 5.0)
     if not math.isfinite(camera_fps):
@@ -2769,7 +2796,11 @@ async def _resolve_camera_source(
         camera_fps = float(config.fps)
     camera_fps = max(1.0, min(60.0, camera_fps))
     used_ingest = False
-    if prefer_ingest:
+    allow_ingest_override = not (
+        str(channel.get("connection_type") or "rtsp").strip().lower() == "onvif"
+        and get_camera_stream_profile(channel) == "custom"
+    )
+    if prefer_ingest and allow_ingest_override:
         ingest_url = await _maybe_resolve_ingest_rtsp_url(
             camera_id=camera_id, dependencies=dependencies
         )

@@ -28,29 +28,28 @@ def test_resolve_onvif_rtsp_url_cached_auto_selects_profile_and_caches(monkeypat
 
         async def get_profiles(self, media_xaddr: str) -> list[OnvifProfile]:  # noqa: ARG002
             type(self).profiles_calls += 1
-            # The resolver should pick the highest-res H264 profile ("main").
+            # Resolution is the primary ranking key; codec only breaks ties.
             return [
                 OnvifProfile(token="low", name="Low", encoding="H264", width=640, height=360, fps=15, has_ptz=False),
                 OnvifProfile(token="main", name="Main", encoding="H264", width=1920, height=1080, fps=15, has_ptz=True),
+                OnvifProfile(token="hq", name="HQ", encoding="H265", width=3840, height=2160, fps=10, has_ptz=True),
             ]
 
         async def get_stream_uri(self, media_xaddr: str, *, profile_token: str) -> str:  # noqa: ARG002
             type(self).stream_calls += 1
-            assert profile_token == "main"
-            return "rtsp://192.168.0.10/stream1"
+            assert profile_token == "hq"
+            return "rtsp://192.168.0.10/hq"
 
     monkeypatch.setattr(ops, "OnvifClient", FakeClient)
 
     camera = {
-        "username": "admin",
-        "password": "secret",
-        "onvif": {"xaddr": "192.168.0.10"},
+        "onvif": {"xaddr": "192.168.0.10", "username": "admin", "password": "secret"},
     }
 
     rtsp1 = asyncio.run(ops._resolve_onvif_rtsp_url_cached(camera_id="cam-1", camera=camera))
     rtsp2 = asyncio.run(ops._resolve_onvif_rtsp_url_cached(camera_id="cam-1", camera=camera))
 
-    assert rtsp1 == "rtsp://192.168.0.10/stream1"
+    assert rtsp1 == "rtsp://192.168.0.10/hq"
     assert rtsp2 == rtsp1
     assert FakeClient.created == 1
     assert FakeClient.capabilities_calls == 1
@@ -68,7 +67,9 @@ def test_resolve_onvif_rtsp_url_cached_respects_profile_token(monkeypatch: pytes
         stream_calls = 0
 
         def __init__(self, *, xaddr: str, username: str, password: str, timeout_s: float, auth_mode: str) -> None:  # noqa: ARG002
-            _ = xaddr, username, password, timeout_s, auth_mode
+            assert username == "admin"
+            assert password == "secret"
+            _ = xaddr, timeout_s, auth_mode
 
         async def get_capabilities(self) -> tuple[str | None, str | None]:
             return "http://192.168.0.10/onvif/media_service", None
@@ -84,12 +85,92 @@ def test_resolve_onvif_rtsp_url_cached_respects_profile_token(monkeypatch: pytes
     monkeypatch.setattr(ops, "OnvifClient", FakeClient)
 
     camera = {
-        "username": "admin",
-        "password": "secret",
-        "onvif": {"xaddr": "192.168.0.10", "profile_token": "configured-token"},
+        "onvif": {
+            "xaddr": "192.168.0.10",
+            "username": "admin",
+            "password": "secret",
+            "profile_token": "configured-token",
+        },
     }
 
     rtsp = asyncio.run(ops._resolve_onvif_rtsp_url_cached(camera_id="cam-2", camera=camera))
     assert rtsp == "rtsp://192.168.0.10/stream2"
     assert FakeClient.stream_calls == 1
 
+
+def test_resolve_camera_stream_custom_uses_stream_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    import toposync_ext_cameras.pipelines.operators as ops
+
+    async def fail_onvif_resolution(**kwargs):  # noqa: ANN003, ANN202
+        _ = kwargs
+        raise AssertionError("custom stream profile must not resolve ONVIF stream URI")
+
+    monkeypatch.setattr(ops, "_resolve_onvif_rtsp_url_cached", fail_onvif_resolution)
+
+    stream = asyncio.run(
+        ops._resolve_camera_stream(
+            camera_id="front",
+            camera={"id": "front"},
+            channel={
+                "connection_type": "onvif",
+                "stream_profile": "custom",
+                "rtsp_url": "rtsp://127.0.0.1:8554/front",
+                "stream_username": "ingest-user",
+                "stream_password": "ingest-pass",
+                "onvif": {
+                    "xaddr": "192.168.0.10",
+                    "username": "camera-user",
+                    "password": "camera-pass",
+                },
+            },
+        )
+    )
+
+    assert stream.rtsp_url == "rtsp://127.0.0.1:8554/front"
+    assert stream.username == "ingest-user"
+    assert stream.password == "ingest-pass"
+
+
+def test_resolve_camera_stream_onvif_profile_falls_back_to_onvif_credentials() -> None:
+    import toposync_ext_cameras.pipelines.operators as ops
+
+    stream = asyncio.run(
+        ops._resolve_camera_stream(
+            camera_id="front",
+            camera={"id": "front"},
+            channel={
+                "connection_type": "onvif",
+                "stream_profile": "onvif",
+                "rtsp_url": "rtsp://192.168.0.10/main",
+                "stream_username": "",
+                "stream_password": "",
+                "onvif": {
+                    "xaddr": "192.168.0.10",
+                    "username": "camera-user",
+                    "password": "camera-pass",
+                },
+            },
+        )
+    )
+
+    assert stream.rtsp_url == "rtsp://192.168.0.10/main"
+    assert stream.username == "camera-user"
+    assert stream.password == "camera-pass"
+
+
+def test_resolve_camera_stream_custom_requires_rtsp_url() -> None:
+    import toposync_ext_cameras.pipelines.operators as ops
+
+    with pytest.raises(ops._CameraSourcePendingError, match="custom stream profile requires rtsp_url"):
+        asyncio.run(
+            ops._resolve_camera_stream(
+                camera_id="front",
+                camera={"id": "front"},
+                channel={
+                    "connection_type": "onvif",
+                    "stream_profile": "custom",
+                    "rtsp_url": "",
+                    "onvif": {"xaddr": "192.168.0.10"},
+                },
+            )
+        )

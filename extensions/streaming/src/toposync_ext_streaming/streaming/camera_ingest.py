@@ -39,6 +39,7 @@ def iter_camera_devices_from_app_settings(app_settings: Any) -> list[dict[str, A
         camera_id = str(item.get("id") or "").strip()
         if not camera_id:
             continue
+        connection_type = str(item.get("connection_type") or "rtsp").strip().lower() or "rtsp"
         devices.append(
             {
                 "id": camera_id,
@@ -50,12 +51,16 @@ def iter_camera_devices_from_app_settings(app_settings: Any) -> list[dict[str, A
                         "name": "Main video",
                         "modality": "video",
                         "is_default": True,
-                        "connection_type": str(item.get("connection_type") or "rtsp").strip().lower() or "rtsp",
+                        "connection_type": connection_type,
                         "transport": "rtsp",
+                        "stream_profile": _camera_stream_profile(item, connection_type=connection_type),
                         "rtsp_url": str(item.get("rtsp_url") or "").strip(),
+                        "stream_username": str(item.get("stream_username") or "").strip(),
+                        "stream_password": str(item.get("stream_password") or "").strip(),
                         "username": str(item.get("username") or "").strip(),
                         "password": str(item.get("password") or "").strip(),
                         "fps": item.get("fps"),
+                        "onvif": item.get("onvif") if isinstance(item.get("onvif"), dict) else None,
                     }
                 ],
             }
@@ -91,17 +96,22 @@ def resolve_camera_video_channel(device: Any, *, channel_id: str = "") -> dict[s
     rtsp_url = str(device.get("rtsp_url") or "").strip()
     if not rtsp_url:
         return None
+    connection_type = str(device.get("connection_type") or "rtsp").strip().lower() or "rtsp"
     return {
         "id": requested_channel_id or "video_main",
         "name": "Main video",
         "modality": "video",
         "is_default": True,
-        "connection_type": str(device.get("connection_type") or "rtsp").strip().lower() or "rtsp",
+        "connection_type": connection_type,
         "transport": "rtsp",
         "rtsp_url": rtsp_url,
+        "stream_profile": _camera_stream_profile(device, connection_type=connection_type),
+        "stream_username": str(device.get("stream_username") or "").strip(),
+        "stream_password": str(device.get("stream_password") or "").strip(),
         "username": str(device.get("username") or "").strip(),
         "password": str(device.get("password") or "").strip(),
         "fps": device.get("fps"),
+        "onvif": device.get("onvif") if isinstance(device.get("onvif"), dict) else None,
     }
 
 
@@ -128,8 +138,7 @@ def build_camera_ingest_definitions(
         rtsp_url = str(channel.get("rtsp_url") or "").strip()
         if not rtsp_url:
             continue
-        username = str(channel.get("username") or "").strip()
-        password = str(channel.get("password") or "").strip()
+        username, password = _camera_stream_credentials(channel)
 
         source = _rtsp_url_with_auth(rtsp_url, username=username, password=password)
         if not source:
@@ -143,6 +152,34 @@ def build_camera_ingest_definitions(
         )
 
     return out
+
+
+def _camera_stream_credentials(channel: dict[str, Any]) -> tuple[str, str]:
+    username = str(channel.get("stream_username") or "").strip()
+    password = str(channel.get("stream_password") or "").strip()
+    if username or password:
+        return username, password
+
+    connection_type = str(channel.get("connection_type") or "rtsp").strip().lower()
+    stream_profile = _camera_stream_profile(channel, connection_type=connection_type)
+    if connection_type == "onvif" and stream_profile == "onvif":
+        onvif_raw = channel.get("onvif")
+        onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
+        return (
+            str(onvif.get("username") or "").strip() or str(channel.get("username") or "").strip(),
+            str(onvif.get("password") or "").strip() or str(channel.get("password") or "").strip(),
+        )
+
+    return (
+        str(channel.get("username") or "").strip(),
+        str(channel.get("password") or "").strip(),
+    )
+
+
+def _camera_stream_profile(value: dict[str, Any], *, connection_type: str) -> str:
+    fallback = "onvif" if connection_type == "onvif" else "custom"
+    profile = str(value.get("stream_profile") or fallback).strip().lower()
+    return "onvif" if profile == "onvif" else "custom"
 
 
 def build_camera_ingest_path_configs(definitions: dict[str, CameraIngestDefinition]) -> dict[str, dict[str, Any]]:

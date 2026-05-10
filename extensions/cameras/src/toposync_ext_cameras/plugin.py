@@ -36,6 +36,9 @@ from .source_health import get_global_source_health_store
 from .settings import (
     flatten_camera_device_for_ui,
     get_camera_device,
+    get_camera_onvif_credentials,
+    get_camera_stream_credentials,
+    get_camera_stream_profile,
     get_primary_video_channel,
     iter_camera_devices,
     normalize_cameras_settings,
@@ -720,6 +723,26 @@ class CamerasExtension(BaseExtension):
 
             return max(profiles, key=score)
 
+        def _pick_best_stream_profile(profiles: list[OnvifProfile]) -> OnvifProfile | None:
+            if not profiles:
+                return None
+
+            def score(item: OnvifProfile) -> tuple[int, int, int, int, str]:
+                encoding = str(item.encoding or "").strip().upper()
+                enc_score = 0
+                if encoding in {"H264", "H.264"}:
+                    enc_score = 3
+                elif encoding in {"H265", "HEVC", "H.265"}:
+                    enc_score = 2
+                elif encoding:
+                    enc_score = 1
+                pixels = int(item.width or 0) * int(item.height or 0)
+                fps = int(item.fps or 0)
+                has_name = 1 if str(item.name or "").strip() else 0
+                return (pixels, fps, enc_score, has_name, str(item.token or ""))
+
+            return max(profiles, key=score)
+
         async def _resolve_onvif_ptz_context(*, camera_id: str) -> tuple[OnvifClient, str, str]:
             cid = str(camera_id or "").strip()
             if not cid:
@@ -753,11 +776,10 @@ class CamerasExtension(BaseExtension):
             if not xaddr:
                 raise HTTPException(status_code=409, detail="Camera is missing ONVIF xaddr")
 
-            username = str(channel.get("username") or "").strip()
-            password = str(channel.get("password") or "").strip()
+            username, password = get_camera_onvif_credentials(channel)
             ptz_xaddr = str(onvif.get("ptz_xaddr") or "").strip()
             media_xaddr = str(onvif.get("media_xaddr") or "").strip()
-            profile_token = str(onvif.get("profile_token") or "").strip()
+            profile_token = str(onvif.get("ptz_profile_token") or "").strip()
             signature = _onvif_ptz_signature(
                 xaddr=xaddr,
                 ptz_xaddr=ptz_xaddr,
@@ -1053,10 +1075,54 @@ class CamerasExtension(BaseExtension):
             if ctype not in {"rtsp", "onvif"}:
                 raise HTTPException(status_code=400, detail="Unsupported camera connection type")
             url_raw = str(channel.get("rtsp_url", "")).strip()
+            stream_profile = get_camera_stream_profile(channel)
+            if not url_raw and ctype == "onvif" and stream_profile == "onvif":
+                onvif_raw = channel.get("onvif")
+                onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
+                xaddr = normalize_onvif_xaddr(str(onvif.get("xaddr") or "").strip())
+                if not xaddr:
+                    raise HTTPException(status_code=400, detail="Camera ONVIF xaddr is not configured")
+                username, password = get_camera_onvif_credentials(channel)
+                client = OnvifClient(
+                    xaddr=xaddr,
+                    username=username,
+                    password=password,
+                    timeout_s=_env_float(
+                        "TOPOSYNC_CAMERA_ONVIF_TIMEOUT_S", 3.5, min_value=0.5, max_value=20.0
+                    ),
+                    auth_mode="auto",
+                )
+                media_xaddr = str(onvif.get("media_xaddr") or "").strip()
+                if not media_xaddr:
+                    try:
+                        media_xaddr, _ptz_xaddr = await client.get_capabilities()
+                    except OnvifError as exc:
+                        raise HTTPException(status_code=502, detail=str(exc)) from exc
+                    media_xaddr = str(media_xaddr or "").strip()
+                if not media_xaddr:
+                    raise HTTPException(
+                        status_code=502,
+                        detail="ONVIF device did not report a Media service URL",
+                    )
+                profile_token = str(onvif.get("profile_token") or "").strip()
+                if not profile_token:
+                    try:
+                        profiles = await client.get_profiles(media_xaddr)
+                    except OnvifError as exc:
+                        raise HTTPException(status_code=502, detail=str(exc)) from exc
+                    selected = _pick_best_stream_profile(profiles)
+                    profile_token = str(getattr(selected, "token", "") or "").strip()
+                if not profile_token:
+                    raise HTTPException(status_code=502, detail="ONVIF returned no usable stream profiles")
+                try:
+                    url_raw = str(await client.get_stream_uri(media_xaddr, profile_token=profile_token) or "").strip()
+                except OnvifError as exc:
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
             if not url_raw:
+                if ctype == "onvif" and stream_profile == "custom":
+                    raise HTTPException(status_code=400, detail="Camera custom stream profile requires RTSP URL")
                 raise HTTPException(status_code=400, detail="Camera RTSP URL is not configured")
-            username = str(channel.get("username", "")).strip()
-            password = str(channel.get("password", "")).strip()
+            username, password = get_camera_stream_credentials(channel)
             try:
                 return _rtsp_url_with_auth(url_raw, username, password)
             except ValueError as exc:
@@ -1566,16 +1632,7 @@ class CamerasExtension(BaseExtension):
                         content=cached.blob, media_type="image/jpeg", headers=cached.headers
                     )
 
-                url_raw = str(channel.get("rtsp_url", "")).strip()
-                username = str(channel.get("username", "")).strip()
-                password = str(channel.get("password", "")).strip()
-                if not url_raw:
-                    raise HTTPException(status_code=400, detail="Camera RTSP URL is not configured")
-
-                try:
-                    url = _rtsp_url_with_auth(url_raw, username, password)
-                except ValueError as exc:
-                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                url = await _resolve_camera_rtsp_url_for_probe(request, cid)
 
                 async with snapshot_ffmpeg_sema:
                     result = await _ffmpeg_snapshot(url, timeout_ms=9000)

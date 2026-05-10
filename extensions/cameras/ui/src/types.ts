@@ -1,12 +1,16 @@
 export type CameraConnectionType = "rtsp" | "onvif";
+export type CameraStreamProfile = "onvif" | "custom";
 
 export type CameraOnvifConfig = {
   device_id?: string;
   xaddr: string;
+  username?: string;
+  password?: string;
   media_xaddr?: string;
   ptz_xaddr?: string;
   profile_token?: string;
   profile_name?: string;
+  ptz_profile_token?: string;
   hardware?: string;
 };
 
@@ -15,7 +19,11 @@ export type CameraConfig = {
   name: string;
   connection_type: CameraConnectionType;
   channel_id?: string;
+  stream_profile: CameraStreamProfile;
   rtsp_url: string;
+  stream_username?: string;
+  stream_password?: string;
+  /** Legacy credentials kept only while parsing older settings. */
   username?: string;
   password?: string;
   fps: number;

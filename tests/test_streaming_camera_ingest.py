@@ -56,6 +56,43 @@ def test_build_camera_ingest_definitions_applies_auth_and_normalizes_path() -> N
     assert ingest.source_rtsp_url == "rtsp://user:pass@10.0.0.10/live"
 
 
+def test_build_camera_ingest_definitions_uses_custom_stream_credentials() -> None:
+    app_settings = _AppSettingsStub(
+        extensions={
+            "com.toposync.cameras": {
+                "devices": [
+                    {
+                        "id": "front",
+                        "name": "Front",
+                        "channels": [
+                            {
+                                "id": "video_main",
+                                "modality": "video",
+                                "is_default": True,
+                                "connection_type": "onvif",
+                                "stream_profile": "custom",
+                                "rtsp_url": "rtsp://ingest.local/front",
+                                "stream_username": "stream-user",
+                                "stream_password": "stream-pass",
+                                "onvif": {
+                                    "xaddr": "192.168.0.10",
+                                    "username": "camera-user",
+                                    "password": "camera-pass",
+                                },
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+
+    ingest_settings = StreamingCameraIngestSettings(enabled=True, path_prefix="ingest")
+    ingest_by_id = build_camera_ingest_definitions(app_settings=app_settings, ingest_settings=ingest_settings)
+
+    assert ingest_by_id["front"].source_rtsp_url == "rtsp://stream-user:stream-pass@ingest.local/front"
+
+
 def test_build_camera_ingest_path_configs_renders_source_and_on_demand() -> None:
     app_settings = _AppSettingsStub(
         extensions={

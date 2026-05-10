@@ -71,6 +71,53 @@ function formatNumber(value: number | null | undefined, fractionDigits = 1): str
   return value.toFixed(fractionDigits);
 }
 
+function codecScore(value: string | null | undefined): number {
+  const encoding = String(value ?? "").trim().toUpperCase();
+  if (encoding === "H264" || encoding === "H.264") return 3;
+  if (encoding === "H265" || encoding === "H.265" || encoding === "HEVC") return 2;
+  return encoding ? 1 : 0;
+}
+
+function pickBestOnvifProfile(profiles: OnvifProfileInfo[]): OnvifProfileInfo | null {
+  let best: OnvifProfileInfo | null = null;
+  let bestScore: [number, number, number, number, string] | null = null;
+  for (const profile of profiles) {
+    const score: [number, number, number, number, string] = [
+      Math.max(0, Number(profile.width ?? 0)) * Math.max(0, Number(profile.height ?? 0)),
+      Math.max(0, Number(profile.fps ?? 0)),
+      codecScore(profile.encoding),
+      profile.name?.trim() ? 1 : 0,
+      String(profile.token ?? ""),
+    ];
+    if (!bestScore || compareProfileScore(score, bestScore) > 0) {
+      best = profile;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function compareProfileScore(left: [number, number, number, number, string], right: [number, number, number, number, string]): number {
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] > right[index]) return 1;
+    if (left[index] < right[index]) return -1;
+  }
+  return 0;
+}
+
+function streamCredentialsForCamera(camera: CameraConfig): { username: string; password: string } {
+  const streamUsername = camera.stream_username?.trim() ?? "";
+  const streamPassword = camera.stream_password?.trim() ?? "";
+  if (streamUsername || streamPassword) return { username: streamUsername, password: streamPassword };
+  if (camera.connection_type === "onvif" && camera.stream_profile === "onvif") {
+    return {
+      username: camera.onvif?.username?.trim() ?? "",
+      password: camera.onvif?.password?.trim() ?? "",
+    };
+  }
+  return { username: camera.username?.trim() ?? "", password: camera.password?.trim() ?? "" };
+}
+
 function statusBadgeClass(status: string): string {
   if (status === "healthy") return "statusBadge statusBadgeSuccess";
   if (status === "starting" || status === "idle") return "statusBadge statusBadgeWarning";
@@ -147,6 +194,7 @@ function CamerasSettingsPanelContent({
   const [onvifLoading, setOnvifLoading] = useState(false);
   const [onvifStreamLoading, setOnvifStreamLoading] = useState(false);
   const onvifAbortRef = React.useRef<AbortController | null>(null);
+  const onvifAutoDiscoverRef = React.useRef<Set<string>>(new Set());
 
   const [wizardOpen, setWizardOpen] = useState(false);
 
@@ -284,8 +332,9 @@ function CamerasSettingsPanelContent({
     setSnapshotLoading(true);
     setSnapshotErrorMessage(null);
     try {
+      const credentials = streamCredentialsForCamera(camera);
       const blob = await fetchRtspSnapshot(
-        { url: camera.rtsp_url, username: camera.username, password: camera.password },
+        { url: camera.rtsp_url, username: credentials.username, password: credentials.password },
         controller.signal,
       );
       if (controller.signal.aborted) return;
@@ -319,8 +368,7 @@ function CamerasSettingsPanelContent({
         : await probeRtsp(
             {
               url: camera.rtsp_url,
-              username: camera.username,
-              password: camera.password,
+              ...streamCredentialsForCamera(camera),
               timeout_ms: 5000,
             },
             controller.signal,
@@ -358,11 +406,12 @@ function CamerasSettingsPanelContent({
       name: "",
       connection_type: "onvif",
       channel_id: "video_main",
+      stream_profile: "onvif",
       rtsp_url: "",
-      username: "",
-      password: "",
+      stream_username: "",
+      stream_password: "",
       fps: 5,
-      onvif: { xaddr: "" },
+      onvif: { xaddr: "", username: "", password: "" },
     };
     commitCameras([next, ...camerasRef.current]);
     setActiveCameraId(id);
@@ -378,12 +427,15 @@ function CamerasSettingsPanelContent({
       name,
       connection_type: "onvif",
       channel_id: "video_main",
+      stream_profile: "onvif",
       rtsp_url: "",
-      username: "",
-      password: "",
+      stream_username: "",
+      stream_password: "",
       fps: 5,
       onvif: {
         xaddr: xaddrCandidate,
+        username: "",
+        password: "",
         device_id: String(device.device_id || "").trim() || undefined,
         hardware: String(device.hardware || "").trim() || undefined,
       },
@@ -453,6 +505,34 @@ function CamerasSettingsPanelContent({
   }, [activeCamera, sourceHealth]);
 
   useEffect(() => {
+    if (!activeCamera) return;
+    if (activeCamera.connection_type !== "onvif") return;
+    if (activeCamera.stream_profile === "custom") return;
+    if (onvifLoading) return;
+
+    const xaddr = activeCamera.onvif?.xaddr?.trim() ?? "";
+    if (!xaddr) return;
+
+    const signature = [
+      activeCamera.id,
+      xaddr,
+      activeCamera.onvif?.username?.trim() ?? "",
+      activeCamera.onvif?.password?.trim() ?? "",
+    ].join("\n");
+    if (onvifAutoDiscoverRef.current.has(signature)) return;
+    onvifAutoDiscoverRef.current.add(signature);
+    void discoverOnvifProfiles(activeCamera);
+  }, [
+    activeCamera?.id,
+    activeCamera?.connection_type,
+    activeCamera?.stream_profile,
+    activeCamera?.onvif?.xaddr,
+    activeCamera?.onvif?.username,
+    activeCamera?.onvif?.password,
+    onvifLoading,
+  ]);
+
+  useEffect(() => {
     let cancelled = false;
     let controller: AbortController | null = null;
 
@@ -496,8 +576,8 @@ function CamerasSettingsPanelContent({
       const result = await inspectOnvif(
         {
           xaddr,
-          username: camera.username ?? "",
-          password: camera.password ?? "",
+          username: camera.onvif?.username ?? "",
+          password: camera.onvif?.password ?? "",
           timeout_ms: 3500,
           auth: "auto",
         },
@@ -514,6 +594,23 @@ function CamerasSettingsPanelContent({
       if (typeof result.ptz_xaddr === "string" && result.ptz_xaddr.trim()) {
         updateCameraOnvif(camera.id, { ptz_xaddr: result.ptz_xaddr.trim() });
       }
+      const selectedProfile =
+        result.profiles.find((profile) => profile.token === camera.onvif?.profile_token) ??
+        pickBestOnvifProfile(result.profiles);
+      if (selectedProfile) {
+        const nextOnvif = {
+          ...(camera.onvif ?? { xaddr }),
+          xaddr: result.xaddr || xaddr,
+          media_xaddr: result.media_xaddr?.trim() || camera.onvif?.media_xaddr,
+          ptz_xaddr: result.ptz_xaddr?.trim() || camera.onvif?.ptz_xaddr,
+          profile_token: selectedProfile.token,
+          profile_name: selectedProfile.name?.trim() ?? "",
+        };
+        updateCamera(camera.id, { onvif: nextOnvif });
+        if (camera.stream_profile !== "custom") {
+          void applyOnvifProfile({ ...camera, onvif: nextOnvif }, selectedProfile, { abortPrevious: false });
+        }
+      }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       setOnvifErrorMessage(error instanceof Error ? error.message : String(error));
@@ -522,13 +619,17 @@ function CamerasSettingsPanelContent({
     }
   }
 
-  async function applyOnvifProfile(camera: CameraConfig, profile: OnvifProfileInfo): Promise<void> {
+  async function applyOnvifProfile(
+    camera: CameraConfig,
+    profile: OnvifProfileInfo,
+    options?: { abortPrevious?: boolean },
+  ): Promise<void> {
     const xaddr = camera.onvif?.xaddr?.trim() ?? "";
     if (!xaddr) return;
     const token = String(profile.token ?? "").trim();
     if (!token) return;
 
-    onvifAbortRef.current?.abort();
+    if (options?.abortPrevious !== false) onvifAbortRef.current?.abort();
     const controller = new AbortController();
     onvifAbortRef.current = controller;
     setOnvifStreamLoading(true);
@@ -540,15 +641,17 @@ function CamerasSettingsPanelContent({
           xaddr,
           media_xaddr: camera.onvif?.media_xaddr ?? onvifInspectResult?.media_xaddr ?? "",
           profile_token: token,
-          username: camera.username ?? "",
-          password: camera.password ?? "",
+          username: camera.onvif?.username ?? "",
+          password: camera.onvif?.password ?? "",
           timeout_ms: 4500,
           auth: "auto",
         },
         controller.signal,
       );
       if (controller.signal.aborted) return;
-      updateCamera(camera.id, { rtsp_url: result.rtsp_url });
+      if (camera.stream_profile !== "custom") {
+        updateCamera(camera.id, { rtsp_url: result.rtsp_url });
+      }
       updateCameraOnvif(camera.id, { profile_token: token, profile_name: profile.name?.trim() ?? "" });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
@@ -934,8 +1037,13 @@ function CamerasSettingsPanelContent({
                       value={activeCamera.connection_type}
                       onChange={(event) => {
                         const next = event.target.value === "onvif" ? "onvif" : "rtsp";
-                        const patch: Partial<CameraConfig> = { connection_type: next };
-                        if (next === "onvif" && !activeCamera.onvif) patch.onvif = { xaddr: "" };
+                        const patch: Partial<CameraConfig> = {
+                          connection_type: next,
+                          stream_profile: next === "onvif" ? activeCamera.stream_profile || "onvif" : "custom",
+                        };
+                        if (next === "onvif" && !activeCamera.onvif) {
+                          patch.onvif = { xaddr: "", username: "", password: "" };
+                        }
                         updateCamera(activeCamera.id, patch);
                         setOnvifInspectResult(null);
                         setOnvifErrorMessage(null);
@@ -965,20 +1073,20 @@ function CamerasSettingsPanelContent({
 
                       <div className="rowWrap" style={{ gap: 10 }}>
                         <div className="field" style={{ flex: 1, minWidth: 220 }}>
-                          <label className="label">{t("ext.cameras.settings.username")}</label>
+                          <label className="label">{t("ext.cameras.settings.onvif_username", {}, "ONVIF user")}</label>
                           <input
                             className="input"
-                            value={activeCamera.username ?? ""}
-                            onChange={(event) => updateCamera(activeCamera.id, { username: event.target.value })}
+                            value={activeCamera.onvif?.username ?? ""}
+                            onChange={(event) => updateCameraOnvif(activeCamera.id, { username: event.target.value })}
                           />
                         </div>
                         <div className="field" style={{ flex: 1, minWidth: 220 }}>
-                          <label className="label">{t("ext.cameras.settings.password")}</label>
+                          <label className="label">{t("ext.cameras.settings.onvif_password", {}, "ONVIF password")}</label>
                           <input
                             className="input"
                             type="password"
-                            value={activeCamera.password ?? ""}
-                            onChange={(event) => updateCamera(activeCamera.id, { password: event.target.value })}
+                            value={activeCamera.onvif?.password ?? ""}
+                            onChange={(event) => updateCameraOnvif(activeCamera.id, { password: event.target.value })}
                           />
                         </div>
                       </div>
@@ -1016,7 +1124,31 @@ function CamerasSettingsPanelContent({
                         </div>
                       ) : null}
 
-                      {onvifInspectResult?.profiles?.length ? (
+                      <div className="field" style={{ marginTop: 12 }}>
+                        <label className="label">{t("ext.cameras.settings.stream_source", {}, "Video stream")}</label>
+                        <select
+                          className="input"
+                          value={activeCamera.stream_profile}
+                          onChange={(event) => {
+                            const streamProfile = event.target.value === "custom" ? "custom" : "onvif";
+                            updateCamera(activeCamera.id, { stream_profile: streamProfile });
+                            if (streamProfile === "onvif") {
+                              const profile =
+                                (onvifInspectResult?.profiles ?? []).find(
+                                  (item) => item.token === activeCamera.onvif?.profile_token,
+                                ) ?? null;
+                              if (profile) {
+                                void applyOnvifProfile({ ...activeCamera, stream_profile: "onvif" }, profile);
+                              }
+                            }
+                          }}
+                        >
+                          <option value="onvif">{t("ext.cameras.settings.stream_source_onvif", {}, "ONVIF profile")}</option>
+                          <option value="custom">{t("ext.cameras.settings.stream_source_custom", {}, "Custom RTSP")}</option>
+                        </select>
+                      </div>
+
+                      {activeCamera.stream_profile !== "custom" && onvifInspectResult?.profiles?.length ? (
                         <div className="field" style={{ marginTop: 12 }}>
                           <label className="label">{t("ext.cameras.settings.onvif_profile")}</label>
                           <select
@@ -1031,7 +1163,9 @@ function CamerasSettingsPanelContent({
                                 profile_token: profile.token,
                                 profile_name: profile.name?.trim() ?? "",
                               });
-                              void applyOnvifProfile(activeCamera, profile);
+                              if (activeCamera.stream_profile !== "custom") {
+                                void applyOnvifProfile(activeCamera, profile);
+                              }
                             }}
                           >
                             <option value="">{t("ext.cameras.editor.select_placeholder", {}, "Select…")}</option>
@@ -1053,7 +1187,11 @@ function CamerasSettingsPanelContent({
                       ) : null}
 
                       <div className="field">
-                        <label className="label">{t("ext.cameras.settings.onvif_rtsp_from_onvif")}</label>
+                        <label className="label">
+                          {activeCamera.stream_profile === "custom"
+                            ? t("ext.cameras.settings.custom_rtsp_url", {}, "Custom RTSP URL")
+                            : t("ext.cameras.settings.onvif_rtsp_from_onvif")}
+                        </label>
                         <input
                           className="input"
                           value={activeCamera.rtsp_url}
@@ -1061,6 +1199,28 @@ function CamerasSettingsPanelContent({
                           placeholder="rtsp://..."
                         />
                       </div>
+
+                      {activeCamera.stream_profile === "custom" ? (
+                        <div className="rowWrap" style={{ gap: 10 }}>
+                          <div className="field" style={{ flex: 1, minWidth: 220 }}>
+                            <label className="label">{t("ext.cameras.settings.stream_username", {}, "Stream user")}</label>
+                            <input
+                              className="input"
+                              value={activeCamera.stream_username ?? ""}
+                              onChange={(event) => updateCamera(activeCamera.id, { stream_username: event.target.value })}
+                            />
+                          </div>
+                          <div className="field" style={{ flex: 1, minWidth: 220 }}>
+                            <label className="label">{t("ext.cameras.settings.stream_password", {}, "Stream password")}</label>
+                            <input
+                              className="input"
+                              type="password"
+                              value={activeCamera.stream_password ?? ""}
+                              onChange={(event) => updateCamera(activeCamera.id, { stream_password: event.target.value })}
+                            />
+                          </div>
+                        </div>
+                      ) : null}
                     </>
                   ) : (
                     <>
@@ -1079,8 +1239,8 @@ function CamerasSettingsPanelContent({
                           <label className="label">{t("ext.cameras.settings.username")}</label>
                           <input
                             className="input"
-                            value={activeCamera.username ?? ""}
-                            onChange={(event) => updateCamera(activeCamera.id, { username: event.target.value })}
+                            value={activeCamera.stream_username ?? ""}
+                            onChange={(event) => updateCamera(activeCamera.id, { stream_username: event.target.value })}
                           />
                         </div>
                         <div className="field" style={{ flex: 1, minWidth: 220 }}>
@@ -1088,8 +1248,8 @@ function CamerasSettingsPanelContent({
                           <input
                             className="input"
                             type="password"
-                            value={activeCamera.password ?? ""}
-                            onChange={(event) => updateCamera(activeCamera.id, { password: event.target.value })}
+                            value={activeCamera.stream_password ?? ""}
+                            onChange={(event) => updateCamera(activeCamera.id, { stream_password: event.target.value })}
                           />
                         </div>
                       </div>

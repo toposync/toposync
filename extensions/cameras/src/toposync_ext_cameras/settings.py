@@ -10,19 +10,27 @@ class CameraOnvifConfig(BaseModel):
 
     device_id: str | None = None
     xaddr: str = ""
+    username: str = ""
+    password: str = ""
     media_xaddr: str | None = None
     ptz_xaddr: str | None = None
     profile_token: str | None = None
     profile_name: str | None = None
+    ptz_profile_token: str | None = None
     hardware: str | None = None
+
+    @field_validator("xaddr", "username", "password", mode="before")
+    @classmethod
+    def _trim_text(cls, value: Any) -> str:
+        return str(value or "").strip()
 
     @field_validator(
         "device_id",
-        "xaddr",
         "media_xaddr",
         "ptz_xaddr",
         "profile_token",
         "profile_name",
+        "ptz_profile_token",
         "hardware",
         mode="before",
     )
@@ -44,7 +52,12 @@ class CameraChannelSettings(BaseModel):
     is_default: bool = False
     connection_type: Literal["rtsp", "onvif"] = "rtsp"
     transport: str = "rtsp"
+    stream_profile: Literal["onvif", "custom"] = "onvif"
     rtsp_url: str = ""
+    stream_username: str = ""
+    stream_password: str = ""
+    # Legacy channel-level credentials. They are accepted for normalization only:
+    # RTSP cameras map them to stream credentials, ONVIF cameras map them to onvif credentials.
     username: str = ""
     password: str = ""
     fps: float | None = Field(default=None, ge=1.0, le=60.0)
@@ -52,10 +65,25 @@ class CameraChannelSettings(BaseModel):
     onvif: CameraOnvifConfig | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("id", "name", "transport", "rtsp_url", "username", "password", mode="before")
+    @field_validator(
+        "id",
+        "name",
+        "transport",
+        "rtsp_url",
+        "stream_username",
+        "stream_password",
+        "username",
+        "password",
+        mode="before",
+    )
     @classmethod
     def _trim_text(cls, value: Any) -> str:
         return str(value or "").strip()
+
+    @field_validator("stream_profile", mode="before")
+    @classmethod
+    def _normalize_stream_profile_value(cls, value: Any) -> str:
+        return "custom" if str(value or "").strip().lower() == "custom" else "onvif"
 
     @model_validator(mode="after")
     def _normalize_transport(self) -> "CameraChannelSettings":
@@ -65,6 +93,29 @@ class CameraChannelSettings(BaseModel):
             self.transport = "custom"
         if self.connection_type == "onvif" and self.onvif is None:
             self.onvif = CameraOnvifConfig()
+        if self.connection_type == "rtsp":
+            self.stream_profile = "custom"
+        elif self.connection_type == "onvif" and self.stream_profile not in {"onvif", "custom"}:
+            self.stream_profile = "onvif"
+
+        legacy_username = str(self.username or "").strip()
+        legacy_password = str(self.password or "").strip()
+        if self.connection_type == "onvif" and self.onvif is not None:
+            updates: dict[str, str] = {}
+            if legacy_username and not str(self.onvif.username or "").strip():
+                updates["username"] = legacy_username
+            if legacy_password and not str(self.onvif.password or "").strip():
+                updates["password"] = legacy_password
+            if updates:
+                self.onvif = self.onvif.model_copy(update=updates)
+        elif self.connection_type == "rtsp":
+            if legacy_username and not self.stream_username:
+                self.stream_username = legacy_username
+            if legacy_password and not self.stream_password:
+                self.stream_password = legacy_password
+
+        self.username = ""
+        self.password = ""
         return self
 
 
@@ -131,17 +182,37 @@ def _coerce_flat_camera(value: Any) -> dict[str, Any] | None:
         return None
     connection_type = str(value.get("connection_type") or "rtsp").strip().lower()
     onvif_raw = value.get("onvif")
-    onvif = onvif_raw if isinstance(onvif_raw, dict) else None
+    onvif = dict(onvif_raw) if isinstance(onvif_raw, dict) else None
+    is_onvif = connection_type == "onvif"
+    legacy_username = str(value.get("username") or "").strip()
+    legacy_password = str(value.get("password") or "").strip()
+    if is_onvif:
+        onvif = dict(onvif or {})
+        if legacy_username and not str(onvif.get("username") or "").strip():
+            onvif["username"] = legacy_username
+        if legacy_password and not str(onvif.get("password") or "").strip():
+            onvif["password"] = legacy_password
+    stream_profile = str(value.get("stream_profile") or ("onvif" if is_onvif else "custom")).strip().lower()
+    if stream_profile != "onvif":
+        stream_profile = "custom"
+    if not is_onvif:
+        stream_profile = "custom"
+    stream_username = str(value.get("stream_username") or "").strip()
+    stream_password = str(value.get("stream_password") or "").strip()
+    if not is_onvif:
+        stream_username = stream_username or legacy_username
+        stream_password = stream_password or legacy_password
     channel = CameraChannelSettings(
         id="video_main",
         name="Main video",
         modality="video",
         is_default=True,
-        connection_type="onvif" if connection_type == "onvif" else "rtsp",
+        connection_type="onvif" if is_onvif else "rtsp",
         transport="rtsp",
+        stream_profile=stream_profile,
         rtsp_url=str(value.get("rtsp_url") or "").strip(),
-        username=str(value.get("username") or "").strip(),
-        password=str(value.get("password") or "").strip(),
+        stream_username=stream_username,
+        stream_password=stream_password,
         fps=value.get("fps"),
         onvif=CameraOnvifConfig.model_validate(onvif) if isinstance(onvif, dict) else None,
     )
@@ -227,9 +298,10 @@ def flatten_camera_device_for_ui(device: Any) -> dict[str, Any] | None:
         "id": str(device.get("id") or "").strip(),
         "name": str(device.get("name") or "").strip(),
         "connection_type": str(channel.get("connection_type") or "rtsp").strip().lower() or "rtsp",
+        "stream_profile": get_camera_stream_profile(channel),
         "rtsp_url": str(channel.get("rtsp_url") or "").strip(),
-        "username": str(channel.get("username") or "").strip(),
-        "password": str(channel.get("password") or "").strip(),
+        "stream_username": str(channel.get("stream_username") or "").strip(),
+        "stream_password": str(channel.get("stream_password") or "").strip(),
         "fps": float(channel.get("fps") or 5.0),
         "onvif": dict(onvif) if isinstance(onvif, dict) else None,
         "channel_id": str(channel.get("id") or "video_main").strip() or "video_main",
@@ -248,3 +320,43 @@ def build_device_from_ui_camera(camera: dict[str, Any]) -> dict[str, Any] | None
             channels[0] = {**channels[0], "id": channel_id}
         return device
     return coerced
+
+
+def get_camera_stream_profile(channel: Any) -> Literal["onvif", "custom"]:
+    if not isinstance(channel, dict):
+        return "custom"
+    ctype = str(channel.get("connection_type") or "rtsp").strip().lower()
+    if ctype != "onvif":
+        return "custom"
+    return "onvif" if str(channel.get("stream_profile") or "onvif").strip().lower() == "onvif" else "custom"
+
+
+def get_camera_onvif_credentials(channel: Any) -> tuple[str, str]:
+    if not isinstance(channel, dict):
+        return "", ""
+    onvif_raw = channel.get("onvif")
+    onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
+    username = str(onvif.get("username") or "").strip()
+    password = str(onvif.get("password") or "").strip()
+    if not username and not password:
+        username = str(channel.get("username") or "").strip()
+        password = str(channel.get("password") or "").strip()
+    return username, password
+
+
+def get_camera_stream_credentials(channel: Any) -> tuple[str, str]:
+    if not isinstance(channel, dict):
+        return "", ""
+    username = str(channel.get("stream_username") or "").strip()
+    password = str(channel.get("stream_password") or "").strip()
+    if username or password:
+        return username, password
+
+    ctype = str(channel.get("connection_type") or "rtsp").strip().lower()
+    if ctype == "onvif" and get_camera_stream_profile(channel) == "onvif":
+        return get_camera_onvif_credentials(channel)
+
+    return (
+        str(channel.get("username") or "").strip(),
+        str(channel.get("password") or "").strip(),
+    )

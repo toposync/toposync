@@ -1,7 +1,7 @@
 
 # Dossiê técnico consolidado: qualidade, estabilidade e operação de streams no Toposync
 
-**Versão:** 2026-05-07  
+**Versão:** 2026-05-10
 **Objetivo:** transformar o diagnóstico de instabilidade em um plano sólido de engenharia, apoiado em literatura, normas de streaming, evidência do código atual e prioridades práticas por camada: backend/server, frontend/web, app React Native/Expo e Home Assistant add-on.
 
 Este documento atualiza o dossiê técnico original sem perder seus detalhes. A primeira parte é a camada operacional nova: contratos de saúde, prioridades, critérios de aceite, métricas e runbooks. O dossiê original fica preservado no apêndice para manter a rastreabilidade.
@@ -40,6 +40,56 @@ Quando um relógio para e outro continua repetindo o último estado, o usuário 
 
 ---
 
+## 0.1. Atualização operacional: Home Assistant, HLS assinado e WebRTC
+
+Em 2026-05-09/2026-05-10, a investigação em ambiente real de Home Assistant mostrou uma causa concreta de fragilidade que não estava suficientemente explícita neste dossiê: **HLS via ingress e HLS via acesso direto precisam ser tratados como um único contrato público de mídia, não como URLs montadas localmente por pedaços independentes**.
+
+### Descobertas
+
+1. **URL HLS por ingress sem prefixo público.**
+   Ao acessar Toposync pelo HA ingress, `/api/streams/transmissions/{id}/urls` podia retornar HLS assinado em `http://<host>:8090/api/streams/media/hls/...`, sem `/api/hassio_ingress/<session>/...`. A primeira playlist podia até responder em chamadas internas, mas o player recebia URLs que não eram tocáveis “como estão” a partir do navegador.
+
+2. **Rewrite de playlist também precisa preservar ingress.**
+   Mesmo quando a master playlist era acessada com o prefixo correto, o proxy HLS podia reescrever media playlists, segmentos, `EXT-X-MAP` e `EXT-X-KEY` para `/api/streams/media/hls/...` sem o prefixo do HA. Isso causa 404 em media playlist ou tail segment e pode virar tela preta/fallback em loop.
+
+3. **`network_contract_error` falso positivo em HA ingress.**
+   No ingress, o request público aparece em `homeassistant.local:8090`, enquanto o contrato de acesso direto do add-on recomenda `18756`. Comparar esses dois valores como causa raiz é incorreto quando `public_hls_mode="proxy"` e a URL efetiva usa `/api/hassio_ingress/...`. A porta direta `18756` continua importante para acesso direto, mas não deve derrubar o diagnóstico do playback via ingress.
+
+4. **WHEP 404 no primeiro acesso é normalmente race de readiness/cold start.**
+   `POST http://homeassistant.local:18760/<path>/whep 404` logo após abrir a página pode acontecer quando o dashboard tenta WebRTC antes do publisher/path estar pronto. Se HLS está saudável e Auto cai para HLS, esse evento deve ser debug/fallback, não causa raiz crítica.
+
+5. **Em Home Assistant add-on, Auto deve preferir HLS.**
+   Para HA + `signed_proxy`, HLS assinado na porta principal/API é o caminho estável padrão. WebRTC/WHEP deve ficar para PTZ aberto ou escolha explícita “Baixa latência”, porque depende de `18760/tcp`, `18762/udp`, ICE e hosts adicionais corretos.
+
+6. **`18759` deixa de ser porta pública obrigatória.**
+   Com HLS assinado/proxy, a porta HLS do MediaMTX é interna. O contrato público mínimo para HLS remoto/local passa a ser a porta principal/API (`18756` no add-on direto ou ingress do HA). `18759` ainda pode existir internamente para MediaMTX/probe, mas não deve ser tratada como porta pública que o app/web precisam alcançar.
+
+7. **HLS precisa de lease explícito, não apenas `viewer_count`.**
+   Voltar de aba/background, fallback HLS e reload do player podem deixar `viewer_count=0` por alguns segundos. O frontend web e o app devem renovar `demand/heartbeat` enquanto tile/player/PiP/PTZ estiverem ativos, e falha de heartbeat deve ser telemetria, não motivo para parar o player.
+
+### Decisões consolidadas
+
+- Toda URL HLS entregue ao app/web deve ser tocável exatamente como retornada pela API.
+- O helper de URL pública de mídia deve usar `scheme + host + root_path/x-ingress-path` e ser reutilizado em URL resolve, proxy/rewrite de playlists, status e snapshot diagnóstico.
+- `network_contract_error` só deve ser causa raiz quando houver `blocking_errors` que afetem o transporte selecionado.
+- HLS signed proxy é o fallback estável e canônico no HA; WebRTC é baixa latência explícita/PTZ.
+- Add-on deve publicar snapshot das portas mapeadas pelo Supervisor para diagnosticar WebRTC UDP ausente, sem afetar HLS.
+
+### Regressões obrigatórias adicionadas ao plano
+
+| Cenário | Critério |
+|---|---|
+| HA ingress HLS URL | `/urls` retorna HLS com `/api/hassio_ingress/<id>/api/streams/media/hls/...`. |
+| Playlist rewrite via ingress | variantes, segmentos, `EXT-X-MAP` e `EXT-X-KEY` mantêm o prefixo público. |
+| HA ingress em `:8090` | não classifica `network_contract_error` contra `18756` quando HLS proxy está ativo. |
+| Auto no HA | usa HLS-first; não faz POST WHEP no carregamento inicial. |
+| PTZ no HA | pode tentar WHEP; se falhar, cai para HLS com aviso discreto. |
+| HLS player ativo | envia `demand/heartbeat` a cada 10s com lease padrão de 45s. |
+
+Nota de leitura: trechos antigos do apêndice preservado ainda mencionam `18759` como HLS público. Eles ficam mantidos por rastreabilidade histórica, mas são supersedidos por esta atualização: em `signed_proxy`, `18759` é porta interna/diagnóstico.
+
+---
+
 ## 1. Evidências de código que mais importam
 
 | Camada | Evidência atual | Risco prático | Decisão recomendada |
@@ -53,7 +103,7 @@ Quando um relógio para e outro continua repetindo o último estado, o usuário 
 | MediaMTX config | Config atual gera `hls: true`, `hlsVariant: mpegts`, `metrics: false`, API interna, RTSP UDP/TCP. | Compatibilidade HLS está boa, mas telemetria MediaMTX fica incompleta. | Ativar métricas controladas e coletar HLS sessions, muxers, readers, jitter e frames descartados. |
 | FFmpeg publisher | Publica H.264 via RTSP, usa `yuv420p`, GOP aproximado de 1s, `-sc_threshold 0`, reinicia em falha e faz fallback de hardware. | `frames_sent` pode subir mesmo com frame visualmente repetido; hardware pode falhar em runtime. | Medir repetição de frame e implementar quarentena de encoder por host/output. |
 | Camera/pipeline | `camera.source` expõe hints de capture, motion gate default `emit_when_idle=false`, YOLO pode operar em `events` ou `annotate`. | Pipelines de evento/gate podem parecer “stream quebrado” se usados como vídeo contínuo. | Separar branch contínuo de vídeo e branch de analytics/eventos. |
-| Home Assistant add-on | Portas fixas: API direct 18756, backend 18757, RTSP 18758, HLS 18759, WHEP 18760, UDP WebRTC 18762. | Se MediaMTX escolher outra porta, app recebe URL não alcançável pela LAN. | Falhar rápido se `engine.status.ports.hls != 18759` no add-on. |
+| Home Assistant add-on | Contrato público mínimo: API/direct + HLS proxy em 18756, backend/ingress 18757, RTSP diagnóstico 18758, WHEP 18760 e UDP WebRTC 18762. HLS MediaMTX direto é interno por padrão. | Se a API montar URL sem prefixo de ingress, ou promover warning WebRTC/porta a causa raiz, o usuário vê erro/fallback mesmo com HLS saudável. | Usar helper único de URL pública de mídia, HLS-first em HA, snapshot de portas do Supervisor e `network_contract_error` apenas para erro bloqueante do transporte selecionado. |
 
 ---
 
@@ -259,20 +309,26 @@ last error
 
 ### 3.10. Contrato do Home Assistant add-on
 
-**Estado saudável:** portas ativas do MediaMTX batem com portas expostas pelo add-on.
+**Estado saudável:** HLS público usa a porta principal/API ou o ingress do HA via proxy assinado; RTSP/WebRTC usam portas próprias apenas quando o usuário habilita esses transportes.
 
 ```text
 expected_direct_api_port = 18756
 expected_backend_port = 18757
 expected_rtsp_port = 18758
-expected_hls_port = 18759
+internal_hls_port = 18759
 expected_webrtc_port = 18760
 expected_webrtc_udp_port = 18762
+public_hls_mode = proxy
 
-if actual_hls_port != expected_hls_port:
-  streaming_health = "unreachable_from_lan"
-  do_not_return_hls_url_to_native_app = true
+if request_has_ingress_prefix and public_hls_mode == "proxy":
+  do_not_compare_request_port_8090_to_direct_api_18756_as_root_cause = true
+
+if public_hls_mode == "proxy":
+  hls_url_must_be_api_proxy_url_with_ingress_prefix_when_present = true
+  internal_hls_port_mismatch_is_diagnostic_not_public_blocker = true
 ```
+
+Para WebRTC, `18760/tcp` e `18762/udp` continuam contrato público quando baixa latência/PTZ é usada. A ausência de `18762/udp` no snapshot do Supervisor é warning de WebRTC, não erro de HLS.
 
 ---
 
@@ -549,11 +605,17 @@ on_demand:
   active_playback_heartbeat_ttl_seconds: 20
 ```
 
-2. Endpoint `demand/heartbeat` ou reutilizar `demand/prime` com TTL explícito:
+2. Endpoint `demand/heartbeat` com TTL explícito:
 
 ```text
-POST /api/streams/transmissions/{id}/demand/prime
-body: { ttl_seconds: 20, playback_session_id: "..." }
+POST /api/streams/transmissions/{id}/demand/heartbeat
+body: {
+  playback_session_id: "...",
+  output_id: "hls_stable_apple_tv",
+  quality_profile_id: "stable_apple_tv",
+  transport: "hls",
+  ttl_seconds: 45
+}
 ```
 
 3. Guardar `last_active_playback_heartbeat_at` por publisher/transmission.
@@ -594,6 +656,7 @@ body: { ttl_seconds: 20, playback_session_id: "..." }
 - Durante reprodução HLS, `viewer_count=0` por poucos segundos não derruba publisher.
 - Ao fechar app ou sair da tela sem PiP, publisher para após grace configurado.
 - Logs explicam por que publisher parou.
+- Erro de heartbeat vira telemetria/diagnóstico e não muda estado do player sozinho.
 
 ---
 
@@ -601,11 +664,11 @@ body: { ttl_seconds: 20, playback_session_id: "..." }
 
 ### Objetivo
 
-Garantir que a porta HLS entregue ao app seja a mesma exposta pela rede do add-on.
+Garantir que a URL HLS entregue ao app/web seja pública e tocável como está, usando proxy assinado na porta principal/API por padrão. Portas RTSP/WebRTC continuam explícitas para diagnóstico e baixa latência.
 
 ### Por que é P0
 
-A API pode estar saudável em `18756`, mas HLS em `18759` pode estar indisponível se o MediaMTX usou porta alternativa. O app recebe uma URL válida internamente e inválida para Apple TV.
+A API pode estar saudável via HA ingress ou `18756`, mas a playlist HLS pode ser reescrita sem o prefixo público correto. Isso gera 404 em media playlist/segmentos e pode virar tela preta, fallback HLS em loop ou falso `network_contract_error`.
 
 ### Mudanças práticas
 
@@ -623,14 +686,16 @@ A API pode estar saudável em `18756`, mas HLS em `18759` pode estar indisponív
 ```text
 TOPOSYNC_EXPECTED_DIRECT_API_PORT=18756
 TOPOSYNC_EXPECTED_RTSP_PORT=18758
-TOPOSYNC_EXPECTED_HLS_PORT=18759
 TOPOSYNC_EXPECTED_WEBRTC_PORT=18760
 TOPOSYNC_EXPECTED_WEBRTC_UDP_PORT=18762
 TOPOSYNC_FAIL_STREAM_URLS_ON_PORT_MISMATCH=1
+TOPOSYNC_STREAMING_HLS_PUBLIC_MODE=proxy
+TOPOSYNC_ADDON_NETWORK_SNAPSHOT_PATH=/data/runtime/streaming/addon-network.json
 ```
 
-2. No startup, garantir que defaults de settings continuem forçando `preferred_ports`.
-3. Opcionalmente, expor endpoint local do add-on com expected ports.
+2. Não publicar `18759/tcp` como requisito público quando `public_hls_mode=proxy`.
+3. No startup, escrever snapshot das portas realmente mapeadas pelo Supervisor.
+4. Usar o snapshot para warnings WebRTC, por exemplo UDP `18762/udp` ausente.
 
 #### Backend/server
 
@@ -642,50 +707,71 @@ TOPOSYNC_FAIL_STREAM_URLS_ON_PORT_MISMATCH=1
 
 **Implementar:**
 
-1. Ao resolver URLs, comparar active ports com expected envs quando `expose_to_lan=true`.
-2. Se mismatch e fail flag ativa, não retornar HLS normal:
+1. Criar helper único de URL pública de mídia:
+
+```text
+media_url_origin = request.scheme + "://" + request.host + request.root_path_or_x_ingress_path
+```
+
+2. Usar esse helper em `/transmissions/{id}/urls`, rewrite do proxy HLS, `engine/status` e diagnostic snapshot.
+3. Em `public_hls_mode=proxy`, retornar HLS como URL de API/proxy:
 
 ```json
 {
   "engine_running": true,
-  "outputs": [],
-  "warnings": [
-    "HLS active port 18888 does not match exposed add-on port 18759."
+  "outputs": [
+    {
+      "protocol": "hls",
+      "url": "http://homeassistant.local:8090/api/hassio_ingress/<id>/api/streams/media/hls/front/index.m3u8?media_token=..."
+    }
   ]
 }
 ```
 
-3. Em `engine/status`, incluir:
+4. Em `network_contract`, separar porta direta de origem pública de mídia:
 
 ```json
 {
   "network_contract": {
-    "expected_hls_port": 18759,
-    "actual_hls_port": 18888,
-    "hls_reachable_from_lan": false,
-    "status": "port_mismatch"
+    "public_hls_mode": "proxy",
+    "public_base_path": "/api/hassio_ingress/<id>",
+    "media_url_origin": "http://homeassistant.local:8090/api/hassio_ingress/<id>",
+    "blocking_errors": [],
+    "warnings": []
   }
 }
 ```
 
+5. `network_contract_error` só deve ser root cause quando houver `blocking_errors` que afetem o transporte selecionado. Warnings de WebRTC não devem esconder HLS saudável.
+
 #### App React Native/Expo
 
-- Mostrar erro específico:
+- Aceitar HLS assinado com `requires_auth=false` e renovar URL antes de expirar.
+- Enviar `demand/heartbeat` durante playback/PiP.
+- Não derrubar player por erro transitório de health/telemetria/heartbeat.
+- Mostrar erro específico apenas quando houver erro bloqueante real:
 
 ```text
-Streaming port mismatch. HLS is running on 18888 but Home Assistant exposes 18759.
+Secure HLS URL could not be renewed. Check connection and sign in again.
 ```
 
 #### Frontend/web
 
-- Exibir alerta vermelho em settings.
-- Botão “reclaim/restart engine” quando houver processo stale ou porta ocupada.
+- Em Home Assistant + HLS proxy, Auto deve usar HLS-first em qualquer navegador.
+- PTZ aberto pode pedir WebRTC temporariamente; falha WHEP cai para HLS sem overlay crítico.
+- Antes de entregar HLS ao `<video>`, fazer probe leve de master/media playlist e tail segment.
+- Renovar signed URL ao voltar para foreground e em 401/403.
+- Enviar `demand/heartbeat` enquanto tile/PiP/PTZ estiver ativo.
+- Modal avançada mostra `public_base_path`, `media_url_origin`, resultado do último probe HLS e warnings WHEP/ICE.
 
 ### Critérios de aceite
 
-- Se `18759` estiver ocupada e MediaMTX mudar de porta, o app não tenta tocar URL inválida.
-- Web e app mostram erro claro.
-- Runbook sugere liberar porta ou reiniciar/reclaim MediaMTX.
+- URL HLS retornada por ingress inclui `/api/hassio_ingress/<id>/...`.
+- Playlist reescrita preserva prefixo de ingress em variantes, segmentos, `EXT-X-MAP` e `EXT-X-KEY`.
+- Ingress `:8090` não vira mismatch contra `18756`.
+- HLS proxy funciona mesmo sem `18760/18762`.
+- WebRTC só vira erro raiz quando for forçado ou não houver fallback HLS saudável.
+- Web/app mantêm publisher vivo com heartbeat enquanto playback estiver ativo.
 
 ---
 
@@ -966,14 +1052,14 @@ Permitir HLS remoto seguro sem depender de cookies/headers do player nativo.
 
 **Implementar opções em ordem de maturidade:**
 
-1. LAN sem auth na mídia, API autenticada por pairing, não expor HLS para internet.
-2. Token de mídia em query string com TTL curto:
+1. HLS signed proxy pela API principal, com token de mídia de TTL curto e rewrite de playlist/segmentos:
 
 ```text
-http://host:18759/path/index.m3u8?media_token=...
+http://host:18756/api/streams/media/hls/front/index.m3u8?media_token=...
+http://homeassistant.local:8090/api/hassio_ingress/<id>/api/streams/media/hls/front/index.m3u8?media_token=...
 ```
 
-3. URL assinada por transmission/output/device:
+2. URL assinada por transmission/output/device:
 
 ```json
 {
@@ -984,7 +1070,7 @@ http://host:18759/path/index.m3u8?media_token=...
 }
 ```
 
-4. Proxy HLS Toposync para reescrever playlist e segmentos quando for necessário controle total.
+3. Modo `open` ou HLS direto apenas como opção explícita de LAN/diagnóstico, com aviso forte.
 
 #### App React Native/Expo
 
@@ -1078,7 +1164,9 @@ Usar baixa latência onde ela realmente importa: dashboard web, PTZ e interativi
 
 #### Frontend/web
 
-- Player WHEP para baixa latência.
+- Em `Auto`, usar HLS-first quando `environment=home_assistant_addon` e `public_hls_mode=proxy`.
+- Player WHEP para baixa latência quando usuário força “Baixa latência” ou abre PTZ.
+- Tratar WHEP 404/readiness inicial como retry/fallback por janela curta.
 - Mostrar ICE state, RTT, packet loss, jitter.
 
 #### App React Native/Expo
@@ -1089,6 +1177,7 @@ Usar baixa latência onde ela realmente importa: dashboard web, PTZ e interativi
 
 - Dashboard web com latência menor que HLS.
 - HLS continua fallback estável.
+- Falha WebRTC recuperada por HLS não aparece como causa raiz principal.
 
 ---
 
@@ -1103,10 +1192,12 @@ Transformar os bugs de streaming em cenários reproduzíveis.
 | Teste | Esperado | Camadas |
 |---|---|---|
 | Desconectar câmera por 30s | App mostra stale/offline, recupera ao reconectar. | Server, App, Web |
-| Ocupar porta 18759 | Sistema não entrega URL HLS inválida. | Add-on, Server, App |
+| HA ingress HLS | URL e playlist reescrita preservam `/api/hassio_ingress/<id>`. | Add-on, Server, Web |
+| HLS proxy com porta interna divergente | Sistema não exige `18759` publicamente quando `public_hls_mode=proxy`. | Add-on, Server, App, Web |
 | Matar FFmpeg | Publisher reinicia ou falha com estado claro. | Server, Web |
 | Forçar viewer_count=0 por 5s | HLS ativo não é derrubado. | Server, App |
 | Congelar playlist HLS | App detecta `stale_hls` e recupera/avisa. | App, Server |
+| WHEP 404 inicial com HLS saudável | Evento fica debug/fallback e não vira causa raiz. | Server, Web |
 | Trocar fullscreen/PiP/background | Sem stream fantasma, sem queda indevida. | App, Server |
 | Quad 4 streams por 1h | CPU estável, stalls dentro do limite. | Server, App |
 
@@ -1118,7 +1209,8 @@ quad 1h: sem queda sistemática de publisher
 selected_frame_age_seconds p99 < 3s quando source saudável
 hls_media_sequence_age_seconds p99 < 3 * target_duration
 encoder_restart_count = 0 no perfil stable_apple_tv
-port_mismatch detectado antes do app tocar
+blocking network contract detectado antes do app tocar
+HA ingress nao reporta 8090 vs 18756 como causa raiz quando HLS proxy esta saudavel
 ```
 
 ---
@@ -1129,8 +1221,8 @@ port_mismatch detectado antes do app tocar
 |---|---|---|---|---|
 | P0.1 Freshness/stale | Runtime state, writer bridge, diagnostics API. | Health badges e tabela de diagnóstico. | Overlay stale e consumo de health. | Não aplicável. |
 | P0.2 HLS liveness | Probe opcional e exposição de config HLS. | Painel de probe. | Monitor playlist/segmentos durante playback. | Não aplicável. |
-| P0.3 On-demand | Grace por protocolo, heartbeat TTL, eventos de parada. | Configuração e visualização de demand. | Heartbeat prime enquanto toca/PiP. | Não aplicável. |
-| P0.4 Portas | Validar expected vs actual no URL resolve/status. | Alerta de mismatch e ação reclaim. | Erro específico de port mismatch. | Definir envs e portas expostas. |
+| P0.3 On-demand | `demand/heartbeat`, lease TTL, eventos de parada. | Heartbeat do tile e visualização de demand. | Heartbeat enquanto toca/PiP. | Não aplicável. |
+| P0.4 Portas/ingress | Helper de URL pública, HLS proxy, contrato bloqueante por transporte. | HLS-first no HA, probe HLS e diagnóstico de ingress. | HLS assinado tocável como retornado, sem falso port mismatch. | Snapshot Supervisor e portas públicas mínimas. |
 | P0.5 Pipelines contínuos | Wizard/templates/validação de graph. | UI de pipeline ligado ao stream. | Mensagem event-gated, se houver. | Não aplicável. |
 | P1.1 Observabilidade | Métricas MediaMTX, health endpoint, logs estruturados. | Dashboard e pacote diagnóstico. | Playback session telemetry. | Expor info de rede/portas. |
 | P1.2 Encoder | Quarentena e perfis FFmpeg. | Mostrar codec/restart/stderr. | Overlay publisher restarting. | Não aplicável. |
@@ -1213,9 +1305,11 @@ Quando o Apple TV/mobile congelar:
    - Sim: FFmpeg/encoder/MediaMTX.
 5. **`source_frame_age_seconds` velho?**
    - Sim: câmera/RTSP/pipeline.
-6. **Porta HLS ativa bate com exposta?**
-   - Não: HA/add-on/rede.
-7. **Só o Apple TV congela, mas VLC/curl seguem?**
+6. **A URL HLS pública contém o prefixo correto de ingress/proxy?**
+   - Não: contrato HA/add-on/proxy HLS.
+7. **Há warning WebRTC, mas HLS está saudável?**
+   - Sim: tratar como fallback/diagnóstico, não causa raiz do playback.
+8. **Só o Apple TV/mobile congela, mas VLC/curl seguem?**
    - App lifecycle, AVPlayer, PiP/background ou rede do dispositivo.
 
 ---
@@ -1226,8 +1320,8 @@ Quando o Apple TV/mobile congelar:
 2. **Default para quad:** output low, 360p ou 540p, 10 FPS.
 3. **Default para câmera crítica:** manter publisher quente ou grace maior.
 4. **Default para analytics:** stream contínuo limpo + metadados/eventos separados.
-5. **Default para segurança LAN:** API autenticada e HLS aberto apenas na LAN.
-6. **Default para remoto:** URL assinada ou proxy HLS, não cookie implícito.
+5. **Default para segurança LAN/remoto:** API autenticada e HLS signed proxy pela porta principal.
+6. **Default para diagnóstico avançado:** HLS direto/open e RTSP só quando explicitamente habilitados.
 7. **Default para UX:** stale explícito após poucos segundos, não freeze silencioso.
 
 ---
@@ -1236,17 +1330,17 @@ Quando o Apple TV/mobile congelar:
 
 ### Normas e especificações
 
-1. IETF RFC 8216, **HTTP Live Streaming**.  
+1. IETF RFC 8216, **HTTP Live Streaming**.
    https://datatracker.ietf.org/doc/html/rfc8216
-2. IETF RFC 3550, **RTP: A Transport Protocol for Real-Time Applications**.  
+2. IETF RFC 3550, **RTP: A Transport Protocol for Real-Time Applications**.
    https://datatracker.ietf.org/doc/html/rfc3550
-3. IETF RFC 7826, **Real-Time Streaming Protocol Version 2.0**.  
+3. IETF RFC 7826, **Real-Time Streaming Protocol Version 2.0**.
    https://datatracker.ietf.org/doc/html/rfc7826
-4. Apple Developer, **HTTP Live Streaming**.  
+4. Apple Developer, **HTTP Live Streaming**.
    https://developer.apple.com/streaming/
-5. Apple Developer, **HLS Authoring Specification for Apple Devices**.  
+5. Apple Developer, **HLS Authoring Specification for Apple Devices**.
    https://developer.apple.com/documentation/http-live-streaming/hls-authoring-specification-for-apple-devices
-6. W3C, **WebRTC Statistics API**.  
+6. W3C, **WebRTC Statistics API**.
    https://www.w3.org/TR/webrtc-stats/
 
 ### QoE e literatura aplicada
@@ -1259,23 +1353,23 @@ Quando o Apple TV/mobile congelar:
 
 ### Documentação de implementação
 
-12. MediaMTX, **Configuration file reference**.  
+12. MediaMTX, **Configuration file reference**.
     https://mediamtx.org/docs/references/configuration-file
-13. MediaMTX, **Metrics**.  
+13. MediaMTX, **Metrics**.
     https://mediamtx.org/docs/features/metrics
-14. MediaMTX, **HLS**.  
+14. MediaMTX, **HLS**.
     https://mediamtx.org/docs/usage/read#hls
-15. MediaMTX, **WebRTC/WHEP**.  
+15. MediaMTX, **WebRTC/WHEP**.
     https://mediamtx.org/docs/usage/read#webrtc
-16. FFmpeg, **Protocols documentation**.  
+16. FFmpeg, **Protocols documentation**.
     https://ffmpeg.org/ffmpeg-protocols.html
-17. FFmpeg, **Codecs documentation**.  
+17. FFmpeg, **Codecs documentation**.
     https://ffmpeg.org/ffmpeg-codecs.html
-18. Expo, **expo-video**.  
+18. Expo, **expo-video**.
     https://docs.expo.dev/versions/latest/sdk/video/
-19. Home Assistant Developer Docs, **Ingress and presentation**.  
+19. Home Assistant Developer Docs, **Ingress and presentation**.
     https://developers.home-assistant.io/docs/apps/presentation/
-20. ONVIF, **Network Video Streaming and device interoperability materials**.  
+20. ONVIF, **Network Video Streaming and device interoperability materials**.
     https://www.onvif.org/
 
 ---

@@ -225,7 +225,12 @@ class CameraSourceHealthStore:
         if last_frame is not None and last_frame > 0.0:
             age = max(0.0, float(now_unix) - float(last_frame))
 
-        status = _status_from_error(record.last_error)
+        fresh_frame = age is not None and age < self.stale_after_seconds
+        last_error = record.last_error
+        if fresh_frame and _is_non_actionable_decode_warning(last_error):
+            last_error = None
+
+        status = None if fresh_frame else _status_from_error(last_error)
         if forced_status == "idle":
             status = "idle"
         elif (
@@ -252,6 +257,7 @@ class CameraSourceHealthStore:
         return replace(
             record,
             source_frame_age_seconds=age,
+            last_error=last_error,
             status=status,
             recommended_action=_recommended_action(status),
         )
@@ -372,6 +378,25 @@ def _status_from_error(value: str | None) -> CameraSourceStatus | None:
     ):
         return "unreachable"
     return "error"
+
+
+def _is_non_actionable_decode_warning(value: str | None) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    return any(
+        term in text
+        for term in (
+            "error while decoding mb",
+            "bytestream",
+            "concealing",
+            "cabac decode",
+            "reference picture missing",
+            "left block unavailable",
+            "decode_slice_header error",
+            "no frame!",
+        )
+    )
 
 
 def _recommended_action(status: CameraSourceStatus) -> str:

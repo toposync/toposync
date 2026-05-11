@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "com.toposync.ai",
   "name": "AI",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "requires_core_version": ">=0.3.6",
   "frontend": {
     "kind": "module-federation",

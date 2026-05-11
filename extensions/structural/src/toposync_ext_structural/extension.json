@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "com.toposync.structural",
   "name": "Structural",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "frontend": {
     "kind": "module-federation",
     "remote_entry": "remoteEntry.js",

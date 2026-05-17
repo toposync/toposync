@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "com.toposync.cameras",
   "name": "Cameras",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "frontend": {
     "kind": "module-federation",
     "remote_entry": "remoteEntry.js",

@@ -246,7 +246,7 @@ export function ProcessingServerModal({ open, server, onClose, onSave, onDelete,
         <div className="processingServerAuthRow">
           <label className="pipelinesLabel">
             <span>{t("core.ui.processing_server_modal.field.username")}</span>
-            <input className="pipelinesInput" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="mateus" />
+            <input className="pipelinesInput" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="username" />
           </label>
 
           <label className="pipelinesLabel">

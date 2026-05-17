@@ -7,11 +7,12 @@ import {
   OPERATOR_FRIENDLY_NAMES,
   PIPELINE_OPERATOR_GROUP_ORDER,
   PIPELINE_OPERATOR_GROUPS,
+  PIPELINE_OPERATOR_RECIPES,
   PIPELINE_OPERATOR_UX,
   PIPELINE_PRESET_OPERATOR_IDS,
 } from "./constants";
 import type { PipelineOperatorGroupId, PipelineOperatorLevel, PipelineOperatorUxMetadata } from "./constants";
-import type { DragInsertPosition, InteractiveBuildResult, InteractiveFromGraphResult, InteractiveStep } from "./types";
+import type { DragInsertPosition, InteractiveBuildResult, InteractiveFromGraphResult, InteractiveStep, PipelineCatalogItem } from "./types";
 
 type TranslationFunction = typeof i18n.t;
 
@@ -217,6 +218,55 @@ export function sortPipelineOperatorsForToolbar(
   return [...operators].sort(comparePipelineOperatorsByUx);
 }
 
+function resolvePipelineCatalogItemUx(item: PipelineCatalogItem): ResolvedPipelineOperatorUx {
+  if (item.kind === "recipe") {
+    return {
+      group: item.recipe.group,
+      level: item.recipe.level,
+      order: item.recipe.order,
+      aliases: [],
+    };
+  }
+  return resolvePipelineOperatorUx(item.operator);
+}
+
+function pipelineCatalogItemName(item: PipelineCatalogItem): string {
+  if (item.kind === "recipe") {
+    return i18n.t(item.recipe.labelKey, {}, item.recipe.fallbackLabel);
+  }
+  return prettyOperatorName(item.operator.id);
+}
+
+export function comparePipelineCatalogItemsByUx(
+  left: PipelineCatalogItem,
+  right: PipelineCatalogItem,
+): number {
+  const leftUx = resolvePipelineCatalogItemUx(left);
+  const rightUx = resolvePipelineCatalogItemUx(right);
+  const leftGroupRank = PIPELINE_OPERATOR_GROUP_RANK.get(leftUx.group) ?? Number.MAX_SAFE_INTEGER;
+  const rightGroupRank = PIPELINE_OPERATOR_GROUP_RANK.get(rightUx.group) ?? Number.MAX_SAFE_INTEGER;
+
+  if (leftGroupRank !== rightGroupRank) return leftGroupRank - rightGroupRank;
+  if (leftUx.level !== rightUx.level) return leftUx.level === "basic" ? -1 : 1;
+  if (leftUx.order !== rightUx.order) return leftUx.order - rightUx.order;
+
+  const nameComparison = pipelineCatalogItemName(left).localeCompare(pipelineCatalogItemName(right));
+  if (nameComparison !== 0) return nameComparison;
+  return left.id.localeCompare(right.id);
+}
+
+export function buildPipelineCatalogItemsForToolbar(
+  operatorsById: Record<string, PipelineOperatorDefinition>,
+): PipelineCatalogItem[] {
+  const operators = Object.values(operatorsById).map(
+    (operator): PipelineCatalogItem => ({ kind: "operator", id: operator.id, operator }),
+  );
+  const recipes = PIPELINE_OPERATOR_RECIPES.filter((recipe) =>
+    recipe.steps.every((step) => Boolean(operatorsById[step.operatorId])),
+  ).map((recipe): PipelineCatalogItem => ({ kind: "recipe", id: recipe.id, recipe }));
+  return [...recipes, ...operators].sort(comparePipelineCatalogItemsByUx);
+}
+
 function normalizeAlertParam(value: unknown): string | number | boolean {
   if (Array.isArray(value)) {
     return value
@@ -367,7 +417,6 @@ function edgePolicyFor(
   const sourceCaps = new Set((source?.capabilities ?? []).map((value) => String(value).trim().toLowerCase()));
   const targetCaps = new Set((target?.capabilities ?? []).map((value) => String(value).trim().toLowerCase()));
 
-  if (targetCaps.has("heavy_compute")) return { maxsize: 1, drop_policy: "latest_only" };
   if (sourceCaps.has("source")) return { maxsize: 1, drop_policy: "latest_only" };
   if (targetCaps.has("sink") || targetCaps.has("origin_only")) {
     return { maxsize: 128, drop_policy: "drop_oldest" };
@@ -375,6 +424,7 @@ function edgePolicyFor(
   if (sourceCaps.has("split_stream")) {
     return { maxsize: 64, drop_policy: "keyed_latest_only" };
   }
+  if (targetCaps.has("heavy_compute")) return { maxsize: 1, drop_policy: "latest_only" };
   return { maxsize: 32, drop_policy: "drop_oldest" };
 }
 

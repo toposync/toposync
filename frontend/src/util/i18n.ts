@@ -435,6 +435,39 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.streams.advanced.no_runtime_outputs": "No runtime outputs reported yet.",
     "core.ui.streams.health.event_gated_idle": "No event currently. Waiting for motion/detection...",
     "core.ui.streams.health.event_gated_idle_label": "Waiting event",
+    "core.ui.streams.health.camera_last_frame_suffix": " Last camera frame: {{time}}.",
+    "core.ui.streams.health.camera_source_stale": "Camera source stale.{{suffix}} Recovering...",
+    "core.ui.streams.health.camera_source_unreachable": "Camera source unreachable. Check camera power/network/RTSP URL.",
+    "core.ui.streams.health.camera_source_unauthorized": "Camera source unauthorized. Check camera credentials.",
+    "core.ui.streams.health.camera_source_error": "Camera source error.",
+    "core.ui.streams.source.status": "Source status",
+    "core.ui.streams.source.camera": "Camera",
+    "core.ui.streams.source.backend": "Backend",
+    "core.ui.streams.source.transport": "Transport",
+    "core.ui.streams.source.age": "Source age",
+    "core.ui.streams.source.capture_fps": "Capture FPS",
+    "core.ui.streams.source.target_fps": "Target FPS",
+    "core.ui.streams.source.frames_captured": "Frames captured",
+    "core.ui.streams.source.restarts": "Restarts",
+    "core.ui.streams.source.decode_failures": "Decode failures",
+    "core.ui.streams.source.last_frame": "Last camera frame",
+    "core.ui.streams.source.recommended_action": "Recommended action",
+    "core.ui.streams.source.status.healthy": "healthy",
+    "core.ui.streams.source.status.starting": "starting",
+    "core.ui.streams.source.status.stale": "stale",
+    "core.ui.streams.source.status.unreachable": "unreachable",
+    "core.ui.streams.source.status.unauthorized": "unauthorized",
+    "core.ui.streams.source.status.error": "error",
+    "core.ui.streams.source.status.idle": "idle",
+    "core.ui.streams.source.status.unknown": "unknown",
+    "core.ui.streams.source.action.healthy": "Camera source is healthy.",
+    "core.ui.streams.source.action.starting": "Waiting for the camera source to produce frames.",
+    "core.ui.streams.source.action.stale": "Camera source stopped producing fresh frames. Test RTSP and check camera load/network.",
+    "core.ui.streams.source.action.unreachable": "Check camera power, network reachability and RTSP URL.",
+    "core.ui.streams.source.action.unauthorized": "Check camera username/password or ONVIF-generated RTSP credentials.",
+    "core.ui.streams.source.action.idle": "Camera source is idle because the source is not currently active.",
+    "core.ui.streams.source.action.error": "Review the camera backend error and test RTSP.",
+    "core.ui.streams.source.action.unknown": "Insufficient source health data.",
 
     "core.ui.main2d.cluster.title": "Multiple items ({{count}})",
     "core.ui.main2d.cluster.tooltip": "{{count}} items",
@@ -581,7 +614,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.alerts.vision_model_unresolved.message": "The {{task}} vision model is not ready: {{error}}",
     "core.ui.pipelines.alerts.vision_model_unresolved.suggestion": "Open this step and select an available model, import a model manifest, or configure the model_id expected by this processing server.",
     "core.ui.pipelines.alerts.vision_model_artifact_missing.message": "Model file for {{model}} is missing on the selected processing server.",
-    "core.ui.pipelines.alerts.vision_model_artifact_missing.suggestion": "Open this step and prepare or upload the ONNX model file, or choose another model that is already available.",
+    "core.ui.pipelines.alerts.vision_model_artifact_missing.suggestion": "Open this step and prepare or upload the model artifact, or choose another model that is already available.",
     "core.ui.pipelines.alerts.vision.task.classification": "classification",
     "core.ui.pipelines.alerts.vision.task.detection": "detection",
     "core.ui.pipelines.alerts.vision.task.pose": "pose",
@@ -656,6 +689,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.vision.track": "Track objects",
     "core.ui.pipelines.operator_name.vision.classify_image": "Classify scene",
     "core.ui.pipelines.operator_name.vision.detect": "Detect objects",
+    "core.ui.pipelines.recipe_name.vision.detect_objects": "Detect objects",
+    "core.ui.pipelines.recipe_name.vision.detect_and_track_objects": "Detect and track objects",
     "core.ui.pipelines.operator_name.vision.segment_instances": "Separate objects from scene",
     "core.ui.pipelines.operator_name.vision.crop_objects": "Crop objects",
     "core.ui.pipelines.operator_name.vision.pose_estimate": "Estimate pose",
@@ -717,6 +752,10 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Classifies the full image with semantic labels and attaches the results to the flow.",
     "core.ui.pipelines.operator_description.vision.detect":
       "Finds objects such as people, cars, and animals, and can annotate, filter, or create events.",
+    "core.ui.pipelines.recipe_description.vision.detect_objects":
+      "Creates detection events for objects found in the stream.",
+    "core.ui.pipelines.recipe_description.vision.detect_and_track_objects":
+      "Detects objects, keeps their identity over time, and emits one event per tracked object.",
     "core.ui.pipelines.operator_description.vision.segment_instances":
       "Generates one mask per detected object and keeps the mask and detection box together.",
     "core.ui.pipelines.operator_description.vision.crop_objects":
@@ -1334,9 +1373,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.model_availability_reason.fallback": "Using the built-in shortlist fallback.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.ok": "Ready to run on the selected processing server.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.artifact_missing":
-      "The model is known, but its ONNX file has not been installed on that machine yet.",
+      "The model is known, but its artifact has not been installed on that machine yet.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.backend_unavailable":
-      "ONNX Runtime is not available on that machine.",
+      "The required vision runtime backend is not available on that machine.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.hardware_incompatible":
       "The machine/providers do not match this model's validated hardware profiles.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.runtime_unsupported":
@@ -1441,7 +1480,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.install_reason.runtime_unsupported":
       "Automatic installation is only available for supported ONNX Runtime models.",
     "core.ui.pipelines.panels.yolo.install_reason.artifact_format_unsupported":
-      "Automatic installation is only available for ONNX artifacts.",
+      "Automatic installation is not available for this artifact format yet.",
     "core.ui.pipelines.panels.yolo.install_reason.checksum_missing":
       "Automatic installation needs a checksum so the downloaded file can be verified safely.",
     "core.ui.pipelines.panels.yolo.install_reason.license_restricted":
@@ -1533,9 +1572,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.profile_hint": "Recommended hardware profile for this machine: {{profile}}.",
     "core.ui.pipelines.panels.yolo.selected_model_details": "Advanced model details",
     "core.ui.pipelines.panels.yolo.details_runtime": "Runtime: {{runtime}}",
+    "core.ui.pipelines.panels.yolo.details_artifact": "Artifact: {{format}} • input {{dtype}}",
     "core.ui.pipelines.panels.yolo.details_input": "Input size: {{width}}x{{height}}",
     "core.ui.pipelines.panels.yolo.details_classes": "Classes: {{count}} (source: {{source}})",
     "core.ui.pipelines.panels.yolo.details_providers": "Compatible providers: {{providers}}",
+    "core.ui.pipelines.panels.yolo.details_accelerators": "Accelerators: {{accelerators}}",
     "core.ui.pipelines.panels.yolo.details_license": "Licenses: code {{code}} • weights {{weights}}",
     "core.ui.pipelines.panels.yolo.details_commercial": "Commercial status: {{status}}",
     "core.ui.pipelines.panels.yolo.details_resource": "Estimated resource tier: {{tier}}",
@@ -2285,6 +2326,41 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.streams.advanced.webrtc": "Stats WebRTC",
     "core.ui.streams.advanced.outputs": "Saídas",
     "core.ui.streams.advanced.no_runtime_outputs": "Nenhuma saída runtime reportada ainda.",
+    "core.ui.streams.health.event_gated_idle": "Nenhum evento agora. Aguardando movimento/detecção...",
+    "core.ui.streams.health.event_gated_idle_label": "Aguardando evento",
+    "core.ui.streams.health.camera_last_frame_suffix": " Último frame da câmera: {{time}}.",
+    "core.ui.streams.health.camera_source_stale": "Fonte da câmera travada.{{suffix}} Recuperando...",
+    "core.ui.streams.health.camera_source_unreachable": "Fonte da câmera inalcançável. Verifique energia, rede e URL RTSP.",
+    "core.ui.streams.health.camera_source_unauthorized": "Fonte da câmera não autorizada. Verifique as credenciais.",
+    "core.ui.streams.health.camera_source_error": "Erro na fonte da câmera.",
+    "core.ui.streams.source.status": "Status da fonte",
+    "core.ui.streams.source.camera": "Câmera",
+    "core.ui.streams.source.backend": "Backend",
+    "core.ui.streams.source.transport": "Transporte",
+    "core.ui.streams.source.age": "Idade da fonte",
+    "core.ui.streams.source.capture_fps": "FPS de captura",
+    "core.ui.streams.source.target_fps": "FPS alvo",
+    "core.ui.streams.source.frames_captured": "Frames capturados",
+    "core.ui.streams.source.restarts": "Reinícios",
+    "core.ui.streams.source.decode_failures": "Falhas de decode",
+    "core.ui.streams.source.last_frame": "Último frame da câmera",
+    "core.ui.streams.source.recommended_action": "Ação recomendada",
+    "core.ui.streams.source.status.healthy": "saudável",
+    "core.ui.streams.source.status.starting": "iniciando",
+    "core.ui.streams.source.status.stale": "travada",
+    "core.ui.streams.source.status.unreachable": "inalcançável",
+    "core.ui.streams.source.status.unauthorized": "não autorizada",
+    "core.ui.streams.source.status.error": "erro",
+    "core.ui.streams.source.status.idle": "ociosa",
+    "core.ui.streams.source.status.unknown": "desconhecida",
+    "core.ui.streams.source.action.healthy": "A fonte da câmera está saudável.",
+    "core.ui.streams.source.action.starting": "Aguardando a fonte da câmera produzir frames.",
+    "core.ui.streams.source.action.stale": "A fonte da câmera parou de produzir frames recentes. Teste o RTSP e verifique carga/rede da câmera.",
+    "core.ui.streams.source.action.unreachable": "Verifique energia da câmera, rede e URL RTSP.",
+    "core.ui.streams.source.action.unauthorized": "Verifique usuário/senha da câmera ou credenciais RTSP geradas pelo ONVIF.",
+    "core.ui.streams.source.action.idle": "A fonte da câmera está ociosa porque a origem não está ativa agora.",
+    "core.ui.streams.source.action.error": "Revise o erro do backend da câmera e teste o RTSP.",
+    "core.ui.streams.source.action.unknown": "Dados insuficientes de saúde da fonte.",
 
     "core.ui.main2d.cluster.title": "Vários itens ({{count}})",
     "core.ui.main2d.cluster.tooltip": "{{count}} itens",
@@ -2435,7 +2511,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.alerts.vision_model_unresolved.message": "O modelo de visão de {{task}} não está pronto: {{error}}",
     "core.ui.pipelines.alerts.vision_model_unresolved.suggestion": "Abra esta etapa e selecione um modelo disponível, importe um manifesto de modelo ou configure o model_id esperado por este servidor de processamento.",
     "core.ui.pipelines.alerts.vision_model_artifact_missing.message": "O arquivo do modelo {{model}} está ausente no servidor de processamento selecionado.",
-    "core.ui.pipelines.alerts.vision_model_artifact_missing.suggestion": "Abra esta etapa e prepare ou envie o arquivo ONNX do modelo, ou escolha outro modelo já disponível.",
+    "core.ui.pipelines.alerts.vision_model_artifact_missing.suggestion": "Abra esta etapa e prepare ou envie o artefato do modelo, ou escolha outro modelo já disponível.",
     "core.ui.pipelines.alerts.vision.task.classification": "classificação",
     "core.ui.pipelines.alerts.vision.task.detection": "detecção",
     "core.ui.pipelines.alerts.vision.task.pose": "pose",
@@ -2510,6 +2586,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.vision.track": "Acompanhar objetos",
     "core.ui.pipelines.operator_name.vision.classify_image": "Classificar cena",
     "core.ui.pipelines.operator_name.vision.detect": "Detectar objetos",
+    "core.ui.pipelines.recipe_name.vision.detect_objects": "Detectar objetos",
+    "core.ui.pipelines.recipe_name.vision.detect_and_track_objects": "Detectar e acompanhar objetos",
     "core.ui.pipelines.operator_name.vision.segment_instances": "Separar objetos da cena",
     "core.ui.pipelines.operator_name.vision.crop_objects": "Recortar objetos",
     "core.ui.pipelines.operator_name.vision.pose_estimate": "Estimar pose",
@@ -2571,6 +2649,10 @@ const translationsByLocale: Record<Locale, Translations> = {
       "Classifica a imagem inteira com rótulos semânticos e anexa os resultados ao fluxo.",
     "core.ui.pipelines.operator_description.vision.detect":
       "Encontra objetos como pessoas, carros e animais, podendo anotar, filtrar ou criar eventos.",
+    "core.ui.pipelines.recipe_description.vision.detect_objects":
+      "Cria eventos de detecção para objetos encontrados no fluxo.",
+    "core.ui.pipelines.recipe_description.vision.detect_and_track_objects":
+      "Detecta objetos, mantém a identidade deles ao longo do tempo e emite um evento por objeto acompanhado.",
     "core.ui.pipelines.operator_description.vision.segment_instances":
       "Gera uma máscara por objeto detectado e mantém máscara e caixa de detecção juntas.",
     "core.ui.pipelines.operator_description.vision.crop_objects":
@@ -3195,9 +3277,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.model_availability_reason.ok":
       "Pronto para rodar no servidor de processamento selecionado.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.artifact_missing":
-      "O modelo é conhecido, mas o arquivo ONNX dele ainda não foi instalado nessa máquina.",
+      "O modelo é conhecido, mas o artefato dele ainda não foi instalado nessa máquina.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.backend_unavailable":
-      "O ONNX Runtime não está disponível nessa máquina.",
+      "O backend de runtime de visão necessário não está disponível nessa máquina.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.hardware_incompatible":
       "A máquina/providers não combinam com os perfis de hardware validados deste modelo.",
     "core.ui.pipelines.panels.yolo.model_availability_reason.runtime_unsupported":
@@ -3303,7 +3385,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.install_reason.runtime_unsupported":
       "A instalação automática está disponível apenas para modelos compatíveis com ONNX Runtime.",
     "core.ui.pipelines.panels.yolo.install_reason.artifact_format_unsupported":
-      "A instalação automática está disponível apenas para artefatos ONNX.",
+      "A instalação automática ainda não está disponível para este formato de artefato.",
     "core.ui.pipelines.panels.yolo.install_reason.checksum_missing":
       "A instalação automática precisa de checksum para verificar com segurança o arquivo baixado.",
     "core.ui.pipelines.panels.yolo.install_reason.license_restricted":
@@ -3396,9 +3478,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.yolo.profile_hint": "Perfil de hardware recomendado para esta máquina: {{profile}}.",
     "core.ui.pipelines.panels.yolo.selected_model_details": "Detalhes avançados do modelo",
     "core.ui.pipelines.panels.yolo.details_runtime": "Runtime: {{runtime}}",
+    "core.ui.pipelines.panels.yolo.details_artifact": "Artefato: {{format}} • entrada {{dtype}}",
     "core.ui.pipelines.panels.yolo.details_input": "Tamanho de entrada: {{width}}x{{height}}",
     "core.ui.pipelines.panels.yolo.details_classes": "Classes: {{count}} (fonte: {{source}})",
     "core.ui.pipelines.panels.yolo.details_providers": "Providers compatíveis: {{providers}}",
+    "core.ui.pipelines.panels.yolo.details_accelerators": "Aceleradores: {{accelerators}}",
     "core.ui.pipelines.panels.yolo.details_license": "Licenças: código {{code}} • pesos {{weights}}",
     "core.ui.pipelines.panels.yolo.details_commercial": "Status comercial: {{status}}",
     "core.ui.pipelines.panels.yolo.details_resource": "Faixa estimada de recurso: {{tier}}",

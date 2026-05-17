@@ -98,7 +98,71 @@ export type PipelineOperatorUxMetadata = {
   aliases?: string[];
 };
 
+export type PipelineOperatorRecipeStep = {
+  operatorId: string;
+  defaultsOverride?: Record<string, unknown>;
+};
+
+export type PipelineOperatorRecipeDefinition = {
+  id: string;
+  group: PipelineOperatorGroupId;
+  level: PipelineOperatorLevel;
+  order: number;
+  labelKey: string;
+  descriptionKey: string;
+  fallbackLabel: string;
+  fallbackDescription: string;
+  steps: PipelineOperatorRecipeStep[];
+};
+
 export const PIPELINE_OPERATOR_GROUP_ORDER = Object.keys(PIPELINE_OPERATOR_GROUPS) as PipelineOperatorGroupId[];
+
+export const PIPELINE_OPERATOR_RECIPES = [
+  {
+    id: "recipe.vision.detect_objects",
+    group: "vision",
+    level: "basic",
+    order: 10,
+    labelKey: "core.ui.pipelines.recipe_name.vision.detect_objects",
+    descriptionKey: "core.ui.pipelines.recipe_description.vision.detect_objects",
+    fallbackLabel: "Detect objects",
+    fallbackDescription: "Creates object detection events with sensible defaults.",
+    steps: [
+      {
+        operatorId: "vision.detect",
+        defaultsOverride: {
+          emit_mode: "events",
+        },
+      },
+    ],
+  },
+  {
+    id: "recipe.vision.detect_and_track_objects",
+    group: "vision",
+    level: "basic",
+    order: 20,
+    labelKey: "core.ui.pipelines.recipe_name.vision.detect_and_track_objects",
+    descriptionKey: "core.ui.pipelines.recipe_description.vision.detect_and_track_objects",
+    fallbackLabel: "Detect and track objects",
+    fallbackDescription: "Detects objects and tracks them over time with compatible defaults.",
+    steps: [
+      {
+        operatorId: "vision.detect",
+        defaultsOverride: {
+          emit_mode: "annotate",
+        },
+      },
+      {
+        operatorId: "vision.track",
+        defaultsOverride: {
+          tracker_id: "simple_iou_kalman",
+          emit_mode: "events",
+          close_after_seconds: 5.0,
+        },
+      },
+    ],
+  },
+] satisfies PipelineOperatorRecipeDefinition[];
 
 export const PIPELINE_OPERATOR_UX = {
   "camera.source": { group: "input", level: "basic", order: 10 },
@@ -128,8 +192,8 @@ export const PIPELINE_OPERATOR_UX = {
   "camera.artifact_privacy": { group: "privacy", level: "advanced", order: 10 },
   "camera.image_privacy": { group: "privacy", level: "basic", order: 20 },
 
-  "vision.detect": { group: "vision", level: "basic", order: 10 },
-  "vision.track": { group: "vision", level: "basic", order: 20 },
+  "vision.detect": { group: "vision", level: "advanced", order: 10 },
+  "vision.track": { group: "vision", level: "advanced", order: 20 },
   "vision.classify_image": { group: "vision", level: "advanced", order: 30 },
   "vision.segment_instances": { group: "vision", level: "basic", order: 40 },
   "vision.crop_objects": { group: "vision", level: "basic", order: 50 },

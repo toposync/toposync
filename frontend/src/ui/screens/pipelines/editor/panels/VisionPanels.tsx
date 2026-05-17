@@ -48,6 +48,7 @@ type VisionModelCatalogItem = {
   availabilityReason: string;
   badgeIds: string[];
   runtime: string;
+  artifactFormat: string;
   sourceKind: "official" | "custom";
   custom: boolean;
   artifactExists: boolean;
@@ -56,7 +57,7 @@ type VisionModelCatalogItem = {
   acquisitionReason: string;
   acquisitionSourceKind: string;
   acquisitionSourceLabel: string;
-  acquisitionArtifactSource: "onnx_ready" | "checkpoint_export_required";
+  acquisitionArtifactSource: string;
   acquisition: VisionModelAcquisition;
   installSupported: boolean;
   installReason: string;
@@ -69,8 +70,10 @@ type VisionModelCatalogItem = {
   localBuildRuntime: string;
   localBuildSourceLabel: string;
   compatibleProviderIds: string[];
+  acceleratorIds: string[];
   inputWidth: number;
   inputHeight: number;
+  inputDtype: string;
   classesSource: string;
   classesCount: number;
   codeLicense: string;
@@ -82,7 +85,7 @@ type VisionModelCatalogItem = {
 
 type VisionModelAcquisition = {
   mode: "guided_upload" | "auto_download" | "local_build_assisted";
-  artifactSource: "onnx_ready" | "checkpoint_export_required";
+  artifactSource: string;
   guideUrl: string;
   exportGuideUrl: string;
   sourceUrl: string;
@@ -90,7 +93,7 @@ type VisionModelAcquisition = {
   configUrl: string;
   metafileUrl: string;
   paperUrl: string;
-  builderBackend: "" | "container_local" | "host_python";
+  builderBackend: string;
   supportedPlatforms: string[];
   explicitConsentRequired: boolean;
 };
@@ -160,15 +163,11 @@ function parseCatalogItem(raw: unknown): VisionModelCatalogItem | null {
     availability === "available" || availability === "manifest_only" || availability === "incompatible"
       ? availability
       : "incompatible";
-  const rawArtifactSource = String(raw.acquisition_artifact_source || acquisition?.artifact_source || "onnx_ready").trim();
-  const artifactSource =
-    rawArtifactSource === "checkpoint_export_required" ? "checkpoint_export_required" : "onnx_ready";
+  const artifactSource = String(raw.acquisition_artifact_source || acquisition?.artifact_source || "onnx_ready").trim() || "onnx_ready";
   const rawMode = String(raw.acquisition_mode || acquisition?.mode || "guided_upload").trim();
   const mode: VisionModelAcquisition["mode"] =
     rawMode === "auto_download" || rawMode === "local_build_assisted" ? rawMode : "guided_upload";
-  const rawBuilderBackend = String(acquisition?.builder_backend || "").trim();
-  const builderBackend: VisionModelAcquisition["builderBackend"] =
-    rawBuilderBackend === "container_local" || rawBuilderBackend === "host_python" ? rawBuilderBackend : "";
+  const builderBackend = String(acquisition?.builder_backend || "").trim();
   return {
     modelId,
     displayName: String(raw.display_name || raw.model_id || "").trim() || modelId,
@@ -177,6 +176,7 @@ function parseCatalogItem(raw: unknown): VisionModelCatalogItem | null {
     availabilityReason: String(raw.availability_reason || "").trim(),
     badgeIds: Array.isArray(raw.badge_ids) ? raw.badge_ids.map((value) => String(value || "").trim()).filter(Boolean) : [],
     runtime: String(raw.runtime || "").trim(),
+    artifactFormat: String(raw.artifact_format || "").trim(),
     sourceKind: String(raw.source_kind || "").trim() === "custom" ? "custom" : "official",
     custom: !!raw.custom,
     artifactExists: !!raw.artifact_exists,
@@ -215,8 +215,12 @@ function parseCatalogItem(raw: unknown): VisionModelCatalogItem | null {
     compatibleProviderIds: Array.isArray(raw.compatible_provider_ids)
       ? raw.compatible_provider_ids.map((value) => String(value || "").trim()).filter(Boolean)
       : [],
+    acceleratorIds: Array.isArray(raw.accelerator_ids)
+      ? raw.accelerator_ids.map((value) => String(value || "").trim()).filter(Boolean)
+      : [],
     inputWidth: Number(input?.width ?? 0),
     inputHeight: Number(input?.height ?? 0),
+    inputDtype: String(input?.dtype || "").trim(),
     classesSource: String(classes?.source || "").trim(),
     classesCount: Number(classes?.count ?? 0),
     codeLicense: String(license?.code_license || "").trim(),
@@ -261,6 +265,7 @@ function fallbackCatalogItem(
     availabilityReason: "fallback",
     badgeIds: [],
     runtime,
+    artifactFormat: runtime === "onnxruntime" ? "onnx" : "",
     sourceKind: custom ? "custom" : "official",
     custom,
     artifactExists: true,
@@ -282,8 +287,10 @@ function fallbackCatalogItem(
     localBuildRuntime: "",
     localBuildSourceLabel: "",
     compatibleProviderIds: [],
+    acceleratorIds: [],
     inputWidth: 0,
     inputHeight: 0,
+    inputDtype: "float32",
     classesSource: "",
     classesCount: 0,
     codeLicense: "",
@@ -1586,6 +1593,12 @@ export function VisionConfigCard({
                 {t("core.ui.pipelines.panels.yolo.details_runtime", { runtime: selectedCatalogItem.runtime || "onnxruntime" })}
               </div>
               <div className="pipelinesStepHint">
+                {t("core.ui.pipelines.panels.yolo.details_artifact", {
+                  format: selectedCatalogItem.artifactFormat || "n/a",
+                  dtype: selectedCatalogItem.inputDtype || "float32",
+                })}
+              </div>
+              <div className="pipelinesStepHint">
                 {t("core.ui.pipelines.panels.yolo.details_input", {
                   width: selectedCatalogItem.inputWidth || 0,
                   height: selectedCatalogItem.inputHeight || 0,
@@ -1599,9 +1612,16 @@ export function VisionConfigCard({
               </div>
               <div className="pipelinesStepHint">
                 {t("core.ui.pipelines.panels.yolo.details_providers", {
-                  providers: selectedCatalogItem.compatibleProviderIds.join(", ") || "CPUExecutionProvider",
+                  providers: selectedCatalogItem.compatibleProviderIds.join(", ") || "n/a",
                 })}
               </div>
+              {selectedCatalogItem.acceleratorIds.length ? (
+                <div className="pipelinesStepHint">
+                  {t("core.ui.pipelines.panels.yolo.details_accelerators", {
+                    accelerators: selectedCatalogItem.acceleratorIds.join(", "),
+                  })}
+                </div>
+              ) : null}
               <div className="pipelinesStepHint">
                 {t("core.ui.pipelines.panels.yolo.details_license", {
                   code: selectedCatalogItem.codeLicense || "n/a",

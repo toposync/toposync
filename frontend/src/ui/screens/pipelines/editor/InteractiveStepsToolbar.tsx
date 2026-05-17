@@ -1,29 +1,29 @@
 import React from "react";
 
-import type { PipelineOperatorDefinition } from "../../../../util/api";
 import { i18n } from "../../../../util/i18n";
 
 import { PIPELINE_OPERATOR_GROUPS } from "../constants";
+import type { PipelineCatalogItem } from "../types";
 import { prettyOperatorDescription, prettyOperatorLabel, resolvePipelineOperatorUx } from "../utils";
 
 type Props = {
-  presetOperators: PipelineOperatorDefinition[];
-  onAddStep: (operatorId: string) => void;
+  catalogItems: PipelineCatalogItem[];
+  onAddItem: (item: PipelineCatalogItem) => void;
 };
 
 export function InteractiveStepsToolbar({
-  presetOperators,
-  onAddStep,
+  catalogItems,
+  onAddItem,
 }: Props): React.ReactElement {
   const { t } = i18n.useI18n();
   const [showAdvanced, setShowAdvanced] = React.useState(false);
   const hasAdvanced = React.useMemo(
-    () => presetOperators.some((operator) => resolvePipelineOperatorUx(operator).level === "advanced"),
-    [presetOperators],
+    () => catalogItems.some((item) => resolveCatalogItemUx(item).level === "advanced"),
+    [catalogItems],
   );
   const visibleOperators = React.useMemo(
-    () => presetOperators.filter((operator) => showAdvanced || resolvePipelineOperatorUx(operator).level !== "advanced"),
-    [presetOperators, showAdvanced],
+    () => catalogItems.filter((item) => showAdvanced || resolveCatalogItemUx(item).level !== "advanced"),
+    [catalogItems, showAdvanced],
   );
 
   return (
@@ -43,26 +43,49 @@ export function InteractiveStepsToolbar({
         ) : null}
       </div>
       <div className="pipelinesOperatorButtons">
-        {visibleOperators.map((operator) => {
-          const ux = resolvePipelineOperatorUx(operator);
+        {visibleOperators.map((item) => {
+          const ux = resolveCatalogItemUx(item);
           const group = PIPELINE_OPERATOR_GROUPS[ux.group];
           const groupLabel = t(group.labelKey);
-          const description = prettyOperatorDescription(operator);
+          const label = catalogItemLabel(item, t);
+          const description = catalogItemDescription(item, t);
           return (
             <button
-              key={operator.id}
+              key={item.id}
               className="pillButton pipelinesOperatorButton"
               type="button"
-              onClick={() => onAddStep(operator.id)}
+              onClick={() => onAddItem(item)}
               title={`${t("core.ui.pipelines.editor.operator_group_tooltip", { group: groupLabel })}\n${description}`}
               style={{ "--operator-group-color": group.color } as React.CSSProperties}
             >
               <span className="pipelinesOperatorButtonAccent" aria-hidden="true" />
-              <span>+ {prettyOperatorLabel(operator)}</span>
+              <span>+ {label}</span>
             </button>
           );
         })}
       </div>
     </div>
   );
+}
+
+function resolveCatalogItemUx(item: PipelineCatalogItem): ReturnType<typeof resolvePipelineOperatorUx> {
+  if (item.kind === "recipe") {
+    return {
+      group: item.recipe.group,
+      level: item.recipe.level,
+      order: item.recipe.order,
+      aliases: [],
+    };
+  }
+  return resolvePipelineOperatorUx(item.operator);
+}
+
+function catalogItemLabel(item: PipelineCatalogItem, t: ReturnType<typeof i18n.useI18n>["t"]): string {
+  if (item.kind === "recipe") return t(item.recipe.labelKey, {}, item.recipe.fallbackLabel);
+  return prettyOperatorLabel(item.operator);
+}
+
+function catalogItemDescription(item: PipelineCatalogItem, t: ReturnType<typeof i18n.useI18n>["t"]): string {
+  if (item.kind === "recipe") return t(item.recipe.descriptionKey, {}, item.recipe.fallbackDescription);
+  return prettyOperatorDescription(item.operator);
 }

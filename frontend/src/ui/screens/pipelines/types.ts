@@ -1,5 +1,13 @@
+import type { PipelineOperatorDefinition } from "../../../util/api";
+
+import type { PipelineOperatorRecipeDefinition } from "./constants";
+
 export type EditorMode = "interactive" | "json" | "python";
 export type DragInsertPosition = "before" | "after";
+
+export type PipelineCatalogItem =
+  | { kind: "operator"; id: string; operator: PipelineOperatorDefinition }
+  | { kind: "recipe"; id: string; recipe: PipelineOperatorRecipeDefinition };
 
 export type InteractiveStep = {
   uid: string;

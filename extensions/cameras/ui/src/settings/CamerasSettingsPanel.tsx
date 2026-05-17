@@ -28,6 +28,8 @@ import type {
 import { SubModal } from "../ui/SubModal";
 import { CameraPipelineWizardModal } from "../wizard/CameraPipelineWizardModal";
 
+type TranslateFn = ReturnType<HostI18n["useI18n"]>["t"];
+
 export function createCamerasSettingsPanel(): SettingsPanel {
   return {
     id: CAMERAS_EXTENSION_ID,
@@ -143,6 +145,35 @@ function statusBadgeStyle(status: string): React.CSSProperties {
     textTransform: "uppercase",
     whiteSpace: "nowrap",
   };
+}
+
+function sourceHealthStatusLabel(status: string | null | undefined, t: TranslateFn): string {
+  const normalized = String(status || "unknown").trim().toLowerCase() || "unknown";
+  return t(`ext.cameras.settings.source_health.status.${normalized}`, {}, normalized);
+}
+
+function sourceHealthPathLabel(usedIngest: boolean | null | undefined, t: TranslateFn): string {
+  return usedIngest
+    ? t("ext.cameras.settings.source_health.path.ingest", {}, "ingest")
+    : t("ext.cameras.settings.source_health.path.direct", {}, "direct");
+}
+
+function sourceHealthRecommendedActionLabel(value: string | null | undefined, t: TranslateFn): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const keysByMessage: Record<string, string> = {
+    "Camera source is healthy.": "healthy",
+    "Waiting for the camera source to produce frames.": "starting",
+    "Camera source stopped producing fresh frames. Test RTSP and check camera load/network.": "stale",
+    "Check camera power, network reachability and RTSP URL.": "unreachable",
+    "Check camera username/password or ONVIF-generated RTSP credentials.": "unauthorized",
+    "Camera source is idle because the source is not currently active.": "idle",
+    "Review the camera backend error and test RTSP.": "error",
+    "Insufficient source health data.": "unknown",
+  };
+  const key = keysByMessage[raw];
+  if (!key) return raw;
+  return t(`ext.cameras.settings.source_health.action.${key}`, {}, raw);
 }
 
 function CamerasSettingsPanelContent({
@@ -909,7 +940,7 @@ function CamerasSettingsPanelContent({
                     <div className="rowWrap" style={{ justifyContent: "flex-end", gap: 8 }}>
                       {activeSourceHealth ? (
                         <span className={statusBadgeClass(activeSourceHealth.status)} style={statusBadgeStyle(activeSourceHealth.status)}>
-                          {activeSourceHealth.status}
+                          {sourceHealthStatusLabel(activeSourceHealth.status, t)}
                         </span>
                       ) : null}
                       <button
@@ -961,7 +992,7 @@ function CamerasSettingsPanelContent({
                       </div>
                       <div>
                         <div className="label">{t("ext.cameras.settings.source_health.path", {}, "Path")}</div>
-                        <div>{activeSourceHealth.used_ingest ? "ingest" : "direct"}</div>
+                        <div>{sourceHealthPathLabel(activeSourceHealth.used_ingest, t)}</div>
                       </div>
                       <div>
                         <div className="label">{t("ext.cameras.settings.source_health.last_frame", {}, "Last frame")}</div>
@@ -978,7 +1009,7 @@ function CamerasSettingsPanelContent({
 
                   {activeSourceHealth?.recommended_action ? (
                     <div className="cardMeta" style={{ marginTop: 6 }}>
-                      {activeSourceHealth.recommended_action}
+                      {sourceHealthRecommendedActionLabel(activeSourceHealth.recommended_action, t)}
                     </div>
                   ) : null}
 

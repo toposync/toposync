@@ -33,6 +33,7 @@ type StreamProtocol = "hls" | "rtsp" | "webrtc";
 type StreamQualityPreference = "auto" | "low" | "stable" | "high" | "diagnostic";
 type StreamTransportPreference = "auto" | "webrtc" | "hls";
 type EffectiveTransportMode = "auto_hls" | "auto_webrtc" | "ptz_webrtc" | "hls" | "webrtc" | "hls_fallback" | "auto";
+type TranslateFn = ReturnType<typeof i18n.useI18n>["t"];
 
 type StreamPlaybackPlan = {
   allowHls: boolean;
@@ -144,7 +145,7 @@ function qualityProfileIdForPreference(
   return gridMode === "2x2" ? "quad_grid" : "stable_apple_tv";
 }
 
-function qualityPreferenceLabel(preference: StreamQualityPreference, t: ReturnType<typeof i18n.useI18n>["t"]): string {
+function qualityPreferenceLabel(preference: StreamQualityPreference, t: TranslateFn): string {
   if (preference === "low") return t("core.ui.streams.quality.low", {}, "Low");
   if (preference === "stable") return t("core.ui.streams.quality.stable", {}, "Stable");
   if (preference === "high") return t("core.ui.streams.quality.high", {}, "High");
@@ -152,13 +153,13 @@ function qualityPreferenceLabel(preference: StreamQualityPreference, t: ReturnTy
   return t("core.ui.streams.quality.auto", {}, "Auto");
 }
 
-function transportPreferenceLabel(preference: StreamTransportPreference, t: ReturnType<typeof i18n.useI18n>["t"]): string {
+function transportPreferenceLabel(preference: StreamTransportPreference, t: TranslateFn): string {
   if (preference === "webrtc") return t("core.ui.streams.transport.low_latency", {}, "Low latency");
   if (preference === "hls") return t("core.ui.streams.transport.hls", {}, "HLS");
   return t("core.ui.streams.transport.auto", {}, "Auto");
 }
 
-function effectiveTransportModeLabel(mode: EffectiveTransportMode, t: ReturnType<typeof i18n.useI18n>["t"]): string {
+function effectiveTransportModeLabel(mode: EffectiveTransportMode, t: TranslateFn): string {
   if (mode === "auto_hls") return t("core.ui.streams.transport.effective_auto_hls", {}, "Auto -> HLS");
   if (mode === "auto_webrtc") return t("core.ui.streams.transport.effective_auto_webrtc", {}, "Auto -> WebRTC");
   if (mode === "ptz_webrtc") return t("core.ui.streams.transport.effective_ptz_webrtc", {}, "PTZ -> WebRTC");
@@ -166,6 +167,29 @@ function effectiveTransportModeLabel(mode: EffectiveTransportMode, t: ReturnType
   if (mode === "webrtc") return t("core.ui.streams.transport.low_latency", {}, "Low latency");
   if (mode === "hls_fallback") return t("core.ui.streams.transport.effective_hls_fallback", {}, "HLS fallback");
   return t("core.ui.streams.transport.auto", {}, "Auto");
+}
+
+function sourceHealthStatusLabel(status: string | null | undefined, t: TranslateFn): string {
+  const normalized = String(status || "unknown").trim().toLowerCase() || "unknown";
+  return t(`core.ui.streams.source.status.${normalized}`, {}, normalized);
+}
+
+function sourceHealthRecommendedActionLabel(value: string | null | undefined, t: TranslateFn): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const keysByMessage: Record<string, string> = {
+    "Camera source is healthy.": "healthy",
+    "Waiting for the camera source to produce frames.": "starting",
+    "Camera source stopped producing fresh frames. Test RTSP and check camera load/network.": "stale",
+    "Check camera power, network reachability and RTSP URL.": "unreachable",
+    "Check camera username/password or ONVIF-generated RTSP credentials.": "unauthorized",
+    "Camera source is idle because the source is not currently active.": "idle",
+    "Review the camera backend error and test RTSP.": "error",
+    "Insufficient source health data.": "unknown",
+  };
+  const key = keysByMessage[raw];
+  if (!key) return raw;
+  return t(`core.ui.streams.source.action.${key}`, {}, raw);
 }
 
 function isProbablyMobileTouchBrowser(): boolean {
@@ -677,7 +701,10 @@ function buildRuntimeHealthHint(
   }
   if (sourceHealth?.status === "error") {
     return {
-      message: sourceHealth.recommended_action || sourceHealth.last_error || "Camera source error.",
+      message:
+        sourceHealthRecommendedActionLabel(sourceHealth.recommended_action, t) ||
+        sourceHealth.last_error ||
+        t("core.ui.streams.health.camera_source_error", {}, "Camera source error."),
       tone: "error",
     };
   }
@@ -1000,18 +1027,21 @@ function StreamAdvancedSettingsModal({
       <section className="streamsAdvancedSection">
         <div className="streamsAdvancedSectionTitle">{t("core.ui.streams.advanced.source", {}, "Camera source")}</div>
         <div className="streamsAdvancedDetailGrid">
-          <TechnicalDetailRow label="Source status" value={sourceHealth?.status || "-"} />
-          <TechnicalDetailRow label="Camera" value={sourceHealth?.camera_name || sourceHealth?.camera_id || "-"} />
-          <TechnicalDetailRow label="Backend" value={sourceHealth?.backend || sourceHealth?.configured_backend || "-"} />
-          <TechnicalDetailRow label="Transport" value={sourceHealth?.rtsp_transport || "-"} />
-          <TechnicalDetailRow label="Source age" value={formatRuntimeAge(sourceHealth?.source_frame_age_seconds)} />
-          <TechnicalDetailRow label="Capture FPS" value={formatTechnicalNumber(sourceHealth?.capture_fps, " fps", 1)} />
-          <TechnicalDetailRow label="Target FPS" value={formatTechnicalNumber(sourceHealth?.target_fps, " fps", 1)} />
-          <TechnicalDetailRow label="Frames captured" value={formatTechnicalNumber(sourceHealth?.frames_captured, "", 0)} />
-          <TechnicalDetailRow label="Restarts" value={formatTechnicalNumber(sourceHealth?.restarts_total, "", 0)} />
-          <TechnicalDetailRow label="Decode failures" value={formatTechnicalNumber(sourceHealth?.decode_failures, "", 0)} />
-          <TechnicalDetailRow label="Last camera frame" value={formatUnixDateTime(sourceHealth?.last_frame_at_unix)} />
-          <TechnicalDetailRow label="Recommended action" value={sourceHealth?.recommended_action || "-"} />
+          <TechnicalDetailRow label={t("core.ui.streams.source.status", {}, "Source status")} value={sourceHealthStatusLabel(sourceHealth?.status, t)} />
+          <TechnicalDetailRow label={t("core.ui.streams.source.camera", {}, "Camera")} value={sourceHealth?.camera_name || sourceHealth?.camera_id || "-"} />
+          <TechnicalDetailRow label={t("core.ui.streams.source.backend", {}, "Backend")} value={sourceHealth?.backend || sourceHealth?.configured_backend || "-"} />
+          <TechnicalDetailRow label={t("core.ui.streams.source.transport", {}, "Transport")} value={sourceHealth?.rtsp_transport || "-"} />
+          <TechnicalDetailRow label={t("core.ui.streams.source.age", {}, "Source age")} value={formatRuntimeAge(sourceHealth?.source_frame_age_seconds)} />
+          <TechnicalDetailRow label={t("core.ui.streams.source.capture_fps", {}, "Capture FPS")} value={formatTechnicalNumber(sourceHealth?.capture_fps, " fps", 1)} />
+          <TechnicalDetailRow label={t("core.ui.streams.source.target_fps", {}, "Target FPS")} value={formatTechnicalNumber(sourceHealth?.target_fps, " fps", 1)} />
+          <TechnicalDetailRow label={t("core.ui.streams.source.frames_captured", {}, "Frames captured")} value={formatTechnicalNumber(sourceHealth?.frames_captured, "", 0)} />
+          <TechnicalDetailRow label={t("core.ui.streams.source.restarts", {}, "Restarts")} value={formatTechnicalNumber(sourceHealth?.restarts_total, "", 0)} />
+          <TechnicalDetailRow label={t("core.ui.streams.source.decode_failures", {}, "Decode failures")} value={formatTechnicalNumber(sourceHealth?.decode_failures, "", 0)} />
+          <TechnicalDetailRow label={t("core.ui.streams.source.last_frame", {}, "Last camera frame")} value={formatUnixDateTime(sourceHealth?.last_frame_at_unix)} />
+          <TechnicalDetailRow
+            label={t("core.ui.streams.source.recommended_action", {}, "Recommended action")}
+            value={sourceHealthRecommendedActionLabel(sourceHealth?.recommended_action, t) || "-"}
+          />
         </div>
         {sourceHealth?.last_error ? <div className="streamsAdvancedNote isError">{sourceHealth.last_error}</div> : null}
       </section>

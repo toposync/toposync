@@ -6,8 +6,9 @@ import { cleanupPipelineStorage } from "../../../util/api";
 import { i18n } from "../../../util/i18n";
 
 import { NODE_ID_RE } from "./constants";
-import type { DragInsertPosition, InteractiveBuildResult, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "./types";
+import type { DragInsertPosition, InteractiveBuildResult, InteractiveStep, PipelineCatalogItem, SelectOption, TelemetryFieldInspectorRequest } from "./types";
 import {
+  buildPipelineCatalogItemsForToolbar,
   createInteractiveStep,
   isRecord,
   jsonPretty,
@@ -16,7 +17,6 @@ import {
   pipelineAlertSeverityLabel,
   prettyOperatorName,
   safeJsonParse,
-  sortPipelineOperatorsForToolbar,
 } from "./utils";
 import {
   bytesToGiBValue,
@@ -281,8 +281,8 @@ export function InteractivePipelineEditor({
     [operatorsById],
   );
 
-  const presetOperators = useMemo(
-    () => sortPipelineOperatorsForToolbar(Object.values(operatorsById)),
+  const catalogItems = useMemo(
+    () => buildPipelineCatalogItemsForToolbar(operatorsById),
     [locale, operatorsById],
   );
 
@@ -490,6 +490,34 @@ export function InteractivePipelineEditor({
     [isCameraSourceOperator, operatorsById, setInteractiveSteps, setInteractiveWarning],
   );
 
+  const addInteractiveCatalogItem = useCallback(
+    (item: PipelineCatalogItem) => {
+      if (item.kind === "operator") {
+        addInteractiveStep(item.operator.id);
+        return;
+      }
+
+      setInteractiveSteps((prev) => {
+        const used = new Set(prev.map((step) => step.nodeId));
+        const nextSteps: InteractiveStep[] = [];
+        for (const recipeStep of item.recipe.steps) {
+          const operator = operatorsById[recipeStep.operatorId];
+          if (!operator) return prev;
+          nextSteps.push(
+            createInteractiveStep(
+              recipeStep.operatorId,
+              { ...(operator.defaults ?? {}), ...(recipeStep.defaultsOverride ?? {}) },
+              used,
+            ),
+          );
+        }
+        return [...prev, ...nextSteps];
+      });
+      setInteractiveWarning(null);
+    },
+    [addInteractiveStep, operatorsById, setInteractiveSteps, setInteractiveWarning],
+  );
+
   const updateInteractiveStep = useCallback(
     (uid: string, patch: Partial<InteractiveStep>) => {
       setInteractiveSteps((prev) => prev.map((step) => (step.uid === uid ? { ...step, ...patch } : step)));
@@ -614,8 +642,8 @@ export function InteractivePipelineEditor({
   return (
     <div className="pipelinesInteractiveRoot">
       <InteractiveStepsToolbar
-        presetOperators={presetOperators}
-        onAddStep={addInteractiveStep}
+        catalogItems={catalogItems}
+        onAddItem={addInteractiveCatalogItem}
       />
 
       {interactiveWarning ? (

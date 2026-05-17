@@ -394,7 +394,7 @@ type ThrottleProps = {
 
 export function ThrottleConfigCard({ config, showAdvanced, onUpdateConfig }: ThrottleProps): React.ReactElement {
   const { t } = i18n.useI18n();
-  const intervalSeconds = Number((config as any).interval_seconds ?? 1.0);
+  const intervalSeconds = Number((config as any).interval_seconds ?? 15.0);
   const modeRaw = String((config as any).mode ?? "first").trim().toLowerCase() || "first";
   const keyFieldRaw = String((config as any).key_field ?? "payload.event_id").trim() || "payload.event_id";
 
@@ -407,7 +407,7 @@ export function ThrottleConfigCard({ config, showAdvanced, onUpdateConfig }: Thr
           min={0.01}
           max={120}
           step={0.05}
-          value={Number.isFinite(intervalSeconds) ? intervalSeconds : 1.0}
+          value={Number.isFinite(intervalSeconds) ? intervalSeconds : 15.0}
           onChange={(nextValue) => {
             onUpdateConfig((prev) => ({
               ...prev,

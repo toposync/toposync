@@ -44,7 +44,7 @@ class FPSReducerConfig(BaseModel):
 
 class ThrottleConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    interval_seconds: float = Field(default=1.0, ge=0.01, le=120.0)
+    interval_seconds: float = Field(default=15.0, ge=0.01, le=120.0)
     key_field: str = Field(default="payload.event_id")
     mode: str = Field(default="first")
 

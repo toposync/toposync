@@ -17,6 +17,31 @@ function installInteractionGuards(): void {
   win.__toposyncInteractionGuards = true;
 
   let lastTouchEndAt = 0;
+  const nativeDefaultActionSelector = [
+    "a[href]",
+    "button",
+    "input",
+    "label",
+    "option",
+    "select",
+    "summary",
+    "textarea",
+    "[contenteditable='true']",
+    "[role='button']",
+    "[role='combobox']",
+    "[role='menuitem']",
+    "[role='option']",
+  ].join(",");
+
+  const targetsNativeDefaultAction = (event: Event): boolean => {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+    if (path.some((item) => item instanceof Element && item.matches(nativeDefaultActionSelector))) return true;
+
+    const target = event.target;
+    if (target instanceof Element) return Boolean(target.closest(nativeDefaultActionSelector));
+    if (target instanceof Node && target.parentElement) return Boolean(target.parentElement.closest(nativeDefaultActionSelector));
+    return false;
+  };
 
   // Prevent browser zoom (trackpad pinch on macOS => wheel with ctrlKey in Chromium).
   window.addEventListener(
@@ -37,6 +62,10 @@ function installInteractionGuards(): void {
   document.addEventListener(
     "touchend",
     (e) => {
+      if (targetsNativeDefaultAction(e)) {
+        lastTouchEndAt = 0;
+        return;
+      }
       const now = Date.now();
       if (now - lastTouchEndAt <= 300) e.preventDefault();
       lastTouchEndAt = now;

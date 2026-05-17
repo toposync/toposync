@@ -158,14 +158,14 @@ class DslGraphBuilder:
         source_caps = self._get_caps(source_operator_id)
         target_caps = self._get_caps(target_operator_id)
 
-        if "heavy_compute" in target_caps:
-            return 1, DropPolicy.LATEST_ONLY.value
         if "source" in source_caps:
             return 1, DropPolicy.LATEST_ONLY.value
         if "sink" in target_caps or "origin_only" in target_caps:
             return 128, DropPolicy.DROP_OLDEST.value
         if "split_stream" in source_caps:
             return 64, DropPolicy.KEYED_LATEST_ONLY.value
+        if "heavy_compute" in target_caps:
+            return 1, DropPolicy.LATEST_ONLY.value
         return 32, DropPolicy.DROP_OLDEST.value
 
     def connect(

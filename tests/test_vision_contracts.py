@@ -144,6 +144,30 @@ def test_model_manifest_normalizes_capabilities_and_registry_filters_reid() -> N
     assert [item.model_id for item in registry.list_manifests(capability="reid")] == ["fake.reid"]
 
 
+def test_model_manifest_accepts_future_runtime_and_accelerator_metadata() -> None:
+    manifest = ModelManifest(
+        model_id="future.edge.detector",
+        display_name="Future Edge Detector",
+        task="detection",
+        runtime=" TFLITE_EDGETPU ",
+        artifact_format=" TFLITE ",
+        artifact_path="models/future_edge_detector_edgetpu.tflite",
+        input={"dtype": " UINT8 ", "width": 320, "height": 320},
+        hardware_profiles={"accelerators": [" Edge_TPU ", "edge_tpu", "HAILO"]},
+        acquisition={
+            "artifact_source": " TFLITE_COMPILED ",
+            "builder_backend": " EDGE_TPU_COMPILER ",
+        },
+    )
+
+    assert manifest.runtime == "tflite_edgetpu"
+    assert manifest.artifact_format == "tflite"
+    assert manifest.input.dtype == "uint8"
+    assert manifest.hardware_profiles.accelerators == ["edge_tpu", "hailo"]
+    assert manifest.acquisition.artifact_source == "tflite_compiled"
+    assert manifest.acquisition.builder_backend == "edge_tpu_compiler"
+
+
 def test_model_manifest_resolves_adapter_family_with_fallback_to_postprocess_type() -> None:
     manifest = ModelManifest(
         model_id="fake.detector",

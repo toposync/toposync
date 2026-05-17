@@ -120,7 +120,7 @@ def _vision_model_diagnostics(task: str) -> Any:
                 code="vision_model_artifact_missing",
                 message=f"Model file for {display_name} is missing on the selected processing server.",
                 suggestion=(
-                    "Open this step and prepare or upload the ONNX model file, "
+                    "Open this step and prepare or upload the model artifact, "
                     "or choose another model that is already available."
                 ),
                 details={"task": task, "model_id": manifest.model_id, "model": display_name},

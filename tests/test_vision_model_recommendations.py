@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from toposync_ext_vision.registry import build_default_model_registry, get_default_model_install_manager
+from toposync_ext_vision.registry import (
+    ModelManifest,
+    ModelRegistry,
+    build_default_model_registry,
+    get_default_model_install_manager,
+)
 from toposync_ext_vision.registry.recommendations import (
     build_task_model_catalog,
     list_official_detection_shortlist,
@@ -98,6 +103,46 @@ def test_detection_recommendation_prefers_medium_for_strong_cuda_hosts(tmp_path:
     assert recommendation["profile"] == "cuda_quality"
     assert recommendation["items"][0]["model_id"] == "rfdetr_det_medium"
     assert "recommended" in recommendation["items"][0]["badge_ids"]
+
+
+def test_future_runtime_manifest_is_listed_without_claiming_runtime_support(tmp_path: Path) -> None:
+    artifact_path = tmp_path / "future_detector_edgetpu.tflite"
+    artifact_path.write_bytes(b"future-tflite-placeholder")
+    registry = ModelRegistry(
+        [
+            ModelManifest(
+                model_id="future.edge.detector",
+                display_name="Future Edge Detector",
+                task="detection",
+                runtime="tflite_edgetpu",
+                artifact_format="tflite",
+                artifact_path=str(artifact_path),
+                input={"dtype": "uint8", "width": 320, "height": 320, "layout": "nhwc"},
+                hardware_profiles={"accelerators": ["edge_tpu"]},
+                acquisition={
+                    "artifact_source": "tflite_compiled",
+                    "builder_backend": "edge_tpu_compiler",
+                },
+            )
+        ]
+    )
+
+    catalog = build_task_model_catalog(
+        task="detection",
+        execution_providers=["CPUExecutionProvider"],
+        model_registry=registry,
+    )
+
+    item = catalog["items"][0]
+    assert item["model_id"] == "future.edge.detector"
+    assert item["runtime"] == "tflite_edgetpu"
+    assert item["artifact_format"] == "tflite"
+    assert item["availability"] == "incompatible"
+    assert item["availability_reason"] == "backend_unavailable"
+    assert item["accelerator_ids"] == ["edge_tpu"]
+    assert item["input"]["dtype"] == "uint8"
+    assert item["acquisition"]["artifact_source"] == "tflite_compiled"
+    assert item["acquisition"]["builder_backend"] == "edge_tpu_compiler"
 
 
 def test_builtin_rtmdet_catalog_blocks_remote_install_when_redistribution_is_not_allowed(monkeypatch) -> None:  # noqa: ANN001

@@ -171,6 +171,68 @@ def test_import_custom_classification_manifest_appears_in_classification_catalog
         assert custom_item["provenance"]["origin"] == "custom_manifest"
 
 
+def test_import_future_runtime_manifest_is_cataloged_as_backend_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_path = tmp_path / "future_detector_edgetpu.tflite"
+    model_path.write_bytes(b"future-tflite-placeholder")
+    manifest_payload = {
+        "model_id": "future.edge.detector",
+        "display_name": "Future Edge Detector",
+        "task": "detection",
+        "runtime": "tflite_edgetpu",
+        "artifact_format": "tflite",
+        "artifact_path": str(model_path),
+        "input": {
+            "width": 320,
+            "height": 320,
+            "dtype": "uint8",
+            "layout": "nhwc",
+            "color_order": "rgb",
+        },
+        "postprocess": {
+            "type": "ssd_boxes",
+            "output_name": "boxes",
+            "label_output_name": "classes",
+            "box_format": "xyxy01",
+        },
+        "classes": {"source": "coco80"},
+        "hardware_profiles": {"accelerators": ["edge_tpu"]},
+        "acquisition": {
+            "mode": "guided_upload",
+            "artifact_source": "tflite_compiled",
+            "builder_backend": "edge_tpu_compiler",
+        },
+    }
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        import_res = client.post(
+            "/api/processing-servers/local/vision/manifests/import",
+            json={"manifest_text": json.dumps(manifest_payload)},
+        )
+        assert import_res.status_code == 200, import_res.text
+        body = import_res.json()
+        assert body["model_id"] == "future.edge.detector"
+        assert body["runtime"] == "tflite_edgetpu"
+        assert body["artifact_exists"] is True
+
+        status_res = client.get("/api/processing-servers/local/status")
+        assert status_res.status_code == 200
+        status_body = status_res.json()
+        detection_catalog = status_body["status"]["vision"]["task_catalogs"]["detection"]["items"]
+        future_item = next(item for item in detection_catalog if item["model_id"] == "future.edge.detector")
+        assert future_item["runtime"] == "tflite_edgetpu"
+        assert future_item["artifact_format"] == "tflite"
+        assert future_item["artifact_exists"] is True
+        assert future_item["availability"] == "incompatible"
+        assert future_item["availability_reason"] == "backend_unavailable"
+        assert future_item["accelerator_ids"] == ["edge_tpu"]
+        assert future_item["input"]["dtype"] == "uint8"
+        assert future_item["acquisition"]["artifact_source"] == "tflite_compiled"
+        assert future_item["acquisition"]["builder_backend"] == "edge_tpu_compiler"
+
+
 def test_import_custom_manifest_replace_reports_provenance_diff(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

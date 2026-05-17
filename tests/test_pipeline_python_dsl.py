@@ -73,6 +73,44 @@ my_pipeline = test.source(_id="source") | test.transform(_id="transform")
     assert graph["nodes"]
 
 
+def test_python_dsl_prioritizes_split_stream_edge_policy_before_heavy_compute() -> None:
+    registry = OperatorRegistry()
+    registry.register_operator(
+        operator_id="test.source",
+        inputs=[],
+        outputs=[{"name": "out"}],
+        capabilities=["source"],
+        defaults={},
+    )
+    registry.register_operator(
+        operator_id="test.split",
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["split_stream"],
+        defaults={},
+    )
+    registry.register_operator(
+        operator_id="test.heavy",
+        inputs=[{"name": "in", "required": True}],
+        outputs=[{"name": "out"}],
+        capabilities=["heavy_compute"],
+        defaults={},
+    )
+
+    source = """
+PIPELINE = test.source(_id="source") | test.split(_id="split") | test.heavy(_id="heavy")
+""".strip()
+
+    graph = compile_python_source_to_graph(
+        python_source=source, pipeline_name="split_policy", registry=registry
+    )
+    split_edge = next(
+        edge for edge in graph["edges"] if edge["from"]["node"] == "split"
+    )
+    assert split_edge["maxsize"] == 64
+    assert split_edge["drop_policy"] == "keyed_latest_only"
+
+
 def test_python_dsl_requires_pipeline_root() -> None:
     registry = OperatorRegistry()
     registry.register_operator(

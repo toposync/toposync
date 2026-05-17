@@ -97,3 +97,10 @@ The public surface is task-based, not vendor-based. The official first-party run
   - `emit_mode="annotate"` for frame passthrough with `payload["vision"]["tracks"]`
 - `vision.detect` events are short OPEN/CLOSE notifications; use `vision.track` when you need temporal identity, movement, and long-lived per-object lifecycle.
 - `vision.crop_objects` crops the bbox from a single object lifecycle packet and preserves event/tracking identifiers. It is not instance segmentation.
+
+## Future runtime compatibility
+
+- Pipeline configs must stay task-oriented and model-oriented. Do not add runtime, device, delegate, or vendor-specific toggles such as `use_coral` to `vision.detect`, `vision.classify_image`, or related operators.
+- New inference stacks should be introduced as optional runtime backends plus `ModelManifest` entries. The manifest owns `runtime`, `artifact_format`, `input.dtype`, hardware accelerators, acquisition metadata, and provenance.
+- Do not reuse an existing `model_id` for a materially different artifact/runtime. For example, an Edge TPU/TFLite artifact should get its own model id rather than replacing an ONNX model id.
+- Runtime-specific upload, build, and install flows should remain disabled with clear diagnostics until the backend and artifact validation are implemented.

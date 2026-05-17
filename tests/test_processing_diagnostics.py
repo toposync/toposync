@@ -77,6 +77,7 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     diagnostics = asyncio.run(collect_processing_server_diagnostics())
     vision = diagnostics["vision"]
     assert any(item.get("id") == "onnxruntime" for item in vision["backends"])
+    assert any("onnx" in list(item.get("artifact_formats") or []) for item in vision["backends"])
     assert any("classification" in list(item.get("tasks") or []) for item in vision["backends"])
     assert any("segmentation" in list(item.get("tasks") or []) for item in vision["backends"])
     assert any(item.get("id") == "simple_iou_kalman" for item in vision["trackers_available"])
@@ -88,6 +89,8 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     assert "yolo_device_recommended" not in vision
     assert any(item.get("model_id") == "constant.detector" for item in vision["models_installed"])
     assert any(isinstance(item.get("capabilities"), list) for item in vision["models_installed"])
+    assert any(item.get("artifact_format") == "onnx" for item in vision["models_installed"])
+    assert any(isinstance(item.get("accelerator_ids"), list) for item in vision["models_installed"])
     assert vision["model_registry_errors"] == []
     assert "classification" in vision["recommendations"]
     assert "detection" in vision["recommendations"]
@@ -112,6 +115,9 @@ def test_processing_diagnostics_exposes_vision_backends_models_and_benchmark(
     assert any(isinstance(item.get("capabilities"), list) for item in detection_items)
     assert any(item.get("acquisition_mode") in {"guided_upload", "auto_download", "local_build_assisted"} for item in detection_items)
     assert any(isinstance(item.get("acquisition"), dict) for item in detection_items)
+    assert any(item.get("artifact_format") == "onnx" for item in detection_items)
+    assert any(isinstance(item.get("accelerator_ids"), list) for item in detection_items)
+    assert any(str(item.get("input", {}).get("dtype") or "") == "float32" for item in detection_items)
     assert any("install_supported" in item for item in detection_items)
     assert any("install_reason" in item for item in detection_items)
     assert any("local_build_supported" in item for item in detection_items)

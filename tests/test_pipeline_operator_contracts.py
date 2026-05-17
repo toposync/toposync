@@ -236,3 +236,56 @@ def test_compile_rejects_detect_events_before_tracking() -> None:
 
     with pytest.raises(GraphCompileError, match="emit_mode='annotate'"):
         PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+
+
+def test_compile_accepts_detect_annotate_before_tracking_recipe_shape() -> None:
+    registry = OperatorRegistry()
+    register_builtin_operators(registry)
+    register_camera_pipeline_operators(registry)
+
+    pipeline = Pipeline(
+        name="detect_annotate_before_tracking",
+        graph={
+            "schema_version": 1,
+            "nodes": [
+                {"id": "source", "operator": "core.demo_frame_sequence_source", "config": {}},
+                {
+                    "id": "detect",
+                    "operator": "vision.detect",
+                    "config": {"model_id": "fake.detector", "emit_mode": "annotate"},
+                },
+                {
+                    "id": "track",
+                    "operator": "vision.track",
+                    "config": {
+                        "tracker_id": "simple_iou_kalman",
+                        "emit_mode": "events",
+                        "close_after_seconds": 5.0,
+                    },
+                },
+                {"id": "sink", "operator": "core.sink", "config": {}},
+            ],
+            "edges": [
+                {"from": {"node": "source", "port": "out"}, "to": {"node": "detect", "port": "in"}},
+                {
+                    "from": {"node": "detect", "port": "out"},
+                    "to": {"node": "track", "port": "in"},
+                    "maxsize": 64,
+                    "drop_policy": "keyed_latest_only",
+                },
+                {
+                    "from": {"node": "track", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 64,
+                    "drop_policy": "keyed_latest_only",
+                },
+            ],
+        },
+    )
+
+    compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+    alerts = analyze_compiled_pipeline(pipeline=compiled, registry=registry)
+
+    assert {node.node_id for node in compiled.nodes} == {"source", "detect", "track", "sink"}
+    assert not any(alert.code == "detect_events_before_tracking" for alert in alerts)
+    assert not any(alert.code == "split_stream_latest_only_channel" for alert in alerts)

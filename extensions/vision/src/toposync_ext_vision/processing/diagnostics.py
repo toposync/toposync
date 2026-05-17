@@ -15,8 +15,7 @@ from ..registry.recommendations import (
     recommend_pose_models,
     recommend_segmentation_models,
 )
-from .runtime_backends import available_onnxruntime_execution_providers
-from .runtime_backends import resolve_onnxruntime_execution_providers
+from .runtime_backends import collect_vision_runtime_backends
 from .runtime_upgrades import collect_runtime_upgrade_guidance
 from .trackers import available_tracker_backends
 
@@ -109,41 +108,28 @@ def collect_vision_diagnostics(
 ) -> dict[str, Any]:
     registry = model_registry if isinstance(model_registry, ModelRegistry) else build_default_model_registry()
     install_manager = get_default_model_install_manager(data_dir=data_dir)
-    try:
-        import onnxruntime as ort  # type: ignore
-
-        onnxruntime_installed = True
-        onnxruntime_version = str(getattr(ort, "__version__", "") or "")
-        execution_providers = available_onnxruntime_execution_providers()
-        preferred_execution_providers = resolve_onnxruntime_execution_providers()
-        backend_error = ""
-    except Exception as exc:  # noqa: BLE001
-        onnxruntime_installed = False
-        onnxruntime_version = ""
-        execution_providers = []
-        preferred_execution_providers = []
-        backend_error = str(exc)
+    backends = collect_vision_runtime_backends()
+    onnxruntime_backend = next(
+        (item for item in backends if str(item.get("id") or "").strip() == "onnxruntime"),
+        {},
+    )
+    execution_providers = list(onnxruntime_backend.get("execution_providers") or [])
+    preferred_execution_providers = list(
+        onnxruntime_backend.get("preferred_execution_providers") or []
+    )
 
     models_installed = [
         {
             "model_id": manifest.model_id,
             "task": manifest.task,
             "runtime": manifest.runtime,
+            "artifact_format": manifest.artifact_format,
             "capabilities": list(manifest.capabilities or []),
+            "accelerator_ids": list(manifest.hardware_profiles.accelerators or []),
             "artifact_path": str(manifest.resolve_artifact_path()),
             "artifact_exists": manifest.resolve_artifact_path().is_file(),
         }
         for manifest in registry.list_manifests()
-    ]
-
-    backends = [
-        {
-            "id": "onnxruntime",
-            "available": onnxruntime_installed,
-            "version": onnxruntime_version,
-            "tasks": ["classification", "detection", "segmentation"],
-            "error": backend_error or None,
-        }
     ]
 
     install_jobs = install_manager.snapshot_jobs()
@@ -171,6 +157,7 @@ def collect_vision_diagnostics(
                 task="classification",
                 system_info=system_info,
                 execution_providers=execution_providers,
+                runtime_backends=backends,
                 model_registry=registry,
                 install_manager=install_manager,
             ),
@@ -178,6 +165,7 @@ def collect_vision_diagnostics(
                 task="detection",
                 system_info=system_info,
                 execution_providers=execution_providers,
+                runtime_backends=backends,
                 model_registry=registry,
                 install_manager=install_manager,
             ),
@@ -185,6 +173,7 @@ def collect_vision_diagnostics(
                 task="segmentation",
                 system_info=system_info,
                 execution_providers=execution_providers,
+                runtime_backends=backends,
                 model_registry=registry,
                 install_manager=install_manager,
             ),
@@ -192,6 +181,7 @@ def collect_vision_diagnostics(
                 task="pose",
                 system_info=system_info,
                 execution_providers=execution_providers,
+                runtime_backends=backends,
                 model_registry=registry,
                 install_manager=install_manager,
             ),
@@ -200,24 +190,28 @@ def collect_vision_diagnostics(
             "classification": recommend_classification_models(
                 system_info=system_info,
                 execution_providers=execution_providers,
+                runtime_backends=backends,
                 model_registry=registry,
                 install_manager=install_manager,
             ),
             "detection": recommend_detection_models(
                 system_info=system_info,
                 execution_providers=execution_providers,
+                runtime_backends=backends,
                 model_registry=registry,
                 install_manager=install_manager,
             ),
             "segmentation": recommend_segmentation_models(
                 system_info=system_info,
                 execution_providers=execution_providers,
+                runtime_backends=backends,
                 model_registry=registry,
                 install_manager=install_manager,
             ),
             "pose": recommend_pose_models(
                 system_info=system_info,
                 execution_providers=execution_providers,
+                runtime_backends=backends,
                 model_registry=registry,
                 install_manager=install_manager,
             ),

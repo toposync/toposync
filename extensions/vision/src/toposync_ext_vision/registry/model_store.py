@@ -68,11 +68,6 @@ def validate_custom_manifest_payload(
         raise ModelRegistryError(
             f"Custom manifest task '{manifest.task}' is not supported by the current UI"
         )
-    if manifest.runtime != "onnxruntime":
-        raise ModelRegistryError(
-            f"Custom manifest runtime '{manifest.runtime}' is not supported by the current UI"
-        )
-
     artifact = Path(str(manifest.artifact_path or "")).expanduser()
     if not artifact.is_absolute():
         artifact = (Path.cwd() / artifact).resolve()
@@ -84,6 +79,8 @@ def validate_custom_manifest_payload(
 
 
 def _validate_manifest_runtime(manifest: ModelManifest) -> None:
+    if str(manifest.runtime or "").strip().lower() != "onnxruntime":
+        return
     if manifest.task == "detection":
         from ..processing.runtime_backends import build_detector_backend
 

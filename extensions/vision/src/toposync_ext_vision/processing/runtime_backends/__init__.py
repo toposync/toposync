@@ -11,6 +11,7 @@ from .onnxruntime_backend import (
     prepare_onnx_input,
     resolve_onnxruntime_execution_providers,
 )
+from .catalog import collect_vision_runtime_backends, runtime_backend_status_by_id
 
 __all__ = [
     "OnnxRuntimeClassificationBackend",
@@ -24,4 +25,6 @@ __all__ = [
     "build_segmenter_backend",
     "prepare_onnx_input",
     "resolve_onnxruntime_execution_providers",
+    "collect_vision_runtime_backends",
+    "runtime_backend_status_by_id",
 ]

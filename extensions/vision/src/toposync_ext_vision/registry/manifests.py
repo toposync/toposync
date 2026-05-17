@@ -23,6 +23,7 @@ class ModelInputSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     width: int = Field(default=640, ge=1, le=16384)
     height: int = Field(default=640, ge=1, le=16384)
+    dtype: str = "float32"
     color_order: str = "rgb"
     layout: str = "nchw"
     resize_mode: Literal["stretch", "letterbox"] = "stretch"
@@ -35,6 +36,11 @@ class ModelInputSpec(BaseModel):
     @classmethod
     def _normalize_lower(cls, value: str) -> str:
         return str(value or "").strip().lower()
+
+    @field_validator("dtype")
+    @classmethod
+    def _normalize_dtype(cls, value: str) -> str:
+        return str(value or "").strip().lower() or "float32"
 
     @field_validator("tensor_name")
     @classmethod
@@ -129,12 +135,26 @@ class ModelHardwareProfiles(BaseModel):
     cuda: bool | None = None
     openvino: bool | None = None
     mps: bool | None = None
+    accelerators: list[str] = Field(default_factory=list)
+
+    @field_validator("accelerators")
+    @classmethod
+    def _normalize_accelerators(cls, value: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in list(value or []):
+            item = str(raw or "").strip().lower()
+            if not item or item in seen:
+                continue
+            out.append(item)
+            seen.add(item)
+        return out
 
 
 class ModelAcquisitionSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["guided_upload", "auto_download", "local_build_assisted"] = "guided_upload"
-    artifact_source: Literal["onnx_ready", "checkpoint_export_required"] = "onnx_ready"
+    artifact_source: str = "onnx_ready"
     guide_url: str = ""
     export_guide_url: str = ""
     source_url: str = ""
@@ -142,7 +162,7 @@ class ModelAcquisitionSpec(BaseModel):
     config_url: str = ""
     metafile_url: str = ""
     paper_url: str = ""
-    builder_backend: Literal["", "container_local", "host_python"] = ""
+    builder_backend: str = ""
     supported_platforms: list[str] = Field(default_factory=list)
     explicit_consent_required: bool = False
 
@@ -158,6 +178,16 @@ class ModelAcquisitionSpec(BaseModel):
     @classmethod
     def _trim_urls(cls, value: str) -> str:
         return str(value or "").strip()
+
+    @field_validator("artifact_source")
+    @classmethod
+    def _normalize_artifact_source(cls, value: str) -> str:
+        return str(value or "").strip().lower() or "onnx_ready"
+
+    @field_validator("builder_backend")
+    @classmethod
+    def _normalize_builder_backend(cls, value: str) -> str:
+        return str(value or "").strip().lower()
 
     @field_validator("supported_platforms")
     @classmethod

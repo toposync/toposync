@@ -159,6 +159,8 @@ def _badge_ids_for_manifest(manifest: ModelManifest, *, profile: ProfileId, reco
 
 def _candidate_provider_ids(manifest: ModelManifest) -> list[str]:
     profiles = manifest.hardware_profiles
+    if str(manifest.runtime or "").strip().lower() != "onnxruntime":
+        return []
     ids: list[str] = []
     if bool(profiles.cuda):
         ids.extend(["CUDAExecutionProvider", "TensorrtExecutionProvider"])
@@ -178,6 +180,43 @@ def _candidate_provider_ids(manifest: ModelManifest) -> list[str]:
     return out
 
 
+def _accelerator_ids(manifest: ModelManifest) -> list[str]:
+    return list(manifest.hardware_profiles.accelerators or [])
+
+
+def _runtime_backend_status_by_id(
+    runtime_backends: list[dict[str, Any]] | None,
+    *,
+    execution_providers: list[str] | None,
+) -> dict[str, dict[str, Any]]:
+    backends = list(runtime_backends or [])
+    if not backends:
+        providers = [
+            str(item or "").strip()
+            for item in list(execution_providers or [])
+            if str(item or "").strip()
+        ]
+        backends = [
+            {
+                "id": "onnxruntime",
+                "available": bool(providers),
+                "tasks": ["classification", "detection", "segmentation"],
+                "artifact_formats": ["onnx"],
+                "execution_providers": providers,
+            }
+        ]
+
+    out: dict[str, dict[str, Any]] = {}
+    for raw in backends:
+        if not isinstance(raw, dict):
+            continue
+        backend_id = str(raw.get("id") or "").strip().lower()
+        if not backend_id:
+            continue
+        out[backend_id] = dict(raw)
+    return out
+
+
 def _labels_count(manifest: ModelManifest) -> int:
     try:
         return len(manifest.classes.resolved_labels())
@@ -189,13 +228,24 @@ def _availability_for_manifest(
     manifest: ModelManifest,
     *,
     execution_providers: list[str] | None,
+    runtime_backends: list[dict[str, Any]] | None,
 ) -> tuple[str, str, list[str]]:
     runtime = str(manifest.runtime or "").strip().lower()
+    backend_statuses = _runtime_backend_status_by_id(
+        runtime_backends,
+        execution_providers=execution_providers,
+    )
+    backend_status = backend_statuses.get(runtime)
+    if backend_status is None or not bool(backend_status.get("available")):
+        return "incompatible", "backend_unavailable", []
+
     providers = {str(item or "").strip() for item in list(execution_providers or []) if str(item or "").strip()}
     artifact_exists = manifest.resolve_artifact_path().is_file()
 
     if runtime != "onnxruntime":
-        return "incompatible", "runtime_unsupported", []
+        if not artifact_exists:
+            return "manifest_only", "artifact_missing", []
+        return "available", "ok", []
     if not providers:
         return "incompatible", "backend_unavailable", []
 
@@ -215,12 +265,14 @@ def _catalog_entry(
     profile: ProfileId,
     system_info: dict[str, Any] | None,
     execution_providers: list[str] | None,
+    runtime_backends: list[dict[str, Any]] | None,
     recommended_index: int | None,
     install_manager: VisionModelInstallManager | None,
 ) -> dict[str, Any]:
     availability, availability_reason, compatible_provider_ids = _availability_for_manifest(
         manifest,
         execution_providers=execution_providers,
+        runtime_backends=runtime_backends,
     )
     official = is_official_model_id(manifest.model_id)
     install_info = (
@@ -255,7 +307,9 @@ def _catalog_entry(
         "display_name": manifest.display_name,
         "task": task,
         "runtime": manifest.runtime,
+        "artifact_format": manifest.artifact_format,
         "capabilities": list(manifest.capabilities or []),
+        "accelerator_ids": _accelerator_ids(manifest),
         "artifact_path": str(manifest.resolve_artifact_path()),
         "artifact_exists": manifest.resolve_artifact_path().is_file(),
         "recommended_profiles": list(manifest.recommended_profiles or []),
@@ -304,6 +358,7 @@ def _catalog_entry(
         "input": {
             "width": int(manifest.input.width),
             "height": int(manifest.input.height),
+            "dtype": manifest.input.dtype,
             "layout": manifest.input.layout,
             "color_order": manifest.input.color_order,
             "resize_mode": manifest.input.resize_mode,
@@ -340,6 +395,7 @@ def build_task_model_catalog(
     task: VisionTask,
     system_info: dict[str, Any] | None = None,
     execution_providers: list[str] | None = None,
+    runtime_backends: list[dict[str, Any]] | None = None,
     model_registry: ModelRegistry | None = None,
     install_manager: VisionModelInstallManager | None = None,
 ) -> dict[str, Any]:
@@ -358,6 +414,7 @@ def build_task_model_catalog(
                 profile=profile,
                 system_info=system_info,
                 execution_providers=execution_providers,
+                runtime_backends=runtime_backends,
                 recommended_index=recommended_index,
                 install_manager=install_manager,
             )
@@ -456,6 +513,7 @@ def recommend_detection_models(
     *,
     system_info: dict[str, Any] | None = None,
     execution_providers: list[str] | None = None,
+    runtime_backends: list[dict[str, Any]] | None = None,
     model_registry: ModelRegistry | None = None,
     install_manager: VisionModelInstallManager | None = None,
 ) -> dict[str, Any]:
@@ -463,6 +521,7 @@ def recommend_detection_models(
         task="detection",
         system_info=system_info,
         execution_providers=execution_providers,
+        runtime_backends=runtime_backends,
         model_registry=model_registry,
         install_manager=install_manager,
     )
@@ -478,6 +537,7 @@ def recommend_segmentation_models(
     *,
     system_info: dict[str, Any] | None = None,
     execution_providers: list[str] | None = None,
+    runtime_backends: list[dict[str, Any]] | None = None,
     model_registry: ModelRegistry | None = None,
     install_manager: VisionModelInstallManager | None = None,
 ) -> dict[str, Any]:
@@ -485,6 +545,7 @@ def recommend_segmentation_models(
         task="segmentation",
         system_info=system_info,
         execution_providers=execution_providers,
+        runtime_backends=runtime_backends,
         model_registry=model_registry,
         install_manager=install_manager,
     )
@@ -500,6 +561,7 @@ def recommend_pose_models(
     *,
     system_info: dict[str, Any] | None = None,
     execution_providers: list[str] | None = None,
+    runtime_backends: list[dict[str, Any]] | None = None,
     model_registry: ModelRegistry | None = None,
     install_manager: VisionModelInstallManager | None = None,
 ) -> dict[str, Any]:
@@ -507,6 +569,7 @@ def recommend_pose_models(
         task="pose",
         system_info=system_info,
         execution_providers=execution_providers,
+        runtime_backends=runtime_backends,
         model_registry=model_registry,
         install_manager=install_manager,
     )
@@ -522,6 +585,7 @@ def recommend_classification_models(
     *,
     system_info: dict[str, Any] | None = None,
     execution_providers: list[str] | None = None,
+    runtime_backends: list[dict[str, Any]] | None = None,
     model_registry: ModelRegistry | None = None,
     install_manager: VisionModelInstallManager | None = None,
 ) -> dict[str, Any]:
@@ -529,6 +593,7 @@ def recommend_classification_models(
         task="classification",
         system_info=system_info,
         execution_providers=execution_providers,
+        runtime_backends=runtime_backends,
         model_registry=model_registry,
         install_manager=install_manager,
     )

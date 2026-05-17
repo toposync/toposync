@@ -80,6 +80,12 @@ function imageBounds(element: CompositionElement): BoundsXZ {
   return { minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs) };
 }
 
+function imageMain2DBounds(element: CompositionElement): BoundsXZ | null {
+  const p = parseImageProps(element.props);
+  if (p.mode !== "overlay") return null;
+  return imageBounds(element);
+}
+
 export function createImageElementType(i18n: HostI18n): ElementType {
   const imageCache = new Map<string, HTMLImageElement>();
 
@@ -100,10 +106,10 @@ export function createImageElementType(i18n: HostI18n): ElementType {
       pixel_width: null,
       pixel_height: null,
     },
-    getMain2DBounds: imageBounds,
+    getMain2DBounds: imageMain2DBounds,
     renderMain2DVector: ({ element }) => {
       const p = parseImageProps(element.props);
-      if (p.mode !== "overlay" && p.mode !== "tracing") return null;
+      if (p.mode !== "overlay") return null;
       const url = p.dir && p.file ? imageUrl(p) : "";
       const rotationDeg = (readNumber(element.rotation.y, 0) * -180) / Math.PI;
       const commonProps = {
@@ -112,7 +118,7 @@ export function createImageElementType(i18n: HostI18n): ElementType {
         width: p.width_m,
         height: p.depth_m,
       };
-      const frameStroke = p.mode === "tracing" ? "rgba(15,23,42,0.22)" : "rgba(226,232,240,0.20)";
+      const frameStroke = "rgba(226,232,240,0.20)";
       return (
         <g
           className="mainVector2dImage"
@@ -256,7 +262,7 @@ export function createImageElementType(i18n: HostI18n): ElementType {
 	      ctx.translate(center.x, center.y);
 	      ctx.rotate(-rotationY);
 
-	      if (p.blend === "multiply") ctx.globalCompositeOperation = "multiply";
+	      if (p.mode !== "tracing" && p.blend === "multiply") ctx.globalCompositeOperation = "multiply";
 	      ctx.globalAlpha = p.opacity;
 	      if (image && image.complete && image.naturalWidth > 0) {
 	        ctx.drawImage(image, -widthPx / 2, -depthPx / 2, widthPx, depthPx);

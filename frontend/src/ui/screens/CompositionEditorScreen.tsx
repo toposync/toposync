@@ -151,6 +151,63 @@ const CORE_TOOL_NAVIGATE_ID = "core.navigate";
 const CORE_TOOL_SELECT_ID = "core.select";
 const CORE_TOOL_MEASURE_LINE_ID = "core.measure_line";
 
+type ToolGroupMeta = NonNullable<EditorTool["group"]>;
+type ToolGroupView = {
+  id: string;
+  name: ToolGroupMeta["name"];
+  order: number;
+  tools: EditorTool[];
+};
+
+const TOOL_GROUP_BASIC: ToolGroupMeta = {
+  id: "basic",
+  name: { key: "core.ui.tools.group.basic", fallback: "Basic" },
+  order: 0,
+};
+
+const TOOL_GROUP_REFERENCES: ToolGroupMeta = {
+  id: "references",
+  name: { key: "core.ui.tools.group.references", fallback: "References" },
+  order: 10,
+};
+
+const TOOL_GROUP_STRUCTURE: ToolGroupMeta = {
+  id: "structure",
+  name: { key: "core.ui.tools.group.structure", fallback: "Structure" },
+  order: 20,
+};
+
+const TOOL_GROUP_AREAS: ToolGroupMeta = {
+  id: "areas",
+  name: { key: "core.ui.tools.group.areas", fallback: "Areas" },
+  order: 30,
+};
+
+const TOOL_GROUP_DEVICES: ToolGroupMeta = {
+  id: "devices",
+  name: { key: "core.ui.tools.group.devices", fallback: "Devices" },
+  order: 40,
+};
+
+const TOOL_GROUP_OTHER: ToolGroupMeta = {
+  id: "other",
+  name: { key: "core.ui.tools.group.other", fallback: "Other" },
+  order: 900,
+};
+
+const KNOWN_TOOL_GROUPS: Record<string, ToolGroupMeta> = {
+  [TOOL_GROUP_BASIC.id]: TOOL_GROUP_BASIC,
+  [TOOL_GROUP_REFERENCES.id]: TOOL_GROUP_REFERENCES,
+  [TOOL_GROUP_STRUCTURE.id]: TOOL_GROUP_STRUCTURE,
+  [TOOL_GROUP_AREAS.id]: TOOL_GROUP_AREAS,
+  [TOOL_GROUP_DEVICES.id]: TOOL_GROUP_DEVICES,
+  [TOOL_GROUP_OTHER.id]: TOOL_GROUP_OTHER,
+};
+
+function finiteOrder(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
 export function CompositionEditorScreen({
   compositionName,
   compositions,
@@ -336,95 +393,99 @@ export function CompositionEditorScreen({
   );
 
   const tools = useMemo(() => {
-	    const coreTools: EditorTool[] = [
-	      {
-	        id: CORE_TOOL_NAVIGATE_ID,
-	        name: { key: "core.tools.navigate", fallback: "Navigate" },
-	        description: { key: "core.tools.navigate_desc", fallback: "Pan around the canvas." },
-	        icon: "hand",
-	        createSession: () => ({}),
-	      },
-	      {
-	        id: CORE_TOOL_SELECT_ID,
-	        name: { key: "core.tools.select", fallback: "Select" },
-	        description: { key: "core.tools.select_desc", fallback: "Select and move elements." },
-	        icon: "arrow-pointer",
-	        createSession: () => ({}),
-	      },
-	      {
-	        id: CORE_TOOL_MEASURE_LINE_ID,
-	        name: { key: "core.tools.measure_line", fallback: "Measure" },
-	        description: { key: "core.tools.measure_line_desc", fallback: "Measure a straight line." },
-	        icon: "ruler",
-	        createSession: (toolContext) => {
-	          let startPoint: PlanePoint | null = null;
-	          let currentPoint: PlanePoint | null = null;
+    const coreTools: EditorTool[] = [
+      {
+        id: CORE_TOOL_NAVIGATE_ID,
+        name: { key: "core.tools.navigate", fallback: "Move" },
+        description: { key: "core.tools.navigate_desc", fallback: "Pan around the canvas." },
+        icon: "hand",
+        group: TOOL_GROUP_BASIC,
+        order: 10,
+        createSession: () => ({}),
+      },
+      {
+        id: CORE_TOOL_SELECT_ID,
+        name: { key: "core.tools.select", fallback: "Select" },
+        description: { key: "core.tools.select_desc", fallback: "Select and move elements." },
+        icon: "arrow-pointer",
+        group: TOOL_GROUP_BASIC,
+        order: 20,
+        createSession: () => ({}),
+      },
+      {
+        id: CORE_TOOL_MEASURE_LINE_ID,
+        name: { key: "core.tools.measure_line", fallback: "Measure" },
+        description: { key: "core.tools.measure_line_desc", fallback: "Measure a straight line." },
+        icon: "ruler",
+        group: TOOL_GROUP_BASIC,
+        order: 30,
+        createSession: (toolContext) => {
+          let startPoint: PlanePoint | null = null;
+          let currentPoint: PlanePoint | null = null;
 
-	          function reset() {
-	            startPoint = null;
-	            currentPoint = null;
-	          }
+          function reset() {
+            startPoint = null;
+            currentPoint = null;
+          }
 
-	          function commit(endPoint: PlanePoint) {
-	            if (!startPoint) return;
-	            if (distance(startPoint, endPoint) < 0.05) {
-	              reset();
-	              return;
-	            }
-	            const center = { x: (startPoint.x + endPoint.x) / 2, z: (startPoint.z + endPoint.z) / 2 };
-	            toolContext.createElement(MEASUREMENT_LINE_ELEMENT_TYPE_ID, {
-	              name: "",
-	              position: { x: center.x, y: 0, z: center.z },
-	              props: { a: startPoint, b: endPoint },
-	            });
-	            reset();
-	          }
+          function commit(endPoint: PlanePoint) {
+            if (!startPoint) return;
+            if (distance(startPoint, endPoint) < 0.05) {
+              reset();
+              return;
+            }
+            const center = { x: (startPoint.x + endPoint.x) / 2, z: (startPoint.z + endPoint.z) / 2 };
+            toolContext.createElement(MEASUREMENT_LINE_ELEMENT_TYPE_ID, {
+              name: "",
+              position: { x: center.x, y: 0, z: center.z },
+              props: { a: startPoint, b: endPoint },
+            });
+            reset();
+          }
 
-	          return {
-	            onPointerEvent: (event) => {
-	              if (event.kind === "cancel") {
-	                reset();
-	                return;
-	              }
-	              if (event.kind === "move") {
-	                if (startPoint) currentPoint = event.world;
-	                return;
-	              }
-	              if (event.kind === "down") {
-	                if (event.button !== 0) return;
-	                startPoint = event.world;
-	                currentPoint = event.world;
-	                return;
-	              }
-	              if (event.kind === "up") {
-	                if (event.button !== 0) return;
-	                if (!startPoint) return;
-	                commit(event.world);
-	              }
-	            },
-	            onKeyDown: (event) => {
-	              if (event.key === "Escape") reset();
-	            },
-	            renderOverlay2D: ({ ctx: canvasContext, viewport }) => {
-	              if (!startPoint || !currentPoint) return;
-	              drawMeasurementLine2D({
-	                ctx: canvasContext,
-	                viewport,
-	                aWorld: startPoint,
-	                bWorld: currentPoint,
-	                dashed: true,
-	                showLabel: true,
-	              });
-	            },
-	            getCursor: () => "crosshair",
-	          };
-	        },
-	      },
-	    ];
+          return {
+            onPointerEvent: (event) => {
+              if (event.kind === "cancel") {
+                reset();
+                return;
+              }
+              if (event.kind === "move") {
+                if (startPoint) currentPoint = event.world;
+                return;
+              }
+              if (event.kind === "down") {
+                if (event.button !== 0) return;
+                startPoint = event.world;
+                currentPoint = event.world;
+                return;
+              }
+              if (event.kind === "up") {
+                if (event.button !== 0) return;
+                if (!startPoint) return;
+                commit(event.world);
+              }
+            },
+            onKeyDown: (event) => {
+              if (event.key === "Escape") reset();
+            },
+            renderOverlay2D: ({ ctx: canvasContext, viewport }) => {
+              if (!startPoint || !currentPoint) return;
+              drawMeasurementLine2D({
+                ctx: canvasContext,
+                viewport,
+                aWorld: startPoint,
+                bWorld: currentPoint,
+                dashed: true,
+                showLabel: true,
+              });
+            },
+            getCursor: () => "crosshair",
+          };
+        },
+      },
+    ];
 
-    const extTools = [...editorTools].sort((a, b) =>
-      resolveLocalizedString(a.name).localeCompare(resolveLocalizedString(b.name)),
-    );
+    const extTools = [...editorTools];
 
     const placementTools: EditorTool[] = elementTypes
       .filter((elType) => elType.layerGroup !== "walls" && elType.layerGroup !== "areas")
@@ -434,6 +495,8 @@ export function CompositionEditorScreen({
         name: elType.name,
         description: elType.description,
         icon: "plus",
+        group: TOOL_GROUP_OTHER,
+        order: 0,
         createSession: ({ createElement: create, openEditor }) => ({
           onPointerEvent: (evt) => {
             if (evt.kind !== "down") return;
@@ -454,6 +517,43 @@ export function CompositionEditorScreen({
     for (const tool of tools) out[tool.id] = tool;
     return out;
   }, [tools]);
+
+  const groupedTools = useMemo<ToolGroupView[]>(() => {
+    const groupsById = new Map<string, ToolGroupView>();
+
+    for (const tool of tools) {
+      const rawGroup = tool.group ?? TOOL_GROUP_OTHER;
+      const groupId = rawGroup.id?.trim() || TOOL_GROUP_OTHER.id;
+      const fallbackGroup = KNOWN_TOOL_GROUPS[groupId];
+      const groupOrder = finiteOrder(rawGroup.order, finiteOrder(fallbackGroup?.order, TOOL_GROUP_OTHER.order ?? 900));
+      const groupName = rawGroup.name ?? fallbackGroup?.name ?? groupId;
+      const existing = groupsById.get(groupId);
+
+      if (existing) {
+        existing.order = Math.min(existing.order, groupOrder);
+        existing.tools.push(tool);
+        continue;
+      }
+
+      groupsById.set(groupId, { id: groupId, name: groupName, order: groupOrder, tools: [tool] });
+    }
+
+    const compareTools = (a: EditorTool, b: EditorTool) => {
+      const orderDelta = finiteOrder(a.order, 0) - finiteOrder(b.order, 0);
+      if (orderDelta !== 0) return orderDelta;
+      return resolveLocalizedString(a.name).localeCompare(resolveLocalizedString(b.name), locale);
+    };
+
+    const groups = [...groupsById.values()];
+    for (const group of groups) group.tools.sort(compareTools);
+    groups.sort((a, b) => {
+      const orderDelta = a.order - b.order;
+      if (orderDelta !== 0) return orderDelta;
+      return resolveLocalizedString(a.name).localeCompare(resolveLocalizedString(b.name), locale);
+    });
+
+    return groups;
+  }, [locale, tools]);
 
   useEffect(() => {
     if (selectedToolId && !toolsById[selectedToolId]) {
@@ -727,32 +827,41 @@ export function CompositionEditorScreen({
             </div>
           ) : (
             <div className="railScroll railScrollTools">
-              <div className="elementButtonGrid">
-                {tools.map((tool) => {
-                  const isSelected = selectedToolId === tool.id;
-                  const toolName = resolveLocalizedString(tool.name);
-                  return (
-                    <button
-                      className={["elementTypeButton", isSelected ? "isSelected" : ""].join(" ")}
-                      key={tool.id}
-                      type="button"
-                      title={toolName}
-                      onClick={() => {
-                        setSelectedToolId((prev) => {
-                          if (tool.id === CORE_TOOL_NAVIGATE_ID) return CORE_TOOL_NAVIGATE_ID;
-                          if (tool.id === CORE_TOOL_SELECT_ID) return CORE_TOOL_SELECT_ID;
-                          return prev === tool.id ? CORE_TOOL_NAVIGATE_ID : tool.id;
-                        });
-                      }}
-                    >
-                      <span className="toolLabel">
-                        {tool.icon ? <Icon name={tool.icon} className="toolIcon" /> : null}
-                        <span>{toolName}</span>
-                      </span>
-                      <span className="elementTypeButtonHint">{isSelected ? <Icon name="check" /> : null}</span>
-                    </button>
-                  );
-                })}
+              <div className="toolGroups">
+                {groupedTools.map((group) => (
+                  <div className="toolGroup" key={group.id}>
+                    <div className="toolGroupTitle">{resolveLocalizedString(group.name)}</div>
+                    <div className="elementButtonGrid">
+                      {group.tools.map((tool) => {
+                        const isSelected = selectedToolId === tool.id;
+                        const toolName = resolveLocalizedString(tool.name);
+                        const toolDescription = resolveLocalizedString(tool.description);
+                        const toolTitle = toolDescription ? `${toolName}\n${toolDescription}` : toolName;
+                        return (
+                          <button
+                            className={["elementTypeButton", isSelected ? "isSelected" : ""].join(" ")}
+                            key={tool.id}
+                            type="button"
+                            title={toolTitle}
+                            onClick={() => {
+                              setSelectedToolId((prev) => {
+                                if (tool.id === CORE_TOOL_NAVIGATE_ID) return CORE_TOOL_NAVIGATE_ID;
+                                if (tool.id === CORE_TOOL_SELECT_ID) return CORE_TOOL_SELECT_ID;
+                                return prev === tool.id ? CORE_TOOL_NAVIGATE_ID : tool.id;
+                              });
+                            }}
+                          >
+                            <span className="toolLabel">
+                              {tool.icon ? <Icon name={tool.icon} className="toolIcon" /> : null}
+                              <span>{toolName}</span>
+                            </span>
+                            <span className="elementTypeButtonHint">{isSelected ? <Icon name="check" /> : null}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}

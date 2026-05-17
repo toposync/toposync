@@ -14,6 +14,12 @@ import { filenameStem, readImageDimensions } from "../imageUtils";
 
 type Mode = "overlay" | "tracing";
 
+const TOOL_GROUP_REFERENCES: NonNullable<EditorTool["group"]> = {
+  id: "references",
+  name: { key: "core.ui.tools.group.references", fallback: "References" },
+  order: 10,
+};
+
 function createAddImageTool(i18n: HostI18n, mode: Mode): EditorTool {
   const id = mode === "tracing" ? ADD_TRACING_IMAGE_TOOL_ID : ADD_OVERLAY_IMAGE_TOOL_ID;
   const nameKey = mode === "tracing" ? "ext.images.tool.add_tracing" : "ext.images.tool.add_overlay";
@@ -22,9 +28,11 @@ function createAddImageTool(i18n: HostI18n, mode: Mode): EditorTool {
 
   return {
     id,
-    name: { key: nameKey, fallback: mode === "tracing" ? "Tracing image" : "Overlay image" },
+    name: { key: nameKey, fallback: mode === "tracing" ? "Tracing" : "Image" },
     description: { key: descKey },
     icon,
+    group: TOOL_GROUP_REFERENCES,
+    order: mode === "tracing" ? 10 : 20,
     createSession: ({ createElement, openEditor }) => {
       const input = document.createElement("input");
       input.type = "file";

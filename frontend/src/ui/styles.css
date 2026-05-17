@@ -5462,9 +5462,31 @@ video {
   gap: 10px;
 }
 
+.toolGroups {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.toolGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toolGroupTitle {
+  padding: 0 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.2;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
 .elementTypeButton {
-  height: 40px;
-  padding: 0 12px;
+  min-height: 48px;
+  padding: 8px 10px;
   border-radius: 14px;
   border: 1px solid var(--border);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.03));
@@ -5502,18 +5524,20 @@ video {
   align-items: center;
   gap: 10px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .toolLabel > span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .toolIcon {
   color: var(--color-text-muted);
   width: 16px;
+  flex: 0 0 16px;
   text-align: center;
 }
 
@@ -5524,8 +5548,10 @@ video {
 
 .elementTypeButtonHint {
   color: var(--color-text-muted);
+  flex: 0 0 14px;
   font-weight: 600;
   font-size: 12px;
+  text-align: right;
 }
 
 .elementTypeButtonHint i {

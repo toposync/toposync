@@ -3,9 +3,9 @@ export const imagesTranslations = {
     "ext.images.element.name": "Image",
     "ext.images.element.desc": "Imported image placed on the floor as an overlay or tracing reference.",
 
-    "ext.images.tool.add_overlay": "Overlay image",
+    "ext.images.tool.add_overlay": "Image",
     "ext.images.tool.add_overlay_desc": "Click to upload and place an overlay image on the floor.",
-    "ext.images.tool.add_tracing": "Tracing image",
+    "ext.images.tool.add_tracing": "Tracing",
     "ext.images.tool.add_tracing_desc": "Click to upload and place a tracing reference image on the floor.",
 
     "ext.images.editor.title": "Image",
@@ -47,9 +47,9 @@ export const imagesTranslations = {
     "ext.images.element.name": "Imagem",
     "ext.images.element.desc": "Imagem importada no chão como sobreposição ou referência (decalque).",
 
-    "ext.images.tool.add_overlay": "Imagem (sobreposição)",
+    "ext.images.tool.add_overlay": "Imagem",
     "ext.images.tool.add_overlay_desc": "Clique para enviar e posicionar uma imagem de sobreposição no chão.",
-    "ext.images.tool.add_tracing": "Imagem (decalque)",
+    "ext.images.tool.add_tracing": "Decalque",
     "ext.images.tool.add_tracing_desc": "Clique para enviar e posicionar uma imagem de referência (decalque) no chão.",
 
     "ext.images.editor.title": "Imagem",

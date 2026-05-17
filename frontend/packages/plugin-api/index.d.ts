@@ -362,11 +362,19 @@ export type HostUi = {
   Viewport2DReplica: (props: Viewport2DReplicaProps) => import("react").ReactNode;
 };
 
+export type EditorToolGroup = {
+  id: string;
+  name?: LocalizedString;
+  order?: number;
+};
+
 export type EditorTool = {
   id: string;
   name: LocalizedString;
   description?: LocalizedString;
   icon?: string;
+  group?: EditorToolGroup;
+  order?: number;
   createSession: (ctx: EditorToolContext) => EditorToolSession;
 };
 

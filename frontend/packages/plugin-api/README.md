@@ -43,6 +43,8 @@ export function activate(host: TopoSyncHost): void {
 
 `@toposync/plugin-api` is intentionally a types-first package. It ships a minimal runtime stub only so bundlers and package resolvers have a concrete entry point. Extension code should treat it as a contract package and import from it using `import type` whenever possible.
 
+Editor tools may optionally declare `group` and `order` metadata. Hosts use those fields to organize the composition editor toolbar; tools without them remain compatible and fall back to the default group.
+
 3D element and notification overlay `tick(deltaSeconds)` callbacks are render-on-demand aware. Return `true` while continuous frames are required, return `false` when the object can sleep, and call `ctx.requestRender?.()` after asynchronous loads or other out-of-band visual changes.
 
 ## Versioning

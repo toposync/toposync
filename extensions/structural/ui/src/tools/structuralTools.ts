@@ -24,18 +24,30 @@ import { centerOfPoints, distanceBetweenPoints } from "../geometry";
 import { loadAreaFillColor, readNumber, readPlanePoint } from "../parsing";
 import { createDefaultOpening, MIN_OPENING_WIDTH_M, openingsToProps, readWallOpenings, type WallOpeningKind } from "../wallOpenings";
 
+const TOOL_GROUP_STRUCTURE: NonNullable<EditorTool["group"]> = {
+  id: "structure",
+  name: { key: "core.ui.tools.group.structure", fallback: "Structure" },
+  order: 20,
+};
+
+const TOOL_GROUP_AREAS: NonNullable<EditorTool["group"]> = {
+  id: "areas",
+  name: { key: "core.ui.tools.group.areas", fallback: "Areas" },
+  order: 30,
+};
+
 export function createStructuralTools(i18n: HostI18n): EditorTool[] {
   return [
     createWallTool(i18n),
-    createWallOpeningTool(i18n, { kind: "opening" }),
     createWallOpeningTool(i18n, { kind: "door" }),
     createWallOpeningTool(i18n, { kind: "window" }),
+    createWallOpeningTool(i18n, { kind: "opening" }),
+    createAreaRectangleTool(i18n, { withWalls: true }),
+    createAreaPolygonTool(i18n, { withWalls: true }),
     createAreaRectangleTool(i18n, { withWalls: false }),
     createAreaPolygonTool(i18n, { withWalls: false }),
     createPoolSquareTool(i18n),
     createPoolPolygonTool(i18n),
-    createAreaRectangleTool(i18n, { withWalls: true }),
-    createAreaPolygonTool(i18n, { withWalls: true }),
   ];
 }
 
@@ -174,6 +186,7 @@ function kindStyle(kind: WallOpeningKind): {
   descriptionKey: string;
   descriptionFallback: string;
   icon: string;
+  order: number;
 } {
   if (kind === "door") {
     return {
@@ -185,6 +198,7 @@ function kindStyle(kind: WallOpeningKind): {
       descriptionKey: "ext.structural.tools.wall_door_desc",
       descriptionFallback: "Place a door cutout on a wall.",
       icon: "door-open",
+      order: 20,
     };
   }
   if (kind === "window") {
@@ -197,6 +211,7 @@ function kindStyle(kind: WallOpeningKind): {
       descriptionKey: "ext.structural.tools.wall_window_desc",
       descriptionFallback: "Place a window cutout on a wall.",
       icon: "window-maximize",
+      order: 30,
     };
   }
   return {
@@ -207,7 +222,8 @@ function kindStyle(kind: WallOpeningKind): {
     fallback: "Opening",
     descriptionKey: "ext.structural.tools.wall_opening_desc",
     descriptionFallback: "Hover a wall, click and drag to size. Click to place default width.",
-    icon: "vectors",
+    icon: "crop-simple",
+    order: 40,
   };
 }
 
@@ -225,6 +241,8 @@ function createWallOpeningTool(i18n: HostI18n, options: { kind: WallOpeningKind 
     name: { key: style.labelKey, fallback: style.fallback },
     description: { key: style.descriptionKey, fallback: style.descriptionFallback },
     icon: style.icon,
+    group: TOOL_GROUP_STRUCTURE,
+    order: style.order,
     createSession: (toolContext) => {
       let hoverWall: WallTarget | null = null;
       let hoverScalar: number | null = null;
@@ -416,7 +434,9 @@ function createWallTool(i18n: HostI18n): EditorTool {
   return {
     id: WALL_TOOL_ID,
     name: { key: "ext.structural.tools.wall", fallback: "Wall" },
-    icon: "ruler-combined",
+    icon: "grip-lines",
+    group: TOOL_GROUP_STRUCTURE,
+    order: 10,
     createSession: (toolContext) => {
       let startPoint: PlanePoint | null = null;
       let currentPoint: PlanePoint | null = null;
@@ -487,9 +507,11 @@ function createAreaRectangleTool(i18n: HostI18n, options: { withWalls: boolean }
     id: options.withWalls ? AREA_SQUARE_WITH_WALLS_TOOL_ID : AREA_SQUARE_TOOL_ID,
     name: {
       key: options.withWalls ? "ext.structural.tools.area_square_walls" : "ext.structural.tools.area_square",
-      fallback: options.withWalls ? "Area + walls (rectangle)" : "Area (rectangle)",
+      fallback: options.withWalls ? "Rectangular room" : "Rectangular area",
     },
-    icon: options.withWalls ? "draw-polygon" : "square",
+    icon: options.withWalls ? "border-all" : "vector-square",
+    group: TOOL_GROUP_AREAS,
+    order: options.withWalls ? 10 : 30,
     createSession: (toolContext) => {
       let startPoint: PlanePoint | null = null;
       let currentPoint: PlanePoint | null = null;
@@ -582,8 +604,10 @@ function createAreaRectangleTool(i18n: HostI18n, options: { withWalls: boolean }
 function createPoolSquareTool(i18n: HostI18n): EditorTool {
   return {
     id: POOL_SQUARE_TOOL_ID,
-    name: { key: "ext.structural.tools.pool_square", fallback: "Pool (rectangle)" },
-    icon: "droplet",
+    name: { key: "ext.structural.tools.pool_square", fallback: "Rectangular pool" },
+    icon: "water-ladder",
+    group: TOOL_GROUP_AREAS,
+    order: 50,
     createSession: (toolContext) => {
       let startPoint: PlanePoint | null = null;
       let currentPoint: PlanePoint | null = null;
@@ -675,9 +699,11 @@ function createAreaPolygonTool(i18n: HostI18n, options: { withWalls: boolean }):
     id: options.withWalls ? AREA_POLYGON_WITH_WALLS_TOOL_ID : AREA_POLYGON_TOOL_ID,
     name: {
       key: options.withWalls ? "ext.structural.tools.area_polygon_walls" : "ext.structural.tools.area_polygon",
-      fallback: options.withWalls ? "Area + walls (polygon)" : "Area (polygon)",
+      fallback: options.withWalls ? "Freeform room" : "Freeform area",
     },
-    icon: "draw-polygon",
+    icon: options.withWalls ? "object-group" : "draw-polygon",
+    group: TOOL_GROUP_AREAS,
+    order: options.withWalls ? 20 : 40,
     createSession: (toolContext) => {
       const vertices: PlanePoint[] = [];
       let hoverPoint: PlanePoint | null = null;
@@ -776,8 +802,10 @@ function createAreaPolygonTool(i18n: HostI18n, options: { withWalls: boolean }):
 function createPoolPolygonTool(i18n: HostI18n): EditorTool {
   return {
     id: POOL_POLYGON_TOOL_ID,
-    name: { key: "ext.structural.tools.pool_polygon", fallback: "Pool (polygon)" },
-    icon: "droplet",
+    name: { key: "ext.structural.tools.pool_polygon", fallback: "Freeform pool" },
+    icon: "water",
+    group: TOOL_GROUP_AREAS,
+    order: 60,
     createSession: (toolContext) => {
       const vertices: PlanePoint[] = [];
       let hoverPoint: PlanePoint | null = null;

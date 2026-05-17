@@ -37,6 +37,8 @@ host.registerEditorTool({
   id: "com.exemplo.tool.point",
   name: "Point",
   icon: "plus",
+  group: { id: "other", name: "Other", order: 900 },
+  order: 10,
   createSession: ({ createElement }) => ({
     onPointerEvent: (e) => {
       if (e.kind !== "down" || e.button !== 0) return
@@ -45,6 +47,8 @@ host.registerEditorTool({
   }),
 })
 ```
+
+`group` e `order` são opcionais. O host usa esses campos para agrupar e ordenar ferramentas no editor de composição; ferramentas antigas sem esses campos continuam aparecendo no grupo padrão ao final.
 
 ## Instalação para extensões externas
 

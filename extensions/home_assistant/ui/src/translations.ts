@@ -2,7 +2,7 @@ export const homeAssistantTranslations = {
   en: {
     "ext.home_assistant.element.name": "Home Assistant item",
     "ext.home_assistant.element.desc": "Place one or more entities/devices from Home Assistant on the scene.",
-    "ext.home_assistant.tool.add": "Home Assistant",
+    "ext.home_assistant.tool.add": "Device",
     "ext.home_assistant.tool.add_desc": "Click to place a Home Assistant item and configure it.",
     "ext.home_assistant.settings.name": "Home Assistant",
     "ext.home_assistant.settings.desc": "Configure one or more Home Assistant servers to connect and integrate.",
@@ -74,7 +74,7 @@ export const homeAssistantTranslations = {
   "pt-BR": {
     "ext.home_assistant.element.name": "Item Home Assistant",
     "ext.home_assistant.element.desc": "Coloque uma ou mais entidades/dispositivos do Home Assistant na cena.",
-    "ext.home_assistant.tool.add": "Home Assistant",
+    "ext.home_assistant.tool.add": "Dispositivo",
     "ext.home_assistant.tool.add_desc": "Clique para posicionar um item do Home Assistant e configurá-lo.",
     "ext.home_assistant.settings.name": "Home Assistant",
     "ext.home_assistant.settings.desc": "Configure um ou mais servidores do Home Assistant para conectar e integrar.",

@@ -5,12 +5,20 @@ import { debugLog } from "../debug";
 import { IMPORT_MODEL_TOOL_ID, MODEL_ELEMENT_TYPE_ID } from "../constants";
 import { generateModelTopDownPreview, stripFileExtension, suggestInitialScale } from "../preview/modelPreview";
 
+const TOOL_GROUP_REFERENCES: NonNullable<EditorTool["group"]> = {
+  id: "references",
+  name: { key: "core.ui.tools.group.references", fallback: "References" },
+  order: 10,
+};
+
 export function createImportModelTool(i18n: HostI18n): EditorTool {
   return {
     id: IMPORT_MODEL_TOOL_ID,
-    name: { key: "ext.models.tool.import", fallback: "Import 3D model" },
+    name: { key: "ext.models.tool.import", fallback: "3D model" },
     description: { key: "ext.models.tool.hint", fallback: "Click to upload and place a model." },
     icon: "cube",
+    group: TOOL_GROUP_REFERENCES,
+    order: 30,
     createSession: (toolContext) => {
       const input = document.createElement("input");
       input.type = "file";

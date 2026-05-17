@@ -2,7 +2,7 @@ export const modelsTranslations = {
   en: {
     "ext.models.element.name": "3D Model",
     "ext.models.element.desc": "GLB/GLTF model placed in the scene.",
-    "ext.models.tool.import": "Import 3D model",
+    "ext.models.tool.import": "3D model",
     "ext.models.tool.hint": "Click to upload and place a model.",
     "ext.models.editor.file": "File",
     "ext.models.editor.size": "Size",
@@ -21,7 +21,7 @@ export const modelsTranslations = {
   "pt-BR": {
     "ext.models.element.name": "Modelo 3D",
     "ext.models.element.desc": "Modelo GLB/GLTF posicionado na cena.",
-    "ext.models.tool.import": "Importar modelo 3D",
+    "ext.models.tool.import": "Modelo 3D",
     "ext.models.tool.hint": "Clique para enviar e posicionar um modelo.",
     "ext.models.editor.file": "Arquivo",
     "ext.models.editor.size": "Tamanho",

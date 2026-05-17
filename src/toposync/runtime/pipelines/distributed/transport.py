@@ -22,7 +22,7 @@ class ProcessingServerRef:
 
 
 class ProcessingRuntimeLike(Protocol):
-    def apply_config(self, payload: dict[str, Any]) -> None: ...
+    async def apply_config(self, payload: dict[str, Any]) -> None: ...
 
     def status(self) -> dict[str, Any]: ...
 
@@ -90,7 +90,7 @@ class InProcessProcessingTransport:
         self._queue: asyncio.Queue[dict[str, Any]] | None = None
 
     async def push_config(self, payload: dict[str, Any]) -> None:
-        self._runtime.apply_config(payload)
+        await self._runtime.apply_config(payload)
 
     async def stream_events(self, *, last_event_id: int = 0) -> AsyncIterator[dict[str, Any]]:
         for item in self._runtime.replay_after(int(last_event_id)):

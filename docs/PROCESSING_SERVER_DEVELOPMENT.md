@@ -2,7 +2,7 @@
 
 This guide explains how to install dependencies and run the Toposync processing server in development mode.
 
-The processing server is used by distributed pipelines. It receives pipeline config from the origin server, runs processing-side nodes, and streams projected events back to origin.
+The processing server is used by distributed pipelines. It receives pipeline config and the runtime settings snapshot from the origin server, runs processing-side nodes, and streams projected events back to origin.
 
 ## Prerequisites
 

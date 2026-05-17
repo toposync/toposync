@@ -124,6 +124,13 @@ class _OriginCollectConfig(BaseModel):
     expected_packets: int = Field(default=4, ge=1, le=100)
 
 
+class _SettingsGateSourceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    extension_id: str = "test.sync"
+    key: str = "ready"
+    value: str = "yes"
+
+
 class _FiniteSourceRuntime(SourceOperatorRuntime):
     def __init__(self, config: dict[str, Any], counters: dict[str, Any], side: str) -> None:
         parsed = _FiniteSourceConfig.model_validate(config)
@@ -214,6 +221,49 @@ class _OriginCollectRuntime(SinkRuntime):
         if self._done_event is not None and len(collected) >= self._expected_packets:
             self._done_event.set()
         return []
+
+
+class _SettingsGateSourceRuntime(SourceOperatorRuntime):
+    def __init__(
+        self,
+        config: dict[str, Any],
+        dependencies: PipelineRuntimeDependencies,
+        counters: dict[str, Any],
+    ) -> None:
+        parsed = _SettingsGateSourceConfig.model_validate(config)
+        self._extension_id = parsed.extension_id
+        self._key = parsed.key
+        self._value = parsed.value
+        self._dependencies = dependencies
+        self._counters = counters
+        self._emitted = False
+
+    async def produce(self, context) -> Packet | None:  # noqa: ANN001
+        if self._emitted:
+            return None
+        store = self._dependencies.config_store
+        if not isinstance(store, ConfigStore):
+            self._counters["last_error"] = "missing_config_store"
+            await context.sleep(0.02)
+            return None
+
+        settings = await store.get_settings()
+        ext = dict(settings.extensions.get(self._extension_id) or {})
+        self._counters["last_seen_settings"] = ext
+        if str(ext.get(self._key) or "") != self._value:
+            await context.sleep(0.02)
+            return None
+
+        self._emitted = True
+        self._counters["settings_gate_packets"] = (
+            int(self._counters.get("settings_gate_packets", 0)) + 1
+        )
+        return Packet.create(
+            stream_id="processing:settings",
+            lifecycle=Lifecycle.UPDATE,
+            payload={"settings": ext},
+            metadata={"settings_gate_side": "processing-server"},
+        )
 
 
 def _run_best_available_workload(matrix_size: int) -> dict[str, Any]:
@@ -318,6 +368,28 @@ def _register_probe_operators(
     )
 
 
+def _register_settings_gate_operator(
+    registry: OperatorRegistry,
+    *,
+    counters: dict[str, Any],
+) -> None:
+    registry.register_operator(
+        operator_id="test.settings_gate_source",
+        config_model=_SettingsGateSourceConfig,
+        inputs=[],
+        outputs=[{"name": "out"}],
+        capabilities=["source", "test"],
+        defaults=_SettingsGateSourceConfig().model_dump(),
+        share_strategy="never",
+        owner="test",
+        runtime_factory=lambda config, deps: _SettingsGateSourceRuntime(
+            config,
+            deps,
+            counters,
+        ),
+    )
+
+
 def _processing_probe_graph(*, expected_packets: int) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -353,6 +425,32 @@ def _processing_probe_graph(*, expected_packets: int) -> dict[str, Any]:
                 "from": {"node": "workload", "port": "out"},
                 "to": {"node": "collect", "port": "in"},
                 "maxsize": 16,
+                "drop_policy": "drop_oldest",
+            },
+        ],
+    }
+
+
+def _settings_sync_probe_graph() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "nodes": [
+            {
+                "id": "settings",
+                "operator": "test.settings_gate_source",
+                "config": {"extension_id": "test.sync", "key": "ready", "value": "yes"},
+            },
+            {
+                "id": "collect",
+                "operator": "test.origin_collect",
+                "config": {"expected_packets": 1},
+            },
+        ],
+        "edges": [
+            {
+                "from": {"node": "settings", "port": "out"},
+                "to": {"node": "collect", "port": "in"},
+                "maxsize": 4,
                 "drop_policy": "drop_oldest",
             },
         ],
@@ -478,6 +576,121 @@ def test_processing_server_http_interconnect_executes_remote_workload(
                     assert float(probe.get("checksum") or 0.0) > 0.0
 
                 assert processing_counters.get("engines")
+            finally:
+                await orchestrator.stop()
+
+        asyncio.run(scenario())
+    finally:
+        live_server.stop()
+
+
+def test_processing_server_syncs_settings_updates_to_running_remote_pipeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    processing_counters: dict[str, Any] = {}
+
+    monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "processing-data"))
+    monkeypatch.delenv("TOPOSYNC_PROCESSING_USERNAME", raising=False)
+    monkeypatch.delenv("TOPOSYNC_PROCESSING_PASSWORD", raising=False)
+
+    processing_app = create_processing_app()
+    live_server = _LiveProcessingServer(processing_app)
+    live_server.start()
+    try:
+        processing_registry: OperatorRegistry = processing_app.state.pipeline_operator_registry
+        _register_settings_gate_operator(
+            processing_registry,
+            counters=processing_counters,
+        )
+        _register_probe_operators(
+            processing_registry,
+            counters={},
+            side="processing-server",
+        )
+
+        async def scenario() -> None:
+            origin_counters: dict[str, Any] = {}
+            done_event = asyncio.Event()
+
+            origin_registry = OperatorRegistry()
+            register_builtin_operators(origin_registry)
+            _register_settings_gate_operator(origin_registry, counters={})
+            _register_probe_operators(
+                origin_registry,
+                counters=origin_counters,
+                side="origin-main",
+                done_event=done_event,
+            )
+
+            paths = UserDataPaths(
+                data_dir=tmp_path / "origin-data",
+                config_path=tmp_path / "origin-data" / "config.json",
+                files_dir=tmp_path / "origin-data" / "files",
+            )
+            config_store = ConfigStore(paths=paths)
+            await config_store.upsert_processing_server(
+                ProcessingServer(
+                    id="edge_gpu",
+                    name="Edge GPU",
+                    kind="http",
+                    url=live_server.base_url,
+                )
+            )
+            await config_store.create_pipeline(
+                Pipeline(
+                    name="processing_settings_sync",
+                    processing_server_id="edge_gpu",
+                    graph=_settings_sync_probe_graph(),
+                )
+            )
+
+            notifications = NotificationsRuntime(data_dir=tmp_path / "origin-notifications")
+            orchestrator = PipelinesOrchestrator(
+                config_store=config_store,
+                operator_registry=origin_registry,
+                compiler=PipelineGraphCompiler(origin_registry),
+                notifications=notifications,
+                files_dir=paths.files_dir,
+                poll_interval_s=999.0,
+                runtime_dependencies=PipelineRuntimeDependencies(),
+            )
+
+            try:
+                await orchestrator._reconcile()
+                await asyncio.sleep(0.2)
+
+                assert int(processing_counters.get("settings_gate_packets", 0)) == 0
+
+                await config_store.patch_extension_settings(
+                    "test.sync",
+                    {"ready": "yes", "camera_id": "frente"},
+                )
+                await orchestrator._reconcile()
+                await asyncio.wait_for(done_event.wait(), timeout=8.0)
+
+                assert processing_counters.get("last_seen_settings") == {
+                    "ready": "yes",
+                    "camera_id": "frente",
+                }
+                assert int(processing_counters.get("settings_gate_packets", 0)) == 1
+                assert int(origin_counters.get("origin_packets", 0)) == 1
+
+                remote_transport = HttpProcessingTransport(
+                    base_url=live_server.base_url,
+                    timeout_s=2.0,
+                )
+                try:
+                    await remote_transport.push_config({"pipelines": []})
+                    cleared_status = await remote_transport.status()
+                    assert cleared_status.get("active") is False
+
+                    await orchestrator._reconcile()
+                    restored_status = await remote_transport.status()
+                    assert restored_status.get("active") is True
+                    assert "processing_settings_sync" in restored_status.get("pipelines", [])
+                finally:
+                    await remote_transport.close()
             finally:
                 await orchestrator.stop()
 

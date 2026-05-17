@@ -7,7 +7,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from toposync.runtime.config_store import ConfigStore, Pipeline, ProcessingServer
+from toposync.runtime.config_store import (
+    EXTENSION_MANAGEMENT_KEY,
+    PROCESSING_SERVERS_KEY,
+    AppSettings,
+    ConfigStore,
+    Pipeline,
+    ProcessingServer,
+)
 from toposync.runtime.notifications import NotificationsRuntime
 
 from ..compiler import (
@@ -48,8 +55,27 @@ class _ServerHandle:
     server: ProcessingServer
     transport: ProcessingTransport
     pump_task: asyncio.Task[None]
+    config_payload: dict[str, Any] = field(default_factory=dict)
     last_event_id: int = 0
     started_at: float = field(default_factory=time.time)
+
+
+def _processing_settings_payload(settings: AppSettings) -> dict[str, Any]:
+    core = dict(settings.core)
+    core.pop(PROCESSING_SERVERS_KEY, None)
+    core.pop(EXTENSION_MANAGEMENT_KEY, None)
+    return AppSettings(core=core, extensions=dict(settings.extensions)).model_dump(mode="json")
+
+
+def _remote_config_payload(
+    pipelines: list[Pipeline],
+    *,
+    settings_payload: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "pipelines": [p.model_dump(mode="json") for p in pipelines],
+        "settings": settings_payload,
+    }
 
 
 class PipelinesOrchestrator:
@@ -81,6 +107,7 @@ class PipelinesOrchestrator:
         self._inboxes: dict[str, BoundedChannel[dict[str, Any]]] = {}
         self._servers: dict[str, _ServerHandle] = {}
         self._last_sig: str = ""
+        self._last_settings_sig: str = ""
         self._last_error: str | None = None
 
     def start(self) -> None:
@@ -155,6 +182,7 @@ class PipelinesOrchestrator:
             "servers": servers,
             "last_error": self._last_error,
             "last_signature": self._last_sig,
+            "last_settings_signature": self._last_settings_sig,
         }
 
     async def _run(self) -> None:
@@ -184,6 +212,9 @@ class PipelinesOrchestrator:
     async def _reconcile(self) -> None:
         pipelines = await self._config_store.list_pipelines()
         servers = await self._config_store.list_processing_servers()
+        settings = await self._config_store.get_settings()
+        settings_payload = _processing_settings_payload(settings)
+        settings_sig = json.dumps(settings_payload, sort_keys=True, separators=(",", ":"))
 
         desired = [p for p in pipelines if getattr(p, "enabled", True) is not False]
         desired_sig = json.dumps(
@@ -195,12 +226,6 @@ class PipelinesOrchestrator:
             separators=(",", ":"),
         )
 
-        if desired_sig == self._last_sig:
-            return
-        self._last_sig = desired_sig
-
-        await self._stop_all()
-
         servers_by_id = {s.id: s for s in servers}
         local: list[Pipeline] = []
         remote_groups: dict[str, list[Pipeline]] = {}
@@ -210,6 +235,26 @@ class PipelinesOrchestrator:
                 local.append(p)
             else:
                 remote_groups.setdefault(sid, []).append(p)
+
+        if desired_sig == self._last_sig:
+            if settings_sig != self._last_settings_sig:
+                synced = await self._sync_remote_settings(
+                    remote_groups=remote_groups,
+                    settings_payload=settings_payload,
+                )
+                if synced:
+                    self._last_settings_sig = settings_sig
+            else:
+                await self._ensure_remote_configs(
+                    remote_groups=remote_groups,
+                    settings_payload=settings_payload,
+                )
+            return
+
+        self._last_sig = desired_sig
+        self._last_settings_sig = settings_sig
+
+        await self._stop_all()
 
         if len(local) > 1:
             started = await self._start_local_bundle(local)
@@ -230,7 +275,61 @@ class PipelinesOrchestrator:
                 continue
             for p in group:
                 await self._start_origin_pipeline_for_remote(p)
-            await self._start_remote_server(server, group)
+            await self._start_remote_server(server, group, settings_payload=settings_payload)
+
+    async def _sync_remote_settings(
+        self,
+        *,
+        remote_groups: dict[str, list[Pipeline]],
+        settings_payload: dict[str, Any],
+    ) -> bool:
+        ok = True
+        for sid, group in remote_groups.items():
+            handle = self._servers.get(sid)
+            if handle is None:
+                ok = False
+                logger.warning("processing server %s is not connected; settings sync deferred", sid)
+                continue
+            payload = _remote_config_payload(group, settings_payload=settings_payload)
+            handle.config_payload = payload
+            try:
+                await handle.transport.push_config(payload)
+            except Exception as exc:  # noqa: BLE001
+                ok = False
+                logger.warning("processing settings sync failed server=%s: %s", sid, exc)
+        return ok
+
+    async def _ensure_remote_configs(
+        self,
+        *,
+        remote_groups: dict[str, list[Pipeline]],
+        settings_payload: dict[str, Any],
+    ) -> None:
+        for sid, group in remote_groups.items():
+            handle = self._servers.get(sid)
+            if handle is None:
+                continue
+            expected_names = {p.name for p in group}
+            try:
+                status = await handle.transport.status()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("processing status check failed server=%s: %s", sid, exc)
+                continue
+            remote_names_raw = status.get("pipelines")
+            remote_names = {
+                str(item or "").strip()
+                for item in (remote_names_raw if isinstance(remote_names_raw, list) else [])
+                if str(item or "").strip()
+            }
+            if bool(status.get("active")) and expected_names.issubset(remote_names):
+                continue
+            payload = _remote_config_payload(group, settings_payload=settings_payload)
+            handle.config_payload = payload
+            try:
+                await handle.transport.push_config(payload)
+                logger.info("re-synced processing config server=%s", sid)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("processing config re-sync failed server=%s: %s", sid, exc)
 
     async def _stop_all(self) -> None:
         if self._local_bundle is not None:
@@ -401,7 +500,11 @@ class PipelinesOrchestrator:
         )
 
     async def _start_remote_server(
-        self, server: ProcessingServer, pipelines: list[Pipeline]
+        self,
+        server: ProcessingServer,
+        pipelines: list[Pipeline],
+        *,
+        settings_payload: dict[str, Any],
     ) -> None:
         if server.kind != "http":
             logger.warning(
@@ -413,6 +516,7 @@ class PipelinesOrchestrator:
             username=getattr(server, "username", ""),
             password=getattr(server, "password", ""),
         )
+        payload = _remote_config_payload(pipelines, settings_payload=settings_payload)
 
         async def pump() -> None:
             last_event_id = 0
@@ -420,6 +524,13 @@ class PipelinesOrchestrator:
             try:
                 while True:
                     try:
+                        handle = self._servers.get(server.id)
+                        config_payload = (
+                            dict(handle.config_payload)
+                            if handle is not None and handle.config_payload
+                            else dict(payload)
+                        )
+                        await transport.push_config(config_payload)
                         async for event in transport.stream_events(last_event_id=last_event_id):
                             backoff_s = 0.5
                             try:
@@ -455,8 +566,14 @@ class PipelinesOrchestrator:
 
         pump_task = asyncio.create_task(pump(), name=f"processing_pump[{server.id}]")
         self._servers[server.id] = _ServerHandle(
-            server=server, transport=transport, pump_task=pump_task
+            server=server,
+            transport=transport,
+            pump_task=pump_task,
+            config_payload=payload,
         )
 
-        payload = {"pipelines": [p.model_dump(mode="json") for p in pipelines]}
-        await transport.push_config(payload)
+        try:
+            await transport.push_config(payload)
+        except Exception as exc:  # noqa: BLE001
+            self._last_error = str(exc)
+            logger.warning("processing config push failed server=%s; will retry: %s", server.id, exc)

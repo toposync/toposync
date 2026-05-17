@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from starlette.responses import Response, StreamingResponse
 
 from toposync.extensions.manager import ExtensionManager
-from toposync.runtime.config_store import ConfigStore, Pipeline, UserDataPaths
+from toposync.runtime.config_store import AppSettings, ConfigStore, Pipeline, UserDataPaths
 from toposync.runtime.event_bus import EventBus
 from toposync.runtime.notifications.events import EventBroadcaster
 from toposync.runtime.services import ServiceRegistry
@@ -42,6 +42,7 @@ logger = logging.getLogger("toposync.processing")
 
 class ProcessingConfig(BaseModel):
     pipelines: list[Pipeline] = Field(default_factory=list)
+    settings: AppSettings | None = None
 
 
 class ProcessingAck(BaseModel):
@@ -200,8 +201,10 @@ class ProcessingServerRuntime:
             "replay_events": len(self._replay_events),
         }
 
-    def apply_config(self, payload: dict[str, Any]) -> None:
+    async def apply_config(self, payload: dict[str, Any]) -> None:
         parsed = ProcessingConfig.model_validate(payload)
+        if parsed.settings is not None:
+            await self._config_store.replace_settings(parsed.settings)
         desired = [p for p in parsed.pipelines if getattr(p, "enabled", True) is not False]
         self._reconcile(desired)
 
@@ -442,7 +445,7 @@ def create_processing_app() -> FastAPI:
 
     @app.post("/api/processing/config")
     async def set_processing_config(body: ProcessingConfig) -> dict[str, Any]:
-        runtime.apply_config(body.model_dump(mode="json"))
+        await runtime.apply_config(body.model_dump(mode="json"))
         return {"ok": True}
 
     @app.get("/api/processing/status")

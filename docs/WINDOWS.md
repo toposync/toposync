@@ -145,7 +145,29 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_se
 
 Depois, registre no servidor origin usando o JSON impresso no final ou o arquivo `processing-server-registration.json`.
 
-## 7) Quando preciso do Visual C++ Build Tools?
+## 7) Desinstalar o processing server
+
+Para remover o serviço, a regra de firewall e os arquivos de runtime, preservando dados e logs:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall_windows_processing_server.ps1
+```
+
+Para remover também `%ProgramData%\TopoSync\ProcessingServer` inteiro:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall_windows_processing_server.ps1 -RemoveData
+```
+
+Se o serviço estiver preso em parada, use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall_windows_processing_server.ps1 -Force
+```
+
+Depois remova o processing server também no Toposync origin, se ele estiver registrado lá.
+
+## 8) Quando preciso do Visual C++ Build Tools?
 
 Na prática: só quando o instalador não encontra wheel pronta e tenta compilar dependências nativas.
 
@@ -161,7 +183,7 @@ Se isso acontecer, siga esta ordem:
 
 Na maior parte dos casos, isso é melhor do que transformar a instalação do usuário em um setup de toolchain C/C++.
 
-## 8) E se eu insistir em Python 3.14?
+## 9) E se eu insistir em Python 3.14?
 
 Pode funcionar no futuro, mas não é a recomendação do projeto neste momento.
 

@@ -1104,7 +1104,7 @@ if ($StartService) {
     }
 }
 
-$listenerSummary = Get-ListeningTcpSummary -ListenPort $selectedPort
+[string[]]$listenerSummary = @(Get-ListeningTcpSummary -ListenPort $selectedPort)
 if ($listenerSummary.Count -gt 0) {
     Write-Host "Listening TCP endpoints: $($listenerSummary -join ', ')"
 }

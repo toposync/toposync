@@ -14,6 +14,13 @@ from toposync.runtime.services import ServiceRegistry
 from .compiler import CompiledPipeline
 from .execution_scheduler import ExecutionMode, ExecutionScheduler
 from .operator_registry import OperatorRegistry
+from .observability import (
+    PipelineObservabilitySink,
+    normalize_pipeline_name,
+    stats_node_output_record,
+    telemetry_image_marker_record,
+    telemetry_numeric_record,
+)
 from .runtime import (
     ArtifactMemoryCounter,
     BoundedChannel,
@@ -49,6 +56,7 @@ class PipelineRuntimeDependencies:
     pipeline_stats_store: PipelineStatsStore | None = None
     pipeline_stats_node_occurrences: dict[str, tuple[tuple[str, str], ...]] | None = None
     pipeline_telemetry_store: PipelineTelemetryStore | None = None
+    pipeline_observability_sink: PipelineObservabilitySink | None = None
     pipeline_storage_manager: Any | None = None
     pipeline_graph_limits_by_pipeline: dict[str, dict[str, Any]] | None = None
     preview_packet_collector: Callable[[Packet, str, str], Awaitable[None] | None] | None = None
@@ -119,6 +127,7 @@ class NodeExecutionContext:
     logger: logging.Logger
     stats_store: PipelineStatsStore | None = None
     telemetry_store: PipelineTelemetryStore | None = None
+    observability_sink: PipelineObservabilitySink | None = None
     storage_manager: Any | None = None
     pipeline_graph_limits_by_pipeline: dict[str, dict[str, Any]] = field(default_factory=dict)
     stats_node_occurrences: tuple[tuple[str, str], ...] = ()
@@ -156,10 +165,10 @@ class NodeExecutionContext:
         result = await channel.get(timeout_s=timeout_s, cancel_event=self.cancel_event)
         if result.status == QueueOperationStatus.ACCEPTED:
             self.metrics.processed_packets += 1
-            if self.stats_count_outputs_on_read and self.stats_store is not None and self.stats_node_occurrences:
+            if self.stats_count_outputs_on_read and self.stats_node_occurrences:
                 now_s = time.time()
                 for pipeline_name, node_id in self.stats_node_occurrences:
-                    self.stats_store.increment_node_output(pipeline_name, node_id, now_s=now_s, value=1)
+                    self._record_node_output(pipeline_name, node_id, now_s=now_s, value=1)
             return result.item
         if result.status == QueueOperationStatus.TIMEOUT:
             self.metrics.timeout_count += 1
@@ -191,11 +200,39 @@ class NodeExecutionContext:
             elif result.status == QueueOperationStatus.CANCELED:
                 self.metrics.canceled_count += 1
         should_count_outputs = accepted > 0 or (not channels and self.stats_count_terminal_outputs_on_emit)
-        if should_count_outputs and self.stats_store is not None and self.stats_node_occurrences:
+        if should_count_outputs and self.stats_node_occurrences:
             now_s = time.time()
             for pipeline_name, node_id in self.stats_node_occurrences:
-                self.stats_store.increment_node_output(pipeline_name, node_id, now_s=now_s, value=1)
+                self._record_node_output(pipeline_name, node_id, now_s=now_s, value=1)
         return accepted
+
+    def _emit_observability_record(self, record: dict[str, Any] | None) -> None:
+        if not record:
+            return
+        sink = self.observability_sink
+        if not callable(sink):
+            return
+        try:
+            sink(record)
+        except Exception:
+            return
+
+    def _record_node_output(
+        self,
+        pipeline_name: str,
+        node_id: str,
+        *,
+        now_s: float,
+        value: int,
+    ) -> None:
+        if self.stats_store is not None:
+            try:
+                self.stats_store.increment_node_output(pipeline_name, node_id, now_s=now_s, value=value)
+            except Exception:
+                pass
+        self._emit_observability_record(
+            stats_node_output_record(pipeline_name, node_id, value=value, ts_s=now_s)
+        )
 
     async def sleep(self, seconds: float) -> None:
         if seconds <= 0:
@@ -214,23 +251,32 @@ class NodeExecutionContext:
         return ((self.pipeline_name, self.node_id),)
 
     def _normalize_telemetry_pipeline_name(self, pipeline_name: str) -> str:
-        normalized = str(pipeline_name or "").strip()
-        if normalized.endswith("__processing") and len(normalized) > len("__processing"):
-            return normalized[: -len("__processing")]
-        return normalized
+        return normalize_pipeline_name(pipeline_name)
 
     def observe_telemetry_numeric(self, metric_id: str, value: float, *, now_s: float | None = None) -> None:
+        timestamp = time.time() if now_s is None else now_s
         store = self.telemetry_store
-        if store is None:
-            return
         for pipeline_name, node_id in self._telemetry_occurrences():
+            normalized_pipeline = self._normalize_telemetry_pipeline_name(pipeline_name)
+            normalized_node = str(node_id or "").strip()
+            self._emit_observability_record(
+                telemetry_numeric_record(
+                    normalized_pipeline,
+                    normalized_node,
+                    metric_id,
+                    value,
+                    ts_s=timestamp,
+                )
+            )
+            if store is None:
+                continue
             try:
                 store.observe_numeric(
-                    self._normalize_telemetry_pipeline_name(pipeline_name),
-                    str(node_id or "").strip(),
+                    normalized_pipeline,
+                    normalized_node,
                     metric_id,
                     float(value),
-                    now_s=now_s,
+                    now_s=timestamp,
                 )
             except Exception:
                 continue
@@ -248,12 +294,30 @@ class NodeExecutionContext:
     ) -> None:
         store = self.telemetry_store
         if store is None:
-            return
+            store = None
         for pipeline_name, node_id in self._telemetry_occurrences():
+            normalized_pipeline = self._normalize_telemetry_pipeline_name(pipeline_name)
+            normalized_node = str(node_id or "").strip()
+            self._emit_observability_record(
+                telemetry_image_marker_record(
+                    normalized_pipeline,
+                    normalized_node,
+                    rel_path=rel_path,
+                    metric_id=metric_id,
+                    ts_s=ts_s,
+                    image_key=image_key,
+                    confidence=confidence,
+                    layer_label=layer_label,
+                    size_bytes=size_bytes,
+                    origin_accessible=False,
+                )
+            )
+            if store is None:
+                continue
             try:
                 store.record_image_marker(
-                    self._normalize_telemetry_pipeline_name(pipeline_name),
-                    node_id=str(node_id or "").strip(),
+                    normalized_pipeline,
+                    node_id=normalized_node,
                     rel_path=rel_path,
                     metric_id=metric_id,
                     ts_s=ts_s,
@@ -524,6 +588,7 @@ class PipelineRuntime:
                 logger=self.logger,
                 stats_store=self.dependencies.pipeline_stats_store,
                 telemetry_store=self.dependencies.pipeline_telemetry_store,
+                observability_sink=self.dependencies.pipeline_observability_sink,
                 storage_manager=self.dependencies.pipeline_storage_manager,
                 pipeline_graph_limits_by_pipeline=(
                     dict(self.dependencies.pipeline_graph_limits_by_pipeline)
@@ -537,10 +602,16 @@ class PipelineRuntime:
                 if occurrences is None:
                     occurrences = ((self.compiled.name, node_id),)
                 context.stats_node_occurrences = tuple((str(pipeline), str(nid)) for pipeline, nid in occurrences)
-            elif self.dependencies.pipeline_stats_store is not None:
+            elif (
+                self.dependencies.pipeline_stats_store is not None
+                or self.dependencies.pipeline_observability_sink is not None
+            ):
                 context.stats_node_occurrences = ((self.compiled.name, node_id),)
 
-            if self.dependencies.pipeline_stats_store is not None:
+            if (
+                self.dependencies.pipeline_stats_store is not None
+                or self.dependencies.pipeline_observability_sink is not None
+            ):
                 context.stats_count_outputs_on_read = int(outdegree.get(node_id, 0)) == 0 and bool(node_inputs)
                 context.stats_count_terminal_outputs_on_emit = int(outdegree.get(node_id, 0)) == 0 and not bool(node_inputs)
             self._context_by_node[node_id] = context

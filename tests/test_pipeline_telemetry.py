@@ -19,6 +19,7 @@ from toposync.runtime.pipelines import (
     TransformOperatorRuntime,
     register_builtin_operators,
 )
+from toposync.runtime.pipelines.observability import RECORD_TELEMETRY_NUMERIC
 from toposync.runtime.pipelines.telemetry import (
     NumericMetricSpec,
     PipelineTelemetryStore,
@@ -272,7 +273,11 @@ def test_pipeline_runtime_collects_numeric_and_image_telemetry() -> None:
             max_image_pipelines=8,
         )
 
-        deps = PipelineRuntimeDependencies(pipeline_telemetry_store=telemetry_store)
+        observability_records: list[dict[str, Any]] = []
+        deps = PipelineRuntimeDependencies(
+            pipeline_telemetry_store=telemetry_store,
+            pipeline_observability_sink=observability_records.append,
+        )
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
         await runtime.start()
         await asyncio.wait_for(done_event.wait(), timeout=2.0)
@@ -292,6 +297,12 @@ def test_pipeline_runtime_collects_numeric_and_image_telemetry() -> None:
         assert len(markers) == 3
         assert all(str(item.get("node_id") or "") == "tap" for item in markers)
         assert all(str(item.get("metric_id") or "") == "test.image" for item in markers)
+        numeric_records = [
+            item for item in observability_records if item.get("type") == RECORD_TELEMETRY_NUMERIC
+        ]
+        assert len(numeric_records) == 6
+        assert all(str(item.get("pipeline_name") or "") == "telemetry_runtime_pipeline" for item in numeric_records)
+        assert all(str(item.get("node_id") or "") == "tap" for item in numeric_records)
 
     asyncio.run(scenario())
 

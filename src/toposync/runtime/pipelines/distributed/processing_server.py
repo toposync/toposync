@@ -25,6 +25,7 @@ from ..builtins import register_builtin_operators
 from ..compiler import PipelineGraphCompiler
 from ..execution import PipelineRuntimeDependencies
 from ..execution_scheduler import ExecutionScheduler
+from ..observability import OBSERVABILITY_BATCH_EVENT_TYPE, PROJECTED_PACKET_EVENT_TYPE
 from ..operator_registry import OperatorRegistry
 from ..shared_runtime import PipelineBundleRuntime
 from ..runtime import ArtifactMemoryCounter
@@ -49,6 +50,17 @@ def _env_float(name: str, default: float) -> float:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _env_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return int(default)
+    try:
+        value = int(raw)
+    except ValueError:
+        return int(default)
+    return max(int(min_value), min(int(max_value), value))
 
 
 class ProcessingConfig(BaseModel):
@@ -181,6 +193,27 @@ class ProcessingServerRuntime:
         self._last_acked_event_id = 0
         self._active: _ActiveBundle | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._observability_buffer: deque[dict[str, Any]] = deque()
+        self._observability_flush_handle: asyncio.TimerHandle | None = None
+        self._observability_flush_interval_s = _env_float(
+            "TOPOSYNC_PROCESSING_OBSERVABILITY_FLUSH_INTERVAL_MS",
+            1000.0,
+        ) / 1000.0
+        self._observability_batch_size = _env_int(
+            "TOPOSYNC_PROCESSING_OBSERVABILITY_BATCH_SIZE",
+            200,
+            min_value=1,
+            max_value=10_000,
+        )
+        self._observability_max_buffer = _env_int(
+            "TOPOSYNC_PROCESSING_OBSERVABILITY_MAX_BUFFER",
+            10_000,
+            min_value=100,
+            max_value=1_000_000,
+        )
+        self._observability_emitted_batches = 0
+        self._observability_emitted_records = 0
+        self._observability_dropped_records = 0
 
     def start(self) -> None:
         if self._loop is not None:
@@ -199,6 +232,8 @@ class ProcessingServerRuntime:
         self._replay_events.clear()
         self._event_seq = 0
         self._last_acked_event_id = 0
+        self._cancel_observability_flush()
+        self._observability_buffer.clear()
 
     def status(self) -> dict[str, Any]:
         active = self._active
@@ -210,6 +245,15 @@ class ProcessingServerRuntime:
             "last_acked_event_id": self._last_acked_event_id,
             "recent_events": len(self._recent_events),
             "replay_events": len(self._replay_events),
+            "observability": {
+                "buffered_records": len(self._observability_buffer),
+                "emitted_batches": self._observability_emitted_batches,
+                "emitted_records": self._observability_emitted_records,
+                "dropped_records": self._observability_dropped_records,
+                "batch_size": self._observability_batch_size,
+                "flush_interval_s": self._observability_flush_interval_s,
+                "max_buffer": self._observability_max_buffer,
+            },
         }
 
     async def apply_config(self, payload: dict[str, Any]) -> None:
@@ -289,6 +333,7 @@ class ProcessingServerRuntime:
             pipeline_snapshot_store=self._snapshot_store,
             processing_emit_projected_event=self._emit_projected_event,
             pipeline_telemetry_store=self._pipeline_telemetry_store,
+            pipeline_observability_sink=self._enqueue_observability_record,
             execution_scheduler=ExecutionScheduler(),
             artifact_max_bytes_per_packet=artifact_max_bytes_per_packet,
             artifact_max_total_bytes_per_pipeline=artifact_max_total_bytes_per_pipeline,
@@ -313,19 +358,88 @@ class ProcessingServerRuntime:
         if not target_node_id:
             return
 
-        self._event_seq += 1
         enriched = dict(event)
-        enriched["event_id"] = self._event_seq
-        self._recent_events.append(
-            {
-                "event_id": self._event_seq,
+        enriched["event_type"] = PROJECTED_PACKET_EVENT_TYPE
+        self._publish_processing_event(
+            enriched,
+            recent={
                 "pipeline_name": pipeline_name,
                 "target_node_id": target_node_id,
                 "target_port": str(event.get("target_port") or "in"),
             },
         )
+
+    def _publish_processing_event(
+        self,
+        event: dict[str, Any],
+        *,
+        recent: dict[str, Any] | None = None,
+    ) -> None:
+        if not isinstance(event, dict):
+            return
+        self._event_seq += 1
+        enriched = dict(event)
+        event_type = str(enriched.get("event_type") or PROJECTED_PACKET_EVENT_TYPE).strip()
+        enriched["event_type"] = event_type
+        enriched["event_id"] = self._event_seq
+        summary = dict(recent or {})
+        summary["event_id"] = self._event_seq
+        summary["event_type"] = event_type
+        self._recent_events.append(summary)
         self._replay_events.append(enriched)
         self.broadcaster.publish(enriched)
+
+    def _enqueue_observability_record(self, record: dict[str, Any]) -> None:
+        if not isinstance(record, dict):
+            return
+        while len(self._observability_buffer) >= self._observability_max_buffer:
+            self._observability_buffer.popleft()
+            self._observability_dropped_records += 1
+        self._observability_buffer.append(dict(record))
+        if len(self._observability_buffer) >= self._observability_batch_size:
+            self._cancel_observability_flush()
+            self._flush_observability()
+            return
+        self._schedule_observability_flush()
+
+    def _schedule_observability_flush(self) -> None:
+        if self._observability_flush_handle is not None:
+            return
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        self._observability_flush_handle = loop.call_later(
+            max(0.001, float(self._observability_flush_interval_s)),
+            self._flush_observability,
+        )
+
+    def _cancel_observability_flush(self) -> None:
+        handle = self._observability_flush_handle
+        self._observability_flush_handle = None
+        if handle is not None:
+            handle.cancel()
+
+    def _flush_observability(self) -> None:
+        self._observability_flush_handle = None
+        if not self._observability_buffer:
+            return
+        records: list[dict[str, Any]] = []
+        while self._observability_buffer and len(records) < self._observability_batch_size:
+            records.append(self._observability_buffer.popleft())
+        if not records:
+            return
+        self._observability_emitted_batches += 1
+        self._observability_emitted_records += len(records)
+        self._publish_processing_event(
+            {
+                "event_type": OBSERVABILITY_BATCH_EVENT_TYPE,
+                "schema_version": 1,
+                "records": records,
+            },
+            recent={"record_count": len(records)},
+        )
+        if self._observability_buffer:
+            self._schedule_observability_flush()
 
     def replay_after(self, last_event_id: int) -> list[dict[str, Any]]:
         after = max(0, int(last_event_id))

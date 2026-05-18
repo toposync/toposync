@@ -17,6 +17,7 @@ from toposync.runtime.pipelines import (
     SourceOperatorRuntime,
     register_builtin_operators,
 )
+from toposync.runtime.pipelines.observability import RECORD_STATS_NODE_OUTPUT
 from toposync.runtime.pipelines.stats import PipelineStatsStore
 
 
@@ -138,5 +139,71 @@ def test_pipeline_runtime_records_step_output_counts() -> None:
         snap = stats_store.snapshot("stats_runtime_pipeline")
         assert snap["node_outputs"]["source"] == 10
         assert snap["node_outputs"]["sink"] == 10
+
+    asyncio.run(scenario())
+
+
+def test_pipeline_runtime_emits_output_observability_without_stats_store() -> None:
+    async def scenario() -> None:
+        registry = OperatorRegistry()
+        register_builtin_operators(registry)
+
+        done_event = asyncio.Event()
+        registry.register_operator(
+            operator_id="test.finite_source",
+            config_model=_FiniteSourceConfig,
+            inputs=[],
+            outputs=[{"name": "out"}],
+            defaults=_FiniteSourceConfig().model_dump(),
+            share_strategy="never",
+            runtime_factory=lambda config, _deps: _FiniteSourceRuntime(config),
+        )
+        registry.register_operator(
+            operator_id="test.collect_sink",
+            config_model=_CollectSinkConfig,
+            inputs=[{"name": "in", "required": True}],
+            outputs=[],
+            defaults=_CollectSinkConfig().model_dump(),
+            share_strategy="never",
+            runtime_factory=lambda config, _deps: _CollectSinkRuntime(config, done_event),
+        )
+
+        graph = {
+            "schema_version": 1,
+            "nodes": [
+                {
+                    "id": "source",
+                    "operator": "test.finite_source",
+                    "config": {"stream_id": "stream:test", "frames": 3},
+                },
+                {"id": "sink", "operator": "test.collect_sink", "config": {"expected": 3}},
+            ],
+            "edges": [
+                {
+                    "from": {"node": "source", "port": "out"},
+                    "to": {"node": "sink", "port": "in"},
+                    "maxsize": 1,
+                    "drop_policy": "block",
+                },
+            ],
+        }
+        pipeline = Pipeline(name="observability_runtime_pipeline", graph=graph)
+        compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+
+        records: list[dict[str, Any]] = []
+        deps = PipelineRuntimeDependencies(pipeline_observability_sink=records.append)
+        runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=deps)
+        await runtime.start()
+        await asyncio.wait_for(done_event.wait(), timeout=1.0)
+        await runtime.stop()
+
+        outputs_by_node: dict[str, int] = {}
+        for record in records:
+            if record.get("type") != RECORD_STATS_NODE_OUTPUT:
+                continue
+            node_id = str(record.get("node_id") or "")
+            outputs_by_node[node_id] = outputs_by_node.get(node_id, 0) + int(record.get("value") or 0)
+        assert outputs_by_node["source"] == 3
+        assert outputs_by_node["sink"] == 3
 
     asyncio.run(scenario())

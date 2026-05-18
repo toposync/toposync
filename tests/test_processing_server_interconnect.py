@@ -28,8 +28,13 @@ from toposync.runtime.pipelines import (
     TransformOperatorRuntime,
     register_builtin_operators,
 )
+from toposync.runtime.pipelines.stats import PipelineStatsStore
+from toposync.runtime.pipelines.telemetry import PipelineTelemetryStore
 from toposync.runtime.pipelines.distributed.orchestrator import PipelinesOrchestrator
 from toposync.runtime.pipelines.distributed.transport import HttpProcessingTransport
+
+
+_PROCESSING_TEST_METRIC_ID = "test.processing.score"
 
 
 class _LiveProcessingServer:
@@ -170,6 +175,12 @@ class _ProcessingWorkRuntime(TransformOperatorRuntime):
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         result = await context.run_blocking(_run_best_available_workload, self._matrix_size)
+        sequence = int(packet.payload.get("sequence", 0) or 0)
+        context.observe_telemetry_numeric(
+            _PROCESSING_TEST_METRIC_ID,
+            min(1.0, 0.25 + (float(sequence) * 0.1)),
+            now_s=time.time(),
+        )
 
         self._counters["processing_work_calls"] = (
             int(self._counters.get("processing_work_calls", 0)) + 1
@@ -477,6 +488,45 @@ async def _wait_for_processing_ack(
         await transport.close()
 
 
+async def _wait_for_origin_metrics(
+    *,
+    stats_store: PipelineStatsStore,
+    telemetry_store: PipelineTelemetryStore,
+    pipeline_name: str,
+    expected_packets: int,
+    timeout_s: float = 5.0,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    deadline = time.monotonic() + timeout_s
+    last_stats: dict[str, Any] = {}
+    last_numeric: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        last_stats = stats_store.snapshot(
+            pipeline_name,
+            node_ids={"source", "workload", "collect"},
+        )
+        numeric = telemetry_store.snapshot_numeric_metric(
+            pipeline_name,
+            "workload",
+            _PROCESSING_TEST_METRIC_ID,
+        )
+        if isinstance(numeric, dict):
+            last_numeric = numeric
+        node_outputs = last_stats.get("node_outputs")
+        if (
+            isinstance(node_outputs, dict)
+            and int(node_outputs.get("source") or 0) >= expected_packets
+            and int(node_outputs.get("workload") or 0) >= expected_packets
+            and int(node_outputs.get("collect") or 0) >= expected_packets
+            and isinstance(numeric, dict)
+            and int(numeric.get("total_count") or 0) >= expected_packets
+        ):
+            return last_stats, numeric
+        await asyncio.sleep(0.05)
+    raise AssertionError(
+        f"origin metrics did not arrive in time stats={last_stats!r} numeric={last_numeric!r}"
+    )
+
+
 def test_processing_server_http_interconnect_executes_remote_workload(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -485,6 +535,8 @@ def test_processing_server_http_interconnect_executes_remote_workload(
     processing_counters: dict[str, Any] = {}
 
     monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "processing-data"))
+    monkeypatch.setenv("TOPOSYNC_PROCESSING_OBSERVABILITY_FLUSH_INTERVAL_MS", "20")
+    monkeypatch.setenv("TOPOSYNC_PROCESSING_OBSERVABILITY_BATCH_SIZE", "4")
     monkeypatch.delenv("TOPOSYNC_PROCESSING_USERNAME", raising=False)
     monkeypatch.delenv("TOPOSYNC_PROCESSING_PASSWORD", raising=False)
 
@@ -535,6 +587,13 @@ def test_processing_server_http_interconnect_executes_remote_workload(
             )
 
             notifications = NotificationsRuntime(data_dir=tmp_path / "origin-notifications")
+            stats_store = PipelineStatsStore(window_seconds=24 * 60 * 60, bucket_seconds=60)
+            telemetry_store = PipelineTelemetryStore(
+                metric_specs=[],
+                max_numeric_series=64,
+                max_image_markers_per_pipeline=64,
+                max_image_pipelines=8,
+            )
             orchestrator = PipelinesOrchestrator(
                 config_store=config_store,
                 operator_registry=origin_registry,
@@ -542,7 +601,10 @@ def test_processing_server_http_interconnect_executes_remote_workload(
                 notifications=notifications,
                 files_dir=paths.files_dir,
                 poll_interval_s=999.0,
-                runtime_dependencies=PipelineRuntimeDependencies(),
+                runtime_dependencies=PipelineRuntimeDependencies(
+                    pipeline_stats_store=stats_store,
+                    pipeline_telemetry_store=telemetry_store,
+                ),
             )
 
             try:
@@ -558,11 +620,21 @@ def test_processing_server_http_interconnect_executes_remote_workload(
                 assert "processing_server_probe" in status.get("pipelines", [])
                 assert int(status.get("last_event_id") or 0) >= expected_packets
                 assert int(status.get("last_acked_event_id") or 0) >= expected_packets
+                metrics_stats, metrics_numeric = await _wait_for_origin_metrics(
+                    stats_store=stats_store,
+                    telemetry_store=telemetry_store,
+                    pipeline_name="processing_server_probe",
+                    expected_packets=expected_packets,
+                )
 
                 assert int(processing_counters.get("source_packets", 0)) == expected_packets
                 assert int(processing_counters.get("processing_work_calls", 0)) == expected_packets
                 assert int(origin_counters.get("source_packets", 0)) == 0
                 assert int(origin_counters.get("processing_work_calls", 0)) == 0
+                assert metrics_stats["node_outputs"]["source"] == expected_packets
+                assert metrics_stats["node_outputs"]["workload"] == expected_packets
+                assert metrics_stats["node_outputs"]["collect"] == expected_packets
+                assert int(metrics_numeric["total_count"]) == expected_packets
 
                 collected = origin_counters.get("collected")
                 assert isinstance(collected, list)

@@ -26,6 +26,11 @@ from ..compiler import (
 )
 from ..execution import PipelineRuntime, PipelineRuntimeDependencies
 from ..operator_registry import OperatorRegistry
+from ..observability import (
+    OBSERVABILITY_BATCH_EVENT_TYPE,
+    PROJECTED_PACKET_EVENT_TYPE,
+    apply_observability_batch,
+)
 from ..runtime import BoundedChannel, DropPolicy
 from ..shared_runtime import PipelineBundleRuntime, SharedRuntimeBuildError
 from .plan import build_distributed_graphs
@@ -58,6 +63,8 @@ class _ServerHandle:
     config_payload: dict[str, Any] = field(default_factory=dict)
     last_event_id: int = 0
     started_at: float = field(default_factory=time.time)
+    observability_applied_records: int = 0
+    observability_skipped_records: int = 0
 
 
 def _processing_settings_payload(settings: AppSettings) -> dict[str, Any]:
@@ -172,6 +179,8 @@ class PipelinesOrchestrator:
                 "url": handle.server.url,
                 "started_at": handle.started_at,
                 "last_event_id": handle.last_event_id,
+                "observability_applied_records": handle.observability_applied_records,
+                "observability_skipped_records": handle.observability_skipped_records,
             }
             for sid, handle in sorted(self._servers.items(), key=lambda item: item[0])
         ]
@@ -387,6 +396,7 @@ class PipelinesOrchestrator:
             processing_emit_projected_event=base.processing_emit_projected_event,
             pipeline_stats_store=base.pipeline_stats_store,
             pipeline_telemetry_store=base.pipeline_telemetry_store,
+            pipeline_observability_sink=base.pipeline_observability_sink,
             pipeline_storage_manager=base.pipeline_storage_manager,
             pipeline_graph_limits_by_pipeline=base.pipeline_graph_limits_by_pipeline,
             execution_scheduler=base.execution_scheduler,
@@ -537,6 +547,18 @@ class PipelinesOrchestrator:
                                 eid = int(event.get("event_id") or 0)
                             except Exception:
                                 eid = 0
+                            event_type = str(event.get("event_type") or "").strip()
+                            if event_type == OBSERVABILITY_BATCH_EVENT_TYPE:
+                                self._apply_processing_observability_event(server.id, event)
+                                if eid:
+                                    last_event_id = max(last_event_id, eid)
+                                    await transport.ack(last_event_id)
+                                continue
+                            if event_type and event_type != PROJECTED_PACKET_EVENT_TYPE:
+                                if eid:
+                                    last_event_id = max(last_event_id, eid)
+                                    await transport.ack(last_event_id)
+                                continue
                             name = str(event.get("pipeline_name") or "").strip()
                             inbox = self._inboxes.get(name)
                             if inbox is None:
@@ -577,3 +599,25 @@ class PipelinesOrchestrator:
         except Exception as exc:  # noqa: BLE001
             self._last_error = str(exc)
             logger.warning("processing config push failed server=%s; will retry: %s", server.id, exc)
+
+    def _apply_processing_observability_event(
+        self,
+        server_id: str,
+        event: dict[str, Any],
+    ) -> None:
+        handle = self._servers.get(server_id)
+        try:
+            result = apply_observability_batch(
+                event,
+                stats_store=self._runtime_deps_base.pipeline_stats_store,
+                telemetry_store=self._runtime_deps_base.pipeline_telemetry_store,
+                apply_image_markers=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("processing observability apply failed server=%s: %s", server_id, exc)
+            if handle is not None:
+                handle.observability_skipped_records += len(event.get("records") or [])
+            return
+        if handle is not None:
+            handle.observability_applied_records += int(result.get("applied") or 0)
+            handle.observability_skipped_records += int(result.get("skipped") or 0)

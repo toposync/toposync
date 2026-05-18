@@ -567,6 +567,209 @@ try {
     Set-Content -Path $RunnerPath -Value $content -Encoding UTF8
 }
 
+function Write-ServiceWrapper {
+    param(
+        [Parameter(Mandatory = $true)][string]$WrapperSourcePath,
+        [Parameter(Mandatory = $true)][string]$WrapperExePath
+    )
+
+    $source = @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.ServiceProcess;
+using System.Threading;
+
+public sealed class TopoSyncProcessingWindowsService : ServiceBase
+{
+    private readonly string runnerPath;
+    private Process runnerProcess;
+    private bool stopping;
+    private readonly object gate = new object();
+
+    public TopoSyncProcessingWindowsService(string serviceName, string runnerPath)
+    {
+        ServiceName = serviceName;
+        CanStop = true;
+        CanShutdown = true;
+        AutoLog = true;
+        this.runnerPath = runnerPath;
+    }
+
+    public static void Main(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Environment.Exit(2);
+        }
+
+        ServiceBase.Run(new ServiceBase[] { new TopoSyncProcessingWindowsService(args[0], args[1]) });
+    }
+
+    protected override void OnStart(string[] args)
+    {
+        lock (gate)
+        {
+            stopping = false;
+
+            if (String.IsNullOrWhiteSpace(runnerPath) || !File.Exists(runnerPath))
+            {
+                throw new FileNotFoundException("TopoSync service runner was not found.", runnerPath);
+            }
+
+            string powerShellExe = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                @"System32\WindowsPowerShell\v1.0\powershell.exe"
+            );
+
+            if (!File.Exists(powerShellExe))
+            {
+                throw new FileNotFoundException("Windows PowerShell was not found.", powerShellExe);
+            }
+
+            ProcessStartInfo startInfo = new ProcessStartInfo();
+            startInfo.FileName = powerShellExe;
+            startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -File " + QuoteArgument(runnerPath);
+            startInfo.WorkingDirectory = Path.GetDirectoryName(runnerPath);
+            startInfo.UseShellExecute = false;
+            startInfo.CreateNoWindow = true;
+
+            runnerProcess = Process.Start(startInfo);
+            if (runnerProcess == null)
+            {
+                throw new InvalidOperationException("Failed to start the TopoSync runner process.");
+            }
+
+            runnerProcess.EnableRaisingEvents = true;
+            runnerProcess.Exited += delegate
+            {
+                if (!stopping)
+                {
+                    int exitCode = GetProcessExitCode(runnerProcess);
+                    Environment.Exit(exitCode == 0 ? 1 : exitCode);
+                }
+            };
+        }
+
+        Thread.Sleep(1000);
+        lock (gate)
+        {
+            if (runnerProcess == null || runnerProcess.HasExited)
+            {
+                throw new InvalidOperationException("TopoSync runner exited during service startup with exit code " + GetProcessExitCode(runnerProcess) + ".");
+            }
+        }
+    }
+
+    protected override void OnStop()
+    {
+        StopRunnerProcessTree();
+    }
+
+    protected override void OnShutdown()
+    {
+        StopRunnerProcessTree();
+    }
+
+    private void StopRunnerProcessTree()
+    {
+        lock (gate)
+        {
+            stopping = true;
+            if (runnerProcess == null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (runnerProcess.HasExited)
+                {
+                    return;
+                }
+
+                ProcessStartInfo taskkillInfo = new ProcessStartInfo();
+                taskkillInfo.FileName = "taskkill.exe";
+                taskkillInfo.Arguments = "/PID " + runnerProcess.Id + " /T /F";
+                taskkillInfo.UseShellExecute = false;
+                taskkillInfo.CreateNoWindow = true;
+
+                Process taskkill = Process.Start(taskkillInfo);
+                if (taskkill != null)
+                {
+                    taskkill.WaitForExit(15000);
+                    taskkill.Dispose();
+                }
+
+                if (!runnerProcess.WaitForExit(15000))
+                {
+                    runnerProcess.Kill();
+                }
+            }
+            catch
+            {
+                try
+                {
+                    if (!runnerProcess.HasExited)
+                    {
+                        runnerProcess.Kill();
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+    }
+
+    private static int GetProcessExitCode(Process process)
+    {
+        if (process == null)
+        {
+            return 1;
+        }
+
+        try
+        {
+            if (process.HasExited)
+            {
+                return process.ExitCode;
+            }
+        }
+        catch
+        {
+        }
+
+        return 1;
+    }
+
+    private static string QuoteArgument(string value)
+    {
+        return "\"" + value.Replace("\"", "\\\"") + "\"";
+    }
+}
+'@
+
+    Set-Content -Path $WrapperSourcePath -Value $source -Encoding UTF8
+    if (Test-Path $WrapperExePath) {
+        Remove-Item -Force $WrapperExePath
+    }
+
+    try {
+        Add-Type `
+            -TypeDefinition $source `
+            -ReferencedAssemblies "System.ServiceProcess.dll" `
+            -OutputAssembly $WrapperExePath `
+            -OutputType WindowsApplication
+    } catch {
+        throw "Failed to compile the TopoSync Windows service wrapper: $($_.Exception.Message)"
+    }
+
+    if (-not (Test-Path $WrapperExePath)) {
+        throw "Service wrapper executable was not created at $WrapperExePath"
+    }
+}
+
 function Set-InstallAcl {
     param([Parameter(Mandatory = $true)][string]$Path)
     try {
@@ -600,11 +803,11 @@ function Configure-WindowsService {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][string]$DisplayName,
+        [Parameter(Mandatory = $true)][string]$WrapperExePath,
         [Parameter(Mandatory = $true)][string]$RunnerPath,
         [Parameter(Mandatory = $true)][bool]$ForceRecreate
     )
-    $powerShellExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-    $binaryPath = '"' + $powerShellExe + '" -NoProfile -ExecutionPolicy Bypass -File "' + $RunnerPath + '"'
+    $binaryPath = '"' + $WrapperExePath + '" "' + $Name + '" "' + $RunnerPath + '"'
     $existing = Get-Service -Name $Name -ErrorAction SilentlyContinue
 
     if ($existing -and $ForceRecreate) {
@@ -690,6 +893,8 @@ $venvDir = Join-Path $InstallRoot ".venv"
 $pythonInstallDir = Join-Path $InstallRoot "uv-python"
 $logDir = Join-Path $InstallRoot "logs"
 $runnerPath = Join-Path $InstallRoot "run-processing-server.ps1"
+$wrapperSourcePath = Join-Path $InstallRoot "TopoSyncProcessingService.cs"
+$wrapperExePath = Join-Path $InstallRoot "TopoSyncProcessingService.exe"
 $manifestPath = Join-Path $InstallRoot "processing-server-registration.json"
 $firewallRuleName = "TopoSync Processing Server ($ServiceName)"
 
@@ -741,6 +946,9 @@ Write-RunnerScript `
     -Username $ProcessingUsername `
     -Password $ProcessingPassword
 
+Write-Step "Compiling Windows service wrapper"
+Write-ServiceWrapper -WrapperSourcePath $wrapperSourcePath -WrapperExePath $wrapperExePath
+
 Write-Step "Configuring Windows Firewall"
 Configure-FirewallRule -RuleName $firewallRuleName -RulePort $selectedPort -Profiles $FirewallProfile
 
@@ -748,12 +956,27 @@ Write-Step "Configuring Windows service"
 Configure-WindowsService `
     -Name $ServiceName `
     -DisplayName $ServiceDisplayName `
+    -WrapperExePath $wrapperExePath `
     -RunnerPath $runnerPath `
     -ForceRecreate ([bool]$ForceReinstallService)
 
 if ($StartService) {
     Write-Step "Starting service"
-    Start-Service -Name $ServiceName
+    try {
+        Start-Service -Name $ServiceName
+    } catch {
+        $query = ""
+        try {
+            $query = (& sc.exe queryex $ServiceName 2>&1) -join [Environment]::NewLine
+        } catch {
+            $query = ""
+        }
+        $details = $_.Exception.Message
+        if ($query) {
+            $details = "$details`n`nsc.exe queryex ${ServiceName}:`n$query"
+        }
+        throw "Starting service $ServiceName failed. Check logs under $logDir. $details"
+    }
     Start-Sleep -Seconds 4
 }
 
@@ -804,6 +1027,8 @@ $manifest = [ordered]@{
     python_install_dir = $pythonInstallDir
     data_dir = $DataDir
     log_dir = $logDir
+    service_wrapper = $wrapperExePath
+    service_runner = $runnerPath
     host_address = $HostAddress
     port = $selectedPort
     firewall_rule = $firewallRuleName

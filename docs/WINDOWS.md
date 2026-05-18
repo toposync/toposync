@@ -94,7 +94,54 @@ Observação:
 
 - CUDA exige driver NVIDIA e stack CUDA/cuDNN compatíveis com o `onnxruntime-gpu`.
 
-## 6) Quando preciso do Visual C++ Build Tools?
+## 6) Instalar o processing server como serviço
+
+Para provisionar uma máquina Windows como processing server permanente, use o script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1
+```
+
+Para o formato "baixar por link e rodar":
+
+```powershell
+irm https://SEU_DOMINIO/install_windows_processing_server.ps1 -OutFile $env:TEMP\install-toposync-processing.ps1
+powershell -ExecutionPolicy Bypass -File $env:TEMP\install-toposync-processing.ps1 -Bundle auto
+```
+
+O script:
+
+- exige ou reabre PowerShell como Administrador quando possível;
+- instala `uv` e Python 3.12 se necessário;
+- cria um ambiente em `%ProgramData%\TopoSync\ProcessingServer`;
+- instala o bundle `toposync`, `toposync-vision-directml` ou `toposync-vision-cuda`;
+- cria regra de firewall para a porta selecionada;
+- cria o serviço Windows `TopoSyncProcessingServer`;
+- configura restart automático em caso de falha;
+- gera senha Basic Auth por padrão;
+- salva o payload de registro em `%ProgramData%\TopoSync\ProcessingServer\processing-server-registration.json`.
+
+Por padrão, o script usa a porta `49321`, não `9001`. A porta `9001` é registrada na IANA para outro serviço (`etlservicemgr`), então o instalador evita usá-la como padrão. Se a porta escolhida já estiver ocupada, o script procura a próxima porta livre.
+
+Exemplos:
+
+```powershell
+# Auto: CUDA se nvidia-smi existir; senão DirectML.
+powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle auto
+
+# Forçar DirectML.
+powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle directml
+
+# Forçar CPU.
+powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -Bundle cpu
+
+# Informar o IP/hostname que o origin deve usar.
+powershell -ExecutionPolicy Bypass -File .\scripts\install_windows_processing_server.ps1 -AdvertiseHost 192.168.1.50
+```
+
+Depois, registre no servidor origin usando o JSON impresso no final ou o arquivo `processing-server-registration.json`.
+
+## 7) Quando preciso do Visual C++ Build Tools?
 
 Na prática: só quando o instalador não encontra wheel pronta e tenta compilar dependências nativas.
 
@@ -110,7 +157,7 @@ Se isso acontecer, siga esta ordem:
 
 Na maior parte dos casos, isso é melhor do que transformar a instalação do usuário em um setup de toolchain C/C++.
 
-## 7) E se eu insistir em Python 3.14?
+## 8) E se eu insistir em Python 3.14?
 
 Pode funcionar no futuro, mas não é a recomendação do projeto neste momento.
 

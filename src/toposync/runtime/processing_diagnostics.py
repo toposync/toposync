@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import platform
 import shutil
@@ -195,9 +196,13 @@ async def collect_camera_hub_snapshot() -> dict[str, Any] | None:
 
 
 async def collect_processing_server_diagnostics(*, data_dir: str | None = None) -> dict[str, Any]:
-    system_info = collect_system_info()
-    vision_runtime = collect_vision_extension_diagnostics(system_info=system_info, data_dir=data_dir)
-    cameras = collect_camera_dependency_info()
+    system_info = await asyncio.to_thread(collect_system_info)
+    vision_runtime = await asyncio.to_thread(
+        collect_vision_extension_diagnostics,
+        system_info=system_info,
+        data_dir=data_dir,
+    )
+    cameras = await asyncio.to_thread(collect_camera_dependency_info)
     hub = await collect_camera_hub_snapshot()
     if hub is not None:
         cameras["hub"] = hub

@@ -123,6 +123,10 @@ O script:
 
 Por padrão, o script usa a porta `49321`, não `9001`. A porta `9001` é registrada na IANA para outro serviço (`etlservicemgr`), então o instalador evita usá-la como padrão. Se a porta escolhida já estiver ocupada, o script procura a próxima porta livre.
 
+Quando `-HostAddress` fica em `0.0.0.0`, o serviço escuta na rede. Sem `-AdvertiseHost`, o instalador tenta anunciar o primeiro IPv4 de LAN com gateway, por exemplo `http://192.168.0.250:49321`, em vez do hostname curto do Windows. Use `-AdvertiseHost` se quiser forçar um IP ou DNS específico.
+
+O firewall é aberto para os perfis `Domain`, `Private` e `Public`, porque muitas máquinas Windows ficam em rede doméstica marcada como pública.
+
 Exemplos:
 
 ```powershell

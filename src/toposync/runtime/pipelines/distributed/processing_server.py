@@ -40,6 +40,17 @@ from .plan import build_distributed_graphs
 logger = logging.getLogger("toposync.processing")
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 class ProcessingConfig(BaseModel):
     pipelines: list[Pipeline] = Field(default_factory=list)
     settings: AppSettings | None = None
@@ -451,14 +462,24 @@ def create_processing_app() -> FastAPI:
     @app.get("/api/processing/status")
     async def get_processing_status() -> dict[str, Any]:
         status = runtime.status()
+        timeout_s = _env_float("TOPOSYNC_PROCESSING_STATUS_DIAGNOSTICS_TIMEOUT", 3.5)
         try:
             status.update(
-                await collect_processing_server_diagnostics(
-                    data_dir=str(config_store.paths.data_dir)
+                await asyncio.wait_for(
+                    collect_processing_server_diagnostics(
+                        data_dir=str(config_store.paths.data_dir)
+                    ),
+                    timeout=timeout_s,
                 )
             )
+        except asyncio.TimeoutError:
+            status["diagnostics"] = {
+                "ok": False,
+                "error": "processing diagnostics timed out",
+                "timeout_s": timeout_s,
+            }
         except Exception:
-            pass
+            status["diagnostics"] = {"ok": False, "error": "processing diagnostics failed"}
         return status
 
     @app.post("/api/processing/vision/manifests/import")

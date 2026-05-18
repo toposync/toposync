@@ -204,7 +204,7 @@ class HttpProcessingTransport:
         auth = None
         if self._username or self._password:
             auth = httpx.BasicAuth(self._username, self._password)
-        self._client = httpx.AsyncClient(timeout=None, auth=auth)
+        self._client = httpx.AsyncClient(timeout=None, auth=auth, trust_env=False)
         return self._client
 
     async def push_config(self, payload: dict[str, Any]) -> None:

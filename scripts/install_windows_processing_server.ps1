@@ -54,7 +54,7 @@ param(
     [string]$AdvertiseHost = "",
 
     [ValidateSet("Domain", "Private", "Public")]
-    [string[]]$FirewallProfile = @("Domain", "Private"),
+    [string[]]$FirewallProfile = @("Domain", "Private", "Public"),
 
     [string]$ProcessingUsername = "toposync",
 
@@ -272,6 +272,92 @@ function Resolve-ProcessingPort {
         }
     }
     throw "No free TCP port found from $RequestedPort to 65535."
+}
+
+function Test-IsWildcardOrLoopbackHost {
+    param([AllowNull()][string]$HostName)
+    $value = ([string]$HostName).Trim().ToLowerInvariant()
+    if (-not $value) {
+        return $true
+    }
+    if ($value -in @("0.0.0.0", "::", "*", "localhost", "::1")) {
+        return $true
+    }
+    if ($value -eq "127.0.0.1" -or $value.StartsWith("127.")) {
+        return $true
+    }
+    return $false
+}
+
+function Test-IsUsableLanIPv4 {
+    param([AllowNull()][string]$Address)
+    $value = ([string]$Address).Trim()
+    if (-not $value) {
+        return $false
+    }
+    if ($value -eq "0.0.0.0" -or $value -eq "255.255.255.255") {
+        return $false
+    }
+    if ($value.StartsWith("127.") -or $value.StartsWith("169.254.")) {
+        return $false
+    }
+    return ($value -match '^\d{1,3}(\.\d{1,3}){3}$')
+}
+
+function Get-LanIPv4Addresses {
+    $addresses = @()
+
+    try {
+        $configs = @(Get-NetIPConfiguration -ErrorAction SilentlyContinue | Where-Object { $_.IPv4Address })
+        $preferred = @($configs | Where-Object { $_.IPv4DefaultGateway })
+        $others = @($configs | Where-Object { -not $_.IPv4DefaultGateway })
+        foreach ($config in @($preferred + $others)) {
+            foreach ($item in @($config.IPv4Address)) {
+                $ip = [string]$item.IPAddress
+                if (Test-IsUsableLanIPv4 -Address $ip) {
+                    $addresses += $ip
+                }
+            }
+        }
+    } catch {
+        $addresses = @()
+    }
+
+    if ($addresses.Count -eq 0) {
+        try {
+            foreach ($address in [Net.Dns]::GetHostAddresses([Net.Dns]::GetHostName())) {
+                if ($address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) {
+                    $ip = [string]$address.IPAddressToString
+                    if (Test-IsUsableLanIPv4 -Address $ip) {
+                        $addresses += $ip
+                    }
+                }
+            }
+        } catch {
+            $addresses = @()
+        }
+    }
+
+    return @($addresses | Select-Object -Unique)
+}
+
+function Resolve-AdvertiseHost {
+    param(
+        [AllowNull()][string]$RequestedAdvertiseHost,
+        [Parameter(Mandatory = $true)][string]$BindHost,
+        [Parameter(Mandatory = $true)][string[]]$LanIPv4Addresses
+    )
+    $requested = ([string]$RequestedAdvertiseHost).Trim()
+    if ($requested) {
+        return $requested
+    }
+    if (-not (Test-IsWildcardOrLoopbackHost -HostName $BindHost)) {
+        return $BindHost.Trim()
+    }
+    if ($LanIPv4Addresses.Count -gt 0) {
+        return [string]$LanIPv4Addresses[0]
+    }
+    return [Net.Dns]::GetHostName()
 }
 
 function Normalize-ServerId {
@@ -855,6 +941,16 @@ function Invoke-ProcessingStatus {
     return Invoke-RestMethod -Uri "$BaseUrl/api/processing/status" -Headers $headers -TimeoutSec 10
 }
 
+function Get-ListeningTcpSummary {
+    param([Parameter(Mandatory = $true)][int]$ListenPort)
+    try {
+        $items = @(Get-NetTCPConnection -LocalPort $ListenPort -State Listen -ErrorAction SilentlyContinue)
+        return @($items | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort) pid=$($_.OwningProcess)" })
+    } catch {
+        return @()
+    }
+}
+
 $existingServiceBeforeInstall = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existingServiceBeforeInstall -and $existingServiceBeforeInstall.Status -ne "Stopped") {
     Write-Step "Stopping existing service before install"
@@ -875,9 +971,11 @@ $packageSpec = [string]$installPlan.Label
 if (-not $DataDir) {
     $DataDir = Join-Path $InstallRoot "data"
 }
-if (-not $AdvertiseHost) {
-    $AdvertiseHost = [Net.Dns]::GetHostName()
-}
+[string[]]$lanIPv4Addresses = @(Get-LanIPv4Addresses)
+$AdvertiseHost = Resolve-AdvertiseHost `
+    -RequestedAdvertiseHost $AdvertiseHost `
+    -BindHost $HostAddress `
+    -LanIPv4Addresses $lanIPv4Addresses
 $baseUrl = "http://${AdvertiseHost}:$selectedPort"
 $localBaseUrl = "http://127.0.0.1:$selectedPort"
 
@@ -1006,6 +1104,15 @@ if ($StartService) {
     }
 }
 
+$listenerSummary = Get-ListeningTcpSummary -ListenPort $selectedPort
+if ($listenerSummary.Count -gt 0) {
+    Write-Host "Listening TCP endpoints: $($listenerSummary -join ', ')"
+}
+if ($lanIPv4Addresses.Count -gt 0) {
+    $networkUrls = @($lanIPv4Addresses | ForEach-Object { "http://${_}:$selectedPort/api/processing/status" })
+    Write-Host "LAN status URL candidates: $($networkUrls -join ', ')"
+}
+
 $registration = [ordered]@{
     id = $resolvedServerId
     name = $ServiceDisplayName
@@ -1030,7 +1137,10 @@ $manifest = [ordered]@{
     service_wrapper = $wrapperExePath
     service_runner = $runnerPath
     host_address = $HostAddress
+    advertise_host = $AdvertiseHost
+    lan_ipv4_addresses = $lanIPv4Addresses
     port = $selectedPort
+    tcp_listeners = $listenerSummary
     firewall_rule = $firewallRuleName
     firewall_profile = $FirewallProfile
     local_status_url = "$localBaseUrl/api/processing/status"

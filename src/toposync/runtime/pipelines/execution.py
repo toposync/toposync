@@ -66,10 +66,17 @@ class NodeRuntimeMetrics:
     timeout_count: int = 0
     canceled_count: int = 0
     error_count: int = 0
+    last_error: str | None = None
+    last_error_at: float | None = None
     process_latency_ms: deque[float] = field(default_factory=lambda: deque(maxlen=4096))
 
     def record_latency(self, latency_ms: float) -> None:
         self.process_latency_ms.append(max(0.0, float(latency_ms)))
+
+    def record_error(self, exc: BaseException) -> None:
+        self.error_count += 1
+        self.last_error = f"{exc.__class__.__name__}: {exc}"
+        self.last_error_at = time.time()
 
     def snapshot(self) -> dict[str, Any]:
         samples = list(self.process_latency_ms)
@@ -82,6 +89,8 @@ class NodeRuntimeMetrics:
             "timeout_count": self.timeout_count,
             "canceled_count": self.canceled_count,
             "error_count": self.error_count,
+            "last_error": self.last_error,
+            "last_error_at": self.last_error_at,
             "avg_process_latency_ms": avg,
             "p95_process_latency_ms": p95,
         }
@@ -306,8 +315,8 @@ class TransformOperatorRuntime(BaseOperatorRuntime):
             started_ns = time.monotonic_ns()
             try:
                 out_packets = await self.process_packet(packet, context)
-            except Exception:
-                context.metrics.error_count += 1
+            except Exception as exc:
+                context.metrics.record_error(exc)
                 context.logger.exception("Node '%s' failed to process packet", context.node_id)
                 continue
             context.metrics.record_latency(_elapsed_ms(started_ns))
@@ -408,8 +417,8 @@ class PipelineRuntime:
             await runtime.run(context)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            context.metrics.error_count += 1
+        except Exception as exc:
+            context.metrics.record_error(exc)
             self.logger.exception("Node '%s' runtime crashed", context.node_id)
 
     def _build_runtime(self) -> None:

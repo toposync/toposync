@@ -335,7 +335,6 @@ def test_resolve_onnxruntime_execution_providers_prefers_cuda_for_gpu_bundle(mon
     )
 
     assert resolve_onnxruntime_execution_providers() == [
-        "TensorrtExecutionProvider",
         "CUDAExecutionProvider",
         "CPUExecutionProvider",
     ]

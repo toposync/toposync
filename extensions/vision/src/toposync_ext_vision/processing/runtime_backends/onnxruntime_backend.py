@@ -82,7 +82,6 @@ def _default_onnxruntime_execution_providers() -> list[str]:
         ]
     if variant == "cuda":
         return [
-            "TensorrtExecutionProvider",
             "CUDAExecutionProvider",
             "CPUExecutionProvider",
         ]

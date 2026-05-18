@@ -2,7 +2,37 @@ from __future__ import annotations
 
 import asyncio
 
-from toposync.runtime.pipelines import Artifact, BoundedChannel, DropPolicy, KeyedBoundedChannel, Lifecycle, Packet, QueueOperationStatus
+from toposync.runtime.config_store import Pipeline
+from toposync.runtime.pipelines import (
+    Artifact,
+    BoundedChannel,
+    DropPolicy,
+    KeyedBoundedChannel,
+    Lifecycle,
+    OperatorRegistry,
+    Packet,
+    PipelineGraphCompiler,
+    PipelineRuntime,
+    QueueOperationStatus,
+    SourceOperatorRuntime,
+    TransformOperatorRuntime,
+)
+
+
+class _OnePacketSourceRuntime(SourceOperatorRuntime):
+    def __init__(self) -> None:
+        self._done = False
+
+    async def produce(self, context) -> Packet | None:  # noqa: ANN001
+        if self._done:
+            return None
+        self._done = True
+        return Packet.create(stream_id="diagnostic")
+
+
+class _FailingTransformRuntime(TransformOperatorRuntime):
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+        raise ValueError("diagnostic failure")
 
 
 def test_packet_creation_and_artifact_attachment() -> None:
@@ -15,6 +45,52 @@ def test_packet_creation_and_artifact_attachment() -> None:
     assert "main" in enriched.artifacts
     assert enriched.artifacts["main"].reference == "files/cam/1.jpg"
     assert enriched.packet_id == packet.packet_id
+
+
+def test_runtime_snapshot_includes_last_node_error() -> None:
+    async def scenario() -> None:
+        registry = OperatorRegistry()
+        registry.register_operator(
+            operator_id="test.source",
+            outputs=[{"name": "out"}],
+            capabilities=["source"],
+            runtime_factory=lambda _config, _deps: _OnePacketSourceRuntime(),
+        )
+        registry.register_operator(
+            operator_id="test.fail",
+            inputs=[{"name": "in", "required": True}],
+            outputs=[{"name": "out"}],
+            runtime_factory=lambda _config, _deps: _FailingTransformRuntime(),
+        )
+        pipeline = Pipeline(
+            name="runtime_error_probe",
+            graph={
+                "schema_version": 1,
+                "nodes": [
+                    {"id": "source", "operator": "test.source", "config": {}},
+                    {"id": "fail", "operator": "test.fail", "config": {}},
+                ],
+                "edges": [
+                    {
+                        "from": {"node": "source", "port": "out"},
+                        "to": {"node": "fail", "port": "in"},
+                    }
+                ],
+            },
+        )
+        compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+        runtime = PipelineRuntime(compiled=compiled, registry=registry)
+        await runtime.start()
+        await asyncio.sleep(0.05)
+        snapshot = runtime.snapshot()
+        await runtime.stop()
+
+        node = snapshot["nodes"]["fail"]
+        assert node["error_count"] == 1
+        assert node["last_error"] == "ValueError: diagnostic failure"
+        assert node["last_error_at"] is not None
+
+    asyncio.run(scenario())
 
 
 def test_channel_drop_oldest_keeps_recent_items() -> None:

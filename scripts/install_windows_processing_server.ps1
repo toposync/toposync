@@ -207,6 +207,34 @@ function Install-UvIfNeeded {
     return $uv
 }
 
+function Get-NpmCommand {
+    $cmd = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if ($cmd) {
+        return $cmd.Source
+    }
+
+    $cmd = Get-Command npm -ErrorAction SilentlyContinue
+    if ($cmd) {
+        return $cmd.Source
+    }
+
+    $candidates = @()
+    if ($env:ProgramFiles) {
+        $candidates += (Join-Path $env:ProgramFiles "nodejs\npm.cmd")
+    }
+    $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+    if ($programFilesX86) {
+        $candidates += (Join-Path $programFilesX86 "nodejs\npm.cmd")
+    }
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+    return ""
+}
+
 function Test-TcpPortAvailable {
     param([Parameter(Mandatory = $true)][int]$CandidatePort)
     $listener = $null
@@ -361,6 +389,7 @@ function Resolve-PackageInstallPlan {
                 Spec = $localPath
                 Label = "$PackageName from local checkout ($localPath)"
                 Source = "local"
+                RepositoryRoot = $repoRoot
                 RegistryFallbackSpec = $registrySpec
                 UnpinnedFallbackSpec = $PackageName
             }
@@ -370,8 +399,82 @@ function Resolve-PackageInstallPlan {
         Spec = $registrySpec
         Label = $registrySpec
         Source = "registry"
+        RepositoryRoot = ""
         RegistryFallbackSpec = $registrySpec
         UnpinnedFallbackSpec = $PackageName
+    }
+}
+
+function Test-FrontendToolingReady {
+    param([Parameter(Mandatory = $true)][string]$RepositoryRoot)
+    $binDir = Join-Path $RepositoryRoot "node_modules\.bin"
+    $tscCandidates = @(
+        (Join-Path $binDir "tsc.cmd"),
+        (Join-Path $binDir "tsc")
+    )
+    $webpackCandidates = @(
+        (Join-Path $binDir "webpack.cmd"),
+        (Join-Path $binDir "webpack")
+    )
+    $hasTsc = $false
+    foreach ($candidate in $tscCandidates) {
+        if (Test-Path $candidate) {
+            $hasTsc = $true
+            break
+        }
+    }
+    $hasWebpack = $false
+    foreach ($candidate in $webpackCandidates) {
+        if (Test-Path $candidate) {
+            $hasWebpack = $true
+            break
+        }
+    }
+    return ($hasTsc -and $hasWebpack)
+}
+
+function Initialize-LocalCheckoutBuildDependencies {
+    param([Parameter(Mandatory = $true)][object]$InstallPlan)
+    if ([string]$InstallPlan.Source -ne "local") {
+        return
+    }
+
+    $repoRoot = [string]$InstallPlan.RepositoryRoot
+    if (-not $repoRoot) {
+        return
+    }
+
+    $rootPackageJson = Join-Path $repoRoot "package.json"
+    $frontendPackageJson = Join-Path $repoRoot "frontend\package.json"
+    if (-not ((Test-Path $rootPackageJson) -and (Test-Path $frontendPackageJson))) {
+        return
+    }
+
+    if (Test-FrontendToolingReady -RepositoryRoot $repoRoot) {
+        return
+    }
+
+    $npm = Get-NpmCommand
+    if (-not $npm) {
+        throw "Local checkout install requires Node.js/npm to build the TopoSync frontend. Install Node.js LTS or rerun with -PreferLocalPackages `$false to use the published bundle."
+    }
+
+    Write-Step "Installing frontend build dependencies for local checkout"
+    Push-Location $repoRoot
+    try {
+        $lockPath = Join-Path $repoRoot "package-lock.json"
+        if (Test-Path $lockPath) {
+            & $npm ci --include=dev
+            if ($LASTEXITCODE -eq 0) {
+                return
+            }
+            Write-Warning "npm ci failed with exit code $LASTEXITCODE. Retrying with npm install --include=dev."
+        }
+
+        & $npm install --include=dev
+        Assert-LastExitCode "Installing frontend build dependencies"
+    } finally {
+        Pop-Location
     }
 }
 
@@ -618,6 +721,7 @@ if (-not (Test-Path $venvPython)) {
 }
 
 Write-Step "Installing TopoSync bundle: $packageSpec"
+Initialize-LocalCheckoutBuildDependencies -InstallPlan $installPlan
 Install-ToposyncBundle -Uv $uv -Python $venvPython -InstallPlan $installPlan
 
 if (-not (Test-Path $toposyncExe)) {

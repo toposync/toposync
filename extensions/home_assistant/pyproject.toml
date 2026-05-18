@@ -1,6 +1,6 @@
 [project]
 name = "toposync-ext-home-assistant"
-version = "0.1.13"
+version = "0.1.14"
 description = "Toposync first-party extension: Home Assistant integration (scaffold)."
 readme = "README.md"
 license = "MIT"

@@ -152,7 +152,8 @@ function New-RandomPassword {
     }
     $chars = New-Object char[] $bytes.Length
     for ($i = 0; $i -lt $bytes.Length; $i++) {
-        $chars[$i] = $alphabet[[int]$bytes[$i] % $alphabet.Length]
+        $index = ([int]$bytes[$i]) % $alphabet.Length
+        $chars[$i] = $alphabet[$index]
     }
     return -join $chars
 }

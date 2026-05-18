@@ -283,7 +283,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="pipelines-stage8-distributed-demo")
     parser.add_argument("--mode", choices=["local", "inprocess", "http"], default="inprocess")
     parser.add_argument("--duration-s", type=float, default=0.8)
-    parser.add_argument("--processing-url", default="http://127.0.0.1:9001")
+    parser.add_argument("--processing-url", default="http://127.0.0.1:49321")
     parser.add_argument("--data-dir", default=None)
     parser.add_argument("--json", action="store_true")
     return parser.parse_args()

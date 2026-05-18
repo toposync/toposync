@@ -44,7 +44,7 @@ def test_distributed_settings_endpoint_filters_by_server_id(tmp_path: Path) -> N
     _set_processing_servers(
         config_store,
         [
-            {"id": "edge_gpu", "name": "Edge GPU", "kind": "http", "url": "http://10.0.0.55:9001"},
+            {"id": "edge_gpu", "name": "Edge GPU", "kind": "http", "url": "http://10.0.0.55:49321"},
         ],
     )
 
@@ -89,7 +89,7 @@ def test_transmission_urls_proxy_remote_processing_server(tmp_path: Path, monkey
                 "id": "edge_gpu",
                 "name": "Edge GPU",
                 "kind": "http",
-                "url": "http://10.0.0.55:9001",
+                "url": "http://10.0.0.55:49321",
                 "username": "proc",
                 "password": "secret",
             },

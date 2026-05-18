@@ -78,7 +78,7 @@ def test_distributed_settings_service_basic_auth(tmp_path: Path, monkeypatch: py
     _set_processing_servers(
         config_store,
         [
-            {"id": "edge_gpu", "name": "Edge GPU", "kind": "http", "url": "http://10.0.0.55:9001"},
+            {"id": "edge_gpu", "name": "Edge GPU", "kind": "http", "url": "http://10.0.0.55:49321"},
         ],
     )
 

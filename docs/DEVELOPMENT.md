@@ -55,7 +55,7 @@ As portas padrão continuam:
 
 - backend: `8000`
 - frontend: `5173`
-- processing server (quando usado): `9001`
+- processing server (quando usado): `49321`
 
 Você pode sobrescrever por ambiente:
 

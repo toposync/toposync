@@ -92,17 +92,17 @@ Product direction: keep RTMDet / RTMDet-Ins on `guided_upload`. RF-DETR is avail
 ## 2) Run the processing server
 
 ```bash
-uv run toposync processing-serve --host 0.0.0.0 --port 9001 --data-dir .toposync-data
+uv run toposync processing-serve --host 0.0.0.0 --port 49321 --data-dir .toposync-data
 ```
 
-Default command values are `--host 127.0.0.1` and `--port 9001`.
+Default command values are `--host 127.0.0.1` and `--port 49321`.
 
 ## 3) Verify it is online
 
 In another terminal:
 
 ```bash
-curl http://127.0.0.1:9001/api/processing/status
+curl http://127.0.0.1:49321/api/processing/status
 ```
 
 You should get a JSON response. `active: false` is expected until the origin server pushes a pipeline config.
@@ -137,13 +137,13 @@ The processing server can require HTTP Basic Auth:
 ```bash
 TOPOSYNC_PROCESSING_USERNAME=dev \
 TOPOSYNC_PROCESSING_PASSWORD=devpass \
-uv run toposync processing-serve --host 0.0.0.0 --port 9001 --data-dir .toposync-data
+uv run toposync processing-serve --host 0.0.0.0 --port 49321 --data-dir .toposync-data
 ```
 
 Quick check:
 
 ```bash
-curl -u dev:devpass http://127.0.0.1:9001/api/processing/status
+curl -u dev:devpass http://127.0.0.1:49321/api/processing/status
 ```
 
 ## 5) Connect it to an origin server (distributed mode)
@@ -159,7 +159,7 @@ Register the processing server in origin:
 ```bash
 curl -X PUT http://127.0.0.1:8000/api/processing-servers/dev_remote \
   -H 'content-type: application/json' \
-  -d '{"id":"dev_remote","name":"Dev Remote","kind":"http","url":"http://127.0.0.1:9001","username":"","password":""}'
+  -d '{"id":"dev_remote","name":"Dev Remote","kind":"http","url":"http://127.0.0.1:49321","username":"","password":""}'
 ```
 
 Then assign your final pipeline to `processing_server_id: "dev_remote"` (via UI or `PUT /api/pipelines/{pipeline_name}`).

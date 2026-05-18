@@ -6,6 +6,9 @@ import os
 import uvicorn
 
 
+DEFAULT_PROCESSING_PORT = 49321
+
+
 def _env_int(name: str, default: int) -> int:
     raw = str(os.getenv(name, "")).strip()
     if not raw:
@@ -43,7 +46,7 @@ def main(argv: list[str] | None = None) -> None:
 
     processing = sub.add_parser("processing-serve", help="Run the Toposync processing server (distributed pipelines).")
     processing.add_argument("--host", default="127.0.0.1")
-    processing.add_argument("--port", type=int, default=_env_int("TOPOSYNC_PROCESSING_PORT", 9001))
+    processing.add_argument("--port", type=int, default=_env_int("TOPOSYNC_PROCESSING_PORT", DEFAULT_PROCESSING_PORT))
     processing.add_argument("--log-level", default="info")
     processing.add_argument(
         "--data-dir",

@@ -19,9 +19,11 @@ type UrlParts = {
   port: string;
 };
 
+const DEFAULT_PROCESSING_PORT = "49321";
+
 function parseUrlParts(url: string): UrlParts {
   const trimmed = String(url || "").trim();
-  if (!trimmed) return { scheme: "http", host: "", port: "9001" };
+  if (!trimmed) return { scheme: "http", host: "", port: DEFAULT_PROCESSING_PORT };
   try {
     const parsed = new URL(trimmed);
     const scheme = parsed.protocol.replace(":", "") === "https" ? "https" : "http";
@@ -29,7 +31,7 @@ function parseUrlParts(url: string): UrlParts {
     const port = parsed.port || (scheme === "https" ? "443" : "80");
     return { scheme, host, port };
   } catch {
-    return { scheme: "http", host: "", port: "9001" };
+    return { scheme: "http", host: "", port: DEFAULT_PROCESSING_PORT };
   }
 }
 
@@ -62,7 +64,7 @@ export function ProcessingServerModal({ open, server, onClose, onSave, onDelete,
   const [name, setName] = useState("");
   const [scheme, setScheme] = useState<"http" | "https">("http");
   const [host, setHost] = useState("");
-  const [port, setPort] = useState("9001");
+  const [port, setPort] = useState(DEFAULT_PROCESSING_PORT);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [saving, setSaving] = useState(false);
@@ -80,7 +82,7 @@ export function ProcessingServerModal({ open, server, onClose, onSave, onDelete,
       setName("");
       setScheme("http");
       setHost("");
-      setPort("9001");
+      setPort(DEFAULT_PROCESSING_PORT);
       setUsername("");
       setPassword("");
       return;
@@ -127,7 +129,7 @@ export function ProcessingServerModal({ open, server, onClose, onSave, onDelete,
 
   const processingServeCommand = useMemo(() => {
     const portNum = Number.parseInt(port, 10);
-    const effectivePort = Number.isFinite(portNum) && portNum > 0 ? portNum : 9001;
+    const effectivePort = Number.isFinite(portNum) && portNum > 0 ? portNum : Number.parseInt(DEFAULT_PROCESSING_PORT, 10);
     const env: string[] = [];
     if (username.trim() || password.trim()) {
       env.push(`TOPOSYNC_PROCESSING_USERNAME=${JSON.stringify(username.trim())}`);
@@ -237,7 +239,7 @@ export function ProcessingServerModal({ open, server, onClose, onSave, onDelete,
 
           <label className="pipelinesLabel">
             <span>{t("core.ui.processing_server_modal.field.port")}</span>
-            <input className="pipelinesInput" value={port} onChange={(event) => setPort(event.target.value)} placeholder="9001" />
+            <input className="pipelinesInput" value={port} onChange={(event) => setPort(event.target.value)} placeholder={DEFAULT_PROCESSING_PORT} />
           </label>
         </div>
 

@@ -360,7 +360,7 @@ function Set-InstallAcl {
     try {
         & icacls.exe $Path /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" | Out-Null
     } catch {
-        Write-Warning "Could not restrict ACLs on $Path: $($_.Exception.Message)"
+        Write-Warning "Could not restrict ACLs on ${Path}: $($_.Exception.Message)"
     }
 }
 

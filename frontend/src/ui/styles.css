@@ -1077,6 +1077,11 @@ video {
   -webkit-user-select: text;
 }
 
+.processingServerInlineIssue {
+  margin-top: 8px;
+  padding: 8px;
+}
+
 .pipelinesChecksCard .cardBody {
   padding-top: 0;
 }

@@ -11,6 +11,7 @@ import type {
   PipelineOperatorDefinition,
   PipelineStats,
   ProcessingServer,
+  ProcessingServerStatus,
 } from "../../util/api";
 import {
   compilePipeline,
@@ -18,6 +19,7 @@ import {
   createPipeline,
   deletePipeline,
   duplicatePipeline,
+  getProcessingServerStatus,
   getPipelineStats,
   listCamerasIndex,
   listPipelineOperators,
@@ -26,6 +28,7 @@ import {
   putPipeline,
   resetPipelineStats,
 } from "../../util/api";
+import { extractProcessingRuntimeNodeIssues, filterProcessingRuntimeIssuesForPipeline } from "../processingRuntimeHealth";
 import { InteractivePipelineEditor, PipelineStorageCard } from "./pipelines/InteractivePipelineEditor";
 import { PipelineDuplicateModal } from "./pipelines/PipelineDuplicateModal";
 import { PipelineTelemetryFieldModal } from "./pipelines/PipelineTelemetryFieldModal";
@@ -112,6 +115,8 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   const [interactiveWarning, setInteractiveWarning] = useState<string | null>(null);
 
   const [pipelineStats, setPipelineStats] = useState<PipelineStats | null>(null);
+  const [selectedServerStatus, setSelectedServerStatus] = useState<ProcessingServerStatus | null>(null);
+  const [selectedServerStatusLoading, setSelectedServerStatusLoading] = useState(false);
   const [telemetryFieldInspector, setTelemetryFieldInspector] = useState<TelemetryFieldInspectorRequest | null>(null);
   const [telemetryResetting, setTelemetryResetting] = useState(false);
   const [telemetryResetNonce, setTelemetryResetNonce] = useState(0);
@@ -243,7 +248,44 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     setGraphText(jsonPretty(interactiveGraph.graph));
   }, [mode, interactiveGraph.graph]);
 
+  useEffect(() => {
+    if (!draft) {
+      setSelectedServerStatus(null);
+      setSelectedServerStatusLoading(false);
+      return undefined;
+    }
+
+    const serverId = String(draft.processing_server_id ?? "local").trim().toLowerCase() || "local";
+    let canceled = false;
+
+    const loadStatus = async () => {
+      setSelectedServerStatusLoading(true);
+      try {
+        const status = await getProcessingServerStatus(serverId);
+        if (!canceled) setSelectedServerStatus(status);
+      } catch (err: any) {
+        if (!canceled) setSelectedServerStatus({ ok: false, error: String(err?.message ?? err) });
+      } finally {
+        if (!canceled) setSelectedServerStatusLoading(false);
+      }
+    };
+
+    void loadStatus();
+    const timer = window.setInterval(() => void loadStatus(), 5000);
+    return () => {
+      canceled = true;
+      window.clearInterval(timer);
+    };
+  }, [draft?.name, draft?.processing_server_id]);
+
   const isPythonLocked = Boolean(draft && draft.editor_mode === "python");
+  const selectedServerIssues = useMemo(() => {
+    if (!selectedServerStatus?.ok) return [];
+    return filterProcessingRuntimeIssuesForPipeline(
+      extractProcessingRuntimeNodeIssues(selectedServerStatus),
+      draft?.name ?? "",
+    );
+  }, [draft?.name, selectedServerStatus]);
 
   const switchMode = (nextMode: EditorMode) => {
     if (!draft) return;
@@ -723,6 +765,42 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                     </div>
                   </div>
                 </div>
+              ) : null}
+
+              {selectedServerStatus && !selectedServerStatus.ok ? (
+                <div className="pipelinesAlertRow isError">
+                  <div className="pipelinesAlertBadge">{t("core.ui.processing_servers.status.offline")}</div>
+                  <div className="pipelinesAlertText">
+                    <div className="pipelinesAlertMessage">
+                      {t("core.ui.pipelines.processing_server_status.unreachable", {
+                        server: draft.processing_server_id ?? "local",
+                      })}
+                    </div>
+                    {selectedServerStatus.error ? <div className="pipelinesAlertSuggestion">{selectedServerStatus.error}</div> : null}
+                  </div>
+                </div>
+              ) : selectedServerIssues.length ? (
+                <div className="pipelinesAlertRow isError">
+                  <div className="pipelinesAlertBadge">{t("core.ui.processing_servers.runtime_issues.badge")}</div>
+                  <div className="pipelinesAlertText">
+                    <div className="pipelinesAlertMessage">
+                      {t("core.ui.pipelines.processing_server_status.runtime_errors", {
+                        server: draft.processing_server_id ?? "local",
+                        count: selectedServerIssues.length,
+                      })}
+                    </div>
+                    <div className="pipelinesAlertSuggestion">
+                      {t("core.ui.processing_servers.runtime_issues.node", {
+                        pipeline: selectedServerIssues[0].pipelineName || draft.name,
+                        node: selectedServerIssues[0].nodeId,
+                        count: selectedServerIssues[0].errorCount,
+                      })}
+                      {selectedServerIssues[0].lastError ? `: ${selectedServerIssues[0].lastError}` : ""}
+                    </div>
+                  </div>
+                </div>
+              ) : selectedServerStatusLoading ? (
+                <div className="pipelinesHint">{t("core.ui.pipelines.processing_server_status.checking")}</div>
               ) : null}
 
               <div className="pipelinesEditorControls">

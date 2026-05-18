@@ -11,6 +11,7 @@ import {
   retryProcessingServerVisionModel,
 } from "../../util/api";
 import { i18n } from "../../util/i18n";
+import { extractProcessingRuntimeNodeIssues } from "../processingRuntimeHealth";
 import { LocalBuildConsentModal } from "../LocalBuildConsentModal";
 import { ProcessingServerModal } from "../ProcessingServerModal";
 
@@ -722,15 +723,22 @@ export function ProcessingServersScreen({ onClose, canManageProvisioning = false
               const probe = serverStatusById[server.id] ?? null;
               const testing = !!serverTestingById[server.id];
               const serverProvisionError = String(serverProvisionErrorById[server.id] || "").trim();
+              const runtimeNodeIssues = probe && probe.ok ? extractProcessingRuntimeNodeIssues(probe) : [];
               const statusLabel = testing
                 ? ` • ${t("core.ui.processing_servers.status.testing")}`
                 : probe
                   ? probe.ok
-                    ? ` • ${t("core.ui.processing_servers.status.online")}`
+                    ? runtimeNodeIssues.length
+                      ? ` • ${t("core.ui.processing_servers.status.online_with_errors")}`
+                      : ` • ${t("core.ui.processing_servers.status.online")}`
                     : ` • ${t("core.ui.processing_servers.status.offline")}`
                   : "";
               const statusTitle =
-                testing ? t("core.ui.processing_servers.status.testing") : probe && !probe.ok ? String(probe.error || "") : "";
+                testing
+                  ? t("core.ui.processing_servers.status.testing")
+                  : probe && !probe.ok
+                    ? String(probe.error || "")
+                    : runtimeNodeIssues[0]?.lastError || "";
               const diagnosticsLine = probe && probe.ok ? buildDiagnosticsSummary(probe.status) : null;
               const runtimeUpgrades = probe && probe.ok ? readVisionRuntimeUpgradeSuggestions(probe.status) : [];
               const visionCatalog = probe && probe.ok ? readVisionDetectionCatalog(probe.status) : null;
@@ -783,6 +791,26 @@ export function ProcessingServersScreen({ onClose, canManageProvisioning = false
                     {diagnosticsLine ? (
                       <div className="pipelinesServerMeta pipelinesServerMetaDiag" title={diagnosticsLine}>
                         {diagnosticsLine}
+                      </div>
+                    ) : null}
+                    {runtimeNodeIssues.length ? (
+                      <div className="pipelinesAlertRow isError processingServerInlineIssue">
+                        <div className="pipelinesAlertBadge">{t("core.ui.processing_servers.runtime_issues.badge")}</div>
+                        <div className="pipelinesAlertText">
+                          <div className="pipelinesAlertMessage">
+                            {t("core.ui.processing_servers.runtime_issues.summary", {
+                              count: runtimeNodeIssues.length,
+                            })}
+                          </div>
+                          <div className="pipelinesAlertSuggestion">
+                            {t("core.ui.processing_servers.runtime_issues.node", {
+                              pipeline: runtimeNodeIssues[0].pipelineName || "-",
+                              node: runtimeNodeIssues[0].nodeId,
+                              count: runtimeNodeIssues[0].errorCount,
+                            })}
+                            {runtimeNodeIssues[0].lastError ? `: ${runtimeNodeIssues[0].lastError}` : ""}
+                          </div>
+                        </div>
                       </div>
                     ) : null}
                     {runtimeUpgrades.map((item) => (

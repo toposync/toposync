@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import type { ProcessingServer, ProcessingServerStatus } from "../util/api";
 import { i18n } from "../util/i18n";
+import { extractProcessingRuntimeNodeIssues } from "./processingRuntimeHealth";
 import { Modal } from "./Modal";
 
 type Props = {
@@ -133,11 +134,13 @@ export function ProcessingServerModal({ open, server, onClose, onSave, onDelete,
     const env: string[] = [];
     if (username.trim() || password.trim()) {
       env.push(`TOPOSYNC_PROCESSING_USERNAME=${JSON.stringify(username.trim())}`);
-      env.push(`TOPOSYNC_PROCESSING_PASSWORD=${JSON.stringify(password.trim())}`);
+      env.push(`TOPOSYNC_PROCESSING_PASSWORD=${JSON.stringify(password.trim() ? "<configured password>" : "")}`);
     }
     const prefix = env.length ? `${env.join(" ")} ` : "";
     return `${prefix}toposync processing-serve --host 0.0.0.0 --port ${effectivePort}`;
   }, [port, username, password]);
+
+  const runtimeIssues = useMemo(() => (testResult?.ok ? extractProcessingRuntimeNodeIssues(testResult) : []), [testResult]);
 
   const saveNow = async () => {
     setLocalError(null);
@@ -274,8 +277,32 @@ export function ProcessingServerModal({ open, server, onClose, onSave, onDelete,
           <div className="cardBody">
             {testResult.ok ? (
               <>
-                <div>{t("core.ui.processing_server_modal.connection_ok")}</div>
-                <pre className="pipelinesPre">{JSON.stringify(testResult.status ?? {}, null, 2)}</pre>
+                <div>
+                  {runtimeIssues.length
+                    ? t("core.ui.processing_server_modal.connection_runtime_errors", { count: runtimeIssues.length })
+                    : t("core.ui.processing_server_modal.connection_ok")}
+                </div>
+                {runtimeIssues.length ? (
+                  <div className="pipelinesAlerts">
+                    {runtimeIssues.slice(0, 4).map((issue) => (
+                      <div key={`${issue.runtimeNodeId}:${issue.pipelineName}:${issue.nodeId}`} className="pipelinesAlertRow isError">
+                        <div className="pipelinesAlertBadge">{t("core.ui.processing_servers.runtime_issues.badge")}</div>
+                        <div className="pipelinesAlertText">
+                          <div className="pipelinesAlertMessage">
+                            {t("core.ui.processing_servers.runtime_issues.node", {
+                              pipeline: issue.pipelineName || "-",
+                              node: issue.nodeId,
+                              count: issue.errorCount,
+                            })}
+                          </div>
+                          {issue.lastError ? <div className="pipelinesAlertSuggestion">{issue.lastError}</div> : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <pre className="pipelinesPre">{JSON.stringify(testResult.status ?? {}, null, 2)}</pre>
+                )}
               </>
             ) : (
               <div>{t("core.ui.processing_server_modal.connection_failed", { error: testResult.error || "failed" })}</div>

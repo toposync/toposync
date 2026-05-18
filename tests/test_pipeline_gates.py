@@ -283,6 +283,8 @@ def test_camera_hub_aggregates_demand_across_pipelines_with_different_schedules(
     # Different schedule nodes must not be allowed to "merge" the camera source in the bundle, otherwise one gate
     # would effectively override the other. The hub is responsible for aggregating RTSP demand across consumers.
     shared_nodes = snapshot.get("shared_nodes") or {}
+    node_occurrences = snapshot.get("node_occurrences") or {}
+    assert node_occurrences
     for occurrences in shared_nodes.values():
         occurrence_set = {(item.get("pipeline_name"), item.get("node_id")) for item in occurrences}
         assert ("final_a", "camera") not in occurrence_set or (

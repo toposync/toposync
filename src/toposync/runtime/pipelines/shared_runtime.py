@@ -185,6 +185,16 @@ class PipelineBundleRuntime:
         return {
             "bundle_name": self.bundle_name,
             "pipelines": [pipeline.name for pipeline in self.report.pipelines],
+            "node_occurrences": {
+                node_id: [
+                    {
+                        "pipeline_name": item.pipeline_name,
+                        "node_id": item.node_id,
+                    }
+                    for item in occurrences
+                ]
+                for node_id, occurrences in self.plan.merged_node_occurrences.items()
+            },
             "shared_nodes": {
                 node_id: [
                     {

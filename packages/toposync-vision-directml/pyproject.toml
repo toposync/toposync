@@ -1,13 +1,13 @@
 [project]
 name = "toposync-vision-directml"
-version = "0.4.19"
+version = "0.4.20"
 description = "Toposync application bundle with ONNX Runtime DirectML acceleration."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
-  "toposync-core==0.4.19",
+  "toposync-core==0.4.20",
   "toposync-ext-structural==0.1.12",
   "toposync-ext-models==0.1.12",
   "toposync-ext-home-assistant==0.1.14",

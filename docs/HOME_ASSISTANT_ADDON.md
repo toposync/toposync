@@ -75,7 +75,7 @@ Todos passam a consumir o mesmo bundle publicado.
 
 Por padrão, o Dockerfile do add-on instala:
 
-- `toposync-streaming==0.4.19`
+- `toposync-streaming==0.4.20`
 
 Para testar contra outro índice, ajuste os build args:
 

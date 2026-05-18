@@ -31,7 +31,9 @@ param(
     [ValidateSet("auto", "cpu", "directml", "cuda")]
     [string]$Bundle = "auto",
 
-    [string]$Version = "0.4.16",
+    [string]$Version = "0.4.17",
+
+    [bool]$PreferLocalPackages = $true,
 
     [string]$InstallRoot = "$env:ProgramData\TopoSync\ProcessingServer",
 
@@ -301,6 +303,112 @@ function Get-PackageSpec {
     return "$PackageName==$PackageVersion"
 }
 
+function Resolve-RepositoryRoot {
+    $start = [string]$PSScriptRoot
+    if (-not $start) {
+        return ""
+    }
+    $current = Get-Item -LiteralPath $start -ErrorAction SilentlyContinue
+    while ($current) {
+        $root = $current.FullName
+        $hasCore = Test-Path (Join-Path $root "src\toposync")
+        $hasPackages = Test-Path (Join-Path $root "packages")
+        $hasPyproject = Test-Path (Join-Path $root "pyproject.toml")
+        if ($hasCore -and $hasPackages -and $hasPyproject) {
+            return $root
+        }
+        $current = $current.Parent
+    }
+    return ""
+}
+
+function Get-LocalPackagePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)][string]$PackageName
+    )
+    if (-not $RepositoryRoot) {
+        return ""
+    }
+    $relative = ""
+    switch ($PackageName) {
+        "toposync" { $relative = "packages\toposync" }
+        "toposync-vision-directml" { $relative = "packages\toposync-vision-directml" }
+        "toposync-vision-cuda" { $relative = "packages\toposync-vision-cuda" }
+    }
+    if (-not $relative) {
+        return ""
+    }
+    $candidate = Join-Path $RepositoryRoot $relative
+    if ((Test-Path (Join-Path $candidate "pyproject.toml")) -and (Test-Path (Join-Path $candidate "README.md"))) {
+        return $candidate
+    }
+    return ""
+}
+
+function Resolve-PackageInstallPlan {
+    param(
+        [Parameter(Mandatory = $true)][string]$PackageName,
+        [Parameter(Mandatory = $true)][string]$PackageVersion,
+        [Parameter(Mandatory = $true)][bool]$UseLocalPackages
+    )
+    $registrySpec = Get-PackageSpec -PackageName $PackageName -PackageVersion $PackageVersion
+    if ($UseLocalPackages) {
+        $repoRoot = Resolve-RepositoryRoot
+        $localPath = Get-LocalPackagePath -RepositoryRoot $repoRoot -PackageName $PackageName
+        if ($localPath) {
+            return [pscustomobject]@{
+                Spec = $localPath
+                Label = "$PackageName from local checkout ($localPath)"
+                Source = "local"
+                RegistryFallbackSpec = $registrySpec
+                UnpinnedFallbackSpec = $PackageName
+            }
+        }
+    }
+    return [pscustomobject]@{
+        Spec = $registrySpec
+        Label = $registrySpec
+        Source = "registry"
+        RegistryFallbackSpec = $registrySpec
+        UnpinnedFallbackSpec = $PackageName
+    }
+}
+
+function Install-ToposyncBundle {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uv,
+        [Parameter(Mandatory = $true)][string]$Python,
+        [Parameter(Mandatory = $true)][object]$InstallPlan
+    )
+
+    $primarySpec = [string]$InstallPlan.Spec
+    $source = [string]$InstallPlan.Source
+    $registryFallbackSpec = [string]$InstallPlan.RegistryFallbackSpec
+    $unpinnedFallbackSpec = [string]$InstallPlan.UnpinnedFallbackSpec
+
+    & $Uv pip install --python $Python --upgrade --refresh $primarySpec
+    if ($LASTEXITCODE -eq 0) {
+        $InstallPlan | Add-Member -NotePropertyName InstalledSpec -NotePropertyValue $primarySpec -Force
+        $InstallPlan | Add-Member -NotePropertyName InstalledSource -NotePropertyValue $source -Force
+        $InstallPlan | Add-Member -NotePropertyName FallbackUsed -NotePropertyValue $false -Force
+        return
+    }
+
+    if ($source -eq "registry" -and $registryFallbackSpec -ne $unpinnedFallbackSpec) {
+        Write-Warning "Exact bundle install failed. Retrying unpinned '$unpinnedFallbackSpec' so uv can choose a published, consistent bundle."
+        & $Uv pip install --python $Python --upgrade --refresh $unpinnedFallbackSpec
+        if ($LASTEXITCODE -eq 0) {
+            $InstallPlan | Add-Member -NotePropertyName InstalledSpec -NotePropertyValue $unpinnedFallbackSpec -Force
+            $InstallPlan | Add-Member -NotePropertyName InstalledSource -NotePropertyValue "registry" -Force
+            $InstallPlan | Add-Member -NotePropertyName FallbackUsed -NotePropertyValue $true -Force
+            return
+        }
+    }
+
+    throw "Installing TopoSync bundle failed with exit code $LASTEXITCODE."
+}
+
 function ConvertTo-PSLiteral {
     param([AllowNull()][string]$Value)
     $text = [string]$Value
@@ -452,7 +560,11 @@ $selectedPort = Resolve-ProcessingPort -RequestedPort $Port -MayAutoSelect $Auto
 $resolvedServerId = Normalize-ServerId -Raw $ServerId
 $selectedBundle = Resolve-Bundle -RequestedBundle $Bundle
 $packageName = Get-PackageNameForBundle -SelectedBundle $selectedBundle
-$packageSpec = Get-PackageSpec -PackageName $packageName -PackageVersion $Version
+$installPlan = Resolve-PackageInstallPlan `
+    -PackageName $packageName `
+    -PackageVersion $Version `
+    -UseLocalPackages $PreferLocalPackages
+$packageSpec = [string]$installPlan.Label
 
 if (-not $DataDir) {
     $DataDir = Join-Path $InstallRoot "data"
@@ -506,8 +618,7 @@ if (-not (Test-Path $venvPython)) {
 }
 
 Write-Step "Installing TopoSync bundle: $packageSpec"
-& $uv pip install --python $venvPython --upgrade --refresh $packageSpec
-Assert-LastExitCode "Installing TopoSync bundle"
+Install-ToposyncBundle -Uv $uv -Python $venvPython -InstallPlan $installPlan
 
 if (-not (Test-Path $toposyncExe)) {
     throw "toposync.exe was not installed at $toposyncExe"
@@ -579,7 +690,12 @@ $registration = [ordered]@{
 $manifest = [ordered]@{
     service_name = $ServiceName
     bundle = $selectedBundle
-    package = $packageSpec
+    package = $packageName
+    package_version = $Version
+    install_source = [string]$installPlan.InstalledSource
+    install_spec = [string]$installPlan.InstalledSpec
+    install_requested_spec = [string]$installPlan.Spec
+    install_fallback_used = [bool]$installPlan.FallbackUsed
     install_root = $InstallRoot
     python_install_dir = $pythonInstallDir
     data_dir = $DataDir

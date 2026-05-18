@@ -31,7 +31,7 @@ param(
     [ValidateSet("auto", "cpu", "directml", "cuda")]
     [string]$Bundle = "auto",
 
-    [string]$Version = "0.4.15",
+    [string]$Version = "0.4.16",
 
     [string]$InstallRoot = "$env:ProgramData\TopoSync\ProcessingServer",
 

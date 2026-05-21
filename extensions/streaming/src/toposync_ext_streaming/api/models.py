@@ -640,6 +640,30 @@ class StreamingCameraIngestAuthResponse(BaseModel):
     paths: list[StreamingCameraIngestAuthPath] = Field(default_factory=list)
 
 
+class StreamingCameraIngestResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    camera_id: str
+    channel_id: str = ""
+    consumer_server_id: str | None = None
+
+
+class StreamingCameraIngestResolveResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    camera_id: str
+    channel_id: str = "video_main"
+    mode: Literal["centralized", "runtime_local", "direct"] = "centralized"
+    used_ingest: bool = False
+    centralizer_server_id: str = "local"
+    path: str = ""
+    rtsp_url: str = ""
+    redacted_rtsp_url: str = ""
+    direct_override_active: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    blocking_errors: list[str] = Field(default_factory=list)
+
+
 class StreamingEngineActivePorts(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -925,6 +949,12 @@ class StreamingRuntimeSourceHealth(BaseModel):
     last_error: str | None = None
     rtsp_transport: str = "rtsp"
     used_ingest: bool = False
+    ingest_mode: Literal["centralized", "runtime_local", "direct"] = "direct"
+    centralizer_server_id: str | None = None
+    ingest_path: str | None = None
+    direct_override_active: bool = False
+    ingest_warnings: list[str] = Field(default_factory=list)
+    ingest_blocking_errors: list[str] = Field(default_factory=list)
     status: StreamingCameraSourceStatus = "unknown"
     recommended_action: str = ""
 

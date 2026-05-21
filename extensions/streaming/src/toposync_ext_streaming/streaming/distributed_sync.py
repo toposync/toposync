@@ -96,6 +96,7 @@ class DistributedSettingsSync:
         camera_ingest_by_id = build_camera_ingest_definitions(
             app_settings=local_settings,
             ingest_settings=remote_settings.camera_ingest,
+            host_server_id=self._host_server_id,
         )
         path_auth = dict(list_path_read_auth_for_host(remote_settings, host_server_id=self._host_server_id))
         if camera_ingest_by_id:

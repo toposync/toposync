@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -42,6 +43,30 @@ class CameraOnvifConfig(BaseModel):
         return text or None
 
 
+class CameraChannelIngestSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["centralized", "runtime_local", "direct"] = "centralized"
+    host_server_id: str = "local"
+    direct_override_until_unix: float | None = Field(default=None, ge=0.0)
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _normalize_mode(cls, value: Any) -> str:
+        mode = str(value or "").strip().lower()
+        if mode in {"runtime_local", "runtime", "runtime-local", "local_runtime", "local-runtime"}:
+            return "runtime_local"
+        if mode in {"direct", "external", "none"}:
+            return "direct"
+        return "centralized"
+
+    @field_validator("host_server_id", mode="before")
+    @classmethod
+    def _normalize_host_server_id(cls, value: Any) -> str:
+        text = str(value or "").strip().lower()
+        return text or "local"
+
+
 class CameraChannelSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -63,6 +88,7 @@ class CameraChannelSettings(BaseModel):
     fps: float | None = Field(default=None, ge=1.0, le=60.0)
     sample_rate_hz: int | None = Field(default=None, ge=1, le=384000)
     onvif: CameraOnvifConfig | None = None
+    ingest: CameraChannelIngestSettings = Field(default_factory=CameraChannelIngestSettings)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator(
@@ -116,6 +142,8 @@ class CameraChannelSettings(BaseModel):
 
         self.username = ""
         self.password = ""
+        if self.ingest.mode != "centralized" and self.ingest.host_server_id != "local":
+            self.ingest = self.ingest.model_copy(update={"host_server_id": "local"})
         return self
 
 
@@ -215,6 +243,7 @@ def _coerce_flat_camera(value: Any) -> dict[str, Any] | None:
         stream_password=stream_password,
         fps=value.get("fps"),
         onvif=CameraOnvifConfig.model_validate(onvif) if isinstance(onvif, dict) else None,
+        ingest=CameraChannelIngestSettings.model_validate(value.get("ingest") if isinstance(value.get("ingest"), dict) else {}),
     )
     device = CameraDeviceSettings(
         id=camera_id,
@@ -312,6 +341,7 @@ def flatten_camera_device_for_ui(device: Any) -> dict[str, Any] | None:
         "fps": float(channel.get("fps") or 5.0),
         "onvif": dict(onvif) if isinstance(onvif, dict) else None,
         "channel_id": str(channel.get("id") or "video_main").strip() or "video_main",
+        "ingest": get_camera_ingest_settings(channel),
     }
 
 
@@ -367,3 +397,25 @@ def get_camera_stream_credentials(channel: Any) -> tuple[str, str]:
         str(channel.get("username") or "").strip(),
         str(channel.get("password") or "").strip(),
     )
+
+
+def get_camera_ingest_settings(channel: Any) -> dict[str, Any]:
+    raw = channel.get("ingest") if isinstance(channel, dict) else None
+    if isinstance(raw, CameraChannelIngestSettings):
+        settings = raw
+    else:
+        settings = CameraChannelIngestSettings.model_validate(raw if isinstance(raw, dict) else {})
+    return settings.model_dump(mode="json")
+
+
+def is_camera_direct_override_active(channel: Any, *, now_unix: float | None = None) -> bool:
+    ingest = get_camera_ingest_settings(channel)
+    value = ingest.get("direct_override_until_unix")
+    try:
+        until = float(value)
+    except Exception:
+        return False
+    if until <= 0.0:
+        return False
+    now = time.time() if now_unix is None else float(now_unix)
+    return until > now

@@ -45,6 +45,12 @@ class CameraSourceHealthRecord:
     last_error: str | None = None
     rtsp_transport: str = "rtsp"
     used_ingest: bool = False
+    ingest_mode: str = "direct"
+    centralizer_server_id: str = ""
+    ingest_path: str = ""
+    direct_override_active: bool = False
+    ingest_warnings: tuple[str, ...] = ()
+    ingest_blocking_errors: tuple[str, ...] = ()
     status: CameraSourceStatus = "unknown"
     recommended_action: str = ""
 
@@ -69,6 +75,12 @@ class CameraSourceHealthRecord:
             "last_error": self.last_error,
             "rtsp_transport": self.rtsp_transport or "rtsp",
             "used_ingest": bool(self.used_ingest),
+            "ingest_mode": self.ingest_mode or "direct",
+            "centralizer_server_id": self.centralizer_server_id or None,
+            "ingest_path": self.ingest_path or None,
+            "direct_override_active": bool(self.direct_override_active),
+            "ingest_warnings": list(self.ingest_warnings),
+            "ingest_blocking_errors": list(self.ingest_blocking_errors),
             "status": self.status,
             "recommended_action": self.recommended_action,
         }
@@ -100,6 +112,12 @@ class CameraSourceHealthStore:
         configured_backend: str = "auto",
         rtsp_transport: str = "rtsp",
         used_ingest: bool = False,
+        ingest_mode: str = "direct",
+        centralizer_server_id: str = "",
+        ingest_path: str = "",
+        direct_override_active: bool = False,
+        ingest_warnings: tuple[str, ...] | list[str] | None = None,
+        ingest_blocking_errors: tuple[str, ...] | list[str] | None = None,
         status: CameraSourceStatus | None = None,
         last_error: str | None = None,
         metrics: dict[str, Any] | None = None,
@@ -126,6 +144,12 @@ class CameraSourceHealthStore:
             configured_backend=_normalize_backend(configured_backend),
             rtsp_transport=_normalize_text(rtsp_transport, limit=80) or "rtsp",
             used_ingest=bool(used_ingest),
+            ingest_mode=_normalize_ingest_mode(ingest_mode),
+            centralizer_server_id=_normalize_text(centralizer_server_id, limit=120),
+            ingest_path=_normalize_text(ingest_path, limit=160),
+            direct_override_active=bool(direct_override_active),
+            ingest_warnings=_normalize_string_tuple(ingest_warnings, limit=240),
+            ingest_blocking_errors=_normalize_string_tuple(ingest_blocking_errors, limit=240),
             last_seen_at_unix=now,
             last_error=sanitize_source_error(last_error)
             if last_error is not None
@@ -147,6 +171,12 @@ class CameraSourceHealthStore:
         configured_backend: str = "auto",
         rtsp_transport: str = "rtsp",
         used_ingest: bool = False,
+        ingest_mode: str = "direct",
+        centralizer_server_id: str = "",
+        ingest_path: str = "",
+        direct_override_active: bool = False,
+        ingest_warnings: tuple[str, ...] | list[str] | None = None,
+        ingest_blocking_errors: tuple[str, ...] | list[str] | None = None,
         frame_ts: float,
         metrics: dict[str, Any] | None = None,
     ) -> CameraSourceHealthRecord:
@@ -160,6 +190,12 @@ class CameraSourceHealthStore:
             configured_backend=configured_backend,
             rtsp_transport=rtsp_transport,
             used_ingest=used_ingest,
+            ingest_mode=ingest_mode,
+            centralizer_server_id=centralizer_server_id,
+            ingest_path=ingest_path,
+            direct_override_active=direct_override_active,
+            ingest_warnings=ingest_warnings,
+            ingest_blocking_errors=ingest_blocking_errors,
             metrics=metrics,
         )
         if normalized_frame_ts is None or normalized_frame_ts <= 0.0:
@@ -335,6 +371,29 @@ def _normalize_backend(value: Any) -> str:
     if text in {"auto", "opencv", "ffmpeg", "none"}:
         return text
     return text or "auto"
+
+
+def _normalize_ingest_mode(value: Any) -> str:
+    text = _normalize_text(value, limit=80).lower()
+    if text in {"centralized", "runtime_local", "direct"}:
+        return text
+    return "direct"
+
+
+def _normalize_string_tuple(value: tuple[str, ...] | list[str] | None, *, limit: int) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (tuple, list)):
+        return ()
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        text = _normalize_text(item, limit=limit)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return tuple(out)
 
 
 def _normalize_text(value: Any, *, limit: int) -> str:

@@ -47,6 +47,7 @@ from ..source_health import get_global_source_health_store, source_health_source
 from ..onvif import OnvifClient, OnvifError, OnvifProfile
 from ..settings import (
     get_camera_device,
+    get_camera_ingest_settings,
     get_camera_onvif_credentials,
     get_camera_stream_credentials,
     get_camera_stream_profile,
@@ -721,6 +722,12 @@ class ResolvedCameraSource:
     clock_domain: str
     transport: str
     used_ingest: bool
+    ingest_mode: str = "direct"
+    centralizer_server_id: str = ""
+    ingest_path: str = ""
+    direct_override_active: bool = False
+    ingest_warnings: tuple[str, ...] = ()
+    ingest_blocking_errors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -732,6 +739,25 @@ class _ResolvedCameraStream:
 
 class _CameraSourcePendingError(RuntimeError):
     """Transient source-resolution error while camera settings/config are converging."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        ingest_mode: str = "",
+        centralizer_server_id: str = "",
+        ingest_path: str = "",
+        direct_override_active: bool = False,
+        ingest_warnings: tuple[str, ...] = (),
+        ingest_blocking_errors: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.ingest_mode = ingest_mode
+        self.centralizer_server_id = centralizer_server_id
+        self.ingest_path = ingest_path
+        self.direct_override_active = bool(direct_override_active)
+        self.ingest_warnings = ingest_warnings
+        self.ingest_blocking_errors = ingest_blocking_errors
 
 
 class _CameraSourceTransientError(RuntimeError):
@@ -752,13 +778,18 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._clock_domain = ""
         self._transport = "rtsp"
         self._source_uses_ingest = False
+        self._ingest_mode = "direct"
+        self._centralizer_server_id = ""
+        self._ingest_path = ""
+        self._direct_override_active = False
+        self._ingest_warnings: tuple[str, ...] = ()
+        self._ingest_blocking_errors: tuple[str, ...] = ()
         self._gate_open = True
         self._gate_known = False
         self._waiting_for_source_config = False
         self._last_wait_log_monotonic = 0.0
         self._last_start_error = ""
         self._start_retry_after_monotonic = 0.0
-        self._force_direct_rtsp_until_monotonic = 0.0
         self._backend_override: str | None = None
         self._backend_override_until_monotonic = 0.0
         self._last_reacquire_monotonic = 0.0
@@ -781,12 +812,6 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             min_value=1.0,
             max_value=300.0,
         )
-        self._ingest_backoff_s = _read_env_float(
-            "TOPOSYNC_CAMERA_SOURCE_INGEST_BACKOFF_S",
-            90.0,
-            min_value=5.0,
-            max_value=900.0,
-        )
         self._backend_failover_s = _read_env_float(
             "TOPOSYNC_CAMERA_SOURCE_BACKEND_FAILOVER_S",
             180.0,
@@ -808,12 +833,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         if now_mono < self._start_retry_after_monotonic:
             detail = str(self._last_start_error or "").strip() or "Camera capture startup cooldown active"
             raise _CameraSourceTransientError(detail)
-        prefer_ingest = time.monotonic() >= self._force_direct_rtsp_until_monotonic
-        resolved = await _resolve_camera_source(
-            self._config,
-            self._dependencies,
-            prefer_ingest=prefer_ingest,
-        )
+        resolved = await _resolve_camera_source(self._config, self._dependencies)
         self._waiting_for_source_config = False
         self._camera_id = resolved.camera_id
         self._camera_name = resolved.camera_name
@@ -821,6 +841,12 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._clock_domain = resolved.clock_domain
         self._transport = resolved.transport
         self._source_uses_ingest = bool(resolved.used_ingest)
+        self._ingest_mode = resolved.ingest_mode
+        self._centralizer_server_id = resolved.centralizer_server_id
+        self._ingest_path = resolved.ingest_path
+        self._direct_override_active = bool(resolved.direct_override_active)
+        self._ingest_warnings = tuple(resolved.ingest_warnings)
+        self._ingest_blocking_errors = tuple(resolved.ingest_blocking_errors)
         selected_backend = str(self._config.backend or "").strip().lower() or "auto"
         if self._backend_override:
             now_mono = time.monotonic()
@@ -843,11 +869,6 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             self._grabber_started_monotonic = 0.0
             self._last_ts = 0.0
             self._start_retry_after_monotonic = now_mono + self._start_failure_backoff_s
-            if self._source_uses_ingest:
-                self._force_direct_rtsp_until_monotonic = max(
-                    self._force_direct_rtsp_until_monotonic,
-                    now_mono + self._ingest_backoff_s,
-                )
             if self._config.backend in {"auto", "opencv"} and selected_backend != "ffmpeg":
                 self._backend_override = "ffmpeg"
                 self._backend_override_until_monotonic = max(
@@ -861,16 +882,11 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 if self._backend_override
                 else ""
             )
-            direct_note = (
-                f" Bypassing ingest for {self._ingest_backoff_s:.0f}s."
-                if resolved.used_ingest
-                else ""
-            )
             self._last_start_error = (
                 "Camera capture startup failed "
                 f"(camera_id={resolved.camera_id or '-'} path={transport_path} backend={selected_backend}): "
                 f"{_exception_detail(exc)}."
-                f"{direct_note}{backend_note}"
+                f"{backend_note}"
             )
             raise _CameraSourceTransientError(self._last_start_error) from exc
         self._last_start_error = ""
@@ -918,6 +934,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._grabber = None
         self._grabber_started_monotonic = 0.0
         self._source_uses_ingest = False
+        self._ingest_path = ""
         self._hub_key = ""
         if hub_key:
             await _GLOBAL_CAMERA_HUB.release(key=hub_key)
@@ -966,6 +983,12 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 configured_backend=str(self._config.backend or "auto"),
                 rtsp_transport=self._transport or "rtsp",
                 used_ingest=self._source_uses_ingest,
+                ingest_mode=self._ingest_mode,
+                centralizer_server_id=self._centralizer_server_id,
+                ingest_path=self._ingest_path,
+                direct_override_active=self._direct_override_active,
+                ingest_warnings=self._ingest_warnings,
+                ingest_blocking_errors=self._ingest_blocking_errors,
                 frame_ts=float(frame_ts),
                 metrics=metrics,
             )
@@ -979,6 +1002,12 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 configured_backend=str(self._config.backend or "auto"),
                 rtsp_transport=self._transport or "rtsp",
                 used_ingest=self._source_uses_ingest,
+                ingest_mode=self._ingest_mode,
+                centralizer_server_id=self._centralizer_server_id,
+                ingest_path=self._ingest_path,
+                direct_override_active=self._direct_override_active,
+                ingest_warnings=self._ingest_warnings,
+                ingest_blocking_errors=self._ingest_blocking_errors,
                 status=status,  # type: ignore[arg-type]
                 last_error=last_error,
                 metrics=metrics,
@@ -1039,32 +1068,17 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             failover_note = " Disabling ffmpeg failover override due hard open errors."
 
         self._last_reacquire_monotonic = now_mono
-        if self._source_uses_ingest:
-            self._force_direct_rtsp_until_monotonic = now_mono + self._ingest_backoff_s
-            context.logger.warning(
-                "Node '%s' camera source stalled for %.1fs (opened=%s backend=%s restarts=%d). "
-                "Re-resolving source and bypassing ingest for %.0fs.%s last_error=%s",
-                context.node_id,
-                stale_for_s,
-                opened,
-                backend or "-",
-                restarts,
-                self._ingest_backoff_s,
-                failover_note,
-                last_error or "-",
-            )
-        else:
-            context.logger.warning(
-                "Node '%s' camera source stalled for %.1fs (opened=%s backend=%s restarts=%d). "
-                "Re-resolving source.%s last_error=%s",
-                context.node_id,
-                stale_for_s,
-                opened,
-                backend or "-",
-                restarts,
-                failover_note,
-                last_error or "-",
-            )
+        context.logger.warning(
+            "Node '%s' camera source stalled for %.1fs (opened=%s backend=%s restarts=%d). "
+            "Re-resolving source.%s last_error=%s",
+            context.node_id,
+            stale_for_s,
+            opened,
+            backend or "-",
+            restarts,
+            failover_note,
+            last_error or "-",
+        )
         self._record_source_health(
             context,
             status="stale",
@@ -1085,6 +1099,13 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             await self._ensure_grabber()
         except _CameraSourcePendingError as exc:
             self._waiting_for_source_config = True
+            if exc.ingest_mode:
+                self._ingest_mode = exc.ingest_mode
+                self._centralizer_server_id = exc.centralizer_server_id
+                self._ingest_path = exc.ingest_path
+                self._direct_override_active = exc.direct_override_active
+                self._ingest_warnings = exc.ingest_warnings
+                self._ingest_blocking_errors = exc.ingest_blocking_errors
             self._record_source_health(context, status="starting", last_error=str(exc))
             now = time.monotonic()
             if (now - self._last_wait_log_monotonic) >= 5.0:
@@ -1146,6 +1167,12 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             "source_status": source_health.get("status"),
             "rtsp_transport": source_health.get("rtsp_transport") or self._transport or "rtsp",
             "used_ingest": bool(source_health.get("used_ingest")),
+            "ingest_mode": source_health.get("ingest_mode") or self._ingest_mode,
+            "centralizer_server_id": source_health.get("centralizer_server_id"),
+            "ingest_path": source_health.get("ingest_path"),
+            "direct_override_active": bool(source_health.get("direct_override_active")),
+            "ingest_warnings": list(source_health.get("ingest_warnings") or []),
+            "ingest_blocking_errors": list(source_health.get("ingest_blocking_errors") or []),
         }
         frame_artifacts = {
             MAIN_ARTIFACT_NAME: Artifact(
@@ -2739,8 +2766,6 @@ async def _resolve_camera_stream(
 async def _resolve_camera_source(
     config: CameraSourceConfig,
     dependencies: PipelineRuntimeDependencies,
-    *,
-    prefer_ingest: bool = True,
 ) -> ResolvedCameraSource:
     camera_id = config.camera_id.strip()
     requested_channel_id = config.channel_id.strip()
@@ -2756,6 +2781,7 @@ async def _resolve_camera_source(
             clock_domain=f"device:{camera_id}" if camera_id else "device:adhoc",
             transport="rtsp",
             used_ingest=False,
+            ingest_mode="direct",
         )
 
     if not camera_id:
@@ -2795,18 +2821,63 @@ async def _resolve_camera_source(
     if config.fps is not None:
         camera_fps = float(config.fps)
     camera_fps = max(1.0, min(60.0, camera_fps))
+    ingest_settings = get_camera_ingest_settings(channel)
+    ingest_mode = str(ingest_settings.get("mode") or "centralized").strip().lower()
+    if ingest_mode not in {"centralized", "runtime_local", "direct"}:
+        ingest_mode = "centralized"
+    centralizer_server_id = str(ingest_settings.get("host_server_id") or "local").strip().lower() or "local"
+    direct_override_active = _direct_override_active(ingest_settings)
     used_ingest = False
-    allow_ingest_override = not (
-        str(channel.get("connection_type") or "rtsp").strip().lower() == "onvif"
-        and get_camera_stream_profile(channel) == "custom"
-    )
-    if prefer_ingest and allow_ingest_override:
-        ingest_url = await _maybe_resolve_ingest_rtsp_url(
-            camera_id=camera_id, dependencies=dependencies
+    ingest_path = ""
+    ingest_warnings: tuple[str, ...] = ()
+    ingest_blocking_errors: tuple[str, ...] = ()
+
+    if ingest_mode != "direct" and not direct_override_active:
+        resolution = await _maybe_resolve_ingest_camera_source(
+            camera_id=camera_id,
+            channel_id=str(channel.get("id") or "").strip(),
+            dependencies=dependencies,
         )
-        if ingest_url:
-            url = ingest_url
-            used_ingest = True
+        if resolution is None:
+            raise _CameraSourcePendingError(
+                f"Camera '{camera_id}' ingest centralizer is unavailable for mode '{ingest_mode}'",
+                ingest_mode=ingest_mode,
+                centralizer_server_id=centralizer_server_id,
+                direct_override_active=direct_override_active,
+            )
+        ingest_warnings = tuple(str(item) for item in resolution.get("warnings", []) if str(item).strip())
+        ingest_blocking_errors = tuple(
+            str(item) for item in resolution.get("blocking_errors", []) if str(item).strip()
+        )
+        if ingest_blocking_errors:
+            raise _CameraSourcePendingError(
+                f"Camera '{camera_id}' ingest centralizer unavailable: {'; '.join(ingest_blocking_errors[:3])}",
+                ingest_mode=ingest_mode,
+                centralizer_server_id=centralizer_server_id,
+                ingest_path=str(resolution.get("path") or "").strip(),
+                direct_override_active=direct_override_active,
+                ingest_warnings=ingest_warnings,
+                ingest_blocking_errors=ingest_blocking_errors,
+            )
+        resolved_url = str(resolution.get("rtsp_url") or "").strip()
+        if not resolved_url:
+            raise _CameraSourcePendingError(
+                f"Camera '{camera_id}' ingest centralizer returned no RTSP URL",
+                ingest_mode=ingest_mode,
+                centralizer_server_id=centralizer_server_id,
+                ingest_path=str(resolution.get("path") or "").strip(),
+                direct_override_active=direct_override_active,
+                ingest_warnings=ingest_warnings,
+            )
+        url = resolved_url
+        used_ingest = bool(resolution.get("used_ingest"))
+        centralizer_server_id = (
+            str(resolution.get("centralizer_server_id") or centralizer_server_id).strip().lower()
+            or centralizer_server_id
+        )
+        ingest_path = str(resolution.get("path") or "").strip()
+        direct_override_active = bool(resolution.get("direct_override_active")) or direct_override_active
+
     return ResolvedCameraSource(
         rtsp_url=url,
         fps=camera_fps,
@@ -2816,12 +2887,21 @@ async def _resolve_camera_source(
         clock_domain=str(camera.get("clock_domain") or "").strip() or f"device:{camera_id}",
         transport=str(channel.get("transport") or "rtsp").strip() or "rtsp",
         used_ingest=used_ingest,
+        ingest_mode=ingest_mode,
+        centralizer_server_id=centralizer_server_id if ingest_mode in {"centralized", "runtime_local"} else "",
+        ingest_path=ingest_path,
+        direct_override_active=direct_override_active,
+        ingest_warnings=ingest_warnings,
+        ingest_blocking_errors=ingest_blocking_errors,
     )
 
 
-async def _maybe_resolve_ingest_rtsp_url(
-    *, camera_id: str, dependencies: PipelineRuntimeDependencies
-) -> str | None:
+async def _maybe_resolve_ingest_camera_source(
+    *,
+    camera_id: str,
+    channel_id: str,
+    dependencies: PipelineRuntimeDependencies,
+) -> dict[str, Any] | None:
     cid = str(camera_id or "").strip()
     if not cid:
         return None
@@ -2832,16 +2912,51 @@ async def _maybe_resolve_ingest_rtsp_url(
         return None
 
     try:
+        value = await call(
+            "streaming.ingest.resolve_camera_source",
+            camera_id=cid,
+            channel_id=str(channel_id or "").strip(),
+        )
+    except KeyError:
+        value = None
+    except Exception:
+        return None
+
+    if isinstance(value, dict):
+        return value
+
+    try:
         value = await call("streaming.ingest.resolve_rtsp_url", camera_id=cid)
     except KeyError:
         return None
     except Exception:
         return None
-
     if not isinstance(value, str):
         return None
     resolved = value.strip()
-    return resolved or None
+    if not resolved:
+        return None
+    return {
+        "camera_id": cid,
+        "channel_id": str(channel_id or "").strip() or "video_main",
+        "mode": "centralized",
+        "used_ingest": True,
+        "centralizer_server_id": "",
+        "path": "",
+        "rtsp_url": resolved,
+        "redacted_rtsp_url": "",
+        "direct_override_active": False,
+        "warnings": [],
+        "blocking_errors": [],
+    }
+
+
+def _direct_override_active(ingest_settings: dict[str, Any]) -> bool:
+    try:
+        until = float(ingest_settings.get("direct_override_until_unix") or 0.0)
+    except Exception:
+        return False
+    return until > time.time()
 
 
 def _apply_rtsp_auth(url: str, username: str, password: str) -> str:

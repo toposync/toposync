@@ -21,6 +21,7 @@ from toposync_ext_streaming.streaming.ingest_auth import (
     CameraIngestCredentialStore,
     CameraIngestCredentials,
 )
+from toposync_ext_streaming.streaming.ingest_resolver import CameraIngestResolver
 from toposync_ext_streaming.streaming.mediamtx_config import MediaMTXResolvedPorts, render_mediamtx_config
 from toposync_ext_streaming.streaming.publisher_manager import PublisherManager
 from toposync_ext_streaming.streaming.runtime_state import TransmissionRuntimeState
@@ -29,6 +30,38 @@ from toposync_ext_streaming.streaming.runtime_state import TransmissionRuntimeSt
 @dataclass(slots=True)
 class _AppSettingsStub:
     extensions: dict
+
+
+class _ConfigStoreStub:
+    def __init__(self, settings: AppSettings) -> None:
+        self._settings = settings
+
+    async def get_settings(self) -> AppSettings:
+        return self._settings
+
+    async def list_processing_servers(self) -> list:
+        return []
+
+
+class _FakeEngineManager:
+    def __init__(self) -> None:
+        self.ensure_calls: list[dict] = []
+
+    async def ensure_running(self, engine_settings, *, engine_paths, path_auth=None, path_configs=None):  # noqa: ANN001
+        self.ensure_calls.append(
+            {
+                "engine_settings": engine_settings,
+                "engine_paths": list(engine_paths),
+                "path_auth": path_auth or {},
+                "path_configs": path_configs or {},
+            }
+        )
+
+    async def get_status(self):  # noqa: ANN201
+        return type("Status", (), {"running": True, "ports": type("Ports", (), {"rtsp": 8554})()})()
+
+    async def get_read_url_for_path(self, path: str, *, host: str = "127.0.0.1") -> str:
+        return f"rtsp://toposync_ingest:secret@{host}:8554/{path}"
 
 
 def test_build_camera_ingest_definitions_applies_auth_and_normalizes_path() -> None:
@@ -91,6 +124,167 @@ def test_build_camera_ingest_definitions_uses_custom_stream_credentials() -> Non
     ingest_by_id = build_camera_ingest_definitions(app_settings=app_settings, ingest_settings=ingest_settings)
 
     assert ingest_by_id["front"].source_rtsp_url == "rtsp://stream-user:stream-pass@ingest.local/front"
+
+
+def test_build_camera_ingest_definitions_filters_by_camera_ingest_policy() -> None:
+    app_settings = _AppSettingsStub(
+        extensions={
+            "com.toposync.cameras": {
+                "devices": [
+                    {
+                        "id": "local_cam",
+                        "channels": [
+                            {
+                                "id": "video_main",
+                                "modality": "video",
+                                "is_default": True,
+                                "rtsp_url": "rtsp://10.0.0.10/live",
+                                "ingest": {"mode": "centralized", "host_server_id": "local"},
+                            }
+                        ],
+                    },
+                    {
+                        "id": "edge_cam",
+                        "channels": [
+                            {
+                                "id": "video_main",
+                                "modality": "video",
+                                "is_default": True,
+                                "rtsp_url": "rtsp://10.0.0.11/live",
+                                "ingest": {"mode": "centralized", "host_server_id": "edge_gpu"},
+                            }
+                        ],
+                    },
+                    {
+                        "id": "runtime_cam",
+                        "channels": [
+                            {
+                                "id": "video_main",
+                                "modality": "video",
+                                "is_default": True,
+                                "rtsp_url": "rtsp://10.0.0.12/live",
+                                "ingest": {"mode": "runtime_local"},
+                            }
+                        ],
+                    },
+                    {
+                        "id": "direct_cam",
+                        "channels": [
+                            {
+                                "id": "video_main",
+                                "modality": "video",
+                                "is_default": True,
+                                "rtsp_url": "rtsp://10.0.0.13/live",
+                                "ingest": {"mode": "direct"},
+                            }
+                        ],
+                    },
+                ]
+            }
+        }
+    )
+
+    ingest_settings = StreamingCameraIngestSettings(enabled=True, path_prefix="ingest")
+
+    local_ingest = build_camera_ingest_definitions(
+        app_settings=app_settings,
+        ingest_settings=ingest_settings,
+        host_server_id="local",
+    )
+    edge_ingest = build_camera_ingest_definitions(
+        app_settings=app_settings,
+        ingest_settings=ingest_settings,
+        host_server_id="edge_gpu",
+    )
+
+    assert set(local_ingest) == {"local_cam", "runtime_cam"}
+    assert set(edge_ingest) == {"edge_cam", "runtime_cam"}
+
+
+def test_camera_ingest_resolver_returns_loopback_for_local_consumer(tmp_path: Path) -> None:
+    settings = AppSettings(
+        extensions={
+            "com.toposync.streaming": {
+                "engine": {"enabled": True, "expose_to_lan": False},
+                "camera_ingest": {"enabled": True, "path_prefix": "ingest"},
+            },
+            "com.toposync.cameras": {
+                "cameras": [{"id": "front", "rtsp_url": "rtsp://10.0.0.10/live"}]
+            },
+        }
+    )
+    manager = _FakeEngineManager()
+    resolver = CameraIngestResolver(
+        config_store=_ConfigStoreStub(settings),
+        engine_manager=manager,  # type: ignore[arg-type]
+        credential_store=CameraIngestCredentialStore(data_dir=tmp_path),
+        host_server_id="local",
+    )
+
+    response = asyncio.run(resolver.resolve(camera_id="front", consumer_server_id="local"))
+
+    assert response.used_ingest is True
+    assert response.path == "ingest-front"
+    assert response.rtsp_url == "rtsp://toposync_ingest:secret@127.0.0.1:8554/ingest-front"
+    assert response.blocking_errors == []
+    assert "ingest-front" in manager.ensure_calls[-1]["engine_paths"]
+
+
+def test_camera_ingest_resolver_blocks_loopback_for_remote_consumer(tmp_path: Path) -> None:
+    settings = AppSettings(
+        extensions={
+            "com.toposync.streaming": {
+                "engine": {"enabled": True, "expose_to_lan": False},
+                "camera_ingest": {"enabled": True, "path_prefix": "ingest"},
+            },
+            "com.toposync.cameras": {
+                "cameras": [{"id": "front", "rtsp_url": "rtsp://10.0.0.10/live"}]
+            },
+        }
+    )
+    resolver = CameraIngestResolver(
+        config_store=_ConfigStoreStub(settings),
+        engine_manager=_FakeEngineManager(),  # type: ignore[arg-type]
+        credential_store=CameraIngestCredentialStore(data_dir=tmp_path),
+        host_server_id="local",
+    )
+
+    response = asyncio.run(
+        resolver.resolve(camera_id="front", consumer_server_id="edge_gpu", request_host="127.0.0.1")
+    )
+
+    assert response.used_ingest is True
+    assert response.rtsp_url == ""
+    assert response.blocking_errors
+    assert any("loopback" in item.lower() for item in response.blocking_errors)
+
+
+def test_camera_ingest_resolver_uses_lan_host_for_remote_consumer(tmp_path: Path) -> None:
+    settings = AppSettings(
+        extensions={
+            "com.toposync.streaming": {
+                "engine": {"enabled": True, "expose_to_lan": True},
+                "camera_ingest": {"enabled": True, "path_prefix": "ingest"},
+            },
+            "com.toposync.cameras": {
+                "cameras": [{"id": "front", "rtsp_url": "rtsp://10.0.0.10/live"}]
+            },
+        }
+    )
+    resolver = CameraIngestResolver(
+        config_store=_ConfigStoreStub(settings),
+        engine_manager=_FakeEngineManager(),  # type: ignore[arg-type]
+        credential_store=CameraIngestCredentialStore(data_dir=tmp_path),
+        host_server_id="local",
+    )
+
+    response = asyncio.run(
+        resolver.resolve(camera_id="front", consumer_server_id="edge_gpu", request_host="core.local")
+    )
+
+    assert response.used_ingest is True
+    assert response.rtsp_url == "rtsp://toposync_ingest:secret@core.local:8554/ingest-front"
+    assert response.blocking_errors == []
 
 
 def test_build_camera_ingest_path_configs_renders_source_and_on_demand() -> None:

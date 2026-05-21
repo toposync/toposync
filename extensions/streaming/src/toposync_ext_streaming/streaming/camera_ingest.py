@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import time
 import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
-from ..api.models import StreamingCameraIngestSettings
+from ..api.models import StreamingCameraIngestSettings, normalize_server_id
 from .ingest_auth import CameraIngestCredentials
 from .mediamtx_config import MediaMTXPathAuth
 from .mediamtx_config import normalize_path_slug
@@ -15,6 +16,21 @@ class CameraIngestDefinition:
     camera_id: str
     path_slug: str
     source_rtsp_url: str
+    channel_id: str = "video_main"
+    mode: str = "centralized"
+    host_server_id: str = "local"
+
+
+@dataclass(frozen=True, slots=True)
+class CameraIngestPolicy:
+    mode: str
+    host_server_id: str
+    direct_override_until_unix: float | None = None
+
+    @property
+    def direct_override_active(self) -> bool:
+        until = self.direct_override_until_unix
+        return until is not None and until > time.time()
 
 
 def iter_camera_devices_from_app_settings(app_settings: Any) -> list[dict[str, Any]]:
@@ -61,6 +77,7 @@ def iter_camera_devices_from_app_settings(app_settings: Any) -> list[dict[str, A
                         "password": str(item.get("password") or "").strip(),
                         "fps": item.get("fps"),
                         "onvif": item.get("onvif") if isinstance(item.get("onvif"), dict) else None,
+                        "ingest": item.get("ingest") if isinstance(item.get("ingest"), dict) else None,
                     }
                 ],
             }
@@ -115,15 +132,82 @@ def resolve_camera_video_channel(device: Any, *, channel_id: str = "") -> dict[s
     }
 
 
+def normalize_camera_ingest_policy(value: Any) -> CameraIngestPolicy:
+    raw = value if isinstance(value, dict) else {}
+    mode = str(raw.get("mode") or "").strip().lower()
+    if mode in {"runtime_local", "runtime", "runtime-local", "local_runtime", "local-runtime"}:
+        mode = "runtime_local"
+    elif mode in {"direct", "external", "none"}:
+        mode = "direct"
+    else:
+        mode = "centralized"
+
+    host_server_id = normalize_server_id(raw.get("host_server_id"), fallback="local")
+    if mode != "centralized":
+        host_server_id = "local"
+
+    direct_override_until_unix = None
+    try:
+        parsed_until = float(raw.get("direct_override_until_unix"))
+    except Exception:
+        parsed_until = 0.0
+    if parsed_until > 0.0:
+        direct_override_until_unix = parsed_until
+
+    return CameraIngestPolicy(
+        mode=mode,
+        host_server_id=host_server_id,
+        direct_override_until_unix=direct_override_until_unix,
+    )
+
+
+def camera_ingest_policy_for_channel(channel: Any) -> CameraIngestPolicy:
+    raw = channel.get("ingest") if isinstance(channel, dict) else None
+    return normalize_camera_ingest_policy(raw)
+
+
+def should_host_camera_ingest(policy: CameraIngestPolicy, *, host_server_id: str) -> bool:
+    if policy.direct_override_active:
+        return False
+    mode = str(policy.mode or "centralized")
+    if mode == "direct":
+        return False
+    if mode == "runtime_local":
+        return True
+    return normalize_server_id(policy.host_server_id, fallback="local") == normalize_server_id(host_server_id, fallback="local")
+
+
+def resolve_camera_ingest_context(
+    *,
+    app_settings: Any,
+    camera_id: str,
+    channel_id: str = "",
+) -> tuple[dict[str, Any], dict[str, Any], CameraIngestPolicy] | None:
+    target_camera_id = str(camera_id or "").strip()
+    if not target_camera_id:
+        return None
+    for device in iter_camera_devices_from_app_settings(app_settings):
+        current_camera_id = str(device.get("id") or "").strip()
+        if current_camera_id != target_camera_id:
+            continue
+        channel = resolve_camera_video_channel(device, channel_id=channel_id)
+        if channel is None:
+            return None
+        return device, channel, camera_ingest_policy_for_channel(channel)
+    return None
+
+
 def build_camera_ingest_definitions(
     *,
     app_settings: Any,
     ingest_settings: StreamingCameraIngestSettings,
+    host_server_id: str | None = None,
 ) -> dict[str, CameraIngestDefinition]:
     if not bool(getattr(ingest_settings, "enabled", True)):
         return {}
 
     prefix = normalize_path_slug(str(getattr(ingest_settings, "path_prefix", "") or "ingest"), fallback="ingest")
+    current_host_server_id = _default_host_server_id(host_server_id)
 
     out: dict[str, CameraIngestDefinition] = {}
     for device in iter_camera_devices_from_app_settings(app_settings):
@@ -133,6 +217,9 @@ def build_camera_ingest_definitions(
 
         channel = resolve_camera_video_channel(device)
         if channel is None:
+            continue
+        policy = camera_ingest_policy_for_channel(channel)
+        if not should_host_camera_ingest(policy, host_server_id=current_host_server_id):
             continue
 
         rtsp_url = str(channel.get("rtsp_url") or "").strip()
@@ -149,9 +236,33 @@ def build_camera_ingest_definitions(
             camera_id=camera_id,
             path_slug=path_slug,
             source_rtsp_url=source,
+            channel_id=str(channel.get("id") or "").strip() or "video_main",
+            mode=policy.mode,
+            host_server_id=current_host_server_id,
         )
 
     return out
+
+
+def _default_host_server_id(host_server_id: str | None) -> str:
+    if host_server_id:
+        return normalize_server_id(host_server_id, fallback="local")
+    try:
+        import os
+
+        if str(os.getenv("TOPOSYNC_ROLE") or "").strip().lower() == "processing":
+            return normalize_server_id(os.getenv("TOPOSYNC_PROCESSING_SERVER_ID"), fallback="local")
+    except Exception:
+        pass
+    return "local"
+
+
+def camera_stream_credentials(channel: dict[str, Any]) -> tuple[str, str]:
+    return _camera_stream_credentials(channel)
+
+
+def rtsp_url_with_auth(url: str, *, username: str, password: str) -> str:
+    return _rtsp_url_with_auth(url, username=username, password=password)
 
 
 def _camera_stream_credentials(channel: dict[str, Any]) -> tuple[str, str]:

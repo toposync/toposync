@@ -225,14 +225,15 @@ def test_camera_source_waits_for_camera_settings_without_crashing(
             "com.toposync.cameras",
             {
                 "cameras": [
-                    {
-                        "id": "cam-wait-settings",
-                        "name": "cam wait",
-                        "rtsp_url": "rtsp://example",
-                        "username": "",
-                        "password": "",
-                        "fps": 5.0,
-                    },
+                        {
+                            "id": "cam-wait-settings",
+                            "name": "cam wait",
+                            "rtsp_url": "rtsp://example",
+                            "username": "",
+                            "password": "",
+                            "fps": 5.0,
+                            "ingest": {"mode": "direct"},
+                        },
                 ]
             },
         )
@@ -285,8 +286,25 @@ def test_resolve_camera_source_can_bypass_ingest_service(tmp_path: Path) -> None
 
         config = camera_ops.CameraSourceConfig(camera_id="cam1")
         deps = PipelineRuntimeDependencies(config_store=store, services=services)
-        via_ingest = await camera_ops._resolve_camera_source(config, deps, prefer_ingest=True)
-        direct = await camera_ops._resolve_camera_source(config, deps, prefer_ingest=False)
+        via_ingest = await camera_ops._resolve_camera_source(config, deps)
+
+        await store.patch_extension_settings(
+            "com.toposync.cameras",
+            {
+                "cameras": [
+                    {
+                        "id": "cam1",
+                        "name": "Cam 1",
+                        "rtsp_url": "rtsp://10.0.0.1/live",
+                        "username": "",
+                        "password": "",
+                        "fps": 5.0,
+                        "ingest": {"mode": "direct"},
+                    }
+                ]
+            },
+        )
+        direct = await camera_ops._resolve_camera_source(config, deps)
         return (
             str(via_ingest.rtsp_url),
             bool(via_ingest.used_ingest),

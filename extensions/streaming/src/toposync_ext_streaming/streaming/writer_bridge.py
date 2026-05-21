@@ -25,8 +25,10 @@ from .camera_ingest import (
     build_camera_ingest_definitions,
     build_camera_ingest_path_auth,
     build_camera_ingest_path_configs,
+    camera_stream_credentials,
     iter_camera_devices_from_app_settings,
     resolve_camera_video_channel,
+    rtsp_url_with_auth,
 )
 from .ingest_auth import CameraIngestCredentialStore
 from .mediamtx_api_client import MediaMtxApiClient
@@ -69,6 +71,7 @@ class WriterBypassCandidate:
     writer_id: str
     transmission_id: str
     camera_id: str | None
+    channel_id: str
     source_rtsp_url: str
     source_fps: float | None
     source_backend: str
@@ -93,6 +96,7 @@ class StreamWriterBridge:
         monotonic: Callable[[], float] | None = None,
         host_server_id: str = "local",
         mediamtx_api_client: MediaMtxApiClient | None = None,
+        services: Any | None = None,
     ) -> None:
         self._config_store = config_store
         self._engine_manager = engine_manager
@@ -108,6 +112,7 @@ class StreamWriterBridge:
         self._monotonic = monotonic or time.monotonic
         self._host_server_id = normalize_server_id(host_server_id)
         self._mediamtx_api_client = mediamtx_api_client or MediaMtxApiClient(engine_manager=engine_manager)
+        self._services = services
 
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
@@ -197,6 +202,8 @@ class StreamWriterBridge:
             "bypass_writers": {
                 writer_id: {
                     "transmission_id": candidate.transmission_id,
+                    "camera_id": candidate.camera_id,
+                    "channel_id": candidate.channel_id,
                     "source_backend": candidate.source_backend,
                     "source_rtsp_url": _redact_url_userinfo(candidate.source_rtsp_url),
                     "source_fps": candidate.source_fps,
@@ -424,15 +431,15 @@ class StreamWriterBridge:
                     bypass_block_reason = ""
 
             if bypass_candidate is not None:
-                resolved_rtsp_url = bypass_candidate.source_rtsp_url
-                camera_id = str(bypass_candidate.camera_id or "").strip()
-                if camera_id:
-                    ingest = camera_ingest_by_id.get(camera_id)
-                    if ingest is not None:
-                        resolved_rtsp_url = await self._engine_manager.get_read_url_for_path(
-                            ingest.path_slug,
-                            host="127.0.0.1",
-                        )
+                resolved_rtsp_url, ingest_detail = await self._resolve_bypass_rtsp_url(
+                    bypass_candidate,
+                    camera_ingest_by_id=camera_ingest_by_id,
+                )
+                if not resolved_rtsp_url:
+                    bypass_block_reason = ingest_detail or "ingest_policy_blocking"
+                    bypass_candidate = None
+
+            if bypass_candidate is not None:
                 input_settings = PublisherInputSettings(
                     mode="rtsp_pull",
                     rtsp_url=resolved_rtsp_url,
@@ -443,7 +450,8 @@ class StreamWriterBridge:
                     mode="on",
                     details=(
                         f"writer={bypass_candidate.writer_id} "
-                        f"backend={bypass_candidate.source_backend} mode={bypass_candidate.bypass_mode}"
+                        f"backend={bypass_candidate.source_backend} "
+                        f"mode={bypass_candidate.bypass_mode} source={ingest_detail}"
                     ),
                 )
             else:
@@ -501,6 +509,57 @@ class StreamWriterBridge:
             until_monotonic = float(self._no_stream_hint_until_by_path.get(path_slug, 0.0))
             if until_monotonic <= now_monotonic:
                 self._no_stream_hint_until_by_path.pop(path_slug, None)
+
+    async def _resolve_bypass_rtsp_url(
+        self,
+        candidate: WriterBypassCandidate,
+        *,
+        camera_ingest_by_id: dict[str, CameraIngestDefinition],
+    ) -> tuple[str, str]:
+        camera_id = str(candidate.camera_id or "").strip()
+        if not camera_id:
+            return candidate.source_rtsp_url, "direct"
+
+        call = getattr(self._services, "call", None)
+        if callable(call):
+            try:
+                resolution = await call(
+                    "streaming.ingest.resolve_camera_source",
+                    camera_id=camera_id,
+                    channel_id=str(candidate.channel_id or "").strip(),
+                    consumer_server_id=self._host_server_id,
+                )
+            except KeyError:
+                resolution = None
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning(
+                    "Streaming bypass failed to resolve camera ingest policy for camera '%s': %s",
+                    camera_id,
+                    exc,
+                )
+                return "", "ingest_policy_error"
+            if isinstance(resolution, dict):
+                blocking_errors = resolution.get("blocking_errors")
+                if isinstance(blocking_errors, list) and blocking_errors:
+                    self._logger.warning(
+                        "Streaming bypass disabled for camera '%s': %s",
+                        camera_id,
+                        "; ".join(str(item) for item in blocking_errors[:3]),
+                    )
+                    return "", "ingest_policy_blocking"
+                resolved = str(resolution.get("rtsp_url") or "").strip()
+                if resolved:
+                    source_kind = "ingest" if bool(resolution.get("used_ingest")) else "direct"
+                    centralizer = str(resolution.get("centralizer_server_id") or "").strip()
+                    suffix = f":{centralizer}" if centralizer else ""
+                    return resolved, f"{source_kind}{suffix}"
+                return "", "ingest_policy_empty"
+
+        ingest = camera_ingest_by_id.get(camera_id)
+        if ingest is not None:
+            url = await self._engine_manager.get_read_url_for_path(ingest.path_slug, host="127.0.0.1")
+            return url, f"ingest:{ingest.host_server_id}"
+        return "", "ingest_resolver_unavailable"
 
     def _resolve_frame_for_output(self, selected: SelectedWriterFrame, target: ResolvedOutputTarget) -> numpy.ndarray:
         if selected.placeholder_active:
@@ -564,6 +623,7 @@ class StreamWriterBridge:
         camera_ingest_by_id = build_camera_ingest_definitions(
             app_settings=settings,
             ingest_settings=normalized_settings.camera_ingest,
+            host_server_id=self._host_server_id,
         )
         if camera_ingest_by_id:
             path_auth_by_path.update(
@@ -749,7 +809,7 @@ class StreamWriterBridge:
                 if chain is None:
                     continue
 
-                source_rtsp_url, source_fps, source_backend, camera_id = _resolve_chain_rtsp_source(
+                source_rtsp_url, source_fps, source_backend, camera_id, channel_id = _resolve_chain_rtsp_source(
                     camera_node=chain["camera_node"],
                     camera_by_id=camera_by_id,
                 )
@@ -770,6 +830,7 @@ class StreamWriterBridge:
                     writer_id=writer_id,
                     transmission_id=transmission_id,
                     camera_id=str(camera_id or "").strip() or None,
+                    channel_id=str(channel_id or "").strip() or "video_main",
                     source_rtsp_url=source_rtsp_url,
                     source_fps=float(source_fps) if source_fps else None,
                     source_backend=str(source_backend or "auto"),
@@ -1148,7 +1209,7 @@ def _resolve_chain_rtsp_source(
     *,
     camera_node: dict[str, Any],
     camera_by_id: dict[str, dict[str, Any]],
-) -> tuple[str, float | None, str, str | None]:
+) -> tuple[str, float | None, str, str | None, str]:
     config = camera_node.get("config") if isinstance(camera_node.get("config"), dict) else {}
     source_backend = str(config.get("backend") or "auto").strip().lower() or "auto"
     direct_rtsp_url = str(config.get("rtsp_url") or "").strip()
@@ -1157,24 +1218,39 @@ def _resolve_chain_rtsp_source(
     requested_channel_id = str(config.get("channel_id") or "").strip()
     fps_value = _coerce_float(config.get("fps"))
     if direct_rtsp_url:
-        return _apply_rtsp_auth(direct_rtsp_url, direct_username, direct_password), fps_value, source_backend, None
+        return (
+            rtsp_url_with_auth(direct_rtsp_url, username=direct_username, password=direct_password),
+            fps_value,
+            source_backend,
+            None,
+            requested_channel_id or "video_main",
+        )
 
     camera_id = str(config.get("camera_id") or "").strip()
     if not camera_id:
-        return "", None, source_backend, None
+        return "", None, source_backend, None, requested_channel_id or "video_main"
     camera = camera_by_id.get(camera_id) or {}
     channel = resolve_camera_video_channel(camera, channel_id=requested_channel_id)
     camera_rtsp = str((channel or {}).get("rtsp_url") or camera.get("rtsp_url") or "").strip()
     if not camera_rtsp:
-        return "", None, source_backend, camera_id
-    username = str((channel or {}).get("username") or camera.get("username") or "").strip()
-    password = str((channel or {}).get("password") or camera.get("password") or "").strip()
+        return "", None, source_backend, camera_id, requested_channel_id or "video_main"
+    if isinstance(channel, dict):
+        username, password = camera_stream_credentials(channel)
+    else:
+        username = str(camera.get("stream_username") or camera.get("username") or "").strip()
+        password = str(camera.get("stream_password") or camera.get("password") or "").strip()
     camera_fps = _coerce_float((channel or {}).get("fps"))
     if camera_fps is None:
         camera_fps = _coerce_float(camera.get("fps"))
     if fps_value is not None:
         camera_fps = fps_value
-    return _apply_rtsp_auth(camera_rtsp, username, password), camera_fps, source_backend, camera_id
+    return (
+        rtsp_url_with_auth(camera_rtsp, username=username, password=password),
+        camera_fps,
+        source_backend,
+        camera_id,
+        str((channel or {}).get("id") or "").strip() or requested_channel_id or "video_main",
+    )
 
 
 def _apply_rtsp_auth(url: str, username: str, password: str) -> str:

@@ -38,6 +38,7 @@ from ..streaming.camera_ingest import (
     build_camera_ingest_path_configs,
     iter_camera_devices_from_app_settings,
 )
+from ..streaming.ingest_resolver import CameraIngestResolver
 from ..streaming.ingest_auth import (
     CameraIngestCredentialStore,
     CameraIngestCredentials,
@@ -72,6 +73,8 @@ from .models import (
     StreamingApplyQualityProfilesResponse,
     StreamingCameraIngestAuthPath,
     StreamingCameraIngestAuthResponse,
+    StreamingCameraIngestResolveRequest,
+    StreamingCameraIngestResolveResponse,
     StreamingNetworkContract,
     StreamingNetworkContractPorts,
     StreamingEncoderQuarantineClearRequest,
@@ -172,6 +175,16 @@ def _ingest_credential_store(request: Request) -> CameraIngestCredentialStore:
     store = CameraIngestCredentialStore(data_dir=config_store.paths.data_dir)
     request.app.state.streaming_ingest_credential_store = store
     return store
+
+
+def _camera_ingest_resolver(request: Request) -> CameraIngestResolver:
+    return CameraIngestResolver(
+        config_store=_config_store(request),
+        engine_manager=_engine_manager(request),
+        credential_store=_ingest_credential_store(request),
+        host_server_id=_current_server_id(request),
+        logger=getattr(request.app.state, "logger", None),
+    )
 
 
 def _path_auth_with_camera_ingest(
@@ -1558,6 +1571,7 @@ async def _build_camera_ingest_auth_response(
     camera_ingest_by_id = build_camera_ingest_definitions(
         app_settings=app_settings,
         ingest_settings=settings.camera_ingest,
+        host_server_id=_current_server_id(request),
     )
     status = await manager.get_status()
     rtsp_port = int(status.ports.rtsp if status.running else settings.engine.preferred_ports.rtsp)
@@ -2690,6 +2704,7 @@ def create_streaming_router() -> APIRouter:
             camera_ingest_by_id = build_camera_ingest_definitions(
                 app_settings=app_settings,
                 ingest_settings=updated.camera_ingest,
+                host_server_id=_current_server_id(request),
             )
             ingest_paths = [item.path_slug for item in camera_ingest_by_id.values()]
             engine_paths = (
@@ -2861,6 +2876,7 @@ def create_streaming_router() -> APIRouter:
             camera_ingest_by_id = build_camera_ingest_definitions(
                 app_settings=app_settings,
                 ingest_settings=settings.camera_ingest,
+                host_server_id=_current_server_id(request),
             )
             await manager.ensure_running(
                 settings.engine,
@@ -2920,6 +2936,7 @@ def create_streaming_router() -> APIRouter:
             camera_ingest_by_id = build_camera_ingest_definitions(
                 app_settings=app_settings,
                 ingest_settings=settings.camera_ingest,
+                host_server_id=_current_server_id(request),
             )
             await manager.restart(
                 settings.engine,
@@ -2974,6 +2991,7 @@ def create_streaming_router() -> APIRouter:
                 camera_ingest_by_id = build_camera_ingest_definitions(
                     app_settings=app_settings,
                     ingest_settings=settings.camera_ingest,
+                    host_server_id=_current_server_id(request),
                 )
                 await manager.ensure_running(
                     settings.engine,
@@ -3053,6 +3071,7 @@ def create_streaming_router() -> APIRouter:
             camera_ingest_by_id = build_camera_ingest_definitions(
                 app_settings=app_settings,
                 ingest_settings=saved.camera_ingest,
+                host_server_id=_current_server_id(request),
             )
             await manager.ensure_running(
                 saved.engine,
@@ -3143,6 +3162,7 @@ def create_streaming_router() -> APIRouter:
             camera_ingest_by_id = build_camera_ingest_definitions(
                 app_settings=app_settings,
                 ingest_settings=saved.camera_ingest,
+                host_server_id=_current_server_id(request),
             )
             await manager.ensure_running(
                 saved.engine,
@@ -3211,6 +3231,7 @@ def create_streaming_router() -> APIRouter:
             camera_ingest_by_id = build_camera_ingest_definitions(
                 app_settings=app_settings,
                 ingest_settings=saved.camera_ingest,
+                host_server_id=_current_server_id(request),
             )
             await manager.ensure_running(
                 saved.engine,
@@ -3281,6 +3302,7 @@ def create_streaming_router() -> APIRouter:
             camera_ingest_by_id = build_camera_ingest_definitions(
                 app_settings=app_settings,
                 ingest_settings=saved.camera_ingest,
+                host_server_id=_current_server_id(request),
             )
             await manager.ensure_running(
                 saved.engine,
@@ -3328,6 +3350,7 @@ def create_streaming_router() -> APIRouter:
             camera_ingest_by_id = build_camera_ingest_definitions(
                 app_settings=app_settings,
                 ingest_settings=saved.camera_ingest,
+                host_server_id=_current_server_id(request),
             )
             await manager.ensure_running(
                 saved.engine,
@@ -3947,6 +3970,23 @@ def create_streaming_router() -> APIRouter:
         normalized_server_id = await _validate_host_server_id(config_store, server_id)
         return _filter_settings_for_server(settings, server_id=normalized_server_id)
 
+    @router.post(
+        "/internal/camera-ingest/resolve",
+        response_model=StreamingCameraIngestResolveResponse,
+    )
+    async def resolve_camera_ingest_internal(
+        request: Request,
+        body: StreamingCameraIngestResolveRequest,
+    ) -> StreamingCameraIngestResolveResponse:
+        if not _is_streaming_sync_service_request(request):
+            _require_auth(request, action="core:settings:read")
+        return await _camera_ingest_resolver(request).resolve(
+            camera_id=body.camera_id,
+            channel_id=body.channel_id,
+            consumer_server_id=body.consumer_server_id,
+            request_host=_request_host(request),
+        )
+
     @router.get("/runtime/outputs", response_model=StreamingOutputsRuntimeResponse)
     async def streaming_runtime_outputs(request: Request) -> StreamingOutputsRuntimeResponse:
         _require_auth(request, action="core:settings:read")
@@ -4115,6 +4155,7 @@ def create_streaming_router() -> APIRouter:
                 camera_ingest_by_id = build_camera_ingest_definitions(
                     app_settings=app_settings,
                     ingest_settings=settings.camera_ingest,
+                    host_server_id=_current_server_id(request),
                 )
                 await manager.restart(
                     settings.engine,

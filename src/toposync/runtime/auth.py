@@ -1397,7 +1397,10 @@ class AuthRuntime:
 
         # Basic auth for internal streaming sync (processing -> core).
         # Keep a tight path scope to avoid exposing Basic auth globally.
-        if path.startswith("/api/streams/distributed/settings/"):
+        if (
+            path.startswith("/api/streams/distributed/settings/")
+            or path == "/api/streams/internal/camera-ingest/resolve"
+        ):
             if self._streaming_sync_username and self._streaming_sync_password:
                 maybe_basic = self._authorization_header_basic_credentials(request)
                 if maybe_basic is not None:

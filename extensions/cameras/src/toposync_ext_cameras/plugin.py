@@ -106,6 +106,12 @@ class CameraSourceHealthItem(BaseModel):
     last_error: str | None = None
     rtsp_transport: str = "rtsp"
     used_ingest: bool = False
+    ingest_mode: Literal["centralized", "runtime_local", "direct"] = "direct"
+    centralizer_server_id: str | None = None
+    ingest_path: str | None = None
+    direct_override_active: bool = False
+    ingest_warnings: list[str] = Field(default_factory=list)
+    ingest_blocking_errors: list[str] = Field(default_factory=list)
     status: Literal["healthy", "starting", "stale", "unreachable", "unauthorized", "error", "idle", "unknown"]
     recommended_action: str = ""
 
@@ -1170,6 +1176,7 @@ class CamerasExtension(BaseExtension):
                         "name": str(flattened.get("name") or "").strip(),
                         "connection_type": str(flattened.get("connection_type") or "rtsp").strip()
                         or "rtsp",
+                        "ingest": flattened.get("ingest") if isinstance(flattened.get("ingest"), dict) else {},
                     }
                 )
 

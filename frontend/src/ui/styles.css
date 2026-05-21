@@ -2674,7 +2674,7 @@ video {
 .streamsTileOverlay {
   position: absolute;
   left: 50%;
-  top: var(--space-2);
+  top: 50%;
   width: max-content;
   max-width: calc(100% - (var(--space-2) * 2));
   min-height: 34px;
@@ -2691,7 +2691,7 @@ video {
   backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate));
   -webkit-backdrop-filter: blur(var(--frost-blur-medium)) saturate(var(--frost-saturate));
   transition: opacity 200ms ease, transform 200ms ease, filter 200ms ease;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   z-index: 3;
 }
 
@@ -2699,14 +2699,14 @@ video {
   opacity: 1;
   pointer-events: auto;
   filter: blur(0);
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
 }
 
 .streamsTileOverlay.isHidden {
   opacity: 0;
   pointer-events: none;
   filter: blur(1px);
-  transform: translate(-50%, -6px);
+  transform: translate(-50%, -50%) translateY(6px);
 }
 
 .streamsTileOverlayLeft {

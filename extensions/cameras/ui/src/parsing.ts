@@ -3,6 +3,8 @@ import type {
   CameraConnectionType,
   CameraControlPoint,
   CameraControlPointSet,
+  CameraIngestConfig,
+  CameraIngestMode,
   CameraOnvifConfig,
   CameraPoseReference,
   CameraMappingQuality,
@@ -227,6 +229,7 @@ export function parseCameras(settings: Record<string, unknown>): CameraConfig[] 
         stream_password:
           readString(selectedChannel.stream_password).trim() ||
           (connectionType === "rtsp" ? readString(selectedChannel.password).trim() : ""),
+        ingest: readCameraIngestConfig(selectedChannel.ingest),
         fps: Math.max(1, Math.min(60, readFiniteNumber(selectedChannel.fps, 5))),
         onvif,
       });
@@ -259,6 +262,7 @@ export function parseCameras(settings: Record<string, unknown>): CameraConfig[] 
       stream_password:
         readString(record.stream_password).trim() ||
         (connectionType === "rtsp" ? readString(record.password).trim() : ""),
+      ingest: readCameraIngestConfig(record.ingest),
       fps: Math.max(1, Math.min(60, readFiniteNumber(record.fps, 5))),
       onvif,
     });
@@ -268,7 +272,7 @@ export function parseCameras(settings: Record<string, unknown>): CameraConfig[] 
 
 export function serializeCameras(settings: CameraConfig[]): Record<string, unknown> {
   return {
-    schema_version: 2,
+    schema_version: 3,
     devices: settings.map((camera) => ({
       id: camera.id,
       name: camera.name,
@@ -288,6 +292,7 @@ export function serializeCameras(settings: CameraConfig[]): Record<string, unkno
           rtsp_url: camera.rtsp_url,
           stream_username: camera.stream_username ?? "",
           stream_password: camera.stream_password ?? "",
+          ingest: readCameraIngestConfig(camera.ingest),
           fps: camera.fps,
           onvif: camera.onvif ?? null,
           metadata: {},
@@ -295,6 +300,24 @@ export function serializeCameras(settings: CameraConfig[]): Record<string, unkno
       ],
       metadata: {},
     })),
+  };
+}
+
+export function readCameraIngestConfig(value: unknown): CameraIngestConfig {
+  const record = readRecord(value);
+  const rawMode = readString(record.mode).trim().toLowerCase();
+  const mode: CameraIngestMode =
+    rawMode === "runtime_local" || rawMode === "runtime-local" || rawMode === "runtime"
+      ? "runtime_local"
+      : rawMode === "direct" || rawMode === "external" || rawMode === "none"
+        ? "direct"
+        : "centralized";
+  const hostServerId = readString(record.host_server_id).trim().toLowerCase() || "local";
+  const directOverride = readFiniteNumber(record.direct_override_until_unix, NaN);
+  return {
+    mode,
+    host_server_id: mode === "centralized" ? hostServerId : "local",
+    direct_override_until_unix: Number.isFinite(directOverride) && directOverride > 0 ? directOverride : null,
   };
 }
 

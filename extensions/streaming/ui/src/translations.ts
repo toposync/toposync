@@ -195,6 +195,12 @@ export const streamingTranslations = {
     "ext.streaming.wizard.pipeline_name": "Pipeline name (optional)",
     "ext.streaming.wizard.processing_server": "Processing server",
     "ext.streaming.wizard.host_mismatch_inline": "Stream host: {{transmissionHost}}. Pipeline host: {{pipelineHost}}. They must match.",
+    "ext.streaming.wizard.ingest_notice.direct": "This flow will open a direct connection to the camera source.",
+    "ext.streaming.wizard.ingest_notice.override_active": "Temporary direct connection is active for this camera.",
+    "ext.streaming.wizard.ingest_notice.runtime_local":
+      "This camera will be centralized on the selected processing server for this flow.",
+    "ext.streaming.wizard.ingest_notice.centralizer_mismatch":
+      "This pipeline runs on {{pipelineHost}} and will read the camera through ingest on {{ingestHost}}.",
     "ext.streaming.wizard.fps": "FPS limit",
     "ext.streaming.wizard.writer_priority": "Writer priority",
     "ext.streaming.wizard.source_backend": "Camera backend",
@@ -457,6 +463,12 @@ export const streamingTranslations = {
     "ext.streaming.wizard.pipeline_name": "Nome do fluxo (opcional)",
     "ext.streaming.wizard.processing_server": "Servidor de processamento",
     "ext.streaming.wizard.host_mismatch_inline": "Host da transmissão: {{transmissionHost}}. Host do fluxo: {{pipelineHost}}. Eles precisam ser iguais.",
+    "ext.streaming.wizard.ingest_notice.direct": "Este fluxo abrirá conexão direta com a origem da câmera.",
+    "ext.streaming.wizard.ingest_notice.override_active": "Conexão direta temporária ativa para esta câmera.",
+    "ext.streaming.wizard.ingest_notice.runtime_local":
+      "Esta câmera será centralizada no servidor de processamento selecionado para este fluxo.",
+    "ext.streaming.wizard.ingest_notice.centralizer_mismatch":
+      "Este fluxo roda em {{pipelineHost}} e lerá a câmera pelo ingest em {{ingestHost}}.",
     "ext.streaming.wizard.fps": "Limite de FPS",
     "ext.streaming.wizard.writer_priority": "Prioridade do writer",
     "ext.streaming.wizard.source_backend": "Backend da câmera",

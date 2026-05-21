@@ -1918,6 +1918,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.processing_server_status.checking": "Checking processing server health…",
     "core.ui.pipelines.processing_server_status.unreachable": "Processing server '{{server}}' is unreachable.",
     "core.ui.pipelines.processing_server_status.runtime_errors": "Processing server '{{server}}' is online, but this pipeline has {{count}} runtime node issue(s).",
+    "core.ui.pipelines.ingest.badge": "INGEST",
+    "core.ui.pipelines.ingest.direct": "This flow will open a direct connection to the camera source for {{camera}}.",
+    "core.ui.pipelines.ingest.override_active": "Temporary direct connection is active for camera {{camera}}.",
+    "core.ui.pipelines.ingest.centralizer_mismatch":
+      "This pipeline runs on {{pipelineHost}} and will read camera {{camera}} through ingest on {{ingestHost}}.",
 
     "core.ui.settings.nav.pipelines.title": "Pipelines",
     "core.ui.settings.nav.pipelines.desc": "Create and edit pipelines.",
@@ -3833,6 +3838,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.processing_server_status.checking": "Verificando saúde do processing server…",
     "core.ui.pipelines.processing_server_status.unreachable": "O processing server '{{server}}' está inacessível.",
     "core.ui.pipelines.processing_server_status.runtime_errors": "O processing server '{{server}}' está online, mas este fluxo tem {{count}} problema(s) em nó do runtime.",
+    "core.ui.pipelines.ingest.badge": "INGEST",
+    "core.ui.pipelines.ingest.direct": "Este fluxo abrirá conexão direta com a origem da câmera {{camera}}.",
+    "core.ui.pipelines.ingest.override_active": "Conexão direta temporária ativa para a câmera {{camera}}.",
+    "core.ui.pipelines.ingest.centralizer_mismatch":
+      "Este pipeline roda em {{pipelineHost}} e lerá a câmera {{camera}} pelo ingest em {{ingestHost}}.",
 
     "core.ui.settings.nav.pipelines.title": "Fluxos",
     "core.ui.settings.nav.pipelines.desc": "Crie e edite fluxos.",

@@ -1,5 +1,12 @@
 export type CameraConnectionType = "rtsp" | "onvif";
 export type CameraStreamProfile = "onvif" | "custom";
+export type CameraIngestMode = "centralized" | "runtime_local" | "direct";
+
+export type CameraIngestConfig = {
+  mode: CameraIngestMode;
+  host_server_id: string;
+  direct_override_until_unix: number | null;
+};
 
 export type CameraOnvifConfig = {
   device_id?: string;
@@ -23,6 +30,7 @@ export type CameraConfig = {
   rtsp_url: string;
   stream_username?: string;
   stream_password?: string;
+  ingest: CameraIngestConfig;
   /** Legacy credentials kept only while parsing older settings. */
   username?: string;
   password?: string;
@@ -31,7 +39,14 @@ export type CameraConfig = {
 };
 
 export type CamerasIndex = {
-  cameras: Array<{ id: string; name: string; connection_type: CameraConnectionType | string }>;
+  cameras: Array<{ id: string; name: string; connection_type: CameraConnectionType | string; ingest?: CameraIngestConfig }>;
+};
+
+export type ProcessingServer = {
+  id: string;
+  name?: string;
+  kind?: "inprocess" | "http" | string;
+  url?: string;
 };
 
 export type CameraSourceHealthStatus =
@@ -64,6 +79,12 @@ export type CameraSourceHealthItem = {
   last_error?: string | null;
   rtsp_transport: string;
   used_ingest: boolean;
+  ingest_mode?: CameraIngestMode;
+  centralizer_server_id?: string | null;
+  ingest_path?: string | null;
+  direct_override_active?: boolean;
+  ingest_warnings?: string[];
+  ingest_blocking_errors?: string[];
   status: CameraSourceHealthStatus;
   recommended_action: string;
 };

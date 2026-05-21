@@ -242,6 +242,12 @@ export type StreamingRuntimeSourceHealth = {
   last_error?: string | null;
   rtsp_transport?: string;
   used_ingest?: boolean;
+  ingest_mode?: "centralized" | "runtime_local" | "direct";
+  centralizer_server_id?: string | null;
+  ingest_path?: string | null;
+  direct_override_active?: boolean;
+  ingest_warnings?: string[];
+  ingest_blocking_errors?: string[];
   status?: "healthy" | "starting" | "stale" | "unreachable" | "unauthorized" | "error" | "idle" | "unknown";
   recommended_action?: string;
 };
@@ -555,6 +561,11 @@ export type StreamingCameraIngestAuthResponse = {
 export type CameraIndexItem = {
   id: string;
   name?: string;
+  ingest?: {
+    mode?: "centralized" | "runtime_local" | "direct";
+    host_server_id?: string;
+    direct_override_until_unix?: number | null;
+  };
 };
 
 export type CameraIndexResponse = {

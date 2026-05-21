@@ -13,6 +13,7 @@ import type {
   OnvifStreamUriRequest,
   OnvifStreamUriResponse,
   PanTiltZoomState,
+  ProcessingServer,
   RtspProbeResponse,
 } from "../types";
 import { readRecord } from "../parsing";
@@ -32,6 +33,14 @@ export async function fetchCamerasIndex(): Promise<CamerasIndex> {
   return {
     cameras: Array.isArray(record.cameras) ? (record.cameras as any[]).filter(Boolean) : [],
   };
+}
+
+export async function fetchProcessingServers(signal?: AbortSignal): Promise<ProcessingServer[]> {
+  const response = await fetch("/api/processing-servers", { signal });
+  if (!response.ok) throw new Error(`Failed to load processing servers: ${response.status}`);
+  const data = await response.json();
+  const record = readRecord(data);
+  return Array.isArray(record.servers) ? (record.servers as ProcessingServer[]).filter(Boolean) : [];
 }
 
 export async function fetchCameraSourceHealth(signal?: AbortSignal): Promise<CameraSourceHealthResponse> {

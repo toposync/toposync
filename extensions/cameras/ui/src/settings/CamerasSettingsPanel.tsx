@@ -7,6 +7,7 @@ import {
   fetchCamerasIndex,
   fetchCameraSourceHealth,
   fetchOnvifStreamUri,
+  fetchProcessingServers,
   fetchRtspSnapshot,
   inspectOnvif,
   probeCameraRtsp,
@@ -16,7 +17,9 @@ import { CAMERAS_EXTENSION_ID } from "../constants";
 import { createUniqueId, parseCameras, serializeCameras } from "../parsing";
 import type {
   CameraConfig,
+  CameraIngestConfig,
   CameraOnvifConfig,
+  ProcessingServer,
   CameraSourceHealthItem,
   CameraSourceHealthResponse,
   OnvifDiscoverResponse,
@@ -66,6 +69,25 @@ function formatSeconds(value: number | null | undefined): string {
 function formatUnixTime(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "n/a";
   return new Date(value * 1000).toLocaleString();
+}
+
+function formatTimeRemainingUntil(value: number | null | undefined, t: TranslateFn): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "n/a";
+  const remainingSeconds = Math.max(0, Math.ceil(value - Date.now() / 1000));
+  if (remainingSeconds < 60) {
+    return t("ext.cameras.settings.ingest.override.remaining_seconds", { seconds: remainingSeconds }, `${remainingSeconds}s`);
+  }
+  const remainingMinutes = Math.ceil(remainingSeconds / 60);
+  if (remainingMinutes < 60) {
+    return t("ext.cameras.settings.ingest.override.remaining_minutes", { minutes: remainingMinutes }, `${remainingMinutes} min`);
+  }
+  const remainingHours = Math.floor(remainingMinutes / 60);
+  const minutes = remainingMinutes % 60;
+  return t(
+    "ext.cameras.settings.ingest.override.remaining_hours",
+    { hours: remainingHours, minutes },
+    minutes ? `${remainingHours}h ${minutes}min` : `${remainingHours}h`,
+  );
 }
 
 function formatNumber(value: number | null | undefined, fractionDigits = 1): string {
@@ -152,10 +174,111 @@ function sourceHealthStatusLabel(status: string | null | undefined, t: Translate
   return t(`ext.cameras.settings.source_health.status.${normalized}`, {}, normalized);
 }
 
-function sourceHealthPathLabel(usedIngest: boolean | null | undefined, t: TranslateFn): string {
-  return usedIngest
-    ? t("ext.cameras.settings.source_health.path.ingest", {}, "ingest")
-    : t("ext.cameras.settings.source_health.path.direct", {}, "direct");
+function normalizeServerId(value: string | null | undefined): string {
+  return String(value || "local").trim().toLowerCase() || "local";
+}
+
+function serverDisplayName(serverId: string | null | undefined, servers: ProcessingServer[], t: TranslateFn): string {
+  const normalized = normalizeServerId(serverId);
+  if (normalized === "local") return t("ext.cameras.settings.ingest.host.local", {}, "Main environment");
+  const server = servers.find((item) => normalizeServerId(item.id) === normalized);
+  const name = String(server?.name || "").trim();
+  return name ? `${name} (${normalized})` : normalized;
+}
+
+function normalizeIngestConfig(value: CameraIngestConfig | undefined): CameraIngestConfig {
+  const mode = value?.mode === "runtime_local" || value?.mode === "direct" ? value.mode : "centralized";
+  return {
+    mode,
+    host_server_id: mode === "centralized" ? normalizeServerId(value?.host_server_id) : "local",
+    direct_override_until_unix:
+      typeof value?.direct_override_until_unix === "number" && Number.isFinite(value.direct_override_until_unix)
+        ? value.direct_override_until_unix
+        : null,
+  };
+}
+
+function ingestSelectValue(camera: CameraConfig): string {
+  const ingest = normalizeIngestConfig(camera.ingest);
+  if (ingest.mode === "centralized") return `centralized:${normalizeServerId(ingest.host_server_id)}`;
+  return ingest.mode;
+}
+
+function ingestModeLabel(camera: CameraConfig, t: TranslateFn): string {
+  const ingest = normalizeIngestConfig(camera.ingest);
+  if (ingest.mode === "direct") return t("ext.cameras.settings.ingest.mode.direct", {}, "Direct");
+  if (ingest.mode === "runtime_local") return t("ext.cameras.settings.ingest.mode.runtime_local", {}, "Per flow server");
+  return t("ext.cameras.settings.ingest.mode.centralized", {}, "Centralized");
+}
+
+function ingestCentralizerLabel(camera: CameraConfig, servers: ProcessingServer[], t: TranslateFn): string {
+  const ingest = normalizeIngestConfig(camera.ingest);
+  if (ingest.mode === "direct") return t("ext.cameras.settings.ingest.centralizer.none", {}, "Not centralized");
+  if (ingest.mode === "runtime_local") {
+    return t("ext.cameras.settings.ingest.centralizer.flow_host", {}, "Server running the flow");
+  }
+  return serverDisplayName(ingest.host_server_id, servers, t);
+}
+
+function ingestReadPathLabel(camera: CameraConfig, t: TranslateFn): string {
+  const ingest = normalizeIngestConfig(camera.ingest);
+  if (ingest.mode === "direct" || directOverrideActive(ingest)) {
+    return t("ext.cameras.settings.ingest.path.direct", {}, "Direct connection");
+  }
+  return t("ext.cameras.settings.ingest.path.ingest", {}, "RTSP from ingest");
+}
+
+function directOverrideStatusLabel(ingest: CameraIngestConfig | undefined, t: TranslateFn): string {
+  const normalized = normalizeIngestConfig(ingest);
+  if (directOverrideActive(normalized)) {
+    return t(
+      "ext.cameras.settings.ingest.override.active_until",
+      {
+        until: formatUnixTime(normalized.direct_override_until_unix),
+        remaining: formatTimeRemainingUntil(normalized.direct_override_until_unix, t),
+      },
+      `Direct connection active until ${formatUnixTime(normalized.direct_override_until_unix)}`,
+    );
+  }
+  return t("ext.cameras.settings.ingest.override.inactive", {}, "Inactive");
+}
+
+function sourceHealthIngestModeLabel(mode: string | null | undefined, t: TranslateFn): string {
+  if (mode === "direct") return t("ext.cameras.settings.ingest.mode.direct", {}, "Direct");
+  if (mode === "runtime_local") return t("ext.cameras.settings.ingest.mode.runtime_local", {}, "Per flow server");
+  return t("ext.cameras.settings.ingest.mode.centralized", {}, "Centralized");
+}
+
+function sourceHealthCentralizerLabel(
+  health: CameraSourceHealthItem | null,
+  camera: CameraConfig,
+  servers: ProcessingServer[],
+  t: TranslateFn,
+): string {
+  const mode = health?.ingest_mode || normalizeIngestConfig(camera.ingest).mode;
+  if (mode === "direct") return t("ext.cameras.settings.ingest.centralizer.none", {}, "Not centralized");
+  if (mode === "runtime_local" && !health?.centralizer_server_id) {
+    return t("ext.cameras.settings.ingest.centralizer.flow_host", {}, "Server running the flow");
+  }
+  const serverId = health?.centralizer_server_id || normalizeIngestConfig(camera.ingest).host_server_id;
+  return serverDisplayName(serverId, servers, t);
+}
+
+function sourceHealthCurrentReadLabel(health: CameraSourceHealthItem, t: TranslateFn): string {
+  return health.used_ingest
+    ? t("ext.cameras.settings.ingest.path.ingest", {}, "RTSP from ingest")
+    : t("ext.cameras.settings.ingest.path.direct", {}, "Direct connection");
+}
+
+function sourceHealthOverrideLabel(health: CameraSourceHealthItem, t: TranslateFn): string {
+  return health.direct_override_active
+    ? t("ext.cameras.settings.source_health.override.active", {}, "active")
+    : t("ext.cameras.settings.source_health.override.none", {}, "inactive");
+}
+
+function directOverrideActive(ingest: CameraIngestConfig | undefined): boolean {
+  const until = normalizeIngestConfig(ingest).direct_override_until_unix;
+  return typeof until === "number" && until > Date.now() / 1000;
 }
 
 function sourceHealthRecommendedActionLabel(value: string | null | undefined, t: TranslateFn): string {
@@ -209,6 +332,8 @@ function CamerasSettingsPanelContent({
 
   const [sourceHealth, setSourceHealth] = useState<CameraSourceHealthResponse | null>(null);
   const [sourceHealthError, setSourceHealthError] = useState<string | null>(null);
+  const [processingServers, setProcessingServers] = useState<ProcessingServer[]>([]);
+  const [processingServersError, setProcessingServersError] = useState<string | null>(null);
   const [rtspProbeResult, setRtspProbeResult] = useState<RtspProbeResponse | null>(null);
   const [rtspProbeError, setRtspProbeError] = useState<string | null>(null);
   const [rtspProbeBusy, setRtspProbeBusy] = useState(false);
@@ -430,6 +555,24 @@ function CamerasSettingsPanelContent({
     updateCamera(cameraId, { onvif: { ...nextBase, ...patch } });
   }
 
+  function updateCameraIngest(cameraId: string, patch: Partial<CameraIngestConfig>): void {
+    const current = normalizeIngestConfig(camerasRef.current.find((camera) => camera.id === cameraId)?.ingest);
+    updateCamera(cameraId, { ingest: normalizeIngestConfig({ ...current, ...patch }) });
+  }
+
+  function applyIngestSelection(camera: CameraConfig, value: string): void {
+    if (value === "runtime_local") {
+      updateCameraIngest(camera.id, { mode: "runtime_local", host_server_id: "local" });
+      return;
+    }
+    if (value === "direct") {
+      updateCameraIngest(camera.id, { mode: "direct", host_server_id: "local", direct_override_until_unix: null });
+      return;
+    }
+    const hostServerId = value.startsWith("centralized:") ? value.slice("centralized:".length) : "local";
+    updateCameraIngest(camera.id, { mode: "centralized", host_server_id: normalizeServerId(hostServerId) });
+  }
+
   function addCamera(): void {
     const id = createUniqueId();
     const next: CameraConfig = {
@@ -441,6 +584,7 @@ function CamerasSettingsPanelContent({
       rtsp_url: "",
       stream_username: "",
       stream_password: "",
+      ingest: { mode: "centralized", host_server_id: "local", direct_override_until_unix: null },
       fps: 5,
       onvif: { xaddr: "", username: "", password: "" },
     };
@@ -462,6 +606,7 @@ function CamerasSettingsPanelContent({
       rtsp_url: "",
       stream_username: "",
       stream_password: "",
+      ingest: { mode: "centralized", host_server_id: "local", direct_override_until_unix: null },
       fps: 5,
       onvif: {
         xaddr: xaddrCandidate,
@@ -552,7 +697,7 @@ function CamerasSettingsPanelContent({
     ].join("\n");
     if (onvifAutoDiscoverRef.current.has(signature)) return;
     onvifAutoDiscoverRef.current.add(signature);
-    void discoverOnvifProfiles(activeCamera);
+    void discoverOnvifProfiles(activeCamera, { commitDiscovered: false });
   }, [
     activeCamera?.id,
     activeCamera?.connection_type,
@@ -590,9 +735,27 @@ function CamerasSettingsPanelContent({
     };
   }, []);
 
-  async function discoverOnvifProfiles(camera: CameraConfig): Promise<void> {
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const servers = await fetchProcessingServers(controller.signal);
+        if (controller.signal.aborted) return;
+        setProcessingServers(servers.filter((server) => normalizeServerId(server.id) !== "local"));
+        setProcessingServersError(null);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setProcessingServers([]);
+        setProcessingServersError(error instanceof Error ? error.message : String(error));
+      }
+    })();
+    return () => controller.abort();
+  }, []);
+
+  async function discoverOnvifProfiles(camera: CameraConfig, options?: { commitDiscovered?: boolean }): Promise<void> {
     const xaddr = camera.onvif?.xaddr?.trim() ?? "";
     if (!xaddr) return;
+    const commitDiscovered = options?.commitDiscovered !== false;
 
     onvifAbortRef.current?.abort();
     const controller = new AbortController();
@@ -616,6 +779,7 @@ function CamerasSettingsPanelContent({
       );
       if (controller.signal.aborted) return;
       setOnvifInspectResult(result);
+      if (!commitDiscovered) return;
       if (result.xaddr && result.xaddr !== xaddr) {
         updateCameraOnvif(camera.id, { xaddr: result.xaddr });
       }
@@ -962,43 +1126,101 @@ function CamerasSettingsPanelContent({
                     </div>
                   ) : null}
 
+                  {activeSourceHealth?.ingest_blocking_errors?.length ? (
+                    <div className="cardMeta" style={{ marginTop: 10, overflowWrap: "anywhere" }}>
+                      <strong>{t("ext.cameras.settings.source_health.ingest_error", {}, "Ingest error")}:</strong>{" "}
+                      {activeSourceHealth.ingest_blocking_errors.join(" ")}
+                    </div>
+                  ) : null}
+
+                  {activeSourceHealth?.ingest_warnings?.length ? (
+                    <div className="cardMeta" style={{ marginTop: 6, overflowWrap: "anywhere" }}>
+                      {activeSourceHealth.ingest_warnings.join(" ")}
+                    </div>
+                  ) : null}
+
                   {activeSourceHealth ? (
-                    <div
-                      className="settingsGrid"
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-                        gap: 12,
-                        marginTop: 12,
-                      }}
-                    >
-                      <div>
-                        <div className="label">{t("ext.cameras.settings.source_health.age", {}, "Source age")}</div>
-                        <div>{formatSeconds(activeSourceHealth.source_frame_age_seconds)}</div>
-                      </div>
-                      <div>
-                        <div className="label">{t("ext.cameras.settings.source_health.fps", {}, "Capture FPS")}</div>
+                    <>
+                      <div
+                        className="settingsGrid"
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                          gap: 12,
+                          marginTop: 12,
+                        }}
+                      >
                         <div>
-                          {formatNumber(activeSourceHealth.capture_fps)} / {formatNumber(activeSourceHealth.target_fps)}
+                          <div className="label">{t("ext.cameras.settings.source_health.ingest_mode", {}, "Ingest mode")}</div>
+                          <div>
+                            {sourceHealthIngestModeLabel(
+                              activeSourceHealth.ingest_mode || normalizeIngestConfig(activeCamera.ingest).mode,
+                              t,
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="label">
+                            {t("ext.cameras.settings.source_health.centralizer", {}, "Centralizer")}
+                          </div>
+                          <div>{sourceHealthCentralizerLabel(activeSourceHealth, activeCamera, processingServers, t)}</div>
+                        </div>
+                        <div>
+                          <div className="label">{t("ext.cameras.settings.source_health.current_read", {}, "Current read")}</div>
+                          <div>
+                            {sourceHealthCurrentReadLabel(activeSourceHealth, t)}
+                            {activeSourceHealth.ingest_path ? ` (${activeSourceHealth.ingest_path})` : ""}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="label">{t("ext.cameras.settings.source_health.override", {}, "Override")}</div>
+                          <div>{sourceHealthOverrideLabel(activeSourceHealth, t)}</div>
                         </div>
                       </div>
-                      <div>
-                        <div className="label">{t("ext.cameras.settings.source_health.backend", {}, "Backend")}</div>
-                        <div>{activeSourceHealth.backend || activeSourceHealth.configured_backend || "auto"}</div>
+
+                      {normalizeIngestConfig(activeCamera.ingest).mode === "direct" ? (
+                        <div className="cardMeta" style={{ marginTop: 8 }}>
+                          {t(
+                            "ext.cameras.settings.source_health.direct_hint",
+                            {},
+                            "This camera may receive one connection per consuming flow.",
+                          )}
+                        </div>
+                      ) : null}
+
+                      <div
+                        className="settingsGrid"
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                          gap: 12,
+                          marginTop: 12,
+                        }}
+                      >
+                        <div>
+                          <div className="label">{t("ext.cameras.settings.source_health.age", {}, "Source age")}</div>
+                          <div>{formatSeconds(activeSourceHealth.source_frame_age_seconds)}</div>
+                        </div>
+                        <div>
+                          <div className="label">{t("ext.cameras.settings.source_health.fps", {}, "Capture FPS")}</div>
+                          <div>
+                            {formatNumber(activeSourceHealth.capture_fps)} / {formatNumber(activeSourceHealth.target_fps)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="label">{t("ext.cameras.settings.source_health.backend", {}, "Backend")}</div>
+                          <div>{activeSourceHealth.backend || activeSourceHealth.configured_backend || "auto"}</div>
+                        </div>
+                        <div>
+                          <div className="label">{t("ext.cameras.settings.source_health.restarts", {}, "Restarts")}</div>
+                          <div>{activeSourceHealth.restarts_total}</div>
+                        </div>
+                        <div>
+                          <div className="label">{t("ext.cameras.settings.source_health.last_frame", {}, "Last frame")}</div>
+                          <div>{formatUnixTime(activeSourceHealth.last_frame_at_unix)}</div>
+                        </div>
                       </div>
-                      <div>
-                        <div className="label">{t("ext.cameras.settings.source_health.restarts", {}, "Restarts")}</div>
-                        <div>{activeSourceHealth.restarts_total}</div>
-                      </div>
-                      <div>
-                        <div className="label">{t("ext.cameras.settings.source_health.path", {}, "Path")}</div>
-                        <div>{sourceHealthPathLabel(activeSourceHealth.used_ingest, t)}</div>
-                      </div>
-                      <div>
-                        <div className="label">{t("ext.cameras.settings.source_health.last_frame", {}, "Last frame")}</div>
-                        <div>{formatUnixTime(activeSourceHealth.last_frame_at_unix)}</div>
-                      </div>
-                    </div>
+                    </>
                   ) : null}
 
                   {activeSourceHealth?.last_error ? (
@@ -1083,6 +1305,130 @@ function CamerasSettingsPanelContent({
                       <option value="onvif">{t("ext.cameras.settings.camera_type_onvif")}</option>
                       <option value="rtsp">{t("ext.cameras.settings.camera_type_rtsp")}</option>
                     </select>
+                  </div>
+
+                  <div className="field">
+                    <label className="label">{t("ext.cameras.settings.ingest.title", {}, "Camera ingest")}</label>
+                    <div className="cardMeta" style={{ marginBottom: 6 }}>
+                      {t(
+                        "ext.cameras.settings.ingest.help",
+                        {},
+                        "Centralizing reduces simultaneous connections to the camera.",
+                      )}
+                    </div>
+                    <select
+                      className="input"
+                      value={ingestSelectValue(activeCamera)}
+                      onChange={(event) => applyIngestSelection(activeCamera, event.target.value)}
+                    >
+                      <option value="centralized:local">
+                        {t("ext.cameras.settings.ingest.option.main", {}, "Centralize in main environment")}
+                      </option>
+                      {processingServers.map((server) => {
+                        const serverId = normalizeServerId(server.id);
+                        return (
+                          <option key={serverId} value={`centralized:${serverId}`}>
+                            {t(
+                              "ext.cameras.settings.ingest.option.processing",
+                              { server: serverDisplayName(serverId, processingServers, t) },
+                              `Centralize in processing server: ${serverDisplayName(serverId, processingServers, t)}`,
+                            )}
+                          </option>
+                        );
+                      })}
+                      <option value="runtime_local">
+                        {t("ext.cameras.settings.ingest.option.runtime_local", {}, "Centralize where the flow is running")}
+                      </option>
+                      <option value="direct">
+                        {t("ext.cameras.settings.ingest.option.direct", {}, "Do not centralize with TopoSync")}
+                      </option>
+                    </select>
+                    <div
+                      style={{
+                        border: "1px solid var(--color-border-subtle)",
+                        borderRadius: 10,
+                        marginTop: 10,
+                        padding: 10,
+                      }}
+                    >
+                      <div
+                        className="settingsGrid"
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                          gap: 10,
+                        }}
+                      >
+                        <div>
+                          <div className="label">{t("ext.cameras.settings.ingest.summary.mode", {}, "Mode")}</div>
+                          <div>{ingestModeLabel(activeCamera, t)}</div>
+                        </div>
+                        <div>
+                          <div className="label">
+                            {t("ext.cameras.settings.ingest.summary.centralizer", {}, "Effective centralizer")}
+                          </div>
+                          <div>{ingestCentralizerLabel(activeCamera, processingServers, t)}</div>
+                        </div>
+                        <div>
+                          <div className="label">{t("ext.cameras.settings.ingest.summary.path", {}, "Path")}</div>
+                          <div>{ingestReadPathLabel(activeCamera, t)}</div>
+                        </div>
+                        <div>
+                          <div className="label">
+                            {t("ext.cameras.settings.ingest.summary.override", {}, "Temporary direct connection")}
+                          </div>
+                          <div>{directOverrideStatusLabel(activeCamera.ingest, t)}</div>
+                        </div>
+                      </div>
+                      {normalizeIngestConfig(activeCamera.ingest).mode === "direct" ? (
+                        <div className="cardMeta" style={{ marginTop: 8 }}>
+                          {t(
+                            "ext.cameras.settings.ingest.direct_hint",
+                            {},
+                            "This camera may receive one connection per consuming flow.",
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                    {processingServersError ? (
+                      <div className="cardMeta" style={{ marginTop: 4 }}>
+                        {processingServersError}
+                      </div>
+                    ) : null}
+                    {normalizeIngestConfig(activeCamera.ingest).mode !== "direct" ? (
+                      <div
+                        style={{
+                          borderTop: "1px solid var(--color-border-subtle)",
+                          marginTop: 12,
+                          paddingTop: 10,
+                        }}
+                      >
+                        <div className="label">{t("ext.cameras.settings.ingest.diagnostics", {}, "Temporary diagnostic action")}</div>
+                        <div className="cardMeta" style={{ marginBottom: 8 }}>
+                          {directOverrideActive(activeCamera.ingest)
+                            ? directOverrideStatusLabel(activeCamera.ingest, t)
+                            : t(
+                                "ext.cameras.settings.ingest.override.help",
+                                {},
+                                "Use only while diagnosing a centralizer issue.",
+                              )}
+                        </div>
+                        <button
+                          className="chipButton"
+                          type="button"
+                          onClick={() => {
+                            const active = directOverrideActive(activeCamera.ingest);
+                            updateCameraIngest(activeCamera.id, {
+                              direct_override_until_unix: active ? null : Math.floor(Date.now() / 1000) + 3600,
+                            });
+                          }}
+                        >
+                          {directOverrideActive(activeCamera.ingest)
+                            ? t("ext.cameras.settings.ingest.override.clear", {}, "End direct connection")
+                            : t("ext.cameras.settings.ingest.override.enable", {}, "Use direct connection for 1h")}
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
 
                   {activeCamera.connection_type === "onvif" ? (

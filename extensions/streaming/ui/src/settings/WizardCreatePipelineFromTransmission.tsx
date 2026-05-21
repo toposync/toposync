@@ -130,6 +130,14 @@ function sortProcessingServers(servers: ProcessingServer[]): ProcessingServer[] 
   return local ? [local, ...rest] : [{ id: "local", name: "Local", kind: "inprocess", url: "" }, ...rest];
 }
 
+function processingServerLabel(serverId: string, servers: ProcessingServer[]): string {
+  const normalized = normalizeServerId(serverId);
+  if (normalized === "local") return "local";
+  const server = servers.find((item) => normalizeServerId(item.id) === normalized);
+  const name = String(server?.name || "").trim();
+  return name ? `${name} (${normalized})` : normalized;
+}
+
 function openPipelinesScreen(): void {
   if (typeof window === "undefined") return;
   const target = "/settings/pipelines";
@@ -307,6 +315,55 @@ export function WizardCreatePipelineFromTransmission({
   const transmissionHostServerId = normalizeServerId(transmission?.host_server_id);
   const selectedProcessingServerId = normalizeServerId(processingServerId);
   const hostMismatch = transmissionHostServerId !== selectedProcessingServerId;
+  const selectedCameraIngest = selectedCamera?.ingest ?? null;
+  const selectedCameraIngestMode = selectedCameraIngest?.mode === "runtime_local" || selectedCameraIngest?.mode === "direct" ? selectedCameraIngest.mode : "centralized";
+  const selectedCameraIngestHost = selectedCameraIngestMode === "centralized" ? normalizeServerId(selectedCameraIngest?.host_server_id) : selectedProcessingServerId;
+  const selectedCameraDirectOverrideActive =
+    typeof selectedCameraIngest?.direct_override_until_unix === "number" &&
+    selectedCameraIngest.direct_override_until_unix > Date.now() / 1000;
+  const ingestNotice = useMemo(() => {
+    if (!selectedCamera) return "";
+    if (selectedCameraDirectOverrideActive) {
+      return t(
+        "ext.streaming.wizard.ingest_notice.override_active",
+        {},
+        "Temporary direct connection is active for this camera.",
+      );
+    }
+    if (selectedCameraIngestMode === "direct") {
+      return t(
+        "ext.streaming.wizard.ingest_notice.direct",
+        {},
+        "This flow will open a direct connection to the camera source.",
+      );
+    }
+    if (selectedCameraIngestMode === "runtime_local") {
+      return t(
+        "ext.streaming.wizard.ingest_notice.runtime_local",
+        {},
+        "This camera will be centralized on the selected processing server for this flow.",
+      );
+    }
+    if (selectedCameraIngestHost !== selectedProcessingServerId) {
+      return t(
+        "ext.streaming.wizard.ingest_notice.centralizer_mismatch",
+        {
+          pipelineHost: processingServerLabel(selectedProcessingServerId, sortedProcessingServers),
+          ingestHost: processingServerLabel(selectedCameraIngestHost, sortedProcessingServers),
+        },
+        `This pipeline runs on ${processingServerLabel(selectedProcessingServerId, sortedProcessingServers)} and will read the camera through ingest on ${processingServerLabel(selectedCameraIngestHost, sortedProcessingServers)}.`,
+      );
+    }
+    return "";
+  }, [
+    selectedCamera,
+    selectedCameraDirectOverrideActive,
+    selectedCameraIngestHost,
+    selectedCameraIngestMode,
+    selectedProcessingServerId,
+    sortedProcessingServers,
+    t,
+  ]);
 
   function parseCategories(raw: string): string[] | undefined {
     const items = raw
@@ -610,6 +667,8 @@ export function WizardCreatePipelineFromTransmission({
                   )}
                 </div>
               ) : null}
+
+              {ingestNotice ? <div className="cardMeta">{ingestNotice}</div> : null}
 
               <div className="rowWrap" style={{ gap: 10 }}>
                 <div className="field" style={{ width: 170 }}>

@@ -74,6 +74,33 @@ function buildPipelinesPath(pipelineName: string | null): string {
   return `${PIPELINES_BASE_PATH}/${encodeURIComponent(String(pipelineName))}`;
 }
 
+function normalizeServerId(value: unknown): string {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized || "local";
+}
+
+function processingServerLabel(serverId: string, servers: ProcessingServer[]): string {
+  const normalized = normalizeServerId(serverId);
+  if (normalized === "local") return "local";
+  const server = servers.find((item) => normalizeServerId(item.id) === normalized);
+  const name = String(server?.name ?? "").trim();
+  return name ? `${name} (${normalized})` : normalized;
+}
+
+function cameraIdsFromPipelineGraph(graph: unknown): string[] {
+  if (!isRecord(graph) || !Array.isArray(graph.nodes)) return [];
+  const ids: string[] = [];
+  for (const node of graph.nodes) {
+    if (!isRecord(node)) continue;
+    const operatorId = String(node.operator ?? node.operator_id ?? "").trim();
+    if (operatorId !== "camera.source") continue;
+    const config = isRecord(node.config) ? node.config : {};
+    const cameraId = String(config.camera_id ?? "").trim();
+    if (cameraId && !ids.includes(cameraId)) ids.push(cameraId);
+  }
+  return ids;
+}
+
 export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPanels = {} }: Props): React.ReactElement {
   const { t } = i18n.useI18n();
   const pathname = usePathname();
@@ -286,6 +313,45 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       draft?.name ?? "",
     );
   }, [draft?.name, selectedServerStatus]);
+  const pipelineIngestNotices = useMemo(() => {
+    if (!draft) return [];
+    const pipelineServerId = normalizeServerId(draft.processing_server_id);
+    const pipelineServerLabel = processingServerLabel(pipelineServerId, servers);
+    const camerasById = new Map(camerasIndex.cameras.map((camera) => [String(camera.id || "").trim(), camera]));
+    return cameraIdsFromPipelineGraph(draft.graph)
+      .map((cameraId) => {
+        const camera = camerasById.get(cameraId);
+        const ingest = camera?.ingest;
+        const mode = ingest?.mode === "runtime_local" || ingest?.mode === "direct" ? ingest.mode : "centralized";
+        const cameraLabel = camera?.name || cameraId;
+        if (mode === "direct") {
+          return t(
+            "core.ui.pipelines.ingest.direct",
+            { camera: cameraLabel },
+            `This flow will open a direct connection to the camera source for ${cameraLabel}.`,
+          );
+        }
+        const overrideActive =
+          typeof ingest?.direct_override_until_unix === "number" && ingest.direct_override_until_unix > Date.now() / 1000;
+        if (overrideActive) {
+          return t(
+            "core.ui.pipelines.ingest.override_active",
+            { camera: cameraLabel },
+            `Temporary direct connection is active for camera ${cameraLabel}.`,
+          );
+        }
+        if (mode === "runtime_local") return "";
+        const ingestHost = normalizeServerId(ingest?.host_server_id);
+        if (ingestHost === pipelineServerId) return "";
+        const ingestHostLabel = processingServerLabel(ingestHost, servers);
+        return t(
+          "core.ui.pipelines.ingest.centralizer_mismatch",
+          { pipelineHost: pipelineServerLabel, camera: cameraLabel, ingestHost: ingestHostLabel },
+          `This pipeline runs on ${pipelineServerLabel} and will read camera ${cameraLabel} through ingest on ${ingestHostLabel}.`,
+        );
+      })
+      .filter(Boolean);
+  }, [camerasIndex.cameras, draft, servers, t]);
 
   const switchMode = (nextMode: EditorMode) => {
     if (!draft) return;
@@ -859,6 +925,15 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                   </div>
                 </div>
               </div>
+
+              {pipelineIngestNotices.map((message) => (
+                <div className="pipelinesAlertRow isInfo" key={message}>
+                  <div className="pipelinesAlertBadge">{t("core.ui.pipelines.ingest.badge", {}, "INGEST")}</div>
+                  <div className="pipelinesAlertText">
+                    <div className="pipelinesAlertMessage">{message}</div>
+                  </div>
+                </div>
+              ))}
 
               <div className="pipelinesEditorPanel">
                 {mode === "python" ? (

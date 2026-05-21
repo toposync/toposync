@@ -284,16 +284,21 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
 
     const serverId = String(draft.processing_server_id ?? "local").trim().toLowerCase() || "local";
     let canceled = false;
+    let didCompleteInitialLoad = false;
+    setSelectedServerStatus(null);
+    setSelectedServerStatusLoading(true);
 
     const loadStatus = async () => {
-      setSelectedServerStatusLoading(true);
+      const showLoading = !didCompleteInitialLoad;
+      if (showLoading) setSelectedServerStatusLoading(true);
       try {
         const status = await getProcessingServerStatus(serverId);
         if (!canceled) setSelectedServerStatus(status);
       } catch (err: any) {
         if (!canceled) setSelectedServerStatus({ ok: false, error: String(err?.message ?? err) });
       } finally {
-        if (!canceled) setSelectedServerStatusLoading(false);
+        didCompleteInitialLoad = true;
+        if (!canceled && showLoading) setSelectedServerStatusLoading(false);
       }
     };
 

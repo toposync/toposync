@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import type { HostI18n, SettingsPanel } from "@toposync/plugin-api";
 
 import {
+  discoverOnvifDevices,
   fetchCameraSnapshot,
   fetchCameraSourceHealth,
   fetchProcessingServers,
@@ -25,6 +26,8 @@ import type {
   CameraSourceConfig,
   CameraSourceHealthItem,
   CameraSourceHealthResponse,
+  OnvifDiscoveredDeviceInfo,
+  OnvifDiscoverResponse,
   OnvifInspectResponse,
   OnvifProfileInfo,
   ProcessingServer,
@@ -157,6 +160,24 @@ function slugSourceId(value: string, fallback: string): string {
   return slug || fallback;
 }
 
+function suggestedCameraName(device: OnvifDiscoveredDeviceInfo, t: TranslateFn): string {
+  const name = String(device.name || "").trim();
+  if (name) return name;
+  const hardware = String(device.hardware || "").trim();
+  if (hardware) return hardware;
+  const sourceIp = String(device.source_ip || "").trim();
+  if (sourceIp) return `ONVIF ${sourceIp}`;
+  return t("ext.cameras.settings.camera_type_onvif", {}, "ONVIF");
+}
+
+function suggestedCameraXaddr(device: OnvifDiscoveredDeviceInfo): string {
+  return (
+    String(device.xaddr || "").trim() ||
+    String(device.xaddrs?.[0] || "").trim() ||
+    (String(device.source_ip || "").trim() ? `http://${String(device.source_ip || "").trim()}/onvif/device_service` : "")
+  );
+}
+
 function roleFromProfile(profile: OnvifProfileInfo, index: number): CameraSourceConfig["role"] {
   const text = `${profile.name || ""} ${profile.token || ""}`.toLowerCase();
   if (text.includes("zoom")) return "zoom";
@@ -233,6 +254,9 @@ function CamerasSettingsPanelContent({
   const [query, setQuery] = useState("");
   const [sourceHealth, setSourceHealth] = useState<CameraSourceHealthResponse | null>(null);
   const [processingServers, setProcessingServers] = useState<ProcessingServer[]>([]);
+  const [discoveryBusy, setDiscoveryBusy] = useState(false);
+  const [discoveryResult, setDiscoveryResult] = useState<OnvifDiscoverResponse | null>(null);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [inspectBusy, setInspectBusy] = useState(false);
   const [inspectResult, setInspectResult] = useState<OnvifInspectResponse | null>(null);
   const [inspectError, setInspectError] = useState<string | null>(null);
@@ -329,6 +353,58 @@ function CamerasSettingsPanelContent({
     };
     commit([...cameras, camera]);
     setActiveCameraId(id);
+  }
+
+  function addDiscoveredCamera(device: OnvifDiscoveredDeviceInfo): void {
+    const xaddr = suggestedCameraXaddr(device);
+    const name = suggestedCameraName(device, t);
+    const baseId = slugSourceId(
+      `${name}_${device.device_id || device.source_ip || createUniqueId()}`,
+      `camera_${cameras.length + 1}`,
+    );
+    let id = baseId;
+    if (cameras.some((camera) => camera.id === id)) {
+      id = slugSourceId(`${baseId}_${createUniqueId().slice(0, 6)}`, `${baseId}_${cameras.length + 1}`);
+    }
+    const camera: CameraConfig = {
+      id,
+      name,
+      enabled: true,
+      control: { type: "onvif" },
+      onvif: {
+        device_id: String(device.device_id || "").trim(),
+        xaddr,
+        username: "",
+        password: "",
+        hardware: String(device.hardware || "").trim(),
+      },
+      sources: [],
+      metadata: {
+        discovery_source_ip: String(device.source_ip || "").trim(),
+      },
+    };
+    commit([...cameras, camera]);
+    setActiveCameraId(id);
+    setDiscoveryResult((previous) => {
+      if (!previous) return previous;
+      return {
+        ...previous,
+        devices: previous.devices.filter((item) => item !== device),
+      };
+    });
+  }
+
+  async function scanOnvifDevices(force = true): Promise<void> {
+    setDiscoveryBusy(true);
+    setDiscoveryError(null);
+    try {
+      const result = await discoverOnvifDevices({ timeout_ms: 1600, force, exclude_known: true });
+      setDiscoveryResult(result);
+    } catch (error) {
+      setDiscoveryError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDiscoveryBusy(false);
+    }
   }
 
   function addRtspSource(camera: CameraConfig): void {
@@ -458,6 +534,63 @@ function CamerasSettingsPanelContent({
           <button className="chipButton" type="button" onClick={() => addCamera("none")}>
             {t("ext.cameras.settings.add_manual", {}, "Adicionar manual")}
           </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="cardBody">
+          <div className="settingsSectionHeader">
+            <div>
+              <div className="modalSectionTitle">{t("ext.cameras.settings.suggestions.title", {}, "Câmeras sugeridas")}</div>
+              <div className="settingsDescription">
+                {t("ext.cameras.settings.suggestions.desc", {}, "Procure câmeras ONVIF na rede e adicione com um clique.")}
+              </div>
+            </div>
+            <button className="chipButton" type="button" disabled={discoveryBusy} onClick={() => void scanOnvifDevices(true)}>
+              {discoveryBusy
+                ? t("ext.cameras.settings.suggestions.scanning", {}, "Procurando...")
+                : t("ext.cameras.settings.suggestions.scan", {}, "Procurar na rede")}
+            </button>
+          </div>
+
+          {discoveryError ? <div className="errorText">{discoveryError}</div> : null}
+          {discoveryResult?.warnings?.length ? <div className="settingsStatusMuted">{discoveryResult.warnings.join(" ")}</div> : null}
+          {discoveryResult?.targets?.length ? (
+            <div className="settingsStatusMuted">
+              {t("ext.cameras.settings.suggestions.targets", {}, "Destinos de descoberta")}: {discoveryResult.targets.join(", ")}
+            </div>
+          ) : null}
+
+          {discoveryResult && discoveryResult.devices.length === 0 ? (
+            <div className="settingsStatusMuted">{t("ext.cameras.settings.suggestions.none", {}, "Nenhuma câmera nova encontrada.")}</div>
+          ) : null}
+
+          {discoveryResult?.devices.length ? (
+            <div className="settingsList">
+              {discoveryResult.devices.map((device) => {
+                const xaddr = suggestedCameraXaddr(device);
+                const label = suggestedCameraName(device, t);
+                const key = String(device.device_id || xaddr || device.source_ip || label);
+                return (
+                  <button
+                    key={key}
+                    className="settingsListItem"
+                    type="button"
+                    disabled={!xaddr}
+                    onClick={() => addDiscoveredCamera(device)}
+                  >
+                    <span className="settingsListTitle">
+                      {label} · {t("ext.cameras.settings.suggestions.add", {}, "Adicionar")}
+                    </span>
+                    <span className="settingsListMeta">
+                      {xaddr || device.source_ip || device.device_id}
+                      {device.hardware ? ` · ${device.hardware}` : ""}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
         </div>
       </div>
 

@@ -1,6 +1,6 @@
 [project]
 name = "toposync-ext-streaming"
-version = "0.1.19"
+version = "0.1.20"
 description = "Toposync first-party extension: streaming settings, API surface, and pipeline sink bootstrap."
 readme = "README.md"
 license = "MIT"

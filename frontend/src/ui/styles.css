@@ -4586,12 +4586,26 @@ video {
   min-width: 0;
 }
 
+.settingsPanel,
+.settingsPanel * {
+  box-sizing: border-box;
+}
+
 .settingsPanel .settingsHeaderRow,
 .settingsPanel .settingsSectionHeader {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.settingsPanel .settingsHeaderRow > div,
+.settingsPanel .settingsSectionHeader > div,
+.settingsPanel .rowWrap,
+.settingsPanel .card,
+.settingsPanel .cardBody {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .settingsPanel .settingsTitle {
@@ -4604,6 +4618,15 @@ video {
   color: var(--color-text-muted);
   font-size: 13px;
   line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settingsPanel .input,
+.settingsPanel select.input,
+.settingsPanel textarea.input {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .settingsPanel .settingsTwoColumn {
@@ -4653,7 +4676,8 @@ video {
 }
 
 .settingsPanel .settingsSourceItem {
-  padding: 0;
+  padding: 10px;
+  cursor: pointer;
 }
 
 .settingsPanel .settingsListItem.isActive,
@@ -4668,6 +4692,7 @@ video {
   font-weight: 750;
   font-size: 13px;
   line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .settingsPanel .settingsListMeta {
@@ -4676,6 +4701,7 @@ video {
   font-size: 12px;
   line-height: 1.3;
   margin-top: 3px;
+  overflow-wrap: anywhere;
 }
 
 .settingsPanel .settingsSourceGrid {
@@ -4688,6 +4714,7 @@ video {
 .settingsPanel .settingsSourceList {
   display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .settingsPanel .sectionDivider {
@@ -4706,6 +4733,12 @@ video {
 
 .settingsPanel .field {
   margin: 0;
+}
+
+.settingsPanel .rowWrap > .field {
+  flex: 1 1 180px;
+  min-width: min(100%, 180px) !important;
+  max-width: 100%;
 }
 
 .settingsPanel .settingsMetricGrid {
@@ -5414,6 +5447,60 @@ video {
 
   .settingsFooter > .row {
     justify-content: flex-end;
+  }
+}
+
+@media (max-width: 960px) {
+  .settingsPanel .settingsTwoColumn,
+  .settingsPanel .settingsSourceGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settingsPanel .settingsList {
+    max-height: 300px;
+  }
+}
+
+@media (max-width: 640px) {
+  .settingsPanel .settingsHeaderRow,
+  .settingsPanel .settingsSectionHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settingsPanel .settingsHeaderRow .rowWrap,
+  .settingsPanel .settingsSectionHeader .rowWrap {
+    width: 100%;
+  }
+
+  .settingsPanel .rowWrap {
+    align-items: stretch;
+  }
+
+  .settingsPanel .rowWrap > .field,
+  .settingsPanel .rowWrap > .chipButton,
+  .settingsPanel .rowWrap > .primaryButton,
+  .settingsPanel .rowWrap > .dangerButton {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100%;
+  }
+
+  .settingsPanel .rowWrap > .chipButton,
+  .settingsPanel .rowWrap > .primaryButton,
+  .settingsPanel .rowWrap > .dangerButton {
+    display: inline-flex;
+    align-items: center;
+    height: auto;
+    min-height: var(--control-height-m);
+    justify-content: center;
+    padding-block: 8px;
+    white-space: normal;
+  }
+
+  .settingsPanel .settingsMetricGrid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

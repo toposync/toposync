@@ -29,20 +29,20 @@ def _create_client(tmp_path: Path) -> TestClient:
 
     async def list_presets(*, camera_id: str, camera_source_id: str | None = None) -> list[dict[str, Any]]:
         assert camera_id == "cam1"
-        assert camera_source_id is None
+        assert camera_source_id == "zoom"
         return [{"token": "home", "name": "Home"}]
 
     async def goto_preset(
         *, camera_id: str, preset_token: str, camera_source_id: str | None = None
     ) -> dict[str, Any]:
         assert camera_id == "cam1"
-        assert camera_source_id is None
+        assert camera_source_id == "zoom"
         assert preset_token == "home"
         return {"ok": True}
 
     async def get_status(*, camera_id: str, camera_source_id: str | None = None) -> dict[str, Any]:
         assert camera_id == "cam1"
-        assert camera_source_id is None
+        assert camera_source_id == "zoom"
         return {"pan": 0.1, "tilt": -0.2, "zoom": 0.0, "move_status": "IDLE", "error": "", "utc_time": "2026-01-01T00:00:00Z"}
 
     async def continuous_move(
@@ -55,7 +55,7 @@ def _create_client(tmp_path: Path) -> TestClient:
         camera_source_id: str | None = None,
     ) -> dict[str, Any]:
         assert camera_id == "cam1"
-        assert camera_source_id is None
+        assert camera_source_id == "zoom"
         assert pan == 0.5
         assert tilt == -0.5
         assert zoom == 0.0
@@ -66,7 +66,7 @@ def _create_client(tmp_path: Path) -> TestClient:
         *, camera_id: str, pan_tilt: bool = True, zoom: bool = True, camera_source_id: str | None = None
     ) -> dict[str, Any]:
         assert camera_id == "cam1"
-        assert camera_source_id is None
+        assert camera_source_id == "zoom"
         assert pan_tilt is True
         assert zoom is True
         return {"ok": True}
@@ -90,17 +90,20 @@ def test_transmission_camera_controls_routes_forward_to_camera_services(tmp_path
                 "name": "Demo",
                 "path": "demo",
                 "outputs": [{"protocol": "hls", "enabled": True}],
-                "camera_controls": {"enabled": True, "camera_id": "cam1"},
+                "camera_controls": {"enabled": True, "camera_id": "cam1", "camera_source_id": "zoom"},
             },
         )
         assert created.status_code == 200
-        transmission_id = str(created.json()["id"])
+        created_body = created.json()
+        transmission_id = str(created_body["id"])
+        assert created_body["camera_controls"]["camera_source_id"] == "zoom"
 
         presets = client.get(f"/api/streams/transmissions/{transmission_id}/camera/presets")
         assert presets.status_code == 200
         body = presets.json()
         assert body["transmission_id"] == transmission_id
         assert body["camera_id"] == "cam1"
+        assert body["camera_source_id"] == "zoom"
         assert body["presets"][0]["token"] == "home"
 
         goto = client.post(

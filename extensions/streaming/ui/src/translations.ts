@@ -127,6 +127,7 @@ export const streamingTranslations = {
     "ext.streaming.transmissions.camera_controls.hint": "When enabled, this stream can control a camera (presets/PTZ) via API.",
     "ext.streaming.transmissions.camera_controls.loading": "Loading cameras…",
     "ext.streaming.transmissions.camera_controls.camera": "Camera",
+    "ext.streaming.transmissions.camera_controls.source": "Camera source",
     "ext.streaming.transmissions.camera_controls.empty": "No cameras found. Add a camera in Settings > Cameras.",
     "ext.streaming.transmissions.camera_controls.select_camera_error": "Select a camera.",
 
@@ -177,6 +178,8 @@ export const streamingTranslations = {
     "ext.streaming.wizard.camera_no_results": "No cameras match your search.",
     "ext.streaming.wizard.camera_empty": "No cameras found. Add a camera in Settings > Cameras.",
     "ext.streaming.wizard.camera_unnamed": "Unnamed camera",
+    "ext.streaming.wizard.camera_source": "Camera source",
+    "ext.streaming.wizard.camera_source_empty": "This camera has no active video source.",
     "ext.streaming.wizard.preset": "Preset",
     "ext.streaming.wizard.presets.simple_stream.title": "Simple stream",
     "ext.streaming.wizard.presets.simple_stream.desc": "Continuous camera video",
@@ -395,6 +398,7 @@ export const streamingTranslations = {
     "ext.streaming.transmissions.camera_controls.hint": "Quando habilitado, esta transmissão poderá controlar uma câmera (presets/PTZ) via API.",
     "ext.streaming.transmissions.camera_controls.loading": "Carregando câmeras…",
     "ext.streaming.transmissions.camera_controls.camera": "Câmera",
+    "ext.streaming.transmissions.camera_controls.source": "Fonte da câmera",
     "ext.streaming.transmissions.camera_controls.empty": "Nenhuma câmera encontrada. Cadastre uma câmera em Configurações > Câmeras.",
     "ext.streaming.transmissions.camera_controls.select_camera_error": "Selecione uma câmera.",
 
@@ -445,6 +449,8 @@ export const streamingTranslations = {
     "ext.streaming.wizard.camera_no_results": "Nenhuma câmera corresponde à busca.",
     "ext.streaming.wizard.camera_empty": "Nenhuma câmera encontrada. Cadastre uma câmera em Configurações > Câmeras.",
     "ext.streaming.wizard.camera_unnamed": "Câmera sem nome",
+    "ext.streaming.wizard.camera_source": "Fonte da câmera",
+    "ext.streaming.wizard.camera_source_empty": "Esta câmera não tem fonte de vídeo ativa.",
     "ext.streaming.wizard.preset": "Preset",
     "ext.streaming.wizard.presets.simple_stream.title": "Stream simples",
     "ext.streaming.wizard.presets.simple_stream.desc": "Vídeo contínuo da câmera",

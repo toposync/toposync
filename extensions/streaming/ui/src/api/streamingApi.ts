@@ -1,4 +1,6 @@
 import type {
+  CameraLiveView,
+  CameraLiveViewGenerateResponse,
   CameraIndexResponse,
   EngineStatusResponse,
   ProcessingServer,
@@ -39,6 +41,7 @@ type CreateTransmissionRequest = {
 };
 
 type PatchStreamingSettingsRequest = {
+  camera_live_views?: CameraLiveView[];
   transmissions?: Transmission[];
   engine?: {
     enabled?: boolean;
@@ -62,6 +65,12 @@ type PatchStreamingSettingsRequest = {
     webrtc_ice_servers?: string[];
     webrtc_additional_hosts?: string[];
   };
+};
+
+type GenerateCameraLiveViewsRequest = {
+  camera_id?: string | null;
+  host_server_id?: string;
+  replace_existing?: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -124,6 +133,35 @@ export async function patchStreamingSettings(patch: PatchStreamingSettingsReques
 
 export async function fetchTransmissions(signal?: AbortSignal): Promise<Transmission[]> {
   return requestJson<Transmission[]>("/api/streams/transmissions", { signal });
+}
+
+export async function fetchCameraLiveViews(signal?: AbortSignal): Promise<CameraLiveView[]> {
+  return requestJson<CameraLiveView[]>("/api/streams/camera-live-views", { signal });
+}
+
+export async function generateCameraLiveViews(
+  payload: GenerateCameraLiveViewsRequest = {},
+): Promise<CameraLiveViewGenerateResponse> {
+  return requestJson<CameraLiveViewGenerateResponse>("/api/streams/camera-live-views/generate", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateCameraLiveView(liveViewId: string, payload: CameraLiveView): Promise<CameraLiveView> {
+  return requestJson<CameraLiveView>(`/api/streams/camera-live-views/${encodeURIComponent(liveViewId)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteCameraLiveView(liveViewId: string): Promise<void> {
+  const response = await fetch(`/api/streams/camera-live-views/${encodeURIComponent(liveViewId)}`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(await parseErrorResponse(response));
+  }
 }
 
 export async function fetchStreamingQualityProfiles(signal?: AbortSignal): Promise<StreamingQualityProfilesResponse> {

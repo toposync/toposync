@@ -20,6 +20,9 @@ StreamingOutputEncoderMode = Literal["inherit", "auto", "cpu"]
 StreamingEncoderTrustState = Literal["candidate", "trusted", "quarantined"]
 StreamingMediaAuthMode = Literal["signed_proxy", "open"]
 StreamingMediaAuthType = Literal["none", "signed_url", "basic"]
+StreamingCameraLiveContext = Literal["thumbnail", "pip", "large", "fullscreen", "ptz"]
+StreamingCameraLiveVariantRole = Literal["thumbnail", "pip", "large", "fullscreen", "ptz", "zoom", "custom"]
+StreamingCameraLiveTransportPreference = Literal["auto", "hls", "webrtc"]
 StreamingQualityProfileId = Literal[
     "quad_grid",
     "stable_apple_tv",
@@ -246,6 +249,125 @@ class StreamingApplyWebRtcCompanionResponse(BaseModel):
     transmission_id: str
     output_id: str
     transmission: Transmission
+
+
+class CameraLiveViewDefaults(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    thumbnail_variant_id: str = "thumbnail"
+    pip_variant_id: str = "pip"
+    large_variant_id: str = "large"
+    fullscreen_variant_id: str = "fullscreen"
+    ptz_variant_id: str | None = None
+
+    @field_validator(
+        "thumbnail_variant_id",
+        "pip_variant_id",
+        "large_variant_id",
+        "fullscreen_variant_id",
+        "ptz_variant_id",
+        mode="before",
+    )
+    @classmethod
+    def _trim_variant_id(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value or "").strip()
+        return normalized or None
+
+
+class CameraLiveVariant(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    label: str = ""
+    role: StreamingCameraLiveVariantRole = "custom"
+    camera_source_id: str
+    transmission_id: str
+    output_id: str | None = None
+    quality_profile_id: StreamingQualityProfileId | None = None
+    preferred_transport: StreamingCameraLiveTransportPreference = "auto"
+    enabled: bool = True
+
+    @field_validator("id", "label", "camera_source_id", "transmission_id", "output_id", mode="before")
+    @classmethod
+    def _trim_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value or "").strip()
+        return normalized or None
+
+    @field_validator("preferred_transport", mode="before")
+    @classmethod
+    def _normalize_transport(cls, value: Any) -> str:
+        normalized = str(value or "auto").strip().lower()
+        if normalized in {"hls", "webrtc"}:
+            return normalized
+        return "auto"
+
+    @model_validator(mode="after")
+    def _validate_required_ids(self) -> "CameraLiveVariant":
+        if not self.id:
+            raise ValueError("Camera live variant id is required")
+        if not self.camera_source_id:
+            raise ValueError(f"camera_source_id is required for camera live variant '{self.id}'")
+        if not self.transmission_id:
+            raise ValueError(f"transmission_id is required for camera live variant '{self.id}'")
+        if not self.label:
+            self.label = self.id
+        return self
+
+
+class CameraLiveView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    camera_id: str
+    name: str = ""
+    enabled: bool = True
+    host_server_id: str = "local"
+    defaults: CameraLiveViewDefaults = Field(default_factory=CameraLiveViewDefaults)
+    variants: list[CameraLiveVariant] = Field(default_factory=list)
+
+    @field_validator("id", "camera_id", "name", "host_server_id", mode="before")
+    @classmethod
+    def _trim_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("host_server_id", mode="before")
+    @classmethod
+    def _normalize_host_server_id(cls, value: Any) -> str:
+        return normalize_server_id(value, fallback="local")
+
+    @model_validator(mode="after")
+    def _validate_live_view(self) -> "CameraLiveView":
+        if not self.id:
+            self.id = str(uuid4())
+        if not self.camera_id:
+            raise ValueError("camera_id is required for camera live view")
+        if not self.name:
+            self.name = self.camera_id
+
+        variant_ids: set[str] = set()
+        for variant in self.variants:
+            if variant.id in variant_ids:
+                raise ValueError(f"Duplicate camera live variant id in '{self.id}': {variant.id}")
+            variant_ids.add(variant.id)
+
+        if self.variants:
+            required_defaults = [
+                self.defaults.thumbnail_variant_id,
+                self.defaults.pip_variant_id,
+                self.defaults.large_variant_id,
+                self.defaults.fullscreen_variant_id,
+            ]
+            for variant_id in required_defaults:
+                if variant_id not in variant_ids:
+                    raise ValueError(f"Camera live view default variant is missing: {variant_id}")
+            if self.defaults.ptz_variant_id and self.defaults.ptz_variant_id not in variant_ids:
+                raise ValueError(f"Camera live view PTZ default variant is missing: {self.defaults.ptz_variant_id}")
+
+        return self
 
 
 DEFAULT_QUALITY_PROFILE_ID: StreamingQualityProfileId = "stable_apple_tv"
@@ -572,6 +694,7 @@ class StreamingEngineSettingsPatch(BaseModel):
 class StreamingExtensionSettings(BaseModel):
     model_config = ConfigDict(extra="allow")
 
+    camera_live_views: list[CameraLiveView] = Field(default_factory=list)
     transmissions: list[Transmission] = Field(default_factory=list)
     engine: StreamingEngineSettings = Field(default_factory=StreamingEngineSettings)
     camera_ingest: StreamingCameraIngestSettings = Field(default_factory=StreamingCameraIngestSettings)
@@ -579,6 +702,12 @@ class StreamingExtensionSettings(BaseModel):
 
     @model_validator(mode="after")
     def _validate_uniqueness(self) -> "StreamingExtensionSettings":
+        seen_live_view_ids: set[str] = set()
+        for live_view in self.camera_live_views:
+            if live_view.id in seen_live_view_ids:
+                raise ValueError(f"Duplicate camera live view id: {live_view.id}")
+            seen_live_view_ids.add(live_view.id)
+
         seen_transmission_ids: set[str] = set()
         seen_paths: set[tuple[str, str]] = set()
 
@@ -607,6 +736,7 @@ class StreamingExtensionSettings(BaseModel):
 class StreamingSettingsPatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    camera_live_views: list[CameraLiveView] | None = None
     transmissions: list[Transmission] | None = None
     engine: StreamingEngineSettingsPatch | None = None
     camera_ingest: StreamingCameraIngestSettings | None = None
@@ -789,6 +919,51 @@ class TransmissionUrlsResponse(BaseModel):
     blocking_errors: list[str] = Field(default_factory=list)
     public_base_path: str = "/"
     media_url_origin: str | None = None
+
+
+class CameraLiveViewGenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    camera_id: str | None = None
+    host_server_id: str = "local"
+    replace_existing: bool = True
+
+    @field_validator("camera_id", "host_server_id", mode="before")
+    @classmethod
+    def _trim_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value or "").strip()
+        return normalized or None
+
+
+class CameraLiveViewGenerateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    camera_live_views: list[CameraLiveView]
+    transmissions: list[Transmission]
+    generated_count: int
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CameraLiveViewPlaybackResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    live_view: CameraLiveView
+    context: StreamingCameraLiveContext
+    variant: CameraLiveVariant
+    camera_id: str
+    camera_name: str
+    camera_source_id: str
+    camera_source_name: str
+    source_role: str | None = None
+    transmission: Transmission
+    urls: TransmissionUrlsResponse
+    selected_output: TransmissionOutputUrl | None = None
+    runtime_health: dict[str, Any] | None = None
+    source_health: dict[str, Any] | None = None
+    warnings: list[str] = Field(default_factory=list)
+    blocking_errors: list[str] = Field(default_factory=list)
 
 
 StreamingHlsProbeStatus = Literal[

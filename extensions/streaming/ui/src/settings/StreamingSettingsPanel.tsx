@@ -5,8 +5,10 @@ import type { SettingsPanel, TopoSyncHost } from "@toposync/plugin-api";
 import {
   clearStreamingEncoderQuarantine,
   createTransmission,
+  deleteCameraLiveView,
   deleteTransmission,
   fetchCameraIngestAuth,
+  fetchCameraLiveViews,
   fetchCamerasIndex,
   fetchEngineStatus,
   fetchProcessingServers,
@@ -21,6 +23,7 @@ import {
   fetchStreamingSettings,
   fetchTransmissionUrls,
   fetchTransmissions,
+  generateCameraLiveViews,
   applyTransmissionQualityProfiles,
   applyTransmissionWebRtcCompanion,
   patchStreamingSettings,
@@ -29,10 +32,14 @@ import {
   revealCameraIngestAuth,
   rotateCameraIngestAuth,
   updateTransmission,
+  updateCameraLiveView,
 } from "../api/streamingApi";
 import { STREAMING_EXTENSION_ID } from "../constants";
 import type {
   CameraIndexItem,
+  CameraLiveContext,
+  CameraLiveVariant,
+  CameraLiveView,
   EngineStatusResponse,
   ProcessingServer,
   StreamingCameraIngestAuthResponse,
@@ -105,6 +112,58 @@ function cameraSourceOptions(camera: CameraIndexItem | null | undefined): Array<
       return { id, label: `${name}${resolution}` };
     })
     .filter((item) => item.id);
+}
+
+function cameraById(cameras: CameraIndexItem[], cameraId: string): CameraIndexItem | null {
+  const normalized = String(cameraId || "").trim();
+  return cameras.find((item) => String(item.id || "").trim() === normalized) ?? null;
+}
+
+function cameraSourceLabel(cameras: CameraIndexItem[], cameraId: string, sourceId: string): string {
+  const camera = cameraById(cameras, cameraId);
+  const source = (camera?.sources || []).find((item) => String(item.id || "").trim() === String(sourceId || "").trim());
+  const name = String(source?.name || "").trim() || String(sourceId || "").trim() || "Fonte";
+  const width = typeof source?.video?.width === "number" ? source.video.width : null;
+  const height = typeof source?.video?.height === "number" ? source.video.height : null;
+  return width && height ? `${name} · ${width}x${height}` : name;
+}
+
+function liveContextLabel(context: CameraLiveContext | "zoom" | "custom", t: TranslateFn): string {
+  if (context === "thumbnail") return t("ext.streaming.live.context.thumbnail", {}, "Miniatura");
+  if (context === "pip") return t("ext.streaming.live.context.pip", {}, "PiP");
+  if (context === "large") return t("ext.streaming.live.context.large", {}, "Tela grande");
+  if (context === "fullscreen") return t("ext.streaming.live.context.fullscreen", {}, "Tela cheia");
+  if (context === "ptz") return t("ext.streaming.live.context.ptz", {}, "PTZ");
+  if (context === "zoom") return t("ext.streaming.live.context.zoom", {}, "Zoom");
+  return t("ext.streaming.live.context.custom", {}, "Personalizada");
+}
+
+function qualityProfileUiLabel(profileId: string | null | undefined, t: TranslateFn): string {
+  if (profileId === "quad_grid") return t("ext.streaming.live.quality.light", {}, "Leve");
+  if (profileId === "stable_apple_tv") return t("ext.streaming.live.quality.stable", {}, "Estável");
+  if (profileId === "fullscreen_quality") return t("ext.streaming.live.quality.high", {}, "Alta");
+  if (profileId === "diagnostic_low") return t("ext.streaming.live.quality.diagnostic", {}, "Diagnóstico");
+  return t("ext.streaming.live.quality.auto", {}, "Automática");
+}
+
+function transportUiLabel(value: string | null | undefined, t: TranslateFn): string {
+  if (value === "hls") return t("ext.streaming.live.transport.stable", {}, "Estável");
+  if (value === "webrtc") return t("ext.streaming.live.transport.low_latency", {}, "Baixa latência");
+  return t("ext.streaming.live.transport.auto", {}, "Automático");
+}
+
+function liveVariantConsequence(variant: CameraLiveVariant, cameras: CameraIndexItem[], cameraId: string, t: TranslateFn): string {
+  const sourceLabel = cameraSourceLabel(cameras, cameraId, variant.camera_source_id);
+  if (variant.preferred_transport === "webrtc") {
+    return t("ext.streaming.live.consequence.low_latency", { source: sourceLabel }, `Usa ${sourceLabel} com menor latência quando disponível.`);
+  }
+  if (variant.quality_profile_id === "quad_grid" || variant.role === "thumbnail") {
+    return t("ext.streaming.live.consequence.light", { source: sourceLabel }, `Usa ${sourceLabel} para economizar rede e CPU.`);
+  }
+  if (variant.quality_profile_id === "fullscreen_quality") {
+    return t("ext.streaming.live.consequence.high", { source: sourceLabel }, `Usa ${sourceLabel} para melhor imagem em tela grande.`);
+  }
+  return t("ext.streaming.live.consequence.stable", { source: sourceLabel }, `Usa ${sourceLabel} com reprodução estável.`);
 }
 
 function deepClone<T>(value: T): T {
@@ -443,6 +502,16 @@ function StreamingSettingsPanelContent({
   const [transmissionsError, setTransmissionsError] = useState<string | null>(null);
   const [transmissions, setTransmissions] = useState<Transmission[]>([]);
   const [transmissionQuery, setTransmissionQuery] = useState("");
+  const [cameraLiveViewsLoading, setCameraLiveViewsLoading] = useState(true);
+  const [cameraLiveViewsError, setCameraLiveViewsError] = useState<string | null>(null);
+  const [cameraLiveViews, setCameraLiveViews] = useState<CameraLiveView[]>([]);
+  const [cameraLiveGenerateBusy, setCameraLiveGenerateBusy] = useState(false);
+  const [cameraLiveGenerateMessage, setCameraLiveGenerateMessage] = useState<string | null>(null);
+  const [activeCameraLiveViewId, setActiveCameraLiveViewId] = useState<string | null>(null);
+  const [cameraLiveDraft, setCameraLiveDraft] = useState<CameraLiveView | null>(null);
+  const [cameraLiveDraftDirty, setCameraLiveDraftDirty] = useState(false);
+  const [cameraLiveDraftBusy, setCameraLiveDraftBusy] = useState(false);
+  const [cameraLiveDraftError, setCameraLiveDraftError] = useState<string | null>(null);
   const [qualityProfiles, setQualityProfiles] = useState<StreamingQualityProfilesResponse | null>(null);
   const [qualityProfilesError, setQualityProfilesError] = useState<string | null>(null);
   const [applyQualityProfilesBusy, setApplyQualityProfilesBusy] = useState(false);
@@ -627,6 +696,22 @@ function StreamingSettingsPanelContent({
     }
   }, []);
 
+  const fetchCameraLiveViewsData = useCallback(async (signal?: AbortSignal) => {
+    setCameraLiveViewsLoading(true);
+    setCameraLiveViewsError(null);
+    try {
+      const payload = await fetchCameraLiveViews(signal);
+      if (signal?.aborted) return;
+      setCameraLiveViews(Array.isArray(payload) ? payload : []);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setCameraLiveViews([]);
+      setCameraLiveViewsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (!signal?.aborted) setCameraLiveViewsLoading(false);
+    }
+  }, []);
+
   const fetchQualityProfilesData = useCallback(async (signal?: AbortSignal) => {
     setQualityProfilesError(null);
     try {
@@ -683,6 +768,7 @@ function StreamingSettingsPanelContent({
     void fetchCameraIngestAuthData(controller.signal);
     void fetchSettingsData(controller.signal);
     void fetchTransmissionsData(controller.signal);
+    void fetchCameraLiveViewsData(controller.signal);
     void fetchQualityProfilesData(controller.signal);
     void fetchProcessingServersData(controller.signal);
     void fetchAvailableCamerasData(controller.signal);
@@ -699,6 +785,7 @@ function StreamingSettingsPanelContent({
     fetchRuntimePipelinesData,
     fetchSettingsData,
     fetchTransmissionsData,
+    fetchCameraLiveViewsData,
     fetchQualityProfilesData,
   ]);
 
@@ -725,6 +812,28 @@ function StreamingSettingsPanelContent({
     if (activeTransmissionId && transmissions.some((item) => item.id === activeTransmissionId)) return;
     setActiveTransmissionId(transmissions[0]?.id ?? null);
   }, [activeTransmissionId, transmissions]);
+
+  useEffect(() => {
+    if (activeCameraLiveViewId && cameraLiveViews.some((item) => item.id === activeCameraLiveViewId)) return;
+    setActiveCameraLiveViewId(cameraLiveViews[0]?.id ?? null);
+  }, [activeCameraLiveViewId, cameraLiveViews]);
+
+  const activeCameraLiveView = useMemo(() => {
+    if (!activeCameraLiveViewId) return null;
+    return cameraLiveViews.find((item) => item.id === activeCameraLiveViewId) ?? null;
+  }, [activeCameraLiveViewId, cameraLiveViews]);
+
+  useEffect(() => {
+    if (!activeCameraLiveView) {
+      setCameraLiveDraft(null);
+      setCameraLiveDraftDirty(false);
+      setCameraLiveDraftError(null);
+      return;
+    }
+    if (cameraLiveDraftDirty) return;
+    setCameraLiveDraft(deepClone(activeCameraLiveView));
+    setCameraLiveDraftError(null);
+  }, [activeCameraLiveView, cameraLiveDraftDirty]);
 
   const activeTransmission = useMemo(() => {
     if (!activeTransmissionId) return null;
@@ -1066,6 +1175,89 @@ function StreamingSettingsPanelContent({
     }
   }
 
+  async function generateLiveViewsAction(cameraId?: string): Promise<void> {
+    setCameraLiveGenerateBusy(true);
+    setCameraLiveViewsError(null);
+    setCameraLiveGenerateMessage(null);
+    try {
+      const payload = await generateCameraLiveViews({
+        camera_id: cameraId || null,
+        host_server_id: "local",
+        replace_existing: true,
+      });
+      setCameraLiveGenerateMessage(
+        t(
+          "ext.streaming.live.generated",
+          { count: payload.generated_count },
+          `${payload.generated_count} visualização(ões) ao vivo gerada(s).`,
+        ),
+      );
+      await fetchCameraLiveViewsData();
+      await fetchTransmissionsData();
+      void fetchEngineData();
+      if (payload.camera_live_views?.[0]?.id) setActiveCameraLiveViewId(payload.camera_live_views[0].id);
+    } catch (error) {
+      setCameraLiveViewsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCameraLiveGenerateBusy(false);
+    }
+  }
+
+  function updateCameraLiveDraftVariant(variantId: string, patch: Partial<CameraLiveVariant>): void {
+    setCameraLiveDraft((previous) => {
+      if (!previous) return previous;
+      return {
+        ...previous,
+        variants: previous.variants.map((variant) =>
+          variant.id === variantId ? { ...variant, ...patch } : variant,
+        ),
+      };
+    });
+    setCameraLiveDraftDirty(true);
+    setCameraLiveDraftError(null);
+  }
+
+  async function saveCameraLiveDraft(): Promise<void> {
+    if (!cameraLiveDraft) return;
+    setCameraLiveDraftBusy(true);
+    setCameraLiveDraftError(null);
+    try {
+      const payload = await updateCameraLiveView(cameraLiveDraft.id, cameraLiveDraft);
+      setCameraLiveViews((previous) => previous.map((item) => (item.id === payload.id ? payload : item)));
+      setCameraLiveDraft(deepClone(payload));
+      setCameraLiveDraftDirty(false);
+    } catch (error) {
+      setCameraLiveDraftError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCameraLiveDraftBusy(false);
+    }
+  }
+
+  async function deleteActiveCameraLiveView(): Promise<void> {
+    if (!activeCameraLiveViewId) return;
+    const ok = confirm(
+      t(
+        "ext.streaming.live.delete_confirm",
+        {},
+        "Excluir esta visualização ao vivo e transmissões geradas por ela?",
+      ),
+    );
+    if (!ok) return;
+    setCameraLiveDraftBusy(true);
+    setCameraLiveDraftError(null);
+    try {
+      await deleteCameraLiveView(activeCameraLiveViewId);
+      setCameraLiveViews((previous) => previous.filter((item) => item.id !== activeCameraLiveViewId));
+      await fetchTransmissionsData();
+      setCameraLiveDraft(null);
+      setCameraLiveDraftDirty(false);
+    } catch (error) {
+      setCameraLiveDraftError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCameraLiveDraftBusy(false);
+    }
+  }
+
   async function loadUrls(transmissionId: string): Promise<void> {
     setUrlsLoadingId(transmissionId);
     setTransmissionsError(null);
@@ -1386,6 +1578,215 @@ function StreamingSettingsPanelContent({
 
       <div className="card">
         <div className="cardBody">
+          <div className="settingsDetailHeader" style={{ marginBottom: 10 }}>
+            <div>
+              <div className="modalSectionTitle" style={{ marginBottom: 4 }}>
+                {t("ext.streaming.live.title", {}, "Câmeras ao vivo")}
+              </div>
+              <div className="cardMeta">
+                {t(
+                  "ext.streaming.live.subtitle",
+                  {},
+                  "Escolha qual fonte cada câmera usa em miniatura, PiP, tela grande e tela cheia.",
+                )}
+              </div>
+            </div>
+            <button
+              className="primaryButton"
+              type="button"
+              disabled={cameraLiveGenerateBusy}
+              onClick={() => void generateLiveViewsAction()}
+            >
+              <i className="fa-solid fa-wand-magic-sparkles" aria-hidden="true" />{" "}
+              {cameraLiveGenerateBusy
+                ? t("ext.streaming.live.generating", {}, "Gerando…")
+                : t("ext.streaming.live.generate_all", {}, "Criar visualizações")}
+            </button>
+          </div>
+
+          {cameraLiveViewsLoading ? (
+            <div className="settingsStatusMuted">{t("ext.streaming.live.loading", {}, "Carregando câmeras ao vivo…")}</div>
+          ) : null}
+          {cameraLiveViewsError ? <div className="errorText">{cameraLiveViewsError}</div> : null}
+          {cameraLiveGenerateMessage ? <div className="streamingStatusOk">{cameraLiveGenerateMessage}</div> : null}
+
+          {!cameraLiveViewsLoading && cameraLiveViews.length === 0 ? (
+            <div className="settingsStatusMuted" style={{ marginTop: 8 }}>
+              {t(
+                "ext.streaming.live.empty",
+                {},
+                "Nenhuma visualização ao vivo criada. Gere a partir das câmeras cadastradas para usar a dashboard.",
+              )}
+            </div>
+          ) : null}
+
+          {cameraLiveViews.length > 0 ? (
+            <div className="streamingFormGrid" style={{ marginTop: 12 }}>
+              <div>
+                <div className="cardMeta" style={{ marginBottom: 8 }}>
+                  {t("ext.streaming.live.configured_count", { count: cameraLiveViews.length }, `${cameraLiveViews.length} câmera(s) ao vivo`)}
+                </div>
+                <div className="settingsList">
+                  {cameraLiveViews.map((liveView) => {
+                    const camera = cameraById(availableCameras, liveView.camera_id);
+                    const sourceSummary = liveView.variants
+                      .filter((variant) => ["thumbnail", "large", "fullscreen", "pip"].includes(String(variant.role)))
+                      .slice(0, 4)
+                      .map((variant) => `${liveContextLabel(variant.role as CameraLiveContext, t)}: ${cameraSourceLabel(availableCameras, liveView.camera_id, variant.camera_source_id)}`)
+                      .join(" · ");
+                    return (
+                      <button
+                        key={liveView.id}
+                        type="button"
+                        className={["settingsListItem", activeCameraLiveViewId === liveView.id ? "isActive" : ""].filter(Boolean).join(" ")}
+                        onClick={() => setActiveCameraLiveViewId(liveView.id)}
+                      >
+                        <span>
+                          <strong>{liveView.name || camera?.name || liveView.camera_id}</strong>
+                          <span className="cardMeta">{sourceSummary || t("ext.streaming.live.no_variants", {}, "Sem variantes configuradas")}</span>
+                        </span>
+                        {liveView.enabled === false ? <span className="badge">{t("ext.streaming.transmissions.badge_disabled", {}, "off")}</span> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                {cameraLiveDraft ? (
+                  <>
+                    <div className="settingsDetailHeader" style={{ marginBottom: 10 }}>
+                      <div>
+                        <div className="modalSectionTitle" style={{ marginBottom: 4 }}>
+                          {cameraLiveDraft.name || cameraLiveDraft.camera_id}
+                        </div>
+                        <div className="cardMeta">
+                          {t("ext.streaming.live.editor_hint", {}, "Ajuste o uso padrão de cada contexto de visualização.")}
+                        </div>
+                      </div>
+                      <div className="rowWrap" style={{ justifyContent: "flex-end" }}>
+                        {cameraLiveDraftDirty ? (
+                          <button
+                            className="chipButton"
+                            type="button"
+                            disabled={cameraLiveDraftBusy}
+                            onClick={() => {
+                              setCameraLiveDraft(deepClone(activeCameraLiveView));
+                              setCameraLiveDraftDirty(false);
+                              setCameraLiveDraftError(null);
+                            }}
+                          >
+                            {t("ext.streaming.transmissions.discard", {}, "Descartar")}
+                          </button>
+                        ) : null}
+                        <button
+                          className="primaryButton"
+                          type="button"
+                          disabled={!cameraLiveDraftDirty || cameraLiveDraftBusy}
+                          onClick={() => void saveCameraLiveDraft()}
+                        >
+                          {cameraLiveDraftBusy
+                            ? t("ext.streaming.transmissions.saving", {}, "Salvando…")
+                            : t("ext.streaming.transmissions.save", {}, "Salvar")}
+                        </button>
+                      </div>
+                    </div>
+                    {cameraLiveDraftError ? <div className="errorText">{cameraLiveDraftError}</div> : null}
+                    <div style={{ display: "grid", gap: 10 }}>
+                      {cameraLiveDraft.variants.map((variant) => {
+                        const sourceOptions = cameraSourceOptions(cameraById(availableCameras, cameraLiveDraft.camera_id));
+                        return (
+                          <div key={variant.id} className="settingsInlinePanel">
+                            <div className="settingsDetailHeader" style={{ marginBottom: 8 }}>
+                              <div>
+                                <div className="cardTitle">{liveContextLabel(variant.role as CameraLiveContext, t)}</div>
+                                <div className="cardMeta">{liveVariantConsequence(variant, availableCameras, cameraLiveDraft.camera_id, t)}</div>
+                              </div>
+                              <label className="settingsToggle">
+                                <input
+                                  type="checkbox"
+                                  checked={variant.enabled !== false}
+                                  onChange={(event) => updateCameraLiveDraftVariant(variant.id, { enabled: event.target.checked })}
+                                />
+                                <span>{t("ext.streaming.outputs.enabled", {}, "Ativa")}</span>
+                              </label>
+                            </div>
+                            <div className="streamingFormGrid">
+                              <label>
+                                <span className="label">{t("ext.streaming.transmissions.camera_controls.source", {}, "Fonte da câmera")}</span>
+                                <select
+                                  className="input"
+                                  value={variant.camera_source_id}
+                                  onChange={(event) => updateCameraLiveDraftVariant(variant.id, { camera_source_id: event.target.value })}
+                                >
+                                  {sourceOptions.map((option) => (
+                                    <option key={option.id} value={option.id}>
+                                      {option.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label>
+                                <span className="label">{t("ext.streaming.live.quality", {}, "Qualidade")}</span>
+                                <select
+                                  className="input"
+                                  value={variant.quality_profile_id ?? ""}
+                                  onChange={(event) => {
+                                    const value = event.target.value as CameraLiveVariant["quality_profile_id"];
+                                    updateCameraLiveDraftVariant(variant.id, {
+                                      quality_profile_id: value || null,
+                                      output_id: value ? `hls_${value}` : null,
+                                    });
+                                  }}
+                                >
+                                  <option value="quad_grid">{qualityProfileUiLabel("quad_grid", t)}</option>
+                                  <option value="stable_apple_tv">{qualityProfileUiLabel("stable_apple_tv", t)}</option>
+                                  <option value="fullscreen_quality">{qualityProfileUiLabel("fullscreen_quality", t)}</option>
+                                  <option value="diagnostic_low">{qualityProfileUiLabel("diagnostic_low", t)}</option>
+                                </select>
+                              </label>
+                              <label>
+                                <span className="label">{t("ext.streaming.live.transport", {}, "Transporte")}</span>
+                                <select
+                                  className="input"
+                                  value={variant.preferred_transport ?? "auto"}
+                                  onChange={(event) => updateCameraLiveDraftVariant(variant.id, { preferred_transport: event.target.value as CameraLiveVariant["preferred_transport"] })}
+                                >
+                                  <option value="auto">{transportUiLabel("auto", t)}</option>
+                                  <option value="hls">{transportUiLabel("hls", t)}</option>
+                                  <option value="webrtc">{transportUiLabel("webrtc", t)}</option>
+                                </select>
+                              </label>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="rowWrap" style={{ marginTop: 12, justifyContent: "space-between" }}>
+                      <button className="chipButton" type="button" disabled={cameraLiveGenerateBusy} onClick={() => void generateLiveViewsAction(cameraLiveDraft.camera_id)}>
+                        <i className="fa-solid fa-rotate" aria-hidden="true" />{" "}
+                        {t("ext.streaming.live.regenerate_one", {}, "Recriar padrões desta câmera")}
+                      </button>
+                      <button className="dangerButton" type="button" disabled={cameraLiveDraftBusy} onClick={() => void deleteActiveCameraLiveView()}>
+                        {t("ext.streaming.transmissions.delete", {}, "Excluir")}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="settingsStatusMuted">
+                    {t("ext.streaming.live.select", {}, "Selecione uma câmera ao vivo para ajustar.")}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="sectionDivider" />
+
+      <div className="card">
+        <div className="cardBody">
           <div className="settingsDetailHeader" style={{ marginBottom: 8 }}>
             <div>
               <div className="modalSectionTitle" style={{ marginBottom: 4 }}>
@@ -1538,7 +1939,7 @@ function StreamingSettingsPanelContent({
       <div className="card">
         <div className="cardBody">
           <div className="cardMeta">
-            {t("ext.streaming.settings.transmissions", {}, "Transmissões configuradas")}: {transmissionsCount}
+            {t("ext.streaming.settings.transmissions", {}, "Transmissões avançadas")}: {transmissionsCount}
           </div>
 
           {healthLoading ? <div className="settingsStatusMuted">{t("ext.streaming.settings.health.loading")}</div> : null}
@@ -2658,6 +3059,10 @@ function StreamingSettingsPanelContent({
                 const name = String(item.name || "").trim() || String(item.path || "").trim() || item.id;
                 const hostServerId = normalizeServerId(item.host_server_id);
                 const outputCount = Array.isArray(item.outputs) ? item.outputs.length : 0;
+                const generatedLabel =
+                  item.generated_by === "camera_live_view"
+                    ? t("ext.streaming.transmissions.generated_by_live", {}, "Gerada por visualização da câmera")
+                    : "";
                 const meta = t(
                   "ext.streaming.transmissions.meta_line",
                   { host: hostServerId, path: item.path || "-", outputs: outputCount },
@@ -2678,6 +3083,7 @@ function StreamingSettingsPanelContent({
                         <div className="settingsListItemMeta" title={meta}>
                           {meta}
                         </div>
+                        {generatedLabel ? <div className="settingsListItemMeta">{generatedLabel}</div> : null}
                       </div>
                       {!item.enabled ? (
                         <span

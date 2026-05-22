@@ -2744,6 +2744,25 @@ video {
   margin-left: auto;
 }
 
+.streamsTileVariantControl {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.streamsTileVariantSelect {
+  width: min(150px, 28vw);
+  height: 30px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--color-border-subtle) 82%, transparent);
+  background: color-mix(in srgb, var(--color-surface-solid) 76%, transparent);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-11);
+  padding: 0 28px 0 var(--space-2);
+  text-overflow: ellipsis;
+}
+
 .streamsTileOverlayButton.iconButton {
   width: 30px;
   height: 30px;
@@ -3207,6 +3226,10 @@ video {
   .streamsTileMeta span {
     height: 20px;
     padding: 0 var(--space-1);
+  }
+
+  .streamsTileVariantSelect {
+    width: min(118px, 32vw);
   }
 }
 

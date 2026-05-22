@@ -769,8 +769,45 @@ export type StreamingTransmission = {
   path: string;
   enabled?: boolean;
   host_server_id?: string;
-  camera_controls?: { enabled?: boolean; camera_id?: string | null } | null;
+  camera_controls?: { enabled?: boolean; camera_id?: string | null; camera_source_id?: string | null } | null;
   outputs?: StreamingTransmissionOutput[];
+  generated_by?: string;
+  camera_live_view_id?: string;
+  camera_live_variant_role?: string;
+};
+
+export type StreamingCameraLiveContext = "thumbnail" | "pip" | "large" | "fullscreen" | "ptz";
+export type StreamingCameraLiveVariantRole = StreamingCameraLiveContext | "zoom" | "custom";
+export type StreamingCameraLiveTransportPreference = "auto" | "hls" | "webrtc";
+
+export type StreamingCameraLiveViewDefaults = {
+  thumbnail_variant_id: string;
+  pip_variant_id: string;
+  large_variant_id: string;
+  fullscreen_variant_id: string;
+  ptz_variant_id?: string | null;
+};
+
+export type StreamingCameraLiveVariant = {
+  id: string;
+  label: string;
+  role: StreamingCameraLiveVariantRole;
+  camera_source_id: string;
+  transmission_id: string;
+  output_id?: string | null;
+  quality_profile_id?: StreamingQualityProfileId | null;
+  preferred_transport?: StreamingCameraLiveTransportPreference;
+  enabled?: boolean;
+};
+
+export type StreamingCameraLiveView = {
+  id: string;
+  camera_id: string;
+  name: string;
+  enabled?: boolean;
+  host_server_id?: string;
+  defaults: StreamingCameraLiveViewDefaults;
+  variants: StreamingCameraLiveVariant[];
 };
 
 export type StreamingTransmissionCameraPreset = {
@@ -851,6 +888,24 @@ export type StreamingTransmissionUrlsResponse = {
   blocking_errors?: string[];
   public_base_path?: string;
   media_url_origin?: string | null;
+};
+
+export type StreamingCameraLiveViewPlaybackResponse = {
+  live_view: StreamingCameraLiveView;
+  context: StreamingCameraLiveContext;
+  variant: StreamingCameraLiveVariant;
+  camera_id: string;
+  camera_name: string;
+  camera_source_id: string;
+  camera_source_name: string;
+  source_role?: string | null;
+  transmission: StreamingTransmission;
+  urls: StreamingTransmissionUrlsResponse;
+  selected_output?: StreamingTransmissionUrlOutput | null;
+  runtime_health?: StreamingRuntimeTransmissionHealth | Record<string, unknown> | null;
+  source_health?: Record<string, unknown> | null;
+  warnings?: string[];
+  blocking_errors?: string[];
 };
 
 export type StreamingTransmissionDemandPrimeResponse = {
@@ -2081,6 +2136,46 @@ export async function listStreamingTransmissions(): Promise<StreamingTransmissio
   const res = await fetch("/api/streams/transmissions");
   if (!res.ok) throw new Error(`Failed to list streaming transmissions: ${res.status}`);
   return (await res.json()) as StreamingTransmission[];
+}
+
+export async function listStreamingCameraLiveViews(): Promise<StreamingCameraLiveView[]> {
+  const res = await fetch("/api/streams/camera-live-views");
+  if (!res.ok) throw new Error(`Failed to list live cameras: ${res.status}`);
+  return (await res.json()) as StreamingCameraLiveView[];
+}
+
+export async function updateStreamingCameraLiveView(
+  liveViewId: string,
+  liveView: StreamingCameraLiveView,
+): Promise<StreamingCameraLiveView> {
+  const res = await fetch(`/api/streams/camera-live-views/${encodeURIComponent(liveViewId)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(liveView),
+  });
+  if (!res.ok) throw new Error(`Failed to update live camera view ${liveViewId}: ${res.status}`);
+  return (await res.json()) as StreamingCameraLiveView;
+}
+
+export type StreamingCameraLivePlaybackOptions = {
+  context?: StreamingCameraLiveContext;
+  variantId?: string | null;
+};
+
+export async function getStreamingCameraLiveViewPlayback(
+  liveViewId: string,
+  options: StreamingCameraLivePlaybackOptions = {},
+): Promise<StreamingCameraLiveViewPlaybackResponse> {
+  const params = new URLSearchParams();
+  if (options.context) params.set("context", options.context);
+  const variantId = String(options.variantId || "").trim();
+  if (variantId) params.set("variant_id", variantId);
+  const query = params.toString();
+  const res = await fetch(
+    `/api/streams/camera-live-views/${encodeURIComponent(liveViewId)}/playback${query ? `?${query}` : ""}`,
+  );
+  if (!res.ok) throw new Error(`Failed to resolve live camera playback for ${liveViewId}: ${res.status}`);
+  return (await res.json()) as StreamingCameraLiveViewPlaybackResponse;
 }
 
 export async function getStreamingQualityProfiles(): Promise<StreamingQualityProfilesResponse> {

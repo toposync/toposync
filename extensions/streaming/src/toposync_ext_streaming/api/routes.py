@@ -63,8 +63,15 @@ from .models import (
     DEFAULT_QUALITY_PROFILE_ID,
     QUALITY_PROFILE_ORDER,
     TEST_PATH,
+    CameraLiveVariant,
+    CameraLiveView,
+    CameraLiveViewDefaults,
+    CameraLiveViewGenerateRequest,
+    CameraLiveViewGenerateResponse,
+    CameraLiveViewPlaybackResponse,
     CameraPtzPreset,
     CameraPtzStatus,
+    StreamingCameraLiveContext,
     StreamingEngineStatusResponse,
     StreamingExtensionSettings,
     StreamingHealthResponse,
@@ -828,7 +835,13 @@ def _filter_settings_for_server(
         for transmission in settings.transmissions
         if normalize_server_id(transmission.host_server_id, fallback="local") == target_server_id
     ]
+    filtered_live_views = [
+        live_view
+        for live_view in settings.camera_live_views
+        if normalize_server_id(live_view.host_server_id, fallback="local") == target_server_id
+    ]
     payload = settings.model_dump(mode="python")
+    payload["camera_live_views"] = filtered_live_views
     payload["transmissions"] = filtered_transmissions
     return StreamingExtensionSettings.model_validate(payload)
 
@@ -2687,6 +2700,613 @@ def _resolve_camera_source_from_settings(
     return None
 
 
+def _camera_live_name(device: dict[str, Any]) -> str:
+    camera_id = str(device.get("id") or "").strip()
+    return str(device.get("name") or "").strip() or camera_id or "Camera"
+
+
+def _camera_source_name(source: dict[str, Any]) -> str:
+    source_id = str(source.get("id") or "").strip()
+    return str(source.get("name") or "").strip() or source_id or "Fonte"
+
+
+def _camera_source_role(source: dict[str, Any]) -> str:
+    role = str(source.get("role") or "").strip().lower()
+    return role if role in {"main", "sub", "zoom", "custom"} else "custom"
+
+
+def _camera_source_origin(source: dict[str, Any]) -> dict[str, Any]:
+    origin = source.get("origin")
+    return origin if isinstance(origin, dict) else {}
+
+
+def _camera_source_ingest(source: dict[str, Any]) -> dict[str, Any]:
+    ingest = source.get("ingest")
+    return ingest if isinstance(ingest, dict) else {}
+
+
+def _is_enabled_video_source(source: dict[str, Any]) -> bool:
+    kind = str(source.get("kind") or "video").strip().lower() or "video"
+    return bool(source.get("enabled", True)) and kind == "video" and bool(str(source.get("id") or "").strip())
+
+
+def _enabled_camera_video_sources(device: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_sources = device.get("sources")
+    if not isinstance(raw_sources, list):
+        return []
+    return [source for source in raw_sources if isinstance(source, dict) and _is_enabled_video_source(source)]
+
+
+def _pick_camera_source(
+    sources: list[dict[str, Any]],
+    *,
+    preferred_role: str,
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    preferred = next((source for source in sources if _camera_source_role(source) == preferred_role), None)
+    if preferred is not None:
+        return preferred
+    if fallback is not None:
+        return fallback
+    default = next((source for source in sources if bool(source.get("is_default"))), None)
+    return default or (sources[0] if sources else None)
+
+
+def _source_has_ptz(source: dict[str, Any]) -> bool:
+    origin = _camera_source_origin(source)
+    if bool(origin.get("has_ptz")):
+        return True
+    metadata = source.get("metadata")
+    return bool(metadata.get("has_ptz")) if isinstance(metadata, dict) else False
+
+
+def _live_slug(*parts: str, fallback: str) -> str:
+    raw = "-".join(part for part in (_slugify(part) for part in parts) if part)
+    return normalize_path_slug(raw, fallback=fallback)
+
+
+def _camera_live_view_id(device: dict[str, Any]) -> str:
+    camera_id = str(device.get("id") or "").strip()
+    name = _camera_live_name(device)
+    return _live_slug("live", name, camera_id, fallback=f"live-{camera_id or 'camera'}")
+
+
+def _camera_live_transmission_id(
+    *,
+    device: dict[str, Any],
+    source: dict[str, Any],
+    role: str,
+) -> str:
+    camera_id = str(device.get("id") or "").strip()
+    source_id = str(source.get("id") or "").strip()
+    return _live_slug(
+        "camera",
+        _camera_live_name(device),
+        camera_id,
+        _camera_source_name(source),
+        source_id,
+        role,
+        fallback=f"camera-{camera_id or 'camera'}-{source_id or 'source'}-{role}",
+    )
+
+
+def _camera_live_variant_label(role: str, source: dict[str, Any]) -> str:
+    source_name = _camera_source_name(source)
+    labels = {
+        "thumbnail": "Miniatura",
+        "pip": "PiP",
+        "large": "Tela grande",
+        "fullscreen": "Tela cheia",
+        "ptz": "PTZ",
+        "zoom": "Zoom",
+    }
+    base = labels.get(role, role)
+    return f"{base} · {source_name}" if source_name else base
+
+
+def _camera_live_quality_for_role(role: str) -> str:
+    if role == "thumbnail":
+        return "quad_grid"
+    if role == "pip":
+        return "stable_apple_tv"
+    if role in {"large", "fullscreen", "zoom", "ptz"}:
+        return "fullscreen_quality"
+    return DEFAULT_QUALITY_PROFILE_ID
+
+
+def _camera_live_hls_outputs() -> list[TransmissionOutput]:
+    return [_quality_profile_output(profile_id) for profile_id in QUALITY_PROFILE_ORDER]
+
+
+def _camera_live_outputs_for_variant(
+    *,
+    role: str,
+    include_webrtc: bool,
+) -> list[TransmissionOutput]:
+    outputs = _camera_live_hls_outputs()
+    if role == "ptz" and include_webrtc:
+        outputs.append(_webrtc_low_latency_output())
+    return outputs
+
+
+def _camera_live_variant_for_source(
+    *,
+    device: dict[str, Any],
+    source: dict[str, Any],
+    role: Literal["thumbnail", "pip", "large", "fullscreen", "ptz", "zoom"],
+    include_webrtc: bool = False,
+) -> tuple[CameraLiveVariant, Transmission]:
+    quality_profile_id = _camera_live_quality_for_role(role)
+    preferred_transport = "webrtc" if role == "ptz" and include_webrtc else "auto"
+    output_id = "webrtc_low_latency" if role == "ptz" and include_webrtc else f"hls_{quality_profile_id}"
+    transmission_id = _camera_live_transmission_id(device=device, source=source, role=role)
+    camera_id = str(device.get("id") or "").strip()
+    source_id = str(source.get("id") or "").strip()
+    label = _camera_live_variant_label(role, source)
+    variant = CameraLiveVariant(
+        id=role,
+        label=label,
+        role=role,
+        camera_source_id=source_id,
+        transmission_id=transmission_id,
+        output_id=output_id,
+        quality_profile_id=quality_profile_id if output_id.startswith("hls_") else None,
+        preferred_transport=preferred_transport,
+        enabled=True,
+    )
+    transmission = Transmission(
+        id=transmission_id,
+        name=f"{_camera_live_name(device)} · {label}",
+        enabled=True,
+        host_server_id="local",
+        path=transmission_id,
+        placeholder="gray",
+        arbitration="priority_latest",
+        camera_controls={
+            "enabled": True,
+            "camera_id": camera_id,
+            "camera_source_id": source_id,
+        },
+        outputs=_camera_live_outputs_for_variant(role=role, include_webrtc=include_webrtc),
+        generated_by="camera_live_view",
+        camera_live_view_id=_camera_live_view_id(device),
+        camera_live_variant_role=role,
+    )
+    return variant, transmission
+
+
+def _build_camera_live_view_for_device(
+    *,
+    device: dict[str, Any],
+    host_server_id: str,
+    engine_enabled: bool,
+) -> tuple[CameraLiveView | None, list[Transmission], list[str]]:
+    sources = _enabled_camera_video_sources(device)
+    warnings: list[str] = []
+    if not sources:
+        return None, [], [f"Camera '{_camera_live_name(device)}' has no enabled video source."]
+
+    main_source = _pick_camera_source(sources, preferred_role="main")
+    sub_source = _pick_camera_source(sources, preferred_role="sub", fallback=main_source)
+    zoom_source = _pick_camera_source(sources, preferred_role="zoom", fallback=None)
+    if main_source is None:
+        return None, [], [f"Camera '{_camera_live_name(device)}' has no usable video source."]
+
+    variants: list[CameraLiveVariant] = []
+    transmissions: list[Transmission] = []
+    defaults = CameraLiveViewDefaults()
+
+    for role, source in (
+        ("thumbnail", sub_source or main_source),
+        ("pip", sub_source or main_source),
+        ("large", main_source),
+        ("fullscreen", main_source),
+    ):
+        variant, transmission = _camera_live_variant_for_source(
+            device=device,
+            source=source,
+            role=role,  # type: ignore[arg-type]
+        )
+        variants.append(variant)
+        transmissions.append(transmission)
+
+    if zoom_source is not None:
+        variant, transmission = _camera_live_variant_for_source(
+            device=device,
+            source=zoom_source,
+            role="zoom",
+        )
+        variants.append(variant)
+        transmissions.append(transmission)
+
+    ptz_source = next((source for source in sources if _source_has_ptz(source)), None)
+    if ptz_source is not None:
+        variant, transmission = _camera_live_variant_for_source(
+            device=device,
+            source=ptz_source,
+            role="ptz",
+            include_webrtc=engine_enabled,
+        )
+        variants.append(variant)
+        transmissions.append(transmission)
+        defaults.ptz_variant_id = variant.id
+        if not engine_enabled:
+            warnings.append(
+                f"Camera '{_camera_live_name(device)}' has PTZ, but WebRTC was not enabled; PTZ view will use HLS."
+            )
+
+    live_view = CameraLiveView(
+        id=_camera_live_view_id(device),
+        camera_id=str(device.get("id") or "").strip(),
+        name=_camera_live_name(device),
+        enabled=True,
+        host_server_id=host_server_id,
+        defaults=defaults,
+        variants=variants,
+    )
+    normalized_transmissions: list[Transmission] = []
+    for transmission in transmissions:
+        payload = transmission.model_dump(mode="python")
+        payload["host_server_id"] = host_server_id
+        payload["camera_live_view_id"] = live_view.id
+        normalized_transmissions.append(Transmission.model_validate(payload))
+    return live_view, normalized_transmissions, warnings
+
+
+def _variant_id_for_context(live_view: CameraLiveView, context: StreamingCameraLiveContext) -> str:
+    defaults = live_view.defaults
+    if context == "thumbnail":
+        return defaults.thumbnail_variant_id
+    if context == "pip":
+        return defaults.pip_variant_id
+    if context == "large":
+        return defaults.large_variant_id
+    if context == "fullscreen":
+        return defaults.fullscreen_variant_id
+    if context == "ptz":
+        return defaults.ptz_variant_id or defaults.large_variant_id
+    return defaults.thumbnail_variant_id
+
+
+def _resolve_live_variant(
+    live_view: CameraLiveView,
+    *,
+    context: StreamingCameraLiveContext,
+    variant_id: str | None = None,
+) -> CameraLiveVariant | None:
+    selected_id = str(variant_id or "").strip() or _variant_id_for_context(live_view, context)
+    return next(
+        (variant for variant in live_view.variants if variant.enabled and variant.id == selected_id),
+        None,
+    )
+
+
+def _select_live_playback_output(
+    *,
+    urls: TransmissionUrlsResponse,
+    variant: CameraLiveVariant,
+) -> TransmissionOutputUrl | None:
+    outputs = list(urls.outputs or [])
+    output_id = str(variant.output_id or "").strip()
+    if output_id:
+        matched = next((item for item in outputs if item.output_id == output_id), None)
+        if matched is not None:
+            return matched
+
+    preferred_transport = str(variant.preferred_transport or "auto")
+    quality_profile_id = str(variant.quality_profile_id or "").strip()
+    if preferred_transport == "webrtc":
+        matched = next((item for item in outputs if item.protocol == "webrtc"), None)
+        if matched is not None:
+            return matched
+    if preferred_transport == "hls":
+        matched = next(
+            (
+                item
+                for item in outputs
+                if item.protocol == "hls"
+                and (not quality_profile_id or item.quality_profile_id == quality_profile_id)
+            ),
+            None,
+        )
+        if matched is not None:
+            return matched
+
+    matched = next(
+        (
+            item
+            for item in outputs
+            if item.protocol == "hls"
+            and (not quality_profile_id or item.quality_profile_id == quality_profile_id)
+        ),
+        None,
+    )
+    if matched is not None:
+        return matched
+    return next((item for item in outputs if item.protocol in {"hls", "webrtc"}), None)
+
+
+def _camera_live_warnings(
+    *,
+    source: dict[str, Any],
+    transmission: Transmission,
+) -> list[str]:
+    warnings: list[str] = []
+    ingest = _camera_source_ingest(source)
+    mode = str(ingest.get("mode") or "centralized").strip().lower()
+    if mode == "direct":
+        warnings.append("Esta visualização pode abrir conexão direta com a origem.")
+    if mode == "centralized":
+        centralizer = normalize_server_id(ingest.get("host_server_id"), fallback="local")
+        transmission_host = normalize_server_id(transmission.host_server_id, fallback="local")
+        if centralizer != transmission_host:
+            warnings.append(
+                f"Esta visualização roda em {transmission_host} e lerá a câmera pelo ingest em {centralizer}."
+            )
+    return warnings
+
+
+def _source_health_for_camera(
+    source_health_by_id: dict[str, StreamingRuntimeSourceHealth],
+    *,
+    camera_id: str,
+    camera_source_id: str,
+) -> StreamingRuntimeSourceHealth | None:
+    for item in source_health_by_id.values():
+        if str(item.camera_id or "").strip() != camera_id:
+            continue
+        if str(item.camera_source_id or "").strip() != camera_source_id:
+            continue
+        return item
+    return None
+
+
+def _sync_generated_camera_live_transmissions(
+    *,
+    settings: StreamingExtensionSettings,
+    app_settings: Any,
+    live_view: CameraLiveView,
+) -> tuple[CameraLiveView, list[Transmission]]:
+    device = next(
+        (
+            item
+            for item in iter_camera_devices_from_app_settings(app_settings)
+            if str(item.get("id") or "").strip() == live_view.camera_id
+        ),
+        None,
+    )
+    if device is None:
+        return live_view, list(settings.transmissions)
+
+    existing_by_id = {item.id: item for item in settings.transmissions}
+    next_transmissions = list(settings.transmissions)
+    next_by_id = {item.id: item for item in next_transmissions}
+    next_variants: list[CameraLiveVariant] = []
+    generated_roles = {"thumbnail", "pip", "large", "fullscreen", "ptz", "zoom"}
+    for variant in live_view.variants:
+        role = str(variant.role or "").strip()
+        if role not in generated_roles:
+            next_variants.append(variant)
+            continue
+        existing = existing_by_id.get(variant.transmission_id)
+        generated_for_view = (
+            existing is not None
+            and str(existing.model_extra.get("camera_live_view_id") if existing.model_extra else "") == live_view.id
+        )
+        if existing is not None and not generated_for_view:
+            next_variants.append(variant)
+            continue
+        source = resolve_camera_video_source(
+            device,
+            source_id=variant.camera_source_id,
+            enabled_only=True,
+        )
+        if source is None:
+            next_variants.append(variant)
+            continue
+        include_webrtc = role == "ptz" and bool(settings.engine.enabled)
+        generated_variant, generated_transmission = _camera_live_variant_for_source(
+            device=device,
+            source=source,
+            role=role,  # type: ignore[arg-type]
+            include_webrtc=include_webrtc,
+        )
+        variant_payload = variant.model_dump(mode="python")
+        variant_payload["transmission_id"] = generated_transmission.id
+        if variant.quality_profile_id:
+            variant_payload["output_id"] = f"hls_{variant.quality_profile_id}"
+        elif variant.preferred_transport == "webrtc" and include_webrtc:
+            variant_payload["output_id"] = "webrtc_low_latency"
+        else:
+            variant_payload["output_id"] = generated_variant.output_id
+            variant_payload["quality_profile_id"] = generated_variant.quality_profile_id
+        next_variants.append(CameraLiveVariant.model_validate(variant_payload))
+
+        transmission_payload = generated_transmission.model_dump(mode="python")
+        transmission_payload["host_server_id"] = live_view.host_server_id
+        transmission_payload["camera_live_view_id"] = live_view.id
+        next_by_id[generated_transmission.id] = Transmission.model_validate(transmission_payload)
+
+    synced_live_view = CameraLiveView.model_validate(
+        {
+            **live_view.model_dump(mode="python"),
+            "variants": next_variants,
+        }
+    )
+    return synced_live_view, list(next_by_id.values())
+
+
+async def _apply_streaming_engine_state(
+    request: Request,
+    *,
+    settings: StreamingExtensionSettings,
+) -> None:
+    config_store = _config_store(request)
+    manager = _engine_manager(request)
+    app_settings = await config_store.get_settings()
+    camera_ingest_by_id = build_camera_ingest_definitions(
+        app_settings=app_settings,
+        ingest_settings=settings.camera_ingest,
+        host_server_id=_current_server_id(request),
+    )
+    await manager.ensure_running(
+        settings.engine,
+        engine_paths=list_engine_paths_for_host(settings, host_server_id=_current_server_id(request))
+        + [item.path_slug for item in camera_ingest_by_id.values()],
+        path_auth=_path_auth_for_camera_ingest_request(
+            request,
+            settings=settings,
+            camera_ingest_by_id=camera_ingest_by_id,
+        ),
+        path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
+    )
+
+
+async def _upsert_camera_live_pipelines(
+    *,
+    request: Request,
+    transmissions: list[Transmission],
+) -> list[str]:
+    config_store = _config_store(request)
+    existing = {pipeline.name: pipeline for pipeline in await config_store.list_pipelines()}
+    compiler = getattr(request.app.state, "pipeline_graph_compiler", None)
+    created_or_updated: list[str] = []
+    for transmission in transmissions:
+        extra = transmission.model_extra or {}
+        if str(extra.get("generated_by") or "") != "camera_live_view":
+            continue
+        controls = transmission.camera_controls
+        camera_id = str(getattr(controls, "camera_id", "") or "").strip()
+        camera_source_id = str(getattr(controls, "camera_source_id", "") or "").strip()
+        if not camera_id or not camera_source_id:
+            continue
+        pipeline_name = _safe_pipeline_name(f"live__{transmission.id}")
+        graph = build_streaming_wizard_graph(
+            transmission_id=transmission.id,
+            camera_id=camera_id,
+            camera_source_id=camera_source_id,
+            preset_id="simple_stream",
+            optional_parameters={
+                "bypass_mode": "auto",
+                "resize_mode": "contain",
+                "stream_behavior": "continuous",
+            },
+        )
+        graph.setdefault("meta", {}).setdefault("streaming", {})
+        graph["meta"]["streaming"]["camera_live_view_id"] = str(extra.get("camera_live_view_id") or "")
+        graph["meta"]["streaming"]["camera_live_variant_role"] = str(extra.get("camera_live_variant_role") or "")
+        graph["meta"]["streaming"]["generated_by"] = "camera_live_view"
+        pipeline = Pipeline(
+            name=pipeline_name,
+            enabled=True,
+            processing_server_id=normalize_server_id(transmission.host_server_id, fallback="local"),
+            editor_mode="interactive",
+            python_source="",
+            graph=graph,
+        )
+        if isinstance(compiler, PipelineGraphCompiler):
+            try:
+                compiler.compile_pipeline(pipeline)
+            except GraphCompileError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Generated live camera pipeline is invalid: {exc}",
+                ) from exc
+        try:
+            if pipeline_name in existing:
+                await config_store.replace_pipeline(pipeline_name, pipeline)
+            else:
+                await config_store.create_pipeline(pipeline)
+        except PipelineValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except PipelineAlreadyExistsError:
+            await config_store.replace_pipeline(pipeline_name, pipeline)
+        created_or_updated.append(pipeline_name)
+
+    orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+    if created_or_updated and orchestrator is not None:
+        try:
+            orchestrator.trigger_reload()
+        except Exception:
+            pass
+    return created_or_updated
+
+
+async def _delete_camera_live_pipelines(
+    *,
+    request: Request,
+    live_view_id: str,
+) -> None:
+    config_store = _config_store(request)
+    for pipeline in await config_store.list_pipelines():
+        graph = pipeline.graph if isinstance(pipeline.graph, dict) else {}
+        meta = graph.get("meta") if isinstance(graph, dict) else {}
+        streaming_meta = meta.get("streaming") if isinstance(meta, dict) else {}
+        if not isinstance(streaming_meta, dict):
+            continue
+        if str(streaming_meta.get("generated_by") or "") != "camera_live_view":
+            continue
+        if str(streaming_meta.get("camera_live_view_id") or "") != live_view_id:
+            continue
+        try:
+            await config_store.delete_pipeline(pipeline.name)
+        except KeyError:
+            continue
+
+    orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+    if orchestrator is not None:
+        try:
+            orchestrator.trigger_reload()
+        except Exception:
+            pass
+
+
+async def _validate_camera_live_view_references(
+    *,
+    request: Request,
+    settings: StreamingExtensionSettings,
+    live_view: CameraLiveView,
+) -> CameraLiveView:
+    host_server_id = await _validate_host_server_id_for_request(request, live_view.host_server_id)
+    app_settings = await _config_store(request).get_settings()
+    resolved_camera = _resolve_camera_source_from_settings(
+        app_settings,
+        camera_id=live_view.camera_id,
+        camera_source_id=None,
+    )
+    if resolved_camera is None:
+        raise HTTPException(status_code=409, detail="Camera not found or has no enabled video source")
+
+    transmission_by_id = {item.id: item for item in settings.transmissions}
+    payload = live_view.model_dump(mode="python")
+    payload["host_server_id"] = host_server_id
+    normalized = CameraLiveView.model_validate(payload)
+    for variant in normalized.variants:
+        source = _resolve_camera_source_from_settings(
+            app_settings,
+            camera_id=normalized.camera_id,
+            camera_source_id=variant.camera_source_id,
+        )
+        if source is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Camera source not found or disabled: {variant.camera_source_id}",
+            )
+        transmission = transmission_by_id.get(variant.transmission_id)
+        if transmission is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Transmission not found for live variant '{variant.id}': {variant.transmission_id}",
+            )
+        if variant.output_id:
+            if not any(output.id == variant.output_id for output in transmission.outputs):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Output not found for live variant '{variant.id}': {variant.output_id}",
+                )
+    return normalized
+
+
 def create_streaming_router() -> APIRouter:
     router = APIRouter(prefix="/api/streams", tags=["streams"])
 
@@ -2734,6 +3354,20 @@ def create_streaming_router() -> APIRouter:
             {
                 **candidate.model_dump(mode="python"),
                 "transmissions": validated_transmissions,
+            }
+        )
+        validated_live_views = [
+            await _validate_camera_live_view_references(
+                request=request,
+                settings=candidate,
+                live_view=live_view,
+            )
+            for live_view in candidate.camera_live_views
+        ]
+        candidate = StreamingExtensionSettings.model_validate(
+            {
+                **candidate.model_dump(mode="python"),
+                "camera_live_views": validated_live_views,
             }
         )
         updated = await _save_settings(config_store, candidate)
@@ -3070,6 +3704,327 @@ def create_streaming_router() -> APIRouter:
         return StreamingQualityProfilesResponse(
             default_profile_id=DEFAULT_QUALITY_PROFILE_ID,
             profiles=build_quality_profiles(),
+        )
+
+    @router.get("/camera-live-views", response_model=list[CameraLiveView])
+    async def list_camera_live_views(request: Request) -> list[CameraLiveView]:
+        _require_auth(request, action="core:settings:read")
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        return list(settings.camera_live_views)
+
+    @router.post(
+        "/camera-live-views/generate",
+        response_model=CameraLiveViewGenerateResponse,
+    )
+    async def generate_camera_live_views(
+        request: Request,
+        body: CameraLiveViewGenerateRequest | None = None,
+    ) -> CameraLiveViewGenerateResponse:
+        _require_auth(
+            request,
+            action="core:extension:settings:write",
+            resource_type="core:extension",
+            resource_selector=EXTENSION_ID,
+        )
+        request_body = body or CameraLiveViewGenerateRequest()
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        app_settings = await config_store.get_settings()
+        host_server_id = await _validate_host_server_id_for_request(
+            request, request_body.host_server_id
+        )
+
+        target_camera_id = str(request_body.camera_id or "").strip()
+        devices = [
+            device
+            for device in iter_camera_devices_from_app_settings(app_settings)
+            if not target_camera_id or str(device.get("id") or "").strip() == target_camera_id
+        ]
+        if target_camera_id and not devices:
+            raise HTTPException(status_code=404, detail="Camera not found")
+
+        generated_views: list[CameraLiveView] = []
+        generated_transmissions: list[Transmission] = []
+        warnings: list[str] = []
+        for device in devices:
+            live_view, transmissions, live_warnings = _build_camera_live_view_for_device(
+                device=device,
+                host_server_id=host_server_id,
+                engine_enabled=bool(settings.engine.enabled),
+            )
+            warnings.extend(live_warnings)
+            if live_view is None:
+                continue
+            generated_views.append(live_view)
+            generated_transmissions.extend(transmissions)
+
+        generated_live_view_ids = {item.id for item in generated_views}
+        generated_camera_ids = {item.camera_id for item in generated_views}
+
+        next_live_views = list(settings.camera_live_views)
+        if request_body.replace_existing:
+            next_live_views = [
+                item
+                for item in next_live_views
+                if item.id not in generated_live_view_ids and item.camera_id not in generated_camera_ids
+            ]
+        next_live_views = [*generated_views, *next_live_views]
+
+        next_transmissions = list(settings.transmissions)
+        if request_body.replace_existing:
+            next_transmissions = [
+                item
+                for item in next_transmissions
+                if str(item.model_extra.get("camera_live_view_id") if item.model_extra else "") not in generated_live_view_ids
+            ]
+        transmission_by_id: dict[str, Transmission] = {item.id: item for item in next_transmissions}
+        for transmission in generated_transmissions:
+            transmission_by_id[transmission.id] = transmission
+        next_transmissions = list(transmission_by_id.values())
+
+        candidate = StreamingExtensionSettings.model_validate(
+            {
+                **settings.model_dump(mode="python"),
+                "camera_live_views": next_live_views,
+                "transmissions": next_transmissions,
+            }
+        )
+        saved = await _save_settings(config_store, candidate)
+        try:
+            await _upsert_camera_live_pipelines(
+                request=request,
+                transmissions=generated_transmissions,
+            )
+            await _apply_streaming_engine_state(request, settings=saved)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to apply streaming settings: {exc}"
+            ) from exc
+        return CameraLiveViewGenerateResponse(
+            camera_live_views=generated_views,
+            transmissions=generated_transmissions,
+            generated_count=len(generated_views),
+            warnings=warnings,
+        )
+
+    @router.put("/camera-live-views/{live_view_id}", response_model=CameraLiveView)
+    async def update_camera_live_view(
+        request: Request,
+        live_view_id: str,
+        body: CameraLiveView,
+    ) -> CameraLiveView:
+        _require_auth(
+            request,
+            action="core:extension:settings:write",
+            resource_type="core:extension",
+            resource_selector=EXTENSION_ID,
+        )
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        if not any(item.id == live_view_id for item in settings.camera_live_views):
+            raise HTTPException(status_code=404, detail="Camera live view not found")
+
+        payload = body.model_dump(mode="python")
+        payload["id"] = live_view_id
+        app_settings = await config_store.get_settings()
+        synced_live_view, synced_transmissions = _sync_generated_camera_live_transmissions(
+            settings=settings,
+            app_settings=app_settings,
+            live_view=CameraLiveView.model_validate(payload),
+        )
+        settings_for_validation = StreamingExtensionSettings.model_validate(
+            {
+                **settings.model_dump(mode="python"),
+                "transmissions": synced_transmissions,
+            }
+        )
+        candidate_live_view = await _validate_camera_live_view_references(
+            request=request,
+            settings=settings_for_validation,
+            live_view=synced_live_view,
+        )
+        next_settings = StreamingExtensionSettings.model_validate(
+            {
+                **settings.model_dump(mode="python"),
+                "transmissions": synced_transmissions,
+                "camera_live_views": [
+                    candidate_live_view if item.id == live_view_id else item
+                    for item in settings.camera_live_views
+                ],
+            }
+        )
+        saved = await _save_settings(config_store, next_settings)
+        try:
+            await _upsert_camera_live_pipelines(
+                request=request,
+                transmissions=[
+                    item
+                    for item in synced_transmissions
+                    if str(item.model_extra.get("camera_live_view_id") if item.model_extra else "")
+                    == live_view_id
+                ],
+            )
+            await _apply_streaming_engine_state(request, settings=saved)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to apply streaming settings: {exc}"
+            ) from exc
+        return candidate_live_view
+
+    @router.delete("/camera-live-views/{live_view_id}")
+    async def delete_camera_live_view(request: Request, live_view_id: str) -> dict[str, bool]:
+        _require_auth(
+            request,
+            action="core:extension:settings:write",
+            resource_type="core:extension",
+            resource_selector=EXTENSION_ID,
+        )
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        if not any(item.id == live_view_id for item in settings.camera_live_views):
+            raise HTTPException(status_code=404, detail="Camera live view not found")
+        next_live_views = [item for item in settings.camera_live_views if item.id != live_view_id]
+        referenced_transmissions = {
+            variant.transmission_id
+            for live_view in next_live_views
+            for variant in live_view.variants
+        }
+        next_transmissions = [
+            transmission
+            for transmission in settings.transmissions
+            if not (
+                str(transmission.model_extra.get("camera_live_view_id") if transmission.model_extra else "")
+                == live_view_id
+                and transmission.id not in referenced_transmissions
+            )
+        ]
+        next_settings = StreamingExtensionSettings.model_validate(
+            {
+                **settings.model_dump(mode="python"),
+                "camera_live_views": next_live_views,
+                "transmissions": next_transmissions,
+            }
+        )
+        saved = await _save_settings(config_store, next_settings)
+        try:
+            await _delete_camera_live_pipelines(request=request, live_view_id=live_view_id)
+            await _apply_streaming_engine_state(request, settings=saved)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to apply streaming settings: {exc}"
+            ) from exc
+        return {"ok": True}
+
+    @router.get(
+        "/camera-live-views/{live_view_id}/playback",
+        response_model=CameraLiveViewPlaybackResponse,
+    )
+    async def camera_live_view_playback(
+        request: Request,
+        live_view_id: str,
+        context: StreamingCameraLiveContext = "thumbnail",
+        variant_id: str | None = None,
+    ) -> CameraLiveViewPlaybackResponse:
+        _require_auth(request, action="core:settings:read")
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        live_view = next((item for item in settings.camera_live_views if item.id == live_view_id), None)
+        if live_view is None or not live_view.enabled:
+            raise HTTPException(status_code=404, detail="Camera live view not found")
+
+        variant = _resolve_live_variant(live_view, context=context, variant_id=variant_id)
+        if variant is None:
+            raise HTTPException(status_code=404, detail="Camera live variant not found")
+
+        app_settings = await config_store.get_settings()
+        resolved_camera_source = _resolve_camera_source_from_settings(
+            app_settings,
+            camera_id=live_view.camera_id,
+            camera_source_id=variant.camera_source_id,
+        )
+        if resolved_camera_source is None:
+            raise HTTPException(status_code=409, detail="Camera source not found or disabled")
+        camera_id, device, camera_source_id, source = resolved_camera_source
+
+        transmission = next(
+            (item for item in settings.transmissions if item.id == variant.transmission_id),
+            None,
+        )
+        if transmission is None:
+            raise HTTPException(status_code=409, detail="Transmission not found for live variant")
+
+        transmission_host_server_id = normalize_server_id(transmission.host_server_id, fallback="local")
+        current_server_id = _current_server_id(request)
+        if transmission_host_server_id == current_server_id:
+            urls = await _resolve_local_transmission_urls(
+                request=request,
+                settings=settings,
+                transmission=transmission,
+                quality_profile_id=variant.quality_profile_id,
+            )
+        else:
+            urls = await _resolve_remote_transmission_urls(
+                config_store=config_store,
+                transmission=transmission,
+                quality_profile_id=variant.quality_profile_id,
+            )
+
+        selected_output = _select_live_playback_output(urls=urls, variant=variant)
+        warnings = [
+            *_camera_live_warnings(source=source, transmission=transmission),
+            *list(urls.warnings),
+        ]
+        blocking_errors = list(urls.blocking_errors)
+        if selected_output is None:
+            blocking_errors.append("No playable HLS/WebRTC output is available for this live view.")
+        elif variant.output_id and selected_output.output_id != variant.output_id:
+            warnings.append(
+                f"Requested playback output '{variant.output_id}' was unavailable; using '{selected_output.output_id}'."
+            )
+            if variant.preferred_transport == "webrtc" and selected_output.protocol == "hls":
+                warnings.append("Baixa latência indisponível; usando HLS.")
+
+        runtime_health_payload: dict[str, Any] | None = None
+        source_health_payload: dict[str, Any] | None = None
+        if transmission_host_server_id == current_server_id:
+            health = await _build_runtime_health(request=request, settings=settings)
+            runtime_item = next(
+                (item for item in health.transmissions if item.transmission_id == transmission.id),
+                None,
+            )
+            if runtime_item is not None:
+                runtime_health_payload = runtime_item.model_dump(mode="json")
+            source_health = _source_health_for_camera(
+                await _camera_source_health_by_id(request),
+                camera_id=camera_id,
+                camera_source_id=camera_source_id,
+            )
+            if source_health is not None:
+                source_health_payload = source_health.model_dump(mode="json")
+
+        return CameraLiveViewPlaybackResponse(
+            live_view=live_view,
+            context=context,
+            variant=variant,
+            camera_id=camera_id,
+            camera_name=_camera_live_name(device),
+            camera_source_id=camera_source_id,
+            camera_source_name=_camera_source_name(source),
+            source_role=_camera_source_role(source),
+            transmission=transmission,
+            urls=urls,
+            selected_output=selected_output,
+            runtime_health=runtime_health_payload,
+            source_health=source_health_payload,
+            warnings=warnings,
+            blocking_errors=blocking_errors,
         )
 
     @router.post("/transmissions", response_model=Transmission)

@@ -125,6 +125,9 @@ export type Transmission = {
   outputs: TransmissionOutput[];
   created_at?: string;
   updated_at?: string;
+  generated_by?: string;
+  camera_live_view_id?: string;
+  camera_live_variant_role?: string;
 };
 
 export type TransmissionOutputUrl = {
@@ -149,6 +152,67 @@ export type TransmissionUrlsResponse = {
   engine_running: boolean;
   outputs: TransmissionOutputUrl[];
   network_contract?: StreamingNetworkContract | null;
+  warnings?: string[];
+  blocking_errors?: string[];
+  public_base_path?: string;
+  media_url_origin?: string | null;
+};
+
+export type CameraLiveContext = "thumbnail" | "pip" | "large" | "fullscreen" | "ptz";
+export type CameraLiveVariantRole = CameraLiveContext | "zoom" | "custom";
+export type CameraLiveTransportPreference = "auto" | "hls" | "webrtc";
+
+export type CameraLiveViewDefaults = {
+  thumbnail_variant_id: string;
+  pip_variant_id: string;
+  large_variant_id: string;
+  fullscreen_variant_id: string;
+  ptz_variant_id?: string | null;
+};
+
+export type CameraLiveVariant = {
+  id: string;
+  label: string;
+  role: CameraLiveVariantRole;
+  camera_source_id: string;
+  transmission_id: string;
+  output_id?: string | null;
+  quality_profile_id?: StreamingQualityProfileId | null;
+  preferred_transport?: CameraLiveTransportPreference;
+  enabled?: boolean;
+};
+
+export type CameraLiveView = {
+  id: string;
+  camera_id: string;
+  name: string;
+  enabled?: boolean;
+  host_server_id?: string;
+  defaults: CameraLiveViewDefaults;
+  variants: CameraLiveVariant[];
+};
+
+export type CameraLiveViewGenerateResponse = {
+  camera_live_views: CameraLiveView[];
+  transmissions: Transmission[];
+  generated_count: number;
+  warnings?: string[];
+};
+
+export type CameraLiveViewPlaybackResponse = {
+  live_view: CameraLiveView;
+  context: CameraLiveContext;
+  variant: CameraLiveVariant;
+  camera_id: string;
+  camera_name: string;
+  camera_source_id: string;
+  camera_source_name: string;
+  source_role?: string | null;
+  transmission: Transmission;
+  urls: TransmissionUrlsResponse;
+  selected_output?: TransmissionOutputUrl | null;
+  runtime_health?: StreamingRuntimeTransmissionHealth | Record<string, unknown> | null;
+  source_health?: Record<string, unknown> | null;
   warnings?: string[];
   blocking_errors?: string[];
 };
@@ -536,6 +600,7 @@ export type StreamingCameraIngestSettings = {
 };
 
 export type StreamingExtensionSettings = {
+  camera_live_views?: CameraLiveView[];
   transmissions?: Transmission[];
   engine?: StreamingEngineSettings;
   camera_ingest?: StreamingCameraIngestSettings;

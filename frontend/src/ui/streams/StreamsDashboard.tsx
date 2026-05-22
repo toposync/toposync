@@ -2,12 +2,17 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type Hls from "hls.js";
 
 import {
-  getStreamingTransmissionUrls,
+  getStreamingCameraLiveViewPlayback,
   getStreamingRuntimeHealth,
   heartbeatStreamingTransmissionDemand,
-  listStreamingTransmissions,
+  listStreamingCameraLiveViews,
   postStreamingPlaybackEvents,
   primeStreamingTransmissionDemand,
+  updateStreamingCameraLiveView,
+  type StreamingCameraLiveContext,
+  type StreamingCameraLiveVariant,
+  type StreamingCameraLiveView,
+  type StreamingCameraLiveViewPlaybackResponse,
   type StreamingQualityProfileId,
   type StreamingRuntimeTransmissionHealth,
   type StreamingTransmission,
@@ -34,6 +39,11 @@ type StreamQualityPreference = "auto" | "low" | "stable" | "high" | "diagnostic"
 type StreamTransportPreference = "auto" | "webrtc" | "hls";
 type EffectiveTransportMode = "auto_hls" | "auto_webrtc" | "ptz_webrtc" | "hls" | "webrtc" | "hls_fallback" | "auto";
 type TranslateFn = ReturnType<typeof i18n.useI18n>["t"];
+type LiveVariantQuickOption = {
+  id: string;
+  label: string;
+  title: string;
+};
 
 type StreamPlaybackPlan = {
   allowHls: boolean;
@@ -75,6 +85,7 @@ type WebRtcStatsSummary = {
 const GRID_MODE_STORAGE_KEY = "toposync.streams.grid_mode.v1";
 const QUALITY_PREFERENCE_STORAGE_KEY = "toposync.streams.quality_preference.v1";
 const TRANSPORT_PREFERENCE_STORAGE_KEY = "toposync.streams.transport_preference.v1";
+const LIVE_VARIANT_OVERRIDE_STORAGE_KEY = "toposync.streams.live_variant_override.v1";
 const TRANSMISSIONS_REFRESH_MS = 15000;
 const RETRY_BASE_MS = 900;
 const RETRY_MAX_MS = 8000;
@@ -134,6 +145,89 @@ function readTransportPreferenceByTransmissionId(): Record<string, StreamTranspo
   }
 }
 
+function readLiveVariantOverrideByLiveViewId(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  try {
+    const parsed = JSON.parse(String(localStorage.getItem(LIVE_VARIANT_OVERRIDE_STORAGE_KEY) || "{}"));
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      const normalizedKey = String(key || "").trim();
+      const normalizedValue = String(value || "").trim();
+      if (normalizedKey && normalizedValue) out[normalizedKey] = normalizedValue;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function playbackKeyFor(liveViewId: string, context: StreamingCameraLiveContext, variantId: string | null | undefined): string {
+  return `${liveViewId}:${context}:${String(variantId || "").trim() || "auto"}`;
+}
+
+function parsePlaybackKey(key: string): {
+  liveViewId: string;
+  context: StreamingCameraLiveContext;
+  variantId: string | null;
+} {
+  const [liveViewId = "", rawContext = "thumbnail", rawVariantId = "auto"] = String(key || "").split(":");
+  const context =
+    rawContext === "pip" ||
+    rawContext === "large" ||
+    rawContext === "fullscreen" ||
+    rawContext === "ptz"
+      ? rawContext
+      : "thumbnail";
+  const variantId = rawVariantId && rawVariantId !== "auto" ? rawVariantId : null;
+  return { liveViewId, context, variantId };
+}
+
+function defaultVariantIdForContext(liveView: StreamingCameraLiveView, context: StreamingCameraLiveContext): string {
+  if (context === "pip") return String(liveView.defaults?.pip_variant_id || "").trim();
+  if (context === "large") return String(liveView.defaults?.large_variant_id || "").trim();
+  if (context === "fullscreen") return String(liveView.defaults?.fullscreen_variant_id || "").trim();
+  if (context === "ptz") return String(liveView.defaults?.ptz_variant_id || "").trim();
+  return String(liveView.defaults?.thumbnail_variant_id || "").trim();
+}
+
+function liveViewWithDefaultVariant(
+  liveView: StreamingCameraLiveView,
+  context: StreamingCameraLiveContext,
+  variantId: string,
+): StreamingCameraLiveView {
+  const defaults = { ...liveView.defaults };
+  if (context === "pip") defaults.pip_variant_id = variantId;
+  else if (context === "large") defaults.large_variant_id = variantId;
+  else if (context === "fullscreen") defaults.fullscreen_variant_id = variantId;
+  else if (context === "ptz") defaults.ptz_variant_id = variantId;
+  else defaults.thumbnail_variant_id = variantId;
+  return { ...liveView, defaults };
+}
+
+function liveVariantRoleLabel(role: string | null | undefined, t: TranslateFn): string {
+  if (role === "thumbnail") return t("core.ui.streams.variant.low", {}, "Low");
+  if (role === "pip") return t("core.ui.streams.variant.stable", {}, "Stable");
+  if (role === "large" || role === "fullscreen") return t("core.ui.streams.variant.high", {}, "High");
+  if (role === "zoom") return t("core.ui.streams.variant.zoom", {}, "Zoom");
+  if (role === "ptz") return t("core.ui.streams.variant.low_latency", {}, "Low latency");
+  return t("core.ui.streams.variant.custom", {}, "Custom");
+}
+
+function liveContextLabel(context: StreamingCameraLiveContext, t: TranslateFn): string {
+  if (context === "pip") return t("core.ui.streams.context.pip", {}, "PiP");
+  if (context === "large") return t("core.ui.streams.context.large", {}, "Large");
+  if (context === "fullscreen") return t("core.ui.streams.context.fullscreen", {}, "Fullscreen");
+  if (context === "ptz") return t("core.ui.streams.context.ptz", {}, "PTZ");
+  return t("core.ui.streams.context.thumbnail", {}, "Thumbnail");
+}
+
+function liveVariantQuickLabel(variant: StreamingCameraLiveVariant, t: TranslateFn): string {
+  const label = String(variant.label || "").trim();
+  if (label) return label;
+  return liveVariantRoleLabel(variant.role, t);
+}
+
 function qualityProfileIdForPreference(
   preference: StreamQualityPreference,
   gridMode: GridMode,
@@ -142,7 +236,7 @@ function qualityProfileIdForPreference(
   if (preference === "stable") return "stable_apple_tv";
   if (preference === "high") return "fullscreen_quality";
   if (preference === "diagnostic") return "diagnostic_low";
-  return gridMode === "2x2" ? "quad_grid" : "stable_apple_tv";
+  return gridMode === "2x2" ? "quad_grid" : "fullscreen_quality";
 }
 
 function qualityPreferenceLabel(preference: StreamQualityPreference, t: TranslateFn): string {
@@ -296,14 +390,6 @@ function buildPlaybackPlan(options: {
     homeAssistantProxyHls,
     mobileTouchBrowser,
   };
-}
-
-function hlsOutputsHaveProfiles(urls: StreamingTransmissionUrlsResponse | undefined): boolean {
-  return Boolean(urls?.outputs?.some((output) => output?.protocol === "hls" && output.quality_profile_id));
-}
-
-function transmissionHasProfiledHls(transmission: StreamingTransmission): boolean {
-  return Boolean(transmission.outputs?.some((output) => output?.protocol === "hls" && output.quality_profile_id));
 }
 
 function normalizeText(value: unknown, fallback: string): string {
@@ -1109,10 +1195,18 @@ function StreamTilePlayer({
   lowLatencyRequested,
   qualityPreference,
   transportPreference,
+  variantOptions,
+  variantOverrideId,
+  currentVariantLabel,
+  canSetVariantDefault,
+  savingVariantDefault,
   onQualityPreferenceChange,
   onTransportPreferenceChange,
+  onVariantOverrideChange,
+  onSetVariantDefault,
   onRefreshUrls,
   onOpenPtz,
+  onDisplayContextChange,
 }: {
   transmissionId: string;
   outputId: string | null;
@@ -1135,10 +1229,18 @@ function StreamTilePlayer({
   lowLatencyRequested: boolean;
   qualityPreference: StreamQualityPreference;
   transportPreference: StreamTransportPreference;
+  variantOptions: LiveVariantQuickOption[];
+  variantOverrideId: string;
+  currentVariantLabel: string;
+  canSetVariantDefault: boolean;
+  savingVariantDefault: boolean;
   onQualityPreferenceChange: (preference: StreamQualityPreference) => void;
   onTransportPreferenceChange: (preference: StreamTransportPreference) => void;
+  onVariantOverrideChange: (variantId: string) => void;
+  onSetVariantDefault: () => Promise<void>;
   onRefreshUrls: () => Promise<void>;
   onOpenPtz: () => void;
+  onDisplayContextChange?: (context: "pip" | "fullscreen" | null) => void;
 }): React.ReactElement {
   const { t } = i18n.useI18n();
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -1153,6 +1255,7 @@ function StreamTilePlayer({
   const [webRtcFallbackActive, setWebRtcFallbackActive] = useState(false);
   const [hlsProbeSummary, setHlsProbeSummary] = useState<string | null>(null);
   const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
+  const [fullscreenActive, setFullscreenActive] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const playbackActive = active || pictureInPictureActive;
   useEffect(() => {
@@ -1260,6 +1363,20 @@ function StreamTilePlayer({
       video.removeEventListener("leavepictureinpicture", onLeavePictureInPicture);
       video.removeEventListener("webkitpresentationmodechanged", onWebkitPresentationModeChanged as EventListener);
     };
+  }, []);
+
+  useEffect(() => {
+    onDisplayContextChange?.(pictureInPictureActive ? "pip" : fullscreenActive ? "fullscreen" : null);
+  }, [fullscreenActive, onDisplayContextChange, pictureInPictureActive]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const updateFullscreenState = () => {
+      setFullscreenActive(document.fullscreenElement === frameRef.current);
+    };
+    document.addEventListener("fullscreenchange", updateFullscreenState);
+    updateFullscreenState();
+    return () => document.removeEventListener("fullscreenchange", updateFullscreenState);
   }, []);
 
   useEffect(() => {
@@ -2168,6 +2285,37 @@ function StreamTilePlayer({
         </div>
 
 	        <div className="streamsTileOverlayActions">
+          {variantOptions.length > 0 ? (
+            <div className="streamsTileVariantControl" title={currentVariantLabel}>
+              <select
+                className="streamsTileVariantSelect"
+                value={variantOverrideId}
+                aria-label={t("core.ui.streams.variant.select", {}, "Live camera variant")}
+                onChange={(event) => onVariantOverrideChange(event.target.value)}
+              >
+                <option value="">{t("core.ui.streams.variant.auto", {}, "Auto")}</option>
+                {variantOptions.map((option) => (
+                  <option key={option.id} value={option.id} title={option.title}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {canSetVariantDefault ? (
+                <button
+                  type="button"
+                  className="iconButton streamsTileOverlayButton"
+                  aria-label={t("core.ui.streams.variant.set_default", {}, "Set as default for this use")}
+                  title={t("core.ui.streams.variant.set_default", {}, "Set as default for this use")}
+                  onClick={() => {
+                    void onSetVariantDefault();
+                  }}
+                  disabled={savingVariantDefault}
+                >
+                  <Icon name="check" />
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           <button
             type="button"
             className="iconButton streamsTileOverlayButton"
@@ -2251,13 +2399,13 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
   const [gridMode, setGridMode] = useState<GridMode>(() => readGridMode());
   const [pageIndex, setPageIndex] = useState(0);
 
-  const [transmissions, setTransmissions] = useState<StreamingTransmission[]>([]);
+  const [liveViews, setLiveViews] = useState<StreamingCameraLiveView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [urlsByTransmissionId, setUrlsByTransmissionId] = useState<Record<string, StreamingTransmissionUrlsResponse>>({});
-  const [urlsLoadingByTransmissionId, setUrlsLoadingByTransmissionId] = useState<Record<string, boolean>>({});
-  const [urlErrorByTransmissionId, setUrlErrorByTransmissionId] = useState<Record<string, string>>({});
+  const [playbackByKey, setPlaybackByKey] = useState<Record<string, StreamingCameraLiveViewPlaybackResponse>>({});
+  const [playbackLoadingByKey, setPlaybackLoadingByKey] = useState<Record<string, boolean>>({});
+  const [playbackErrorByKey, setPlaybackErrorByKey] = useState<Record<string, string>>({});
   const [runtimeHealthByTransmissionId, setRuntimeHealthByTransmissionId] = useState<Record<string, StreamingRuntimeTransmissionHealth>>({});
   const [runtimeHealthError, setRuntimeHealthError] = useState<string | null>(null);
   const [qualityPreferenceByTransmissionId, setQualityPreferenceByTransmissionId] = useState<
@@ -2266,6 +2414,11 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
   const [transportPreferenceByTransmissionId, setTransportPreferenceByTransmissionId] = useState<
     Record<string, StreamTransportPreference>
   >(() => readTransportPreferenceByTransmissionId());
+  const [variantOverrideByLiveViewId, setVariantOverrideByLiveViewId] = useState<Record<string, string>>(
+    () => readLiveVariantOverrideByLiveViewId(),
+  );
+  const [savingVariantDefaultByLiveViewId, setSavingVariantDefaultByLiveViewId] = useState<Record<string, boolean>>({});
+  const [displayContextByLiveViewId, setDisplayContextByLiveViewId] = useState<Record<string, StreamingCameraLiveContext>>({});
 
   const [tabVisible, setTabVisible] = useState<boolean>(() => {
     if (typeof document === "undefined") return true;
@@ -2300,6 +2453,15 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
   }, [transportPreferenceByTransmissionId]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      localStorage.setItem(LIVE_VARIANT_OVERRIDE_STORAGE_KEY, JSON.stringify(variantOverrideByLiveViewId));
+    } catch {
+      // ignore
+    }
+  }, [variantOverrideByLiveViewId]);
+
+  useEffect(() => {
     if (typeof document === "undefined") return;
     const onVisibilityChange = () => setTabVisible(document.visibilityState === "visible");
     document.addEventListener("visibilitychange", onVisibilityChange);
@@ -2309,12 +2471,12 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
   useEffect(() => {
     let cancelled = false;
 
-    const loadTransmissions = async (isFirstLoad: boolean) => {
+    const loadLiveViews = async (isFirstLoad: boolean) => {
       if (isFirstLoad) setLoading(true);
       try {
-        const payload = await listStreamingTransmissions();
+        const payload = await listStreamingCameraLiveViews();
         if (cancelled) return;
-        setTransmissions(Array.isArray(payload) ? payload : []);
+        setLiveViews(Array.isArray(payload) ? payload : []);
         setError(null);
       } catch (loadError) {
         if (cancelled) return;
@@ -2324,9 +2486,9 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
       }
     };
 
-    void loadTransmissions(true);
+    void loadLiveViews(true);
     const intervalId = window.setInterval(() => {
-      void loadTransmissions(false);
+      void loadLiveViews(false);
     }, TRANSMISSIONS_REFRESH_MS);
 
     return () => {
@@ -2335,13 +2497,44 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
     };
   }, []);
 
-  const enabledTransmissions = useMemo(
-    () => transmissions.filter((item) => item && item.enabled !== false),
-    [transmissions],
+  const enabledLiveViews = useMemo(
+    () => liveViews.filter((item) => item && item.enabled !== false),
+    [liveViews],
   );
 
   const pageSize = gridMode === "1x1" ? 1 : 4;
-  const pageCount = Math.max(1, Math.ceil(enabledTransmissions.length / pageSize));
+  const pageCount = Math.max(1, Math.ceil(enabledLiveViews.length / pageSize));
+  const basePlaybackContext: StreamingCameraLiveContext = gridMode === "1x1" ? "large" : "thumbnail";
+  const contextForLiveView = useCallback(
+    (liveViewId: string): StreamingCameraLiveContext => displayContextByLiveViewId[liveViewId] ?? basePlaybackContext,
+    [basePlaybackContext, displayContextByLiveViewId],
+  );
+
+  const saveDefaultVariantForUse = useCallback(
+    async (liveView: StreamingCameraLiveView, context: StreamingCameraLiveContext, variantId: string): Promise<void> => {
+      const liveViewId = String(liveView.id || "").trim();
+      const normalizedVariantId = String(variantId || "").trim();
+      if (!liveViewId || !normalizedVariantId) return;
+      const draft = liveViewWithDefaultVariant(liveView, context, normalizedVariantId);
+      setSavingVariantDefaultByLiveViewId((previous) => ({ ...previous, [liveViewId]: true }));
+      try {
+        const updated = await updateStreamingCameraLiveView(liveViewId, draft);
+        setLiveViews((previous) => previous.map((item) => (item.id === liveViewId ? updated : item)));
+        setPlaybackByKey((previous) => {
+          const next = { ...previous };
+          for (const key of Object.keys(next)) {
+            if (parsePlaybackKey(key).liveViewId === liveViewId && next[key]) {
+              next[key] = { ...next[key], live_view: updated };
+            }
+          }
+          return next;
+        });
+      } finally {
+        setSavingVariantDefaultByLiveViewId((previous) => ({ ...previous, [liveViewId]: false }));
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     setPageIndex((previous) => Math.min(previous, Math.max(0, pageCount - 1)));
@@ -2349,91 +2542,103 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
 
   const currentPageItems = useMemo(() => {
     const start = pageIndex * pageSize;
-    return enabledTransmissions.slice(start, start + pageSize);
-  }, [enabledTransmissions, pageIndex, pageSize]);
+    return enabledLiveViews.slice(start, start + pageSize);
+  }, [enabledLiveViews, pageIndex, pageSize]);
 
-  const currentPageTransmissionIds = useMemo(
-    () => currentPageItems.map((item) => String(item.id || "").trim()).filter(Boolean),
-    [currentPageItems],
+  const currentPagePlaybackKeys = useMemo(
+    () =>
+      currentPageItems
+        .map((item) => {
+          const liveViewId = String(item.id || "").trim();
+          return liveViewId
+            ? playbackKeyFor(liveViewId, contextForLiveView(liveViewId), variantOverrideByLiveViewId[liveViewId])
+            : "";
+        })
+        .filter(Boolean),
+    [contextForLiveView, currentPageItems, variantOverrideByLiveViewId],
   );
 
   useEffect(() => {
-    for (const transmission of currentPageItems) {
-      const transmissionId = String(transmission.id || "").trim();
-      if (!transmissionId) continue;
-      if (urlsByTransmissionId[transmissionId]) continue;
-      if (urlsLoadingByTransmissionId[transmissionId]) continue;
-      const qualityPreference = qualityPreferenceByTransmissionId[transmissionId] ?? "auto";
-      const qualityProfileId = transmissionHasProfiledHls(transmission)
-        ? qualityProfileIdForPreference(qualityPreference, gridMode)
-        : null;
+    for (const liveView of currentPageItems) {
+      const liveViewId = String(liveView.id || "").trim();
+      if (!liveViewId) continue;
+      const playbackContext = contextForLiveView(liveViewId);
+      const variantId = variantOverrideByLiveViewId[liveViewId] ?? null;
+      const playbackKey = playbackKeyFor(liveViewId, playbackContext, variantId);
+      if (playbackByKey[playbackKey]) continue;
+      if (playbackLoadingByKey[playbackKey]) continue;
 
-      setUrlsLoadingByTransmissionId((previous) => ({ ...previous, [transmissionId]: true }));
-      void getStreamingTransmissionUrls(transmissionId, { qualityProfileId })
+      setPlaybackLoadingByKey((previous) => ({ ...previous, [playbackKey]: true }));
+      void getStreamingCameraLiveViewPlayback(liveViewId, { context: playbackContext, variantId })
         .then((payload) => {
-          setUrlsByTransmissionId((previous) => ({ ...previous, [transmissionId]: payload }));
-          setUrlErrorByTransmissionId((previous) => {
-            if (!previous[transmissionId]) return previous;
+          setPlaybackByKey((previous) => ({ ...previous, [playbackKey]: payload }));
+          setPlaybackErrorByKey((previous) => {
+            if (!previous[playbackKey]) return previous;
             const next = { ...previous };
-            delete next[transmissionId];
+            delete next[playbackKey];
             return next;
           });
         })
         .catch((loadError) => {
-          setUrlErrorByTransmissionId((previous) => ({
+          setPlaybackErrorByKey((previous) => ({
             ...previous,
-            [transmissionId]: asErrorMessage(loadError),
+            [playbackKey]: asErrorMessage(loadError),
           }));
         })
         .finally(() => {
-          setUrlsLoadingByTransmissionId((previous) => ({ ...previous, [transmissionId]: false }));
+          setPlaybackLoadingByKey((previous) => ({ ...previous, [playbackKey]: false }));
       });
     }
-  }, [currentPageItems, gridMode, qualityPreferenceByTransmissionId, urlsByTransmissionId, urlsLoadingByTransmissionId]);
+  }, [contextForLiveView, currentPageItems, playbackByKey, playbackLoadingByKey, variantOverrideByLiveViewId]);
+
+  const currentPageTransmissionIds = useMemo(
+    () =>
+      currentPagePlaybackKeys
+        .map((key) => String(playbackByKey[key]?.transmission?.id || "").trim())
+        .filter(Boolean),
+    [currentPagePlaybackKeys, playbackByKey],
+  );
 
   useEffect(() => {
-    if (!tabVisible || currentPageTransmissionIds.length === 0) return;
+    if (!tabVisible || currentPagePlaybackKeys.length === 0) return;
 
     const inFlight = new Set<string>();
     const renewSignedUrls = () => {
       const nowUnix = Date.now() / 1000;
-      for (const transmissionId of currentPageTransmissionIds) {
-        const urls = urlsByTransmissionId[transmissionId];
-        const qualityPreference = qualityPreferenceByTransmissionId[transmissionId] ?? "auto";
-        const qualityProfileId = qualityProfileIdForPreference(qualityPreference, gridMode);
+      for (const playbackKey of currentPagePlaybackKeys) {
+        const playback = playbackByKey[playbackKey];
+        const liveViewId = String(playback?.live_view?.id || playbackKey.split(":")[0] || "").trim();
+        const urls = playback?.urls;
         const signedHlsOutput = urls?.outputs?.find(
           (output) =>
             output.protocol === "hls" &&
-            (!hlsOutputsHaveProfiles(urls) || output.quality_profile_id === qualityProfileId) &&
             output.media_auth_type === "signed_url" &&
             typeof output.renew_after_unix === "number" &&
             nowUnix >= Number(output.renew_after_unix),
         );
-        if (!signedHlsOutput || inFlight.has(transmissionId)) continue;
+        if (!signedHlsOutput || !liveViewId || inFlight.has(playbackKey)) continue;
 
-        inFlight.add(transmissionId);
-        const hasProfiledHls = hlsOutputsHaveProfiles(urls);
-        void getStreamingTransmissionUrls(transmissionId, {
-          outputId: hasProfiledHls ? null : signedHlsOutput.output_id,
-          qualityProfileId: hasProfiledHls ? signedHlsOutput.quality_profile_id ?? qualityProfileId : null,
-        })
+        inFlight.add(playbackKey);
+        const keyParts = parsePlaybackKey(playbackKey);
+        const context = keyParts.context || basePlaybackContext;
+        void getStreamingCameraLiveViewPlayback(liveViewId, { context, variantId: keyParts.variantId })
           .then((payload) => {
-            setUrlsByTransmissionId((previous) => ({ ...previous, [transmissionId]: payload }));
-            setUrlErrorByTransmissionId((previous) => {
-              if (!previous[transmissionId]) return previous;
+            setPlaybackByKey((previous) => ({ ...previous, [playbackKey]: payload }));
+            setPlaybackErrorByKey((previous) => {
+              if (!previous[playbackKey]) return previous;
               const next = { ...previous };
-              delete next[transmissionId];
+              delete next[playbackKey];
               return next;
             });
           })
           .catch((loadError) => {
-            setUrlErrorByTransmissionId((previous) => ({
+            setPlaybackErrorByKey((previous) => ({
               ...previous,
-              [transmissionId]: asErrorMessage(loadError),
+              [playbackKey]: asErrorMessage(loadError),
             }));
           })
           .finally(() => {
-            inFlight.delete(transmissionId);
+            inFlight.delete(playbackKey);
           });
       }
     };
@@ -2441,7 +2646,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
     renewSignedUrls();
     const interval = window.setInterval(renewSignedUrls, 10_000);
     return () => window.clearInterval(interval);
-  }, [currentPageTransmissionIds, gridMode, qualityPreferenceByTransmissionId, tabVisible, urlsByTransmissionId]);
+  }, [basePlaybackContext, currentPagePlaybackKeys, playbackByKey, tabVisible]);
 
   useEffect(() => {
     if (!tabVisible || currentPageTransmissionIds.length === 0) {
@@ -2480,7 +2685,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
   }, [currentPageTransmissionIds, tabVisible]);
 
   const pageTiles = useMemo(() => {
-    const out: Array<StreamingTransmission | null> = [...currentPageItems];
+    const out: Array<StreamingCameraLiveView | null> = [...currentPageItems];
     while (out.length < pageSize) out.push(null);
     return out;
   }, [currentPageItems, pageSize]);
@@ -2515,39 +2720,45 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
         </div>
       ) : null}
 
-      {!error && enabledTransmissions.length === 0 ? (
+      {!error && enabledLiveViews.length === 0 ? (
         <div className="main2dCenterHint">
           <div className="card">
             <div className="cardBody">
-              {t("core.ui.streams.empty", {}, "No enabled transmissions. Create one in Settings > Transmissions.")}
+              {t("core.ui.streams.empty", {}, "Nenhuma câmera ao vivo habilitada. Crie em Configurações > Transmissões > Câmeras ao vivo.")}
             </div>
           </div>
         </div>
       ) : null}
 
-      {!error && enabledTransmissions.length > 0 ? (
+      {!error && enabledLiveViews.length > 0 ? (
         <div className={["streamsGrid", gridMode === "1x1" ? "is1x1" : "is2x2"].join(" ")}>
-          {pageTiles.map((transmission, slotIndex) => {
-            if (!transmission) {
+          {pageTiles.map((liveView, slotIndex) => {
+            if (!liveView) {
               return <div key={`slot-empty-${slotIndex}`} className="streamsTile streamsTileEmpty" />;
             }
 
-            const transmissionId = String(transmission.id || "").trim();
-            const qualityPreference = qualityPreferenceByTransmissionId[transmissionId] ?? "auto";
-            const transportPreference = transportPreferenceByTransmissionId[transmissionId] ?? "auto";
+            const liveViewId = String(liveView.id || "").trim();
+            const playbackContext = contextForLiveView(liveViewId);
+            const variantOverrideId = String(variantOverrideByLiveViewId[liveViewId] || "").trim();
+            const playbackKey = playbackKeyFor(liveViewId, playbackContext, variantOverrideId);
+            const playback = playbackByKey[playbackKey] ?? null;
+            const transmission = playback?.transmission ?? null;
+            const transmissionId = String(transmission?.id || "").trim();
+            const qualityPreference = qualityPreferenceByTransmissionId[liveViewId] ?? "auto";
+            const transportPreference = transportPreferenceByTransmissionId[liveViewId] ?? "auto";
             const desiredQualityProfileId = qualityProfileIdForPreference(qualityPreference, gridMode);
             const transmissionName = normalizeText(
-              transmission.name,
-              normalizeText(transmission.path, transmissionId || `stream-${slotIndex + 1}`),
+              playback?.camera_name,
+              normalizeText(liveView.name, liveViewId || `camera-${slotIndex + 1}`),
             );
-            const urls = urlsByTransmissionId[transmissionId];
-            const hlsOutput = selectOutputByProtocol(transmission, urls, "hls", {
+            const urls = playback?.urls;
+            const hlsOutput = transmission ? selectOutputByProtocol(transmission, urls, "hls", {
               qualityProfileId: desiredQualityProfileId,
-            });
-            const webrtcOutput = selectOutputByProtocol(transmission, urls, "webrtc");
-            const urlError = urlErrorByTransmissionId[transmissionId];
-            const urlLoading = Boolean(urlsLoadingByTransmissionId[transmissionId]);
-            const runtimeHealth = runtimeHealthByTransmissionId[transmissionId];
+            }) : null;
+            const webrtcOutput = transmission ? selectOutputByProtocol(transmission, urls, "webrtc") : null;
+            const urlError = playbackErrorByKey[playbackKey];
+            const urlLoading = Boolean(playbackLoadingByKey[playbackKey]);
+            const runtimeHealth = transmissionId ? runtimeHealthByTransmissionId[transmissionId] : undefined;
             const webrtcUrl = webrtcOutput?.url ?? null;
             const hlsUrl = hlsOutput?.url ?? null;
             const webrtcAuthHeader = buildBasicAuthHeader(webrtcOutput?.auth ?? null);
@@ -2559,16 +2770,39 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
                 (transportPreference !== "hls" && webrtcUrl) ||
                   (transportPreference !== "webrtc" && hlsUrl),
               );
-            const ptzEnabled = Boolean(transmission.camera_controls?.enabled);
+            const ptzEnabled = Boolean(transmission?.camera_controls?.enabled && liveView.defaults?.ptz_variant_id);
             const lowLatencyRequested = ptzOverlay?.transmissionId === transmissionId && transportPreference === "auto";
             const runtimeHint = buildRuntimeHealthHint(runtimeHealth, t, {
               suppressRecoveredClientTransportErrors: transportPreference !== "webrtc",
             });
+            const variantOptions = (liveView.variants ?? [])
+              .filter((variant) => variant && variant.enabled !== false && String(variant.id || "").trim())
+              .map((variant) => {
+                const roleLabel = liveVariantRoleLabel(variant.role, t);
+                const label = liveVariantQuickLabel(variant, t);
+                const sourceSuffix = playback?.variant?.id === variant.id && playback?.camera_source_name
+                  ? ` - ${playback.camera_source_name}`
+                  : "";
+                return {
+                  id: String(variant.id || "").trim(),
+                  label,
+                  title: `${roleLabel}${sourceSuffix}`,
+                };
+              });
+            const selectedVariantLabel = variantOverrideId
+              ? variantOptions.find((option) => option.id === variantOverrideId)?.label || t("core.ui.streams.variant.custom", {}, "Custom")
+              : t("core.ui.streams.variant.auto", {}, "Auto");
+            const defaultVariantId = defaultVariantIdForContext(liveView, playbackContext);
+            const canSetVariantDefault =
+              Boolean(variantOverrideId) &&
+              Boolean(variantOptions.some((option) => option.id === variantOverrideId)) &&
+              variantOverrideId !== defaultVariantId;
+            const savingVariantDefault = Boolean(savingVariantDefaultByLiveViewId[liveViewId]);
 
             let sourceHint: string | null = null;
             let sourceHintTone: "muted" | "warn" | "error" = "muted";
             if (urlLoading) {
-              sourceHint = t("core.ui.streams.hint.loading_url", {}, "Loading stream URL…");
+              sourceHint = t("core.ui.streams.hint.loading_url", {}, "Carregando visualização…");
               sourceHintTone = "muted";
             } else if (urlError) {
               sourceHint = urlError;
@@ -2578,7 +2812,13 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
               (transportPreference === "hls" && !hlsUrl) ||
               (transportPreference === "auto" && !webrtcUrl && !hlsUrl)
             ) {
-              sourceHint = t("core.ui.streams.hint.no_outputs", {}, "No WebRTC/HLS output configured for this transmission.");
+              sourceHint = t("core.ui.streams.hint.no_outputs", {}, "Nenhuma saída WebRTC/HLS disponível para esta câmera.");
+              sourceHintTone = "warn";
+            } else if (playback?.blocking_errors?.length) {
+              sourceHint = playback.blocking_errors.join(" ");
+              sourceHintTone = "error";
+            } else if (playback?.warnings?.length) {
+              sourceHint = playback.warnings[0] || null;
               sourceHintTone = "warn";
             } else if (runtimeHint) {
               sourceHint = runtimeHint.message;
@@ -2586,10 +2826,13 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
             } else if (runtimeHealthError) {
               sourceHint = runtimeHealthError;
               sourceHintTone = "warn";
+            } else if (playback?.camera_source_name) {
+              sourceHint = `${liveContextLabel(playbackContext, t)}: ${playback.camera_source_name}`;
+              sourceHintTone = "muted";
             }
 
             return (
-              <div key={transmissionId} className="streamsTile">
+              <div key={liveViewId} className="streamsTile">
                 <StreamTilePlayer
                   transmissionId={transmissionId}
                   outputId={webrtcOutput?.outputId ?? hlsOutput?.outputId ?? null}
@@ -2612,51 +2855,76 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
                   lowLatencyRequested={lowLatencyRequested}
                   qualityPreference={qualityPreference}
                   transportPreference={transportPreference}
+                  variantOptions={variantOptions}
+                  variantOverrideId={variantOverrideId}
+                  currentVariantLabel={selectedVariantLabel}
+                  canSetVariantDefault={canSetVariantDefault}
+                  savingVariantDefault={savingVariantDefault}
                   onQualityPreferenceChange={(preference) => {
                     setQualityPreferenceByTransmissionId((previous) => ({
                       ...previous,
-                      [transmissionId]: preference,
+                      [liveViewId]: preference,
                     }));
-                    setUrlsByTransmissionId((previous) => {
-                      if (!previous[transmissionId]) return previous;
-                      const next = { ...previous };
-                      delete next[transmissionId];
-                      return next;
-                    });
                   }}
                   onTransportPreferenceChange={(preference) => {
                     setTransportPreferenceByTransmissionId((previous) => ({
                       ...previous,
-                      [transmissionId]: preference,
+                      [liveViewId]: preference,
                     }));
                   }}
-                  onRefreshUrls={async () => {
-                    setUrlsLoadingByTransmissionId((previous) => ({ ...previous, [transmissionId]: true }));
-                    try {
-                      const hasProfiledHls = hlsOutputsHaveProfiles(urls);
-                      const payload = await getStreamingTransmissionUrls(transmissionId, {
-                        outputId: hasProfiledHls ? null : hlsOutput?.outputId ?? null,
-                        qualityProfileId: hasProfiledHls ? desiredQualityProfileId : null,
-                      });
-                      setUrlsByTransmissionId((previous) => ({ ...previous, [transmissionId]: payload }));
-                      setUrlErrorByTransmissionId((previous) => {
-                        if (!previous[transmissionId]) return previous;
+                  onVariantOverrideChange={(variantId) => {
+                    const normalizedVariantId = String(variantId || "").trim();
+                    setVariantOverrideByLiveViewId((previous) => {
+                      if (!normalizedVariantId) {
+                        if (!previous[liveViewId]) return previous;
                         const next = { ...previous };
-                        delete next[transmissionId];
+                        delete next[liveViewId];
+                        return next;
+                      }
+                      if (previous[liveViewId] === normalizedVariantId) return previous;
+                      return { ...previous, [liveViewId]: normalizedVariantId };
+                    });
+                  }}
+                  onSetVariantDefault={() => saveDefaultVariantForUse(liveView, playbackContext, variantOverrideId)}
+                  onRefreshUrls={async () => {
+                    setPlaybackLoadingByKey((previous) => ({ ...previous, [playbackKey]: true }));
+                    try {
+                      const payload = await getStreamingCameraLiveViewPlayback(liveViewId, {
+                        context: playbackContext,
+                        variantId: variantOverrideId,
+                      });
+                      setPlaybackByKey((previous) => ({ ...previous, [playbackKey]: payload }));
+                      setPlaybackErrorByKey((previous) => {
+                        if (!previous[playbackKey]) return previous;
+                        const next = { ...previous };
+                        delete next[playbackKey];
                         return next;
                       });
                     } catch (refreshError) {
-                      setUrlErrorByTransmissionId((previous) => ({
+                      setPlaybackErrorByKey((previous) => ({
                         ...previous,
-                        [transmissionId]: asErrorMessage(refreshError),
+                        [playbackKey]: asErrorMessage(refreshError),
                       }));
                       throw refreshError;
                     } finally {
-                      setUrlsLoadingByTransmissionId((previous) => ({ ...previous, [transmissionId]: false }));
+                      setPlaybackLoadingByKey((previous) => ({ ...previous, [playbackKey]: false }));
                     }
                   }}
                   onOpenPtz={() => {
-                    setPtzOverlay({ transmissionId, label: transmissionName });
+                    if (transmissionId) setPtzOverlay({ transmissionId, label: transmissionName });
+                  }}
+                  onDisplayContextChange={(context) => {
+                    setDisplayContextByLiveViewId((previous) => {
+                      const normalizedContext = context === "pip" || context === "fullscreen" ? context : null;
+                      if (!normalizedContext) {
+                        if (!previous[liveViewId]) return previous;
+                        const next = { ...previous };
+                        delete next[liveViewId];
+                        return next;
+                      }
+                      if (previous[liveViewId] === normalizedContext) return previous;
+                      return { ...previous, [liveViewId]: normalizedContext };
+                    });
                   }}
                 />
               </div>

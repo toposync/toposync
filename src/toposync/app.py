@@ -102,6 +102,7 @@ from toposync.runtime.pipelines.migration_legacy_cameras import (
 )
 from toposync.runtime.pipelines.templates import (
     PipelineTemplateError,
+    camera_default_source_ids_by_id,
     default_instance_name,
     instantiate_camera_template_graph,
 )
@@ -3138,13 +3139,29 @@ def create_app() -> FastAPI:
         skipped: list[dict[str, Any]] = []
 
         existing_names = {p.name for p in await config_store.list_pipelines()}
+        app_settings = await config_store.get_settings()
+        default_source_by_camera_id = camera_default_source_ids_by_id(app_settings.extensions)
 
         seen_camera_ids: set[str] = set()
         for camera_id in camera_ids:
             if camera_id in seen_camera_ids:
                 continue
             seen_camera_ids.add(camera_id)
-            instance_name = default_instance_name(template_name=template.name, camera_id=camera_id)
+            camera_source_id = str(default_source_by_camera_id.get(camera_id) or "").strip()
+            if not camera_source_id:
+                skipped.append(
+                    {
+                        "camera_id": camera_id,
+                        "pipeline_name": "",
+                        "reason": "no_default_camera_source",
+                    }
+                )
+                continue
+            instance_name = default_instance_name(
+                template_name=template.name,
+                camera_id=camera_id,
+                camera_source_id="",
+            )
 
             exists = instance_name in existing_names
             if exists and conflict == "skip":
@@ -3163,7 +3180,9 @@ def create_app() -> FastAPI:
 
             try:
                 graph = instantiate_camera_template_graph(
-                    template_graph=template_graph, camera_id=camera_id
+                    template_graph=template_graph,
+                    camera_id=camera_id,
+                    camera_source_id=camera_source_id,
                 )
             except PipelineTemplateError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc

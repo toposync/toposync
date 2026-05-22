@@ -37,6 +37,7 @@ from ..streaming.camera_ingest import (
     build_camera_ingest_path_auth,
     build_camera_ingest_path_configs,
     iter_camera_devices_from_app_settings,
+    resolve_camera_video_source,
 )
 from ..streaming.ingest_resolver import CameraIngestResolver
 from ..streaming.ingest_auth import (
@@ -1577,7 +1578,7 @@ async def _build_camera_ingest_auth_response(
     rtsp_port = int(status.ports.rtsp if status.running else settings.engine.preferred_ports.rtsp)
     host = _status_host(request, settings)
     paths: list[StreamingCameraIngestAuthPath] = []
-    for camera_id, ingest in sorted(camera_ingest_by_id.items(), key=lambda item: item[0]):
+    for _key, ingest in sorted(camera_ingest_by_id.items(), key=lambda item: item[0]):
         redacted_url = _redacted_rtsp_url_with_userinfo(
             host,
             rtsp_port,
@@ -1597,7 +1598,8 @@ async def _build_camera_ingest_auth_response(
         )
         paths.append(
             StreamingCameraIngestAuthPath(
-                camera_id=camera_id,
+                camera_id=ingest.camera_id,
+                source_id=ingest.source_id,
                 path=ingest.path_slug,
                 redacted_rtsp_url=redacted_url,
                 rtsp_url=full_url,
@@ -1842,11 +1844,15 @@ def _runtime_source_health_id(
     pipeline_name: str,
     node_id: str,
     camera_id: str = "",
+    camera_source_id: str = "",
     rtsp_url: str = "",
 ) -> str:
     pipeline = str(pipeline_name or "").strip() or "pipeline"
     node = str(node_id or "").strip() or "source"
     normalized_camera_id = str(camera_id or "").strip()
+    normalized_camera_source_id = str(camera_source_id or "").strip()
+    if normalized_camera_id and normalized_camera_source_id:
+        return f"{pipeline}:{node}:camera:{normalized_camera_id}:source:{normalized_camera_source_id}"
     if normalized_camera_id:
         return f"{pipeline}:{node}:camera:{normalized_camera_id}"
     normalized_rtsp_url = str(rtsp_url or "").strip()
@@ -1861,21 +1867,23 @@ def _runtime_pipeline_source_node(
     pipeline_name: str,
     nodes_by_id: dict[str, tuple[str, dict[str, Any]]],
     upstream_node_ids: set[str],
-) -> tuple[str | None, str | None, str | None]:
+) -> tuple[str | None, str | None, str | None, str | None]:
     for node_id in sorted(upstream_node_ids):
         operator_id, cfg = nodes_by_id.get(node_id, ("", {}))
         if operator_id != "camera.source":
             continue
         camera_id = str(cfg.get("camera_id") or "").strip() or None
+        camera_source_id = str(cfg.get("source_id") or "").strip()
         rtsp_url = str(cfg.get("rtsp_url") or "").strip()
         source_id = _runtime_source_health_id(
             pipeline_name=pipeline_name,
             node_id=node_id,
             camera_id=camera_id or "",
+            camera_source_id=camera_source_id,
             rtsp_url=rtsp_url,
         )
-        return node_id, source_id, camera_id
-    return None, None, None
+        return node_id, source_id, camera_id, camera_source_id or None
+    return None, None, None, None
 
 
 def _inspect_streaming_pipeline_links(pipeline: Pipeline) -> list[StreamingRuntimePipelineLink]:
@@ -1905,7 +1913,7 @@ def _inspect_streaming_pipeline_links(pipeline: Pipeline) -> list[StreamingRunti
         warnings = [_runtime_pipeline_warning(reason) for reason in reasons]
         if event_gated and not warnings:
             warnings.append(_runtime_pipeline_warning("explicit_event_gated"))
-        source_node_id, source_id, camera_id = _runtime_pipeline_source_node(
+        source_node_id, source_id, camera_id, camera_source_id = _runtime_pipeline_source_node(
             pipeline_name=pipeline.name,
             nodes_by_id=nodes_by_id,
             upstream_node_ids=upstream_node_ids,
@@ -1924,6 +1932,7 @@ def _inspect_streaming_pipeline_links(pipeline: Pipeline) -> list[StreamingRunti
                 source_node_id=source_node_id,
                 source_id=source_id,
                 camera_id=camera_id,
+                camera_source_id=camera_source_id,
                 writer_id=f"{pipeline.name}:{publish_node_id}",
                 stream_behavior=stream_behavior,
                 event_gated=event_gated,
@@ -2018,10 +2027,14 @@ def _select_source_health(
     if source_id and source_id in source_health_by_id:
         return source_health_by_id[source_id]
     camera_id = str(pipeline_link.camera_id or "").strip()
+    camera_source_id = str(pipeline_link.camera_source_id or "").strip()
     if camera_id:
         for item in source_health_by_id.values():
-            if str(item.camera_id or "").strip() == camera_id:
-                return item
+            if str(item.camera_id or "").strip() != camera_id:
+                continue
+            if camera_source_id and str(item.camera_source_id or "").strip() != camera_source_id:
+                continue
+            return item
     return None
 
 
@@ -2644,6 +2657,33 @@ def _resolve_camera_id_from_settings(settings: Any, *, camera_selector: str) -> 
         }
         if selector in candidates or selector_slug in candidates:
             return camera_id
+    return None
+
+
+def _resolve_camera_source_from_settings(
+    settings: Any,
+    *,
+    camera_id: str,
+    camera_source_id: str | None = None,
+) -> tuple[str, dict[str, Any], str, dict[str, Any]] | None:
+    target_camera_id = str(camera_id or "").strip()
+    if not target_camera_id:
+        return None
+    for device in iter_camera_devices_from_app_settings(settings):
+        current_camera_id = str(device.get("id") or "").strip()
+        if current_camera_id != target_camera_id:
+            continue
+        source = resolve_camera_video_source(
+            device,
+            source_id=str(camera_source_id or "").strip(),
+            enabled_only=True,
+        )
+        if source is None:
+            return None
+        resolved_source_id = str(source.get("id") or "").strip()
+        if not resolved_source_id:
+            return None
+        return current_camera_id, device, resolved_source_id, source
     return None
 
 
@@ -3382,7 +3422,7 @@ def create_streaming_router() -> APIRouter:
 
     async def _require_transmission_camera_controls(
         request: Request, *, transmission_id: str
-    ) -> tuple[Transmission, str]:
+    ) -> tuple[Transmission, str, str | None]:
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
 
@@ -3395,6 +3435,11 @@ def create_streaming_router() -> APIRouter:
         camera_id = (
             str(getattr(controls, "camera_id", "") or "").strip() if controls is not None else ""
         )
+        camera_source_id = (
+            str(getattr(controls, "camera_source_id", "") or "").strip()
+            if controls is not None
+            else ""
+        )
         if not enabled:
             raise HTTPException(
                 status_code=409, detail="Camera controls are not enabled for this transmission"
@@ -3404,7 +3449,7 @@ def create_streaming_router() -> APIRouter:
                 status_code=500,
                 detail="Transmission camera controls are misconfigured (missing camera_id)",
             )
-        return transmission, camera_id
+        return transmission, camera_id, camera_source_id or None
 
     @router.get(
         "/transmissions/{transmission_id}/camera/presets",
@@ -3414,13 +3459,17 @@ def create_streaming_router() -> APIRouter:
         request: Request, transmission_id: str
     ) -> TransmissionCameraPresetsResponse:
         _require_auth(request, action="core:settings:read")
-        _transmission, camera_id = await _require_transmission_camera_controls(
+        _transmission, camera_id, camera_source_id = await _require_transmission_camera_controls(
             request, transmission_id=transmission_id
         )
 
         services = _services(request)
         try:
-            raw_presets = await services.call("cameras.ptz.list_presets", camera_id=camera_id)
+            raw_presets = await services.call(
+                "cameras.ptz.list_presets",
+                camera_id=camera_id,
+                camera_source_id=camera_source_id,
+            )
         except KeyError:
             raise HTTPException(
                 status_code=503,
@@ -3440,6 +3489,7 @@ def create_streaming_router() -> APIRouter:
         return TransmissionCameraPresetsResponse(
             transmission_id=transmission_id,
             camera_id=camera_id,
+            camera_source_id=camera_source_id,
             presets=presets,
         )
 
@@ -3453,14 +3503,17 @@ def create_streaming_router() -> APIRouter:
         body: TransmissionCameraGotoPresetRequest,
     ) -> TransmissionCameraActionResponse:
         _require_auth(request, action="core:settings:read")
-        _transmission, camera_id = await _require_transmission_camera_controls(
+        _transmission, camera_id, camera_source_id = await _require_transmission_camera_controls(
             request, transmission_id=transmission_id
         )
 
         services = _services(request)
         try:
             await services.call(
-                "cameras.ptz.goto_preset", camera_id=camera_id, preset_token=body.preset_token
+                "cameras.ptz.goto_preset",
+                camera_id=camera_id,
+                camera_source_id=camera_source_id,
+                preset_token=body.preset_token,
             )
         except KeyError:
             raise HTTPException(
@@ -3478,13 +3531,17 @@ def create_streaming_router() -> APIRouter:
         request: Request, transmission_id: str
     ) -> TransmissionCameraStatusResponse:
         _require_auth(request, action="core:settings:read")
-        _transmission, camera_id = await _require_transmission_camera_controls(
+        _transmission, camera_id, camera_source_id = await _require_transmission_camera_controls(
             request, transmission_id=transmission_id
         )
 
         services = _services(request)
         try:
-            raw_status = await services.call("cameras.ptz.get_status", camera_id=camera_id)
+            raw_status = await services.call(
+                "cameras.ptz.get_status",
+                camera_id=camera_id,
+                camera_source_id=camera_source_id,
+            )
         except KeyError:
             raise HTTPException(
                 status_code=503,
@@ -3495,6 +3552,7 @@ def create_streaming_router() -> APIRouter:
         return TransmissionCameraStatusResponse(
             transmission_id=transmission_id,
             camera_id=camera_id,
+            camera_source_id=camera_source_id,
             status=status,
         )
 
@@ -3508,7 +3566,7 @@ def create_streaming_router() -> APIRouter:
         body: TransmissionCameraMoveRequest,
     ) -> TransmissionCameraActionResponse:
         _require_auth(request, action="core:settings:read")
-        _transmission, camera_id = await _require_transmission_camera_controls(
+        _transmission, camera_id, camera_source_id = await _require_transmission_camera_controls(
             request, transmission_id=transmission_id
         )
 
@@ -3517,6 +3575,7 @@ def create_streaming_router() -> APIRouter:
             await services.call(
                 "cameras.ptz.continuous_move",
                 camera_id=camera_id,
+                camera_source_id=camera_source_id,
                 pan=float(body.pan),
                 tilt=float(body.tilt),
                 zoom=float(body.zoom),
@@ -3540,7 +3599,7 @@ def create_streaming_router() -> APIRouter:
         body: TransmissionCameraStopRequest,
     ) -> TransmissionCameraActionResponse:
         _require_auth(request, action="core:settings:read")
-        _transmission, camera_id = await _require_transmission_camera_controls(
+        _transmission, camera_id, camera_source_id = await _require_transmission_camera_controls(
             request, transmission_id=transmission_id
         )
 
@@ -3549,6 +3608,7 @@ def create_streaming_router() -> APIRouter:
             await services.call(
                 "cameras.ptz.stop",
                 camera_id=camera_id,
+                camera_source_id=camera_source_id,
                 pan_tilt=bool(body.pan_tilt),
                 zoom=bool(body.zoom),
             )
@@ -3582,6 +3642,14 @@ def create_streaming_router() -> APIRouter:
         )
         if not resolved_camera_id:
             raise HTTPException(status_code=404, detail="Camera not found")
+        resolved_camera_source = _resolve_camera_source_from_settings(
+            app_settings,
+            camera_id=resolved_camera_id,
+            camera_source_id=body.camera_source_id,
+        )
+        if resolved_camera_source is None:
+            raise HTTPException(status_code=409, detail="Camera source not found or disabled")
+        _resolved_camera_id, _camera, resolved_camera_source_id, camera_source = resolved_camera_source
 
         optional = body.optional_parameters
         optional_payload = (
@@ -3602,7 +3670,9 @@ def create_streaming_router() -> APIRouter:
                 transmission_name=transmission.name,
                 transmission_path=transmission.path,
                 camera_id=resolved_camera_id,
+                camera_source_id=resolved_camera_source_id,
                 camera_name=camera_names_by_id(app_settings.extensions).get(resolved_camera_id),
+                camera_source_name=str(camera_source.get("name") or "").strip(),
                 preset_id=body.preset_id,
             )
             pipeline_name = _unique_pipeline_name(suggested, existing_names=existing_names)
@@ -3611,6 +3681,7 @@ def create_streaming_router() -> APIRouter:
             graph = build_streaming_wizard_graph(
                 transmission_id=transmission.id,
                 camera_id=resolved_camera_id,
+                camera_source_id=resolved_camera_source_id,
                 preset_id=body.preset_id,
                 optional_parameters=optional_payload,
             )
@@ -3698,6 +3769,7 @@ def create_streaming_router() -> APIRouter:
             pipeline_name=pipeline_name,
             transmission_id=transmission.id,
             camera_id=resolved_camera_id,
+            camera_source_id=resolved_camera_source_id,
             preset_id=body.preset_id,
             engine_running=local_engine_running,
             warnings=warnings,
@@ -3982,7 +4054,7 @@ def create_streaming_router() -> APIRouter:
             _require_auth(request, action="core:settings:read")
         return await _camera_ingest_resolver(request).resolve(
             camera_id=body.camera_id,
-            channel_id=body.channel_id,
+            source_id=body.source_id,
             consumer_server_id=body.consumer_server_id,
             request_host=_request_host(request),
         )

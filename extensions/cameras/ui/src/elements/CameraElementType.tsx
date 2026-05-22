@@ -383,7 +383,7 @@ function CameraEditor({
       .map((camera) => ({
         id: readString((camera as any).id),
         name: readString((camera as any).name),
-        connectionType: readString((camera as any).connection_type).trim().toLowerCase() as CameraConnectionType | "",
+        connectionType: readString((camera as any).control?.type).trim().toLowerCase() as CameraConnectionType | "",
       }))
       .filter((camera) => Boolean(camera.id));
   }, [camerasIndex]);

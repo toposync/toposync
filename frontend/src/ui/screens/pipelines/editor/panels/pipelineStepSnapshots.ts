@@ -48,7 +48,8 @@ function parseInteractiveStepConfig(step: InteractiveStep): Record<string, unkno
 
 export function resolvePipelineStepSourceIdFromCameraSourceConfig(config: Record<string, unknown>): string | null {
   const cameraId = String((config as any).camera_id ?? "").trim();
-  if (cameraId) return cameraId;
+  const sourceId = String((config as any).source_id ?? "").trim();
+  if (cameraId) return sourceId ? `${cameraId}:${sourceId}` : cameraId;
   const rtspUrl = String((config as any).rtsp_url ?? "").trim();
   if (!rtspUrl) return null;
   return "camera:adhoc";

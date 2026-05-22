@@ -1,6 +1,10 @@
 export type CameraConnectionType = "rtsp" | "onvif";
 export type CameraStreamProfile = "onvif" | "custom";
 export type CameraIngestMode = "centralized" | "runtime_local" | "direct";
+export type CameraControlType = "onvif" | "none";
+export type CameraSourceKind = "video" | "audio" | "data";
+export type CameraSourceRole = "main" | "sub" | "zoom" | "custom";
+export type CameraSourceOriginType = "onvif_profile" | "rtsp";
 
 export type CameraIngestConfig = {
   mode: CameraIngestMode;
@@ -21,25 +25,59 @@ export type CameraOnvifConfig = {
   hardware?: string;
 };
 
-export type CameraConfig = {
-  id: string;
-  name: string;
-  connection_type: CameraConnectionType;
-  channel_id?: string;
-  stream_profile: CameraStreamProfile;
+export type CameraControlConfig = {
+  type: CameraControlType;
+};
+
+export type CameraSourceOriginConfig = {
+  type: CameraSourceOriginType;
   rtsp_url: string;
   stream_username?: string;
   stream_password?: string;
+  profile_token?: string | null;
+  profile_name?: string | null;
+  has_ptz?: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+export type CameraSourceVideoConfig = {
+  width?: number | null;
+  height?: number | null;
+  fps?: number | null;
+  codec?: string | null;
+};
+
+export type CameraSourceConfig = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  is_default: boolean;
+  kind: CameraSourceKind;
+  role: CameraSourceRole;
+  view_id: string;
+  origin: CameraSourceOriginConfig;
+  video: CameraSourceVideoConfig;
   ingest: CameraIngestConfig;
-  /** Legacy credentials kept only while parsing older settings. */
-  username?: string;
-  password?: string;
-  fps: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type CameraConfig = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  control: CameraControlConfig;
   onvif?: CameraOnvifConfig | null;
+  sources: CameraSourceConfig[];
+  metadata?: Record<string, unknown>;
 };
 
 export type CamerasIndex = {
-  cameras: Array<{ id: string; name: string; connection_type: CameraConnectionType | string; ingest?: CameraIngestConfig }>;
+  cameras: Array<{
+    id: string;
+    name: string;
+    control?: CameraControlConfig;
+    sources?: CameraSourceConfig[];
+  }>;
 };
 
 export type ProcessingServer = {
@@ -62,6 +100,8 @@ export type CameraSourceHealthStatus =
 export type CameraSourceHealthItem = {
   source_id: string;
   camera_id?: string | null;
+  camera_source_id?: string | null;
+  camera_source_name?: string | null;
   camera_name?: string | null;
   pipeline_name?: string | null;
   node_id?: string | null;
@@ -186,6 +226,7 @@ export type CameraPipelineWizardPreset = "people" | "vehicles_stopped" | "pets";
 
 export type CameraPipelineWizardRequest = {
   preset: CameraPipelineWizardPreset;
+  source_id?: string;
   pipeline_name?: string;
   enabled?: boolean;
   processing_server_id?: string;

@@ -27,29 +27,46 @@ def _create_client(tmp_path: Path) -> TestClient:
 
     services = ServiceRegistry()
 
-    async def list_presets(*, camera_id: str) -> list[dict[str, Any]]:
+    async def list_presets(*, camera_id: str, camera_source_id: str | None = None) -> list[dict[str, Any]]:
         assert camera_id == "cam1"
+        assert camera_source_id is None
         return [{"token": "home", "name": "Home"}]
 
-    async def goto_preset(*, camera_id: str, preset_token: str) -> dict[str, Any]:
+    async def goto_preset(
+        *, camera_id: str, preset_token: str, camera_source_id: str | None = None
+    ) -> dict[str, Any]:
         assert camera_id == "cam1"
+        assert camera_source_id is None
         assert preset_token == "home"
         return {"ok": True}
 
-    async def get_status(*, camera_id: str) -> dict[str, Any]:
+    async def get_status(*, camera_id: str, camera_source_id: str | None = None) -> dict[str, Any]:
         assert camera_id == "cam1"
+        assert camera_source_id is None
         return {"pan": 0.1, "tilt": -0.2, "zoom": 0.0, "move_status": "IDLE", "error": "", "utc_time": "2026-01-01T00:00:00Z"}
 
-    async def continuous_move(*, camera_id: str, pan: float, tilt: float, zoom: float, timeout_s: float | None = None) -> dict[str, Any]:
+    async def continuous_move(
+        *,
+        camera_id: str,
+        pan: float,
+        tilt: float,
+        zoom: float,
+        timeout_s: float | None = None,
+        camera_source_id: str | None = None,
+    ) -> dict[str, Any]:
         assert camera_id == "cam1"
+        assert camera_source_id is None
         assert pan == 0.5
         assert tilt == -0.5
         assert zoom == 0.0
         assert timeout_s == 0.25
         return {"ok": True}
 
-    async def stop(*, camera_id: str, pan_tilt: bool = True, zoom: bool = True) -> dict[str, Any]:
+    async def stop(
+        *, camera_id: str, pan_tilt: bool = True, zoom: bool = True, camera_source_id: str | None = None
+    ) -> dict[str, Any]:
         assert camera_id == "cam1"
+        assert camera_source_id is None
         assert pan_tilt is True
         assert zoom is True
         return {"ok": True}
@@ -129,4 +146,3 @@ def test_transmission_camera_controls_routes_reject_when_disabled(tmp_path: Path
 
         res = client.get(f"/api/streams/transmissions/{transmission_id}/camera/presets")
         assert res.status_code == 409
-

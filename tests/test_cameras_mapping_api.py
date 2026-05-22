@@ -334,29 +334,44 @@ def test_camera_ptz_routes_forward_to_services(tmp_path: Path, monkeypatch: pyte
     with _create_client_with_cameras(tmp_path, monkeypatch) as client:
         services = client.app.state.services
 
-        async def list_presets(*, camera_id: str):
+        async def list_presets(*, camera_id: str, camera_source_id: str | None = None):
             assert camera_id == "cam1"
+            assert camera_source_id is None
             return [{"token": "home", "name": "Home", "pan": 0.1, "tilt": -0.2, "zoom": 0.3}]
 
-        async def goto_preset(*, camera_id: str, preset_token: str):
+        async def goto_preset(*, camera_id: str, preset_token: str, camera_source_id: str | None = None):
             assert camera_id == "cam1"
+            assert camera_source_id is None
             assert preset_token == "home"
             return {"ok": True}
 
-        async def get_status(*, camera_id: str):
+        async def get_status(*, camera_id: str, camera_source_id: str | None = None):
             assert camera_id == "cam1"
+            assert camera_source_id is None
             return {"pan": 0.1, "tilt": -0.2, "zoom": 0.3, "move_status": "IDLE", "error": "", "utc_time": "2026-01-01T00:00:00Z"}
 
-        async def move(*, camera_id: str, pan: float, tilt: float, zoom: float, timeout_s: float | None = None):
+        async def move(
+            *,
+            camera_id: str,
+            pan: float,
+            tilt: float,
+            zoom: float,
+            timeout_s: float | None = None,
+            camera_source_id: str | None = None,
+        ):
             assert camera_id == "cam1"
+            assert camera_source_id is None
             assert pan == pytest.approx(0.5)
             assert tilt == pytest.approx(-0.5)
             assert zoom == pytest.approx(0.25)
             assert timeout_s == pytest.approx(0.8)
             return {"ok": True}
 
-        async def stop(*, camera_id: str, pan_tilt: bool = True, zoom: bool = True):
+        async def stop(
+            *, camera_id: str, pan_tilt: bool = True, zoom: bool = True, camera_source_id: str | None = None
+        ):
             assert camera_id == "cam1"
+            assert camera_source_id is None
             assert pan_tilt is True
             assert zoom is False
             return {"ok": True}

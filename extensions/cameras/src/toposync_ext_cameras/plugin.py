@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from toposync.extensions import BaseExtension
 from toposync.runtime.auth import AuthContext, AuthRuntime
@@ -37,9 +37,11 @@ from .settings import (
     flatten_camera_device_for_ui,
     get_camera_device,
     get_camera_onvif_credentials,
-    get_camera_stream_credentials,
-    get_camera_stream_profile,
-    get_primary_video_channel,
+    get_camera_source,
+    get_camera_source_credentials,
+    get_camera_source_origin,
+    get_camera_source_origin_type,
+    get_default_camera_source,
     iter_camera_devices,
     normalize_cameras_settings,
 )
@@ -74,6 +76,12 @@ class RtspProbeRequest(BaseModel):
 
 class CameraRtspProbeRequest(BaseModel):
     timeout_ms: int = Field(default=5000, ge=1000, le=30000)
+    source_id: str = ""
+
+    @field_validator("source_id", mode="before")
+    @classmethod
+    def _trim_source_id(cls, value: Any) -> str:
+        return str(value or "").strip()
 
 
 class RtspProbeResponse(BaseModel):
@@ -89,6 +97,8 @@ class RtspProbeResponse(BaseModel):
 class CameraSourceHealthItem(BaseModel):
     source_id: str
     camera_id: str | None = None
+    camera_source_id: str | None = None
+    camera_source_name: str | None = None
     camera_name: str | None = None
     pipeline_name: str | None = None
     node_id: str | None = None
@@ -250,11 +260,13 @@ class CameraPtzStatus(BaseModel):
 
 class CameraPtzPresetsResponse(BaseModel):
     camera_id: str
+    camera_source_id: str | None = None
     presets: list[CameraPtzPreset] = Field(default_factory=list)
 
 
 class CameraPtzStatusResponse(BaseModel):
     camera_id: str
+    camera_source_id: str | None = None
     status: CameraPtzStatus = Field(default_factory=CameraPtzStatus)
 
 
@@ -264,9 +276,11 @@ class CameraPtzActionResponse(BaseModel):
 
 class CameraPtzGotoPresetRequest(BaseModel):
     preset_token: str
+    source_id: str = ""
 
 
 class CameraPtzMoveRequest(BaseModel):
+    source_id: str = ""
     pan: float = Field(default=0.0, ge=-1.0, le=1.0)
     tilt: float = Field(default=0.0, ge=-1.0, le=1.0)
     zoom: float = Field(default=0.0, ge=-1.0, le=1.0)
@@ -274,12 +288,14 @@ class CameraPtzMoveRequest(BaseModel):
 
 
 class CameraPtzStopRequest(BaseModel):
+    source_id: str = ""
     pan_tilt: bool = True
     zoom: bool = True
 
 
 class CameraPipelineWizardRequest(BaseModel):
     preset: Literal["people", "vehicles_stopped", "pets"]
+    source_id: str = ""
     pipeline_name: str = ""
     enabled: bool = True
     processing_server_id: str = "local"
@@ -749,7 +765,11 @@ class CamerasExtension(BaseExtension):
 
             return max(profiles, key=score)
 
-        async def _resolve_onvif_ptz_context(*, camera_id: str) -> tuple[OnvifClient, str, str]:
+        async def _resolve_onvif_ptz_context(
+            *,
+            camera_id: str,
+            camera_source_id: str | None = None,
+        ) -> tuple[OnvifClient, str, str, str]:
             cid = str(camera_id or "").strip()
             if not cid:
                 raise HTTPException(status_code=400, detail="camera_id is required")
@@ -765,27 +785,35 @@ class CamerasExtension(BaseExtension):
             if camera is None:
                 raise HTTPException(status_code=404, detail="Camera not found")
 
-            channel = get_primary_video_channel(camera)
-            if not isinstance(channel, dict):
+            source = get_camera_source(
+                camera,
+                source_id=str(camera_source_id or "").strip(),
+                kind="video",
+                enabled_only=True,
+            )
+            if not isinstance(source, dict):
                 raise HTTPException(
-                    status_code=409, detail="Camera has no video channel configured"
+                    status_code=409, detail="Camera has no video source configured"
                 )
 
-            if str(channel.get("connection_type") or "rtsp").strip().lower() != "onvif":
+            control = camera.get("control") if isinstance(camera.get("control"), dict) else {}
+            if str(control.get("type") or "").strip().lower() != "onvif":
                 raise HTTPException(
                     status_code=409, detail="Camera controls are only supported for ONVIF cameras"
                 )
 
-            onvif_raw = channel.get("onvif")
+            onvif_raw = camera.get("onvif")
             onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
             xaddr = normalize_onvif_xaddr(str(onvif.get("xaddr") or "").strip())
             if not xaddr:
                 raise HTTPException(status_code=409, detail="Camera is missing ONVIF xaddr")
 
-            username, password = get_camera_onvif_credentials(channel)
+            username, password = get_camera_onvif_credentials(camera)
             ptz_xaddr = str(onvif.get("ptz_xaddr") or "").strip()
             media_xaddr = str(onvif.get("media_xaddr") or "").strip()
-            profile_token = str(onvif.get("ptz_profile_token") or "").strip()
+            origin = get_camera_source_origin(source)
+            profile_token = str(origin.get("profile_token") or "").strip()
+            source_id = str(source.get("id") or "").strip()
             signature = _onvif_ptz_signature(
                 xaddr=xaddr,
                 ptz_xaddr=ptz_xaddr,
@@ -795,7 +823,8 @@ class CamerasExtension(BaseExtension):
             )
 
             now = time.time()
-            cached = onvif_ptz_cache.get(cid)
+            cache_key = f"{cid}:{source_id or 'default'}"
+            cached = onvif_ptz_cache.get(cache_key)
             if (
                 cached is not None
                 and cached.signature == signature
@@ -812,11 +841,11 @@ class CamerasExtension(BaseExtension):
                     ),
                     auth_mode="auto",
                 )
-                return client, cached.ptz_xaddr, cached.profile_token
+                return client, cached.ptz_xaddr, cached.profile_token, source_id
 
-            async with _get_onvif_ptz_lock(cid):
+            async with _get_onvif_ptz_lock(cache_key):
                 now = time.time()
-                cached = onvif_ptz_cache.get(cid)
+                cached = onvif_ptz_cache.get(cache_key)
                 if (
                     cached is not None
                     and cached.signature == signature
@@ -836,7 +865,7 @@ class CamerasExtension(BaseExtension):
                         ),
                         auth_mode="auto",
                     )
-                    return client, cached.ptz_xaddr, cached.profile_token
+                    return client, cached.ptz_xaddr, cached.profile_token, source_id
 
                 timeout_s = _env_float(
                     "TOPOSYNC_CAMERA_ONVIF_TIMEOUT_S",
@@ -887,12 +916,12 @@ class CamerasExtension(BaseExtension):
                         )
                     profile_token = str(selected.token or "").strip()
 
-                prev = onvif_ptz_cache.get(cid)
+                prev = onvif_ptz_cache.get(cache_key)
                 prev_mode = "continuous"
                 if prev is not None and str(getattr(prev, "signature", "") or "") == signature:
                     prev_mode = str(getattr(prev, "move_mode", "") or "").strip() or "continuous"
 
-                onvif_ptz_cache[cid] = _OnvifPtzContextCacheEntry(
+                onvif_ptz_cache[cache_key] = _OnvifPtzContextCacheEntry(
                     signature=signature,
                     ptz_xaddr=ptz_xaddr,
                     media_xaddr=media_xaddr,
@@ -901,14 +930,17 @@ class CamerasExtension(BaseExtension):
                     move_mode=prev_mode,
                 )
 
-                return client, ptz_xaddr, profile_token
+                return client, ptz_xaddr, profile_token, source_id
 
         def _clamp(value: float, minimum: float, maximum: float) -> float:
             return max(minimum, min(maximum, float(value)))
 
-        async def _svc_ptz_list_presets(*, camera_id: str) -> list[dict[str, Any]]:
-            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(
-                camera_id=str(camera_id or "").strip()
+        async def _svc_ptz_list_presets(
+            *, camera_id: str, camera_source_id: str | None = None
+        ) -> list[dict[str, Any]]:
+            client, ptz_xaddr, profile_token, _source_id = await _resolve_onvif_ptz_context(
+                camera_id=str(camera_id or "").strip(),
+                camera_source_id=camera_source_id,
             )
             try:
                 presets = await client.get_ptz_presets(ptz_xaddr, profile_token=profile_token)
@@ -926,12 +958,15 @@ class CamerasExtension(BaseExtension):
                 if str(p.token or "").strip()
             ]
 
-        async def _svc_ptz_goto_preset(*, camera_id: str, preset_token: str) -> dict[str, Any]:
+        async def _svc_ptz_goto_preset(
+            *, camera_id: str, preset_token: str, camera_source_id: str | None = None
+        ) -> dict[str, Any]:
             token = str(preset_token or "").strip()
             if not token:
                 raise HTTPException(status_code=400, detail="preset_token is required")
-            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(
-                camera_id=str(camera_id or "").strip()
+            client, ptz_xaddr, profile_token, _source_id = await _resolve_onvif_ptz_context(
+                camera_id=str(camera_id or "").strip(),
+                camera_source_id=camera_source_id,
             )
             try:
                 await client.goto_preset(ptz_xaddr, profile_token=profile_token, preset_token=token)
@@ -939,9 +974,12 @@ class CamerasExtension(BaseExtension):
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
             return {"ok": True}
 
-        async def _svc_ptz_get_status(*, camera_id: str) -> dict[str, Any]:
-            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(
-                camera_id=str(camera_id or "").strip()
+        async def _svc_ptz_get_status(
+            *, camera_id: str, camera_source_id: str | None = None
+        ) -> dict[str, Any]:
+            client, ptz_xaddr, profile_token, _source_id = await _resolve_onvif_ptz_context(
+                camera_id=str(camera_id or "").strip(),
+                camera_source_id=camera_source_id,
             )
             try:
                 status = await client.get_ptz_status(ptz_xaddr, profile_token=profile_token)
@@ -959,13 +997,17 @@ class CamerasExtension(BaseExtension):
         async def _svc_ptz_continuous_move(
             *,
             camera_id: str,
+            camera_source_id: str | None = None,
             pan: float = 0.0,
             tilt: float = 0.0,
             zoom: float = 0.0,
             timeout_s: float | None = None,
         ) -> dict[str, Any]:
             cid = str(camera_id or "").strip()
-            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(camera_id=cid)
+            client, ptz_xaddr, profile_token, resolved_source_id = await _resolve_onvif_ptz_context(
+                camera_id=cid,
+                camera_source_id=camera_source_id,
+            )
             safe_timeout = None
             if timeout_s is not None:
                 try:
@@ -980,7 +1022,7 @@ class CamerasExtension(BaseExtension):
             safe_tilt = _clamp(float(tilt), -1.0, 1.0)
             safe_zoom = _clamp(float(zoom), -1.0, 1.0)
 
-            entry = onvif_ptz_cache.get(cid)
+            entry = onvif_ptz_cache.get(f"{cid}:{resolved_source_id or 'default'}")
             move_mode = str(getattr(entry, "move_mode", "") or "").strip() or "continuous"
 
             async def _do_relative_move() -> None:
@@ -1026,11 +1068,13 @@ class CamerasExtension(BaseExtension):
         async def _svc_ptz_stop(
             *,
             camera_id: str,
+            camera_source_id: str | None = None,
             pan_tilt: bool = True,
             zoom: bool = True,
         ) -> dict[str, Any]:
-            client, ptz_xaddr, profile_token = await _resolve_onvif_ptz_context(
-                camera_id=str(camera_id or "").strip()
+            client, ptz_xaddr, profile_token, _source_id = await _resolve_onvif_ptz_context(
+                camera_id=str(camera_id or "").strip(),
+                camera_source_id=camera_source_id,
             )
             try:
                 await client.stop(
@@ -1066,7 +1110,12 @@ class CamerasExtension(BaseExtension):
                 snapshot_locks[key] = lock
             return lock
 
-        async def _resolve_camera_rtsp_url_for_probe(request: Request, camera_id: str) -> str:
+        async def _resolve_camera_rtsp_url_for_probe(
+            request: Request,
+            camera_id: str,
+            *,
+            source_id: str = "",
+        ) -> str:
             cid = str(camera_id or "").strip()
             if not cid:
                 raise HTTPException(status_code=400, detail="camera_id is required")
@@ -1074,21 +1123,24 @@ class CamerasExtension(BaseExtension):
             camera = get_camera_device(ext, camera_id=cid)
             if camera is None:
                 raise HTTPException(status_code=404, detail="Unknown camera")
-            channel = get_primary_video_channel(camera)
-            if not isinstance(channel, dict):
-                raise HTTPException(status_code=404, detail="Unknown camera")
-            ctype = str(channel.get("connection_type", "rtsp")).strip().lower() or "rtsp"
-            if ctype not in {"rtsp", "onvif"}:
-                raise HTTPException(status_code=400, detail="Unsupported camera connection type")
-            url_raw = str(channel.get("rtsp_url", "")).strip()
-            stream_profile = get_camera_stream_profile(channel)
-            if not url_raw and ctype == "onvif" and stream_profile == "onvif":
-                onvif_raw = channel.get("onvif")
+            source = get_camera_source(
+                camera,
+                source_id=str(source_id or "").strip(),
+                kind="video",
+                enabled_only=True,
+            )
+            if not isinstance(source, dict):
+                raise HTTPException(status_code=404, detail="Unknown camera source")
+            origin = get_camera_source_origin(source)
+            origin_type = get_camera_source_origin_type(source)
+            url_raw = str(origin.get("rtsp_url", "")).strip()
+            if not url_raw and origin_type == "onvif_profile":
+                onvif_raw = camera.get("onvif")
                 onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
                 xaddr = normalize_onvif_xaddr(str(onvif.get("xaddr") or "").strip())
                 if not xaddr:
                     raise HTTPException(status_code=400, detail="Camera ONVIF xaddr is not configured")
-                username, password = get_camera_onvif_credentials(channel)
+                username, password = get_camera_onvif_credentials(camera)
                 client = OnvifClient(
                     xaddr=xaddr,
                     username=username,
@@ -1110,7 +1162,7 @@ class CamerasExtension(BaseExtension):
                         status_code=502,
                         detail="ONVIF device did not report a Media service URL",
                     )
-                profile_token = str(onvif.get("profile_token") or "").strip()
+                profile_token = str(origin.get("profile_token") or "").strip()
                 if not profile_token:
                     try:
                         profiles = await client.get_profiles(media_xaddr)
@@ -1125,10 +1177,8 @@ class CamerasExtension(BaseExtension):
                 except OnvifError as exc:
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
             if not url_raw:
-                if ctype == "onvif" and stream_profile == "custom":
-                    raise HTTPException(status_code=400, detail="Camera custom stream profile requires RTSP URL")
-                raise HTTPException(status_code=400, detail="Camera RTSP URL is not configured")
-            username, password = get_camera_stream_credentials(channel)
+                raise HTTPException(status_code=400, detail="Camera source RTSP URL is not configured")
+            username, password = get_camera_source_credentials(camera, source)
             try:
                 return _rtsp_url_with_auth(url_raw, username, password)
             except ValueError as exc:
@@ -1155,7 +1205,11 @@ class CamerasExtension(BaseExtension):
             body: CameraRtspProbeRequest | None = None,
         ) -> RtspProbeResponse:
             _require_auth(request, action="core:settings:read")
-            url = await _resolve_camera_rtsp_url_for_probe(request, camera_id)
+            url = await _resolve_camera_rtsp_url_for_probe(
+                request,
+                camera_id,
+                source_id=str(body.source_id if body is not None else "").strip(),
+            )
             timeout_ms = int(body.timeout_ms if body is not None else 5000)
             return await _ffmpeg_rtsp_probe(url, timeout_ms=timeout_ms)
 
@@ -1174,9 +1228,12 @@ class CamerasExtension(BaseExtension):
                     {
                         "id": cid,
                         "name": str(flattened.get("name") or "").strip(),
-                        "connection_type": str(flattened.get("connection_type") or "rtsp").strip()
-                        or "rtsp",
-                        "ingest": flattened.get("ingest") if isinstance(flattened.get("ingest"), dict) else {},
+                        "control": flattened.get("control")
+                        if isinstance(flattened.get("control"), dict)
+                        else {"type": "none"},
+                        "sources": flattened.get("sources")
+                        if isinstance(flattened.get("sources"), list)
+                        else [],
                     }
                 )
 
@@ -1211,16 +1268,17 @@ class CamerasExtension(BaseExtension):
             for device in iter_camera_devices(ext):
                 if not isinstance(device, dict):
                     continue
-                channel = get_primary_video_channel(device)
-                if not isinstance(channel, dict):
-                    continue
-                rtsp_url = str(channel.get("rtsp_url") or "").strip()
-                if rtsp_url:
-                    host = _normalized_host(rtsp_url)
-                    if host:
-                        known_hosts.add(host)
+                for source in device.get("sources") if isinstance(device.get("sources"), list) else []:
+                    if not isinstance(source, dict):
+                        continue
+                    origin = get_camera_source_origin(source)
+                    rtsp_url = str(origin.get("rtsp_url") or "").strip()
+                    if rtsp_url:
+                        host = _normalized_host(rtsp_url)
+                        if host:
+                            known_hosts.add(host)
 
-                onvif = channel.get("onvif")
+                onvif = device.get("onvif")
                 onvif_rec = onvif if isinstance(onvif, dict) else {}
                 device_id = str(onvif_rec.get("device_id") or "").strip()
                 if device_id:
@@ -1443,7 +1501,9 @@ class CamerasExtension(BaseExtension):
         @app.get(
             "/api/cameras/cameras/{camera_id}/ptz/presets", response_model=CameraPtzPresetsResponse
         )
-        async def camera_ptz_presets(request: Request, camera_id: str) -> CameraPtzPresetsResponse:
+        async def camera_ptz_presets(
+            request: Request, camera_id: str, source_id: str = ""
+        ) -> CameraPtzPresetsResponse:
             _require_auth(request, action="core:settings:read")
             cid = str(camera_id or "").strip()
             if not cid:
@@ -1451,7 +1511,11 @@ class CamerasExtension(BaseExtension):
 
             services = _services(request)
             try:
-                raw_presets = await services.call("cameras.ptz.list_presets", camera_id=cid)
+                raw_presets = await services.call(
+                    "cameras.ptz.list_presets",
+                    camera_id=cid,
+                    camera_source_id=str(source_id or "").strip() or None,
+                )
             except KeyError:
                 raise HTTPException(
                     status_code=503, detail="Camera PTZ controls are not available"
@@ -1467,7 +1531,12 @@ class CamerasExtension(BaseExtension):
                     except Exception:
                         continue
 
-            return CameraPtzPresetsResponse(camera_id=cid, presets=presets)
+            resolved_source_id = str(source_id or "").strip() or None
+            return CameraPtzPresetsResponse(
+                camera_id=cid,
+                camera_source_id=resolved_source_id,
+                presets=presets,
+            )
 
         @app.post(
             "/api/cameras/cameras/{camera_id}/ptz/goto-preset",
@@ -1486,7 +1555,10 @@ class CamerasExtension(BaseExtension):
             services = _services(request)
             try:
                 await services.call(
-                    "cameras.ptz.goto_preset", camera_id=cid, preset_token=body.preset_token
+                    "cameras.ptz.goto_preset",
+                    camera_id=cid,
+                    camera_source_id=str(getattr(body, "source_id", "") or "").strip() or None,
+                    preset_token=body.preset_token,
                 )
             except KeyError:
                 raise HTTPException(
@@ -1498,7 +1570,9 @@ class CamerasExtension(BaseExtension):
         @app.get(
             "/api/cameras/cameras/{camera_id}/ptz/status", response_model=CameraPtzStatusResponse
         )
-        async def camera_ptz_status(request: Request, camera_id: str) -> CameraPtzStatusResponse:
+        async def camera_ptz_status(
+            request: Request, camera_id: str, source_id: str = ""
+        ) -> CameraPtzStatusResponse:
             _require_auth(request, action="core:settings:read")
             cid = str(camera_id or "").strip()
             if not cid:
@@ -1506,7 +1580,11 @@ class CamerasExtension(BaseExtension):
 
             services = _services(request)
             try:
-                raw_status = await services.call("cameras.ptz.get_status", camera_id=cid)
+                raw_status = await services.call(
+                    "cameras.ptz.get_status",
+                    camera_id=cid,
+                    camera_source_id=str(source_id or "").strip() or None,
+                )
             except KeyError:
                 raise HTTPException(
                     status_code=503, detail="Camera PTZ controls are not available"
@@ -1514,6 +1592,7 @@ class CamerasExtension(BaseExtension):
 
             return CameraPtzStatusResponse(
                 camera_id=cid,
+                camera_source_id=str(source_id or "").strip() or None,
                 status=CameraPtzStatus.model_validate(
                     raw_status if isinstance(raw_status, dict) else {}
                 ),
@@ -1537,6 +1616,7 @@ class CamerasExtension(BaseExtension):
                 await services.call(
                     "cameras.ptz.continuous_move",
                     camera_id=cid,
+                    camera_source_id=str(getattr(body, "source_id", "") or "").strip() or None,
                     pan=float(body.pan),
                     tilt=float(body.tilt),
                     zoom=float(body.zoom),
@@ -1567,6 +1647,7 @@ class CamerasExtension(BaseExtension):
                 await services.call(
                     "cameras.ptz.stop",
                     camera_id=cid,
+                    camera_source_id=str(getattr(body, "source_id", "") or "").strip() or None,
                     pan_tilt=bool(body.pan_tilt),
                     zoom=bool(body.zoom),
                 )
@@ -1611,7 +1692,7 @@ class CamerasExtension(BaseExtension):
             return Response(content=result.blob, media_type="image/jpeg", headers=headers)
 
         @app.get("/api/cameras/cameras/{camera_id}/snapshot")
-        async def camera_snapshot(request: Request, camera_id: str) -> Response:
+        async def camera_snapshot(request: Request, camera_id: str, source_id: str = "") -> Response:
             cid = camera_id.strip()
             if not cid:
                 raise HTTPException(status_code=400, detail="camera_id is required")
@@ -1621,15 +1702,13 @@ class CamerasExtension(BaseExtension):
             if camera is None:
                 raise HTTPException(status_code=404, detail="Unknown camera")
 
-            channel = get_primary_video_channel(camera)
-            if not isinstance(channel, dict):
-                raise HTTPException(status_code=404, detail="Unknown camera")
+            resolved_source_id = str(source_id or "").strip()
+            source = get_camera_source(camera, source_id=resolved_source_id, kind="video", enabled_only=True)
+            if not isinstance(source, dict):
+                raise HTTPException(status_code=404, detail="Unknown camera source")
+            resolved_source_id = str(source.get("id") or "").strip()
 
-            ctype = str(channel.get("connection_type", "rtsp")).strip().lower() or "rtsp"
-            if ctype not in {"rtsp", "onvif"}:
-                raise HTTPException(status_code=400, detail="Unsupported camera connection type")
-
-            cache_key = f"cam:{cid}"
+            cache_key = f"cam:{cid}:source:{resolved_source_id or 'default'}"
             lock = _get_lock(cache_key)
             async with lock:
                 now = time.time()
@@ -1639,7 +1718,11 @@ class CamerasExtension(BaseExtension):
                         content=cached.blob, media_type="image/jpeg", headers=cached.headers
                     )
 
-                url = await _resolve_camera_rtsp_url_for_probe(request, cid)
+                url = await _resolve_camera_rtsp_url_for_probe(
+                    request,
+                    cid,
+                    source_id=resolved_source_id,
+                )
 
                 async with snapshot_ffmpeg_sema:
                     result = await _ffmpeg_snapshot(url, timeout_ms=9000)
@@ -1814,6 +1897,7 @@ class CamerasExtension(BaseExtension):
             *,
             preset: str,
             camera_id: str,
+            source_id: str,
             composition_id: str,
             area_name: str,
             area_points: list[dict[str, float]],
@@ -1825,7 +1909,11 @@ class CamerasExtension(BaseExtension):
                 motion_hold_seconds = 10.0
 
             base_nodes: list[dict[str, Any]] = [
-                {"id": "source", "operator": "camera.source", "config": {"camera_id": camera_id}},
+                {
+                    "id": "source",
+                    "operator": "camera.source",
+                    "config": {"camera_id": camera_id, "source_id": source_id},
+                },
                 {
                     "id": "motion",
                     "operator": "camera.motion_gate",
@@ -2216,8 +2304,18 @@ class CamerasExtension(BaseExtension):
             compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
 
             ext = await _read_ext_settings(request)
-            if get_camera_device(ext, camera_id=cid) is None:
+            camera = get_camera_device(ext, camera_id=cid)
+            if camera is None:
                 raise HTTPException(status_code=404, detail="Unknown camera")
+            source = get_camera_source(
+                camera,
+                source_id=str(body.source_id or "").strip(),
+                kind="video",
+                enabled_only=True,
+            )
+            if not isinstance(source, dict):
+                raise HTTPException(status_code=409, detail="Camera source not found or disabled")
+            source_id = str(source.get("id") or "").strip()
 
             cfg = await store.get_config()
 
@@ -2261,13 +2359,14 @@ class CamerasExtension(BaseExtension):
                     )
             else:
                 pipeline_name = _unique_pipeline_name(
-                    f"camera_{cid}__{preset}", existing_names=existing_names
+                    f"camera_{cid}__{source_id}__{preset}", existing_names=existing_names
                 )
 
             try:
                 graph = _build_wizard_graph(
                     preset=preset,
                     camera_id=cid,
+                    source_id=source_id,
                     composition_id=composition_id,
                     area_name=area_name,
                     area_points=area_points,

@@ -45,9 +45,17 @@ def test_resolve_onvif_rtsp_url_cached_auto_selects_profile_and_caches(monkeypat
     camera = {
         "onvif": {"xaddr": "192.168.0.10", "username": "admin", "password": "secret"},
     }
+    source = {
+        "id": "hq",
+        "origin": {"type": "onvif_profile"},
+    }
 
-    rtsp1 = asyncio.run(ops._resolve_onvif_rtsp_url_cached(camera_id="cam-1", camera=camera))
-    rtsp2 = asyncio.run(ops._resolve_onvif_rtsp_url_cached(camera_id="cam-1", camera=camera))
+    rtsp1 = asyncio.run(
+        ops._resolve_onvif_rtsp_url_cached(camera_id="cam-1", source_id="hq", camera=camera, source=source)
+    )
+    rtsp2 = asyncio.run(
+        ops._resolve_onvif_rtsp_url_cached(camera_id="cam-1", source_id="hq", camera=camera, source=source)
+    )
 
     assert rtsp1 == "rtsp://192.168.0.10/hq"
     assert rtsp2 == rtsp1
@@ -89,11 +97,21 @@ def test_resolve_onvif_rtsp_url_cached_respects_profile_token(monkeypatch: pytes
             "xaddr": "192.168.0.10",
             "username": "admin",
             "password": "secret",
-            "profile_token": "configured-token",
         },
     }
+    source = {
+        "id": "configured",
+        "origin": {"type": "onvif_profile", "profile_token": "configured-token"},
+    }
 
-    rtsp = asyncio.run(ops._resolve_onvif_rtsp_url_cached(camera_id="cam-2", camera=camera))
+    rtsp = asyncio.run(
+        ops._resolve_onvif_rtsp_url_cached(
+            camera_id="cam-2",
+            source_id="configured",
+            camera=camera,
+            source=source,
+        )
+    )
     assert rtsp == "rtsp://192.168.0.10/stream2"
     assert FakeClient.stream_calls == 1
 
@@ -110,17 +128,21 @@ def test_resolve_camera_stream_custom_uses_stream_credentials(monkeypatch: pytes
     stream = asyncio.run(
         ops._resolve_camera_stream(
             camera_id="front",
-            camera={"id": "front"},
-            channel={
-                "connection_type": "onvif",
-                "stream_profile": "custom",
-                "rtsp_url": "rtsp://127.0.0.1:8554/front",
-                "stream_username": "ingest-user",
-                "stream_password": "ingest-pass",
+            camera={
+                "id": "front",
                 "onvif": {
                     "xaddr": "192.168.0.10",
                     "username": "camera-user",
                     "password": "camera-pass",
+                },
+            },
+            source={
+                "id": "external",
+                "origin": {
+                    "type": "rtsp",
+                    "rtsp_url": "rtsp://127.0.0.1:8554/front",
+                    "stream_username": "ingest-user",
+                    "stream_password": "ingest-pass",
                 },
             },
         )
@@ -137,17 +159,22 @@ def test_resolve_camera_stream_onvif_profile_falls_back_to_onvif_credentials() -
     stream = asyncio.run(
         ops._resolve_camera_stream(
             camera_id="front",
-            camera={"id": "front"},
-            channel={
-                "connection_type": "onvif",
-                "stream_profile": "onvif",
-                "rtsp_url": "rtsp://192.168.0.10/main",
-                "stream_username": "",
-                "stream_password": "",
+            camera={
+                "id": "front",
                 "onvif": {
                     "xaddr": "192.168.0.10",
                     "username": "camera-user",
                     "password": "camera-pass",
+                },
+            },
+            source={
+                "id": "main",
+                "origin": {
+                    "type": "onvif_profile",
+                    "rtsp_url": "rtsp://192.168.0.10/main",
+                    "stream_username": "",
+                    "stream_password": "",
+                    "profile_token": "main-token",
                 },
             },
         )
@@ -161,16 +188,11 @@ def test_resolve_camera_stream_onvif_profile_falls_back_to_onvif_credentials() -
 def test_resolve_camera_stream_custom_requires_rtsp_url() -> None:
     import toposync_ext_cameras.pipelines.operators as ops
 
-    with pytest.raises(ops._CameraSourcePendingError, match="custom stream profile requires rtsp_url"):
+    with pytest.raises(ops._CameraSourcePendingError, match="source 'external' has empty rtsp_url"):
         asyncio.run(
             ops._resolve_camera_stream(
                 camera_id="front",
-                camera={"id": "front"},
-                channel={
-                    "connection_type": "onvif",
-                    "stream_profile": "custom",
-                    "rtsp_url": "",
-                    "onvif": {"xaddr": "192.168.0.10"},
-                },
+                camera={"id": "front", "onvif": {"xaddr": "192.168.0.10"}},
+                source={"id": "external", "origin": {"type": "rtsp", "rtsp_url": ""}},
             )
         )

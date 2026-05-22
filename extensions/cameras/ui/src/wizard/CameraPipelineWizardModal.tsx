@@ -93,13 +93,20 @@ export function CameraPipelineWizardModal({
   const [createError, setCreateError] = useState<string | null>(null);
 
   const title = t("ext.cameras.wizard.title", {}, "Create camera pipeline");
+  const defaultSource = useMemo(
+    () => camera.sources.find((source) => source.is_default && source.enabled) ?? camera.sources.find((source) => source.enabled) ?? camera.sources[0] ?? null,
+    [camera.sources],
+  );
+  const hasConfiguredSource = Boolean(
+    defaultSource?.origin.rtsp_url?.trim() || (defaultSource?.origin.type === "onvif_profile" && camera.onvif?.xaddr?.trim()),
+  );
 
   useEffect(() => {
     if (!open) return;
     setStep("preset");
     setPreset(null);
     setPipelineName("");
-    setEnabled(Boolean(camera.rtsp_url.trim()));
+    setEnabled(hasConfiguredSource);
     setContexts(null);
     setContextsLoading(false);
     setContextsError(null);
@@ -108,7 +115,7 @@ export function CameraPipelineWizardModal({
     setCreating(false);
     setCreatedPipelineName(null);
     setCreateError(null);
-  }, [camera.rtsp_url, open]);
+  }, [hasConfiguredSource, open]);
 
   const vehiclesCompositions = useMemo(() => {
     const compositions = contexts?.compositions ?? [];
@@ -202,6 +209,7 @@ export function CameraPipelineWizardModal({
     try {
       const response = await createCameraPipelineFromWizard(camera.id, {
         preset,
+        source_id: defaultSource?.id ?? "",
         pipeline_name: pipelineName.trim() && pipelineName.trim() !== defaultPipelineName ? pipelineName.trim() : "",
         enabled,
         composition_id: preset === "vehicles_stopped" ? compositionId : "",
@@ -290,7 +298,7 @@ export function CameraPipelineWizardModal({
 
       {step === "configure" && preset ? (
         <div>
-          {!camera.rtsp_url.trim() && !(camera.connection_type === "onvif" && camera.onvif?.xaddr?.trim()) ? (
+          {!hasConfiguredSource ? (
             <div className="card" style={{ marginBottom: 10 }}>
               <div className="cardBody">
                 {t(

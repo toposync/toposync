@@ -653,9 +653,12 @@ def test_runtime_health_and_observability_include_camera_source_health(tmp_path:
             )
         )
 
+        source_health_id = "source_health_pipeline:source:camera:camera_a:source:main"
         source_health = {
-            "source_id": "source_health_pipeline:source:camera:camera_a",
+            "source_id": source_health_id,
             "camera_id": "camera_a",
+            "camera_source_id": "main",
+            "camera_source_name": "Principal",
             "camera_name": "Front Camera",
             "pipeline_name": "source_health_pipeline",
             "node_id": "source",
@@ -693,8 +696,9 @@ def test_runtime_health_and_observability_include_camera_source_health(tmp_path:
         assert pipelines_res.status_code == 200
         link = pipelines_res.json()["pipelines"][0]
         assert link["source_node_id"] == "source"
-        assert link["source_id"] == "source_health_pipeline:source:camera:camera_a"
+        assert link["source_id"] == source_health_id
         assert link["camera_id"] == "camera_a"
+        assert link["camera_source_id"] == "main"
 
         health_res = client.get("/api/streams/runtime/health")
         assert health_res.status_code == 200

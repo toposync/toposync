@@ -1,7 +1,7 @@
 import React from "react";
 import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 
-import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../../../../util/api";
+import type { CameraContextsResponse, CamerasIndexResponse, PipelineOperatorDefinition } from "../../../../../util/api";
 import { i18n } from "../../../../../util/i18n";
 
 import type { CameraAreaOption, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
@@ -50,6 +50,7 @@ type Props = {
   onOpenProcessingServers?: () => void;
 
   interactiveCameraId: string;
+  camerasIndex: CamerasIndexResponse;
   cameraSelectOptions: SelectOption[];
   cameraSelectOptionById: Map<string, SelectOption>;
   activeCameraContexts: CameraContextsResponse | null;
@@ -73,6 +74,7 @@ export function OperatorConfigPanel({
   processingServerId,
   onOpenProcessingServers,
   interactiveCameraId,
+  camerasIndex,
   cameraSelectOptions,
   cameraSelectOptionById,
   activeCameraContexts,
@@ -110,6 +112,7 @@ export function OperatorConfigPanel({
     return (
       <CameraSourceConfigCard
         config={config}
+        camerasIndex={camerasIndex}
         cameraSelectOptions={cameraSelectOptions}
         cameraSelectOptionById={cameraSelectOptionById}
         onUpdateConfig={onUpdateConfig}

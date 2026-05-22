@@ -94,13 +94,16 @@ export async function probeRtsp(
 
 export async function probeCameraRtsp(
   cameraId: string,
-  options: { timeout_ms?: number } = {},
+  options: { source_id?: string; timeout_ms?: number } = {},
   signal?: AbortSignal,
 ): Promise<RtspProbeResponse> {
   const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/rtsp/probe`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ timeout_ms: options.timeout_ms ?? 5000 }),
+    body: JSON.stringify({
+      source_id: options.source_id ?? "",
+      timeout_ms: options.timeout_ms ?? 5000,
+    }),
     signal,
   });
   if (!response.ok) {
@@ -110,8 +113,9 @@ export async function probeCameraRtsp(
   return response.json();
 }
 
-export async function fetchCameraSnapshot(cameraId: string, signal?: AbortSignal): Promise<Blob> {
-  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/snapshot`, { signal });
+export async function fetchCameraSnapshot(cameraId: string, sourceId = "", signal?: AbortSignal): Promise<Blob> {
+  const query = sourceId ? `?source_id=${encodeURIComponent(sourceId)}` : "";
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/snapshot${query}`, { signal });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Snapshot failed: ${response.status}`);
@@ -121,9 +125,11 @@ export async function fetchCameraSnapshot(cameraId: string, signal?: AbortSignal
 
 export async function fetchCameraPtzPresets(
   cameraId: string,
+  sourceId = "",
   signal?: AbortSignal,
 ): Promise<{ camera_id: string; presets: CameraPtzPreset[] }> {
-  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/presets`, { signal });
+  const query = sourceId ? `?source_id=${encodeURIComponent(sourceId)}` : "";
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/presets${query}`, { signal });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Failed to load PTZ presets: ${response.status}`);
@@ -133,9 +139,11 @@ export async function fetchCameraPtzPresets(
 
 export async function fetchCameraPtzStatus(
   cameraId: string,
+  sourceId = "",
   signal?: AbortSignal,
 ): Promise<{ camera_id: string; status: PanTiltZoomState | null }> {
-  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/status`, { signal });
+  const query = sourceId ? `?source_id=${encodeURIComponent(sourceId)}` : "";
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/status${query}`, { signal });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Failed to load PTZ status: ${response.status}`);
@@ -146,12 +154,13 @@ export async function fetchCameraPtzStatus(
 export async function gotoCameraPtzPreset(
   cameraId: string,
   presetToken: string,
+  sourceId = "",
   signal?: AbortSignal,
 ): Promise<{ ok: boolean }> {
   const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/goto-preset`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ preset_token: presetToken }),
+    body: JSON.stringify({ preset_token: presetToken, source_id: sourceId }),
     signal,
   });
   if (!response.ok) {
@@ -163,7 +172,7 @@ export async function gotoCameraPtzPreset(
 
 export async function moveCameraPtz(
   cameraId: string,
-  body: { pan: number; tilt: number; zoom: number; timeout_s?: number | null },
+  body: { source_id?: string; pan: number; tilt: number; zoom: number; timeout_s?: number | null },
   signal?: AbortSignal,
 ): Promise<{ ok: boolean }> {
   const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/move`, {
@@ -181,7 +190,7 @@ export async function moveCameraPtz(
 
 export async function stopCameraPtz(
   cameraId: string,
-  body: { pan_tilt?: boolean; zoom?: boolean },
+  body: { source_id?: string; pan_tilt?: boolean; zoom?: boolean },
   signal?: AbortSignal,
 ): Promise<{ ok: boolean }> {
   const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/stop`, {

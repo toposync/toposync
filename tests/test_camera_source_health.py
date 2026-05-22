@@ -237,15 +237,25 @@ def test_saved_camera_rtsp_probe_uses_camera_credentials(
                 settings=AppSettings(
                     extensions={
                         "com.toposync.cameras": {
-                            "cameras": [
+                            "devices": [
                                 {
                                     "id": "cam1",
                                     "name": "Camera 1",
-                                    "connection_type": "rtsp",
-                                    "rtsp_url": "rtsp://camera.local/live",
-                                    "username": "admin",
-                                    "password": "secret",
-                                    "fps": 5,
+                                    "control": {"type": "none"},
+                                    "sources": [
+                                        {
+                                            "id": "main",
+                                            "kind": "video",
+                                            "is_default": True,
+                                            "origin": {
+                                                "type": "rtsp",
+                                                "rtsp_url": "rtsp://camera.local/live",
+                                                "stream_username": "admin",
+                                                "stream_password": "secret",
+                                            },
+                                            "video": {"fps": 5},
+                                        }
+                                    ],
                                 }
                             ]
                         }
@@ -291,20 +301,22 @@ def test_saved_onvif_custom_stream_probe_uses_stream_credentials(
                                     "id": "cam1",
                                     "name": "Camera 1",
                                     "kind": "camera",
-                                    "channels": [
+                                    "control": {"type": "onvif"},
+                                    "onvif": {
+                                        "xaddr": "192.168.0.10",
+                                        "username": "camera-user",
+                                        "password": "camera-pass",
+                                    },
+                                    "sources": [
                                         {
-                                            "id": "video_main",
-                                            "modality": "video",
+                                            "id": "main",
+                                            "kind": "video",
                                             "is_default": True,
-                                            "connection_type": "onvif",
-                                            "stream_profile": "custom",
-                                            "rtsp_url": "rtsp://ingest.local/front",
-                                            "stream_username": "stream-user",
-                                            "stream_password": "stream-pass",
-                                            "onvif": {
-                                                "xaddr": "192.168.0.10",
-                                                "username": "camera-user",
-                                                "password": "camera-pass",
+                                            "origin": {
+                                                "type": "rtsp",
+                                                "rtsp_url": "rtsp://ingest.local/front",
+                                                "stream_username": "stream-user",
+                                                "stream_password": "stream-pass",
                                             },
                                         }
                                     ],
@@ -354,24 +366,29 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
                                     "id": "cam1",
                                     "name": "Camera 1",
                                     "kind": "camera",
-                                    "channels": [
+                                    "control": {"type": "onvif"},
+                                    "onvif": {
+                                        "xaddr": "192.168.0.10",
+                                        "username": "camera-user",
+                                        "password": "camera-pass",
+                                        "media_xaddr": "http://192.168.0.10/onvif/media_service",
+                                        "ptz_xaddr": "http://192.168.0.10/onvif/ptz_service",
+                                    },
+                                    "sources": [
                                         {
-                                            "id": "video_main",
-                                            "modality": "video",
+                                            "id": "zoom",
+                                            "kind": "video",
                                             "is_default": True,
-                                            "connection_type": "onvif",
-                                            "stream_profile": "custom",
-                                            "rtsp_url": "rtsp://ingest.local/front",
-                                            "stream_username": "stream-user",
-                                            "stream_password": "stream-pass",
-                                            "onvif": {
-                                                "xaddr": "192.168.0.10",
-                                                "username": "camera-user",
-                                                "password": "camera-pass",
-                                                "media_xaddr": "http://192.168.0.10/onvif/media_service",
-                                                "ptz_xaddr": "http://192.168.0.10/onvif/ptz_service",
-                                                "profile_token": "stream-token",
-                                                "ptz_profile_token": "ptz-token",
+                                            "role": "zoom",
+                                            "view_id": "zoom",
+                                            "origin": {
+                                                "type": "onvif_profile",
+                                                "profile_token": "ptz-token",
+                                                "profile_name": "PTZ",
+                                                "rtsp_url": "rtsp://ingest.local/front",
+                                                "stream_username": "stream-user",
+                                                "stream_password": "stream-pass",
+                                                "has_ptz": True,
                                             },
                                         }
                                     ],

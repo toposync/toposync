@@ -38,10 +38,12 @@ def suggested_streaming_wizard_pipeline_name(
     *,
     transmission_id: str,
     camera_id: str,
+    camera_source_id: str = "",
     preset_id: WizardPresetId,
     transmission_name: str | None = None,
     transmission_path: str | None = None,
     camera_name: str | None = None,
+    camera_source_name: str | None = None,
 ) -> str:
     transmission_component = _pick_name_component(
         transmission_path,
@@ -51,11 +53,12 @@ def suggested_streaming_wizard_pipeline_name(
         skip_generic=True,
     )
     camera_component = _pick_name_component(camera_id, camera_name)
+    source_component = _pick_name_component(camera_source_id, camera_source_name, fallback="", skip_generic=True)
     preset_component = _PRESET_NAME_COMPONENTS.get(str(preset_id), "stream")
 
-    components = [transmission_component, camera_component, preset_component]
+    components = [transmission_component, camera_component, source_component, preset_component]
     if camera_component and _is_generic_component(transmission_component):
-        components = [camera_component, preset_component]
+        components = [camera_component, source_component, preset_component]
 
     base = "__".join(_dedupe_name_components(components))
     return safe_pipeline_name(base)
@@ -65,6 +68,7 @@ def build_streaming_wizard_graph(
     *,
     transmission_id: str,
     camera_id: str,
+    camera_source_id: str = "main",
     preset_id: WizardPresetId,
     optional_parameters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -111,6 +115,7 @@ def build_streaming_wizard_graph(
             "operator": "camera.source",
             "config": {
                 "camera_id": camera_id,
+                "source_id": camera_source_id,
                 "backend": source_backend,
             },
         }
@@ -239,6 +244,7 @@ def build_streaming_wizard_graph(
             "streaming": {
                 "transmission_id": transmission_id,
                 "camera_id": camera_id,
+                "camera_source_id": camera_source_id,
                 "preset_id": preset_id,
                 "stream_behavior": stream_behavior,
             },

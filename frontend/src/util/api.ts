@@ -570,7 +570,30 @@ export type ProcessingServerVisionHuggingFaceImportRequest = {
 export type CameraSummary = {
   id: string;
   name: string;
-  connection_type: string;
+  control?: { type?: string };
+  sources?: CameraSourceSummary[];
+};
+
+export type CameraSourceSummary = {
+  id: string;
+  name?: string;
+  enabled?: boolean;
+  is_default?: boolean;
+  kind?: string;
+  role?: string;
+  view_id?: string;
+  origin?: {
+    type?: string;
+    rtsp_url?: string;
+    profile_token?: string | null;
+    profile_name?: string | null;
+  };
+  video?: {
+    width?: number | null;
+    height?: number | null;
+    fps?: number | null;
+    codec?: string | null;
+  };
   ingest?: {
     mode?: "centralized" | "runtime_local" | "direct";
     host_server_id?: string;
@@ -877,6 +900,8 @@ export type StreamingFallbackReason =
 export type StreamingRuntimeSourceHealth = {
   source_id: string;
   camera_id?: string | null;
+  camera_source_id?: string | null;
+  camera_source_name?: string | null;
   camera_name?: string | null;
   pipeline_name?: string | null;
   node_id?: string | null;
@@ -1052,6 +1077,10 @@ export type StreamingRuntimePipelineLink = {
   enabled?: boolean;
   processing_server_id?: string;
   publish_node_id: string;
+  source_node_id?: string | null;
+  source_id?: string | null;
+  camera_id?: string | null;
+  camera_source_id?: string | null;
   writer_id: string;
   stream_behavior?: StreamingStreamBehavior;
   event_gated?: boolean;

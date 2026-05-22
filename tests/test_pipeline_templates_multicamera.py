@@ -29,10 +29,39 @@ def _create_client_with_cameras(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     return TestClient(create_app())
 
 
+def _camera_device(camera_id: str) -> dict[str, object]:
+    return {
+        "id": camera_id,
+        "name": camera_id,
+        "control": {"type": "none"},
+        "sources": [
+            {
+                "id": "main",
+                "name": "Principal",
+                "enabled": True,
+                "is_default": True,
+                "kind": "video",
+                "role": "main",
+                "origin": {"type": "rtsp", "rtsp_url": f"rtsp://example.local/{camera_id}"},
+                "ingest": {"mode": "direct"},
+            }
+        ],
+    }
+
+
+def _save_camera_devices(client: TestClient, *camera_ids: str) -> None:
+    res = client.patch(
+        "/api/settings/extensions/com.toposync.cameras",
+        json={"devices": [_camera_device(camera_id) for camera_id in camera_ids]},
+    )
+    assert res.status_code == 200, res.text
+
+
 def test_apply_template_to_multiple_cameras_creates_pipelines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with _create_client_with_cameras(tmp_path, monkeypatch) as client:
+        _save_camera_devices(client, "cam-a", "cam-b")
         template = Pipeline(
             name="alerts_template",
             enabled=True,
@@ -84,6 +113,7 @@ def test_apply_template_to_multiple_cameras_creates_pipelines(
         nodes = pipeline["graph"]["nodes"]
         source_node = next(node for node in nodes if node.get("operator") == "camera.source")
         assert source_node["config"]["camera_id"] == "cam-a"
+        assert source_node["config"]["source_id"] == "main"
         assert source_node["config"]["rtsp_url"] == ""
         assert source_node["config"]["username"] == ""
         assert source_node["config"]["password"] == ""
@@ -94,10 +124,12 @@ def test_apply_template_to_multiple_cameras_creates_pipelines(
         nodes = pipeline["graph"]["nodes"]
         source_node = next(node for node in nodes if node.get("operator") == "camera.source")
         assert source_node["config"]["camera_id"] == "cam-b"
+        assert source_node["config"]["source_id"] == "main"
 
 
 def test_apply_template_conflict_skip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with _create_client_with_cameras(tmp_path, monkeypatch) as client:
+        _save_camera_devices(client, "cam-a")
         template = Pipeline(
             name="alerts_template",
             enabled=True,

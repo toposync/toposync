@@ -2,7 +2,7 @@ import React from "react";
 import Select, { type MultiValue, type SingleValue } from "react-select";
 import type { StylesConfig } from "react-select";
 
-import type { CameraContextsResponse, PipelineOperatorDefinition } from "../../../../../util/api";
+import type { CameraContextsResponse, CamerasIndexResponse, CameraSourceSummary, PipelineOperatorDefinition } from "../../../../../util/api";
 import { i18n } from "../../../../../util/i18n";
 
 import { buildArtifactSuggestions, pipelinesReactSelectStyles } from "../../constants";
@@ -65,6 +65,7 @@ function imageDrawUnavailableMessage(
 
 type CameraSourceProps = {
   config: Record<string, unknown>;
+  camerasIndex: CamerasIndexResponse;
   cameraSelectOptions: SelectOption[];
   cameraSelectOptionById: Map<string, SelectOption>;
   onUpdateConfig: UpdateConfig;
@@ -72,17 +73,33 @@ type CameraSourceProps = {
 
 export function CameraSourceConfigCard({
   config,
+  camerasIndex,
   cameraSelectOptions,
   cameraSelectOptionById,
   onUpdateConfig,
 }: CameraSourceProps): React.ReactElement {
   const { t } = i18n.useI18n();
   const cameraIdInConfig = String((config as any).camera_id ?? "").trim();
+  const sourceIdInConfig = String((config as any).source_id ?? "").trim();
   const backendRaw = String((config as any).backend ?? "auto").trim().toLowerCase() || "auto";
   const backend = backendRaw === "opencv" || backendRaw === "ffmpeg" ? backendRaw : "auto";
   const selectedCameraOption = cameraIdInConfig
     ? (cameraSelectOptionById.get(cameraIdInConfig) ?? { value: cameraIdInConfig, label: cameraIdInConfig })
     : null;
+  const selectedCamera = (camerasIndex.cameras || []).find((camera) => String(camera.id || "").trim() === cameraIdInConfig) ?? null;
+  const sourceOptions = (selectedCamera?.sources || [])
+    .filter((source) => (String(source.kind || "video").trim().toLowerCase() || "video") === "video" && source.enabled !== false)
+    .map((source): SelectOption => {
+      const label = cameraSourceLabel(source);
+      return { value: String(source.id || "").trim(), label };
+    })
+    .filter((option) => option.value);
+  const defaultSource = (selectedCamera?.sources || []).find((source) => source.is_default && source.enabled !== false) ?? selectedCamera?.sources?.[0] ?? null;
+  const selectedSourceOption = sourceIdInConfig
+    ? (sourceOptions.find((option) => option.value === sourceIdInConfig) ?? { value: sourceIdInConfig, label: sourceIdInConfig })
+    : defaultSource
+      ? (sourceOptions.find((option) => option.value === String(defaultSource.id || "").trim()) ?? null)
+      : null;
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -102,6 +119,15 @@ export function CameraSourceConfigCard({
                 (next as any).rtsp_url = "";
                 (next as any).username = "";
                 (next as any).password = "";
+                const camera = (camerasIndex.cameras || []).find((item) => String(item.id || "").trim() === value.value);
+                const defaultSourceId = String(
+                  (camera?.sources || []).find((source) => source.is_default && source.enabled !== false)?.id ||
+                    (camera?.sources || []).find((source) => source.enabled !== false)?.id ||
+                    "",
+                ).trim();
+                (next as any).source_id = defaultSourceId;
+              } else {
+                (next as any).source_id = "";
               }
               return next;
             });
@@ -111,6 +137,27 @@ export function CameraSourceConfigCard({
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.camera_source.hint_infer")}</div>
       {cameraSelectOptions.length === 0 ? (
         <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.camera_source.hint_no_cameras")}</div>
+      ) : null}
+
+      {selectedCamera ? (
+        <label className="pipelinesLabel">
+          <span>{t("core.ui.pipelines.panels.camera_source.source", {}, "Fonte da câmera")}</span>
+          <Select<SelectOption, false>
+            styles={pipelinesReactSelectStyles}
+            options={sourceOptions}
+            value={selectedSourceOption}
+            isClearable={sourceOptions.length !== 1}
+            placeholder={t("core.ui.pipelines.panels.camera_source.source_placeholder", {}, "Selecionar fonte...")}
+            onChange={(value: SingleValue<SelectOption>) => {
+              onUpdateConfig((prev) => ({ ...prev, source_id: value?.value ?? "" }));
+            }}
+          />
+        </label>
+      ) : null}
+      {selectedCamera && sourceOptions.length === 0 ? (
+        <div className="pipelinesStepHint">
+          {t("core.ui.pipelines.panels.camera_source.hint_no_sources", {}, "Esta câmera não tem fonte de vídeo ativa.")}
+        </div>
       ) : null}
 
       <label className="pipelinesLabel">
@@ -131,6 +178,15 @@ export function CameraSourceConfigCard({
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.camera_source.hint_backend")}</div>
     </div>
   );
+}
+
+function cameraSourceLabel(source: CameraSourceSummary): string {
+  const name = String(source.name || "").trim() || String(source.id || "").trim();
+  const role = String(source.role || "").trim();
+  const width = typeof source.video?.width === "number" ? source.video.width : null;
+  const height = typeof source.video?.height === "number" ? source.video.height : null;
+  const resolution = width && height ? `${width}x${height}` : "";
+  return [name, role, resolution].filter(Boolean).join(" · ");
 }
 
 type CameraMappingProps = {

@@ -47,11 +47,12 @@ from ..source_health import get_global_source_health_store, source_health_source
 from ..onvif import OnvifClient, OnvifError, OnvifProfile
 from ..settings import (
     get_camera_device,
-    get_camera_ingest_settings,
     get_camera_onvif_credentials,
-    get_camera_stream_credentials,
-    get_camera_stream_profile,
-    get_primary_video_channel,
+    get_camera_source,
+    get_camera_source_credentials,
+    get_camera_source_ingest_settings,
+    get_camera_source_origin,
+    get_camera_source_origin_type,
     normalize_cameras_settings,
 )
 from .postprocess import register_camera_postprocess_operators
@@ -64,11 +65,14 @@ def _exception_detail(exc: Exception) -> str:
     return exc.__class__.__name__
 
 
-def _camera_hub_key(*, camera_id: str, rtsp_url: str, backend: str) -> str:
+def _camera_hub_key(*, camera_id: str, source_id: str, rtsp_url: str, backend: str) -> str:
     cid = str(camera_id or "").strip()
+    sid = str(source_id or "").strip()
     backend_key = str(backend or "").strip().lower() or "auto"
+    if cid and sid:
+        return f"camera:{cid}:source:{sid}:{backend_key}"
     if cid:
-        return f"camera:{cid}:{backend_key}"
+        return f"camera:{cid}:source:default:{backend_key}"
     raw = str(rtsp_url or "").strip().encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()[:16]
     return f"camera:adhoc:{digest}:{backend_key}"
@@ -112,7 +116,10 @@ def _camera_source_expression_hints() -> list[Any]:
         payload_path_hint("payload.capture", value_type="object", description="Capture runtime diagnostics for the source."),
         payload_path_hint("payload.source", value_type="object", description="Source descriptor published for the stream."),
         payload_path_hint("payload.source.device_id", value_type="string", description="Device identifier from the source descriptor."),
-        payload_path_hint("payload.source.channel_id", value_type="string", description="Channel identifier from the source descriptor."),
+        payload_path_hint("payload.source.source_id", value_type="string", description="Camera source identifier."),
+        payload_path_hint("payload.source.source_name", value_type="string", description="Camera source display name."),
+        payload_path_hint("payload.source.view_id", value_type="string", description="Camera physical view identifier."),
+        payload_path_hint("payload.source.role", value_type="string", description="Camera source role."),
         payload_path_hint("payload.source.kind", value_type="string", description="Source kind published by the descriptor."),
         payload_path_hint(
             "payload.source.modality",
@@ -270,10 +277,17 @@ def _pick_best_onvif_profile(profiles: list[OnvifProfile]) -> OnvifProfile | Non
     return max(profiles, key=score)
 
 
-async def _resolve_onvif_rtsp_url_cached(*, camera_id: str, camera: dict[str, Any]) -> str:
+async def _resolve_onvif_rtsp_url_cached(
+    *,
+    camera_id: str,
+    source_id: str,
+    camera: dict[str, Any],
+    source: dict[str, Any],
+) -> str:
     cid = str(camera_id or "").strip()
     if not cid:
         raise OnvifError("Missing camera_id")
+    sid = str(source_id or "").strip() or "default"
 
     onvif_raw = camera.get("onvif")
     onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
@@ -283,7 +297,8 @@ async def _resolve_onvif_rtsp_url_cached(*, camera_id: str, camera: dict[str, An
 
     username, password = get_camera_onvif_credentials(camera)
     media_xaddr = str(onvif.get("media_xaddr") or "").strip()
-    profile_token = str(onvif.get("profile_token") or "").strip()
+    origin = get_camera_source_origin(source)
+    profile_token = str(origin.get("profile_token") or "").strip()
     signature = _onvif_stream_signature(
         xaddr=xaddr,
         media_xaddr=media_xaddr,
@@ -292,7 +307,8 @@ async def _resolve_onvif_rtsp_url_cached(*, camera_id: str, camera: dict[str, An
     )
 
     now = time.time()
-    cached = _ONVIF_STREAM_CACHE.get(cid)
+    cache_key = f"{cid}:{sid}"
+    cached = _ONVIF_STREAM_CACHE.get(cache_key)
     if (
         cached is not None
         and cached.signature == signature
@@ -301,9 +317,9 @@ async def _resolve_onvif_rtsp_url_cached(*, camera_id: str, camera: dict[str, An
     ):
         return cached.rtsp_url
 
-    async with _get_onvif_lock(cid):
+    async with _get_onvif_lock(cache_key):
         now = time.time()
-        cached = _ONVIF_STREAM_CACHE.get(cid)
+        cached = _ONVIF_STREAM_CACHE.get(cache_key)
         if (
             cached is not None
             and cached.signature == signature
@@ -347,7 +363,7 @@ async def _resolve_onvif_rtsp_url_cached(*, camera_id: str, camera: dict[str, An
         if not rtsp_url:
             raise OnvifError("ONVIF returned an empty RTSP URL")
 
-        _ONVIF_STREAM_CACHE[cid] = _OnvifStreamCacheEntry(
+        _ONVIF_STREAM_CACHE[cache_key] = _OnvifStreamCacheEntry(
             rtsp_url=rtsp_url,
             signature=signature,
             created_ts=time.time(),
@@ -358,7 +374,7 @@ async def _resolve_onvif_rtsp_url_cached(*, camera_id: str, camera: dict[str, An
 class CameraSourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     camera_id: str = ""
-    channel_id: str = ""
+    source_id: str = ""
     rtsp_url: str = ""
     username: str = ""
     password: str = ""
@@ -366,7 +382,7 @@ class CameraSourceConfig(BaseModel):
     fps: float | None = Field(default=None, ge=1.0, le=60.0)
     poll_interval_ms: int = Field(default=20, ge=1, le=250)
 
-    @field_validator("camera_id", "channel_id", "rtsp_url", mode="after")
+    @field_validator("camera_id", "source_id", "rtsp_url", mode="after")
     @classmethod
     def _trim(cls, value: str) -> str:
         return str(value or "").strip()
@@ -718,7 +734,10 @@ class ResolvedCameraSource:
     fps: float
     camera_id: str
     camera_name: str
-    channel_id: str
+    source_id: str
+    source_name: str
+    view_id: str
+    role: str
     clock_domain: str
     transport: str
     used_ingest: bool
@@ -774,7 +793,10 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._last_ts = 0.0
         self._camera_name = ""
         self._camera_id = ""
-        self._channel_id = ""
+        self._source_id = ""
+        self._source_name = ""
+        self._view_id = ""
+        self._source_role = ""
         self._clock_domain = ""
         self._transport = "rtsp"
         self._source_uses_ingest = False
@@ -837,7 +859,10 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._waiting_for_source_config = False
         self._camera_id = resolved.camera_id
         self._camera_name = resolved.camera_name
-        self._channel_id = resolved.channel_id
+        self._source_id = resolved.source_id
+        self._source_name = resolved.source_name
+        self._view_id = resolved.view_id
+        self._source_role = resolved.role
         self._clock_domain = resolved.clock_domain
         self._transport = resolved.transport
         self._source_uses_ingest = bool(resolved.used_ingest)
@@ -856,7 +881,12 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 self._backend_override = None
                 self._backend_override_until_monotonic = 0.0
 
-        self._hub_key = _camera_hub_key(camera_id=resolved.camera_id, rtsp_url=resolved.rtsp_url, backend=selected_backend)
+        self._hub_key = _camera_hub_key(
+            camera_id=resolved.camera_id,
+            source_id=resolved.source_id,
+            rtsp_url=resolved.rtsp_url,
+            backend=selected_backend,
+        )
         try:
             self._grabber = await _GLOBAL_CAMERA_HUB.acquire(
                 key=self._hub_key,
@@ -957,6 +987,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             pipeline_name=str(getattr(context, "pipeline_name", "") or ""),
             node_id=str(getattr(context, "node_id", "") or ""),
             camera_id=camera_id,
+            camera_source_id=self._source_id or str(self._config.source_id or "").strip(),
             rtsp_url=str(self._config.rtsp_url or "").strip(),
         )
         return self._source_health_id
@@ -977,6 +1008,8 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             record = store.record_frame(
                 source_id=source_id,
                 camera_id=camera_id,
+                camera_source_id=self._source_id,
+                camera_source_name=self._source_name,
                 camera_name=self._camera_name,
                 pipeline_name=str(getattr(context, "pipeline_name", "") or ""),
                 node_id=str(getattr(context, "node_id", "") or ""),
@@ -996,6 +1029,8 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             record = store.record_tick(
                 source_id=source_id,
                 camera_id=camera_id,
+                camera_source_id=self._source_id,
+                camera_source_name=self._source_name,
                 camera_name=self._camera_name,
                 pipeline_name=str(getattr(context, "pipeline_name", "") or ""),
                 node_id=str(getattr(context, "node_id", "") or ""),
@@ -1153,7 +1188,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             if getattr(frame, "shape", None) is not None
             else 0
         )
-        stream_suffix = self._camera_id or "adhoc"
+        stream_suffix = ":".join(item for item in (self._camera_id, self._source_id) if item) or "adhoc"
         capture_metrics = self._capture_metrics_snapshot()
         source_health = self._record_source_health(
             context,
@@ -1192,7 +1227,10 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             payload={
                 "source": build_source_descriptor(
                     device_id=self._camera_id or "",
-                    channel_id=self._channel_id or "video_main",
+                    source_id=self._source_id or "",
+                    source_name=self._source_name or "",
+                    view_id=self._view_id or "",
+                    role=self._source_role or "",
                     kind="camera",
                     modality="video",
                     name=self._camera_name or "",
@@ -1208,6 +1246,9 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 "frame_ts": float(frame_ts),
                 "camera_id": self._camera_id or None,
                 "camera_name": self._camera_name or None,
+                "camera_source_id": self._source_id or None,
+                "camera_source_name": self._source_name or None,
+                "view_id": self._view_id or None,
                 "frame_width": width,
                 "frame_height": height,
                 "capture": capture_metrics,
@@ -1217,6 +1258,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 "source": "camera.source",
                 "camera_id": self._camera_id or None,
                 "camera_name": self._camera_name or None,
+                "camera_source_id": self._source_id or None,
                 "capture_backend": str(capture_metrics.get("backend") or ""),
                 "source_status": str(capture_metrics.get("source_status") or ""),
             },
@@ -2608,7 +2650,7 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
             "capture",
         ],
         produces_artifacts=[MAIN_ARTIFACT_NAME],
-        produces_source_fields=["device_id", "channel_id", "kind", "modality", "name", "transport", "clock_domain"],
+        produces_source_fields=["device_id", "source_id", "source_name", "view_id", "role", "kind", "modality", "name", "transport", "clock_domain"],
         produces_media_fields=["modality", "ts", "width", "height", "frame_rate"],
         output_modalities=["video"],
         expression_hints=_camera_source_expression_hints(),
@@ -2728,20 +2770,22 @@ async def _resolve_camera_stream(
     *,
     camera_id: str,
     camera: dict[str, Any],
-    channel: dict[str, Any],
+    source: dict[str, Any],
 ) -> _ResolvedCameraStream:
-    connection_type = str(channel.get("connection_type") or "rtsp").strip().lower() or "rtsp"
-    stream_profile = get_camera_stream_profile(channel)
-    rtsp_url = str(channel.get("rtsp_url", "")).strip()
+    origin = get_camera_source_origin(source)
+    origin_type = get_camera_source_origin_type(source)
+    rtsp_url = str(origin.get("rtsp_url", "")).strip()
 
-    if connection_type == "onvif" and stream_profile == "onvif" and not rtsp_url:
-        onvif_raw = channel.get("onvif")
+    if origin_type == "onvif_profile" and not rtsp_url:
+        onvif_raw = camera.get("onvif")
         onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
         if str(onvif.get("xaddr") or "").strip():
             try:
                 rtsp_url = await _resolve_onvif_rtsp_url_cached(
                     camera_id=camera_id,
-                    camera={**camera, **channel, "onvif": onvif},
+                    source_id=str(source.get("id") or "").strip(),
+                    camera=camera,
+                    source=source,
                 )
             except OnvifError as exc:
                 raise _CameraSourcePendingError(
@@ -2753,13 +2797,10 @@ async def _resolve_camera_stream(
                 ) from exc
 
     if not rtsp_url:
-        if connection_type == "onvif" and stream_profile == "custom":
-            raise _CameraSourcePendingError(
-                f"Camera '{camera_id}' custom stream profile requires rtsp_url"
-            )
-        raise _CameraSourcePendingError(f"Camera '{camera_id}' has empty rtsp_url")
+        source_id = str(source.get("id") or "").strip()
+        raise _CameraSourcePendingError(f"Camera '{camera_id}' source '{source_id}' has empty rtsp_url")
 
-    username, password = get_camera_stream_credentials(channel)
+    username, password = get_camera_source_credentials(camera, source)
     return _ResolvedCameraStream(rtsp_url=rtsp_url, username=username, password=password)
 
 
@@ -2768,7 +2809,7 @@ async def _resolve_camera_source(
     dependencies: PipelineRuntimeDependencies,
 ) -> ResolvedCameraSource:
     camera_id = config.camera_id.strip()
-    requested_channel_id = config.channel_id.strip()
+    requested_source_id = config.source_id.strip()
     if config.rtsp_url:
         url = _apply_rtsp_auth(config.rtsp_url, config.username, config.password)
         fps = float(config.fps if config.fps is not None else 5.0)
@@ -2777,7 +2818,10 @@ async def _resolve_camera_source(
             fps=max(1.0, min(60.0, fps)),
             camera_id=camera_id,
             camera_name="",
-            channel_id=requested_channel_id or "video_main",
+            source_id=requested_source_id or "adhoc",
+            source_name="",
+            view_id=requested_source_id or "adhoc",
+            role="custom",
             clock_domain=f"device:{camera_id}" if camera_id else "device:adhoc",
             transport="rtsp",
             used_ingest=False,
@@ -2798,30 +2842,25 @@ async def _resolve_camera_source(
     if camera is None:
         raise _CameraSourcePendingError(f"Camera '{camera_id}' not found in settings yet")
 
-    channel: dict[str, Any] | None = None
-    channels_raw = camera.get("channels")
-    if isinstance(channels_raw, list) and requested_channel_id:
-        for item in channels_raw:
-            if not isinstance(item, dict):
-                continue
-            if str(item.get("id") or "").strip() == requested_channel_id:
-                channel = item
-                break
-    if channel is None:
-        channel = get_primary_video_channel(camera)
-    if channel is None:
-        raise _CameraSourcePendingError(f"Camera '{camera_id}' has no video channel configured")
+    source = get_camera_source(camera, source_id=requested_source_id, kind="video", enabled_only=True)
+    if source is None:
+        if requested_source_id:
+            raise _CameraSourcePendingError(
+                f"Camera '{camera_id}' source '{requested_source_id}' not found or disabled"
+            )
+        raise _CameraSourcePendingError(f"Camera '{camera_id}' has no default video source configured")
 
-    stream = await _resolve_camera_stream(camera_id=camera_id, camera=camera, channel=channel)
+    stream = await _resolve_camera_stream(camera_id=camera_id, camera=camera, source=source)
     url = _apply_rtsp_auth(stream.rtsp_url, stream.username, stream.password)
 
-    camera_fps = float(channel.get("fps", 5.0) or 5.0)
+    video = source.get("video") if isinstance(source.get("video"), dict) else {}
+    camera_fps = float(video.get("fps", 5.0) or 5.0)
     if not math.isfinite(camera_fps):
         camera_fps = 5.0
     if config.fps is not None:
         camera_fps = float(config.fps)
     camera_fps = max(1.0, min(60.0, camera_fps))
-    ingest_settings = get_camera_ingest_settings(channel)
+    ingest_settings = get_camera_source_ingest_settings(source)
     ingest_mode = str(ingest_settings.get("mode") or "centralized").strip().lower()
     if ingest_mode not in {"centralized", "runtime_local", "direct"}:
         ingest_mode = "centralized"
@@ -2835,7 +2874,7 @@ async def _resolve_camera_source(
     if ingest_mode != "direct" and not direct_override_active:
         resolution = await _maybe_resolve_ingest_camera_source(
             camera_id=camera_id,
-            channel_id=str(channel.get("id") or "").strip(),
+            source_id=str(source.get("id") or "").strip(),
             dependencies=dependencies,
         )
         if resolution is None:
@@ -2883,9 +2922,12 @@ async def _resolve_camera_source(
         fps=camera_fps,
         camera_id=camera_id,
         camera_name=str(camera.get("name", "")).strip(),
-        channel_id=str(channel.get("id") or "").strip() or "video_main",
+        source_id=str(source.get("id") or "").strip(),
+        source_name=str(source.get("name") or "").strip(),
+        view_id=str(source.get("view_id") or "").strip(),
+        role=str(source.get("role") or "").strip() or "custom",
         clock_domain=str(camera.get("clock_domain") or "").strip() or f"device:{camera_id}",
-        transport=str(channel.get("transport") or "rtsp").strip() or "rtsp",
+        transport=get_camera_source_origin_type(source),
         used_ingest=used_ingest,
         ingest_mode=ingest_mode,
         centralizer_server_id=centralizer_server_id if ingest_mode in {"centralized", "runtime_local"} else "",
@@ -2899,7 +2941,7 @@ async def _resolve_camera_source(
 async def _maybe_resolve_ingest_camera_source(
     *,
     camera_id: str,
-    channel_id: str,
+    source_id: str,
     dependencies: PipelineRuntimeDependencies,
 ) -> dict[str, Any] | None:
     cid = str(camera_id or "").strip()
@@ -2915,7 +2957,7 @@ async def _maybe_resolve_ingest_camera_source(
         value = await call(
             "streaming.ingest.resolve_camera_source",
             camera_id=cid,
-            channel_id=str(channel_id or "").strip(),
+            source_id=str(source_id or "").strip(),
         )
     except KeyError:
         value = None
@@ -2938,7 +2980,7 @@ async def _maybe_resolve_ingest_camera_source(
         return None
     return {
         "camera_id": cid,
-        "channel_id": str(channel_id or "").strip() or "video_main",
+        "source_id": str(source_id or "").strip(),
         "mode": "centralized",
         "used_ingest": True,
         "centralizer_server_id": "",

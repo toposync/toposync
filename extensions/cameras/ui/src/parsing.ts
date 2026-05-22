@@ -8,6 +8,9 @@ import type {
   CameraOnvifConfig,
   CameraPoseReference,
   CameraMappingQuality,
+  CameraSourceConfig,
+  CameraSourceOriginConfig,
+  CameraSourceRole,
   CameraStreamProfile,
 } from "./types";
 
@@ -190,81 +193,22 @@ function convexHullAreaRatio(points: Array<{ x: number; y: number }>): number {
 }
 
 export function parseCameras(settings: Record<string, unknown>): CameraConfig[] {
-  const devicesRaw = Array.isArray(settings.devices) ? settings.devices : null;
-  if (devicesRaw) {
-    const output: CameraConfig[] = [];
-    for (const item of devicesRaw) {
-      const device = readRecord(item);
-      const id = readString(device.id).trim();
-      if (!id) continue;
-      const channels = Array.isArray(device.channels) ? device.channels : [];
-      let selectedChannel: Record<string, unknown> | null = null;
-      for (const rawChannel of channels) {
-        const channel = readRecord(rawChannel);
-        const modality = readString(channel.modality).trim().toLowerCase() || "video";
-        if (modality !== "video") continue;
-        if (!selectedChannel) selectedChannel = channel;
-        if (Boolean(channel.is_default)) {
-          selectedChannel = channel;
-          break;
-        }
-      }
-      if (!selectedChannel) continue;
-      const connectionType = readCameraConnectionType(selectedChannel.connection_type);
-      const onvif = readOnvifConfig(selectedChannel.onvif, {
-        legacyUsername: connectionType === "onvif" ? readString(selectedChannel.username).trim() : "",
-        legacyPassword: connectionType === "onvif" ? readString(selectedChannel.password).trim() : "",
-      });
-      const streamProfile = readCameraStreamProfile(selectedChannel.stream_profile, connectionType);
-      output.push({
-        id,
-        name: readString(device.name).trim(),
-        connection_type: connectionType,
-        channel_id: readString(selectedChannel.id).trim() || "video_main",
-        stream_profile: streamProfile,
-        rtsp_url: readString(selectedChannel.rtsp_url).trim(),
-        stream_username:
-          readString(selectedChannel.stream_username).trim() ||
-          (connectionType === "rtsp" ? readString(selectedChannel.username).trim() : ""),
-        stream_password:
-          readString(selectedChannel.stream_password).trim() ||
-          (connectionType === "rtsp" ? readString(selectedChannel.password).trim() : ""),
-        ingest: readCameraIngestConfig(selectedChannel.ingest),
-        fps: Math.max(1, Math.min(60, readFiniteNumber(selectedChannel.fps, 5))),
-        onvif,
-      });
-    }
-    return output;
-  }
-
-  const raw = settings.cameras;
-  if (!Array.isArray(raw)) return [];
+  const raw = Array.isArray(settings.devices) ? settings.devices : [];
   const output: CameraConfig[] = [];
   for (const item of raw) {
-    const record = readRecord(item);
-    const id = readString(record.id).trim();
+    const device = readRecord(item);
+    const id = readString(device.id).trim();
     if (!id) continue;
-    const connectionType = readCameraConnectionType(record.connection_type);
-    const onvif = readOnvifConfig(record.onvif, {
-      legacyUsername: connectionType === "onvif" ? readString(record.username).trim() : "",
-      legacyPassword: connectionType === "onvif" ? readString(record.password).trim() : "",
-    });
-    const streamProfile = readCameraStreamProfile(record.stream_profile, connectionType);
+    const controlRecord = readRecord(device.control);
+    const controlType = readString(controlRecord.type).trim().toLowerCase() === "onvif" ? "onvif" : "none";
     output.push({
       id,
-      name: readString(record.name).trim(),
-      connection_type: connectionType,
-      stream_profile: streamProfile,
-      rtsp_url: readString(record.rtsp_url).trim(),
-      stream_username:
-        readString(record.stream_username).trim() ||
-        (connectionType === "rtsp" ? readString(record.username).trim() : ""),
-      stream_password:
-        readString(record.stream_password).trim() ||
-        (connectionType === "rtsp" ? readString(record.password).trim() : ""),
-      ingest: readCameraIngestConfig(record.ingest),
-      fps: Math.max(1, Math.min(60, readFiniteNumber(record.fps, 5))),
-      onvif,
+      name: readString(device.name).trim(),
+      enabled: typeof device.enabled === "boolean" ? device.enabled : true,
+      control: { type: controlType },
+      onvif: controlType === "onvif" ? readOnvifConfig(device.onvif) ?? { xaddr: "", username: "", password: "" } : null,
+      sources: readCameraSources(device.sources),
+      metadata: readRecord(device.metadata),
     });
   }
   return output;
@@ -272,35 +216,121 @@ export function parseCameras(settings: Record<string, unknown>): CameraConfig[] 
 
 export function serializeCameras(settings: CameraConfig[]): Record<string, unknown> {
   return {
-    schema_version: 3,
+    schema_version: 4,
     devices: settings.map((camera) => ({
       id: camera.id,
       name: camera.name,
       kind: "camera",
-      enabled: true,
+      enabled: camera.enabled,
       clock_domain: `device:${camera.id}`,
-      channels: [
-        {
-          id: camera.channel_id?.trim() || "video_main",
-          name: "Main video",
-          modality: "video",
-          enabled: true,
-          is_default: true,
-          connection_type: camera.connection_type,
-          transport: "rtsp",
-          stream_profile: camera.connection_type === "onvif" ? camera.stream_profile : "custom",
-          rtsp_url: camera.rtsp_url,
-          stream_username: camera.stream_username ?? "",
-          stream_password: camera.stream_password ?? "",
-          ingest: readCameraIngestConfig(camera.ingest),
-          fps: camera.fps,
-          onvif: camera.onvif ?? null,
-          metadata: {},
-        },
-      ],
-      metadata: {},
+      control: { type: camera.control?.type === "onvif" ? "onvif" : "none" },
+      onvif: camera.control?.type === "onvif" ? camera.onvif ?? { xaddr: "", username: "", password: "" } : null,
+      sources: normalizeCameraSourcesForSave(camera.sources),
+      metadata: camera.metadata ?? {},
     })),
   };
+}
+
+export function createDefaultCameraSource(index = 0, options?: Partial<CameraSourceConfig>): CameraSourceConfig {
+  const id = options?.id?.trim() || (index === 0 ? "main" : `source_${index + 1}`);
+  return {
+    id,
+    name: options?.name?.trim() || (index === 0 ? "Principal" : `Fonte ${index + 1}`),
+    enabled: options?.enabled ?? true,
+    is_default: options?.is_default ?? index === 0,
+    kind: options?.kind ?? "video",
+    role: options?.role ?? (index === 0 ? "main" : "custom"),
+    view_id: options?.view_id?.trim() || (index === 0 ? "main" : id),
+    origin: normalizeSourceOrigin(options?.origin),
+    video: {
+      width: readOptionalFiniteNumber(options?.video?.width),
+      height: readOptionalFiniteNumber(options?.video?.height),
+      fps: readOptionalFiniteNumber(options?.video?.fps),
+      codec: options?.video?.codec?.trim() || null,
+    },
+    ingest: readCameraIngestConfig(options?.ingest),
+    metadata: options?.metadata ?? {},
+  };
+}
+
+export function readCameraSources(value: unknown): CameraSourceConfig[] {
+  if (!Array.isArray(value)) return [];
+  const output: CameraSourceConfig[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const record = readRecord(item);
+    const id = readString(record.id).trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const origin = normalizeSourceOrigin(record.origin);
+    const video = readRecord(record.video);
+    output.push({
+      id,
+      name: readString(record.name).trim() || id,
+      enabled: typeof record.enabled === "boolean" ? record.enabled : true,
+      is_default: Boolean(record.is_default),
+      kind: readString(record.kind).trim().toLowerCase() === "audio" ? "audio" : readString(record.kind).trim().toLowerCase() === "data" ? "data" : "video",
+      role: readCameraSourceRole(record.role),
+      view_id: readString(record.view_id).trim() || id,
+      origin,
+      video: {
+        width: readOptionalFiniteNumber(video.width),
+        height: readOptionalFiniteNumber(video.height),
+        fps: readOptionalFiniteNumber(video.fps),
+        codec: readString(video.codec).trim() || null,
+      },
+      ingest: readCameraIngestConfig(record.ingest),
+      metadata: readRecord(record.metadata),
+    });
+  }
+  return normalizeCameraSourcesForUi(output);
+}
+
+export function normalizeCameraSourcesForUi(sources: CameraSourceConfig[]): CameraSourceConfig[] {
+  let defaultSeen = false;
+  return sources.map((source, index) => {
+    const isDefault = source.kind === "video" && source.enabled && source.is_default && !defaultSeen;
+    if (isDefault) defaultSeen = true;
+    return {
+      ...createDefaultCameraSource(index, source),
+      is_default: isDefault,
+    };
+  });
+}
+
+function normalizeCameraSourcesForSave(sources: CameraSourceConfig[]): CameraSourceConfig[] {
+  const normalized = normalizeCameraSourcesForUi(sources);
+  const hasDefault = normalized.some((source) => source.kind === "video" && source.enabled && source.is_default);
+  if (hasDefault) return normalized;
+  let defaultAssigned = false;
+  return normalized.map((source) => {
+    if (!defaultAssigned && source.kind === "video" && source.enabled) {
+      defaultAssigned = true;
+      return { ...source, is_default: true };
+    }
+    return source;
+  });
+}
+
+export function normalizeSourceOrigin(value: unknown): CameraSourceOriginConfig {
+  const record = readRecord(value);
+  const type = readString(record.type).trim().toLowerCase() === "onvif_profile" ? "onvif_profile" : "rtsp";
+  return {
+    type,
+    rtsp_url: readString(record.rtsp_url).trim(),
+    stream_username: readString(record.stream_username).trim(),
+    stream_password: readString(record.stream_password).trim(),
+    profile_token: readString(record.profile_token).trim() || null,
+    profile_name: readString(record.profile_name).trim() || null,
+    has_ptz: Boolean(record.has_ptz),
+    metadata: readRecord(record.metadata),
+  };
+}
+
+export function readCameraSourceRole(value: unknown): CameraSourceRole {
+  const role = readString(value).trim().toLowerCase();
+  if (role === "main" || role === "sub" || role === "zoom" || role === "custom") return role;
+  return "custom";
 }
 
 export function readCameraIngestConfig(value: unknown): CameraIngestConfig {

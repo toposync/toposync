@@ -52,17 +52,33 @@ def camera_names_by_id(extensions_settings: dict[str, Any]) -> dict[str, str]:
             continue
         name = _as_str(camera.get("name")).strip()
         out[camera_id] = name
-    if isinstance(ext_record.get("devices"), list):
-        return out
+    return out
 
-    cameras_raw = _as_list(ext_record.get("cameras"))
-    for item in cameras_raw:
+
+def camera_default_source_ids_by_id(extensions_settings: dict[str, Any]) -> dict[str, str]:
+    ext = extensions_settings.get(CAMERAS_EXTENSION_ID)
+    ext_record = ext if isinstance(ext, dict) else {}
+    devices_raw = _as_list(ext_record.get("devices"))
+
+    out: dict[str, str] = {}
+    for item in devices_raw:
         camera = _as_record(item)
         camera_id = _as_str(camera.get("id")).strip()
         if not camera_id:
             continue
-        name = _as_str(camera.get("name")).strip()
-        out[camera_id] = name
+        sources = [_as_record(source) for source in _as_list(camera.get("sources"))]
+        video_sources = [
+            source
+            for source in sources
+            if _as_str(source.get("kind")).strip().lower() in {"", "video"}
+            and bool(source.get("enabled", True))
+        ]
+        selected = next((source for source in video_sources if bool(source.get("is_default"))), None)
+        if selected is None and len(video_sources) == 1:
+            selected = video_sources[0]
+        source_id = _as_str(selected.get("id")).strip() if selected is not None else ""
+        if source_id:
+            out[camera_id] = source_id
     return out
 
 
@@ -72,7 +88,12 @@ class CameraTemplateResult:
     graph: dict[str, Any]
 
 
-def instantiate_camera_template_graph(*, template_graph: dict[str, Any], camera_id: str) -> dict[str, Any]:
+def instantiate_camera_template_graph(
+    *,
+    template_graph: dict[str, Any],
+    camera_id: str,
+    camera_source_id: str,
+) -> dict[str, Any]:
     graph = dict(template_graph or {})
     raw_nodes = graph.get("nodes")
     nodes = raw_nodes if isinstance(raw_nodes, list) else []
@@ -86,6 +107,7 @@ def instantiate_camera_template_graph(*, template_graph: dict[str, Any], camera_
         if operator_id == "camera.source":
             cfg = dict(_as_record(node.get("config")))
             cfg["camera_id"] = str(camera_id or "").strip()
+            cfg["source_id"] = str(camera_source_id or "").strip()
             cfg["rtsp_url"] = ""
             cfg["username"] = ""
             cfg["password"] = ""
@@ -104,6 +126,8 @@ def instantiate_camera_template_graph(*, template_graph: dict[str, Any], camera_
     return graph
 
 
-def default_instance_name(*, template_name: str, camera_id: str) -> str:
+def default_instance_name(*, template_name: str, camera_id: str, camera_source_id: str = "") -> str:
     # Keep the name predictable and compatible with a Python identifier.
-    return safe_pipeline_name(f"{template_name}__{camera_id}")
+    source = _as_str(camera_source_id).strip()
+    suffix = f"{camera_id}__{source}" if source else camera_id
+    return safe_pipeline_name(f"{template_name}__{suffix}")

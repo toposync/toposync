@@ -87,18 +87,21 @@ function processingServerLabel(serverId: string, servers: ProcessingServer[]): s
   return name ? `${name} (${normalized})` : normalized;
 }
 
-function cameraIdsFromPipelineGraph(graph: unknown): string[] {
+function cameraSourceRefsFromPipelineGraph(graph: unknown): Array<{ cameraId: string; sourceId: string }> {
   if (!isRecord(graph) || !Array.isArray(graph.nodes)) return [];
-  const ids: string[] = [];
+  const refs: Array<{ cameraId: string; sourceId: string }> = [];
   for (const node of graph.nodes) {
     if (!isRecord(node)) continue;
     const operatorId = String(node.operator ?? node.operator_id ?? "").trim();
     if (operatorId !== "camera.source") continue;
     const config = isRecord(node.config) ? node.config : {};
     const cameraId = String(config.camera_id ?? "").trim();
-    if (cameraId && !ids.includes(cameraId)) ids.push(cameraId);
+    const sourceId = String(config.source_id ?? "").trim();
+    if (cameraId && !refs.some((item) => item.cameraId === cameraId && item.sourceId === sourceId)) {
+      refs.push({ cameraId, sourceId });
+    }
   }
-  return ids;
+  return refs;
 }
 
 export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPanels = {} }: Props): React.ReactElement {
@@ -323,12 +326,17 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     const pipelineServerId = normalizeServerId(draft.processing_server_id);
     const pipelineServerLabel = processingServerLabel(pipelineServerId, servers);
     const camerasById = new Map(camerasIndex.cameras.map((camera) => [String(camera.id || "").trim(), camera]));
-    return cameraIdsFromPipelineGraph(draft.graph)
-      .map((cameraId) => {
+    return cameraSourceRefsFromPipelineGraph(draft.graph)
+      .map(({ cameraId, sourceId }) => {
         const camera = camerasById.get(cameraId);
-        const ingest = camera?.ingest;
+        const source =
+          (camera?.sources || []).find((item) => String(item.id || "").trim() === sourceId) ??
+          (camera?.sources || []).find((item) => Boolean(item.is_default)) ??
+          camera?.sources?.[0];
+        const ingest = source?.ingest;
         const mode = ingest?.mode === "runtime_local" || ingest?.mode === "direct" ? ingest.mode : "centralized";
-        const cameraLabel = camera?.name || cameraId;
+        const sourceLabel = source?.name ? ` / ${source.name}` : "";
+        const cameraLabel = `${camera?.name || cameraId}${sourceLabel}`;
         if (mode === "direct") {
           return t(
             "core.ui.pipelines.ingest.direct",

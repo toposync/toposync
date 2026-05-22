@@ -1,7 +1,7 @@
 import React from "react";
 import type { PipelineOperatorPanel } from "@toposync/plugin-api";
 
-import type { CameraContextsResponse, PipelineAlert, PipelineOperatorDefinition } from "../../../../util/api";
+import type { CameraContextsResponse, CamerasIndexResponse, PipelineAlert, PipelineOperatorDefinition } from "../../../../util/api";
 import { i18n } from "../../../../util/i18n";
 
 import type { CameraAreaOption, DragInsertPosition, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../types";
@@ -20,6 +20,7 @@ type Props = {
   onOpenProcessingServers?: () => void;
 
   interactiveCameraId: string;
+  camerasIndex: CamerasIndexResponse;
   cameraSelectOptions: SelectOption[];
   cameraSelectOptionById: Map<string, SelectOption>;
   activeCameraContexts: CameraContextsResponse | null;
@@ -133,6 +134,7 @@ export function InteractiveStepCard({
   processingServerId,
   onOpenProcessingServers,
   interactiveCameraId,
+  camerasIndex,
   cameraSelectOptions,
   cameraSelectOptionById,
   activeCameraContexts,
@@ -342,6 +344,7 @@ export function InteractiveStepCard({
             processingServerId={processingServerId}
             onOpenProcessingServers={onOpenProcessingServers}
             interactiveCameraId={interactiveCameraId}
+            camerasIndex={camerasIndex}
             cameraSelectOptions={cameraSelectOptions}
             cameraSelectOptionById={cameraSelectOptionById}
             activeCameraContexts={activeCameraContexts}

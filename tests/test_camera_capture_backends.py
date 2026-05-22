@@ -22,6 +22,35 @@ from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 
 
+def _manual_camera_device(
+    camera_id: str,
+    *,
+    source_id: str = "main",
+    rtsp_url: str = "rtsp://example",
+    fps: float = 5.0,
+    ingest: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": camera_id,
+        "name": camera_id,
+        "control": {"type": "none"},
+        "sources": [
+            {
+                "id": source_id,
+                "name": "Principal",
+                "enabled": True,
+                "is_default": True,
+                "kind": "video",
+                "role": "main",
+                "view_id": "default",
+                "origin": {"type": "rtsp", "rtsp_url": rtsp_url},
+                "video": {"fps": fps},
+                "ingest": ingest or {"mode": "centralized", "host_server_id": "local"},
+            }
+        ],
+    }
+
+
 def test_frame_grabber_falls_back_to_opencv_when_ffmpeg_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -224,16 +253,13 @@ def test_camera_source_waits_for_camera_settings_without_crashing(
         await store.patch_extension_settings(
             "com.toposync.cameras",
             {
-                "cameras": [
-                        {
-                            "id": "cam-wait-settings",
-                            "name": "cam wait",
-                            "rtsp_url": "rtsp://example",
-                            "username": "",
-                            "password": "",
-                            "fps": 5.0,
-                            "ingest": {"mode": "direct"},
-                        },
+                "devices": [
+                    _manual_camera_device(
+                        "cam-wait-settings",
+                        rtsp_url="rtsp://example",
+                        fps=5.0,
+                        ingest={"mode": "direct"},
+                    ),
                 ]
             },
         )
@@ -263,15 +289,12 @@ def test_resolve_camera_source_can_bypass_ingest_service(tmp_path: Path) -> None
         await store.patch_extension_settings(
             "com.toposync.cameras",
             {
-                "cameras": [
-                    {
-                        "id": "cam1",
-                        "name": "Cam 1",
-                        "rtsp_url": "rtsp://10.0.0.1/live",
-                        "username": "",
-                        "password": "",
-                        "fps": 5.0,
-                    }
+                "devices": [
+                    _manual_camera_device(
+                        "cam1",
+                        rtsp_url="rtsp://10.0.0.1/live",
+                        fps=5.0,
+                    )
                 ]
             },
         )
@@ -291,16 +314,13 @@ def test_resolve_camera_source_can_bypass_ingest_service(tmp_path: Path) -> None
         await store.patch_extension_settings(
             "com.toposync.cameras",
             {
-                "cameras": [
-                    {
-                        "id": "cam1",
-                        "name": "Cam 1",
-                        "rtsp_url": "rtsp://10.0.0.1/live",
-                        "username": "",
-                        "password": "",
-                        "fps": 5.0,
-                        "ingest": {"mode": "direct"},
-                    }
+                "devices": [
+                    _manual_camera_device(
+                        "cam1",
+                        rtsp_url="rtsp://10.0.0.1/live",
+                        fps=5.0,
+                        ingest={"mode": "direct"},
+                    )
                 ]
             },
         )

@@ -57,7 +57,27 @@ def test_camera_pipeline_wizard_defaults_detection_to_rfdetr_medium(
     with _create_client(tmp_path, monkeypatch) as client:
         res = client.patch(
             "/api/settings/extensions/com.toposync.cameras",
-            json={"cameras": [{"id": "cam1", "name": "Front"}]},
+            json={
+                "devices": [
+                    {
+                        "id": "cam1",
+                        "name": "Front",
+                        "control": {"type": "none"},
+                        "sources": [
+                            {
+                                "id": "main",
+                                "name": "Principal",
+                                "enabled": True,
+                                "is_default": True,
+                                "kind": "video",
+                                "role": "main",
+                                "origin": {"type": "rtsp", "rtsp_url": "rtsp://example.local/front"},
+                                "ingest": {"mode": "direct"},
+                            }
+                        ],
+                    }
+                ],
+            },
         )
         assert res.status_code == 200
 

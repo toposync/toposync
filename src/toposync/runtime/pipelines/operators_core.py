@@ -733,7 +733,10 @@ class DemoFrameSequenceSourceRuntime(SourceOperatorRuntime):
         payload = {
             "source": build_source_descriptor(
                 device_id=self._camera_id,
-                channel_id="video_main",
+                source_id="demo",
+                source_name="Demo",
+                view_id="demo",
+                role="main",
                 kind="camera",
                 modality="video",
                 name=self._camera_name,
@@ -1038,7 +1041,10 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         produces_artifacts=[MAIN_ARTIFACT_NAME],
         produces_source_fields=[
             "device_id",
-            "channel_id",
+            "source_id",
+            "source_name",
+            "view_id",
+            "role",
             "kind",
             "modality",
             "name",

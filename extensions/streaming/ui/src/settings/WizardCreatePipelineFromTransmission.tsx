@@ -122,6 +122,15 @@ function chooseInitialCameraId(cameras: CameraIndexItem[], preferredCameraId: st
   return "";
 }
 
+function defaultCameraSourceId(camera: CameraIndexItem | null): string {
+  const sources = camera?.sources || [];
+  return String(
+    sources.find((source) => source.enabled !== false && source.is_default)?.id ||
+      sources.find((source) => source.enabled !== false)?.id ||
+      "",
+  ).trim();
+}
+
 function sortProcessingServers(servers: ProcessingServer[]): ProcessingServer[] {
   const local = servers.find((item) => normalizeServerId(item.id) === "local") ?? null;
   const rest = servers
@@ -170,6 +179,7 @@ export function WizardCreatePipelineFromTransmission({
   const [step, setStep] = useState<WizardStep>("form");
   const [presetId, setPresetId] = useState<StreamingWizardPresetId>("simple_stream");
   const [cameraId, setCameraId] = useState("");
+  const [cameraSourceId, setCameraSourceId] = useState("");
   const [cameraPickerOpen, setCameraPickerOpen] = useState(false);
   const [cameraSearch, setCameraSearch] = useState("");
   const [cameras, setCameras] = useState<CameraIndexItem[]>([]);
@@ -198,12 +208,14 @@ export function WizardCreatePipelineFromTransmission({
   const [created, setCreated] = useState<StreamingWizardCreatePipelineResponse | null>(null);
 
   const transmissionCameraControlId = String(transmission?.camera_controls?.camera_id || "").trim();
+  const transmissionCameraControlSourceId = String(transmission?.camera_controls?.camera_source_id || "").trim();
 
   useEffect(() => {
     if (!open) return;
     setStep("form");
     setPresetId("simple_stream");
     setCameraId("");
+    setCameraSourceId("");
     setCameraPickerOpen(false);
     setCameraSearch("");
     setCameras([]);
@@ -246,7 +258,14 @@ export function WizardCreatePipelineFromTransmission({
         setCameraId((previous) => {
           if (next.length === 0) return "";
           const current = String(previous || "").trim();
-          return cameraIdInList(next, current) || chooseInitialCameraId(next, transmissionCameraControlId, transmission);
+          const selected = cameraIdInList(next, current) || chooseInitialCameraId(next, transmissionCameraControlId, transmission);
+          const selectedCameraForSource = next.find((camera) => String(camera.id || "").trim() === selected) ?? null;
+          setCameraSourceId(
+            selectedCameraForSource && transmissionCameraControlSourceId
+              ? transmissionCameraControlSourceId
+              : defaultCameraSourceId(selectedCameraForSource),
+          );
+          return selected;
         });
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
@@ -257,7 +276,7 @@ export function WizardCreatePipelineFromTransmission({
     })();
 
     return () => controller.abort();
-  }, [open, transmission?.id, transmission?.name, transmission?.path, transmissionCameraControlId]);
+  }, [open, transmission?.id, transmission?.name, transmission?.path, transmissionCameraControlId, transmissionCameraControlSourceId]);
 
   useEffect(() => {
     if (!cameraPickerOpen) return;
@@ -283,6 +302,26 @@ export function WizardCreatePipelineFromTransmission({
 
   const selectedPreset = useMemo(() => PRESET_OPTIONS.find((item) => item.id === presetId) ?? PRESET_OPTIONS[0], [presetId]);
   const selectedCamera = useMemo(() => cameras.find((camera) => String(camera.id || "").trim() === cameraId.trim()) ?? null, [cameraId, cameras]);
+  const selectedCameraSources = useMemo(
+    () => (selectedCamera?.sources || []).filter((source) => (String(source.kind || "video").toLowerCase() || "video") === "video" && source.enabled !== false),
+    [selectedCamera],
+  );
+  const selectedSource = useMemo(
+    () =>
+      selectedCameraSources.find((source) => String(source.id || "").trim() === cameraSourceId.trim()) ??
+      selectedCameraSources.find((source) => source.is_default) ??
+      selectedCameraSources[0] ??
+      null,
+    [cameraSourceId, selectedCameraSources],
+  );
+  useEffect(() => {
+    if (!selectedCamera) {
+      if (cameraSourceId) setCameraSourceId("");
+      return;
+    }
+    const current = selectedCameraSources.find((source) => String(source.id || "").trim() === cameraSourceId.trim());
+    if (!current) setCameraSourceId(defaultCameraSourceId(selectedCamera));
+  }, [cameraSourceId, selectedCamera, selectedCameraSources]);
   const cameraNameCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const camera of cameras) {
@@ -297,7 +336,8 @@ export function WizardCreatePipelineFromTransmission({
     const query = normalizeCameraSearch(cameraSearch);
     if (!query) return cameras;
     return cameras.filter((camera) => {
-      const haystack = normalizeCameraSearch(`${camera.name || ""} ${camera.id || ""}`);
+      const sourceNames = (camera.sources || []).map((source) => `${source.name || ""} ${source.id || ""}`).join(" ");
+      const haystack = normalizeCameraSearch(`${camera.name || ""} ${camera.id || ""} ${sourceNames}`);
       return haystack.includes(query);
     });
   }, [cameraSearch, cameras]);
@@ -315,7 +355,7 @@ export function WizardCreatePipelineFromTransmission({
   const transmissionHostServerId = normalizeServerId(transmission?.host_server_id);
   const selectedProcessingServerId = normalizeServerId(processingServerId);
   const hostMismatch = transmissionHostServerId !== selectedProcessingServerId;
-  const selectedCameraIngest = selectedCamera?.ingest ?? null;
+  const selectedCameraIngest = selectedSource?.ingest ?? null;
   const selectedCameraIngestMode = selectedCameraIngest?.mode === "runtime_local" || selectedCameraIngest?.mode === "direct" ? selectedCameraIngest.mode : "centralized";
   const selectedCameraIngestHost = selectedCameraIngestMode === "centralized" ? normalizeServerId(selectedCameraIngest?.host_server_id) : selectedProcessingServerId;
   const selectedCameraDirectOverrideActive =
@@ -395,6 +435,10 @@ export function WizardCreatePipelineFromTransmission({
       setCreateError(t("ext.streaming.wizard.errors.select_camera", {}, "Select a camera."));
       return;
     }
+    if (!selectedSource) {
+      setCreateError(t("ext.streaming.wizard.errors.select_source", {}, "Selecione uma fonte da câmera."));
+      return;
+    }
     if (!knownProcessingServerIds.has(selectedProcessingServerId)) {
       setCreateError(
         t(
@@ -423,6 +467,7 @@ export function WizardCreatePipelineFromTransmission({
       const response = await createPipelineFromTransmissionWizard({
         transmission_id: transmission.id,
         camera_id: cameraId.trim(),
+        camera_source_id: String(selectedSource.id || "").trim(),
         preset_id: presetId,
         optional_parameters: {
           pipeline_name: pipelineName.trim() || undefined,
@@ -559,6 +604,7 @@ export function WizardCreatePipelineFromTransmission({
                                 aria-selected={selected}
                                 onClick={() => {
                                   setCameraId(cid);
+                                  setCameraSourceId(defaultCameraSourceId(camera));
                                   setCameraPickerOpen(false);
                                   setCameraSearch("");
                                 }}
@@ -586,6 +632,36 @@ export function WizardCreatePipelineFromTransmission({
                   </div>
                 ) : null}
               </div>
+
+              {selectedCamera ? (
+                <div className="field">
+                  <label className="label">{t("ext.streaming.wizard.camera_source", {}, "Fonte da câmera")}</label>
+                  <select
+                    className="input"
+                    value={String(selectedSource?.id || "").trim()}
+                    onChange={(event) => setCameraSourceId(event.target.value)}
+                    disabled={selectedCameraSources.length <= 1}
+                  >
+                    {selectedCameraSources.map((source) => {
+                      const sourceId = String(source.id || "").trim();
+                      const name = String(source.name || "").trim() || sourceId;
+                      const width = typeof source.video?.width === "number" ? source.video.width : null;
+                      const height = typeof source.video?.height === "number" ? source.video.height : null;
+                      const resolution = width && height ? ` · ${width}x${height}` : "";
+                      return (
+                        <option key={sourceId} value={sourceId}>
+                          {name}{resolution}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  {selectedCameraSources.length === 0 ? (
+                    <div className="cardMeta">
+                      {t("ext.streaming.wizard.camera_source_empty", {}, "Esta câmera não tem fonte de vídeo ativa.")}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
 
               <div className="field">
                 <label className="label">{t("ext.streaming.wizard.preset", {}, "Preset")}</label>

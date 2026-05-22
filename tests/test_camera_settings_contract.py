@@ -29,7 +29,7 @@ def _create_client_with_cameras(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     return TestClient(create_app())
 
 
-def test_normalize_onvif_legacy_credentials_move_to_onvif_config() -> None:
+def test_normalize_onvif_camera_keeps_control_and_sources() -> None:
     from toposync_ext_cameras.settings import normalize_cameras_settings
 
     normalized = normalize_cameras_settings(
@@ -38,34 +38,39 @@ def test_normalize_onvif_legacy_credentials_move_to_onvif_config() -> None:
                 {
                     "id": "front",
                     "name": "Front",
-                    "channels": [
-                        {
-                            "id": "video_main",
-                            "modality": "video",
-                            "is_default": True,
-                            "connection_type": "onvif",
-                            "rtsp_url": "rtsp://192.168.0.10/main",
+                        "control": {"type": "onvif"},
+                        "onvif": {
+                            "xaddr": "192.168.0.10",
                             "username": "camera-user",
                             "password": "camera-pass",
-                            "onvif": {"xaddr": "192.168.0.10"},
-                        }
-                    ],
+                        },
+                        "sources": [
+                            {
+                                "id": "main",
+                                "kind": "video",
+                                "is_default": True,
+                                "origin": {
+                                    "type": "onvif_profile",
+                                    "rtsp_url": "rtsp://192.168.0.10/main",
+                                    "profile_token": "profile-main",
+                                },
+                            }
+                        ],
                 }
             ]
         }
     )
 
-    channel = normalized["devices"][0]["channels"][0]
-    assert channel["stream_profile"] == "onvif"
-    assert channel["stream_username"] == ""
-    assert channel["stream_password"] == ""
-    assert channel["username"] == ""
-    assert channel["password"] == ""
-    assert channel["onvif"]["username"] == "camera-user"
-    assert channel["onvif"]["password"] == "camera-pass"
+    device = normalized["devices"][0]
+    assert device["control"]["type"] == "onvif"
+    assert device["onvif"]["username"] == "camera-user"
+    assert device["onvif"]["password"] == "camera-pass"
+    source = device["sources"][0]
+    assert source["origin"]["type"] == "onvif_profile"
+    assert source["origin"]["profile_token"] == "profile-main"
 
 
-def test_normalize_rtsp_legacy_credentials_move_to_stream_credentials() -> None:
+def test_normalize_manual_camera_keeps_rtsp_source_credentials() -> None:
     from toposync_ext_cameras.settings import normalize_cameras_settings
 
     normalized = normalize_cameras_settings(
@@ -74,31 +79,32 @@ def test_normalize_rtsp_legacy_credentials_move_to_stream_credentials() -> None:
                 {
                     "id": "front",
                     "name": "Front",
-                    "channels": [
-                        {
-                            "id": "video_main",
-                            "modality": "video",
-                            "is_default": True,
-                            "connection_type": "rtsp",
-                            "rtsp_url": "rtsp://127.0.0.1:8554/front",
-                            "username": "stream-user",
-                            "password": "stream-pass",
-                        }
-                    ],
+                        "control": {"type": "none"},
+                        "sources": [
+                            {
+                                "id": "main",
+                                "kind": "video",
+                                "is_default": True,
+                                "origin": {
+                                    "type": "rtsp",
+                                    "rtsp_url": "rtsp://127.0.0.1:8554/front",
+                                    "stream_username": "stream-user",
+                                    "stream_password": "stream-pass",
+                                },
+                            }
+                        ],
                 }
             ]
         }
     )
 
-    channel = normalized["devices"][0]["channels"][0]
-    assert channel["stream_profile"] == "custom"
-    assert channel["stream_username"] == "stream-user"
-    assert channel["stream_password"] == "stream-pass"
-    assert channel["username"] == ""
-    assert channel["password"] == ""
+    source = normalized["devices"][0]["sources"][0]
+    assert source["origin"]["type"] == "rtsp"
+    assert source["origin"]["stream_username"] == "stream-user"
+    assert source["origin"]["stream_password"] == "stream-pass"
 
 
-def test_normalize_prefers_devices_when_legacy_cameras_key_remains() -> None:
+def test_normalize_ignores_legacy_cameras_key() -> None:
     from toposync_ext_cameras.settings import normalize_cameras_settings
 
     normalized = normalize_cameras_settings(
@@ -109,13 +115,13 @@ def test_normalize_prefers_devices_when_legacy_cameras_key_remains() -> None:
                 {
                     "id": "kept",
                     "name": "Kept camera",
-                    "channels": [
+                    "control": {"type": "none"},
+                    "sources": [
                         {
-                            "id": "video_main",
-                            "modality": "video",
+                            "id": "main",
+                            "kind": "video",
                             "is_default": True,
-                            "connection_type": "rtsp",
-                            "rtsp_url": "rtsp://127.0.0.1:8554/kept",
+                            "origin": {"type": "rtsp", "rtsp_url": "rtsp://127.0.0.1:8554/kept"},
                         }
                     ],
                 }
@@ -156,42 +162,25 @@ def test_camera_index_uses_devices_after_deleting_legacy_camera(
         res = client.patch(
             "/api/settings/extensions/com.toposync.cameras",
             json={
-                "cameras": [
-                    {"id": "front", "name": "Front"},
-                    {"id": "back", "name": "Back"},
-                ],
-            },
-        )
-        assert res.status_code == 200
-
-        res = client.get("/api/cameras/index")
-        assert res.status_code == 200
-        assert [item["id"] for item in res.json()["cameras"]] == ["front", "back"]
-
-        res = client.patch(
-            "/api/settings/extensions/com.toposync.cameras",
-            json={
-                "schema_version": 2,
+                "schema_version": 4,
                 "devices": [
                     {
                         "id": "back",
                         "name": "Back",
                         "kind": "camera",
-                        "channels": [
+                        "control": {"type": "none"},
+                        "sources": [
                             {
-                                "id": "video_main",
-                                "name": "Main video",
-                                "modality": "video",
+                                "id": "main",
+                                "name": "Main",
+                                "kind": "video",
                                 "enabled": True,
                                 "is_default": True,
-                                "connection_type": "rtsp",
-                                "transport": "rtsp",
-                                "stream_profile": "custom",
-                                "rtsp_url": "",
-                                "stream_username": "",
-                                "stream_password": "",
-                                "fps": 5,
-                                "onvif": None,
+                                "role": "main",
+                                "view_id": "main",
+                                "origin": {"type": "rtsp", "rtsp_url": ""},
+                                "video": {"fps": 5},
+                                "ingest": {"mode": "centralized", "host_server_id": "local"},
                                 "metadata": {},
                             }
                         ],
@@ -208,7 +197,7 @@ def test_camera_index_uses_devices_after_deleting_legacy_camera(
 
         res = client.patch(
             "/api/settings/extensions/com.toposync.cameras",
-            json={"schema_version": 2, "devices": []},
+            json={"schema_version": 4, "devices": []},
         )
         assert res.status_code == 200
 

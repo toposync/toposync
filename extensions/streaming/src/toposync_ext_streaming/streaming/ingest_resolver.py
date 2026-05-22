@@ -23,7 +23,9 @@ from .camera_ingest import (
     build_camera_ingest_definitions,
     build_camera_ingest_path_auth,
     build_camera_ingest_path_configs,
-    camera_stream_credentials,
+    camera_source_credentials,
+    camera_source_key,
+    camera_source_rtsp_url,
     resolve_camera_ingest_context,
     rtsp_url_with_auth,
 )
@@ -70,18 +72,18 @@ class CameraIngestResolver:
         self,
         *,
         camera_id: str,
-        channel_id: str = "",
+        source_id: str = "",
         consumer_server_id: str | None = None,
         request_host: str = "127.0.0.1",
     ) -> StreamingCameraIngestResolveResponse:
         current_server_id = self._host_server_id
         consumer_id = normalize_server_id(consumer_server_id, fallback=current_server_id)
         cid = str(camera_id or "").strip()
-        requested_channel_id = str(channel_id or "").strip()
+        requested_source_id = str(source_id or "").strip()
         if not cid:
             return StreamingCameraIngestResolveResponse(
                 camera_id="",
-                channel_id=requested_channel_id or "video_main",
+                source_id=requested_source_id,
                 blocking_errors=["camera_id is required."],
             )
 
@@ -93,17 +95,17 @@ class CameraIngestResolver:
         context = resolve_camera_ingest_context(
             app_settings=app_settings,
             camera_id=cid,
-            channel_id=requested_channel_id,
+            source_id=requested_source_id,
         )
         if context is None:
             return StreamingCameraIngestResolveResponse(
                 camera_id=cid,
-                channel_id=requested_channel_id or "video_main",
-                blocking_errors=["Camera not found or has no configured video channel."],
+                source_id=requested_source_id,
+                blocking_errors=["Camera not found or has no configured video source."],
             )
 
-        _device, channel, policy = context
-        resolved_channel_id = str(channel.get("id") or "").strip() or requested_channel_id or "video_main"
+        device, source, policy = context
+        resolved_source_id = str(source.get("id") or "").strip() or requested_source_id
         direct_override_active = bool(policy.direct_override_active)
         mode = policy.mode
         target_server_id = (
@@ -124,10 +126,11 @@ class CameraIngestResolver:
                 warnings.append("Temporary direct override is active for this camera.")
             return self._resolve_direct_response(
                 camera_id=cid,
-                channel_id=resolved_channel_id,
+                source_id=resolved_source_id,
                 mode=mode,
                 centralizer_server_id="" if mode == "direct" else target_server_id,
-                channel=channel,
+                device=device,
+                source=source,
                 direct_override_active=direct_override_active,
                 warnings=warnings,
             )
@@ -135,7 +138,7 @@ class CameraIngestResolver:
         if not streaming_settings.engine.enabled:
             return StreamingCameraIngestResolveResponse(
                 camera_id=cid,
-                channel_id=resolved_channel_id,
+                source_id=resolved_source_id,
                 mode=mode,  # type: ignore[arg-type]
                 centralizer_server_id=target_server_id,
                 direct_override_active=direct_override_active,
@@ -145,7 +148,7 @@ class CameraIngestResolver:
         if not streaming_settings.camera_ingest.enabled:
             return StreamingCameraIngestResolveResponse(
                 camera_id=cid,
-                channel_id=resolved_channel_id,
+                source_id=resolved_source_id,
                 mode=mode,  # type: ignore[arg-type]
                 centralizer_server_id=target_server_id,
                 direct_override_active=direct_override_active,
@@ -156,7 +159,7 @@ class CameraIngestResolver:
         if target_server_id != current_server_id:
             return await self._resolve_remote(
                 camera_id=cid,
-                channel_id=resolved_channel_id,
+                source_id=resolved_source_id,
                 mode=mode,
                 target_server_id=target_server_id,
                 consumer_server_id=consumer_id,
@@ -167,7 +170,7 @@ class CameraIngestResolver:
             app_settings=app_settings,
             settings=streaming_settings,
             camera_id=cid,
-            channel_id=resolved_channel_id,
+            source_id=resolved_source_id,
             mode=mode,
             centralizer_server_id=target_server_id,
             consumer_server_id=consumer_id,
@@ -180,20 +183,21 @@ class CameraIngestResolver:
         self,
         *,
         camera_id: str,
-        channel_id: str,
+        source_id: str,
         mode: str,
         centralizer_server_id: str,
-        channel: dict[str, Any],
+        device: dict[str, Any],
+        source: dict[str, Any],
         direct_override_active: bool,
         warnings: list[str],
     ) -> StreamingCameraIngestResolveResponse:
-        direct_url = _direct_rtsp_url(channel)
+        direct_url = _direct_rtsp_url(device, source)
         blocking_errors: list[str] = []
         if not direct_url:
-            blocking_errors.append("Camera channel has no configured RTSP URL for direct connection.")
+            blocking_errors.append("Camera source has no configured RTSP URL for direct connection.")
         return StreamingCameraIngestResolveResponse(
             camera_id=camera_id,
-            channel_id=channel_id,
+            source_id=source_id,
             mode=mode,  # type: ignore[arg-type]
             used_ingest=False,
             centralizer_server_id=centralizer_server_id,
@@ -211,7 +215,7 @@ class CameraIngestResolver:
         app_settings: Any,
         settings: StreamingExtensionSettings,
         camera_id: str,
-        channel_id: str,
+        source_id: str,
         mode: str,
         centralizer_server_id: str,
         consumer_server_id: str,
@@ -224,11 +228,11 @@ class CameraIngestResolver:
             ingest_settings=settings.camera_ingest,
             host_server_id=centralizer_server_id,
         )
-        ingest = ingest_by_id.get(camera_id)
+        ingest = ingest_by_id.get(camera_source_key(camera_id, source_id))
         if ingest is None:
             return StreamingCameraIngestResolveResponse(
                 camera_id=camera_id,
-                channel_id=channel_id,
+                source_id=source_id,
                 mode=mode,  # type: ignore[arg-type]
                 centralizer_server_id=centralizer_server_id,
                 direct_override_active=direct_override_active,
@@ -263,7 +267,7 @@ class CameraIngestResolver:
             url = await self._engine_manager.get_read_url_for_path(ingest.path_slug, host="127.0.0.1")
             return StreamingCameraIngestResolveResponse(
                 camera_id=camera_id,
-                channel_id=channel_id,
+                source_id=source_id,
                 mode=mode,  # type: ignore[arg-type]
                 used_ingest=True,
                 centralizer_server_id=centralizer_server_id,
@@ -287,7 +291,7 @@ class CameraIngestResolver:
         if blocking_errors:
             return StreamingCameraIngestResolveResponse(
                 camera_id=camera_id,
-                channel_id=channel_id,
+                source_id=source_id,
                 mode=mode,  # type: ignore[arg-type]
                 used_ingest=True,
                 centralizer_server_id=centralizer_server_id,
@@ -301,7 +305,7 @@ class CameraIngestResolver:
         if _is_loopback_url(url):
             return StreamingCameraIngestResolveResponse(
                 camera_id=camera_id,
-                channel_id=channel_id,
+                source_id=source_id,
                 mode=mode,  # type: ignore[arg-type]
                 used_ingest=True,
                 centralizer_server_id=centralizer_server_id,
@@ -312,7 +316,7 @@ class CameraIngestResolver:
             )
         return StreamingCameraIngestResolveResponse(
             camera_id=camera_id,
-            channel_id=channel_id,
+            source_id=source_id,
             mode=mode,  # type: ignore[arg-type]
             used_ingest=True,
             centralizer_server_id=centralizer_server_id,
@@ -328,7 +332,7 @@ class CameraIngestResolver:
         self,
         *,
         camera_id: str,
-        channel_id: str,
+        source_id: str,
         mode: str,
         target_server_id: str,
         consumer_server_id: str,
@@ -343,7 +347,7 @@ class CameraIngestResolver:
             if server is None:
                 return _remote_error_response(
                     camera_id=camera_id,
-                    channel_id=channel_id,
+                    source_id=source_id,
                     mode=mode,
                     centralizer_server_id=target_server_id,
                     warnings=warnings,
@@ -352,7 +356,7 @@ class CameraIngestResolver:
             if str(getattr(server, "kind", "") or "") != "http":
                 return _remote_error_response(
                     camera_id=camera_id,
-                    channel_id=channel_id,
+                    source_id=source_id,
                     mode=mode,
                     centralizer_server_id=target_server_id,
                     warnings=warnings,
@@ -362,7 +366,7 @@ class CameraIngestResolver:
             if not base_url:
                 return _remote_error_response(
                     camera_id=camera_id,
-                    channel_id=channel_id,
+                    source_id=source_id,
                     mode=mode,
                     centralizer_server_id=target_server_id,
                     warnings=warnings,
@@ -373,7 +377,7 @@ class CameraIngestResolver:
                     url=f"{base_url}{INTERNAL_CAMERA_INGEST_RESOLVE_PATH}",
                     body={
                         "camera_id": camera_id,
-                        "channel_id": channel_id,
+                        "source_id": source_id,
                         "consumer_server_id": consumer_server_id,
                     },
                     timeout_s=self._timeout_s,
@@ -383,7 +387,7 @@ class CameraIngestResolver:
             except Exception as exc:  # noqa: BLE001
                 return _remote_error_response(
                     camera_id=camera_id,
-                    channel_id=channel_id,
+                    source_id=source_id,
                     mode=mode,
                     centralizer_server_id=target_server_id,
                     warnings=warnings,
@@ -393,7 +397,7 @@ class CameraIngestResolver:
             if not self._core_base_url:
                 return _remote_error_response(
                     camera_id=camera_id,
-                    channel_id=channel_id,
+                    source_id=source_id,
                     mode=mode,
                     centralizer_server_id=target_server_id,
                     warnings=warnings,
@@ -404,7 +408,7 @@ class CameraIngestResolver:
                     url=f"{self._core_base_url}{INTERNAL_CAMERA_INGEST_RESOLVE_PATH}",
                     body={
                         "camera_id": camera_id,
-                        "channel_id": channel_id,
+                        "source_id": source_id,
                         "consumer_server_id": consumer_server_id,
                     },
                     timeout_s=self._timeout_s,
@@ -415,7 +419,7 @@ class CameraIngestResolver:
             except Exception as exc:  # noqa: BLE001
                 return _remote_error_response(
                     camera_id=camera_id,
-                    channel_id=channel_id,
+                    source_id=source_id,
                     mode=mode,
                     centralizer_server_id=target_server_id,
                     warnings=warnings,
@@ -441,18 +445,18 @@ class CameraIngestResolver:
         )
 
 
-def _direct_rtsp_url(channel: dict[str, Any]) -> str:
-    rtsp_url = str(channel.get("rtsp_url") or "").strip()
+def _direct_rtsp_url(device: dict[str, Any], source: dict[str, Any]) -> str:
+    rtsp_url = camera_source_rtsp_url(source)
     if not rtsp_url:
         return ""
-    username, password = camera_stream_credentials(channel)
+    username, password = camera_source_credentials(device, source)
     return rtsp_url_with_auth(rtsp_url, username=username, password=password)
 
 
 def _remote_error_response(
     *,
     camera_id: str,
-    channel_id: str,
+    source_id: str,
     mode: str,
     centralizer_server_id: str,
     warnings: list[str],
@@ -460,7 +464,7 @@ def _remote_error_response(
 ) -> StreamingCameraIngestResolveResponse:
     return StreamingCameraIngestResolveResponse(
         camera_id=camera_id,
-        channel_id=channel_id or "video_main",
+        source_id=source_id,
         mode=mode,  # type: ignore[arg-type]
         centralizer_server_id=centralizer_server_id,
         warnings=warnings,

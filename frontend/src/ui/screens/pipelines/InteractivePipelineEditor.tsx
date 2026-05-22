@@ -708,6 +708,7 @@ export function InteractivePipelineEditor({
         processingServerId={processingServerId}
         onOpenProcessingServers={onOpenProcessingServers}
         interactiveCameraId={interactiveCameraId}
+        camerasIndex={camerasIndex}
         cameraSelectOptions={cameraSelectOptions}
         cameraSelectOptionById={cameraSelectOptionById}
         activeCameraContexts={activeCameraContexts}

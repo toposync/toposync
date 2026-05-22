@@ -4557,6 +4557,149 @@ video {
   gap: 10px;
 }
 
+.settingsPanel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.settingsPanel .settingsHeaderRow,
+.settingsPanel .settingsSectionHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settingsPanel .settingsTitle {
+  font-size: 18px;
+  font-weight: 850;
+}
+
+.settingsPanel .settingsDescription,
+.settingsPanel .settingsStatusMuted {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.settingsPanel .settingsTwoColumn {
+  display: grid;
+  grid-template-columns: minmax(240px, 270px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  min-width: 0;
+}
+
+.settingsPanel .settingsSidebar,
+.settingsPanel .settingsMain {
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-panel);
+  padding: 10px;
+  overflow: visible;
+}
+
+.settingsPanel .settingsMain {
+  display: grid;
+  gap: 12px;
+}
+
+.settingsPanel .settingsList {
+  max-height: 430px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.settingsPanel .settingsListItem,
+.settingsPanel .settingsSourceItem {
+  width: 100%;
+  display: block;
+  text-align: left;
+  color: var(--color-text-primary);
+  background: var(--color-surface-frost);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
+}
+
+.settingsPanel .settingsListItem {
+  padding: 10px;
+}
+
+.settingsPanel .settingsSourceItem {
+  padding: 0;
+}
+
+.settingsPanel .settingsListItem.isActive,
+.settingsPanel .settingsSourceItem.isActive {
+  background: linear-gradient(135deg, var(--color-accent-background-strong), var(--color-accent-background-strong-2));
+  border-color: var(--color-accent-border);
+}
+
+.settingsPanel .settingsListTitle {
+  display: block;
+  color: var(--color-text-primary);
+  font-weight: 750;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.settingsPanel .settingsListMeta {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.3;
+  margin-top: 3px;
+}
+
+.settingsPanel .settingsSourceGrid {
+  display: grid;
+  grid-template-columns: minmax(220px, 294px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.settingsPanel .settingsSourceList {
+  display: grid;
+  gap: 8px;
+}
+
+.settingsPanel .sectionDivider {
+  height: auto;
+  background: transparent;
+  border-top: 1px solid var(--color-border-subtle);
+  margin: 12px 0 0;
+  padding-top: 12px;
+}
+
+.settingsPanel .cardBody {
+  margin-top: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.settingsPanel .field {
+  margin: 0;
+}
+
+.settingsPanel .settingsMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.settingsPanel .settingsMetricGrid > div {
+  min-width: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+  background: rgba(255, 255, 255, 0.035);
+  padding: 8px 10px;
+}
+
 .settingsSplitMain {
   flex: 1;
   min-width: 0;

@@ -15,9 +15,6 @@ class CameraOnvifConfig(BaseModel):
     password: str = ""
     media_xaddr: str | None = None
     ptz_xaddr: str | None = None
-    profile_token: str | None = None
-    profile_name: str | None = None
-    ptz_profile_token: str | None = None
     hardware: str | None = None
 
     @field_validator("xaddr", "username", "password", mode="before")
@@ -25,16 +22,7 @@ class CameraOnvifConfig(BaseModel):
     def _trim_text(cls, value: Any) -> str:
         return str(value or "").strip()
 
-    @field_validator(
-        "device_id",
-        "media_xaddr",
-        "ptz_xaddr",
-        "profile_token",
-        "profile_name",
-        "ptz_profile_token",
-        "hardware",
-        mode="before",
-    )
+    @field_validator("device_id", "media_xaddr", "ptz_xaddr", "hardware", mode="before")
     @classmethod
     def _trim_strings(cls, value: Any) -> str | None:
         if value is None:
@@ -43,7 +31,19 @@ class CameraOnvifConfig(BaseModel):
         return text or None
 
 
-class CameraChannelIngestSettings(BaseModel):
+class CameraControlSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["onvif", "none"] = "none"
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def _normalize_type(cls, value: Any) -> str:
+        text = str(value or "").strip().lower()
+        return "onvif" if text == "onvif" else "none"
+
+
+class CameraSourceIngestSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["centralized", "runtime_local", "direct"] = "centralized"
@@ -66,84 +66,106 @@ class CameraChannelIngestSettings(BaseModel):
         text = str(value or "").strip().lower()
         return text or "local"
 
+    @model_validator(mode="after")
+    def _normalize_non_centralized_host(self) -> "CameraSourceIngestSettings":
+        if self.mode != "centralized" and self.host_server_id != "local":
+            self.host_server_id = "local"
+        return self
 
-class CameraChannelSettings(BaseModel):
+
+class CameraSourceOrigin(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = "video_main"
-    name: str = "Main video"
-    modality: Literal["video", "audio", "data"] = "video"
-    enabled: bool = True
-    is_default: bool = False
-    connection_type: Literal["rtsp", "onvif"] = "rtsp"
-    transport: str = "rtsp"
-    stream_profile: Literal["onvif", "custom"] = "onvif"
+    type: Literal["onvif_profile", "rtsp"] = "rtsp"
     rtsp_url: str = ""
     stream_username: str = ""
     stream_password: str = ""
-    # Legacy channel-level credentials. They are accepted for normalization only:
-    # RTSP cameras map them to stream credentials, ONVIF cameras map them to onvif credentials.
-    username: str = ""
-    password: str = ""
-    fps: float | None = Field(default=None, ge=1.0, le=60.0)
-    sample_rate_hz: int | None = Field(default=None, ge=1, le=384000)
-    onvif: CameraOnvifConfig | None = None
-    ingest: CameraChannelIngestSettings = Field(default_factory=CameraChannelIngestSettings)
+    profile_token: str | None = None
+    profile_name: str | None = None
+    has_ptz: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator(
-        "id",
-        "name",
-        "transport",
-        "rtsp_url",
-        "stream_username",
-        "stream_password",
-        "username",
-        "password",
-        mode="before",
-    )
+    @field_validator("type", mode="before")
+    @classmethod
+    def _normalize_type(cls, value: Any) -> str:
+        text = str(value or "").strip().lower()
+        return "onvif_profile" if text in {"onvif", "onvif_profile", "profile"} else "rtsp"
+
+    @field_validator("rtsp_url", "stream_username", "stream_password", mode="before")
     @classmethod
     def _trim_text(cls, value: Any) -> str:
         return str(value or "").strip()
 
-    @field_validator("stream_profile", mode="before")
+    @field_validator("profile_token", "profile_name", mode="before")
     @classmethod
-    def _normalize_stream_profile_value(cls, value: Any) -> str:
-        return "custom" if str(value or "").strip().lower() == "custom" else "onvif"
+    def _trim_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value or "").strip()
+        return text or None
+
+
+class CameraSourceVideoSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    width: int | None = Field(default=None, ge=1)
+    height: int | None = Field(default=None, ge=1)
+    fps: float | None = Field(default=None, ge=1.0, le=120.0)
+    codec: str | None = None
+
+    @field_validator("codec", mode="before")
+    @classmethod
+    def _trim_codec(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value or "").strip()
+        return text or None
+
+
+class CameraSourceSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = "main"
+    name: str = "Principal"
+    enabled: bool = True
+    is_default: bool = False
+    kind: Literal["video", "audio", "data"] = "video"
+    role: Literal["main", "sub", "zoom", "custom"] = "main"
+    view_id: str = "main"
+    origin: CameraSourceOrigin = Field(default_factory=CameraSourceOrigin)
+    video: CameraSourceVideoSettings = Field(default_factory=CameraSourceVideoSettings)
+    ingest: CameraSourceIngestSettings = Field(default_factory=CameraSourceIngestSettings)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("id", "name", "view_id", mode="before")
+    @classmethod
+    def _trim_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _normalize_kind(cls, value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if text in {"audio", "data"}:
+            return text
+        return "video"
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def _normalize_role(cls, value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if text in {"main", "sub", "zoom", "custom"}:
+            return text
+        return "custom"
 
     @model_validator(mode="after")
-    def _normalize_transport(self) -> "CameraChannelSettings":
-        if self.modality == "video" and not str(self.transport or "").strip():
-            self.transport = "rtsp"
-        if self.modality != "video" and not str(self.transport or "").strip():
-            self.transport = "custom"
-        if self.connection_type == "onvif" and self.onvif is None:
-            self.onvif = CameraOnvifConfig()
-        if self.connection_type == "rtsp":
-            self.stream_profile = "custom"
-        elif self.connection_type == "onvif" and self.stream_profile not in {"onvif", "custom"}:
-            self.stream_profile = "onvif"
-
-        legacy_username = str(self.username or "").strip()
-        legacy_password = str(self.password or "").strip()
-        if self.connection_type == "onvif" and self.onvif is not None:
-            updates: dict[str, str] = {}
-            if legacy_username and not str(self.onvif.username or "").strip():
-                updates["username"] = legacy_username
-            if legacy_password and not str(self.onvif.password or "").strip():
-                updates["password"] = legacy_password
-            if updates:
-                self.onvif = self.onvif.model_copy(update=updates)
-        elif self.connection_type == "rtsp":
-            if legacy_username and not self.stream_username:
-                self.stream_username = legacy_username
-            if legacy_password and not self.stream_password:
-                self.stream_password = legacy_password
-
-        self.username = ""
-        self.password = ""
-        if self.ingest.mode != "centralized" and self.ingest.host_server_id != "local":
-            self.ingest = self.ingest.model_copy(update={"host_server_id": "local"})
+    def _normalize_source(self) -> "CameraSourceSettings":
+        if not self.id:
+            self.id = "source"
+        if not self.name:
+            self.name = self.id
+        if not self.view_id:
+            self.view_id = self.id
         return self
 
 
@@ -155,7 +177,9 @@ class CameraDeviceSettings(BaseModel):
     kind: Literal["camera"] = "camera"
     enabled: bool = True
     clock_domain: str = ""
-    channels: list[CameraChannelSettings] = Field(default_factory=list)
+    control: CameraControlSettings = Field(default_factory=CameraControlSettings)
+    onvif: CameraOnvifConfig | None = None
+    sources: list[CameraSourceSettings] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("id", "name", "clock_domain", mode="before")
@@ -164,32 +188,28 @@ class CameraDeviceSettings(BaseModel):
         return str(value or "").strip()
 
     @model_validator(mode="after")
-    def _ensure_channels(self) -> "CameraDeviceSettings":
-        if not self.channels:
-            self.channels = [CameraChannelSettings(id="video_main", name="Main video", modality="video", is_default=True)]
-        default_video_seen = False
-        normalized: list[CameraChannelSettings] = []
+    def _normalize_device(self) -> "CameraDeviceSettings":
+        if self.control.type == "onvif" and self.onvif is None:
+            self.onvif = CameraOnvifConfig()
+        if self.control.type != "onvif":
+            self.onvif = None
+
+        normalized: list[CameraSourceSettings] = []
         seen_ids: set[str] = set()
-        for index, channel in enumerate(self.channels):
-            channel_id = str(channel.id or "").strip() or f"channel_{index + 1}"
-            if channel_id in seen_ids:
+        default_video_seen = False
+        for index, source in enumerate(self.sources):
+            source_id = str(source.id or "").strip() or f"source_{index + 1}"
+            if source_id in seen_ids:
                 continue
-            seen_ids.add(channel_id)
-            updated = channel.model_copy(update={"id": channel_id})
-            if updated.modality == "video" and not default_video_seen:
-                if index == 0 or updated.is_default:
-                    updated = updated.model_copy(update={"is_default": True})
-                    default_video_seen = True
+            seen_ids.add(source_id)
+            updated = source.model_copy(update={"id": source_id})
+            if updated.kind == "video" and updated.is_default and not default_video_seen:
+                default_video_seen = True
+            elif updated.kind == "video" and updated.is_default and default_video_seen:
+                updated = updated.model_copy(update={"is_default": False})
             normalized.append(updated)
 
-        if not default_video_seen:
-            for index, channel in enumerate(normalized):
-                if channel.modality == "video":
-                    normalized[index] = channel.model_copy(update={"is_default": True})
-                    default_video_seen = True
-                    break
-
-        self.channels = normalized
+        self.sources = normalized
         if not str(self.clock_domain or "").strip():
             self.clock_domain = f"device:{self.id}"
         return self
@@ -198,59 +218,8 @@ class CameraDeviceSettings(BaseModel):
 class CamerasExtensionSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 2
+    schema_version: int = 4
     devices: list[CameraDeviceSettings] = Field(default_factory=list)
-
-
-def _coerce_flat_camera(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, dict):
-        return None
-    camera_id = str(value.get("id") or "").strip()
-    if not camera_id:
-        return None
-    connection_type = str(value.get("connection_type") or "rtsp").strip().lower()
-    onvif_raw = value.get("onvif")
-    onvif = dict(onvif_raw) if isinstance(onvif_raw, dict) else None
-    is_onvif = connection_type == "onvif"
-    legacy_username = str(value.get("username") or "").strip()
-    legacy_password = str(value.get("password") or "").strip()
-    if is_onvif:
-        onvif = dict(onvif or {})
-        if legacy_username and not str(onvif.get("username") or "").strip():
-            onvif["username"] = legacy_username
-        if legacy_password and not str(onvif.get("password") or "").strip():
-            onvif["password"] = legacy_password
-    stream_profile = str(value.get("stream_profile") or ("onvif" if is_onvif else "custom")).strip().lower()
-    if stream_profile != "onvif":
-        stream_profile = "custom"
-    if not is_onvif:
-        stream_profile = "custom"
-    stream_username = str(value.get("stream_username") or "").strip()
-    stream_password = str(value.get("stream_password") or "").strip()
-    if not is_onvif:
-        stream_username = stream_username or legacy_username
-        stream_password = stream_password or legacy_password
-    channel = CameraChannelSettings(
-        id="video_main",
-        name="Main video",
-        modality="video",
-        is_default=True,
-        connection_type="onvif" if is_onvif else "rtsp",
-        transport="rtsp",
-        stream_profile=stream_profile,
-        rtsp_url=str(value.get("rtsp_url") or "").strip(),
-        stream_username=stream_username,
-        stream_password=stream_password,
-        fps=value.get("fps"),
-        onvif=CameraOnvifConfig.model_validate(onvif) if isinstance(onvif, dict) else None,
-        ingest=CameraChannelIngestSettings.model_validate(value.get("ingest") if isinstance(value.get("ingest"), dict) else {}),
-    )
-    device = CameraDeviceSettings(
-        id=camera_id,
-        name=str(value.get("name") or "").strip(),
-        channels=[channel],
-    )
-    return device.model_dump(mode="json")
 
 
 def normalize_cameras_settings(value: Any) -> dict[str, Any]:
@@ -260,11 +229,8 @@ def normalize_cameras_settings(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         devices_raw = value.get("devices")
         if isinstance(devices_raw, list):
-            # The generic extension settings endpoint merges patches. When a UI migrates
-            # legacy flat "cameras" settings to "devices", stale legacy keys can remain.
-            # Validate only the v2 schema fields so the new device list remains canonical.
             candidate = {
-                "schema_version": value.get("schema_version", 2),
+                "schema_version": value.get("schema_version", 4),
                 "devices": devices_raw,
             }
             try:
@@ -273,22 +239,13 @@ def normalize_cameras_settings(value: Any) -> dict[str, Any]:
                 settings = CamerasExtensionSettings()
             return settings.model_dump(mode="json")
 
-        cameras_raw = value.get("cameras")
-        if isinstance(cameras_raw, list):
-            devices: list[dict[str, Any]] = []
-            for item in cameras_raw:
-                coerced = _coerce_flat_camera(item)
-                if coerced is not None:
-                    devices.append(coerced)
-            return CamerasExtensionSettings(devices=devices).model_dump(mode="json")
-
     return CamerasExtensionSettings().model_dump(mode="json")
 
 
 def iter_camera_devices(value: Any) -> list[dict[str, Any]]:
     normalized = normalize_cameras_settings(value)
     devices = normalized.get("devices")
-    return list(devices) if isinstance(devices, list) else []
+    return [item for item in devices if isinstance(item, dict)] if isinstance(devices, list) else []
 
 
 def get_camera_device(value: Any, *, camera_id: str) -> dict[str, Any] | None:
@@ -296,120 +253,98 @@ def get_camera_device(value: Any, *, camera_id: str) -> dict[str, Any] | None:
     if not target:
         return None
     for item in iter_camera_devices(value):
-        if not isinstance(item, dict):
-            continue
         if str(item.get("id") or "").strip() == target:
             return item
     return None
 
 
-def get_primary_video_channel(device: Any) -> dict[str, Any] | None:
+def iter_camera_sources(device: Any, *, kind: str | None = None, enabled_only: bool = False) -> list[dict[str, Any]]:
     if not isinstance(device, dict):
-        return None
-    channels = device.get("channels")
-    if not isinstance(channels, list):
-        return None
-
-    fallback: dict[str, Any] | None = None
-    for item in channels:
+        return []
+    sources = device.get("sources")
+    if not isinstance(sources, list):
+        return []
+    out: list[dict[str, Any]] = []
+    wanted_kind = str(kind or "").strip().lower()
+    for item in sources:
         if not isinstance(item, dict):
             continue
-        if str(item.get("modality") or "video").strip().lower() != "video":
+        source_kind = str(item.get("kind") or "video").strip().lower() or "video"
+        if wanted_kind and source_kind != wanted_kind:
             continue
-        if fallback is None:
-            fallback = item
+        if enabled_only and not bool(item.get("enabled", True)):
+            continue
+        out.append(item)
+    return out
+
+
+def get_default_camera_source(device: Any, *, kind: str = "video", enabled_only: bool = False) -> dict[str, Any] | None:
+    sources = iter_camera_sources(device, kind=kind, enabled_only=enabled_only)
+    for item in sources:
         if bool(item.get("is_default")):
             return item
-    return fallback
+    return None
 
 
-def flatten_camera_device_for_ui(device: Any) -> dict[str, Any] | None:
+def get_camera_source(
+    device: Any,
+    *,
+    source_id: str = "",
+    kind: str = "video",
+    enabled_only: bool = False,
+) -> dict[str, Any] | None:
+    requested = str(source_id or "").strip()
+    if requested:
+        for item in iter_camera_sources(device, kind=kind, enabled_only=enabled_only):
+            if str(item.get("id") or "").strip() == requested:
+                return item
+        return None
+    return get_default_camera_source(device, kind=kind, enabled_only=enabled_only)
+
+
+def get_camera_onvif_credentials(device: Any) -> tuple[str, str]:
     if not isinstance(device, dict):
-        return None
-    channel = get_primary_video_channel(device)
-    if channel is None:
-        return None
-    onvif = channel.get("onvif") if isinstance(channel.get("onvif"), dict) else None
-    return {
-        "id": str(device.get("id") or "").strip(),
-        "name": str(device.get("name") or "").strip(),
-        "connection_type": str(channel.get("connection_type") or "rtsp").strip().lower() or "rtsp",
-        "stream_profile": get_camera_stream_profile(channel),
-        "rtsp_url": str(channel.get("rtsp_url") or "").strip(),
-        "stream_username": str(channel.get("stream_username") or "").strip(),
-        "stream_password": str(channel.get("stream_password") or "").strip(),
-        "fps": float(channel.get("fps") or 5.0),
-        "onvif": dict(onvif) if isinstance(onvif, dict) else None,
-        "channel_id": str(channel.get("id") or "video_main").strip() or "video_main",
-        "ingest": get_camera_ingest_settings(channel),
-    }
-
-
-def build_device_from_ui_camera(camera: dict[str, Any]) -> dict[str, Any] | None:
-    coerced = _coerce_flat_camera(camera)
-    if coerced is None:
-        return None
-    channel_id = str(camera.get("channel_id") or "").strip()
-    if channel_id:
-        device = dict(coerced)
-        channels = device.get("channels")
-        if isinstance(channels, list) and channels and isinstance(channels[0], dict):
-            channels[0] = {**channels[0], "id": channel_id}
-        return device
-    return coerced
-
-
-def get_camera_stream_profile(channel: Any) -> Literal["onvif", "custom"]:
-    if not isinstance(channel, dict):
-        return "custom"
-    ctype = str(channel.get("connection_type") or "rtsp").strip().lower()
-    if ctype != "onvif":
-        return "custom"
-    return "onvif" if str(channel.get("stream_profile") or "onvif").strip().lower() == "onvif" else "custom"
-
-
-def get_camera_onvif_credentials(channel: Any) -> tuple[str, str]:
-    if not isinstance(channel, dict):
         return "", ""
-    onvif_raw = channel.get("onvif")
+    onvif_raw = device.get("onvif")
     onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
-    username = str(onvif.get("username") or "").strip()
-    password = str(onvif.get("password") or "").strip()
-    if not username and not password:
-        username = str(channel.get("username") or "").strip()
-        password = str(channel.get("password") or "").strip()
-    return username, password
-
-
-def get_camera_stream_credentials(channel: Any) -> tuple[str, str]:
-    if not isinstance(channel, dict):
-        return "", ""
-    username = str(channel.get("stream_username") or "").strip()
-    password = str(channel.get("stream_password") or "").strip()
-    if username or password:
-        return username, password
-
-    ctype = str(channel.get("connection_type") or "rtsp").strip().lower()
-    if ctype == "onvif" and get_camera_stream_profile(channel) == "onvif":
-        return get_camera_onvif_credentials(channel)
-
     return (
-        str(channel.get("username") or "").strip(),
-        str(channel.get("password") or "").strip(),
+        str(onvif.get("username") or "").strip(),
+        str(onvif.get("password") or "").strip(),
     )
 
 
-def get_camera_ingest_settings(channel: Any) -> dict[str, Any]:
-    raw = channel.get("ingest") if isinstance(channel, dict) else None
-    if isinstance(raw, CameraChannelIngestSettings):
+def get_camera_source_origin(source: Any) -> dict[str, Any]:
+    origin = source.get("origin") if isinstance(source, dict) else None
+    return origin if isinstance(origin, dict) else {}
+
+
+def get_camera_source_origin_type(source: Any) -> Literal["onvif_profile", "rtsp"]:
+    origin = get_camera_source_origin(source)
+    return "onvif_profile" if str(origin.get("type") or "").strip().lower() == "onvif_profile" else "rtsp"
+
+
+def get_camera_source_credentials(device: Any, source: Any) -> tuple[str, str]:
+    origin = get_camera_source_origin(source)
+    username = str(origin.get("stream_username") or "").strip()
+    password = str(origin.get("stream_password") or "").strip()
+    if username or password:
+        return username, password
+    if get_camera_source_origin_type(source) == "onvif_profile":
+        return get_camera_onvif_credentials(device)
+    return "", ""
+
+
+def get_camera_source_ingest_settings(source: Any) -> dict[str, Any]:
+    raw = source.get("ingest") if isinstance(source, dict) else None
+    if isinstance(raw, CameraSourceIngestSettings):
         settings = raw
     else:
-        settings = CameraChannelIngestSettings.model_validate(raw if isinstance(raw, dict) else {})
+        settings = CameraSourceIngestSettings.model_validate(raw if isinstance(raw, dict) else {})
     return settings.model_dump(mode="json")
 
 
-def is_camera_direct_override_active(channel: Any, *, now_unix: float | None = None) -> bool:
-    ingest = get_camera_ingest_settings(channel)
+def is_camera_direct_override_active(source: Any, *, now_unix: float | None = None) -> bool:
+    ingest = get_camera_source_ingest_settings(source)
     value = ingest.get("direct_override_until_unix")
     try:
         until = float(value)
@@ -419,3 +354,18 @@ def is_camera_direct_override_active(channel: Any, *, now_unix: float | None = N
         return False
     now = time.time() if now_unix is None else float(now_unix)
     return until > now
+
+
+def flatten_camera_device_for_ui(device: Any) -> dict[str, Any] | None:
+    if not isinstance(device, dict):
+        return None
+    camera_id = str(device.get("id") or "").strip()
+    if not camera_id:
+        return None
+    return {
+        "id": camera_id,
+        "name": str(device.get("name") or "").strip(),
+        "control": device.get("control") if isinstance(device.get("control"), dict) else {"type": "none"},
+        "onvif": dict(device.get("onvif")) if isinstance(device.get("onvif"), dict) else None,
+        "sources": [dict(item) for item in iter_camera_sources(device)],
+    }

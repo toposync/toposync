@@ -121,7 +121,7 @@ export type Transmission = {
   host_server_id?: string;
   placeholder?: "gray" | "black";
   arbitration?: "latest" | "priority_latest";
-  camera_controls?: { enabled?: boolean; camera_id?: string | null } | null;
+  camera_controls?: { enabled?: boolean; camera_id?: string | null; camera_source_id?: string | null } | null;
   outputs: TransmissionOutput[];
   created_at?: string;
   updated_at?: string;
@@ -225,6 +225,8 @@ export type StreamingObservabilityClassification =
 export type StreamingRuntimeSourceHealth = {
   source_id: string;
   camera_id?: string | null;
+  camera_source_id?: string | null;
+  camera_source_name?: string | null;
   camera_name?: string | null;
   pipeline_name?: string | null;
   node_id?: string | null;
@@ -351,6 +353,7 @@ export type StreamingRuntimePipelineLink = {
   source_node_id?: string | null;
   source_id?: string | null;
   camera_id?: string | null;
+  camera_source_id?: string | null;
   writer_id: string;
   stream_behavior?: StreamingStreamBehavior;
   event_gated?: boolean;
@@ -561,6 +564,30 @@ export type StreamingCameraIngestAuthResponse = {
 export type CameraIndexItem = {
   id: string;
   name?: string;
+  control?: { type?: "onvif" | "none" | string };
+  sources?: CameraIndexSource[];
+};
+
+export type CameraIndexSource = {
+  id: string;
+  name?: string;
+  enabled?: boolean;
+  is_default?: boolean;
+  kind?: "video" | "audio" | "data" | string;
+  role?: "main" | "sub" | "zoom" | "custom" | string;
+  view_id?: string;
+  origin?: {
+    type?: "onvif_profile" | "rtsp" | string;
+    rtsp_url?: string;
+    profile_token?: string | null;
+    profile_name?: string | null;
+  };
+  video?: {
+    width?: number | null;
+    height?: number | null;
+    fps?: number | null;
+    codec?: string | null;
+  };
   ingest?: {
     mode?: "centralized" | "runtime_local" | "direct";
     host_server_id?: string;
@@ -595,6 +622,7 @@ export type StreamingWizardPresetId =
 export type StreamingWizardCreatePipelineRequest = {
   transmission_id: string;
   camera_id: string;
+  camera_source_id?: string;
   preset_id: StreamingWizardPresetId;
   optional_parameters?: {
     pipeline_name?: string;
@@ -620,6 +648,7 @@ export type StreamingWizardCreatePipelineResponse = {
   pipeline_name: string;
   transmission_id: string;
   camera_id: string;
+  camera_source_id: string;
   preset_id: StreamingWizardPresetId;
   engine_running: boolean;
   warnings?: string[];

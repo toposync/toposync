@@ -28,6 +28,8 @@ DEFAULT_SOURCE_RETENTION_SECONDS = 900.0
 class CameraSourceHealthRecord:
     source_id: str
     camera_id: str = ""
+    camera_source_id: str = ""
+    camera_source_name: str = ""
     camera_name: str = ""
     pipeline_name: str = ""
     node_id: str = ""
@@ -58,6 +60,8 @@ class CameraSourceHealthRecord:
         return {
             "source_id": self.source_id,
             "camera_id": self.camera_id or None,
+            "camera_source_id": self.camera_source_id or None,
+            "camera_source_name": self.camera_source_name or None,
             "camera_name": self.camera_name or None,
             "pipeline_name": self.pipeline_name or None,
             "node_id": self.node_id or None,
@@ -106,6 +110,8 @@ class CameraSourceHealthStore:
         *,
         source_id: str,
         camera_id: str = "",
+        camera_source_id: str = "",
+        camera_source_name: str = "",
         camera_name: str = "",
         pipeline_name: str = "",
         node_id: str = "",
@@ -127,6 +133,7 @@ class CameraSourceHealthStore:
             pipeline_name=pipeline_name,
             node_id=node_id,
             camera_id=camera_id,
+            camera_source_id=camera_source_id,
         )
         previous = self._records.get(source_key)
         merged = previous or CameraSourceHealthRecord(source_id=source_key)
@@ -138,6 +145,8 @@ class CameraSourceHealthStore:
         candidate = replace(
             metric_record,
             camera_id=_normalize_text(camera_id, limit=160) or metric_record.camera_id,
+            camera_source_id=_normalize_text(camera_source_id, limit=160) or metric_record.camera_source_id,
+            camera_source_name=_normalize_text(camera_source_name, limit=240) or metric_record.camera_source_name,
             camera_name=_normalize_text(camera_name, limit=240) or metric_record.camera_name,
             pipeline_name=_normalize_text(pipeline_name, limit=240) or metric_record.pipeline_name,
             node_id=_normalize_text(node_id, limit=160) or metric_record.node_id,
@@ -165,6 +174,8 @@ class CameraSourceHealthStore:
         *,
         source_id: str,
         camera_id: str = "",
+        camera_source_id: str = "",
+        camera_source_name: str = "",
         camera_name: str = "",
         pipeline_name: str = "",
         node_id: str = "",
@@ -184,6 +195,8 @@ class CameraSourceHealthStore:
         record = self.record_tick(
             source_id=source_id,
             camera_id=camera_id,
+            camera_source_id=camera_source_id,
+            camera_source_name=camera_source_name,
             camera_name=camera_name,
             pipeline_name=pipeline_name,
             node_id=node_id,
@@ -312,8 +325,21 @@ def get_global_source_health_store() -> CameraSourceHealthStore:
     return _GLOBAL_SOURCE_HEALTH_STORE
 
 
-def source_health_source_id(*, pipeline_name: str, node_id: str, camera_id: str = "", rtsp_url: str = "") -> str:
-    return _source_id(pipeline_name=pipeline_name, node_id=node_id, camera_id=camera_id, rtsp_url=rtsp_url)
+def source_health_source_id(
+    *,
+    pipeline_name: str,
+    node_id: str,
+    camera_id: str = "",
+    camera_source_id: str = "",
+    rtsp_url: str = "",
+) -> str:
+    return _source_id(
+        pipeline_name=pipeline_name,
+        node_id=node_id,
+        camera_id=camera_id,
+        camera_source_id=camera_source_id,
+        rtsp_url=rtsp_url,
+    )
 
 
 def sanitize_source_error(value: Any) -> str | None:
@@ -353,10 +379,20 @@ def _record_from_metrics(
     )
 
 
-def _source_id(*, pipeline_name: str, node_id: str, camera_id: str = "", rtsp_url: str = "") -> str:
+def _source_id(
+    *,
+    pipeline_name: str,
+    node_id: str,
+    camera_id: str = "",
+    camera_source_id: str = "",
+    rtsp_url: str = "",
+) -> str:
     pipeline = _normalize_text(pipeline_name, limit=120) or "pipeline"
     node = _normalize_text(node_id, limit=80) or "source"
     camera = _normalize_text(camera_id, limit=120)
+    camera_source = _normalize_text(camera_source_id, limit=120)
+    if camera and camera_source:
+        return f"{pipeline}:{node}:camera:{camera}:source:{camera_source}"
     if camera:
         return f"{pipeline}:{node}:camera:{camera}"
     url = _normalize_text(rtsp_url, limit=1000)

@@ -84,6 +84,29 @@ function slugifyPath(value: string): string {
   return filtered.replace(/-+/g, "-").replace(/^[-_]+|[-_]+$/g, "");
 }
 
+function defaultCameraSourceId(camera: CameraIndexItem | null | undefined): string {
+  const sources = camera?.sources || [];
+  return String(
+    sources.find((source) => source.enabled !== false && source.is_default)?.id ||
+      sources.find((source) => source.enabled !== false)?.id ||
+      "",
+  ).trim();
+}
+
+function cameraSourceOptions(camera: CameraIndexItem | null | undefined): Array<{ id: string; label: string }> {
+  return (camera?.sources || [])
+    .filter((source) => (String(source.kind || "video").trim().toLowerCase() || "video") === "video" && source.enabled !== false)
+    .map((source) => {
+      const id = String(source.id || "").trim();
+      const name = String(source.name || "").trim() || id;
+      const width = typeof source.video?.width === "number" ? source.video.width : null;
+      const height = typeof source.video?.height === "number" ? source.video.height : null;
+      const resolution = width && height ? ` · ${width}x${height}` : "";
+      return { id, label: `${name}${resolution}` };
+    })
+    .filter((item) => item.id);
+}
+
 function deepClone<T>(value: T): T {
   if (typeof structuredClone === "function") return structuredClone(value);
   return JSON.parse(JSON.stringify(value)) as T;
@@ -456,6 +479,7 @@ function StreamingSettingsPanelContent({
 
   const [newCameraControlsEnabled, setNewCameraControlsEnabled] = useState(false);
   const [newCameraControlsCameraId, setNewCameraControlsCameraId] = useState("");
+  const [newCameraControlsSourceId, setNewCameraControlsSourceId] = useState("");
   const [availableCamerasLoading, setAvailableCamerasLoading] = useState(false);
   const [availableCamerasError, setAvailableCamerasError] = useState<string | null>(null);
   const [availableCameras, setAvailableCameras] = useState<CameraIndexItem[]>([]);
@@ -742,6 +766,7 @@ function StreamingSettingsPanelContent({
     if (!createModalOpen) return;
     setNewCameraControlsEnabled(false);
     setNewCameraControlsCameraId("");
+    setNewCameraControlsSourceId("");
     if (availableCameras.length > 0) return;
     const controller = new AbortController();
     void fetchAvailableCamerasData(controller.signal);
@@ -752,8 +777,23 @@ function StreamingSettingsPanelContent({
     if (!createModalOpen) return;
     if (newCameraControlsCameraId.trim()) return;
     if (availableCameras.length === 0) return;
-    setNewCameraControlsCameraId(String(availableCameras[0]?.id || "").trim());
+    const camera = availableCameras[0] ?? null;
+    setNewCameraControlsCameraId(String(camera?.id || "").trim());
+    setNewCameraControlsSourceId(defaultCameraSourceId(camera));
   }, [availableCameras, createModalOpen, newCameraControlsCameraId]);
+
+  useEffect(() => {
+    if (!createModalOpen) return;
+    const camera = availableCameras.find((item) => String(item.id || "").trim() === newCameraControlsCameraId.trim()) ?? null;
+    if (!camera) {
+      if (newCameraControlsSourceId) setNewCameraControlsSourceId("");
+      return;
+    }
+    const options = cameraSourceOptions(camera);
+    if (!options.some((item) => item.id === newCameraControlsSourceId.trim())) {
+      setNewCameraControlsSourceId(defaultCameraSourceId(camera));
+    }
+  }, [availableCameras, createModalOpen, newCameraControlsCameraId, newCameraControlsSourceId]);
 
   async function runEngineAction(action: "start" | "stop" | "restart" | "reclaim"): Promise<void> {
     if (action === "reclaim") {
@@ -976,14 +1016,18 @@ function StreamingSettingsPanelContent({
         newTransmissionName.trim() || t("ext.streaming.transmissions.default_name", {}, "Transmission");
       const suggestedPath = slugifyPath(newTransmissionPath.trim() || suggestedName) || "stream";
 
-      let cameraControlsPayload: { enabled: boolean; camera_id: string } | null | undefined = undefined;
+      let cameraControlsPayload: { enabled: boolean; camera_id: string; camera_source_id?: string | null } | null | undefined = undefined;
       if (newCameraControlsEnabled) {
         const cid = newCameraControlsCameraId.trim();
         if (!cid) {
           setCreateError(t("ext.streaming.transmissions.camera_controls.select_camera_error", {}, "Selecione uma câmera."));
           return;
         }
-        cameraControlsPayload = { enabled: true, camera_id: cid };
+        cameraControlsPayload = {
+          enabled: true,
+          camera_id: cid,
+          camera_source_id: newCameraControlsSourceId.trim() || null,
+        };
       }
 
       const payload = await createTransmission({
@@ -2839,10 +2883,20 @@ function StreamingSettingsPanelContent({
                               return;
                             }
                             const current = String(transmissionDraft.camera_controls?.camera_id || "").trim();
-                            const fallback = String(availableCameras[0]?.id || "").trim();
+                            const fallbackCamera = availableCameras[0] ?? null;
+                            const fallback = String(fallbackCamera?.id || "").trim();
                             const nextCameraId = current || fallback;
                             updateDraft({
-                              camera_controls: { enabled: true, camera_id: nextCameraId },
+                              camera_controls: {
+                                enabled: true,
+                                camera_id: nextCameraId,
+                                camera_source_id:
+                                  transmissionDraft.camera_controls?.camera_source_id ||
+                                  defaultCameraSourceId(
+                                    availableCameras.find((camera) => String(camera.id || "").trim() === nextCameraId) ?? fallbackCamera,
+                                  ) ||
+                                  null,
+                              },
                             });
                           }}
                         />
@@ -2876,7 +2930,10 @@ function StreamingSettingsPanelContent({
                           value={String(transmissionDraft.camera_controls?.camera_id || "").trim()}
                           onChange={(event) => {
                             const cid = String(event.target.value || "").trim();
-                            updateDraft({ camera_controls: { enabled: true, camera_id: cid } });
+                            const camera = availableCameras.find((item) => String(item.id || "").trim() === cid) ?? null;
+                            updateDraft({
+                              camera_controls: { enabled: true, camera_id: cid, camera_source_id: defaultCameraSourceId(camera) || null },
+                            });
                           }}
                           disabled={availableCameras.length === 0}
                         >
@@ -2909,6 +2966,36 @@ function StreamingSettingsPanelContent({
                             )}
                           </div>
                         ) : null}
+                        {(() => {
+                          const currentCameraId = String(transmissionDraft.camera_controls?.camera_id || "").trim();
+                          const camera = availableCameras.find((item) => String(item.id || "").trim() === currentCameraId) ?? null;
+                          const options = cameraSourceOptions(camera);
+                          if (!currentCameraId || options.length === 0) return null;
+                          return (
+                            <div className="field" style={{ marginTop: 10 }}>
+                              <label className="label">{t("ext.streaming.transmissions.camera_controls.source", {}, "Fonte da câmera")}</label>
+                              <select
+                                className="input"
+                                value={String(transmissionDraft.camera_controls?.camera_source_id || defaultCameraSourceId(camera) || "").trim()}
+                                onChange={(event) =>
+                                  updateDraft({
+                                    camera_controls: {
+                                      enabled: true,
+                                      camera_id: currentCameraId,
+                                      camera_source_id: String(event.target.value || "").trim() || null,
+                                    },
+                                  })
+                                }
+                              >
+                                {options.map((source) => (
+                                  <option key={source.id} value={source.id}>
+                                    {source.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          );
+                        })()}
                       </div>
                     ) : null}
                   </div>
@@ -3513,7 +3600,12 @@ function StreamingSettingsPanelContent({
                 <select
                   className="input"
                   value={newCameraControlsCameraId}
-                  onChange={(event) => setNewCameraControlsCameraId(String(event.target.value || "").trim())}
+                  onChange={(event) => {
+                    const cid = String(event.target.value || "").trim();
+                    const camera = availableCameras.find((item) => String(item.id || "").trim() === cid) ?? null;
+                    setNewCameraControlsCameraId(cid);
+                    setNewCameraControlsSourceId(defaultCameraSourceId(camera));
+                  }}
                   disabled={availableCameras.length === 0}
                 >
                   {availableCameras.map((camera) => {
@@ -3536,6 +3628,27 @@ function StreamingSettingsPanelContent({
                   </div>
                 ) : null}
               </div>
+              {(() => {
+                const camera = availableCameras.find((item) => String(item.id || "").trim() === newCameraControlsCameraId.trim()) ?? null;
+                const options = cameraSourceOptions(camera);
+                if (options.length === 0) return null;
+                return (
+                  <div className="field">
+                    <label className="label">{t("ext.streaming.transmissions.camera_controls.source", {}, "Fonte da câmera")}</label>
+                    <select
+                      className="input"
+                      value={newCameraControlsSourceId || defaultCameraSourceId(camera)}
+                      onChange={(event) => setNewCameraControlsSourceId(String(event.target.value || "").trim())}
+                    >
+                      {options.map((source) => (
+                        <option key={source.id} value={source.id}>
+                          {source.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         ) : null}

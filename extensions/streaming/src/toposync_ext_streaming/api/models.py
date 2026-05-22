@@ -183,10 +183,11 @@ class TransmissionCameraControls(BaseModel):
 
     enabled: bool = False
     camera_id: str | None = None
+    camera_source_id: str | None = None
 
-    @field_validator("camera_id", mode="before")
+    @field_validator("camera_id", "camera_source_id", mode="before")
     @classmethod
-    def _trim_camera_id(cls, value: Any) -> str | None:
+    def _trim_camera_reference(cls, value: Any) -> str | None:
         normalized = str(value or "").strip()
         return normalized or None
 
@@ -621,6 +622,7 @@ class StreamingCameraIngestAuthPath(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     camera_id: str
+    source_id: str
     path: str
     redacted_rtsp_url: str
     rtsp_url: str | None = None
@@ -644,7 +646,7 @@ class StreamingCameraIngestResolveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     camera_id: str
-    channel_id: str = ""
+    source_id: str = ""
     consumer_server_id: str | None = None
 
 
@@ -652,7 +654,7 @@ class StreamingCameraIngestResolveResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     camera_id: str
-    channel_id: str = "video_main"
+    source_id: str = ""
     mode: Literal["centralized", "runtime_local", "direct"] = "centralized"
     used_ingest: bool = False
     centralizer_server_id: str = "local"
@@ -843,6 +845,7 @@ class TransmissionCameraPresetsResponse(BaseModel):
 
     transmission_id: str
     camera_id: str
+    camera_source_id: str | None = None
     presets: list[CameraPtzPreset] = Field(default_factory=list)
 
 
@@ -881,6 +884,7 @@ class TransmissionCameraStatusResponse(BaseModel):
 
     transmission_id: str
     camera_id: str
+    camera_source_id: str | None = None
     status: CameraPtzStatus
 
 
@@ -932,6 +936,8 @@ class StreamingRuntimeSourceHealth(BaseModel):
 
     source_id: str
     camera_id: str | None = None
+    camera_source_id: str | None = None
+    camera_source_name: str | None = None
     camera_name: str | None = None
     pipeline_name: str | None = None
     node_id: str | None = None
@@ -1126,6 +1132,7 @@ class StreamingRuntimePipelineLink(BaseModel):
     source_node_id: str | None = None
     source_id: str | None = None
     camera_id: str | None = None
+    camera_source_id: str | None = None
     writer_id: str
     stream_behavior: StreamingStreamBehavior = "continuous"
     event_gated: bool = False
@@ -1354,6 +1361,7 @@ class StreamingWizardCreatePipelineRequest(BaseModel):
 
     transmission_id: str
     camera_id: str
+    camera_source_id: str | None = None
     preset_id: StreamingWizardPresetId
     optional_parameters: StreamingWizardOptionalParameters | None = None
 
@@ -1365,6 +1373,12 @@ class StreamingWizardCreatePipelineRequest(BaseModel):
             raise ValueError("Field is required")
         return normalized
 
+    @field_validator("camera_source_id", mode="before")
+    @classmethod
+    def _trim_optional_source_id(cls, value: Any) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
+
 
 class StreamingWizardCreatePipelineResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -1372,6 +1386,7 @@ class StreamingWizardCreatePipelineResponse(BaseModel):
     pipeline_name: str
     transmission_id: str
     camera_id: str
+    camera_source_id: str
     preset_id: StreamingWizardPresetId
     engine_running: bool
     warnings: list[str] = Field(default_factory=list)

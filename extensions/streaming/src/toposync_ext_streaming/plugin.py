@@ -121,7 +121,7 @@ class StreamingExtension(BaseExtension):
             async def _resolve_camera_ingest_source(
                 *,
                 camera_id: str,
-                channel_id: str = "",
+                source_id: str = "",
                 consumer_server_id: str | None = None,
             ) -> dict[str, object] | None:
                 cid = str(camera_id or "").strip()
@@ -136,7 +136,7 @@ class StreamingExtension(BaseExtension):
                 )
                 resolution = await resolver.resolve(
                     camera_id=cid,
-                    channel_id=channel_id,
+                    source_id=source_id,
                     consumer_server_id=consumer_server_id or server_id,
                 )
                 return resolution.model_dump(mode="json")

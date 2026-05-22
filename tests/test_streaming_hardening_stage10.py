@@ -178,15 +178,28 @@ def test_bypass_simple_chain_is_detected_and_resolves_rtsp_source() -> None:
     assert chain is not None
     assert chain["fps_limit"] == 8
 
-    source_url, source_fps, source_backend, camera_id, channel_id = _resolve_chain_rtsp_source(
+    source_url, source_fps, source_backend, camera_id, source_id = _resolve_chain_rtsp_source(
         camera_node=chain["camera_node"],
         camera_by_id={
             "cam1": {
                 "id": "cam1",
-                "rtsp_url": "rtsp://10.0.0.50/live",
-                "username": "camuser",
-                "password": "campass",
-                "fps": 20,
+                "sources": [
+                    {
+                        "id": "main",
+                        "name": "Principal",
+                        "enabled": True,
+                        "is_default": True,
+                        "kind": "video",
+                        "role": "main",
+                        "origin": {
+                            "type": "rtsp",
+                            "rtsp_url": "rtsp://10.0.0.50/live",
+                            "stream_username": "camuser",
+                            "stream_password": "campass",
+                        },
+                        "video": {"fps": 20},
+                    }
+                ],
             }
         },
     )
@@ -194,7 +207,7 @@ def test_bypass_simple_chain_is_detected_and_resolves_rtsp_source() -> None:
     assert source_fps == 20
     assert source_backend == "ffmpeg"
     assert camera_id == "cam1"
-    assert channel_id == "video_main"
+    assert source_id == "main"
 
 
 def test_bypass_rejects_non_simple_graph() -> None:

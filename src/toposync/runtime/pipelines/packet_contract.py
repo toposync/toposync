@@ -57,7 +57,10 @@ def _merge_nested_record(payload: dict[str, Any], *, field: str, values: dict[st
 def build_source_descriptor(
     *,
     device_id: str = "",
-    channel_id: str = "",
+    source_id: str = "",
+    source_name: str = "",
+    view_id: str = "",
+    role: str = "",
     kind: str = "",
     modality: str = "",
     name: str = "",
@@ -67,7 +70,10 @@ def build_source_descriptor(
     out: dict[str, Any] = {}
     for key, value in (
         ("device_id", _as_str(device_id)),
-        ("channel_id", _as_str(channel_id)),
+        ("source_id", _as_str(source_id)),
+        ("source_name", _as_str(source_name)),
+        ("view_id", _as_str(view_id)),
+        ("role", _as_str(role)),
         ("kind", _as_str(kind)),
         ("modality", _as_str(modality)),
         ("name", _as_str(name)),
@@ -159,9 +165,9 @@ def resolve_source_device_id(packet: Packet) -> str:
     return _as_str(packet.payload.get("camera_id")) or _as_str(packet.metadata.get("camera_id"))
 
 
-def resolve_source_channel_id(packet: Packet) -> str:
+def resolve_source_id(packet: Packet) -> str:
     source = get_source_descriptor(packet)
-    return _as_str(source.get("channel_id"))
+    return _as_str(source.get("source_id"))
 
 
 def resolve_source_kind(packet: Packet) -> str:

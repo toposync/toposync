@@ -215,6 +215,11 @@ def test_home_assistant_contract_returns_proxied_hls_url(
     tmp_path: Path,
     monkeypatch,  # noqa: ANN001
 ) -> None:
+    snapshot_path = tmp_path / "addon-network.json"
+    snapshot_path.write_text(
+        '{"network":{"18756/tcp":18756,"18758/tcp":18758,"18760/tcp":18760}}',
+        encoding="utf-8",
+    )
     monkeypatch.setenv("TOPOSYNC_DEPLOYMENT_TARGET", "home_assistant_addon")
     monkeypatch.setenv("TOPOSYNC_EXPECTED_DIRECT_API_PORT", "18756")
     monkeypatch.setenv("TOPOSYNC_EXPECTED_RTSP_PORT", "18758")
@@ -224,6 +229,7 @@ def test_home_assistant_contract_returns_proxied_hls_url(
     monkeypatch.setenv("TOPOSYNC_STREAMING_WEBRTC_LOCAL_UDP_ADDRESS", ":18762")
     monkeypatch.setenv("TOPOSYNC_FAIL_STREAM_URLS_ON_PORT_MISMATCH", "1")
     monkeypatch.setenv("TOPOSYNC_STREAMING_HLS_PUBLIC_MODE", "proxy")
+    monkeypatch.setenv("TOPOSYNC_ADDON_NETWORK_SNAPSHOT_PATH", str(snapshot_path))
     engine_manager = _EngineManagerStub(
         data_dir=tmp_path / "data",
         ports=MediaMtxPorts(
@@ -257,7 +263,7 @@ def test_home_assistant_contract_returns_proxied_hls_url(
     payload = urls_res.json()
     output = payload["outputs"][0]
     assert output["url"].startswith(
-        "http://192.168.0.100:18756/api/streams/media/hls/lan-main/index.m3u8?media_token="
+        "/api/streams/media/hls/lan-main/index.m3u8?media_token="
     )
     assert output["requires_auth"] is False
     assert output["media_auth_type"] == "signed_url"
@@ -267,6 +273,10 @@ def test_home_assistant_contract_returns_proxied_hls_url(
     assert payload["network_contract"]["public_hls_mode"] == "proxy"
     assert payload["network_contract"]["expected_ports"].get("hls") is None
     assert payload["network_contract"]["actual_ports"]["hls"] == 18888
+    assert any("18762/udp" in item for item in payload["network_contract"]["warnings"])
+    assert not any("WebRTC" in item or "WHEP" in item for item in payload["warnings"])
+    assert payload["hls_warnings"] == []
+    assert any("WebRTC WHEP unavailable" in item for item in payload["webrtc_warnings"])
 
 
 def test_hls_output_is_omitted_when_direct_hls_port_mismatches_in_fail_mode(
@@ -350,7 +360,7 @@ def test_signed_hls_treats_hls_port_as_internal_without_env_proxy(tmp_path: Path
     assert urls_res.status_code == 200
     payload = urls_res.json()
     assert payload["outputs"][0]["url"].startswith(
-        "http://192.168.0.100:18756/api/streams/media/hls/signed-main/index.m3u8?media_token="
+        "/api/streams/media/hls/signed-main/index.m3u8?media_token="
     )
     assert payload["network_contract"]["public_hls_mode"] == "proxy"
     assert payload["network_contract"]["expected_ports"].get("hls") is None
@@ -410,7 +420,7 @@ def test_engine_status_uses_hls_proxy_url_when_contract_requests_proxy(
     assert status_res.status_code == 200
     payload = status_res.json()
     assert payload["urls"]["hls_url"] == (
-        "http://homeassistant.local:18756/api/streams/media/hls/test/index.m3u8"
+        "/api/streams/media/hls/test/index.m3u8"
     )
     assert payload["network_contract"]["public_hls_mode"] == "proxy"
 
@@ -460,7 +470,7 @@ def test_ingress_hls_url_contract_uses_public_base_path(
         payload = urls_res.json()
         signed_url = payload["outputs"][0]["url"]
         assert signed_url.startswith(
-            "http://homeassistant.local:8090/api/hassio_ingress/session-token/api/streams/media/hls/ingress-main/index.m3u8?media_token="
+            "/api/hassio_ingress/session-token/api/streams/media/hls/ingress-main/index.m3u8?media_token="
         )
         assert payload["public_base_path"] == ingress_prefix
         assert payload["media_url_origin"] == f"http://homeassistant.local:8090{ingress_prefix}"
@@ -644,10 +654,11 @@ def test_open_hls_media_auth_preserves_plain_proxy_url(
     assert urls_res.status_code == 200
     payload = urls_res.json()
     output = payload["outputs"][0]
-    assert output["url"] == "http://testserver/api/streams/media/hls/open-main/index.m3u8"
+    assert output["url"] == "/api/streams/media/hls/open-main/index.m3u8"
     assert output["media_auth_type"] == "none"
     assert output["url_expires_at_unix"] is None
     assert any("Open HLS media access is enabled" in item for item in payload["warnings"])
+    assert any("Open HLS media access is enabled" in item for item in payload["hls_warnings"])
 
 
 def test_transmission_urls_primes_demand_hint(tmp_path: Path) -> None:

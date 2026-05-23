@@ -343,11 +343,9 @@ export function readCameraIngestConfig(value: unknown): CameraIngestConfig {
         ? "direct"
         : "centralized";
   const hostServerId = readString(record.host_server_id).trim().toLowerCase() || "local";
-  const directOverride = readFiniteNumber(record.direct_override_until_unix, NaN);
   return {
     mode,
     host_server_id: mode === "centralized" ? hostServerId : "local",
-    direct_override_until_unix: Number.isFinite(directOverride) && directOverride > 0 ? directOverride : null,
   };
 }
 

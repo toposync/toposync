@@ -344,15 +344,6 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
             `This flow will open a direct connection to the camera source for ${cameraLabel}.`,
           );
         }
-        const overrideActive =
-          typeof ingest?.direct_override_until_unix === "number" && ingest.direct_override_until_unix > Date.now() / 1000;
-        if (overrideActive) {
-          return t(
-            "core.ui.pipelines.ingest.override_active",
-            { camera: cameraLabel },
-            `Temporary direct connection is active for camera ${cameraLabel}.`,
-          );
-        }
         if (mode === "runtime_local") return "";
         const ingestHost = normalizeServerId(ingest?.host_server_id);
         if (ingestHost === pipelineServerId) return "";

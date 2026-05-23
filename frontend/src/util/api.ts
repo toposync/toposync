@@ -597,7 +597,6 @@ export type CameraSourceSummary = {
   ingest?: {
     mode?: "centralized" | "runtime_local" | "direct";
     host_server_id?: string;
-    direct_override_until_unix?: number | null;
   };
 };
 
@@ -772,13 +771,36 @@ export type StreamingTransmission = {
   camera_controls?: { enabled?: boolean; camera_id?: string | null; camera_source_id?: string | null } | null;
   outputs?: StreamingTransmissionOutput[];
   generated_by?: string;
+  publication_id?: string;
+  owner_kind?: StreamingPublicationOwnerKind;
+  camera_id?: string | null;
+  camera_source_id?: string | null;
+  role?: StreamingPublicationRole;
   camera_live_view_id?: string;
   camera_live_variant_role?: string;
 };
 
 export type StreamingCameraLiveContext = "thumbnail" | "pip" | "large" | "fullscreen" | "ptz";
-export type StreamingCameraLiveVariantRole = StreamingCameraLiveContext | "zoom" | "custom";
+export type StreamingPublicationOwnerKind = "camera_source" | "pipeline_output";
+export type StreamingPublicationRole = "main" | "sub" | "zoom" | "custom";
+export type StreamingCameraLiveVariantRole = StreamingCameraLiveContext | StreamingPublicationRole;
 export type StreamingCameraLiveTransportPreference = "auto" | "hls" | "webrtc";
+
+export type StreamingStreamPublication = {
+  id: string;
+  owner_kind: StreamingPublicationOwnerKind;
+  camera_id?: string | null;
+  camera_source_id?: string | null;
+  pipeline_name?: string | null;
+  publish_node_id?: string | null;
+  enabled?: boolean;
+  role: StreamingPublicationRole;
+  label: string;
+  live_view_id?: string | null;
+  host_server_id?: string;
+  quality_policy?: Record<string, unknown>;
+  transport_policy?: Record<string, unknown>;
+};
 
 export type StreamingCameraLiveViewDefaults = {
   thumbnail_variant_id: string;
@@ -885,6 +907,8 @@ export type StreamingTransmissionUrlsResponse = {
   outputs: StreamingTransmissionUrlOutput[];
   network_contract?: StreamingNetworkContract | null;
   warnings?: string[];
+  hls_warnings?: string[];
+  webrtc_warnings?: string[];
   blocking_errors?: string[];
   public_base_path?: string;
   media_url_origin?: string | null;
@@ -919,6 +943,8 @@ export type StreamingPlaybackPlanResponse = {
   transports: StreamingPlaybackPlanTransport[];
   selected_transport?: StreamingPlaybackTransport | null;
   warnings?: string[];
+  hls_warnings?: string[];
+  webrtc_warnings?: string[];
   blocking_errors?: string[];
 };
 
@@ -1011,7 +1037,6 @@ export type StreamingRuntimeSourceHealth = {
   ingest_mode?: "centralized" | "runtime_local" | "direct";
   centralizer_server_id?: string | null;
   ingest_path?: string | null;
-  direct_override_active?: boolean;
   ingest_warnings?: string[];
   ingest_blocking_errors?: string[];
   status?: "healthy" | "starting" | "stale" | "unreachable" | "unauthorized" | "error" | "idle" | "unknown";
@@ -2178,6 +2203,39 @@ export async function listStreamingCameraLiveViews(): Promise<StreamingCameraLiv
   return (await res.json()) as StreamingCameraLiveView[];
 }
 
+export async function listStreamingPublications(cameraId?: string): Promise<StreamingStreamPublication[]> {
+  const params = new URLSearchParams();
+  const normalizedCameraId = String(cameraId || "").trim();
+  if (normalizedCameraId) params.set("camera_id", normalizedCameraId);
+  const query = params.toString();
+  const res = await fetch(`/api/streams/publications${query ? `?${query}` : ""}`);
+  if (!res.ok) throw new Error(`Failed to list streaming publications: ${res.status}`);
+  return (await res.json()) as StreamingStreamPublication[];
+}
+
+export async function updateStreamingCameraSourcePublication(
+  cameraId: string,
+  sourceId: string,
+  patch: Partial<Pick<StreamingStreamPublication, "enabled" | "label" | "role" | "host_server_id" | "quality_policy" | "transport_policy">>,
+): Promise<StreamingStreamPublication> {
+  const res = await fetch(
+    `/api/streams/publications/camera-sources/${encodeURIComponent(cameraId)}/${encodeURIComponent(sourceId)}`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  );
+  if (!res.ok) throw new Error(`Failed to update streaming publication: ${res.status}`);
+  return (await res.json()) as StreamingStreamPublication;
+}
+
+export async function reconcileStreamingPublications(): Promise<unknown> {
+  const res = await fetch("/api/streams/reconcile", { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to reconcile streaming publications: ${res.status}`);
+  return res.json();
+}
+
 export async function updateStreamingCameraLiveView(
   liveViewId: string,
   liveView: StreamingCameraLiveView,
@@ -2245,15 +2303,22 @@ export async function getStreamingTransmissionUrls(
 
 export async function getStreamingTransmissionPlaybackPlan(
   transmissionId: string,
-  options?: StreamingTransmissionUrlSelectionOptions & { client?: "app" | "web" | "ha_ingress" | "ha_entity" },
+  options?: StreamingTransmissionUrlSelectionOptions & {
+    client?: "app" | "web" | "ha_ingress" | "ha_entity";
+    context?: StreamingCameraLiveContext;
+    lowLatency?: boolean;
+  },
 ): Promise<StreamingPlaybackPlanResponse> {
   const params = new URLSearchParams();
   const outputId = String(options?.outputId || "").trim();
   const qualityProfileId = String(options?.qualityProfileId || "").trim();
   const client = String(options?.client || "web").trim();
+  const context = String(options?.context || "").trim();
   if (outputId) params.set("output_id", outputId);
   if (qualityProfileId) params.set("quality_profile_id", qualityProfileId);
   if (client) params.set("client", client);
+  if (context) params.set("context", context);
+  if (options?.lowLatency) params.set("low_latency", "true");
   const query = params.toString() ? `?${params.toString()}` : "";
   const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/playback-plan${query}`);
   if (!res.ok) throw new Error(`Failed to fetch streaming playback plan for ${transmissionId}: ${res.status}`);

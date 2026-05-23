@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { HostI18n, SettingsPanel } from "@toposync/plugin-api";
 
@@ -7,8 +7,11 @@ import {
   fetchCameraSnapshot,
   fetchCameraSourceHealth,
   fetchProcessingServers,
+  fetchStreamPublications,
   inspectOnvif,
   probeCameraRtsp,
+  reconcileStreamPublications,
+  updateCameraSourcePublication,
 } from "../api/camerasApi";
 import { CAMERAS_EXTENSION_ID } from "../constants";
 import {
@@ -32,6 +35,7 @@ import type {
   OnvifProfileInfo,
   ProcessingServer,
   RtspProbeResponse,
+  StreamPublication,
 } from "../types";
 import { SubModal } from "../ui/SubModal";
 
@@ -55,11 +59,6 @@ function normalizeServerId(value: string | null | undefined): string {
 
 function normalizeIngestConfig(value: CameraIngestConfig | undefined): CameraIngestConfig {
   return readCameraIngestConfig(value);
-}
-
-function directOverrideActive(ingest: CameraIngestConfig | undefined): boolean {
-  const until = normalizeIngestConfig(ingest).direct_override_until_unix;
-  return typeof until === "number" && Number.isFinite(until) && until > Date.now() / 1000;
 }
 
 function serverDisplayName(serverId: string | null | undefined, servers: ProcessingServer[], t: TranslateFn): string {
@@ -92,22 +91,10 @@ function ingestCentralizerLabel(source: CameraSourceConfig, servers: ProcessingS
 
 function ingestPathLabel(source: CameraSourceConfig, t: TranslateFn): string {
   const ingest = normalizeIngestConfig(source.ingest);
-  if (ingest.mode === "direct" || directOverrideActive(ingest)) {
+  if (ingest.mode === "direct") {
     return t("ext.cameras.settings.ingest.path.direct", {}, "Direta");
   }
   return t("ext.cameras.settings.ingest.path.ingest", {}, "RTSP do ingest");
-}
-
-function formatOverride(ingest: CameraIngestConfig | undefined, t: TranslateFn): string {
-  const until = normalizeIngestConfig(ingest).direct_override_until_unix;
-  if (!directOverrideActive(ingest) || typeof until !== "number") {
-    return t("ext.cameras.settings.ingest.override.inactive", {}, "Inativa");
-  }
-  return t(
-    "ext.cameras.settings.ingest.override.active_until",
-    { time: new Date(until * 1000).toLocaleTimeString() },
-    `Ativa até ${new Date(until * 1000).toLocaleTimeString()}`,
-  );
 }
 
 function sourceRoleLabel(role: string, t: TranslateFn): string {
@@ -196,7 +183,7 @@ function sourceFromOnvifProfile(profile: OnvifProfileInfo, index: number): Camer
     view_id: role === "zoom" ? "zoom" : "main",
     origin: {
       type: "onvif_profile",
-      rtsp_url: "",
+      rtsp_url: String(profile.stream_uri || "").trim(),
       profile_token: profile.token,
       profile_name: profile.name,
       has_ptz: Boolean(profile.has_ptz),
@@ -226,7 +213,11 @@ function mergeOnvifSources(existing: CameraSourceConfig[], profiles: OnvifProfil
       name: source.name || next.name,
       role: next.role,
       view_id: source.view_id || next.view_id,
-      origin: { ...source.origin, ...next.origin },
+      origin: {
+        ...source.origin,
+        ...next.origin,
+        rtsp_url: String(next.origin.rtsp_url || source.origin.rtsp_url || "").trim(),
+      },
       video: { ...source.video, ...next.video },
     };
   });
@@ -253,6 +244,9 @@ function CamerasSettingsPanelContent({
   const [activeSourceByCamera, setActiveSourceByCamera] = useState<Record<string, string>>({});
   const [query, setQuery] = useState("");
   const [sourceHealth, setSourceHealth] = useState<CameraSourceHealthResponse | null>(null);
+  const [streamPublications, setStreamPublications] = useState<StreamPublication[]>([]);
+  const [streamPublicationError, setStreamPublicationError] = useState<string | null>(null);
+  const [streamPublicationBusyByKey, setStreamPublicationBusyByKey] = useState<Record<string, boolean>>({});
   const [processingServers, setProcessingServers] = useState<ProcessingServer[]>([]);
   const [discoveryBusy, setDiscoveryBusy] = useState(false);
   const [discoveryResult, setDiscoveryResult] = useState<OnvifDiscoverResponse | null>(null);
@@ -287,6 +281,24 @@ function CamerasSettingsPanelContent({
     };
   }, []);
 
+  const reloadStreamPublications = useCallback((signal?: AbortSignal) => {
+    void fetchStreamPublications(undefined, signal)
+      .then((items) => {
+        setStreamPublications(items);
+        setStreamPublicationError(null);
+      })
+      .catch((error) => {
+        if (signal?.aborted) return;
+        setStreamPublicationError(error instanceof Error ? error.message : String(error));
+      });
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    reloadStreamPublications(controller.signal);
+    return () => controller.abort();
+  }, [reloadStreamPublications]);
+
   useEffect(() => {
     setInspectResult(null);
     setInspectError(null);
@@ -308,6 +320,67 @@ function CamerasSettingsPanelContent({
     "";
   const activeSource = activeCamera?.sources.find((source) => source.id === activeSourceId) ?? activeCamera?.sources[0] ?? null;
   const activeHealth = activeCamera && activeSource ? sourceHealthFor(sourceHealth, activeCamera.id, activeSource.id) : null;
+  const publicationBySourceKey = useMemo(() => {
+    const byKey = new Map<string, StreamPublication>();
+    for (const publication of streamPublications) {
+      if (publication.owner_kind !== "camera_source") continue;
+      const cameraId = String(publication.camera_id || "").trim();
+      const sourceId = String(publication.camera_source_id || "").trim();
+      if (!cameraId || !sourceId) continue;
+      byKey.set(`${cameraId}:${sourceId}`, publication);
+    }
+    return byKey;
+  }, [streamPublications]);
+
+  function sourcePublication(cameraId: string, sourceId: string): StreamPublication | null {
+    return publicationBySourceKey.get(`${cameraId}:${sourceId}`) ?? null;
+  }
+
+  function sourcePublicationEnabled(cameraId: string, source: CameraSourceConfig): boolean {
+    if (!source.enabled || source.kind !== "video") return false;
+    const publication = sourcePublication(cameraId, source.id);
+    return publication?.enabled !== false;
+  }
+
+  function patchPublicationState(publication: StreamPublication): void {
+    setStreamPublications((previous) => {
+      const key = `${publication.camera_id || ""}:${publication.camera_source_id || ""}`;
+      const next = previous.filter((item) => `${item.camera_id || ""}:${item.camera_source_id || ""}` !== key);
+      next.push(publication);
+      return next;
+    });
+  }
+
+  async function updateSourcePublication(
+    cameraId: string,
+    source: CameraSourceConfig,
+    patch: Partial<Pick<StreamPublication, "enabled" | "label" | "role" | "host_server_id" | "quality_policy" | "transport_policy">>,
+  ): Promise<void> {
+    const key = `${cameraId}:${source.id}`;
+    setStreamPublicationBusyByKey((previous) => ({ ...previous, [key]: true }));
+    setStreamPublicationError(null);
+    try {
+      const publication = await updateCameraSourcePublication(cameraId, source.id, {
+        label: source.name || source.id,
+        role: source.role,
+        ...patch,
+      });
+      patchPublicationState(publication);
+      reloadStreamPublications();
+    } catch (error) {
+      setStreamPublicationError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setStreamPublicationBusyByKey((previous) => ({ ...previous, [key]: false }));
+    }
+  }
+
+  function schedulePublicationReconcile(): void {
+    window.setTimeout(() => {
+      void reconcileStreamPublications()
+        .then(() => reloadStreamPublications())
+        .catch((error) => setStreamPublicationError(error instanceof Error ? error.message : String(error)));
+    }, 150);
+  }
 
   const filteredCameras = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -416,6 +489,7 @@ function CamerasSettingsPanelContent({
     });
     updateCamera(camera.id, (current) => ({ ...current, sources: [...current.sources, next] }));
     setActiveSourceByCamera((prev) => ({ ...prev, [camera.id]: next.id }));
+    schedulePublicationReconcile();
   }
 
   function removeSource(cameraId: string, sourceId: string): void {
@@ -429,6 +503,7 @@ function CamerasSettingsPanelContent({
         })),
       };
     });
+    schedulePublicationReconcile();
   }
 
   function makeDefaultSource(cameraId: string, sourceId: string): void {
@@ -440,14 +515,15 @@ function CamerasSettingsPanelContent({
 
   function applyIngestSelection(cameraId: string, sourceId: string, value: string): void {
     updateSource(cameraId, sourceId, (source) => {
-      if (value === "runtime_local") return { ...source, ingest: { mode: "runtime_local", host_server_id: "local", direct_override_until_unix: null } };
-      if (value === "direct") return { ...source, ingest: { mode: "direct", host_server_id: "local", direct_override_until_unix: null } };
+      if (value === "runtime_local") return { ...source, ingest: { mode: "runtime_local", host_server_id: "local" } };
+      if (value === "direct") return { ...source, ingest: { mode: "direct", host_server_id: "local" } };
       const hostServerId = value.startsWith("centralized:") ? value.slice("centralized:".length) : "local";
       return {
         ...source,
-        ingest: { mode: "centralized", host_server_id: normalizeServerId(hostServerId), direct_override_until_unix: null },
+        ingest: { mode: "centralized", host_server_id: normalizeServerId(hostServerId) },
       };
     });
+    schedulePublicationReconcile();
   }
 
   async function discoverSources(camera: CameraConfig): Promise<void> {
@@ -478,6 +554,7 @@ function CamerasSettingsPanelContent({
         },
         sources: mergeOnvifSources(current.sources, result.profiles ?? []),
       }));
+      schedulePublicationReconcile();
     } catch (error) {
       setInspectError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -758,6 +835,7 @@ function CamerasSettingsPanelContent({
                           <span className="cardBody">
                             <span className="settingsListTitle">
                               {source.name || source.id} {source.is_default ? "· padrão" : ""}
+                              {sourcePublicationEnabled(activeCamera.id, source) ? " · transmitindo" : ""}
                             </span>
                             <span className="settingsListMeta">{sourceRoleLabel(source.role, t)} · {sourceResolutionLabel(source)}</span>
                             <span className="settingsListMeta">{sourceOriginLabel(source, t)}</span>
@@ -780,6 +858,12 @@ function CamerasSettingsPanelContent({
                               onChange={(event) =>
                                 updateSource(activeCamera.id, activeSource.id, (source) => ({ ...source, name: event.target.value }))
                               }
+                              onBlur={(event) => {
+                                if (!sourcePublicationEnabled(activeCamera.id, activeSource)) return;
+                                void updateSourcePublication(activeCamera.id, activeSource, {
+                                  label: event.target.value || activeSource.id,
+                                });
+                              }}
                             />
                           </div>
                           <div className="field" style={{ width: 180 }}>
@@ -787,12 +871,16 @@ function CamerasSettingsPanelContent({
                             <select
                               className="input"
                               value={activeSource.role}
-                              onChange={(event) =>
+                              onChange={(event) => {
+                                const role = event.target.value as CameraSourceConfig["role"];
                                 updateSource(activeCamera.id, activeSource.id, (source) => ({
                                   ...source,
-                                  role: event.target.value as CameraSourceConfig["role"],
-                                }))
-                              }
+                                  role,
+                                }));
+                                if (sourcePublicationEnabled(activeCamera.id, activeSource)) {
+                                  void updateSourcePublication(activeCamera.id, { ...activeSource, role }, { role });
+                                }
+                              }}
                             >
                               <option value="main">{sourceRoleLabel("main", t)}</option>
                               <option value="sub">{sourceRoleLabel("sub", t)}</option>
@@ -817,12 +905,35 @@ function CamerasSettingsPanelContent({
                             <input
                               type="checkbox"
                               checked={activeSource.enabled}
-                              onChange={(event) =>
-                                updateSource(activeCamera.id, activeSource.id, (source) => ({ ...source, enabled: event.target.checked }))
-                              }
+                              onChange={(event) => {
+                                const enabled = event.target.checked;
+                                updateSource(activeCamera.id, activeSource.id, (source) => ({ ...source, enabled }));
+                                if (!enabled && sourcePublication(activeCamera.id, activeSource.id)?.enabled !== false) {
+                                  void updateSourcePublication(activeCamera.id, activeSource, { enabled: false });
+                                } else {
+                                  schedulePublicationReconcile();
+                                }
+                              }}
                             />
                             {t("ext.cameras.settings.sources.enabled", {}, "Ativa")}
                           </label>
+                          {activeSource.kind === "video" ? (
+                            <label className="chipButton">
+                              <input
+                                type="checkbox"
+                                checked={sourcePublicationEnabled(activeCamera.id, activeSource)}
+                                disabled={Boolean(streamPublicationBusyByKey[`${activeCamera.id}:${activeSource.id}`]) || !activeSource.enabled}
+                                onChange={(event) => {
+                                  void updateSourcePublication(activeCamera.id, activeSource, {
+                                    enabled: event.target.checked,
+                                    role: activeSource.role,
+                                    label: activeSource.name || activeSource.id,
+                                  });
+                                }}
+                              />
+                              {t("ext.cameras.settings.sources.transmit", {}, "Transmitir esta fonte")}
+                            </label>
+                          ) : null}
                           <button className="chipButton" type="button" onClick={() => makeDefaultSource(activeCamera.id, activeSource.id)}>
                             {activeSource.is_default ? t("ext.cameras.settings.sources.default", {}, "Fonte padrão") : t("ext.cameras.settings.sources.make_default", {}, "Tornar padrão")}
                           </button>
@@ -830,6 +941,7 @@ function CamerasSettingsPanelContent({
                             {t("core.actions.delete", {}, "Excluir")}
                           </button>
                         </div>
+                        {streamPublicationError ? <div className="errorText">{streamPublicationError}</div> : null}
 
                         <div className="sectionDivider">
                           <div className="rowWrap">
@@ -849,19 +961,30 @@ function CamerasSettingsPanelContent({
                                 <option value="onvif_profile">ONVIF</option>
                               </select>
                             </div>
-                            <div className="field" style={{ flex: 1, minWidth: 240 }}>
-                              <label className="label">{t("ext.cameras.settings.sources.rtsp_url", {}, "URL RTSP")}</label>
-                              <input
-                                className="input"
-                                value={activeSource.origin.rtsp_url}
-                                onChange={(event) =>
-                                  updateSource(activeCamera.id, activeSource.id, (source) => ({
-                                    ...source,
-                                    origin: { ...source.origin, rtsp_url: event.target.value },
-                                  }))
-                                }
-                              />
-                            </div>
+                            {activeSource.origin.type === "rtsp" ? (
+                              <div className="field" style={{ flex: 1, minWidth: 240 }}>
+                                <label className="label">{t("ext.cameras.settings.sources.rtsp_url", {}, "URL RTSP")}</label>
+                                <input
+                                  className="input"
+                                  value={activeSource.origin.rtsp_url}
+                                  onChange={(event) =>
+                                    updateSource(activeCamera.id, activeSource.id, (source) => ({
+                                      ...source,
+                                      origin: { ...source.origin, rtsp_url: event.target.value },
+                                    }))
+                                  }
+                                />
+                              </div>
+                            ) : (
+                              <div className="field" style={{ flex: 1, minWidth: 240 }}>
+                                <label className="label">{t("ext.cameras.settings.onvif_profile", {}, "Perfil de stream")}</label>
+                                <div className="settingsStatusMuted">
+                                  {activeSource.origin.profile_name ||
+                                    activeSource.origin.profile_token ||
+                                    t("ext.cameras.settings.sources.onvif_profile_unset", {}, "Perfil ONVIF não definido.")}
+                                </div>
+                              </div>
+                            )}
                           </div>
                           {activeSource.origin.type === "rtsp" ? (
                             <div className="rowWrap">
@@ -895,7 +1018,18 @@ function CamerasSettingsPanelContent({
                             </div>
                           ) : (
                             <div className="settingsStatusMuted">
-                              {activeSource.origin.profile_name || activeSource.origin.profile_token || t("ext.cameras.settings.sources.onvif_profile_unset", {}, "Perfil ONVIF não definido.")}
+                              {activeSource.origin.rtsp_url ? (
+                                <>
+                                  {t("ext.cameras.settings.sources.onvif_resolved_stream_uri", {}, "Endereço de stream resolvido")}:{" "}
+                                  <code>{activeSource.origin.rtsp_url}</code>
+                                </>
+                              ) : (
+                                t(
+                                  "ext.cameras.settings.sources.onvif_profile_hint",
+                                  {},
+                                  "A URL RTSP é resolvida a partir do perfil ONVIF selecionado quando o playback começa.",
+                                )
+                              )}
                             </div>
                           )}
                         </div>
@@ -923,31 +1057,12 @@ function CamerasSettingsPanelContent({
                             <div><span className="label">{t("ext.cameras.settings.ingest.summary.mode", {}, "Modo")}</span><div>{ingestModeLabel(activeSource, t)}</div></div>
                             <div><span className="label">{t("ext.cameras.settings.ingest.summary.centralizer", {}, "Centralizador efetivo")}</span><div>{ingestCentralizerLabel(activeSource, processingServers, t)}</div></div>
                             <div><span className="label">{t("ext.cameras.settings.ingest.summary.path", {}, "Caminho")}</span><div>{ingestPathLabel(activeSource, t)}</div></div>
-                            <div><span className="label">{t("ext.cameras.settings.ingest.summary.override", {}, "Conexão direta temporária")}</span><div>{formatOverride(activeSource.ingest, t)}</div></div>
                           </div>
-                          {normalizeIngestConfig(activeSource.ingest).mode !== "direct" ? (
-                            <button
-                              className="chipButton"
-                              type="button"
-                              onClick={() =>
-                                updateSource(activeCamera.id, activeSource.id, (source) => ({
-                                  ...source,
-                                  ingest: {
-                                    ...normalizeIngestConfig(source.ingest),
-                                    direct_override_until_unix: directOverrideActive(source.ingest) ? null : Math.floor(Date.now() / 1000) + 3600,
-                                  },
-                                }))
-                              }
-                            >
-                              {directOverrideActive(activeSource.ingest)
-                                ? t("ext.cameras.settings.ingest.override.clear", {}, "Encerrar conexão direta")
-                                : t("ext.cameras.settings.ingest.override.enable", {}, "Usar conexão direta por 1h")}
-                            </button>
-                          ) : (
+                          {normalizeIngestConfig(activeSource.ingest).mode === "direct" ? (
                             <div className="settingsStatusMuted">
                               {t("ext.cameras.settings.ingest.direct_hint", {}, "Esta câmera pode receber uma conexão por fluxo consumidor.")}
                             </div>
-                          )}
+                          ) : null}
                         </div>
 
                         <div className="sectionDivider">

@@ -97,6 +97,7 @@ const WEBRTC_WHEP_READY_RETRY_MS = 500;
 const RUNTIME_HEALTH_REFRESH_MS = 2000;
 const HLS_BROWSER_PROBE_TIMEOUT_MS = 2500;
 const HLS_LIVENESS_STALE_GRACE_MS = 5000;
+const HLS_PLAYBACK_WARMUP_MS = 12000;
 const DEMAND_HEARTBEAT_INTERVAL_MS = 10000;
 
 function readGridMode(): GridMode {
@@ -208,6 +209,8 @@ function liveViewWithDefaultVariant(
 }
 
 function liveVariantRoleLabel(role: string | null | undefined, t: TranslateFn): string {
+  if (role === "main") return t("core.ui.streams.variant.main", {}, "Principal");
+  if (role === "sub") return t("core.ui.streams.variant.sub", {}, "Baixa resolução");
   if (role === "thumbnail") return t("core.ui.streams.variant.low", {}, "Low");
   if (role === "pip") return t("core.ui.streams.variant.stable", {}, "Stable");
   if (role === "large" || role === "fullscreen") return t("core.ui.streams.variant.high", {}, "High");
@@ -288,6 +291,73 @@ function sourceHealthRecommendedActionLabel(value: string | null | undefined, t:
   return t(`core.ui.streams.source.action.${key}`, {}, raw);
 }
 
+function sourceHealthBlockingMessage(
+  sourceHealth: StreamingRuntimeTransmissionHealth["source_health"] | undefined,
+  t: TranslateFn,
+): string {
+  if (!sourceHealth) return "";
+  const blockingErrors = (sourceHealth.ingest_blocking_errors ?? [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  if (blockingErrors.length > 0) {
+    const details = blockingErrors.slice(0, 2).join(" ");
+    return t(
+      "core.ui.streams.health.camera_source_blocked",
+      { details },
+      `Camera source is not feeding frames through the configured ingest/source. ${details}`,
+    );
+  }
+  const status = String(sourceHealth.status || "unknown").trim().toLowerCase();
+  if (status && status !== "healthy") {
+    return (
+      sourceHealthRecommendedActionLabel(sourceHealth.recommended_action, t) ||
+      sourceHealth.last_error ||
+      t(
+        "core.ui.streams.health.camera_source_not_feeding",
+        {},
+        "Camera source is not feeding frames yet.",
+      )
+    );
+  }
+  return "";
+}
+
+function runtimeHasFreshSourceAndWriter(health: StreamingRuntimeTransmissionHealth | undefined): boolean {
+  if (!health) return false;
+  const activeWriter = String(health.active_writer_id || "").trim();
+  const selectedWriter = String(health.selected_writer_id || "").trim();
+  if (!activeWriter && !selectedWriter) return false;
+  if (health.stale || health.status === "stale") return false;
+  const sourceHealth = health.source_health ?? null;
+  if (sourceHealth?.ingest_blocking_errors?.some((item) => String(item || "").trim())) return false;
+  const sourceStatus = String(sourceHealth?.status || "").trim().toLowerCase();
+  if (["stale", "unreachable", "unauthorized", "error"].includes(sourceStatus)) return false;
+  const selectedAge = health.selected_frame_age_seconds;
+  if (typeof selectedAge === "number" && Number.isFinite(selectedAge)) return selectedAge <= 10;
+  const sourceAge = sourceHealth?.source_frame_age_seconds;
+  if (typeof sourceAge === "number" && Number.isFinite(sourceAge)) return sourceAge <= 10;
+  return health.status !== "offline" || Boolean(activeWriter || selectedWriter);
+}
+
+function isHlsWarmupRecoverableError(
+  message: string,
+  health: StreamingRuntimeTransmissionHealth | undefined,
+): boolean {
+  if (isHlsAuthProbeErrorMessage(message)) return false;
+  if (!runtimeHasFreshSourceAndWriter(health)) return false;
+  const lowered = String(message || "").toLowerCase();
+  if (lowered.includes("expired") || lowered.includes("forbidden") || lowered.includes("unauthorized")) return false;
+  return (
+    lowered.includes("failed to fetch") ||
+    lowered.includes("playlist probe failed") ||
+    lowered.includes("tail segment probe failed") ||
+    lowered.includes("no media segment") ||
+    lowered.includes("hls.js fatal") ||
+    lowered.includes("native hls playback error") ||
+    lowered.includes("network")
+  );
+}
+
 function isProbablyMobileTouchBrowser(): boolean {
   if (typeof window === "undefined" || typeof navigator === "undefined") return false;
   const userAgent = String(navigator.userAgent || "").toLowerCase();
@@ -302,20 +372,40 @@ function isProbablyMobileTouchBrowser(): boolean {
 
 function getWebRtcIssueMessages(urls: StreamingTransmissionUrlsResponse | undefined): string[] {
   const contract = urls?.network_contract ?? null;
-  const rawMessages = [
-    ...(urls?.blocking_errors ?? []),
-    ...(urls?.warnings ?? []),
-    ...(contract?.blocking_errors ?? []),
-    ...(contract?.warnings ?? []),
-  ];
+  const scopedWarnings = urls?.webrtc_warnings ?? [];
+  const rawMessages = scopedWarnings.length
+    ? [
+        ...scopedWarnings,
+        ...(urls?.blocking_errors ?? []),
+        ...(contract?.blocking_errors ?? []),
+      ]
+    : [
+        ...(urls?.blocking_errors ?? []),
+        ...(urls?.warnings ?? []),
+        ...(contract?.blocking_errors ?? []),
+        ...(contract?.warnings ?? []),
+      ];
   const out: string[] = [];
   const seen = new Set<string>();
   for (const raw of rawMessages) {
     const message = String(raw || "").trim();
     if (!message) continue;
     const lowered = message.toLowerCase();
-    if (!lowered.includes("webrtc") && !lowered.includes("whep") && !lowered.includes("ice")) continue;
+    if (!lowered.includes("webrtc") && !lowered.includes("whep") && !/\bice\b/.test(lowered)) continue;
     if (seen.has(message)) continue;
+    seen.add(message);
+    out.push(message);
+  }
+  return out;
+}
+
+function getHlsIssueMessages(urls: StreamingTransmissionUrlsResponse | undefined): string[] {
+  const rawMessages = [...(urls?.hls_warnings ?? [])];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of rawMessages) {
+    const message = String(raw || "").trim();
+    if (!message || seen.has(message)) continue;
     seen.add(message);
     out.push(message);
   }
@@ -397,6 +487,48 @@ function buildPlaybackPlan(options: {
     homeAssistantProxyHls,
     mobileTouchBrowser,
   };
+}
+
+function plannedPrimaryTransport(
+  playbackPlan: StreamPlaybackPlan,
+  hlsUrl: string | null,
+  webrtcUrl: string | null,
+): TilePlaybackTransport {
+  if (playbackPlan.preferWebRtcFirst && playbackPlan.allowWebRtc && webrtcUrl) return "webrtc";
+  if (playbackPlan.allowHls && hlsUrl) return "hls";
+  if (playbackPlan.allowWebRtc && webrtcUrl) return "webrtc";
+  return "none";
+}
+
+function transportScopedWarnings(
+  urls: StreamingTransmissionUrlsResponse | undefined,
+  transport: TilePlaybackTransport,
+  playbackPlan: StreamPlaybackPlan,
+): string[] {
+  if (transport === "webrtc") return playbackPlan.webRtcIssueMessages;
+  if (transport === "hls") return getHlsIssueMessages(urls);
+  return urls?.warnings ?? [];
+}
+
+function isAdvisoryLivePlaybackWarning(message: string): boolean {
+  const normalized = String(message || "").trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes("conexão direta com a origem") ||
+    normalized.includes("abrir conexão direta") ||
+    normalized.includes("direct connection to the camera") ||
+    normalized.includes("open a direct connection") ||
+    /\b(api|metrics|rtsp|webrtc|hls)?\s*port\s+\d+\s+unavailable;\s+using\s+\d+/.test(normalized)
+  );
+}
+
+function primaryLivePlaybackWarning(playback: StreamingCameraLiveViewPlaybackResponse | null | undefined): string | null {
+  for (const raw of playback?.warnings ?? []) {
+    const message = String(raw || "").trim();
+    if (!message || isAdvisoryLivePlaybackWarning(message)) continue;
+    return message;
+  }
+  return null;
 }
 
 function normalizeText(value: unknown, fallback: string): string {
@@ -510,7 +642,8 @@ function canUseWebRtc(): boolean {
 }
 
 function resolveHlsRelativeUrl(baseUrl: string, rawUrl: string): string {
-  return new URL(String(rawUrl || "").trim(), baseUrl).toString();
+  const absoluteBaseUrl = new URL(String(baseUrl || "").trim(), window.location.href).toString();
+  return new URL(String(rawUrl || "").trim(), absoluteBaseUrl).toString();
 }
 
 function hlsPlaylistUris(playlistText: string): string[] {
@@ -801,6 +934,48 @@ function buildRuntimeHealthHint(
       tone: "error",
     };
   }
+  const hasNoWriter = !String(health.active_writer_id || "").trim() && !String(health.selected_writer_id || "").trim();
+  const sourceBlockingMessage = sourceHealthBlockingMessage(sourceHealth, t);
+  if (health.fallback_reason === "no_frame" && hasNoWriter && sourceBlockingMessage) {
+    return {
+      message: sourceBlockingMessage,
+      tone: "error",
+    };
+  }
+  if (health.fallback_reason === "no_frame" && hasNoWriter) {
+    return {
+      message: t(
+        "core.ui.streams.health.no_pipeline_frame",
+        {},
+        "No pipeline is feeding this transmission.",
+      ),
+      tone: "error",
+    };
+  }
+  if (health.classification === "publisher_down" && !hasNoWriter) {
+    return {
+      message: t(
+        "core.ui.streams.health.publisher_down",
+        {},
+        "The pipeline has a selected frame, but the HLS/WebRTC publisher is not running.",
+      ),
+      tone: "error",
+    };
+  }
+  if (health.classification === "source_pipeline_stale") {
+    const lastLive = formatLastLiveTime(health.last_live_frame_at_unix);
+    const suffix = lastLive
+      ? t("core.ui.streams.health.last_live_suffix", { time: lastLive }, ` Last live frame: ${lastLive}.`)
+      : "";
+    return {
+      message: t(
+        "core.ui.streams.health.source_pipeline_stale",
+        { suffix },
+        `Pipeline stopped feeding fresh frames.${suffix}`,
+      ),
+      tone: "error",
+    };
+  }
   if (health.classification && health.classification !== "healthy" && health.classification !== "unknown") {
     if (
       options.suppressRecoveredClientTransportErrors &&
@@ -1002,12 +1177,22 @@ function StreamAdvancedSettingsModal({
   const sourceHealth = runtimeHealth?.source_health ?? null;
   const evidence = runtimeHealth?.evidence ?? [];
   const warnings = urls?.warnings ?? [];
+  const activeTransportWarnings = transportScopedWarnings(urls, playbackTransport, playbackPlan);
   const publicBasePath = urls?.public_base_path || urls?.network_contract?.public_base_path || "/";
   const mediaOrigin = urls?.media_url_origin || urls?.network_contract?.media_url_origin || "-";
   const hlsUsesPublicBasePath =
     Boolean(hlsUrl) && publicBasePath !== "/" && String(hlsUrl || "").includes(publicBasePath);
+  const showWebRtcIssues = playbackTransport === "webrtc" || lowLatencyRequested || transportPreference === "webrtc";
+  const hlsHealthy = playbackTransport === "hls" && Boolean(hlsProbeSummary && !hlsProbeSummary.startsWith("failed"));
+  const activeTransportWarningText = activeTransportWarnings.join(" ");
+  const webRtcIssueText = playbackPlan.webRtcIssueMessages.join(" ");
+  const webRtcContractStatus = playbackPlan.webRtcBlocked
+    ? showWebRtcIssues
+      ? "warning"
+      : "not selected"
+    : "ok";
   const webRtcGuidance =
-    playbackPlan.homeAssistantProxyHls && (playbackPlan.webRtcBlocked || lowLatencyRequested || transportPreference === "webrtc")
+    playbackPlan.homeAssistantProxyHls && (playbackTransport === "webrtc" || lowLatencyRequested || transportPreference === "webrtc")
       ? t(
           "core.ui.streams.transport.webrtc_addon_hint",
           {},
@@ -1068,11 +1253,15 @@ function StreamAdvancedSettingsModal({
           <TechnicalDetailRow label="HLS ingress prefix in URL" value={formatTechnicalBoolean(hlsUsesPublicBasePath)} />
           <TechnicalDetailRow label="HLS media origin" value={mediaOrigin} />
           <TechnicalDetailRow label="Last HLS probe" value={hlsProbeSummary || "-"} />
-          <TechnicalDetailRow label="WebRTC contract" value={playbackPlan.webRtcBlocked ? "warning" : "ok"} />
+          <TechnicalDetailRow label="HLS health" value={hlsHealthy ? "healthy" : playbackTransport === "hls" ? "checking" : "-"} />
+          <TechnicalDetailRow label="WebRTC contract" value={webRtcContractStatus} />
           <TechnicalDetailRow label="Player error" value={errorText || "-"} />
           <TechnicalDetailRow label="Current hint" value={sourceHint || "-"} />
         </div>
-        {playbackPlan.webRtcIssueMessages.length ? <div className="streamsAdvancedNote isWarn">{playbackPlan.webRtcIssueMessages.join(" ")}</div> : null}
+        {activeTransportWarningText ? <div className="streamsAdvancedNote isWarn">{activeTransportWarningText}</div> : null}
+        {showWebRtcIssues && webRtcIssueText && webRtcIssueText !== activeTransportWarningText ? (
+          <div className="streamsAdvancedNote isWarn">{webRtcIssueText}</div>
+        ) : null}
         {webRtcGuidance ? <div className="streamsAdvancedNote">{webRtcGuidance}</div> : null}
       </section>
 
@@ -1266,10 +1455,22 @@ function StreamTilePlayer({
   const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
   const [fullscreenActive, setFullscreenActive] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [playbackWarmupUntilMs, setPlaybackWarmupUntilMs] = useState(0);
+  const runtimeHealthRef = useRef(runtimeHealth);
   const playbackActive = active || pictureInPictureActive;
+  const playbackWarmupActive = playbackWarmupUntilMs > Date.now();
   useEffect(() => {
     onRefreshUrlsRef.current = onRefreshUrls;
   }, [onRefreshUrls]);
+  useEffect(() => {
+    runtimeHealthRef.current = runtimeHealth;
+  }, [runtimeHealth]);
+  useEffect(() => {
+    if (!playbackWarmupUntilMs) return;
+    const delayMs = Math.max(250, playbackWarmupUntilMs - Date.now());
+    const timeoutId = window.setTimeout(() => setPlaybackWarmupUntilMs(0), delayMs);
+    return () => window.clearTimeout(timeoutId);
+  }, [playbackWarmupUntilMs]);
   const playbackPlan = useMemo(
     () =>
       buildPlaybackPlan({
@@ -1800,8 +2001,19 @@ function StreamTilePlayer({
       });
       hlsPlayer = hls;
 
-      hls.on(HlsConstructor.Events.MANIFEST_PARSED, () => {
+      const onPlaying = () => {
         setStatus("playing");
+        setErrorText(null);
+      };
+      video.addEventListener("playing", onPlaying);
+      video.addEventListener("loadeddata", onPlaying);
+      nativeCleanup = () => {
+        video.removeEventListener("playing", onPlaying);
+        video.removeEventListener("loadeddata", onPlaying);
+      };
+
+      hls.on(HlsConstructor.Events.MANIFEST_PARSED, () => {
+        setStatus("loading");
         setErrorText(null);
         startHlsLivenessMonitor(hlsUrl ?? "");
         void video.play().catch(() => {});
@@ -2038,6 +2250,21 @@ function StreamTilePlayer({
       return true;
     };
 
+    const retryHlsWarmupError = (message: string): boolean => {
+      if (!isHlsWarmupRecoverableError(message, runtimeHealthRef.current)) return false;
+      setStatus("loading");
+      setTransport("hls");
+      setErrorText(null);
+      recordWebPlaybackEvent("hls_warmup_retry", {
+        severity: "debug",
+        message,
+        data: withTransportTelemetry({ output_id: hlsOutputId ?? outputId, playback_transport: "hls" }),
+      });
+      destroyPlayback();
+      scheduleRetry(message);
+      return true;
+    };
+
     const startPlayback = async () => {
       if (cancelled || !playbackActive || ((!allowHls || !hlsUrl) && (!allowWebRtc || !webrtcUrl))) return;
       const video = videoRef.current;
@@ -2061,6 +2288,7 @@ function StreamTilePlayer({
       setStatus("loading");
       setErrorText(null);
       setTransport("none");
+      setPlaybackWarmupUntilMs(Date.now() + HLS_PLAYBACK_WARMUP_MS);
       setWebRtcFallbackActive(false);
       if (cancelled) return;
 
@@ -2101,6 +2329,7 @@ function StreamTilePlayer({
         } catch (error) {
           const hlsError = asErrorMessage(error);
           if (await refreshSignedHlsAfterAuthError(hlsError)) return;
+          if (retryHlsWarmupError(hlsError)) return;
           setStatus("error");
           setErrorText(hlsError);
           recordWebPlaybackEvent("playback_error", {
@@ -2164,6 +2393,7 @@ function StreamTilePlayer({
         } catch (error) {
           const hlsError = asErrorMessage(error);
           if (await refreshSignedHlsAfterAuthError(hlsError)) return;
+          if (retryHlsWarmupError(hlsError)) return;
           const combinedError = webRtcError
             ? i18n.t(
                 "core.ui.streams.errors.webrtc_hls_fallback_failed",
@@ -2214,6 +2444,7 @@ function StreamTilePlayer({
       setErrorText(null);
       setWebRtcFallbackActive(false);
       setHlsProbeSummary(null);
+      setPlaybackWarmupUntilMs(0);
       return () => {
         cancelled = true;
         destroyPlayback();
@@ -2352,6 +2583,16 @@ function StreamTilePlayer({
     }
     setAdvancedOpen(true);
   };
+  const hlsWarmupHintActive =
+    playbackWarmupActive &&
+    transport === "hls" &&
+    runtimeHasFreshSourceAndWriter(runtimeHealth) &&
+    (status === "loading" || (status === "error" && Boolean(errorText) && isHlsWarmupRecoverableError(errorText ?? "", runtimeHealth)));
+  const displayErrorText = hlsWarmupHintActive ? null : errorText;
+  const displaySourceHint = hlsWarmupHintActive
+    ? t("core.ui.streams.health.hls_warming_up", {}, "Aquecendo transmissão HLS...")
+    : sourceHint;
+  const displaySourceHintTone = hlsWarmupHintActive ? "muted" : sourceHintTone;
 
   return (
     <div className="streamsPlayerFrame" ref={frameRef}>
@@ -2378,7 +2619,11 @@ function StreamTilePlayer({
                 aria-label={t("core.ui.streams.variant.select", {}, "Live camera variant")}
                 onChange={(event) => onVariantOverrideChange(event.target.value)}
               >
-                <option value="">{t("core.ui.streams.variant.auto", {}, "Auto")}</option>
+                <option value="">
+                  {currentVariantLabel
+                    ? t("core.ui.streams.variant.automatic_source", { label: currentVariantLabel }, `Auto · ${currentVariantLabel}`)
+                    : t("core.ui.streams.variant.auto", {}, "Auto")}
+                </option>
                 {variantOptions.map((option) => (
                   <option key={option.id} value={option.id} title={option.title}>
                     {option.label}
@@ -2444,9 +2689,9 @@ function StreamTilePlayer({
         </div>
       </div>
 
-      {overlayVisible && (sourceHint || errorText) ? (
-        <div className={["streamsTileOverlayHint", `is-${errorText ? "error" : sourceHintTone}`].join(" ")}>
-          {errorText || sourceHint}
+      {overlayVisible && (displaySourceHint || displayErrorText) ? (
+        <div className={["streamsTileOverlayHint", `is-${displayErrorText ? "error" : displaySourceHintTone}`].join(" ")}>
+          {displayErrorText || displaySourceHint}
         </div>
       ) : null}
 
@@ -2468,8 +2713,8 @@ function StreamTilePlayer({
         hlsUrl={hlsUrl}
         playbackPlan={playbackPlan}
         lowLatencyRequested={lowLatencyRequested}
-        errorText={errorText}
-        sourceHint={sourceHint}
+        errorText={displayErrorText}
+        sourceHint={displaySourceHint}
         qualityPreference={qualityPreference}
         transportPreference={transportPreference}
         onQualityPreferenceChange={onQualityPreferenceChange}
@@ -2860,6 +3105,16 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
             const runtimeHint = buildRuntimeHealthHint(runtimeHealth, t, {
               suppressRecoveredClientTransportErrors: transportPreference !== "webrtc",
             });
+            const clientPlaybackPlan = buildPlaybackPlan({
+              transportPreference,
+              urls,
+              serverPlaybackPlan: playback?.playback_plan ?? null,
+              hlsUrl,
+              webrtcUrl,
+              lowLatencyRequested,
+            });
+            const plannedTransport = plannedPrimaryTransport(clientPlaybackPlan, hlsUrl, webrtcUrl);
+            const activeTransportWarnings = transportScopedWarnings(urls, plannedTransport, clientPlaybackPlan);
             const variantOptions = (liveView.variants ?? [])
               .filter((variant) => variant && variant.enabled !== false && String(variant.id || "").trim())
               .map((variant) => {
@@ -2876,7 +3131,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
               });
             const selectedVariantLabel = variantOverrideId
               ? variantOptions.find((option) => option.id === variantOverrideId)?.label || t("core.ui.streams.variant.custom", {}, "Custom")
-              : t("core.ui.streams.variant.auto", {}, "Auto");
+              : playback?.variant?.label || liveContextLabel(playbackContext, t);
             const defaultVariantId = defaultVariantIdForContext(liveView, playbackContext);
             const canSetVariantDefault =
               Boolean(variantOverrideId) &&
@@ -2902,18 +3157,24 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
             } else if (playback?.blocking_errors?.length) {
               sourceHint = playback.blocking_errors.join(" ");
               sourceHintTone = "error";
-            } else if (playback?.warnings?.length) {
-              sourceHint = playback.warnings[0] || null;
-              sourceHintTone = "warn";
             } else if (runtimeHint) {
               sourceHint = runtimeHint.message;
               sourceHintTone = runtimeHint.tone;
             } else if (runtimeHealthError) {
               sourceHint = runtimeHealthError;
               sourceHintTone = "warn";
-            } else if (playback?.camera_source_name) {
-              sourceHint = `${liveContextLabel(playbackContext, t)}: ${playback.camera_source_name}`;
-              sourceHintTone = "muted";
+            } else if (activeTransportWarnings.length) {
+              sourceHint = activeTransportWarnings[0] || null;
+              sourceHintTone = "warn";
+            } else {
+              const playbackWarning = primaryLivePlaybackWarning(playback);
+              if (playbackWarning) {
+                sourceHint = playbackWarning;
+                sourceHintTone = "warn";
+              } else if (playback?.camera_source_name) {
+                sourceHint = `${liveContextLabel(playbackContext, t)}: ${playback.camera_source_name}`;
+                sourceHintTone = "muted";
+              }
             }
 
             return (

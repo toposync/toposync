@@ -90,6 +90,7 @@ from .models import (
     StreamingNetworkContractPorts,
     StreamingEncoderQuarantineClearRequest,
     StreamingEncoderQuarantineClearResponse,
+    StreamPublicationSpec,
     StreamingPlaybackEventsRequest,
     StreamingPlaybackEventsResponse,
     StreamingPlaybackClientKind,
@@ -476,6 +477,11 @@ def _media_url_origin(request: Request) -> str | None:
     return origin if base_path == "/" else f"{origin}{base_path}"
 
 
+def _hls_proxy_public_base_path(request: Request) -> str:
+    base_path = _request_public_base_path(request)
+    return "" if base_path == "/" else base_path.rstrip("/")
+
+
 MEDIA_TOKEN_SCOPE = "stream:hls:read"
 
 
@@ -486,12 +492,10 @@ def _hls_proxy_url(
     *,
     media_token: str = "",
 ) -> str | None:
-    origin = _media_url_origin(request)
-    if not origin:
-        return None
+    public_base_path = _hls_proxy_public_base_path(request)
     quoted_engine_path = urllib_parse.quote(str(engine_path or "").strip(), safe="")
     quoted_file_path = urllib_parse.quote(str(file_path or "").strip().lstrip("/"), safe="/._-~")
-    url = f"{origin}/api/streams/media/hls/{quoted_engine_path}/{quoted_file_path}"
+    url = f"{public_base_path}/api/streams/media/hls/{quoted_engine_path}/{quoted_file_path}"
     token = str(media_token or "").strip()
     if token:
         url = f"{url}?media_token={urllib_parse.quote(token, safe='')}"
@@ -791,11 +795,34 @@ def _hls_output_blocking_errors(contract: StreamingNetworkContract) -> list[str]
     return out
 
 
+def _is_webrtc_contract_message(message: str) -> bool:
+    lowered = str(message or "").lower()
+    return "webrtc" in lowered or "whep" in lowered or re.search(r"\bice\b", lowered) is not None
+
+
+def _is_hls_contract_message(message: str) -> bool:
+    lowered = str(message or "").lower()
+    if _is_webrtc_contract_message(message):
+        return False
+    return "hls" in lowered or "media proxy" in lowered
+
+
+def _dedupe_messages(messages: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in messages:
+        message = str(raw or "").strip()
+        if not message or message in seen:
+            continue
+        seen.add(message)
+        out.append(message)
+    return out
+
+
 def _webrtc_output_blocking_errors(contract: StreamingNetworkContract) -> list[str]:
     out: list[str] = []
     for message in [*contract.blocking_errors, *contract.warnings]:
-        lowered = message.lower()
-        if "webrtc" in lowered or "whep" in lowered or "ice" in lowered:
+        if _is_webrtc_contract_message(message):
             out.append(message)
     return out
 
@@ -1282,16 +1309,23 @@ async def _resolve_local_transmission_urls(
         else settings.engine.preferred_ports.webrtc
     )
 
-    warnings: list[str] = list(getattr(engine_status, "warnings", ()) or ())
+    generic_warnings: list[str] = list(getattr(engine_status, "warnings", ()) or ())
     if not engine_status.running:
-        warnings.append("Engine is not running. URLs are based on preferred ports.")
+        generic_warnings.append("Engine is not running. URLs are based on preferred ports.")
     network_contract = _build_network_contract(
         request=request,
         settings=settings,
         ports=engine_status.ports,
         running=engine_status.running,
     )
-    warnings.extend(network_contract.warnings)
+    hls_warnings = _dedupe_messages(
+        [message for message in network_contract.warnings if _is_hls_contract_message(message)]
+    )
+    generic_warnings.extend(
+        message
+        for message in network_contract.warnings
+        if not _is_webrtc_contract_message(message)
+    )
     signed_hls = settings.engine.media_auth.mode == "signed_proxy"
     blocking_errors: list[str] = list(network_contract.blocking_errors)
     if signed_hls:
@@ -1302,16 +1336,22 @@ async def _resolve_local_transmission_urls(
         ]
     hls_blocking_errors = [] if signed_hls else _hls_output_blocking_errors(network_contract)
     webrtc_blocking_errors = _webrtc_output_blocking_errors(network_contract)
+    if hls_blocking_errors:
+        hls_warnings = _dedupe_messages([*hls_warnings, *hls_blocking_errors])
+    webrtc_warnings = _dedupe_messages(
+        [f"WebRTC WHEP unavailable: {' '.join(webrtc_blocking_errors[:2])}"]
+        if webrtc_blocking_errors
+        else []
+    )
     if settings.engine.media_auth.mode == "open":
-        warnings.append(
-            "Open HLS media access is enabled. Use it only on trusted LAN or for diagnostics."
-        )
-    if webrtc_blocking_errors:
-        warnings.append("WebRTC WHEP unavailable: " + " ".join(webrtc_blocking_errors[:2]))
+        open_hls_warning = "Open HLS media access is enabled. Use it only on trusted LAN or for diagnostics."
+        generic_warnings.append(open_hls_warning)
+        hls_warnings = _dedupe_messages([*hls_warnings, open_hls_warning])
 
     outputs: list[TransmissionOutputUrl] = []
     selected_output_id = str(output_id or "").strip() or None
     selected_profile_id = str(quality_profile_id or "").strip() or None
+    candidate_protocols: set[str] = set()
     for output in transmission.outputs:
         if not output.enabled:
             continue
@@ -1322,6 +1362,7 @@ async def _resolve_local_transmission_urls(
                 continue
             if output.protocol == "rtsp":
                 continue
+        candidate_protocols.add(output.protocol)
         engine_path = resolve_output_engine_path(transmission, output)
         if output.protocol == "rtsp":
             url = _rtsp_url(host, rtsp_port, engine_path)
@@ -1389,12 +1430,24 @@ async def _resolve_local_transmission_urls(
             )
         )
 
+    warnings = _dedupe_messages(
+        [
+            *generic_warnings,
+            *(
+                webrtc_warnings
+                if "webrtc" in candidate_protocols and "hls" not in candidate_protocols
+                else []
+            ),
+        ]
+    )
     return TransmissionUrlsResponse(
         transmission_id=transmission.id,
         engine_running=engine_status.running,
         outputs=outputs,
         network_contract=network_contract,
         warnings=warnings,
+        hls_warnings=hls_warnings,
+        webrtc_warnings=webrtc_warnings,
         blocking_errors=blocking_errors,
         public_base_path=_request_public_base_path(request),
         media_url_origin=_media_url_origin(request),
@@ -1504,6 +1557,8 @@ async def _resolve_remote_transmission_urls(
         outputs=outputs,
         network_contract=resolved.network_contract,
         warnings=warnings,
+        hls_warnings=list(resolved.hls_warnings),
+        webrtc_warnings=list(resolved.webrtc_warnings),
         blocking_errors=list(resolved.blocking_errors),
         public_base_path=resolved.public_base_path,
         media_url_origin=resolved.media_url_origin,
@@ -1656,6 +1711,8 @@ def _build_playback_plan_response(
     urls: TransmissionUrlsResponse,
     runtime_health: StreamingRuntimeTransmissionHealth | None = None,
     quality_profile_id: str | None = None,
+    visual_context: StreamingCameraLiveContext | None = None,
+    low_latency_requested: bool = False,
 ) -> StreamingPlaybackPlanResponse:
     contract = urls.network_contract
     home_assistant_proxy_hls = (
@@ -1681,11 +1738,19 @@ def _build_playback_plan_response(
         webrtc_blocking.append(
             "Home Assistant entity playback is negotiated by the Home Assistant camera platform."
         )
+    web_webrtc_contextual = (
+        client == "web"
+        and (bool(low_latency_requested) or str(visual_context or "").strip().lower() == "ptz")
+    )
+    if client == "web" and not web_webrtc_contextual:
+        webrtc_blocking.append("WebRTC is reserved for explicit low-latency or PTZ playback.")
     if urls.network_contract is not None:
         for message in urls.network_contract.blocking_errors:
-            lowered = message.lower()
-            if "webrtc" in lowered or "whep" in lowered or "ice" in lowered:
+            if _is_webrtc_contract_message(message):
                 webrtc_blocking.append(message)
+    for message in urls.webrtc_warnings:
+        if message not in webrtc_blocking:
+            webrtc_blocking.append(message)
 
     mse_blocking = [
         "MSE sidecar playback is not enabled yet. Falling back to native transports.",
@@ -1704,13 +1769,17 @@ def _build_playback_plan_response(
                 *list(urls.warnings),
                 "Home Assistant entity playback uses the Home Assistant camera contract from /api/streams/home-assistant/cameras.",
             ],
+            hls_warnings=list(urls.hls_warnings),
+            webrtc_warnings=list(urls.webrtc_warnings),
             blocking_errors=list(urls.blocking_errors),
         )
 
     if client in {"app", "ha_ingress"} or home_assistant_proxy_hls:
         order: list[Literal["hls", "mse", "webrtc", "jsmpeg"]] = ["hls", "mse", "webrtc", "jsmpeg"]
+    elif web_webrtc_contextual:
+        order = ["webrtc", "mse", "hls", "jsmpeg"]
     else:
-        order = ["mse", "webrtc", "hls", "jsmpeg"]
+        order = ["mse", "hls", "jsmpeg", "webrtc"]
 
     transports: list[StreamingPlaybackPlanTransport] = []
     for rank, transport in enumerate(order):
@@ -1722,18 +1791,21 @@ def _build_playback_plan_response(
                     output=hls_output,
                     available=hls_output is not None and not hls_blocking,
                     blocking_errors=hls_blocking,
-                    warnings=[],
+                    warnings=list(urls.hls_warnings),
                     health=_runtime_health_for_playback_plan(runtime_health, hls_output.output_id if hls_output else None),
                 )
             )
         elif transport == "webrtc":
-            warnings = (
-                ["WebRTC is reserved for Home Assistant native camera/WebRTC relay in HA ingress mode."]
-                if client == "ha_ingress"
-                else ["WebRTC is reserved for low-latency/PTZ in Home Assistant proxy mode."]
-                if home_assistant_proxy_hls
-                else []
-            )
+            warnings = [
+                *list(urls.webrtc_warnings),
+                *(
+                    ["WebRTC is reserved for Home Assistant native camera/WebRTC relay in HA ingress mode."]
+                    if client == "ha_ingress"
+                    else ["WebRTC is reserved for low-latency/PTZ in Home Assistant proxy mode."]
+                    if home_assistant_proxy_hls
+                    else []
+                ),
+            ]
             transports.append(
                 _playback_plan_transport_from_output(
                     transport="webrtc",
@@ -1780,6 +1852,8 @@ def _build_playback_plan_response(
         transports=transports,
         selected_transport=selected,
         warnings=plan_warnings,
+        hls_warnings=list(urls.hls_warnings),
+        webrtc_warnings=list(urls.webrtc_warnings),
         blocking_errors=list(urls.blocking_errors),
     )
 
@@ -1943,6 +2017,7 @@ async def _build_home_assistant_camera_item(
     camera_id: str | None = None,
     live_view_id: str | None = None,
     variant: CameraLiveVariant | None = None,
+    variants: list[dict[str, Any]] | None = None,
 ) -> StreamingHomeAssistantCameraManifestItem:
     warnings: list[str] = []
     blocking_errors: list[str] = []
@@ -2013,9 +2088,48 @@ async def _build_home_assistant_camera_item(
             "native_webrtc": bool(native_webrtc_enabled and webrtc_output is not None),
             "ptz": bool(role == "ptz"),
         },
+        variants=list(variants or []),
         warnings=warnings,
         blocking_errors=blocking_errors,
     )
+
+
+def _home_assistant_primary_variant(live_view: CameraLiveView) -> CameraLiveVariant | None:
+    enabled = [variant for variant in live_view.variants if variant.enabled]
+    if not enabled:
+        return None
+    for role in ("sub", "main", "thumbnail", "pip", "large", "fullscreen", "zoom", "custom"):
+        for variant in enabled:
+            if variant.role == role:
+                return variant
+    return enabled[0]
+
+
+def _home_assistant_variant_for_stream_component(variant: CameraLiveVariant) -> CameraLiveVariant:
+    payload = variant.model_dump(mode="python")
+    payload["output_id"] = "hls_stable_apple_tv"
+    payload["quality_profile_id"] = "stable_apple_tv"
+    payload["preferred_transport"] = "hls"
+    return CameraLiveVariant.model_validate(payload)
+
+
+def _home_assistant_live_view_variants_summary(live_view: CameraLiveView) -> list[dict[str, Any]]:
+    variants: list[dict[str, Any]] = []
+    for variant in live_view.variants:
+        if not variant.enabled:
+            continue
+        variants.append(
+            {
+                "variant_id": variant.id,
+                "role": variant.role,
+                "label": variant.label,
+                "camera_source_id": variant.camera_source_id,
+                "transmission_id": variant.transmission_id,
+                "output_id": variant.output_id,
+                "quality_profile_id": variant.quality_profile_id,
+            }
+        )
+    return variants
 
 
 async def _build_home_assistant_cameras_response(
@@ -2029,25 +2143,29 @@ async def _build_home_assistant_cameras_response(
     for live_view in settings.camera_live_views:
         if not live_view.enabled:
             continue
-        for variant in live_view.variants:
-            if not variant.enabled:
-                continue
-            transmission = transmissions_by_id.get(variant.transmission_id)
-            if transmission is None:
-                continue
-            referenced_transmission_ids.add(transmission.id)
-            item_name = f"{live_view.name} · {variant.label}".strip(" ·")
-            cameras.append(
-                await _build_home_assistant_camera_item(
-                    request,
-                    transmission=transmission,
-                    name=item_name or transmission.name or transmission.id,
-                    item_id=f"{live_view.id}:{variant.id}",
-                    camera_id=live_view.camera_id,
-                    live_view_id=live_view.id,
-                    variant=variant,
-                )
+        primary_variant = _home_assistant_primary_variant(live_view)
+        if primary_variant is None:
+            continue
+        transmission = transmissions_by_id.get(primary_variant.transmission_id)
+        if transmission is None:
+            continue
+        referenced_transmission_ids.add(transmission.id)
+        item_variant = _home_assistant_variant_for_stream_component(primary_variant)
+        cameras.append(
+            await _build_home_assistant_camera_item(
+                request,
+                transmission=transmission,
+                name=live_view.name or transmission.name or transmission.id,
+                item_id=live_view.id,
+                camera_id=live_view.camera_id,
+                live_view_id=live_view.id,
+                variant=item_variant,
+                variants=_home_assistant_live_view_variants_summary(live_view),
             )
+        )
+        for variant in live_view.variants:
+            if variant.enabled:
+                referenced_transmission_ids.add(variant.transmission_id)
 
     for transmission in settings.transmissions:
         if transmission.id in referenced_transmission_ids or not transmission.enabled:
@@ -2634,6 +2752,16 @@ def _runtime_playback_recovered(
     return True
 
 
+def _output_has_active_demand(output: StreamingRuntimeOutputHealth) -> bool:
+    if output.viewer_count > 0 or output.demand_signal:
+        return True
+    if output.publisher_running:
+        return True
+    if output.status in {"live", "degraded"}:
+        return True
+    return False
+
+
 def _recent_events(events: list[Any], *, now_unix: float, window_seconds: float = 30.0) -> list[Any]:
     cutoff = float(now_unix) - max(1.0, float(window_seconds))
     return [
@@ -2655,6 +2783,9 @@ def _source_health_classification_evidence(
         evidence.append(f"Camera source frame age is {float(age):.1f}s.")
     if source_health.last_error:
         evidence.append(f"Camera source error: {source_health.last_error}")
+    for blocking_error in source_health.ingest_blocking_errors[:2]:
+        if blocking_error:
+            evidence.append(f"Camera source ingest error: {blocking_error}")
     if source_health.recommended_action:
         evidence.append(source_health.recommended_action)
     return evidence[:4]
@@ -2684,19 +2815,15 @@ def _classify_observability(
         evidence.extend(details[:3] or [f"Network contract status is {network_contract.status}."])
         return "network_contract_error", evidence
 
-    auth_terms = ("auth", "authorization", "unauthorized", "forbidden", "401", "403")
-    url_terms = ("url", "loopback", "invalid", "port", "proxy", "not found", "404")
-    if any(any(term in text for term in auth_terms) for text in texts):
-        return "auth_url_error", ["Recent playback event indicates auth failure."]
-    if any("url" in text and any(term in text for term in url_terms) for text in texts):
-        return "auth_url_error", ["Recent playback event indicates URL/network playback failure."]
-
-    if source_health is not None and source_health.status in {
-        "stale",
-        "unreachable",
-        "unauthorized",
-        "error",
-    }:
+    if source_health is not None and (
+        source_health.status in {
+            "stale",
+            "unreachable",
+            "unauthorized",
+            "error",
+        }
+        or bool(source_health.ingest_blocking_errors)
+    ):
         return "source_stale", _source_health_classification_evidence(source_health)
 
     if target_status == "stale" or health.stale:
@@ -2705,6 +2832,8 @@ def _classify_observability(
         return "source_pipeline_stale", [f"Selected frame is stale.{age_text}"]
 
     if output is not None and (not output.publisher_running or output.publisher_last_error):
+        if not _output_has_active_demand(output):
+            return "unknown", ["Output is idle because no viewer or heartbeat demand is active."]
         if output.publisher_last_error:
             evidence.append(f"Publisher error: {output.publisher_last_error}")
         else:
@@ -2718,6 +2847,34 @@ def _classify_observability(
         return "hls_playlist_stale", ["Recent HLS liveness event reports playlist stopped advancing."]
 
     runtime_recovered = _runtime_playback_recovered(health, output)
+    auth_terms = ("auth", "authorization", "unauthorized", "forbidden", "401", "403")
+    url_terms = ("url", "loopback", "invalid", "port", "proxy", "not found", "404")
+    auth_url_events: list[tuple[Any, str]] = []
+    for event, text in zip(recent, texts, strict=False):
+        if any(term in text for term in auth_terms):
+            auth_url_events.append((event, "auth"))
+        elif "url" in text and any(term in text for term in url_terms):
+            auth_url_events.append((event, "url"))
+    if auth_url_events:
+        last_auth_url_event, last_auth_url_kind = max(
+            auth_url_events,
+            key=lambda item: _event_at_unix(item[0]),
+        )
+        last_auth_url_at = _event_at_unix(last_auth_url_event)
+        playback_recovered_at = _latest_event_at(
+            recent,
+            lambda event: _event_type(event) in {"hls_browser_probe", "hls_start", "playing", "ready_to_play"},
+        )
+        recovered_after_auth_url = (
+            runtime_recovered
+            and playback_recovered_at is not None
+            and playback_recovered_at >= last_auth_url_at
+        )
+        if not recovered_after_auth_url:
+            if last_auth_url_kind == "auth":
+                return "auth_url_error", ["Recent playback event indicates auth failure."]
+            return "auth_url_error", ["Recent playback event indicates URL/network playback failure."]
+
     webrtc_error_terms = (
         "webrtc_signaling_error",
         "webrtc_transport_error",
@@ -2778,7 +2935,17 @@ def _classify_observability(
         if any(term in compact_text for term in terminal_lifecycle_terms)
     ]
     if terminal_lifecycle_events:
-        return "app_player_lifecycle", ["Recent playback/player lifecycle event indicates stall or error."]
+        last_lifecycle_at = max(_event_at_unix(event) for event in terminal_lifecycle_events)
+        playback_recovered_at = _latest_event_at(
+            recent,
+            lambda event: _event_type(event) in {"hls_browser_probe", "hls_start", "playing", "ready_to_play"},
+        )
+        if not (
+            runtime_recovered
+            and playback_recovered_at is not None
+            and playback_recovered_at >= last_lifecycle_at
+        ):
+            return "app_player_lifecycle", ["Recent playback/player lifecycle event indicates stall or error."]
 
     transient_lifecycle_events = [
         event
@@ -3320,6 +3487,10 @@ def _camera_live_variant_label(role: str, source: dict[str, Any]) -> str:
 
 
 def _camera_live_quality_for_role(role: str) -> str:
+    if role == "sub":
+        return "quad_grid"
+    if role == "main":
+        return "fullscreen_quality"
     if role == "thumbnail":
         return "quad_grid"
     if role == "pip":
@@ -3342,6 +3513,474 @@ def _camera_live_outputs_for_variant(
     if role == "ptz" and include_webrtc:
         outputs.append(_webrtc_low_latency_output())
     return outputs
+
+
+def _source_publication_id(*, camera_id: str, source_id: str) -> str:
+    return f"camera:{str(camera_id or '').strip()}:{str(source_id or '').strip()}"
+
+
+def _pipeline_publication_id(*, pipeline_name: str, publish_node_id: str) -> str:
+    return f"pipeline:{str(pipeline_name or '').strip()}:{str(publish_node_id or '').strip()}"
+
+
+def _source_publication_label(source: dict[str, Any]) -> str:
+    role = _camera_source_role(source)
+    source_name = _camera_source_name(source)
+    role_labels = {
+        "main": "Principal",
+        "sub": "Baixa resolução",
+        "zoom": "Zoom",
+        "custom": "Personalizada",
+    }
+    role_label = role_labels.get(role, "Personalizada")
+    if source_name and source_name.lower() != role_label.lower():
+        return f"{role_label} · {source_name}"
+    return role_label
+
+
+def _publication_host_for_source(source: dict[str, Any], *, current_server_id: str) -> str:
+    ingest = _camera_source_ingest(source)
+    mode = str(ingest.get("mode") or "centralized").strip().lower()
+    if mode == "centralized":
+        return normalize_server_id(ingest.get("host_server_id"), fallback=current_server_id)
+    return normalize_server_id(current_server_id, fallback="local")
+
+
+def _publication_transmission_id(publication: StreamPublicationSpec) -> str:
+    if publication.owner_kind == "pipeline_output":
+        return _live_slug(
+            "tx",
+            "pipeline",
+            publication.pipeline_name or "",
+            publication.publish_node_id or "",
+            publication.role,
+            fallback=f"tx-pipeline-{publication.id}",
+        )
+    return _live_slug(
+        "tx",
+        "camera",
+        publication.camera_id or "",
+        publication.camera_source_id or "",
+        publication.role,
+        fallback=f"tx-camera-{publication.camera_id or 'camera'}-{publication.camera_source_id or 'source'}",
+    )
+
+
+def _publication_pipeline_name(publication: StreamPublicationSpec) -> str:
+    return _safe_pipeline_name(f"implicit__{_publication_transmission_id(publication)}")
+
+
+def _publication_quality_profile(publication: StreamPublicationSpec) -> str:
+    configured = str(publication.quality_policy.get("default_profile_id") or "").strip()
+    if configured in QUALITY_PROFILE_ORDER:
+        return configured
+    if publication.role == "sub":
+        return "quad_grid"
+    if publication.role in {"main", "zoom"}:
+        return "fullscreen_quality"
+    return DEFAULT_QUALITY_PROFILE_ID
+
+
+def _publication_outputs(publication: StreamPublicationSpec) -> list[TransmissionOutput]:
+    outputs = _camera_live_hls_outputs()
+    enable_webrtc = bool(publication.transport_policy.get("enable_webrtc", False))
+    if enable_webrtc:
+        outputs.append(_webrtc_low_latency_output())
+    return outputs
+
+
+def _transmission_for_publication(publication: StreamPublicationSpec) -> Transmission:
+    transmission_id = _publication_transmission_id(publication)
+    camera_controls = None
+    if publication.camera_id:
+        camera_controls = {
+            "enabled": True,
+            "camera_id": publication.camera_id,
+            "camera_source_id": publication.camera_source_id,
+        }
+    return Transmission(
+        id=transmission_id,
+        name=publication.label,
+        enabled=bool(publication.enabled),
+        host_server_id=publication.host_server_id,
+        path=transmission_id,
+        placeholder="gray",
+        arbitration="priority_latest",
+        camera_controls=camera_controls,
+        outputs=_publication_outputs(publication),
+        generated_by="stream_publication",
+        publication_id=publication.id,
+        owner_kind=publication.owner_kind,
+        camera_id=publication.camera_id,
+        camera_source_id=publication.camera_source_id,
+        role=publication.role,
+        camera_live_view_id=publication.live_view_id,
+    )
+
+
+def _variant_for_publication(publication: StreamPublicationSpec) -> CameraLiveVariant:
+    quality_profile_id = _publication_quality_profile(publication)
+    if publication.owner_kind == "pipeline_output":
+        variant_id = _live_slug(
+            publication.pipeline_name or "pipeline",
+            publication.publish_node_id or publication.id,
+            publication.role,
+            fallback=publication.id,
+        )
+    else:
+        variant_id = str(publication.camera_source_id or publication.id).strip()
+    return CameraLiveVariant(
+        id=_live_slug(variant_id, fallback=publication.id),
+        label=publication.label,
+        role=publication.role,
+        camera_source_id=str(publication.camera_source_id or "").strip(),
+        transmission_id=_publication_transmission_id(publication),
+        output_id=f"hls_{quality_profile_id}",
+        quality_profile_id=quality_profile_id,
+        preferred_transport="auto",
+        enabled=bool(publication.enabled),
+    )
+
+
+def _pick_default_variant_id(
+    variants: list[CameraLiveVariant],
+    *,
+    preferred_roles: tuple[str, ...],
+) -> str:
+    for role in preferred_roles:
+        for variant in variants:
+            if variant.enabled and variant.role == role:
+                return variant.id
+    for variant in variants:
+        if variant.enabled:
+            return variant.id
+    return variants[0].id
+
+
+def _reconcile_publication_specs(
+    *,
+    settings: StreamingExtensionSettings,
+    app_settings: Any,
+    current_server_id: str,
+    pipelines: list[Pipeline] | None = None,
+) -> list[StreamPublicationSpec]:
+    existing_by_id = {publication.id: publication for publication in settings.publications}
+    next_publications: list[StreamPublicationSpec] = []
+    seen_camera_publication_ids: set[str] = set()
+    seen_pipeline_publication_ids: set[str] = set()
+    camera_devices_by_id = {
+        str(device.get("id") or "").strip(): device
+        for device in iter_camera_devices_from_app_settings(app_settings)
+        if str(device.get("id") or "").strip()
+    }
+
+    for device in iter_camera_devices_from_app_settings(app_settings):
+        camera_id = str(device.get("id") or "").strip()
+        if not camera_id:
+            continue
+        live_view_id = _camera_live_view_id(device)
+        for source in _enabled_camera_video_sources(device):
+            source_id = str(source.get("id") or "").strip()
+            publication_id = _source_publication_id(camera_id=camera_id, source_id=source_id)
+            seen_camera_publication_ids.add(publication_id)
+            existing = existing_by_id.get(publication_id)
+            payload = existing.model_dump(mode="python") if existing is not None else {}
+            label = str(payload.get("label") or "").strip()
+            if not label or label == publication_id:
+                label = _source_publication_label(source)
+            payload.update(
+                {
+                    "id": publication_id,
+                    "owner_kind": "camera_source",
+                    "camera_id": camera_id,
+                    "camera_source_id": source_id,
+                    "pipeline_name": None,
+                    "publish_node_id": None,
+                    "role": _camera_source_role(source),
+                    "label": label,
+                    "live_view_id": live_view_id,
+                    "host_server_id": _publication_host_for_source(
+                        source, current_server_id=current_server_id
+                    ),
+                }
+            )
+            next_publications.append(StreamPublicationSpec.model_validate(payload))
+
+    for pipeline in pipelines or []:
+        graph = pipeline.graph if isinstance(pipeline.graph, dict) else {}
+        meta = graph.get("meta") if isinstance(graph, dict) else {}
+        streaming_meta = meta.get("streaming") if isinstance(meta, dict) else {}
+        if isinstance(streaming_meta, dict) and str(streaming_meta.get("generated_by") or "").strip() in {
+            "stream_publication",
+            "camera_live_view",
+        }:
+            continue
+        nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if str(node.get("operator") or "").strip() != "stream.publish_video":
+                continue
+            cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
+            if not bool(cfg.get("publication_enabled", False)):
+                continue
+            node_id = str(node.get("id") or "").strip()
+            pipeline_name = str(getattr(pipeline, "name", "") or "").strip()
+            if not node_id or not pipeline_name:
+                continue
+            camera_id = str(cfg.get("publication_camera_id") or "").strip()
+            camera_source_id = str(cfg.get("publication_camera_source_id") or "").strip()
+            if not camera_id or not camera_source_id:
+                continue
+            publication_id = _pipeline_publication_id(
+                pipeline_name=pipeline_name, publish_node_id=node_id
+            )
+            seen_pipeline_publication_ids.add(publication_id)
+            existing = existing_by_id.get(publication_id)
+            payload = existing.model_dump(mode="python") if existing is not None else {}
+            role = str(cfg.get("publication_role") or payload.get("role") or "custom").strip().lower()
+            if role not in {"main", "sub", "zoom", "custom"}:
+                role = "custom"
+            label = str(cfg.get("publication_label") or payload.get("label") or "").strip()
+            if not label:
+                label = f"{pipeline_name} · {node_id}"
+            device = camera_devices_by_id.get(camera_id)
+            live_view_id = str(cfg.get("publication_live_view_id") or "").strip()
+            if not live_view_id and device is not None:
+                live_view_id = _camera_live_view_id(device)
+            if not live_view_id:
+                live_view_id = _live_slug("pipeline", pipeline_name, fallback=publication_id)
+            quality_policy = dict(payload.get("quality_policy") or {})
+            quality_profile_id = str(cfg.get("publication_quality_profile_id") or "").strip()
+            if quality_profile_id in QUALITY_PROFILE_ORDER:
+                quality_policy["default_profile_id"] = quality_profile_id
+            transport_policy = dict(payload.get("transport_policy") or {})
+            transport_policy.update(
+                {
+                    "show_in_dashboard": bool(cfg.get("publication_show_in_dashboard", True)),
+                    "show_in_home_assistant": bool(
+                        cfg.get("publication_show_in_home_assistant", False)
+                    ),
+                }
+            )
+            payload.update(
+                {
+                    "id": publication_id,
+                    "owner_kind": "pipeline_output",
+                    "camera_id": camera_id,
+                    "camera_source_id": camera_source_id,
+                    "pipeline_name": pipeline_name,
+                    "publish_node_id": node_id,
+                    "enabled": bool(getattr(pipeline, "enabled", True)),
+                    "role": role,
+                    "label": label,
+                    "live_view_id": live_view_id,
+                    "host_server_id": normalize_server_id(
+                        getattr(pipeline, "processing_server_id", "local"), fallback="local"
+                    ),
+                    "quality_policy": quality_policy,
+                    "transport_policy": transport_policy,
+                }
+            )
+            next_publications.append(StreamPublicationSpec.model_validate(payload))
+
+    for publication in settings.publications:
+        if publication.owner_kind == "pipeline_output":
+            if publication.id not in seen_pipeline_publication_ids:
+                continue
+            if any(item.id == publication.id for item in next_publications):
+                continue
+            next_publications.append(publication)
+            continue
+        if publication.id in seen_camera_publication_ids:
+            continue
+
+    next_publications.sort(key=lambda item: (item.owner_kind, item.camera_id or "", item.role, item.label, item.id))
+    return next_publications
+
+
+def _build_artifacts_from_publications(
+    *,
+    publications: list[StreamPublicationSpec],
+    app_settings: Any,
+) -> tuple[list[CameraLiveView], list[Transmission], list[str]]:
+    warnings: list[str] = []
+    publications_by_camera: dict[str, list[StreamPublicationSpec]] = {}
+    devices_by_id = {
+        str(device.get("id") or "").strip(): device
+        for device in iter_camera_devices_from_app_settings(app_settings)
+        if str(device.get("id") or "").strip()
+    }
+
+    for publication in publications:
+        if not publication.enabled:
+            continue
+        if not bool(publication.transport_policy.get("show_in_dashboard", True)):
+            continue
+        if not publication.camera_id or not publication.camera_source_id:
+            warnings.append(f"Camera target is missing for publication '{publication.id}'.")
+            continue
+        device = devices_by_id.get(publication.camera_id)
+        if device is None:
+            warnings.append(f"Camera not found for publication '{publication.id}'.")
+            continue
+        source = resolve_camera_video_source(
+            device,
+            source_id=publication.camera_source_id,
+            enabled_only=True,
+        )
+        if source is None:
+            warnings.append(f"Camera source not found for publication '{publication.id}'.")
+            continue
+        publications_by_camera.setdefault(publication.camera_id, []).append(publication)
+
+    live_views: list[CameraLiveView] = []
+    transmissions: list[Transmission] = []
+    for camera_id, camera_publications in sorted(publications_by_camera.items()):
+        device = devices_by_id.get(camera_id)
+        if device is None:
+            continue
+        variants = [_variant_for_publication(publication) for publication in camera_publications]
+        if not variants:
+            continue
+        defaults = CameraLiveViewDefaults(
+            thumbnail_variant_id=_pick_default_variant_id(variants, preferred_roles=("sub", "main", "zoom", "custom")),
+            pip_variant_id=_pick_default_variant_id(variants, preferred_roles=("sub", "main", "zoom", "custom")),
+            large_variant_id=_pick_default_variant_id(variants, preferred_roles=("main", "zoom", "sub", "custom")),
+            fullscreen_variant_id=_pick_default_variant_id(variants, preferred_roles=("main", "zoom", "sub", "custom")),
+            ptz_variant_id=_pick_default_variant_id(variants, preferred_roles=("zoom", "main", "sub", "custom")),
+        )
+        live_view_id = _camera_live_view_id(device)
+        host_server_id = normalize_server_id(camera_publications[0].host_server_id, fallback="local")
+        live_views.append(
+            CameraLiveView(
+                id=live_view_id,
+                camera_id=camera_id,
+                name=_camera_live_name(device),
+                enabled=True,
+                host_server_id=host_server_id,
+                defaults=defaults,
+                variants=variants,
+            )
+        )
+        transmissions.extend(_transmission_for_publication(publication) for publication in camera_publications)
+
+    return live_views, transmissions, warnings
+
+
+def _merge_generated_publication_artifacts(
+    *,
+    settings: StreamingExtensionSettings,
+    publications: list[StreamPublicationSpec],
+    live_views: list[CameraLiveView],
+    transmissions: list[Transmission],
+) -> tuple[StreamingExtensionSettings, set[str]]:
+    generated_live_view_ids = {item.id for item in live_views}
+    generated_transmission_ids = {item.id for item in transmissions}
+    managed_camera_ids = {
+        str(publication.camera_id or "").strip()
+        for publication in publications
+        if publication.owner_kind == "camera_source"
+        and str(publication.camera_id or "").strip()
+    }
+    active_artifact_publication_ids = {
+        str((item.model_extra or {}).get("publication_id") or "").strip()
+        for item in transmissions
+        if str((item.model_extra or {}).get("publication_id") or "").strip()
+    }
+
+    pruned_transmission_ids: set[str] = set()
+    next_live_views: list[CameraLiveView] = []
+    for item in settings.camera_live_views:
+        live_view_id = str(item.id or "")
+        if live_view_id in generated_live_view_ids:
+            continue
+        camera_id = str(item.camera_id or "").strip()
+        if camera_id and camera_id in managed_camera_ids:
+            for variant in item.variants:
+                transmission_id = str(variant.transmission_id or "").strip()
+                if transmission_id and transmission_id not in generated_transmission_ids:
+                    pruned_transmission_ids.add(transmission_id)
+            continue
+        next_live_views.append(item)
+    next_live_views = [*live_views, *next_live_views]
+
+    next_transmissions = []
+    for transmission in settings.transmissions:
+        extra = transmission.model_extra or {}
+        generated_by = str(extra.get("generated_by") or "").strip()
+        publication_id = str(extra.get("publication_id") or "").strip()
+        if transmission.id in generated_transmission_ids:
+            continue
+        if transmission.id in pruned_transmission_ids:
+            continue
+        if generated_by in {"stream_publication", "camera_live_view"}:
+            if not publication_id or publication_id not in active_artifact_publication_ids:
+                continue
+        next_transmissions.append(transmission)
+    next_transmissions = [*transmissions, *next_transmissions]
+
+    final_transmission_ids = {item.id for item in next_transmissions}
+    validated_live_views: list[CameraLiveView] = []
+    for item in next_live_views:
+        referenced_transmission_ids = {
+            str(variant.transmission_id or "").strip()
+            for variant in item.variants
+            if str(variant.transmission_id or "").strip()
+        }
+        missing_transmission_ids = referenced_transmission_ids - final_transmission_ids
+        if not missing_transmission_ids:
+            validated_live_views.append(item)
+            continue
+        pruned_transmission_ids.update(missing_transmission_ids)
+        variants = [
+            variant
+            for variant in item.variants
+            if str(variant.transmission_id or "").strip() in final_transmission_ids
+        ]
+        if not variants:
+            continue
+        default_variant_id = _pick_default_variant_id(
+            variants,
+            preferred_roles=(
+                "sub",
+                "main",
+                "zoom",
+                "custom",
+                "thumbnail",
+                "pip",
+                "large",
+                "fullscreen",
+                "ptz",
+            ),
+        )
+        default_ids = {variant.id for variant in variants}
+        defaults_payload = item.defaults.model_dump(mode="python")
+        defaults_payload = {
+            key: value if value in default_ids else default_variant_id
+            for key, value in defaults_payload.items()
+        }
+        validated_live_views.append(
+            CameraLiveView.model_validate(
+                {
+                    **item.model_dump(mode="python"),
+                    "defaults": defaults_payload,
+                    "variants": [variant.model_dump(mode="python") for variant in variants],
+                }
+            )
+        )
+
+    return (
+        StreamingExtensionSettings.model_validate(
+            {
+                **settings.model_dump(mode="python"),
+                "publications": publications,
+                "camera_live_views": validated_live_views,
+                "transmissions": next_transmissions,
+            }
+        ),
+        pruned_transmission_ids,
+    )
 
 
 def _camera_live_variant_for_source(
@@ -3747,6 +4386,206 @@ async def _upsert_camera_live_pipelines(
     return created_or_updated
 
 
+async def _upsert_stream_publication_pipelines(
+    *,
+    request: Request,
+    publications: list[StreamPublicationSpec],
+    transmissions: list[Transmission],
+    pruned_transmission_ids: set[str] | None = None,
+) -> list[str]:
+    config_store = _config_store(request)
+    existing = {pipeline.name: pipeline for pipeline in await config_store.list_pipelines()}
+    compiler = getattr(request.app.state, "pipeline_graph_compiler", None)
+    created_or_updated: list[str] = []
+    deleted_any = False
+    active_publication_ids = {publication.id for publication in publications if publication.enabled}
+    pruned_transmission_ids = set(pruned_transmission_ids or set())
+    active_transmission_ids = {transmission.id for transmission in transmissions}
+    transmissions_by_publication_id = {
+        str((transmission.model_extra or {}).get("publication_id") or "").strip(): transmission
+        for transmission in transmissions
+        if str((transmission.model_extra or {}).get("publication_id") or "").strip()
+    }
+
+    for publication in publications:
+        if not publication.enabled or publication.owner_kind != "camera_source":
+            continue
+        if not publication.camera_id or not publication.camera_source_id:
+            continue
+        transmission = transmissions_by_publication_id.get(publication.id)
+        if transmission is None:
+            continue
+        pipeline_name = _publication_pipeline_name(publication)
+        graph = build_streaming_wizard_graph(
+            transmission_id=transmission.id,
+            camera_id=publication.camera_id,
+            camera_source_id=publication.camera_source_id,
+            preset_id="simple_stream",
+            optional_parameters={
+                "bypass_mode": "auto",
+                "resize_mode": "contain",
+                "stream_behavior": "continuous",
+            },
+        )
+        graph.setdefault("meta", {}).setdefault("streaming", {})
+        graph["meta"]["streaming"].update(
+            {
+                "generated_by": "stream_publication",
+                "publication_id": publication.id,
+                "owner_kind": publication.owner_kind,
+                "camera_id": publication.camera_id,
+                "camera_source_id": publication.camera_source_id,
+                "role": publication.role,
+                "camera_live_view_id": publication.live_view_id or "",
+                "stream_behavior": "continuous",
+            }
+        )
+        pipeline = Pipeline(
+            name=pipeline_name,
+            enabled=bool(publication.enabled),
+            processing_server_id=normalize_server_id(publication.host_server_id, fallback="local"),
+            editor_mode="interactive",
+            python_source="",
+            graph=graph,
+        )
+        if isinstance(compiler, PipelineGraphCompiler):
+            try:
+                compiler.compile_pipeline(pipeline)
+            except GraphCompileError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Generated publication pipeline is invalid: {exc}",
+                ) from exc
+        try:
+            if pipeline_name in existing:
+                await config_store.replace_pipeline(pipeline_name, pipeline)
+            else:
+                await config_store.create_pipeline(pipeline)
+        except PipelineValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except PipelineAlreadyExistsError:
+            await config_store.replace_pipeline(pipeline_name, pipeline)
+        created_or_updated.append(pipeline_name)
+
+    for pipeline in await config_store.list_pipelines():
+        graph = pipeline.graph if isinstance(pipeline.graph, dict) else {}
+        meta = graph.get("meta") if isinstance(graph, dict) else {}
+        streaming_meta = meta.get("streaming") if isinstance(meta, dict) else {}
+        if not isinstance(streaming_meta, dict):
+            continue
+        generated_by = str(streaming_meta.get("generated_by") or "").strip()
+        if generated_by not in {"stream_publication", "camera_live_view"}:
+            continue
+        publication_id = str(streaming_meta.get("publication_id") or "").strip()
+        if generated_by == "stream_publication" and publication_id in active_publication_ids:
+            continue
+        if pipeline.name in created_or_updated:
+            continue
+        try:
+            await config_store.delete_pipeline(pipeline.name)
+        except KeyError:
+            continue
+        deleted_any = True
+
+    for pipeline in await config_store.list_pipelines():
+        if pipeline.name in created_or_updated:
+            continue
+        graph = pipeline.graph if isinstance(pipeline.graph, dict) else {}
+        nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+        publish_target_ids: list[str] = []
+        has_publication_node = False
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if str(node.get("operator") or "").strip() != "stream.publish_video":
+                continue
+            cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
+            target_id = str(cfg.get("transmission_id") or "").strip()
+            if target_id:
+                publish_target_ids.append(target_id)
+            if bool(cfg.get("publication_enabled", False)):
+                has_publication_node = True
+        if not publish_target_ids:
+            continue
+        if has_publication_node:
+            continue
+        targets_were_pruned = all(target_id in pruned_transmission_ids for target_id in publish_target_ids)
+        targets_are_orphaned = all(target_id not in active_transmission_ids for target_id in publish_target_ids)
+        if not targets_were_pruned and not targets_are_orphaned:
+            continue
+        try:
+            await config_store.delete_pipeline(pipeline.name)
+        except KeyError:
+            continue
+        deleted_any = True
+
+    orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+    if (created_or_updated or deleted_any or active_publication_ids) and orchestrator is not None:
+        try:
+            orchestrator.trigger_reload()
+        except Exception:
+            pass
+    return created_or_updated
+
+
+async def _sync_pipeline_output_publication_nodes(
+    *,
+    request: Request,
+    publications: list[StreamPublicationSpec],
+) -> list[str]:
+    publication_by_pipeline_node = {
+        (str(publication.pipeline_name or "").strip(), str(publication.publish_node_id or "").strip()): publication
+        for publication in publications
+        if publication.owner_kind == "pipeline_output"
+        and publication.pipeline_name
+        and publication.publish_node_id
+    }
+    if not publication_by_pipeline_node:
+        return []
+
+    config_store = _config_store(request)
+    changed_pipelines: list[str] = []
+    for pipeline in await config_store.list_pipelines():
+        pipeline_name = str(getattr(pipeline, "name", "") or "").strip()
+        if not pipeline_name:
+            continue
+        graph = pipeline.graph if isinstance(pipeline.graph, dict) else {}
+        nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+        changed = False
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if str(node.get("operator") or "").strip() != "stream.publish_video":
+                continue
+            node_id = str(node.get("id") or "").strip()
+            publication = publication_by_pipeline_node.get((pipeline_name, node_id))
+            if publication is None:
+                continue
+            cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
+            expected_transmission_id = _publication_transmission_id(publication)
+            if str(cfg.get("transmission_id") or "").strip() == expected_transmission_id:
+                continue
+            next_cfg = {**cfg, "transmission_id": expected_transmission_id}
+            node["config"] = next_cfg
+            changed = True
+        if not changed:
+            continue
+        updated = pipeline.model_copy(update={"graph": graph})
+        try:
+            await config_store.replace_pipeline(pipeline_name, updated)
+        except PipelineValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        changed_pipelines.append(pipeline_name)
+
+    orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+    if changed_pipelines and orchestrator is not None:
+        try:
+            orchestrator.trigger_reload()
+        except Exception:
+            pass
+    return changed_pipelines
+
+
 async def _delete_camera_live_pipelines(
     *,
     request: Request,
@@ -3820,6 +4659,54 @@ async def _validate_camera_live_view_references(
                     detail=f"Output not found for live variant '{variant.id}': {variant.output_id}",
                 )
     return normalized
+
+
+async def _reconcile_streaming_publications(
+    *,
+    request: Request,
+    settings: StreamingExtensionSettings | None = None,
+) -> tuple[StreamingExtensionSettings, list[str]]:
+    config_store = _config_store(request)
+    loaded_settings = settings or await _load_settings(config_store)
+    app_settings = await config_store.get_settings()
+    pipelines = await config_store.list_pipelines()
+    publications = _reconcile_publication_specs(
+        settings=loaded_settings,
+        app_settings=app_settings,
+        current_server_id=_current_server_id(request),
+        pipelines=pipelines,
+    )
+    live_views, transmissions, warnings = _build_artifacts_from_publications(
+        publications=publications,
+        app_settings=app_settings,
+    )
+    reconciled, pruned_transmission_ids = _merge_generated_publication_artifacts(
+        settings=loaded_settings,
+        publications=publications,
+        live_views=live_views,
+        transmissions=transmissions,
+    )
+    saved = await _save_settings(config_store, reconciled)
+    try:
+        await _upsert_stream_publication_pipelines(
+            request=request,
+            publications=publications,
+            transmissions=saved.transmissions,
+            pruned_transmission_ids=pruned_transmission_ids,
+        )
+        await _sync_pipeline_output_publication_nodes(
+            request=request,
+            publications=publications,
+        )
+        await _apply_streaming_engine_state(request, settings=saved)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to apply streaming publication reconciliation: {exc}",
+        ) from exc
+    return saved, warnings
 
 
 def create_streaming_router() -> APIRouter:
@@ -3927,6 +4814,110 @@ def create_streaming_router() -> APIRouter:
             ) from exc
 
         return updated
+
+    @router.get("/publications", response_model=list[StreamPublicationSpec])
+    async def list_stream_publications(
+        request: Request,
+        camera_id: str | None = None,
+    ) -> list[StreamPublicationSpec]:
+        _require_auth(request, action="core:settings:read")
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        app_settings = await config_store.get_settings()
+        publications = _reconcile_publication_specs(
+            settings=settings,
+            app_settings=app_settings,
+            current_server_id=_current_server_id(request),
+        )
+        selected_camera_id = str(camera_id or "").strip()
+        if selected_camera_id:
+            publications = [
+                publication
+                for publication in publications
+                if str(publication.camera_id or "").strip() == selected_camera_id
+            ]
+        return publications
+
+    @router.put(
+        "/publications/camera-sources/{camera_id}/{source_id}",
+        response_model=StreamPublicationSpec,
+    )
+    async def update_camera_source_publication(
+        request: Request,
+        camera_id: str,
+        source_id: str,
+        body: dict[str, Any],
+    ) -> StreamPublicationSpec:
+        _require_auth(
+            request,
+            action="core:extension:settings:write",
+            resource_type="core:extension",
+            resource_selector=EXTENSION_ID,
+        )
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        app_settings = await config_store.get_settings()
+        resolved = _resolve_camera_source_from_settings(
+            app_settings,
+            camera_id=camera_id,
+            camera_source_id=source_id,
+        )
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="Camera source not found")
+
+        publications = _reconcile_publication_specs(
+            settings=settings,
+            app_settings=app_settings,
+            current_server_id=_current_server_id(request),
+        )
+        publication_id = _source_publication_id(camera_id=camera_id, source_id=source_id)
+        updated_publications: list[StreamPublicationSpec] = []
+        updated_publication: StreamPublicationSpec | None = None
+        allowed_keys = {
+            "enabled",
+            "label",
+            "role",
+            "host_server_id",
+            "quality_policy",
+            "transport_policy",
+        }
+        patch_payload = {key: value for key, value in (body or {}).items() if key in allowed_keys}
+        for publication in publications:
+            if publication.id != publication_id:
+                updated_publications.append(publication)
+                continue
+            payload = publication.model_dump(mode="python")
+            payload.update(patch_payload)
+            updated_publication = StreamPublicationSpec.model_validate(payload)
+            updated_publications.append(updated_publication)
+        if updated_publication is None:
+            raise HTTPException(status_code=404, detail="Stream publication not found")
+
+        candidate = StreamingExtensionSettings.model_validate(
+            {
+                **settings.model_dump(mode="python"),
+                "publications": updated_publications,
+            }
+        )
+        saved, _warnings = await _reconcile_streaming_publications(
+            request=request,
+            settings=candidate,
+        )
+        return next(
+            (publication for publication in saved.publications if publication.id == publication_id),
+            updated_publication,
+        )
+
+    @router.post("/reconcile", response_model=StreamingExtensionSettings)
+    async def reconcile_streaming_publications(request: Request) -> StreamingExtensionSettings:
+        _require_auth(
+            request,
+            action="core:extension:settings:write",
+            resource_type="core:extension",
+            resource_selector=EXTENSION_ID,
+        )
+        saved, _warnings = await _reconcile_streaming_publications(request=request)
+        return saved
 
     @router.get("/engine/status", response_model=StreamingEngineStatusResponse)
     async def engine_status(request: Request) -> StreamingEngineStatusResponse:
@@ -4256,9 +5247,7 @@ def create_streaming_router() -> APIRouter:
         config_store = _config_store(request)
         settings = await _load_settings(config_store)
         app_settings = await config_store.get_settings()
-        host_server_id = await _validate_host_server_id_for_request(
-            request, request_body.host_server_id
-        )
+        await _validate_host_server_id_for_request(request, request_body.host_server_id)
 
         target_camera_id = str(request_body.camera_id or "").strip()
         devices = [
@@ -4269,65 +5258,29 @@ def create_streaming_router() -> APIRouter:
         if target_camera_id and not devices:
             raise HTTPException(status_code=404, detail="Camera not found")
 
-        generated_views: list[CameraLiveView] = []
-        generated_transmissions: list[Transmission] = []
-        warnings: list[str] = []
-        for device in devices:
-            live_view, transmissions, live_warnings = _build_camera_live_view_for_device(
-                device=device,
-                host_server_id=host_server_id,
-                engine_enabled=bool(settings.engine.enabled),
+        if not request_body.replace_existing:
+            # The publication reconciler is deterministic and authoritative for generated
+            # camera streams. Keep the flag accepted for API compatibility, but avoid
+            # preserving obsolete context-owned generated artifacts.
+            pass
+
+        saved, warnings = await _reconcile_streaming_publications(request=request, settings=settings)
+        target_camera_ids = {str(device.get("id") or "").strip() for device in devices}
+        generated_views = [
+            live_view
+            for live_view in saved.camera_live_views
+            if not target_camera_ids or live_view.camera_id in target_camera_ids
+        ]
+        generated_transmissions = [
+            transmission
+            for transmission in saved.transmissions
+            if str((transmission.model_extra or {}).get("publication_id") or "").strip()
+            and (
+                not target_camera_ids
+                or str((transmission.model_extra or {}).get("camera_id") or "").strip()
+                in target_camera_ids
             )
-            warnings.extend(live_warnings)
-            if live_view is None:
-                continue
-            generated_views.append(live_view)
-            generated_transmissions.extend(transmissions)
-
-        generated_live_view_ids = {item.id for item in generated_views}
-        generated_camera_ids = {item.camera_id for item in generated_views}
-
-        next_live_views = list(settings.camera_live_views)
-        if request_body.replace_existing:
-            next_live_views = [
-                item
-                for item in next_live_views
-                if item.id not in generated_live_view_ids and item.camera_id not in generated_camera_ids
-            ]
-        next_live_views = [*generated_views, *next_live_views]
-
-        next_transmissions = list(settings.transmissions)
-        if request_body.replace_existing:
-            next_transmissions = [
-                item
-                for item in next_transmissions
-                if str(item.model_extra.get("camera_live_view_id") if item.model_extra else "") not in generated_live_view_ids
-            ]
-        transmission_by_id: dict[str, Transmission] = {item.id: item for item in next_transmissions}
-        for transmission in generated_transmissions:
-            transmission_by_id[transmission.id] = transmission
-        next_transmissions = list(transmission_by_id.values())
-
-        candidate = StreamingExtensionSettings.model_validate(
-            {
-                **settings.model_dump(mode="python"),
-                "camera_live_views": next_live_views,
-                "transmissions": next_transmissions,
-            }
-        )
-        saved = await _save_settings(config_store, candidate)
-        try:
-            await _upsert_camera_live_pipelines(
-                request=request,
-                transmissions=generated_transmissions,
-            )
-            await _apply_streaming_engine_state(request, settings=saved)
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500, detail=f"Failed to apply streaming settings: {exc}"
-            ) from exc
+        ]
         return CameraLiveViewGenerateResponse(
             camera_live_views=generated_views,
             transmissions=generated_transmissions,
@@ -4552,6 +5505,8 @@ def create_streaming_router() -> APIRouter:
                 urls=urls,
                 runtime_health=runtime_item_for_plan,
                 quality_profile_id=variant.quality_profile_id,
+                visual_context=context,
+                low_latency_requested=variant.preferred_transport == "webrtc" or context == "ptz",
             ),
             selected_output=selected_output,
             runtime_health=runtime_health_payload,
@@ -5453,6 +6408,8 @@ def create_streaming_router() -> APIRouter:
         client: StreamingPlaybackClientKind = "web",
         output_id: str | None = None,
         quality_profile_id: str | None = None,
+        context: StreamingCameraLiveContext | None = None,
+        low_latency: bool = False,
     ) -> StreamingPlaybackPlanResponse:
         _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)
@@ -5495,6 +6452,8 @@ def create_streaming_router() -> APIRouter:
             urls=urls,
             runtime_health=runtime_health,
             quality_profile_id=quality_profile_id,
+            visual_context=context,
+            low_latency_requested=low_latency,
         )
 
     @router.post(

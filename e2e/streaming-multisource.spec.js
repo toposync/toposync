@@ -57,7 +57,7 @@ test("multi-source camera settings feed ingest, stream controls, and the stream 
               view_id: "front",
               origin: { type: "rtsp", rtsp_url: "rtsp://10.0.0.10/high" },
               video: { width: 1920, height: 1080, fps: 20, codec: "H264" },
-              ingest: { mode: "centralized", host_server_id: "local", direct_override_until_unix: null },
+              ingest: { mode: "centralized", host_server_id: "local" },
             },
             {
               id: "sub",
@@ -69,7 +69,7 @@ test("multi-source camera settings feed ingest, stream controls, and the stream 
               view_id: "front",
               origin: { type: "rtsp", rtsp_url: "rtsp://10.0.0.10/low" },
               video: { width: 640, height: 360, fps: 10, codec: "H264" },
-              ingest: { mode: "direct", host_server_id: "local", direct_override_until_unix: null },
+              ingest: { mode: "direct", host_server_id: "local" },
             },
           ],
         },

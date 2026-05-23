@@ -67,6 +67,7 @@ import { PipelinesScreen } from "./screens/PipelinesScreen";
 import { ProcessingServersScreen } from "./screens/ProcessingServersScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 import { AccessScreen } from "./screens/AccessScreen";
+import { StreamTransportDebugScreen } from "./streams/StreamTransportDebugScreen";
 
 type ExtensionRecord = {
   id: string;
@@ -1091,7 +1092,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
 
   return (
     <div className="appShell">
-      {normalizedPathname.startsWith("/settings/pipelines") ? (
+      {normalizedPathname.startsWith("/streams/debug") ? (
+        <StreamTransportDebugScreen />
+      ) : normalizedPathname.startsWith("/settings/pipelines") ? (
         <PipelinesScreen
           onClose={closeSettingsChild}
           onOpenProcessingServers={openProcessingServersSettings}

@@ -126,6 +126,11 @@ export type Transmission = {
   created_at?: string;
   updated_at?: string;
   generated_by?: string;
+  publication_id?: string;
+  owner_kind?: StreamingPublicationOwnerKind;
+  camera_id?: string | null;
+  camera_source_id?: string | null;
+  role?: StreamingPublicationRole;
   camera_live_view_id?: string;
   camera_live_variant_role?: string;
 };
@@ -159,8 +164,26 @@ export type TransmissionUrlsResponse = {
 };
 
 export type CameraLiveContext = "thumbnail" | "pip" | "large" | "fullscreen" | "ptz";
-export type CameraLiveVariantRole = CameraLiveContext | "zoom" | "custom";
+export type StreamingPublicationOwnerKind = "camera_source" | "pipeline_output";
+export type StreamingPublicationRole = "main" | "sub" | "zoom" | "custom";
+export type CameraLiveVariantRole = CameraLiveContext | StreamingPublicationRole;
 export type CameraLiveTransportPreference = "auto" | "hls" | "webrtc";
+
+export type StreamPublication = {
+  id: string;
+  owner_kind: StreamingPublicationOwnerKind;
+  camera_id?: string | null;
+  camera_source_id?: string | null;
+  pipeline_name?: string | null;
+  publish_node_id?: string | null;
+  enabled?: boolean;
+  role: StreamingPublicationRole;
+  label: string;
+  live_view_id?: string | null;
+  host_server_id?: string;
+  quality_policy?: Record<string, unknown>;
+  transport_policy?: Record<string, unknown>;
+};
 
 export type CameraLiveViewDefaults = {
   thumbnail_variant_id: string;
@@ -311,7 +334,6 @@ export type StreamingRuntimeSourceHealth = {
   ingest_mode?: "centralized" | "runtime_local" | "direct";
   centralizer_server_id?: string | null;
   ingest_path?: string | null;
-  direct_override_active?: boolean;
   ingest_warnings?: string[];
   ingest_blocking_errors?: string[];
   status?: "healthy" | "starting" | "stale" | "unreachable" | "unauthorized" | "error" | "idle" | "unknown";
@@ -602,6 +624,7 @@ export type StreamingCameraIngestSettings = {
 export type StreamingExtensionSettings = {
   camera_live_views?: CameraLiveView[];
   transmissions?: Transmission[];
+  publications?: StreamPublication[];
   engine?: StreamingEngineSettings;
   camera_ingest?: StreamingCameraIngestSettings;
   stale_policy?: StreamingStalePolicySettings;
@@ -656,7 +679,6 @@ export type CameraIndexSource = {
   ingest?: {
     mode?: "centralized" | "runtime_local" | "direct";
     host_server_id?: string;
-    direct_override_until_unix?: number | null;
   };
 };
 

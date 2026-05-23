@@ -1,7 +1,7 @@
 
 # Dossiê técnico consolidado: qualidade, estabilidade e operação de streams no Toposync
 
-**Versão:** 2026-05-22
+**Versão:** 2026-05-23
 **Objetivo:** transformar o diagnóstico de instabilidade em um plano sólido de engenharia, apoiado em literatura, normas de streaming, evidência do código atual e prioridades práticas por camada: backend/server, frontend/web, app React Native/Expo e Home Assistant add-on.
 
 Este documento atualiza o dossiê técnico original sem perder seus detalhes. A primeira parte é a camada operacional nova: contratos de saúde, prioridades, critérios de aceite, métricas e runbooks. O dossiê original fica preservado no apêndice para manter a rastreabilidade.
@@ -197,6 +197,228 @@ O manifesto HA-native preserva a variante da live view: thumbnail/grid, fullscre
 2. Definir como o add-on expõe a URL interna ideal para o HA Core (`TOPOSYNC_HOME_ASSISTANT_RTSP_HOST` e porta RTSP interna/publicada).
 3. Adicionar testes de integração com Home Assistant Core quando a dependência de teste estiver disponível.
 4. Medir se HA Cloud remoto mantém HLS visualizável via entidade câmera durante restart de publisher/MediaMTX.
+
+---
+
+## 0.4. Atualização operacional: câmeras publicáveis, pipelines implícitos e UX sempre visualizável
+
+Em 2026-05-23, o fluxo de uso foi reposicionado: o usuário não deve criar `Transmission`, escolher output e depois ligar pipeline para uma câmera comum. A intenção primária agora é **publicar uma fonte de câmera**. A extensão de streaming reconcilia automaticamente `CameraLiveView`, `Transmission`, outputs e pipelines implícitos.
+
+Essa mudança reduz a superfície operacional exposta ao usuário e elimina a classe de erro mais comum observada nos testes: câmera existente, stream de origem saudável, mas nenhuma pipeline alimentando a transmissão.
+
+### Decisão de produto
+
+- A tela de câmeras é a fonte de verdade para streams normais de câmera.
+- Cada fonte de câmera tem `Transmitir esta fonte`, papel (`main`, `sub`, `zoom`, `custom`) e nome visível.
+- Fontes ONVIF de vídeo descobertas podem nascer publicadas por padrão.
+- `Transmissions` continuam existindo como contrato técnico, mas viram artefatos gerados e visão avançada/diagnóstico.
+- Pipelines implícitos de câmera são contínuos e gerados pelo reconciliador.
+- O operador manual `stream.publish_video` deixa de ser uma escolha de transmissão existente e passa a ser uma intenção de publicar uma variante de câmera ou grupo.
+
+### Modelo novo
+
+O modelo de intenção é `StreamPublicationSpec`.
+
+Campos centrais:
+
+| Campo | Papel |
+|---|---|
+| `id` | ID determinístico da publicação. |
+| `owner_kind` | `camera_source` ou `pipeline_output`. |
+| `enabled` | Liga/desliga a publicação e seus artefatos gerados. |
+| `camera_id` | Grupo/câmera de destino. |
+| `camera_source_id` | Fonte concreta da câmera quando aplicável. |
+| `pipeline_name` / `publish_node_id` | Origem manual quando a publicação vem de um operador de pipeline. |
+| `role` | `main`, `sub`, `zoom` ou `custom`. |
+| `label` | Nome visível para seletor/dashboard/HA. |
+| `host_server_id` | Host efetivo da publicação, resolvido a partir de ingest/processing. |
+| `quality_policy` | Perfil técnico gerado para outputs. |
+| `transport_policy` | Política de transporte inicial da publicação. |
+
+IDs determinísticos:
+
+```text
+camera:{camera_id}:{source_id}
+pipeline:{pipeline_name}:{node_id}
+```
+
+Artefatos gerados recebem metadata de rastreabilidade:
+
+```json
+{
+  "generated_by": "stream_publication",
+  "publication_id": "camera:frente:sub",
+  "owner_kind": "camera_source",
+  "camera_id": "frente",
+  "camera_source_id": "sub",
+  "role": "sub",
+  "camera_live_view_id": "camera:frente"
+}
+```
+
+### Reconciliação
+
+O reconciliador roda quando:
+
+- uma câmera ou fonte é salva;
+- uma descoberta ONVIF adiciona/atualiza fontes de vídeo;
+- uma publicação é alterada pela API;
+- uma pipeline é salva, habilitada, desabilitada ou removida;
+- um operador `stream.publish_video` declara publicação manual;
+- `POST /api/streams/reconcile` é chamado.
+
+Para `owner_kind="camera_source"`, o reconciliador:
+
+1. cria ou atualiza uma `CameraLiveView` por câmera;
+2. cria uma `Transmission` por fonte publicada;
+3. cria outputs HLS/WebRTC/RTSP compatíveis com o perfil da fonte;
+4. cria uma pipeline implícita contínua `camera.source -> stream.publish_video`;
+5. preserva ingest/centralizador via resolução da fonte de câmera, sem embutir regra específica de domínio no core;
+6. remove ou desativa artefatos gerados quando a publicação é desligada.
+
+Para `owner_kind="pipeline_output"`, o reconciliador:
+
+1. lê a intenção declarada no nó `stream.publish_video`;
+2. cria a publicação manual como variante de câmera/grupo;
+3. cria a `Transmission` técnica correspondente;
+4. grava o `transmission_id` gerado de volta no nó quando necessário;
+5. desativa a publicação se a pipeline dona for desativada.
+
+Regra importante: pipelines implícitos de câmera nunca devem colocar `stream.publish_video` atrás de motion gate, evento ou detecção event-only. Se houver pipeline manual com gate, ela deve ser classificada como variante manual/event-gated e diagnosticada como tal.
+
+### UX resultante
+
+Fluxo de câmera comum:
+
+1. Usuário adiciona câmera ONVIF ou RTSP.
+2. Fontes de vídeo aparecem com papel sugerido: principal, baixa resolução, zoom ou custom.
+3. `Transmitir esta fonte` vem ligado para fontes de vídeo publicáveis.
+4. Ao salvar, o reconciliador cria live view, transmissões, outputs e pipelines implícitos.
+5. O dashboard já exibe a câmera sem o usuário abrir `Streaming avançado` ou `Pipelines`.
+
+Fluxo de variante manual:
+
+1. Usuário monta uma pipeline customizada.
+2. No nó `stream.publish_video`, escolhe publicar como variante.
+3. Escolhe grupo/câmera de destino, papel, nome visível e perfil.
+4. Ao salvar, o reconciliador cria a transmissão gerada e a variante aparece no seletor do dashboard.
+
+`Streaming avançado` continua útil para:
+
+- diagnóstico de URLs, outputs e saúde runtime;
+- inspeção de artefatos gerados;
+- testes de protocolo;
+- integrações externas;
+- casos manuais raros.
+
+Na UI normal, artefatos gerados por publicação são read-only e apontam para a fonte dona: câmera/fonte ou operador de pipeline.
+
+### Seleção de fonte por contexto visual
+
+O seletor primário do dashboard passa a escolher papel/fonte, não perfil técnico como "Auto" ou "Stable".
+
+| Contexto | Fonte preferida |
+|---|---|
+| Grid, thumbnail, dashboard passivo | `sub`, depois `main`. |
+| Fullscreen/large | `main`, depois `sub`. |
+| PTZ/zoom | `zoom`, depois `main`, depois `sub`. |
+| Diagnóstico ou rede ruim | menor fonte publicável, normalmente `sub` ou `custom` low. |
+| Home Assistant entity | variante primária do grupo, preferindo `sub/stable` quando existir. |
+
+Qualidade e transporte continuam existindo, mas ficam abaixo dessa camada. O primeiro erro de UX era tentar resolver qualidade/transporte antes de escolher a fonte correta da câmera.
+
+### Política de transporte por contexto
+
+Esta política substitui a ideia anterior de "WebRTC sempre primeiro no navegador".
+
+| Cliente/contexto | Ordem padrão | Observações |
+|---|---|---|
+| `web`, grid/passivo LAN | `MSE -> HLS -> JSMpeg` | WebRTC não deve abrir para todos os tiles por padrão. |
+| `web`, fullscreen sem interação | `MSE -> HLS -> JSMpeg` | Fullscreen troca para fonte `main`; se HEVC/H.265, transcodificar para H.264. |
+| `web`, PTZ/baixa latência/two-way | `WebRTC -> MSE -> HLS -> JSMpeg` | WebRTC só vira erro principal quando foi solicitado explicitamente ou não há HLS saudável. |
+| `ha_ingress` | `HLS signed proxy -> MSE proxied -> JSMpeg` | WebRTC direto bloqueado por padrão. |
+| `ha_entity` / HA Cloud | contrato nativo HA | Toposync exporta `stream_source()` RTSP interno e still; HA decide o player. |
+| `app` / PiP | `HLS -> MSE se aplicável -> JSMpeg` | WebRTC apenas em modo explícito de baixa latência. |
+| remoto desconhecido/rede ruim | HLS baixo, depois JSMpeg | Se falhar, mostrar still recente ou placeholder com motivo claro. |
+| `RTSP` | não é transporte web | Mantido para HA Core, VLC, Frigate/dev, go2rtc e diagnóstico. |
+
+Estado atual:
+
+- HLS, WebRTC e RTSP existem no runtime real via MediaMTX.
+- MSE está modelado no `Playback Plan`, mas depende de sidecar `go2rtc` real e proxy assinado.
+- JSMpeg está modelado como fallback, mas depende de worker/encoder sob demanda real.
+
+### Regras de saúde e diagnóstico
+
+`Live` só é verdadeiro quando estes relógios avançam:
+
+- frame selecionado recente;
+- writer selecionado/ativo;
+- fonte de câmera recente;
+- publisher/output saudável;
+- playlist HLS avançando quando o transporte ativo é HLS.
+
+Regras de mensagem principal:
+
+| Condição | Mensagem principal |
+|---|---|
+| `fallback_reason=no_frame` e sem writer | `Nenhuma pipeline está alimentando esta transmissão.` |
+| writer presente, mas publisher/output parado | `Pipeline tem frame, mas publisher HLS/WebRTC não está rodando.` |
+| fonte/pipeline velha | Mostrar idade do frame, writer esperado e output selecionado. |
+| HLS saudável e WebRTC indisponível | Warning técnico secundário, não causa principal. |
+| placeholder/still | Estado visual válido, mas nunca `Live`. |
+
+O objetivo é que o usuário nunca veja freeze silencioso marcado como live.
+
+### APIs relevantes
+
+Publicações:
+
+- `GET /api/streams/publications?camera_id=...`
+- `PUT /api/streams/publications/camera-sources/{camera_id}/{source_id}`
+- `POST /api/streams/reconcile`
+
+Playback:
+
+- `GET /api/streams/transmissions/{id}/playback-plan?client=web|app|ha_ingress|ha_entity&context=thumbnail|pip|large|fullscreen|ptz&low_latency=true|false`
+
+Na UI, grid/dashboard passivo mapeia para `thumbnail` ou `large` conforme o layout; diagnóstico escolhe a menor variante publicável antes de chamar o plano.
+
+Home Assistant:
+
+- `GET /api/streams/home-assistant/cameras`
+- `GET /api/streams/transmissions/{id}/still.jpg?output_id=&quality_profile_id=`
+- `POST /api/streams/transmissions/{id}/webrtc/offer` quando WebRTC nativo HA estiver habilitado.
+
+### Regressões cobertas nesta fatia
+
+- Publicação de fonte de câmera gera uma transmissão por fonte, não por contexto visual.
+- Desmarcar `Transmitir esta fonte` remove/desativa transmissão e pipeline geradas.
+- Reconciliador respeita ingest/centralizador e host efetivo.
+- Dashboard mostra papéis de câmera no seletor.
+- Grid usa `sub`; fullscreen usa `main`; PTZ pode escolher `zoom`.
+- `ha_ingress` continua HLS-first e não promove warning WebRTC quando HLS está saudável.
+- Manifesto HA exporta grupos/câmeras e variantes sem URL direta da câmera ou credenciais brutas.
+- Pipeline manual com `stream.publish_video` cria publicação de variante.
+- Pipeline desativada desativa publicação gerada.
+
+### Validação desta fatia
+
+- `uv run pytest tests/test_streaming_camera_live_views.py tests/test_streaming_camera_ingest.py tests/test_streaming_webrtc.py tests/test_streaming_chaos.py tests/test_streaming_hardening_stage10.py tests/test_pipelines_api.py -q`: 69 testes.
+- `npm run build:frontend`: OK, com warning conhecido de tamanho de bundle.
+- `npm --workspace @toposync/extension-streaming-ui run build`: OK.
+- `npm --workspace @toposync/extension-cameras-ui run build`: OK, com warning conhecido de tamanho de bundle.
+- `python -m py_compile` nos módulos alterados de streaming/câmeras: OK.
+- `git diff --check`: OK.
+- Validação visual no browser local: dashboard, câmeras e streaming settings carregam sem erros de console.
+
+### Pendências explícitas
+
+1. Implementar sidecar `go2rtc` opcional para MSE real, consumindo RTSP interno do MediaMTX.
+2. Implementar JSMpeg real sob demanda, baixa resolução/FPS, sem áudio, encerrado por heartbeat.
+3. Expandir `scripts/check_stream_transport_frames.mjs` para MSE/JSMpeg reais quando existirem.
+4. Validar Home Assistant Cloud com entidade câmera em ambiente real antes de habilitar WebRTC HA nativo por padrão.
+5. Criar testes de browser cobrindo troca automática de fonte entre grid, fullscreen e PTZ.
 
 ---
 

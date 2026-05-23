@@ -38,6 +38,7 @@ import { STREAMING_EXTENSION_ID } from "../constants";
 import type {
   CameraIndexItem,
   CameraLiveContext,
+  CameraLiveVariantRole,
   CameraLiveVariant,
   CameraLiveView,
   EngineStatusResponse,
@@ -67,6 +68,9 @@ import { SubModal } from "./SubModal";
 import { WizardCreatePipelineFromTransmission } from "./WizardCreatePipelineFromTransmission";
 
 type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: string) => string;
+type BrowserDebugTransport = "hls" | "webrtc" | "mse" | "jsmpeg";
+
+const BROWSER_DEBUG_TRANSPORTS: BrowserDebugTransport[] = ["hls", "webrtc", "mse", "jsmpeg"];
 
 function toSafeInt(value: string, fallback: number): number {
   const parsed = Number.parseInt(String(value || "").trim(), 10);
@@ -89,6 +93,22 @@ function slugifyPath(value: string): string {
     .map((ch) => (/[a-z0-9_-]/.test(ch) ? ch : "-"))
     .join("");
   return filtered.replace(/-+/g, "-").replace(/^[-_]+|[-_]+$/g, "");
+}
+
+function streamingTransportDebugHref(options: {
+  transmissionId: string;
+  transport: BrowserDebugTransport;
+  outputId?: string | null;
+  qualityProfileId?: string | null;
+}): string {
+  const params = new URLSearchParams();
+  params.set("transmission_id", options.transmissionId);
+  params.set("transport", options.transport);
+  const outputId = String(options.outputId || "").trim();
+  const qualityProfileId = String(options.qualityProfileId || "").trim();
+  if (outputId) params.set("output_id", outputId);
+  if (qualityProfileId) params.set("quality_profile_id", qualityProfileId);
+  return `/streams/debug?${params.toString()}`;
 }
 
 function defaultCameraSourceId(camera: CameraIndexItem | null | undefined): string {
@@ -128,12 +148,14 @@ function cameraSourceLabel(cameras: CameraIndexItem[], cameraId: string, sourceI
   return width && height ? `${name} · ${width}x${height}` : name;
 }
 
-function liveContextLabel(context: CameraLiveContext | "zoom" | "custom", t: TranslateFn): string {
+function liveContextLabel(context: CameraLiveVariantRole, t: TranslateFn): string {
   if (context === "thumbnail") return t("ext.streaming.live.context.thumbnail", {}, "Miniatura");
   if (context === "pip") return t("ext.streaming.live.context.pip", {}, "PiP");
   if (context === "large") return t("ext.streaming.live.context.large", {}, "Tela grande");
   if (context === "fullscreen") return t("ext.streaming.live.context.fullscreen", {}, "Tela cheia");
   if (context === "ptz") return t("ext.streaming.live.context.ptz", {}, "PTZ");
+  if (context === "main") return t("ext.streaming.live.context.main", {}, "Principal");
+  if (context === "sub") return t("ext.streaming.live.context.sub", {}, "Baixa resolução");
   if (context === "zoom") return t("ext.streaming.live.context.zoom", {}, "Zoom");
   return t("ext.streaming.live.context.custom", {}, "Personalizada");
 }
@@ -152,15 +174,38 @@ function transportUiLabel(value: string | null | undefined, t: TranslateFn): str
   return t("ext.streaming.live.transport.auto", {}, "Automático");
 }
 
+function isGeneratedTransmission(transmission: Transmission | null | undefined): boolean {
+  if (!transmission) return false;
+  const generatedBy = String(transmission.generated_by || "").trim();
+  return (
+    generatedBy === "stream_publication" ||
+    generatedBy === "camera_live_view" ||
+    Boolean(String(transmission.publication_id || "").trim())
+  );
+}
+
+function generatedTransmissionLabel(transmission: Transmission, t: TranslateFn): string {
+  if (transmission.owner_kind === "pipeline_output") {
+    return t("ext.streaming.transmissions.generated_by_pipeline", {}, "Gerada por operador de pipeline");
+  }
+  if (transmission.generated_by === "stream_publication" || transmission.publication_id) {
+    return t("ext.streaming.transmissions.generated_by_publication", {}, "Gerada por fonte de câmera publicável");
+  }
+  if (transmission.generated_by === "camera_live_view") {
+    return t("ext.streaming.transmissions.generated_by_live", {}, "Gerada por visualização da câmera");
+  }
+  return "";
+}
+
 function liveVariantConsequence(variant: CameraLiveVariant, cameras: CameraIndexItem[], cameraId: string, t: TranslateFn): string {
   const sourceLabel = cameraSourceLabel(cameras, cameraId, variant.camera_source_id);
   if (variant.preferred_transport === "webrtc") {
     return t("ext.streaming.live.consequence.low_latency", { source: sourceLabel }, `Usa ${sourceLabel} com menor latência quando disponível.`);
   }
-  if (variant.quality_profile_id === "quad_grid" || variant.role === "thumbnail") {
+  if (variant.quality_profile_id === "quad_grid" || variant.role === "thumbnail" || variant.role === "sub") {
     return t("ext.streaming.live.consequence.light", { source: sourceLabel }, `Usa ${sourceLabel} para economizar rede e CPU.`);
   }
-  if (variant.quality_profile_id === "fullscreen_quality") {
+  if (variant.quality_profile_id === "fullscreen_quality" || variant.role === "main") {
     return t("ext.streaming.live.consequence.high", { source: sourceLabel }, `Usa ${sourceLabel} para melhor imagem em tela grande.`);
   }
   return t("ext.streaming.live.consequence.stable", { source: sourceLabel }, `Usa ${sourceLabel} com reprodução estável.`);
@@ -443,7 +488,7 @@ export function createStreamingSettingsPanel(): SettingsPanel {
   return {
     id: STREAMING_EXTENSION_ID,
     icon: "tower-broadcast",
-    name: { key: "ext.streaming.settings.name", fallback: "Transmissões" },
+    name: { key: "ext.streaming.settings.name", fallback: "Streaming avançado" },
     description: { key: "ext.streaming.settings.desc" },
     render: ({ i18n, settings }) => <StreamingSettingsPanelContent i18n={i18n} settings={settings} />,
   };
@@ -1547,28 +1592,29 @@ function StreamingSettingsPanelContent({
     enginePendingAction === "refresh"
       ? t("ext.streaming.engine.refreshing", {}, "Atualizando…")
       : t("ext.streaming.engine.refresh", {}, "Atualizar");
+  const activeTransmissionGenerated = isGeneratedTransmission(transmissionDraft);
 
   return (
     <div className="streamingSettingsPanel">
       <div className="card">
         <div className="cardBody">
           <div className="modalSectionTitle" style={{ marginBottom: 6 }}>
-            {t("ext.streaming.settings.title", {}, "Transmissões")}
+            {t("ext.streaming.settings.title", {}, "Streaming avançado")}
           </div>
           <div className="cardMeta">
             {t(
               "ext.streaming.settings.subtitle",
               {},
-              "Crie transmissões, configure saídas (HLS/RTSP/WebRTC) e gere URLs a partir do MediaMTX.",
+              "Transmissões, outputs e pipelines gerados aparecem aqui para diagnóstico. Para câmeras comuns, publique fontes pela configuração da câmera.",
             )}
           </div>
 
           <div className="streamingQuickSteps">
             <div className="streamingQuickStepsTitle">{t("ext.streaming.settings.quickstart", {}, "Fluxo Recomendado")}</div>
             <ol className="streamingQuickStepsList">
-              <li>{t("ext.streaming.settings.quickstart_step_1", {}, "Crie uma transmissão com ao menos uma saída.")}</li>
-              <li>{t("ext.streaming.settings.quickstart_step_2", {}, "Ajuste resolução/FPS/autenticação por saída.")}</li>
-              <li>{t("ext.streaming.settings.quickstart_step_3", {}, "Salve, carregue URLs e use o wizard para gerar o fluxo.")}</li>
+              <li>{t("ext.streaming.settings.quickstart_step_1", {}, "Ative Transmitir nas fontes de câmera que devem aparecer no dashboard.")}</li>
+              <li>{t("ext.streaming.settings.quickstart_step_2", {}, "Use o papel da fonte para escolher Principal, Baixa resolução, Zoom ou Personalizada.")}</li>
+              <li>{t("ext.streaming.settings.quickstart_step_3", {}, "Use esta área apenas para diagnóstico ou transmissões manuais avançadas.")}</li>
             </ol>
           </div>
         </div>
@@ -1587,7 +1633,7 @@ function StreamingSettingsPanelContent({
                 {t(
                   "ext.streaming.live.subtitle",
                   {},
-                  "Escolha qual fonte cada câmera usa em miniatura, PiP, tela grande e tela cheia.",
+                  "As variantes são geradas a partir das fontes publicáveis de câmera e dos operadores de pipeline que publicam vídeo.",
                 )}
               </div>
             </div>
@@ -1630,9 +1676,9 @@ function StreamingSettingsPanelContent({
                   {cameraLiveViews.map((liveView) => {
                     const camera = cameraById(availableCameras, liveView.camera_id);
                     const sourceSummary = liveView.variants
-                      .filter((variant) => ["thumbnail", "large", "fullscreen", "pip"].includes(String(variant.role)))
+                      .filter((variant) => variant.enabled !== false)
                       .slice(0, 4)
-                      .map((variant) => `${liveContextLabel(variant.role as CameraLiveContext, t)}: ${cameraSourceLabel(availableCameras, liveView.camera_id, variant.camera_source_id)}`)
+                      .map((variant) => `${liveContextLabel(variant.role, t)}: ${cameraSourceLabel(availableCameras, liveView.camera_id, variant.camera_source_id)}`)
                       .join(" · ");
                     return (
                       <button
@@ -1699,7 +1745,7 @@ function StreamingSettingsPanelContent({
                           <div key={variant.id} className="settingsInlinePanel">
                             <div className="settingsDetailHeader" style={{ marginBottom: 8 }}>
                               <div>
-                                <div className="cardTitle">{liveContextLabel(variant.role as CameraLiveContext, t)}</div>
+                                <div className="cardTitle">{liveContextLabel(variant.role, t)}</div>
                                 <div className="cardMeta">{liveVariantConsequence(variant, availableCameras, cameraLiveDraft.camera_id, t)}</div>
                               </div>
                               <label className="settingsToggle">
@@ -3033,12 +3079,12 @@ function StreamingSettingsPanelContent({
             <div className="card" style={{ marginTop: 10 }}>
               <div className="cardBody">
                 <div>
-                  {t("ext.streaming.transmissions.empty", {}, "Nenhuma transmissão criada.")}
+                  {t("ext.streaming.transmissions.empty", {}, "Nenhuma transmissão avançada ou publicação ativa.")}
                 </div>
                 <ol className="streamingQuickStepsList streamingQuickStepsListCompact">
-                  <li>{t("ext.streaming.settings.quickstart_step_1", {}, "Crie uma transmissão com ao menos uma saída.")}</li>
-                  <li>{t("ext.streaming.settings.quickstart_step_2", {}, "Ajuste resolução/FPS/autenticação por saída.")}</li>
-                  <li>{t("ext.streaming.settings.quickstart_step_3", {}, "Salve, carregue URLs e use o wizard para gerar o fluxo.")}</li>
+                  <li>{t("ext.streaming.settings.quickstart_step_1", {}, "Ative Transmitir nas fontes de câmera que devem aparecer no dashboard.")}</li>
+                  <li>{t("ext.streaming.settings.quickstart_step_2", {}, "Use o papel da fonte para escolher Principal, Baixa resolução, Zoom ou Personalizada.")}</li>
+                  <li>{t("ext.streaming.settings.quickstart_step_3", {}, "Use esta área apenas para diagnóstico ou transmissões manuais avançadas.")}</li>
                 </ol>
                 <button
                   className="primaryButton"
@@ -3059,10 +3105,7 @@ function StreamingSettingsPanelContent({
                 const name = String(item.name || "").trim() || String(item.path || "").trim() || item.id;
                 const hostServerId = normalizeServerId(item.host_server_id);
                 const outputCount = Array.isArray(item.outputs) ? item.outputs.length : 0;
-                const generatedLabel =
-                  item.generated_by === "camera_live_view"
-                    ? t("ext.streaming.transmissions.generated_by_live", {}, "Gerada por visualização da câmera")
-                    : "";
+                const generatedLabel = generatedTransmissionLabel(item, t);
                 const meta = t(
                   "ext.streaming.transmissions.meta_line",
                   { host: hostServerId, path: item.path || "-", outputs: outputCount },
@@ -3106,10 +3149,10 @@ function StreamingSettingsPanelContent({
             <div className="card">
               <div className="cardBody">
                 <div>
-                  {t("ext.streaming.transmissions.select", {}, "Selecione uma transmissão para editar.")}
+                  {t("ext.streaming.transmissions.select", {}, "Selecione um artefato de streaming para inspecionar.")}
                 </div>
                 <div className="cardMeta">
-                  {t("ext.streaming.transmissions.select_hint", {}, "Dica: comece criando uma transmissão e depois abra o wizard para gerar o fluxo.")}
+                  {t("ext.streaming.transmissions.select_hint", {}, "Para câmeras comuns, gerencie publicação na própria fonte de câmera.")}
                 </div>
                 <button
                   className="primaryButton"
@@ -3131,6 +3174,12 @@ function StreamingSettingsPanelContent({
                     {transmissionDraft.name?.trim() || transmissionDraft.path?.trim() || transmissionDraft.id}
                   </div>
                   <div className="cardMeta">ID: {transmissionDraft.id}</div>
+                  {activeTransmissionGenerated ? (
+                    <div className="cardMeta" style={{ marginTop: 4 }}>
+                      {generatedTransmissionLabel(transmissionDraft, t)} ·{" "}
+                      {t("ext.streaming.transmissions.generated_readonly", {}, "somente leitura aqui; edite pela fonte ou operador dono.")}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="rowWrap" style={{ gap: 10, justifyContent: "flex-end" }}>
@@ -3148,12 +3197,12 @@ function StreamingSettingsPanelContent({
                   <button
                     className="primaryButton"
                     type="button"
-                    disabled={!transmissionDraftDirty || transmissionDraftBusy}
+                    disabled={activeTransmissionGenerated || !transmissionDraftDirty || transmissionDraftBusy}
                     onClick={() => void saveDraftChanges()}
                   >
                     {transmissionDraftBusy ? t("ext.streaming.transmissions.saving", {}, "Salvando…") : t("ext.streaming.transmissions.save", {}, "Salvar")}
                   </button>
-                  <button className="chipButton" type="button" disabled={transmissionDraftBusy} onClick={() => setConfirmDeleteOpen(true)}>
+                  <button className="chipButton" type="button" disabled={activeTransmissionGenerated || transmissionDraftBusy} onClick={() => setConfirmDeleteOpen(true)}>
                     {t("ext.streaming.transmissions.delete", {}, "Excluir")}
                   </button>
                 </div>
@@ -3174,6 +3223,7 @@ function StreamingSettingsPanelContent({
                       <label className="label">{t("ext.streaming.transmissions.name", {}, "Nome")}</label>
                       <input
                         className="input"
+                        disabled={activeTransmissionGenerated}
                         value={transmissionDraft.name ?? ""}
                         onChange={(event) => updateDraft({ name: event.target.value })}
                       />
@@ -3182,6 +3232,7 @@ function StreamingSettingsPanelContent({
                       <label className="label">{t("ext.streaming.transmissions.path", {}, "Path/slug")}</label>
                       <input
                         className="input"
+                        disabled={activeTransmissionGenerated}
                         value={transmissionDraft.path ?? ""}
                         onChange={(event) => updateDraft({ path: event.target.value })}
                       />
@@ -3195,6 +3246,7 @@ function StreamingSettingsPanelContent({
                     <label className="rowWrap" style={{ gap: 8 }}>
                       <input
                         type="checkbox"
+                        disabled={activeTransmissionGenerated}
                         checked={Boolean(transmissionDraft.enabled)}
                         onChange={(event) => updateDraft({ enabled: event.target.checked })}
                       />
@@ -3208,6 +3260,7 @@ function StreamingSettingsPanelContent({
                       <label className="label">{t("ext.streaming.transmissions.host_server", {}, "Host server")}</label>
                       <select
                         className="input"
+                        disabled={activeTransmissionGenerated}
                         value={normalizeServerId(transmissionDraft.host_server_id)}
                         onChange={(event) => updateDraft({ host_server_id: normalizeServerId(event.target.value) })}
                       >
@@ -3241,6 +3294,7 @@ function StreamingSettingsPanelContent({
                       <label className="label">{t("ext.streaming.transmissions.placeholder", {}, "Placeholder")}</label>
                       <select
                         className="input"
+                        disabled={activeTransmissionGenerated}
                         value={transmissionDraft.placeholder ?? "gray"}
                         onChange={(event) => updateDraft({ placeholder: event.target.value as "gray" | "black" })}
                       >
@@ -3253,6 +3307,7 @@ function StreamingSettingsPanelContent({
                       <label className="label">{t("ext.streaming.transmissions.arbitration", {}, "Arbitragem")}</label>
                       <select
                         className="input"
+                        disabled={activeTransmissionGenerated}
                         value={transmissionDraft.arbitration ?? "priority_latest"}
                         onChange={(event) =>
                           updateDraft({ arbitration: event.target.value as "latest" | "priority_latest" })
@@ -3276,12 +3331,13 @@ function StreamingSettingsPanelContent({
                     <div className="rowWrap" style={{ gap: 10, alignItems: "center" }}>
                       <label className="rowWrap" style={{ gap: 8 }}>
                         <input
-                          type="checkbox"
-                          checked={Boolean(transmissionDraft.camera_controls?.enabled)}
-                          disabled={
-                            !Boolean(transmissionDraft.camera_controls?.enabled) &&
-                            (availableCamerasLoading || availableCameras.length === 0)
-                          }
+                        type="checkbox"
+                        checked={Boolean(transmissionDraft.camera_controls?.enabled)}
+                        disabled={
+                          activeTransmissionGenerated ||
+                          (!Boolean(transmissionDraft.camera_controls?.enabled) &&
+                            (availableCamerasLoading || availableCameras.length === 0))
+                        }
                           onChange={(event) => {
                             const enabled = event.target.checked;
                             if (!enabled) {
@@ -3341,7 +3397,7 @@ function StreamingSettingsPanelContent({
                               camera_controls: { enabled: true, camera_id: cid, camera_source_id: defaultCameraSourceId(camera) || null },
                             });
                           }}
-                          disabled={availableCameras.length === 0}
+                          disabled={activeTransmissionGenerated || availableCameras.length === 0}
                         >
                           {availableCameras.map((camera) => {
                             const cid = String(camera.id || "").trim();
@@ -3382,6 +3438,7 @@ function StreamingSettingsPanelContent({
                               <label className="label">{t("ext.streaming.transmissions.camera_controls.source", {}, "Fonte da câmera")}</label>
                               <select
                                 className="input"
+                                disabled={activeTransmissionGenerated}
                                 value={String(transmissionDraft.camera_controls?.camera_source_id || defaultCameraSourceId(camera) || "").trim()}
                                 onChange={(event) =>
                                   updateDraft({
@@ -3435,7 +3492,7 @@ function StreamingSettingsPanelContent({
 	                      <button
 	                        className="chipButton"
 	                        type="button"
-	                        disabled={applyQualityProfilesBusy || transmissionDraftDirty}
+	                        disabled={activeTransmissionGenerated || applyQualityProfilesBusy || transmissionDraftDirty}
 	                        onClick={() => void applyQualityProfilesToDraft()}
 	                        title={
 	                          transmissionDraftDirty
@@ -3450,7 +3507,7 @@ function StreamingSettingsPanelContent({
                       <button
                         className="chipButton"
                         type="button"
-                        disabled={applyWebRtcCompanionBusy || transmissionDraftDirty}
+                        disabled={activeTransmissionGenerated || applyWebRtcCompanionBusy || transmissionDraftDirty}
                         onClick={() => void applyWebRtcCompanionToDraft()}
                         title={
                           transmissionDraftDirty
@@ -3462,13 +3519,13 @@ function StreamingSettingsPanelContent({
                           ? t("ext.streaming.webrtc.applying", {}, "Applying WebRTC...")
                           : t("ext.streaming.webrtc.apply", {}, "Apply WebRTC low-latency output")}
                       </button>
-	                      <button className="chipButton" type="button" onClick={() => addDraftOutput("hls")}>
+	                      <button className="chipButton" type="button" disabled={activeTransmissionGenerated} onClick={() => addDraftOutput("hls")}>
 	                        {t("ext.streaming.outputs.add_hls", {}, "+ HLS")}
 	                      </button>
-                      <button className="chipButton" type="button" onClick={() => addDraftOutput("rtsp")}>
+                      <button className="chipButton" type="button" disabled={activeTransmissionGenerated} onClick={() => addDraftOutput("rtsp")}>
                         {t("ext.streaming.outputs.add_rtsp", {}, "+ RTSP")}
                       </button>
-                      <button className="chipButton" type="button" onClick={() => addDraftOutput("webrtc")}>
+                      <button className="chipButton" type="button" disabled={activeTransmissionGenerated} onClick={() => addDraftOutput("webrtc")}>
                         {t("ext.streaming.outputs.add_webrtc", {}, "+ WebRTC")}
                       </button>
                     </div>
@@ -3508,12 +3565,13 @@ function StreamingSettingsPanelContent({
                                   <label className="rowWrap" style={{ gap: 8 }}>
                                     <input
                                       type="checkbox"
+                                      disabled={activeTransmissionGenerated}
                                       checked={Boolean(output.enabled)}
                                       onChange={(event) => updateDraftOutput(output.id, { enabled: event.target.checked })}
                                     />
                                     <span className="cardMeta">{t("ext.streaming.outputs.enabled", {}, "Ativa")}</span>
                                   </label>
-                                  <button className="chipButton" type="button" onClick={() => removeDraftOutput(output.id)}>
+                                  <button className="chipButton" type="button" disabled={activeTransmissionGenerated} onClick={() => removeDraftOutput(output.id)}>
                                     {t("ext.streaming.outputs.remove", {}, "Remover")}
                                   </button>
                                 </div>
@@ -3524,6 +3582,7 @@ function StreamingSettingsPanelContent({
 	                                  <label className="label">{t("ext.streaming.outputs.protocol", {}, "Protocolo")}</label>
 	                                  <select
                                     className="input"
+                                    disabled={activeTransmissionGenerated}
                                     value={output.protocol}
                                     onChange={(event) =>
                                       updateDraftOutput(output.id, { protocol: event.target.value as "hls" | "rtsp" | "webrtc" })
@@ -3540,6 +3599,7 @@ function StreamingSettingsPanelContent({
 	                                    <label className="label">{t("ext.streaming.outputs.quality_profile", {}, "Quality profile")}</label>
 	                                    <select
 	                                      className="input"
+	                                      disabled={activeTransmissionGenerated}
 	                                      value={output.quality_profile_id ?? ""}
 	                                      onChange={(event) => {
 	                                        const profileId = event.target.value as StreamingQualityProfileId | "";
@@ -3574,6 +3634,7 @@ function StreamingSettingsPanelContent({
 	                                  <label className="label">{t("ext.streaming.outputs.width", {}, "Largura")}</label>
                                   <input
                                     className="input"
+                                    disabled={activeTransmissionGenerated}
                                     value={String(resolution.width ?? "")}
                                     onChange={(event) => {
                                       const width = toOptionalInt(event.target.value);
@@ -3597,6 +3658,7 @@ function StreamingSettingsPanelContent({
                                   <label className="label">{t("ext.streaming.outputs.height", {}, "Altura")}</label>
                                   <input
                                     className="input"
+                                    disabled={activeTransmissionGenerated}
                                     value={String(resolution.height ?? "")}
                                     onChange={(event) => {
                                       const height = toOptionalInt(event.target.value);
@@ -3620,6 +3682,7 @@ function StreamingSettingsPanelContent({
                                   <label className="label">{t("ext.streaming.outputs.fps", {}, "FPS")}</label>
                                   <input
                                     className="input"
+                                    disabled={activeTransmissionGenerated}
                                     value={output.fps_limit === null || output.fps_limit === undefined ? "" : String(output.fps_limit)}
                                     onChange={(event) => updateDraftOutput(output.id, { fps_limit: toOptionalInt(event.target.value) })}
                                   />
@@ -3628,6 +3691,7 @@ function StreamingSettingsPanelContent({
                                   <label className="label">{t("ext.streaming.outputs.bitrate", {}, "Bitrate (kbps)")}</label>
                                   <input
                                     className="input"
+                                    disabled={activeTransmissionGenerated}
                                     value={output.bitrate_kbps === null || output.bitrate_kbps === undefined ? "" : String(output.bitrate_kbps)}
                                     onChange={(event) => updateDraftOutput(output.id, { bitrate_kbps: toOptionalInt(event.target.value) })}
                                   />
@@ -3636,6 +3700,7 @@ function StreamingSettingsPanelContent({
                                   <label className="label">{t("ext.streaming.outputs.latency", {}, "Latência")}</label>
                                   <select
                                     className="input"
+                                    disabled={activeTransmissionGenerated}
                                     value={output.latency_profile ?? "normal"}
                                     onChange={(event) =>
                                       updateDraftOutput(output.id, { latency_profile: event.target.value as "normal" | "low" | "ultra_low" })
@@ -3654,6 +3719,7 @@ function StreamingSettingsPanelContent({
                                   <label className="label">{t("ext.streaming.outputs.encoder", {}, "Encoder")}</label>
                                   <select
                                     className="input"
+                                    disabled={activeTransmissionGenerated}
                                     value={output.encoder_mode ?? "inherit"}
                                     onChange={(event) =>
                                       updateDraftOutput(output.id, {
@@ -3678,6 +3744,7 @@ function StreamingSettingsPanelContent({
                                 <label className="rowWrap" style={{ gap: 8 }}>
                                   <input
                                     type="checkbox"
+                                    disabled={activeTransmissionGenerated}
                                     checked={Boolean(auth.enabled)}
                                     onChange={(event) => {
                                       const enabled = event.target.checked;
@@ -3696,6 +3763,7 @@ function StreamingSettingsPanelContent({
                                     <label className="label">{t("ext.streaming.outputs.username", {}, "Usuário")}</label>
                                     <input
                                       className="input"
+                                      disabled={activeTransmissionGenerated}
                                       value={String(auth.username ?? "")}
                                       onChange={(event) =>
                                         updateDraftOutput(output.id, {
@@ -3709,6 +3777,7 @@ function StreamingSettingsPanelContent({
                                     <input
                                       className="input"
                                       type="password"
+                                      disabled={activeTransmissionGenerated}
                                       value={String(auth.password ?? "")}
                                       onChange={(event) =>
                                         updateDraftOutput(output.id, {
@@ -3742,6 +3811,22 @@ function StreamingSettingsPanelContent({
                       <div className="cardMeta">
                         {t("ext.streaming.transmissions.urls_hint", {}, "As URLs são geradas pelo engine (MediaMTX).")}
                       </div>
+                      <div className="rowWrap" style={{ gap: 8, marginTop: 10 }}>
+                        {BROWSER_DEBUG_TRANSPORTS.map((transport) => (
+                          <a
+                            key={transport}
+                            className="chipButton"
+                            style={{ alignItems: "center", display: "inline-flex", textDecoration: "none" }}
+                            href={streamingTransportDebugHref({ transmissionId: transmissionDraft.id, transport })}
+                          >
+                            {t(
+                              "ext.streaming.transmissions.debug_transport_protocol",
+                              { protocol: transport.toUpperCase() },
+                              `Debug ${transport.toUpperCase()}`,
+                            )}
+                          </a>
+                        ))}
+                      </div>
                     </div>
                     <div className="rowWrap" style={{ gap: 8, justifyContent: "flex-end" }}>
                       <button
@@ -3754,7 +3839,12 @@ function StreamingSettingsPanelContent({
                           ? t("ext.streaming.transmissions.loading_urls", {}, "Carregando URLs…")
                           : t("ext.streaming.transmissions.load_urls", {}, "Carregar URLs")}
                       </button>
-                      <button className="primaryButton" type="button" onClick={() => setWizardTransmission(transmissionDraft)}>
+                      <button
+                        className="primaryButton"
+                        type="button"
+                        disabled={activeTransmissionGenerated}
+                        onClick={() => setWizardTransmission(transmissionDraft)}
+                      >
                         {t("ext.streaming.wizard.open", {}, "Criar fluxo com esta transmissão")}
                       </button>
                     </div>
@@ -3852,6 +3942,24 @@ function StreamingSettingsPanelContent({
                             </div>
                             <div className="rowWrap" style={{ gap: 8, marginTop: 10 }}>
                               <input className="input" style={{ flex: 1 }} value={item.url} readOnly />
+                              {item.protocol === "hls" || item.protocol === "webrtc" ? (
+                                <a
+                                  className="chipButton"
+                                  style={{ alignItems: "center", display: "inline-flex", textDecoration: "none" }}
+                                  href={streamingTransportDebugHref({
+                                    transmissionId: transmissionDraft.id,
+                                    transport: item.protocol,
+                                    outputId: item.output_id,
+                                    qualityProfileId: item.quality_profile_id ?? null,
+                                  })}
+                                >
+                                  {t(
+                                    "ext.streaming.transmissions.debug_transport_protocol",
+                                    { protocol: item.protocol.toUpperCase() },
+                                    `Debug ${item.protocol.toUpperCase()}`,
+                                  )}
+                                </a>
+                              ) : null}
                               <button
                                 className="iconButton"
                                 type="button"

@@ -15,6 +15,7 @@ import type {
   PanTiltZoomState,
   ProcessingServer,
   RtspProbeResponse,
+  StreamPublication,
 } from "../types";
 import { readRecord } from "../parsing";
 
@@ -47,6 +48,41 @@ export async function fetchCameraSourceHealth(signal?: AbortSignal): Promise<Cam
   const response = await fetch("/api/cameras/runtime/source-health", { signal });
   if (!response.ok) throw new Error(`Failed to load camera source health: ${response.status}`);
   return response.json();
+}
+
+export async function fetchStreamPublications(cameraId?: string, signal?: AbortSignal): Promise<StreamPublication[]> {
+  const params = new URLSearchParams();
+  const normalizedCameraId = String(cameraId || "").trim();
+  if (normalizedCameraId) params.set("camera_id", normalizedCameraId);
+  const suffix = params.toString();
+  const response = await fetch(`/api/streams/publications${suffix ? `?${suffix}` : ""}`, { signal });
+  if (!response.ok) throw new Error(`Failed to load stream publications: ${response.status}`);
+  const data = await response.json();
+  return Array.isArray(data) ? (data as StreamPublication[]).filter(Boolean) : [];
+}
+
+export async function updateCameraSourcePublication(
+  cameraId: string,
+  sourceId: string,
+  patch: Partial<Pick<StreamPublication, "enabled" | "label" | "role" | "host_server_id" | "quality_policy" | "transport_policy">>,
+  signal?: AbortSignal,
+): Promise<StreamPublication> {
+  const response = await fetch(
+    `/api/streams/publications/camera-sources/${encodeURIComponent(cameraId)}/${encodeURIComponent(sourceId)}`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+      signal,
+    },
+  );
+  if (!response.ok) throw new Error(`Failed to update stream publication: ${response.status}`);
+  return response.json();
+}
+
+export async function reconcileStreamPublications(signal?: AbortSignal): Promise<void> {
+  const response = await fetch("/api/streams/reconcile", { method: "POST", signal });
+  if (!response.ok) throw new Error(`Failed to reconcile stream publications: ${response.status}`);
 }
 
 export async function fetchRtspSnapshot(

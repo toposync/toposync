@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 import cv2
 import numpy
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from toposync.runtime.pipelines.execution import SinkRuntime
 from toposync.runtime.pipelines.images import normalize_artifact_name
@@ -37,24 +37,48 @@ def get_streaming_runtime_bindings() -> StreamingRuntimeBindings | None:
 class PublishVideoConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    transmission_id: str
+    transmission_id: str = ""
     input_artifact_name: str = ""
     resize_mode: Literal["contain", "none"] = "contain"
     writer_priority: int = 0
     bypass_mode: Literal["auto", "force_on", "force_off"] = "auto"
+    publication_enabled: bool = False
+    publication_camera_id: str = ""
+    publication_camera_source_id: str = ""
+    publication_live_view_id: str = ""
+    publication_role: Literal["main", "sub", "zoom", "custom"] = "custom"
+    publication_label: str = ""
+    publication_show_in_dashboard: bool = True
+    publication_show_in_home_assistant: bool = False
+    publication_quality_profile_id: str = ""
 
-    @field_validator("transmission_id", mode="after")
+    @field_validator(
+        "transmission_id",
+        "publication_camera_id",
+        "publication_camera_source_id",
+        "publication_live_view_id",
+        "publication_label",
+        "publication_quality_profile_id",
+        mode="after",
+    )
     @classmethod
-    def _validate_transmission_id(cls, value: str) -> str:
-        normalized = str(value or "").strip()
-        if not normalized:
-            raise ValueError("transmission_id is required")
-        return normalized
+    def _trim_text(cls, value: str) -> str:
+        return str(value or "").strip()
 
     @field_validator("input_artifact_name", mode="after")
     @classmethod
     def _trim_input_artifact_name(cls, value: str) -> str:
         return str(value or "").strip()
+
+    @model_validator(mode="after")
+    def _validate_publication_target(self) -> "PublishVideoConfig":
+        if self.transmission_id or not self.publication_enabled:
+            return self
+        if not self.publication_camera_id:
+            raise ValueError("publication_camera_id is required when transmission_id is generated")
+        if not self.publication_camera_source_id:
+            raise ValueError("publication_camera_source_id is required when transmission_id is generated")
+        return self
 
 
 class PublishVideoRuntime(SinkRuntime):
@@ -64,6 +88,8 @@ class PublishVideoRuntime(SinkRuntime):
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         bindings = get_streaming_runtime_bindings()
         if bindings is None:
+            return []
+        if not self._config.transmission_id:
             return []
 
         writer_id = _build_writer_id(context)

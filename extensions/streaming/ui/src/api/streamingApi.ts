@@ -16,6 +16,7 @@ import type {
   TransmissionDemandResponse,
   StreamingExtensionSettings,
   StreamingPreferredPorts,
+  StreamPublication,
   StreamingWizardCreatePipelineRequest,
   StreamingWizardCreatePipelineResponse,
   StreamsHealthResponse,
@@ -43,6 +44,7 @@ type CreateTransmissionRequest = {
 type PatchStreamingSettingsRequest = {
   camera_live_views?: CameraLiveView[];
   transmissions?: Transmission[];
+  publications?: StreamPublication[];
   engine?: {
     enabled?: boolean;
     expose_to_lan?: boolean;

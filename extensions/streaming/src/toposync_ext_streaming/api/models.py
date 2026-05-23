@@ -21,7 +21,19 @@ StreamingEncoderTrustState = Literal["candidate", "trusted", "quarantined"]
 StreamingMediaAuthMode = Literal["signed_proxy", "open"]
 StreamingMediaAuthType = Literal["none", "signed_url", "basic"]
 StreamingCameraLiveContext = Literal["thumbnail", "pip", "large", "fullscreen", "ptz"]
-StreamingCameraLiveVariantRole = Literal["thumbnail", "pip", "large", "fullscreen", "ptz", "zoom", "custom"]
+StreamingPublicationOwnerKind = Literal["camera_source", "pipeline_output"]
+StreamingPublicationRole = Literal["main", "sub", "zoom", "custom"]
+StreamingCameraLiveVariantRole = Literal[
+    "thumbnail",
+    "pip",
+    "large",
+    "fullscreen",
+    "ptz",
+    "main",
+    "sub",
+    "zoom",
+    "custom",
+]
 StreamingCameraLiveTransportPreference = Literal["auto", "hls", "webrtc"]
 StreamingQualityProfileId = Literal[
     "quad_grid",
@@ -371,6 +383,77 @@ class CameraLiveView(BaseModel):
         return self
 
 
+class StreamPublicationSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    owner_kind: StreamingPublicationOwnerKind = "camera_source"
+    camera_id: str | None = None
+    camera_source_id: str | None = None
+    pipeline_name: str | None = None
+    publish_node_id: str | None = None
+    enabled: bool = True
+    role: StreamingPublicationRole = "custom"
+    label: str = ""
+    live_view_id: str | None = None
+    host_server_id: str = "local"
+    quality_policy: dict[str, Any] = Field(default_factory=dict)
+    transport_policy: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator(
+        "id",
+        "camera_id",
+        "camera_source_id",
+        "pipeline_name",
+        "publish_node_id",
+        "label",
+        "live_view_id",
+        "host_server_id",
+        mode="before",
+    )
+    @classmethod
+    def _trim_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value or "").strip()
+        return normalized or None
+
+    @field_validator("host_server_id", mode="before")
+    @classmethod
+    def _normalize_host_server_id(cls, value: Any) -> str:
+        return normalize_server_id(value, fallback="local")
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def _normalize_role(cls, value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"main", "sub", "zoom", "custom"}:
+            return normalized
+        if normalized in {"thumbnail", "pip"}:
+            return "sub"
+        if normalized in {"large", "fullscreen", "ptz"}:
+            return "main"
+        return "custom"
+
+    @model_validator(mode="after")
+    def _validate_owner(self) -> "StreamPublicationSpec":
+        if not self.id:
+            raise ValueError("Stream publication id is required")
+        if self.owner_kind == "camera_source":
+            if not self.camera_id:
+                raise ValueError("camera_id is required for camera source publication")
+            if not self.camera_source_id:
+                raise ValueError("camera_source_id is required for camera source publication")
+        if self.owner_kind == "pipeline_output":
+            if not self.pipeline_name:
+                raise ValueError("pipeline_name is required for pipeline output publication")
+            if not self.publish_node_id:
+                raise ValueError("publish_node_id is required for pipeline output publication")
+        if not self.label:
+            self.label = self.id
+        return self
+
+
 DEFAULT_QUALITY_PROFILE_ID: StreamingQualityProfileId = "stable_apple_tv"
 QUALITY_PROFILE_ORDER: tuple[StreamingQualityProfileId, ...] = (
     "quad_grid",
@@ -695,6 +778,7 @@ class StreamingEngineSettingsPatch(BaseModel):
 class StreamingExtensionSettings(BaseModel):
     model_config = ConfigDict(extra="allow")
 
+    publications: list[StreamPublicationSpec] = Field(default_factory=list)
     camera_live_views: list[CameraLiveView] = Field(default_factory=list)
     transmissions: list[Transmission] = Field(default_factory=list)
     engine: StreamingEngineSettings = Field(default_factory=StreamingEngineSettings)
@@ -703,6 +787,12 @@ class StreamingExtensionSettings(BaseModel):
 
     @model_validator(mode="after")
     def _validate_uniqueness(self) -> "StreamingExtensionSettings":
+        seen_publication_ids: set[str] = set()
+        for publication in self.publications:
+            if publication.id in seen_publication_ids:
+                raise ValueError(f"Duplicate stream publication id: {publication.id}")
+            seen_publication_ids.add(publication.id)
+
         seen_live_view_ids: set[str] = set()
         for live_view in self.camera_live_views:
             if live_view.id in seen_live_view_ids:
@@ -737,6 +827,7 @@ class StreamingExtensionSettings(BaseModel):
 class StreamingSettingsPatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    publications: list[StreamPublicationSpec] | None = None
     camera_live_views: list[CameraLiveView] | None = None
     transmissions: list[Transmission] | None = None
     engine: StreamingEngineSettingsPatch | None = None
@@ -792,7 +883,6 @@ class StreamingCameraIngestResolveResponse(BaseModel):
     path: str = ""
     rtsp_url: str = ""
     redacted_rtsp_url: str = ""
-    direct_override_active: bool = False
     warnings: list[str] = Field(default_factory=list)
     blocking_errors: list[str] = Field(default_factory=list)
 
@@ -917,6 +1007,8 @@ class TransmissionUrlsResponse(BaseModel):
     outputs: list[TransmissionOutputUrl]
     network_contract: StreamingNetworkContract | None = None
     warnings: list[str] = Field(default_factory=list)
+    hls_warnings: list[str] = Field(default_factory=list)
+    webrtc_warnings: list[str] = Field(default_factory=list)
     blocking_errors: list[str] = Field(default_factory=list)
     public_base_path: str = "/"
     media_url_origin: str | None = None
@@ -953,6 +1045,8 @@ class StreamingPlaybackPlanResponse(BaseModel):
     transports: list[StreamingPlaybackPlanTransport] = Field(default_factory=list)
     selected_transport: StreamingPlaybackTransport | None = None
     warnings: list[str] = Field(default_factory=list)
+    hls_warnings: list[str] = Field(default_factory=list)
+    webrtc_warnings: list[str] = Field(default_factory=list)
     blocking_errors: list[str] = Field(default_factory=list)
 
 
@@ -973,6 +1067,7 @@ class StreamingHomeAssistantCameraManifestItem(BaseModel):
     redacted_rtsp_url: str | None = None
     webrtc_offer_url: str | None = None
     capabilities: dict[str, bool] = Field(default_factory=dict)
+    variants: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     blocking_errors: list[str] = Field(default_factory=list)
 
@@ -1215,7 +1310,6 @@ class StreamingRuntimeSourceHealth(BaseModel):
     ingest_mode: Literal["centralized", "runtime_local", "direct"] = "direct"
     centralizer_server_id: str | None = None
     ingest_path: str | None = None
-    direct_override_active: bool = False
     ingest_warnings: list[str] = Field(default_factory=list)
     ingest_blocking_errors: list[str] = Field(default_factory=list)
     status: StreamingCameraSourceStatus = "unknown"

@@ -12,3 +12,4 @@
 - `docs/TROUBLESHOOTING.md` — problemas comuns
 - `docs/EXTENSIONS_FIRST_PARTY.md` — extensões inclusas no repo
 - `docs/PIPELINES.md` — pipelines globais (DAG) para automações/visão
+- `docs/toposync-streaming-dossier-solid-priorities.md` — dossiê consolidado de streaming, Home Assistant, playback e UX de câmeras publicáveis

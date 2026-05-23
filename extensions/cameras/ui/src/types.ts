@@ -9,7 +9,6 @@ export type CameraSourceOriginType = "onvif_profile" | "rtsp";
 export type CameraIngestConfig = {
   mode: CameraIngestMode;
   host_server_id: string;
-  direct_override_until_unix: number | null;
 };
 
 export type CameraOnvifConfig = {
@@ -59,6 +58,19 @@ export type CameraSourceConfig = {
   video: CameraSourceVideoConfig;
   ingest: CameraIngestConfig;
   metadata?: Record<string, unknown>;
+};
+
+export type StreamPublication = {
+  id: string;
+  owner_kind: "camera_source" | "pipeline_output";
+  camera_id?: string | null;
+  camera_source_id?: string | null;
+  enabled?: boolean;
+  role: CameraSourceRole;
+  label: string;
+  host_server_id?: string;
+  quality_policy?: Record<string, unknown>;
+  transport_policy?: Record<string, unknown>;
 };
 
 export type CameraConfig = {
@@ -122,7 +134,6 @@ export type CameraSourceHealthItem = {
   ingest_mode?: CameraIngestMode;
   centralizer_server_id?: string | null;
   ingest_path?: string | null;
-  direct_override_active?: boolean;
   ingest_warnings?: string[];
   ingest_blocking_errors?: string[];
   status: CameraSourceHealthStatus;
@@ -258,6 +269,7 @@ export type OnvifProfileInfo = {
   height?: number | null;
   fps?: number | null;
   has_ptz?: boolean;
+  stream_uri?: string | null;
 };
 
 export type OnvifInspectResponse = {

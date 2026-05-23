@@ -744,7 +744,6 @@ class ResolvedCameraSource:
     ingest_mode: str = "direct"
     centralizer_server_id: str = ""
     ingest_path: str = ""
-    direct_override_active: bool = False
     ingest_warnings: tuple[str, ...] = ()
     ingest_blocking_errors: tuple[str, ...] = ()
 
@@ -766,7 +765,6 @@ class _CameraSourcePendingError(RuntimeError):
         ingest_mode: str = "",
         centralizer_server_id: str = "",
         ingest_path: str = "",
-        direct_override_active: bool = False,
         ingest_warnings: tuple[str, ...] = (),
         ingest_blocking_errors: tuple[str, ...] = (),
     ) -> None:
@@ -774,7 +772,6 @@ class _CameraSourcePendingError(RuntimeError):
         self.ingest_mode = ingest_mode
         self.centralizer_server_id = centralizer_server_id
         self.ingest_path = ingest_path
-        self.direct_override_active = bool(direct_override_active)
         self.ingest_warnings = ingest_warnings
         self.ingest_blocking_errors = ingest_blocking_errors
 
@@ -803,7 +800,6 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._ingest_mode = "direct"
         self._centralizer_server_id = ""
         self._ingest_path = ""
-        self._direct_override_active = False
         self._ingest_warnings: tuple[str, ...] = ()
         self._ingest_blocking_errors: tuple[str, ...] = ()
         self._gate_open = True
@@ -869,7 +865,6 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._ingest_mode = resolved.ingest_mode
         self._centralizer_server_id = resolved.centralizer_server_id
         self._ingest_path = resolved.ingest_path
-        self._direct_override_active = bool(resolved.direct_override_active)
         self._ingest_warnings = tuple(resolved.ingest_warnings)
         self._ingest_blocking_errors = tuple(resolved.ingest_blocking_errors)
         selected_backend = str(self._config.backend or "").strip().lower() or "auto"
@@ -1019,7 +1014,6 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 ingest_mode=self._ingest_mode,
                 centralizer_server_id=self._centralizer_server_id,
                 ingest_path=self._ingest_path,
-                direct_override_active=self._direct_override_active,
                 ingest_warnings=self._ingest_warnings,
                 ingest_blocking_errors=self._ingest_blocking_errors,
                 frame_ts=float(frame_ts),
@@ -1040,7 +1034,6 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 ingest_mode=self._ingest_mode,
                 centralizer_server_id=self._centralizer_server_id,
                 ingest_path=self._ingest_path,
-                direct_override_active=self._direct_override_active,
                 ingest_warnings=self._ingest_warnings,
                 ingest_blocking_errors=self._ingest_blocking_errors,
                 status=status,  # type: ignore[arg-type]
@@ -1138,7 +1131,6 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 self._ingest_mode = exc.ingest_mode
                 self._centralizer_server_id = exc.centralizer_server_id
                 self._ingest_path = exc.ingest_path
-                self._direct_override_active = exc.direct_override_active
                 self._ingest_warnings = exc.ingest_warnings
                 self._ingest_blocking_errors = exc.ingest_blocking_errors
             self._record_source_health(context, status="starting", last_error=str(exc))
@@ -1205,7 +1197,6 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             "ingest_mode": source_health.get("ingest_mode") or self._ingest_mode,
             "centralizer_server_id": source_health.get("centralizer_server_id"),
             "ingest_path": source_health.get("ingest_path"),
-            "direct_override_active": bool(source_health.get("direct_override_active")),
             "ingest_warnings": list(source_health.get("ingest_warnings") or []),
             "ingest_blocking_errors": list(source_health.get("ingest_blocking_errors") or []),
         }
@@ -2865,13 +2856,12 @@ async def _resolve_camera_source(
     if ingest_mode not in {"centralized", "runtime_local", "direct"}:
         ingest_mode = "centralized"
     centralizer_server_id = str(ingest_settings.get("host_server_id") or "local").strip().lower() or "local"
-    direct_override_active = _direct_override_active(ingest_settings)
     used_ingest = False
     ingest_path = ""
     ingest_warnings: tuple[str, ...] = ()
     ingest_blocking_errors: tuple[str, ...] = ()
 
-    if ingest_mode != "direct" and not direct_override_active:
+    if ingest_mode != "direct":
         resolution = await _maybe_resolve_ingest_camera_source(
             camera_id=camera_id,
             source_id=str(source.get("id") or "").strip(),
@@ -2882,7 +2872,6 @@ async def _resolve_camera_source(
                 f"Camera '{camera_id}' ingest centralizer is unavailable for mode '{ingest_mode}'",
                 ingest_mode=ingest_mode,
                 centralizer_server_id=centralizer_server_id,
-                direct_override_active=direct_override_active,
             )
         ingest_warnings = tuple(str(item) for item in resolution.get("warnings", []) if str(item).strip())
         ingest_blocking_errors = tuple(
@@ -2894,7 +2883,6 @@ async def _resolve_camera_source(
                 ingest_mode=ingest_mode,
                 centralizer_server_id=centralizer_server_id,
                 ingest_path=str(resolution.get("path") or "").strip(),
-                direct_override_active=direct_override_active,
                 ingest_warnings=ingest_warnings,
                 ingest_blocking_errors=ingest_blocking_errors,
             )
@@ -2905,7 +2893,6 @@ async def _resolve_camera_source(
                 ingest_mode=ingest_mode,
                 centralizer_server_id=centralizer_server_id,
                 ingest_path=str(resolution.get("path") or "").strip(),
-                direct_override_active=direct_override_active,
                 ingest_warnings=ingest_warnings,
             )
         url = resolved_url
@@ -2915,7 +2902,6 @@ async def _resolve_camera_source(
             or centralizer_server_id
         )
         ingest_path = str(resolution.get("path") or "").strip()
-        direct_override_active = bool(resolution.get("direct_override_active")) or direct_override_active
 
     return ResolvedCameraSource(
         rtsp_url=url,
@@ -2932,7 +2918,6 @@ async def _resolve_camera_source(
         ingest_mode=ingest_mode,
         centralizer_server_id=centralizer_server_id if ingest_mode in {"centralized", "runtime_local"} else "",
         ingest_path=ingest_path,
-        direct_override_active=direct_override_active,
         ingest_warnings=ingest_warnings,
         ingest_blocking_errors=ingest_blocking_errors,
     )
@@ -2987,18 +2972,9 @@ async def _maybe_resolve_ingest_camera_source(
         "path": "",
         "rtsp_url": resolved,
         "redacted_rtsp_url": "",
-        "direct_override_active": False,
         "warnings": [],
         "blocking_errors": [],
     }
-
-
-def _direct_override_active(ingest_settings: dict[str, Any]) -> bool:
-    try:
-        until = float(ingest_settings.get("direct_override_until_unix") or 0.0)
-    except Exception:
-        return False
-    return until > time.time()
 
 
 def _apply_rtsp_auth(url: str, username: str, password: str) -> str:

@@ -145,6 +145,7 @@ export const streamingTranslations = {
     "ext.streaming.transmissions.auth_required_user": "Requires authentication (username: {{username}}).",
     "ext.streaming.transmissions.auth_not_required": "No authentication.",
     "ext.streaming.transmissions.copy_url": "Copy URL",
+    "ext.streaming.transmissions.debug_transport_protocol": "Debug {{protocol}}",
     "ext.streaming.transmissions.copied": "Copied!",
 
     "ext.streaming.outputs.add_hls": "+ HLS",
@@ -199,7 +200,6 @@ export const streamingTranslations = {
     "ext.streaming.wizard.processing_server": "Processing server",
     "ext.streaming.wizard.host_mismatch_inline": "Stream host: {{transmissionHost}}. Pipeline host: {{pipelineHost}}. They must match.",
     "ext.streaming.wizard.ingest_notice.direct": "This flow will open a direct connection to the camera source.",
-    "ext.streaming.wizard.ingest_notice.override_active": "Temporary direct connection is active for this camera.",
     "ext.streaming.wizard.ingest_notice.runtime_local":
       "This camera will be centralized on the selected processing server for this flow.",
     "ext.streaming.wizard.ingest_notice.centralizer_mismatch":
@@ -416,6 +416,7 @@ export const streamingTranslations = {
     "ext.streaming.transmissions.auth_required_user": "Requer autenticação (usuário: {{username}}).",
     "ext.streaming.transmissions.auth_not_required": "Sem autenticação.",
     "ext.streaming.transmissions.copy_url": "Copiar URL",
+    "ext.streaming.transmissions.debug_transport_protocol": "Debug {{protocol}}",
     "ext.streaming.transmissions.copied": "Copiado!",
 
     "ext.streaming.outputs.add_hls": "+ HLS",
@@ -470,7 +471,6 @@ export const streamingTranslations = {
     "ext.streaming.wizard.processing_server": "Servidor de processamento",
     "ext.streaming.wizard.host_mismatch_inline": "Host da transmissão: {{transmissionHost}}. Host do fluxo: {{pipelineHost}}. Eles precisam ser iguais.",
     "ext.streaming.wizard.ingest_notice.direct": "Este fluxo abrirá conexão direta com a origem da câmera.",
-    "ext.streaming.wizard.ingest_notice.override_active": "Conexão direta temporária ativa para esta câmera.",
     "ext.streaming.wizard.ingest_notice.runtime_local":
       "Esta câmera será centralizada no servidor de processamento selecionado para este fluxo.",
     "ext.streaming.wizard.ingest_notice.centralizer_mismatch":

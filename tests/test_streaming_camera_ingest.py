@@ -355,7 +355,7 @@ def test_camera_ingest_resolver_direct_source_returns_origin_without_starting_in
     assert manager.ensure_calls == []
 
 
-def test_camera_ingest_resolver_direct_override_is_temporary_and_source_scoped(tmp_path: Path) -> None:
+def test_camera_ingest_resolver_centralized_sources_are_source_scoped(tmp_path: Path) -> None:
     settings = AppSettings(
         extensions={
             "com.toposync.streaming": {
@@ -371,11 +371,7 @@ def test_camera_ingest_resolver_direct_override_is_temporary_and_source_scoped(t
                             _camera_source(
                                 "sub",
                                 rtsp_url="rtsp://10.0.0.10/low",
-                                ingest={
-                                    "mode": "centralized",
-                                    "host_server_id": "local",
-                                    "direct_override_until_unix": 4_102_444_800,
-                                },
+                                ingest={"mode": "centralized", "host_server_id": "local"},
                             ),
                         ],
                     )
@@ -396,11 +392,10 @@ def test_camera_ingest_resolver_direct_override_is_temporary_and_source_scoped(t
 
     assert main_response.used_ingest is True
     assert main_response.path == "ingest-front-main"
-    assert sub_response.used_ingest is False
-    assert sub_response.direct_override_active is True
-    assert sub_response.rtsp_url == "rtsp://10.0.0.10/low"
+    assert sub_response.used_ingest is True
+    assert sub_response.path == "ingest-front-sub"
     assert any("ingest-front-main" in call["engine_paths"] for call in manager.ensure_calls)
-    assert all("ingest-front-sub" not in call["engine_paths"] for call in manager.ensure_calls)
+    assert any("ingest-front-sub" in call["engine_paths"] for call in manager.ensure_calls)
 
 
 def test_build_camera_ingest_path_configs_renders_source_and_on_demand() -> None:

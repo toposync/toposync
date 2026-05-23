@@ -50,7 +50,6 @@ class CameraSourceHealthRecord:
     ingest_mode: str = "direct"
     centralizer_server_id: str = ""
     ingest_path: str = ""
-    direct_override_active: bool = False
     ingest_warnings: tuple[str, ...] = ()
     ingest_blocking_errors: tuple[str, ...] = ()
     status: CameraSourceStatus = "unknown"
@@ -82,7 +81,6 @@ class CameraSourceHealthRecord:
             "ingest_mode": self.ingest_mode or "direct",
             "centralizer_server_id": self.centralizer_server_id or None,
             "ingest_path": self.ingest_path or None,
-            "direct_override_active": bool(self.direct_override_active),
             "ingest_warnings": list(self.ingest_warnings),
             "ingest_blocking_errors": list(self.ingest_blocking_errors),
             "status": self.status,
@@ -121,7 +119,6 @@ class CameraSourceHealthStore:
         ingest_mode: str = "direct",
         centralizer_server_id: str = "",
         ingest_path: str = "",
-        direct_override_active: bool = False,
         ingest_warnings: tuple[str, ...] | list[str] | None = None,
         ingest_blocking_errors: tuple[str, ...] | list[str] | None = None,
         status: CameraSourceStatus | None = None,
@@ -156,7 +153,6 @@ class CameraSourceHealthStore:
             ingest_mode=_normalize_ingest_mode(ingest_mode),
             centralizer_server_id=_normalize_text(centralizer_server_id, limit=120),
             ingest_path=_normalize_text(ingest_path, limit=160),
-            direct_override_active=bool(direct_override_active),
             ingest_warnings=_normalize_string_tuple(ingest_warnings, limit=240),
             ingest_blocking_errors=_normalize_string_tuple(ingest_blocking_errors, limit=240),
             last_seen_at_unix=now,
@@ -185,7 +181,6 @@ class CameraSourceHealthStore:
         ingest_mode: str = "direct",
         centralizer_server_id: str = "",
         ingest_path: str = "",
-        direct_override_active: bool = False,
         ingest_warnings: tuple[str, ...] | list[str] | None = None,
         ingest_blocking_errors: tuple[str, ...] | list[str] | None = None,
         frame_ts: float,
@@ -206,7 +201,6 @@ class CameraSourceHealthStore:
             ingest_mode=ingest_mode,
             centralizer_server_id=centralizer_server_id,
             ingest_path=ingest_path,
-            direct_override_active=direct_override_active,
             ingest_warnings=ingest_warnings,
             ingest_blocking_errors=ingest_blocking_errors,
             metrics=metrics,

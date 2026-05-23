@@ -199,6 +199,8 @@ def _output(
     status: str = "live",
     publisher_running: bool = True,
     publisher_last_error: str | None = None,
+    viewer_count: int = 1,
+    demand_signal: bool = True,
     event_gated_idle: bool = False,
     source_health: StreamingRuntimeSourceHealth | None = None,
 ) -> StreamingRuntimeOutputHealth:
@@ -208,8 +210,8 @@ def _output(
         transmission_id="front",
         protocol="hls",
         resolved_engine_path="front",
-        viewer_count=1,
-        demand_signal=True,
+        viewer_count=viewer_count,
+        demand_signal=demand_signal,
         publisher_running=publisher_running,
         publisher_frames_sent=120,
         publisher_last_error=publisher_last_error,
@@ -412,7 +414,46 @@ def test_observability_classifies_streaming_chaos_root_causes() -> None:
             network_contract=contract,
         )
         assert classification == expected
-        assert evidence
+    assert evidence
+
+
+def test_observability_does_not_promote_idle_outputs_to_publisher_down() -> None:
+    classification, evidence = _classify_observability(
+        health=_health(status="live"),
+        output=_output(
+            status="offline",
+            publisher_running=False,
+            publisher_last_error="previous viewer disconnected",
+            viewer_count=0,
+            demand_signal=False,
+        ),
+        events=[],
+        network_contract=None,
+    )
+
+    assert classification == "unknown"
+    assert "idle" in " ".join(evidence).lower()
+
+
+def test_observability_prioritizes_ingest_blocking_errors_over_no_frame() -> None:
+    source = StreamingRuntimeSourceHealth(
+        source_id="camera.source:garage",
+        status="unknown",
+        ingest_blocking_errors=["RTSP URL is missing for ONVIF profile."],
+        recommended_action="Review the camera backend error and test RTSP.",
+    )
+
+    classification, evidence = _classify_observability(
+        health=_health(status="offline", source_health=source),
+        output=_output(status="offline", publisher_running=False, source_health=source),
+        events=[],
+        network_contract=None,
+    )
+
+    assert classification == "source_stale"
+    joined = " ".join(evidence)
+    assert "ingest error" in joined
+    assert "RTSP URL is missing" in joined
 
 
 def test_observability_ignores_recovered_webrtc_and_lifecycle_noise() -> None:
@@ -487,6 +528,33 @@ def test_observability_ignores_recovered_webrtc_and_lifecycle_noise() -> None:
         health=_health(status="live"),
         output=_output(status="live"),
         events=transient_lifecycle_events,
+        network_contract=None,
+    )
+    assert classification == "healthy"
+
+    recovered_url_error_events = [
+        _event(
+            "playback_error",
+            message="Failed to construct 'URL': Invalid base URL",
+            at_unix=now - 3,
+        ),
+        _event(
+            "hls_browser_probe",
+            severity="debug",
+            data={"playback_transport": "hls"},
+            at_unix=now - 2,
+        ),
+        _event(
+            "playing",
+            severity="info",
+            data={"transport_preference": "auto", "playback_transport": "hls"},
+            at_unix=now - 1,
+        ),
+    ]
+    classification, _evidence = _classify_observability(
+        health=_health(status="live"),
+        output=_output(status="live"),
+        events=recovered_url_error_events,
         network_contract=None,
     )
     assert classification == "healthy"

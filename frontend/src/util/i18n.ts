@@ -454,6 +454,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.streams.health.camera_source_unreachable": "Camera source unreachable. Check camera power/network/RTSP URL.",
     "core.ui.streams.health.camera_source_unauthorized": "Camera source unauthorized. Check camera credentials.",
     "core.ui.streams.health.camera_source_error": "Camera source error.",
+    "core.ui.streams.health.camera_source_blocked": "Camera source is not feeding frames through the configured ingest/source. {{details}}",
+    "core.ui.streams.health.camera_source_not_feeding": "Camera source is not feeding frames yet.",
+    "core.ui.streams.health.hls_warming_up": "Warming up HLS stream...",
+    "core.ui.streams.health.no_pipeline_frame": "No pipeline is feeding this transmission.",
+    "core.ui.streams.health.publisher_down": "The pipeline has a selected frame, but the HLS/WebRTC publisher is not running.",
+    "core.ui.streams.health.source_pipeline_stale": "Pipeline stopped feeding fresh frames.{{suffix}}",
     "core.ui.streams.source.status": "Source status",
     "core.ui.streams.source.camera": "Camera",
     "core.ui.streams.source.backend": "Backend",
@@ -807,7 +813,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_description.home_assistant.notify":
       "Sends mobile push notifications through a Home Assistant notify service.",
     "core.ui.pipelines.operator_description.stream.publish_video":
-      "Sends this flow's frames to a configured video stream.",
+      "Publishes this flow's frames as a camera variant or to an advanced video stream.",
     "core.ui.pipelines.operator_description.ai.condition_filter":
       "Lets packets pass only when the visual condition is present.",
     "core.ui.pipelines.operator_description.ai.smart_crop":
@@ -1934,7 +1940,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.processing_server_status.runtime_errors": "Processing server '{{server}}' is online, but this pipeline has {{count}} runtime node issue(s).",
     "core.ui.pipelines.ingest.badge": "INGEST",
     "core.ui.pipelines.ingest.direct": "This flow will open a direct connection to the camera source for {{camera}}.",
-    "core.ui.pipelines.ingest.override_active": "Temporary direct connection is active for camera {{camera}}.",
     "core.ui.pipelines.ingest.centralizer_mismatch":
       "This pipeline runs on {{pipelineHost}} and will read camera {{camera}} through ingest on {{ingestHost}}.",
 
@@ -2374,6 +2379,12 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.streams.health.camera_source_unreachable": "Fonte da câmera inalcançável. Verifique energia, rede e URL RTSP.",
     "core.ui.streams.health.camera_source_unauthorized": "Fonte da câmera não autorizada. Verifique as credenciais.",
     "core.ui.streams.health.camera_source_error": "Erro na fonte da câmera.",
+    "core.ui.streams.health.camera_source_blocked": "A fonte da câmera não está alimentando frames pelo ingest/origem configurado. {{details}}",
+    "core.ui.streams.health.camera_source_not_feeding": "A fonte da câmera ainda não está alimentando frames.",
+    "core.ui.streams.health.hls_warming_up": "Aquecendo transmissão HLS...",
+    "core.ui.streams.health.no_pipeline_frame": "Nenhuma pipeline está alimentando esta transmissão.",
+    "core.ui.streams.health.publisher_down": "A pipeline tem frame selecionado, mas o publisher HLS/WebRTC não está rodando.",
+    "core.ui.streams.health.source_pipeline_stale": "A pipeline parou de alimentar frames recentes.{{suffix}}",
     "core.ui.streams.source.status": "Status da fonte",
     "core.ui.streams.source.camera": "Câmera",
     "core.ui.streams.source.backend": "Backend",
@@ -2731,7 +2742,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_description.home_assistant.notify":
       "Envia notificações push pelo serviço notify do Home Assistant.",
     "core.ui.pipelines.operator_description.stream.publish_video":
-      "Envia os frames deste fluxo para uma transmissão de vídeo configurada.",
+      "Publica os frames deste fluxo como variante de câmera ou em uma transmissão avançada.",
     "core.ui.pipelines.operator_description.ai.condition_filter":
       "Deixa passar apenas pacotes em que a condição visual está presente.",
     "core.ui.pipelines.operator_description.ai.smart_crop":
@@ -3868,7 +3879,6 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.processing_server_status.runtime_errors": "O processing server '{{server}}' está online, mas este fluxo tem {{count}} problema(s) em nó do runtime.",
     "core.ui.pipelines.ingest.badge": "INGEST",
     "core.ui.pipelines.ingest.direct": "Este fluxo abrirá conexão direta com a origem da câmera {{camera}}.",
-    "core.ui.pipelines.ingest.override_active": "Conexão direta temporária ativa para a câmera {{camera}}.",
     "core.ui.pipelines.ingest.centralizer_mismatch":
       "Este pipeline roda em {{pipelineHost}} e lerá a câmera {{camera}} pelo ingest em {{ingestHost}}.",
 

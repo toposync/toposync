@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import time
 import urllib.parse
 from dataclasses import dataclass
 from typing import Any
@@ -25,12 +24,6 @@ class CameraIngestDefinition:
 class CameraIngestPolicy:
     mode: str
     host_server_id: str
-    direct_override_until_unix: float | None = None
-
-    @property
-    def direct_override_active(self) -> bool:
-        until = self.direct_override_until_unix
-        return until is not None and until > time.time()
 
 
 def camera_source_key(camera_id: str, source_id: str) -> str:
@@ -94,18 +87,9 @@ def normalize_camera_ingest_policy(value: Any) -> CameraIngestPolicy:
     if mode != "centralized":
         host_server_id = "local"
 
-    direct_override_until_unix = None
-    try:
-        parsed_until = float(raw.get("direct_override_until_unix"))
-    except Exception:
-        parsed_until = 0.0
-    if parsed_until > 0.0:
-        direct_override_until_unix = parsed_until
-
     return CameraIngestPolicy(
         mode=mode,
         host_server_id=host_server_id,
-        direct_override_until_unix=direct_override_until_unix,
     )
 
 
@@ -115,8 +99,6 @@ def camera_ingest_policy_for_source(source: Any) -> CameraIngestPolicy:
 
 
 def should_host_camera_ingest(policy: CameraIngestPolicy, *, host_server_id: str) -> bool:
-    if policy.direct_override_active:
-        return False
     if policy.mode == "direct":
         return False
     if policy.mode == "runtime_local":

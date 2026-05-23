@@ -358,18 +358,8 @@ export function WizardCreatePipelineFromTransmission({
   const selectedCameraIngest = selectedSource?.ingest ?? null;
   const selectedCameraIngestMode = selectedCameraIngest?.mode === "runtime_local" || selectedCameraIngest?.mode === "direct" ? selectedCameraIngest.mode : "centralized";
   const selectedCameraIngestHost = selectedCameraIngestMode === "centralized" ? normalizeServerId(selectedCameraIngest?.host_server_id) : selectedProcessingServerId;
-  const selectedCameraDirectOverrideActive =
-    typeof selectedCameraIngest?.direct_override_until_unix === "number" &&
-    selectedCameraIngest.direct_override_until_unix > Date.now() / 1000;
   const ingestNotice = useMemo(() => {
     if (!selectedCamera) return "";
-    if (selectedCameraDirectOverrideActive) {
-      return t(
-        "ext.streaming.wizard.ingest_notice.override_active",
-        {},
-        "Temporary direct connection is active for this camera.",
-      );
-    }
     if (selectedCameraIngestMode === "direct") {
       return t(
         "ext.streaming.wizard.ingest_notice.direct",
@@ -397,7 +387,6 @@ export function WizardCreatePipelineFromTransmission({
     return "";
   }, [
     selectedCamera,
-    selectedCameraDirectOverrideActive,
     selectedCameraIngestHost,
     selectedCameraIngestMode,
     selectedProcessingServerId,

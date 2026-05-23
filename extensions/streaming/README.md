@@ -2,33 +2,40 @@
 
 Extension ID: `com.toposync.streaming`
 
-This extension provides "pipeline-rendered streaming" in Toposync:
+This extension provides camera and pipeline video publication in Toposync:
 
-- Users define **Transmissions** (domain objects) with one or more **Outputs**.
-- Pipelines publish frames to a Transmission via the sink operator **`stream.publish_video`**.
+- Users normally publish **camera sources** with a `Transmitir esta fonte` intent.
+- The extension reconciles generated **CameraLiveView**, **Transmission**, **Outputs**, and implicit continuous pipelines.
+- Advanced pipelines can publish a rendered variant through **`stream.publish_video`**.
 - A local **MediaMTX** engine serves RTSP/HLS/WebRTC (WHEP) URLs.
 - FFmpeg publishers (one per output) push encoded video into MediaMTX paths.
 
 The core design goal is reliability in local-first setups with highly dynamic pipelines:
 
-- Pipelines can be intermittent (open/update/close based on detection/tracking).
-- Multiple pipelines can write to the same Transmission (multi-writer arbitration).
-- Encoding should happen only when there is an actual viewer (on-demand).
+- Regular camera playback should work after adding a camera, without manually creating transmissions or pipelines.
+- Generated camera pipelines must be continuous, so a video stream is not hidden behind motion/event gates.
+- Advanced pipelines can still be intermittent (open/update/close based on detection/tracking).
+- Multiple writers can write to the same Transmission when using advanced/manual flows.
+- Encoding should happen only when there is actual playback demand.
 
 ## Implemented features (high level)
 
 - MediaMTX engine lifecycle management (start/stop/restart/status) with on-demand binary install (download + SHA256 verification) and dynamic port resolution.
+- Stream publication specs for camera sources and pipeline output variants.
+- Reconciliation from publication intent to generated live views, transmissions, outputs, and implicit pipelines.
 - Transmission and output CRUD stored in extension settings.
 - Per-output URLs for RTSP, HLS, and WebRTC/WHEP.
 - Pipeline sink operator `stream.publish_video` that publishes frames into a transmission (multi-writer capable).
+- Pipeline sink operator publication mode for generated variants.
 - Multi-writer arbitration using lifecycle (`open/update/close`), priority, and a sticky window.
 - Output-level placeholder frames when no writer is active.
 - Output-level resolution and FPS enforcement, including contain resizing with black padding.
 - FFmpeg publishers (one per output) that publish RTSP into MediaMTX.
 - On-demand encoding based on MediaMTX viewer count, with debounce stop.
 - Demand priming to reduce "first connect" 404/no-stream failures.
+- Demand heartbeat for web, app, PiP, PTZ, and Home Assistant entity playback.
 - Distributed hosting via `Transmission.host_server_id`, plus URL proxying and processing-side settings sync.
-- Dashboard playback (Rendering -> Streams) using WebRTC/WHEP with HLS fallback.
+- Dashboard playback using a backend Playback Plan with HLS/WebRTC now, and MSE/JSMpeg declared as future/blocked candidates.
 
 ## Supported protocols (as implemented)
 
@@ -47,14 +54,31 @@ The core design goal is reliability in local-first setups with highly dynamic pi
 
 ### WebRTC (WHEP)
 - URL format: `http://<host>:<webrtc_port>/<path>/whep`
-- Used by the Toposync dashboard for lower latency than HLS.
+- Used by the Toposync dashboard when low latency, PTZ, or another explicit interactive context requests it.
 - Current implementation is LAN-first (HTTP, no TLS termination built in). If you expose streaming beyond LAN, plan to terminate TLS.
+
+### Playback Plan candidates
+
+The Playback Plan API can return these transport candidates:
+
+- `hls`: stable baseline, active today.
+- `webrtc`: low-latency path, active today when context allows it.
+- `mse`: planned browser-first path through a go2rtc-style sidecar; currently returned as blocked/unavailable until the sidecar exists.
+- `jsmpeg`: planned emergency visual fallback; currently returned as blocked/unavailable until the worker exists.
+
+RTSP is not a browser transport. It remains the internal/ecosystem contract for HA Core, VLC/ffplay, Frigate/dev, go2rtc sidecars, and diagnostics.
 
 ## Architecture overview
 
 ### Data flow
 
-`pipeline frames` -> `stream.publish_video` -> `TransmissionRuntimeState` -> `StreamWriterBridge` -> `FFmpeg publisher` -> `MediaMTX path` -> viewers (RTSP/HLS/WHEP)
+Camera source publication:
+
+`camera source` -> `StreamPublicationSpec` -> reconciler -> implicit pipeline -> `stream.publish_video` -> `TransmissionRuntimeState` -> `StreamWriterBridge` -> `FFmpeg publisher` -> `MediaMTX path` -> viewers (RTSP/HLS/WHEP)
+
+Advanced pipeline publication:
+
+`pipeline frames` -> `stream.publish_video` -> generated/manual `Transmission` -> `TransmissionRuntimeState` -> `StreamWriterBridge` -> `FFmpeg publisher` -> `MediaMTX path` -> viewers (RTSP/HLS/WHEP)
 
 ### Components
 
@@ -70,6 +94,10 @@ The core design goal is reliability in local-first setups with highly dynamic pi
   - Periodic "tick loop" that loads streaming settings, ensures engine is running, refreshes viewer counts, starts/stops publishers on-demand, and pushes frames (or placeholders) into publishers.
   - Implements best-effort demand priming and a fallback "synthetic demand" hint.
   - Implements a bypass mode for simple pipelines (publisher pulls camera RTSP directly).
+- Publication reconciler
+  - Converts user intent (`StreamPublicationSpec`) into generated `CameraLiveView`, `Transmission`, outputs, and implicit camera pipelines.
+  - Preserves generated artifact metadata (`generated_by`, `publication_id`, owner/camera/source/role) for diagnostics and read-only UI display.
+  - Runs after camera/source changes, publication updates, pipeline saves, and explicit `POST /api/streams/reconcile`.
 - `PublisherManager`
   - Spawns and supervises FFmpeg processes.
   - Supports rawvideo frames over stdin (`rawvideo_pipe`) or RTSP pull (`rtsp_pull`).
@@ -77,9 +105,87 @@ The core design goal is reliability in local-first setups with highly dynamic pi
 
 ## Domain model and settings
 
+### StreamPublicationSpec
+
+`StreamPublicationSpec` is the user-facing intent model for publishing video.
+
+For normal camera playback, the user should not create a Transmission manually. The camera source owns a publication spec, and the streaming extension reconciles the generated artifacts.
+
+Fields:
+
+- `id`: deterministic publication id.
+- `owner_kind`: `"camera_source"` or `"pipeline_output"`.
+- `camera_id`: camera/live-view group id.
+- `camera_source_id`: concrete camera source id when publishing a camera source.
+- `pipeline_name` and `publish_node_id`: source pipeline/node when publishing a manual rendered variant.
+- `enabled`: turns the publication and generated artifacts on/off.
+- `role`: `"main" | "sub" | "zoom" | "custom"`.
+- `label`: user-facing label shown in source selectors.
+- `live_view_id`: optional live-view group override.
+- `host_server_id`: effective stream host.
+- `quality_policy`: output/profile hints for generated artifacts.
+- `transport_policy`: playback/transport hints for generated artifacts.
+
+Deterministic ids:
+
+```text
+camera:{camera_id}:{source_id}
+pipeline:{pipeline_name}:{node_id}
+```
+
+Generated Transmissions, CameraLiveViews, variants, and implicit pipelines include metadata such as:
+
+```json
+{
+  "generated_by": "stream_publication",
+  "publication_id": "camera:front:sub",
+  "owner_kind": "camera_source",
+  "camera_id": "front",
+  "camera_source_id": "sub",
+  "role": "sub"
+}
+```
+
+Generated artifacts are normal runtime artifacts, but the regular UI treats them as read-only and points the user back to the owning camera source or pipeline operator.
+
+### CameraLiveView and variants
+
+`CameraLiveView` groups the public variants for one camera or logical video group. A variant maps a camera role to a generated Transmission/output.
+
+Context defaults:
+
+- `thumbnail` and `pip`: prefer `sub`.
+- `large` and `fullscreen`: prefer `main`.
+- `ptz`: prefer `zoom`, then `main`, then `sub`.
+
+This is intentionally separate from technical quality labels. The dashboard source selector should expose labels such as "Principal", "Baixa resolução", "Zoom", or custom names, not internal output ids.
+
+### Reconciliation rules
+
+The reconciler is the owner of generated streaming artifacts.
+
+It runs when:
+
+- camera/source settings are saved;
+- ONVIF discovery creates or updates video sources;
+- `GET /api/streams/publications` normalizes publication specs for display;
+- `PUT /api/streams/publications/camera-sources/{camera_id}/{source_id}` updates a source publication;
+- `POST /api/streams/reconcile` is called;
+- pipelines are saved, enabled, disabled, or removed.
+
+For `owner_kind="camera_source"`, it creates one generated Transmission per published source and an implicit continuous pipeline named from the generated transmission. That pipeline feeds `camera.source` directly into `stream.publish_video`.
+
+For `owner_kind="pipeline_output"`, it reads publication fields from the `stream.publish_video` node, creates a publication for that rendered variant, creates the generated Transmission, and writes the generated `transmission_id` back into the node when needed.
+
+Generated camera pipelines must be continuous. A stream sink behind a motion gate, event-only detector, or event-only tracker is a manual/diagnostic case and should surface a warning rather than pretending to be a stable live camera stream.
+
 ### Transmission
 
-A Transmission is the durable configuration entity. Fields (as implemented by the API model):
+A Transmission is the technical stream entity consumed by MediaMTX/FFmpeg.
+
+For regular camera sources, Transmissions are generated from `StreamPublicationSpec`. Manual CRUD remains available for advanced diagnostics and integration work.
+
+Fields (as implemented by the API model):
 
 - `id`: UUID (generated server-side if omitted).
 - `name`: display name.
@@ -322,11 +428,22 @@ Config (as implemented):
   "input_artifact_name": "",
   "resize_mode": "contain",
   "writer_priority": 0,
-  "bypass_mode": "auto"
+  "bypass_mode": "auto",
+  "publication_enabled": false,
+  "publication_camera_id": "",
+  "publication_camera_source_id": "",
+  "publication_live_view_id": "",
+  "publication_role": "custom",
+  "publication_label": "",
+  "publication_show_in_dashboard": true,
+  "publication_show_in_home_assistant": false,
+  "publication_quality_profile_id": ""
 }
 ```
 
 Notes:
+- `transmission_id` is still the runtime target.
+- For generated variants, the UI can leave `transmission_id` empty and set `publication_enabled=true`; the reconciler generates the Transmission and later fills the target id.
 - `resize_mode` exists in the operator config, but resizing is currently applied by the writer bridge based on output settings.
 - Artifact selection:
   - Reads `input_artifact_name` exactly, or `main` when it is empty.
@@ -334,8 +451,31 @@ Notes:
   - Normalizes frames to `uint8` BGR and contiguous memory.
 - Lifecycle handling:
   - On `close`, the writer is marked closed and becomes ineligible for arbitration.
+- Diagnostics:
+  - The operator warns when it is downstream of motion gates or event-only detection/tracking, because those graphs do not produce continuous live video.
 
-## Wizard: create pipeline from a Transmission
+### Manual publication mode
+
+Advanced pipelines should publish rendered video as a variant instead of asking the user to pick an existing Transmission id.
+
+User-facing fields:
+
+- destination camera/group;
+- source role: `main`, `sub`, `zoom`, or `custom`;
+- visible label;
+- whether the variant appears in the dashboard;
+- whether the variant is exported to Home Assistant;
+- quality profile override when needed.
+
+Pipeline-owned publications use deterministic ids:
+
+```text
+pipeline:{pipeline_name}:{node_id}
+```
+
+If the pipeline is disabled or removed, the publication and generated stream artifacts are disabled/removed by reconciliation.
+
+## Advanced wizard: create pipeline from a Transmission
 
 Endpoint:
 - `POST /api/streams/wizard/create-pipeline`
@@ -355,6 +495,8 @@ Generated topology (high level):
 
 Critical validation:
 - `Transmission.host_server_id` must match the pipeline `processing_server_id` (wizard enforces this).
+
+This wizard is an advanced/diagnostic shortcut. The normal camera flow is now camera source publication plus reconciliation.
 
 ## Bypass mode (publisher input optimization)
 
@@ -421,14 +563,29 @@ Core auth (enforced mode):
 
 ## UI behavior (Settings and Dashboard)
 
+### Camera settings
+
+For regular cameras, streaming is configured from the camera source itself:
+
+- each video source can show a `Transmitir esta fonte` checkbox;
+- the source role is used as the publication role (`main`, `sub`, `zoom`, `custom`);
+- the visible source label becomes the publication label;
+- ONVIF-discovered video sources can be published by default;
+- saving the source triggers streaming reconciliation.
+
+If the streaming extension is not active, camera settings should not expose streaming controls.
+
 ### Settings panel
 
-The extension adds a Streaming panel in Settings where users can:
+The extension adds a Streaming/advanced panel in Settings where users can:
 
-- Create/edit transmissions and outputs.
+- Inspect generated transmissions, outputs, live views, and runtime health.
+- Create/edit manual transmissions and outputs for advanced diagnostics.
 - Start/stop the engine.
 - Resolve URLs (and best-effort prime demand).
-- Create a pipeline from a transmission using the wizard.
+- Create a pipeline from a transmission using the advanced wizard.
+
+Generated artifacts are read-only in the normal UI. To change a generated camera stream, edit the camera source publication. To change a generated pipeline variant, edit the owning `stream.publish_video` node.
 
 ### Dashboard (Rendering -> Streams)
 
@@ -436,10 +593,27 @@ The main UI includes a "Streams" rendering mode with:
 
 - Grid modes `1x1` and `2x2` with pagination.
 - Auto-hide overlay.
+- Source/role selector using camera variants, for example Principal, Baixa resolução, Zoom, or custom names.
 - Playback strategy:
-  1. Prime demand for the selected transmission.
-  2. Attempt WebRTC/WHEP (low latency).
-  3. Fallback to HLS (native HLS when supported, otherwise `hls.js`).
+  1. Pick the best variant for the visual context.
+  2. Request the backend Playback Plan for that transmission/output/context.
+  3. Prime/heartbeat demand for the selected output.
+  4. Use the first available transport from the plan.
+  5. Monitor playback and fallback without surfacing non-blocking transport warnings as primary errors.
+
+Default variant selection:
+
+- grid/thumbnail/PiP: prefer `sub`;
+- fullscreen/large: prefer `main`;
+- PTZ/low latency: prefer `zoom`, then `main`;
+- diagnostics/poor network: prefer the smallest available public variant.
+
+Default transport policy:
+
+- web grid/passive: `MSE -> HLS -> JSMpeg`; WebRTC is blocked unless low latency/PTZ is explicit;
+- web PTZ/low latency: `WebRTC -> MSE -> HLS -> JSMpeg`;
+- app and Home Assistant ingress: HLS-first;
+- Home Assistant entity: no web player decision, use the HA camera contract.
 
 Authentication in browser playback:
 
@@ -480,6 +654,11 @@ All endpoints are under `/api/streams`.
 - `GET /api/streams/settings`
 - `PATCH /api/streams/settings`
 
+### Publications and reconciliation
+- `GET /api/streams/publications?camera_id=...`
+- `PUT /api/streams/publications/camera-sources/{camera_id}/{source_id}`
+- `POST /api/streams/reconcile`
+
 ### Engine
 - `GET /api/streams/engine/status`
 - `POST /api/streams/engine/start`
@@ -494,18 +673,31 @@ All endpoints are under `/api/streams`.
 
 ### URL resolution
 - `GET /api/streams/transmissions/{transmission_id}/urls` (local or proxy)
+- `GET /api/streams/transmissions/{transmission_id}/playback-plan`
+- `GET /api/streams/transmissions/{transmission_id}/hls/probe`
+- `GET /api/streams/transmissions/{transmission_id}/still.jpg`
+- `POST /api/streams/transmissions/{transmission_id}/webrtc/offer` (Home Assistant native WebRTC opt-in)
 - `GET /api/streams/internal/transmissions/{transmission_id}/urls` (only on host server)
+
+### Home Assistant
+- `GET /api/streams/home-assistant/cameras`
 
 ### Distributed settings
 - `GET /api/streams/distributed/settings/{server_id}`
 
 ### Runtime
 - `GET /api/streams/runtime/outputs`
+- `GET /api/streams/runtime/health`
+- `GET /api/streams/runtime/pipelines`
+- `GET /api/streams/runtime/observability`
+- `GET /api/streams/runtime/diagnostic-snapshot`
 - `GET /api/streams/runtime/diagnostics`
+- `POST /api/streams/runtime/playback-events`
 
 ### Demand
 - `GET /api/streams/transmissions/{transmission_id}/demand`
 - `POST /api/streams/transmissions/{transmission_id}/demand/prime`
+- `POST /api/streams/transmissions/{transmission_id}/demand/heartbeat`
 
 ### Wizard
 - `POST /api/streams/wizard/create-pipeline`
@@ -553,6 +745,52 @@ Transmission URLs (`GET /api/streams/transmissions/{id}/urls`):
 }
 ```
 
+Playback plan (`GET /api/streams/transmissions/{id}/playback-plan?client=web&context=fullscreen`):
+
+```json
+{
+  "transmission_id": "uuid",
+  "client": "web",
+  "selected_transport": "hls",
+  "transports": [
+    {
+      "transport": "mse",
+      "rank": 0,
+      "available": false,
+      "blocking_errors": ["MSE sidecar playback is not enabled yet. Falling back to native transports."]
+    },
+    {
+      "transport": "hls",
+      "rank": 1,
+      "available": true,
+      "output_id": "hls_fullscreen_quality",
+      "url": "http://127.0.0.1:8100/api/streams/media/hls/..."
+    }
+  ],
+  "hls_warnings": [],
+  "webrtc_warnings": []
+}
+```
+
+Camera source publication (`GET /api/streams/publications?camera_id=front`):
+
+```json
+[
+  {
+    "id": "camera:front:sub",
+    "owner_kind": "camera_source",
+    "camera_id": "front",
+    "camera_source_id": "sub",
+    "enabled": true,
+    "role": "sub",
+    "label": "Baixa resolução",
+    "host_server_id": "local",
+    "quality_policy": {},
+    "transport_policy": {}
+  }
+]
+```
+
 Demand (`GET /api/streams/transmissions/{id}/demand`):
 
 ```json
@@ -566,7 +804,31 @@ Demand (`GET /api/streams/transmissions/{id}/demand`):
 }
 ```
 
-## Practical quickstart (curl + ffplay)
+## Practical quickstart
+
+### Camera-source flow
+
+For normal use:
+
+1. Add/discover a camera in the Cameras extension.
+2. Keep `Transmitir esta fonte` enabled on the desired video sources.
+3. Save the camera/source.
+4. The streaming reconciler creates the live view, generated transmissions, outputs, and implicit pipelines.
+5. Open the dashboard and select the camera/source role.
+
+The direct streaming API for that intent is:
+
+```bash
+curl http://127.0.0.1:8100/api/streams/publications?camera_id=<camera_id>
+
+curl -X PUT http://127.0.0.1:8100/api/streams/publications/camera-sources/<camera_id>/<source_id> \
+  -H 'content-type: application/json' \
+  -d '{"enabled": true, "role": "sub", "label": "Baixa resolução"}'
+
+curl -X POST http://127.0.0.1:8100/api/streams/reconcile
+```
+
+### Advanced manual flow (curl + ffplay)
 
 Start the engine:
 
@@ -652,6 +914,38 @@ Fix:
 - Check `GET /api/streams/engine/status`.
 - Use `GET /api/streams/runtime/diagnostics` and inspect `engine`, `publisher`, and `runtime_state`.
 
+### Dashboard says no pipeline is feeding the stream
+Likely causes:
+- The camera source publication is disabled.
+- Generated implicit pipeline was removed or disabled.
+- The manual pipeline that owns a variant is disabled.
+- `stream.publish_video` has not received a frame yet.
+
+Fix:
+- For camera streams, check the camera source and keep `Transmitir esta fonte` enabled.
+- Call `POST /api/streams/reconcile`.
+- Check `GET /api/streams/runtime/pipelines` to see which pipeline owns the generated transmission.
+- Check `GET /api/streams/runtime/health` for `active_writer_id`, `selected_writer_id`, `fallback_reason`, and frame age.
+
+The primary user-facing message for this class is:
+
+```text
+Nenhuma pipeline está alimentando esta transmissão.
+```
+
+### HLS plays but WebRTC warning appears
+If the effective transport is HLS and the HLS probe is healthy, WebRTC network warnings are technical diagnostics only.
+
+Common causes:
+- Home Assistant add-on did not publish the UDP WebRTC port.
+- The browser is remote or behind NAT without TURN/ICE reachability.
+- The context is HA ingress, where direct Toposync WebRTC is blocked by default.
+
+Fix:
+- Keep HLS as the stable path for HA/app/passive views.
+- Use WebRTC only for explicit low-latency/PTZ contexts.
+- For HA Cloud, use the native Home Assistant camera entity path.
+
 ### RTSP returns 401 Unauthorized
 The output requires authentication.
 
@@ -723,5 +1017,7 @@ If you plan to ship FFmpeg binaries, pay attention to LGPL/GPL build flags and c
 - Video-only: audio is not published (`-an` in FFmpeg).
 - No built-in TLS for MediaMTX endpoints (LAN-first).
 - No Low-Latency HLS by default (to avoid TLS requirements and keep the default simpler).
+- MSE is represented in Playback Plan but does not have the go2rtc/sidecar proxy implementation yet.
+- JSMpeg is represented in Playback Plan but does not have the emergency fallback worker implementation yet.
 - Hardware encoding selection exists in code paths but is not exposed as a stable user-facing setting yet.
-- On-demand stops publishers, but does not stop pipeline execution; pipeline compute is controlled by pipeline configuration and lifecycle semantics.
+- On-demand stops publishers, but does not stop arbitrary manual pipeline execution; pipeline compute is controlled by pipeline configuration and lifecycle semantics.

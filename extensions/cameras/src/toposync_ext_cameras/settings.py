@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -48,7 +47,6 @@ class CameraSourceIngestSettings(BaseModel):
 
     mode: Literal["centralized", "runtime_local", "direct"] = "centralized"
     host_server_id: str = "local"
-    direct_override_until_unix: float | None = Field(default=None, ge=0.0)
 
     @field_validator("mode", mode="before")
     @classmethod
@@ -341,19 +339,6 @@ def get_camera_source_ingest_settings(source: Any) -> dict[str, Any]:
     else:
         settings = CameraSourceIngestSettings.model_validate(raw if isinstance(raw, dict) else {})
     return settings.model_dump(mode="json")
-
-
-def is_camera_direct_override_active(source: Any, *, now_unix: float | None = None) -> bool:
-    ingest = get_camera_source_ingest_settings(source)
-    value = ingest.get("direct_override_until_unix")
-    try:
-        until = float(value)
-    except Exception:
-        return False
-    if until <= 0.0:
-        return False
-    now = time.time() if now_unix is None else float(now_unix)
-    return until > now
 
 
 def flatten_camera_device_for_ui(device: Any) -> dict[str, Any] | None:

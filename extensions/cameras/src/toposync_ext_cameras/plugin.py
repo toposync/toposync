@@ -119,7 +119,6 @@ class CameraSourceHealthItem(BaseModel):
     ingest_mode: Literal["centralized", "runtime_local", "direct"] = "direct"
     centralizer_server_id: str | None = None
     ingest_path: str | None = None
-    direct_override_active: bool = False
     ingest_warnings: list[str] = Field(default_factory=list)
     ingest_blocking_errors: list[str] = Field(default_factory=list)
     status: Literal["healthy", "starting", "stale", "unreachable", "unauthorized", "error", "idle", "unknown"]
@@ -150,6 +149,7 @@ class OnvifProfileInfo(BaseModel):
     height: int | None = None
     fps: int | None = None
     has_ptz: bool = False
+    stream_uri: str | None = None
 
 
 class OnvifInspectResponse(BaseModel):
@@ -1373,18 +1373,24 @@ class CamerasExtension(BaseExtension):
             if media_xaddr:
                 try:
                     raw_profiles = await client.get_profiles(media_xaddr)
-                    profiles = [
-                        OnvifProfileInfo(
-                            token=p.token,
-                            name=p.name,
-                            encoding=p.encoding,
-                            width=p.width,
-                            height=p.height,
-                            fps=p.fps,
-                            has_ptz=p.has_ptz,
+                    for p in raw_profiles:
+                        stream_uri: str | None = None
+                        try:
+                            stream_uri = await client.get_stream_uri(media_xaddr, profile_token=p.token)
+                        except OnvifError as exc:
+                            warnings.append(f"Could not resolve stream URI for profile '{p.token}': {exc}")
+                        profiles.append(
+                            OnvifProfileInfo(
+                                token=p.token,
+                                name=p.name,
+                                encoding=p.encoding,
+                                width=p.width,
+                                height=p.height,
+                                fps=p.fps,
+                                has_ptz=p.has_ptz,
+                                stream_uri=stream_uri or None,
+                            )
                         )
-                        for p in raw_profiles
-                    ]
                 except OnvifError as exc:
                     warnings.append(str(exc))
             else:

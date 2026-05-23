@@ -106,7 +106,6 @@ class CameraIngestResolver:
 
         device, source, policy = context
         resolved_source_id = str(source.get("id") or "").strip() or requested_source_id
-        direct_override_active = bool(policy.direct_override_active)
         mode = policy.mode
         target_server_id = (
             consumer_id
@@ -114,24 +113,21 @@ class CameraIngestResolver:
             else normalize_server_id(policy.host_server_id, fallback="local")
         )
         warnings: list[str] = []
-        if mode == "centralized" and target_server_id != consumer_id and not direct_override_active:
+        if mode == "centralized" and target_server_id != consumer_id:
             warnings.append(
                 f"Consumer runtime '{consumer_id}' will read camera ingest from '{target_server_id}'."
             )
         if mode == "direct":
             warnings.append("Camera policy opens a direct/external connection to the configured source.")
 
-        if mode == "direct" or direct_override_active:
-            if direct_override_active:
-                warnings.append("Temporary direct override is active for this camera.")
+        if mode == "direct":
             return self._resolve_direct_response(
                 camera_id=cid,
                 source_id=resolved_source_id,
                 mode=mode,
-                centralizer_server_id="" if mode == "direct" else target_server_id,
+                centralizer_server_id="",
                 device=device,
                 source=source,
-                direct_override_active=direct_override_active,
                 warnings=warnings,
             )
 
@@ -141,7 +137,6 @@ class CameraIngestResolver:
                 source_id=resolved_source_id,
                 mode=mode,  # type: ignore[arg-type]
                 centralizer_server_id=target_server_id,
-                direct_override_active=direct_override_active,
                 warnings=warnings,
                 blocking_errors=["Streaming engine is disabled on the selected ingest centralizer."],
             )
@@ -151,7 +146,6 @@ class CameraIngestResolver:
                 source_id=resolved_source_id,
                 mode=mode,  # type: ignore[arg-type]
                 centralizer_server_id=target_server_id,
-                direct_override_active=direct_override_active,
                 warnings=warnings,
                 blocking_errors=["Camera ingest is disabled in streaming settings."],
             )
@@ -175,7 +169,6 @@ class CameraIngestResolver:
             centralizer_server_id=target_server_id,
             consumer_server_id=consumer_id,
             request_host=request_host,
-            direct_override_active=direct_override_active,
             warnings=warnings,
         )
 
@@ -188,7 +181,6 @@ class CameraIngestResolver:
         centralizer_server_id: str,
         device: dict[str, Any],
         source: dict[str, Any],
-        direct_override_active: bool,
         warnings: list[str],
     ) -> StreamingCameraIngestResolveResponse:
         direct_url = _direct_rtsp_url(device, source)
@@ -204,7 +196,6 @@ class CameraIngestResolver:
             path="",
             rtsp_url=direct_url,
             redacted_rtsp_url=_redact_rtsp_url(direct_url),
-            direct_override_active=direct_override_active,
             warnings=warnings,
             blocking_errors=blocking_errors,
         )
@@ -220,7 +211,6 @@ class CameraIngestResolver:
         centralizer_server_id: str,
         consumer_server_id: str,
         request_host: str,
-        direct_override_active: bool,
         warnings: list[str],
     ) -> StreamingCameraIngestResolveResponse:
         ingest_by_id = build_camera_ingest_definitions(
@@ -235,7 +225,6 @@ class CameraIngestResolver:
                 source_id=source_id,
                 mode=mode,  # type: ignore[arg-type]
                 centralizer_server_id=centralizer_server_id,
-                direct_override_active=direct_override_active,
                 warnings=warnings,
                 blocking_errors=["Camera ingest path is unavailable for the configured policy."],
             )
@@ -274,7 +263,6 @@ class CameraIngestResolver:
                 path=ingest.path_slug,
                 rtsp_url=url,
                 redacted_rtsp_url=_redact_rtsp_url(url),
-                direct_override_active=direct_override_active,
                 warnings=warnings,
             )
 
@@ -296,7 +284,6 @@ class CameraIngestResolver:
                 used_ingest=True,
                 centralizer_server_id=centralizer_server_id,
                 path=ingest.path_slug,
-                direct_override_active=direct_override_active,
                 warnings=warnings,
                 blocking_errors=blocking_errors,
             )
@@ -310,7 +297,6 @@ class CameraIngestResolver:
                 used_ingest=True,
                 centralizer_server_id=centralizer_server_id,
                 path=ingest.path_slug,
-                direct_override_active=direct_override_active,
                 warnings=warnings,
                 blocking_errors=["Selected ingest centralizer returned a loopback RTSP URL."],
             )
@@ -324,7 +310,6 @@ class CameraIngestResolver:
             rtsp_url=url,
             redacted_rtsp_url=_redact_rtsp_url(url)
             or _redacted_rtsp_url_with_userinfo(host, rtsp_port, ingest.path_slug, username=credentials.username),
-            direct_override_active=direct_override_active,
             warnings=warnings,
         )
 

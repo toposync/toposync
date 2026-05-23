@@ -151,7 +151,7 @@ from .models import (
 )
 
 MSE_PROXY_DEMAND_TTL_S = 45.0
-MSE_PROXY_PATH_READY_TIMEOUT_S = 4.0
+MSE_PROXY_PATH_READY_TIMEOUT_S = 8.0
 MSE_PROXY_PATH_READY_POLL_S = 0.25
 
 
@@ -554,6 +554,35 @@ def _mse_proxy_url(
     if token:
         url = f"{url}?media_token={urllib_parse.quote(token, safe='')}"
     return url
+
+
+def _mse_sidecar_start_blocking_errors(
+    *,
+    settings: StreamingExtensionSettings,
+    engine_running: bool,
+) -> list[str]:
+    errors: list[str] = []
+    if not settings.engine.enabled:
+        errors.append("MediaMTX streaming engine is disabled; MSE needs the internal RTSP output.")
+    if not engine_running:
+        errors.append("MediaMTX engine is not running; MSE needs the internal RTSP output.")
+    if not settings.engine.mse_sidecar.enabled:
+        errors.append("MSE sidecar is disabled in streaming settings.")
+    if settings.engine.enabled and settings.engine.mse_sidecar.enabled:
+        try:
+            platform = detect_go2rtc_platform()
+            installed = find_installed_go2rtc_binary(
+                platform=platform,
+                version=settings.engine.mse_sidecar.go2rtc_version,
+            )
+            if installed is None:
+                errors.append(
+                    "go2rtc binary is not installed. Use /api/streams/mse/download or set "
+                    "TOPOSYNC_STREAMING_GO2RTC_PATH before using MSE."
+                )
+        except Exception as exc:
+            errors.append(f"go2rtc binary is unavailable: {exc}")
+    return _dedupe_messages(errors)
 
 
 def _jsmpeg_proxy_url(
@@ -1439,6 +1468,21 @@ async def _mse_sidecar_api_reachable(status: Go2RtcSidecarStatus) -> bool:
         return False
 
 
+async def _wait_for_mse_sidecar_api_reachable(
+    status: Go2RtcSidecarStatus,
+    *,
+    timeout_s: float = 3.0,
+    poll_s: float = 0.1,
+) -> bool:
+    deadline = time.monotonic() + max(0.0, float(timeout_s))
+    while True:
+        if await _mse_sidecar_api_reachable(status):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(max(0.05, float(poll_s)))
+
+
 async def _prime_mse_proxy_demand(
     request: Request | WebSocket,
     *,
@@ -1535,6 +1579,7 @@ async def _resolve_local_transmission_urls(
     if not engine_status.running:
         generic_warnings.append("Engine is not running. URLs are based on preferred ports.")
     mse_status: Go2RtcSidecarStatus | None = None
+    mse_media_url_available = False
     mse_warnings: list[str] = []
     if engine_status.running and settings.engine.mse_sidecar.enabled:
         try:
@@ -1542,8 +1587,23 @@ async def _resolve_local_transmission_urls(
             if current_mse_status.running:
                 mse_status = await _apply_mse_sidecar_state(request, settings=settings)
                 mse_warnings.extend(list(getattr(mse_status, "warnings", ()) or ()))
+                mse_media_url_available = bool(mse_status.running)
+            else:
+                mse_start_errors = _mse_sidecar_start_blocking_errors(
+                    settings=settings,
+                    engine_running=engine_status.running,
+                )
+                mse_media_url_available = not mse_start_errors
+                mse_warnings.extend(mse_start_errors)
         except Exception as exc:
             mse_warnings.append(f"MSE sidecar unavailable: {exc}")
+    elif settings.engine.mse_sidecar.enabled:
+        mse_warnings.extend(
+            _mse_sidecar_start_blocking_errors(
+                settings=settings,
+                engine_running=engine_status.running,
+            )
+        )
     jsmpeg_available = False
     if settings.engine.jsmpeg.enabled:
         try:
@@ -1638,7 +1698,7 @@ async def _resolve_local_transmission_urls(
                         **_output_quality_metadata(output),
                     )
                 )
-                if mse_status is not None and mse_status.running:
+                if mse_media_url_available:
                     media_token, mse_expires_at_unix, mse_renew_after_unix = _issue_media_token(
                         config_store=_config_store(request),
                         settings=settings,
@@ -1713,7 +1773,7 @@ async def _resolve_local_transmission_urls(
                 **_output_quality_metadata(output),
             )
         )
-        if output.protocol == "hls" and mse_status is not None and mse_status.running:
+        if output.protocol == "hls" and mse_media_url_available:
             media_token, mse_expires_at_unix, mse_renew_after_unix = _issue_media_token(
                 config_store=_config_store(request),
                 settings=settings,
@@ -2138,8 +2198,15 @@ def _build_playback_plan_response(
     if hls_output is None:
         mse_blocking.append("No HLS backing output is available for MSE.")
     if mse_output is None:
-        sidecar_warning = next((message for message in urls.warnings if "mse sidecar" in message.lower()), "")
-        mse_blocking.append(sidecar_warning or "MSE sidecar is not running or has no stream for this output.")
+        sidecar_warning = next(
+            (
+                message
+                for message in urls.warnings
+                if "mse" in message.lower() or "go2rtc" in message.lower()
+            ),
+            "",
+        )
+        mse_blocking.append(sidecar_warning or "MSE is not available for this output.")
     jsmpeg_blocking: list[str] = []
     if hls_output is None:
         jsmpeg_blocking.append("No HLS backing output is available for JSMpeg.")
@@ -5860,6 +5927,13 @@ def create_streaming_router() -> APIRouter:
         warnings: list[str] = list(status.warnings)
         platform = status.platform
         binary_path = status.binary_path
+        runtime_dir = config_store.paths.data_dir / "runtime" / "streaming" / "go2rtc"
+        config_path = status.config_path
+        log_path = status.log_path
+        if not config_path and (runtime_dir / "go2rtc.yaml").is_file():
+            config_path = str(runtime_dir / "go2rtc.yaml")
+        if not log_path and (runtime_dir / "go2rtc.log").is_file():
+            log_path = str(runtime_dir / "go2rtc.log")
         try:
             platform_info = detect_go2rtc_platform()
             platform = platform_info.key
@@ -5875,8 +5949,6 @@ def create_streaming_router() -> APIRouter:
             warnings.append("MSE sidecar is disabled in settings.")
         if settings.engine.mse_sidecar.enabled and not settings.engine.enabled:
             warnings.append("MSE sidecar needs the MediaMTX streaming engine to be enabled.")
-        if settings.engine.mse_sidecar.enabled and not status.running:
-            warnings.append("MSE sidecar is enabled but not running.")
         if settings.engine.mse_sidecar.enabled and not status.running and not binary_path:
             warnings.append(
                 "go2rtc binary is not installed yet. Starting MSE will download it (internet required), "
@@ -5895,8 +5967,8 @@ def create_streaming_router() -> APIRouter:
             go2rtc_version=status.go2rtc_version,
             platform=platform,
             binary_path=binary_path,
-            config_path=status.config_path,
-            log_path=status.log_path,
+            config_path=config_path,
+            log_path=log_path,
             stream_count=status.stream_count,
             warnings=_dedupe_messages(warnings),
             restart_count=status.restart_count,
@@ -7069,15 +7141,43 @@ def create_streaming_router() -> APIRouter:
             return
         transmission, output = token_output
 
+        await websocket.accept()
+
+        async def send_control(message_type: str, message: str, **extra: Any) -> None:
+            payload = {"type": message_type, "message": message, "value": message, **extra}
+            with contextlib.suppress(Exception):
+                await websocket.send_text(json.dumps(payload, separators=(",", ":")))
+
+        async def fail(message: str, *, code: int = 1011, **extra: Any) -> None:
+            await send_control("error", message, **extra)
+            with contextlib.suppress(Exception):
+                await websocket.close(code=code)
+
+        await send_control("status", "Priming MSE backing stream demand.")
         await _prime_mse_proxy_demand(websocket, transmission=transmission, output=output)
-        await _wait_for_mse_backing_path_ready(websocket, engine_path=normalized_engine_path)
+        await send_control("status", "Waiting for MSE backing RTSP path.")
+        backing_ready = await _wait_for_mse_backing_path_ready(
+            websocket,
+            engine_path=normalized_engine_path,
+        )
+        if not backing_ready:
+            await fail(
+                "MSE backing RTSP path did not become ready before timeout.",
+                engine_path=normalized_engine_path,
+            )
+            return
         try:
+            await send_control("status", "Starting MSE go2rtc sidecar.")
             status = await _apply_mse_sidecar_state(websocket, settings=settings)  # type: ignore[arg-type]
-        except Exception:
-            await websocket.close(code=1011)
+        except Exception as exc:
+            await fail(f"Failed to start MSE sidecar: {exc}")
             return
         if not status.running:
-            await websocket.close(code=1011)
+            await fail("MSE sidecar did not start.")
+            return
+        await send_control("status", "Waiting for MSE go2rtc API.")
+        if not await _wait_for_mse_sidecar_api_reachable(status):
+            await fail("MSE sidecar API did not become reachable before timeout.")
             return
 
         stream_name = _mse_stream_name_for_engine_path(normalized_engine_path)
@@ -7085,10 +7185,10 @@ def create_streaming_router() -> APIRouter:
             f"ws://127.0.0.1:{int(status.api_port)}/api/ws?"
             f"src={urllib_parse.quote(stream_name, safe='')}"
         )
-        await websocket.accept()
         try:
             import websockets
 
+            await send_control("status", "Connecting to MSE go2rtc WebSocket.", stream=stream_name)
             async with websockets.connect(
                 upstream_url,
                 open_timeout=5.0,
@@ -7132,9 +7232,8 @@ def create_streaming_router() -> APIRouter:
                 for task in done:
                     with contextlib.suppress(Exception):
                         task.result()
-        except Exception:
-            with contextlib.suppress(Exception):
-                await websocket.close(code=1011)
+        except Exception as exc:
+            await fail(f"MSE upstream WebSocket failed: {exc}", stream=stream_name)
 
     @router.websocket("/media/jsmpeg/{engine_path}/ws")
     async def jsmpeg_media_proxy(websocket: WebSocket, engine_path: str) -> None:

@@ -19,6 +19,7 @@ from toposync_ext_streaming.api.models import (
     list_engine_paths_for_host,
     resolve_output_engine_path,
 )
+from toposync_ext_streaming.api import routes as streaming_routes
 from toposync_ext_streaming.api.routes import create_streaming_router
 from toposync_ext_streaming.streaming.engine_manager import (
     MediaMtxEngineStatus,
@@ -119,6 +120,40 @@ class _RunningMseSidecarStub(Go2RtcSidecarManager):
             warnings=(),
             restart_count=1,
             stream_count=len(self.streams),
+        )
+
+
+class _StoppedMseSidecarStub(Go2RtcSidecarManager):
+    def __init__(self, *, data_dir: Path) -> None:
+        super().__init__(data_dir=data_dir)
+        self.streams: dict[str, str] = {}
+        self.ensure_calls = 0
+
+    async def get_status(self) -> Go2RtcSidecarStatus:
+        return self._status()
+
+    async def ensure_running(self, sidecar_settings, *, streams=None) -> Go2RtcSidecarStatus:  # noqa: ANN001
+        self.ensure_calls += 1
+        self.streams = dict(streams or {})
+        return self._status()
+
+    def _status(self) -> Go2RtcSidecarStatus:
+        return Go2RtcSidecarStatus(
+            running=False,
+            pid=None,
+            uptime_seconds=None,
+            started_at_unix=None,
+            bind_host="127.0.0.1",
+            api_port=18764,
+            last_error=None,
+            go2rtc_version="test",
+            platform="test",
+            binary_path=None,
+            config_path=None,
+            log_path=None,
+            warnings=(),
+            restart_count=0,
+            stream_count=0,
         )
 
 
@@ -410,6 +445,128 @@ def test_mse_sidecar_adds_signed_mse_url_and_playback_plan_candidate(tmp_path: P
     mse_plan = next(item for item in plan_payload["transports"] if item["transport"] == "mse")
     assert mse_plan["available"] is True
     assert mse_plan["output_id"] == "hls_main"
+
+
+def test_mse_url_is_available_when_sidecar_is_stopped_but_startable(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    monkeypatch.setattr(
+        streaming_routes,
+        "find_installed_go2rtc_binary",
+        lambda **_kwargs: tmp_path / "go2rtc",
+    )
+    with _create_client(tmp_path) as client:
+        client.app.state.streaming_engine_manager = _RunningEngineManagerStub(
+            data_dir=tmp_path / "engine"
+        )
+        mse_manager = _StoppedMseSidecarStub(data_dir=tmp_path / "mse")
+        client.app.state.streaming_mse_sidecar_manager = mse_manager
+        settings_res = client.patch(
+            "/api/streams/settings",
+            json={"engine": {"enabled": True, "mse_sidecar": {"enabled": True}}},
+        )
+        assert settings_res.status_code == 200
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Startable MSE stream",
+                "path": "startable-mse-stream",
+                "outputs": [
+                    {
+                        "id": "hls_main",
+                        "protocol": "hls",
+                        "enabled": True,
+                        "quality_profile_id": "fullscreen_quality",
+                    }
+                ],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        urls_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/urls?quality_profile_id=fullscreen_quality"
+        )
+        plan_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/playback-plan?client=web&quality_profile_id=fullscreen_quality"
+        )
+
+    assert urls_res.status_code == 200
+    urls_payload = urls_res.json()
+    mse_output = next(item for item in urls_payload["outputs"] if item["protocol"] == "mse")
+    assert mse_output["output_id"] == "hls_main"
+    assert "/api/streams/media/mse/startable-mse-stream/ws?media_token=" in mse_output["url"]
+    assert mse_manager.ensure_calls == 0
+    assert mse_manager.streams == {}
+
+    assert plan_res.status_code == 200
+    plan_payload = plan_res.json()
+    assert plan_payload["selected_transport"] == "mse"
+    mse_plan = next(item for item in plan_payload["transports"] if item["transport"] == "mse")
+    assert mse_plan["available"] is True
+    assert mse_plan["blocking_errors"] == []
+
+
+def test_mse_plan_reports_missing_binary_without_hiding_hls(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    monkeypatch.setattr(
+        streaming_routes,
+        "find_installed_go2rtc_binary",
+        lambda **_kwargs: None,
+    )
+    with _create_client(tmp_path) as client:
+        client.app.state.streaming_engine_manager = _RunningEngineManagerStub(
+            data_dir=tmp_path / "engine"
+        )
+        client.app.state.streaming_mse_sidecar_manager = _StoppedMseSidecarStub(
+            data_dir=tmp_path / "mse"
+        )
+        settings_res = client.patch(
+            "/api/streams/settings",
+            json={"engine": {"enabled": True, "mse_sidecar": {"enabled": True}}},
+        )
+        assert settings_res.status_code == 200
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Missing go2rtc stream",
+                "path": "missing-go2rtc-stream",
+                "outputs": [
+                    {
+                        "id": "hls_main",
+                        "protocol": "hls",
+                        "enabled": True,
+                        "quality_profile_id": "fullscreen_quality",
+                    }
+                ],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        urls_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/urls?quality_profile_id=fullscreen_quality"
+        )
+        plan_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/playback-plan?client=web&quality_profile_id=fullscreen_quality"
+        )
+
+    assert urls_res.status_code == 200
+    urls_payload = urls_res.json()
+    assert not any(item["protocol"] == "mse" for item in urls_payload["outputs"])
+    assert any("go2rtc binary is not installed" in item for item in urls_payload["warnings"])
+
+    assert plan_res.status_code == 200
+    plan_payload = plan_res.json()
+    assert plan_payload["selected_transport"] == "hls"
+    hls_plan = next(item for item in plan_payload["transports"] if item["transport"] == "hls")
+    mse_plan = next(item for item in plan_payload["transports"] if item["transport"] == "mse")
+    assert hls_plan["available"] is True
+    assert mse_plan["available"] is False
+    assert any("go2rtc binary is not installed" in item for item in mse_plan["blocking_errors"])
 
 
 def test_transmission_playback_plan_prefers_hls_for_native_app(

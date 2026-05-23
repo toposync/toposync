@@ -28,6 +28,7 @@ from toposync.runtime.config_store import (
     ProcessingServer,
 )
 from toposync.runtime.pipelines.compiler import GraphCompileError, PipelineGraphCompiler
+from toposync.runtime.pipelines.operators_sinks import _encode_image_bytes
 from toposync.runtime.pipelines.templates import camera_names_by_id, safe_pipeline_name
 from toposync.runtime.services import ServiceRegistry
 
@@ -56,6 +57,8 @@ from ..streaming.mediamtx_processes import (
 )
 from ..streaming.publisher_manager import PublisherManager
 from ..streaming.playback_events import PlaybackEventStore, summarize_active_sessions
+from ..streaming.placeholder import get_placeholder_frame
+from ..streaming.resize import resize_frame_contain
 from ..streaming.runtime_state import SelectedWriterFrame, TransmissionRuntimeState
 from ..wizard import build_streaming_wizard_graph, suggested_streaming_wizard_pipeline_name
 from .models import (
@@ -89,6 +92,11 @@ from .models import (
     StreamingEncoderQuarantineClearResponse,
     StreamingPlaybackEventsRequest,
     StreamingPlaybackEventsResponse,
+    StreamingPlaybackClientKind,
+    StreamingHomeAssistantCameraManifestItem,
+    StreamingHomeAssistantCamerasResponse,
+    StreamingHomeAssistantWebRtcOfferRequest,
+    StreamingHomeAssistantWebRtcOfferResponse,
     StreamingPlaybackPlanResponse,
     StreamingPlaybackPlanTransport,
     StreamingQualityProfilesResponse,
@@ -1644,7 +1652,7 @@ def _runtime_health_for_playback_plan(
 def _build_playback_plan_response(
     *,
     transmission_id: str,
-    client: Literal["app", "web"],
+    client: StreamingPlaybackClientKind,
     urls: TransmissionUrlsResponse,
     runtime_health: StreamingRuntimeTransmissionHealth | None = None,
     quality_profile_id: str | None = None,
@@ -1665,6 +1673,14 @@ def _build_playback_plan_response(
     webrtc_blocking: list[str] = []
     if webrtc_output is None:
         webrtc_blocking.append("No WebRTC/WHEP output is available.")
+    if client == "ha_ingress":
+        webrtc_blocking.append(
+            "Home Assistant ingress must use the Home Assistant native camera path for Cloud/WebRTC relay; direct Toposync WebRTC is disabled by default."
+        )
+    if client == "ha_entity":
+        webrtc_blocking.append(
+            "Home Assistant entity playback is negotiated by the Home Assistant camera platform."
+        )
     if urls.network_contract is not None:
         for message in urls.network_contract.blocking_errors:
             lowered = message.lower()
@@ -1678,7 +1694,20 @@ def _build_playback_plan_response(
         "JSMpeg emergency fallback is not enabled yet. Falling back to HLS/WebRTC.",
     ]
 
-    if client == "app" or home_assistant_proxy_hls:
+    if client == "ha_entity":
+        return StreamingPlaybackPlanResponse(
+            transmission_id=transmission_id,
+            client=client,
+            transports=[],
+            selected_transport=None,
+            warnings=[
+                *list(urls.warnings),
+                "Home Assistant entity playback uses the Home Assistant camera contract from /api/streams/home-assistant/cameras.",
+            ],
+            blocking_errors=list(urls.blocking_errors),
+        )
+
+    if client in {"app", "ha_ingress"} or home_assistant_proxy_hls:
         order: list[Literal["hls", "mse", "webrtc", "jsmpeg"]] = ["hls", "mse", "webrtc", "jsmpeg"]
     else:
         order = ["mse", "webrtc", "hls", "jsmpeg"]
@@ -1698,14 +1727,20 @@ def _build_playback_plan_response(
                 )
             )
         elif transport == "webrtc":
-            warnings = ["WebRTC is reserved for low-latency/PTZ in Home Assistant proxy mode."] if home_assistant_proxy_hls else []
+            warnings = (
+                ["WebRTC is reserved for Home Assistant native camera/WebRTC relay in HA ingress mode."]
+                if client == "ha_ingress"
+                else ["WebRTC is reserved for low-latency/PTZ in Home Assistant proxy mode."]
+                if home_assistant_proxy_hls
+                else []
+            )
             transports.append(
                 _playback_plan_transport_from_output(
                     transport="webrtc",
                     rank=rank,
                     output=webrtc_output,
-                    available=webrtc_output is not None and not webrtc_blocking and not (client == "app"),
-                    blocking_errors=webrtc_blocking if client != "app" else [*webrtc_blocking, "Native app playback uses HLS first."],
+                    available=webrtc_output is not None and not webrtc_blocking and client not in {"app", "ha_ingress"},
+                    blocking_errors=webrtc_blocking if client not in {"app"} else [*webrtc_blocking, "Native app playback uses HLS first."],
                     warnings=warnings,
                     health=_runtime_health_for_playback_plan(runtime_health, webrtc_output.output_id if webrtc_output else None),
                 )
@@ -1737,6 +1772,8 @@ def _build_playback_plan_response(
     plan_warnings = list(urls.warnings)
     if home_assistant_proxy_hls:
         plan_warnings.append("Home Assistant proxy mode prefers signed HLS for stable playback.")
+    if client == "ha_ingress":
+        plan_warnings.append("Home Assistant ingress prefers HLS; use HA camera entities for Home Assistant Cloud/WebRTC relay.")
     return StreamingPlaybackPlanResponse(
         transmission_id=transmission_id,
         client=client,
@@ -1744,6 +1781,292 @@ def _build_playback_plan_response(
         selected_transport=selected,
         warnings=plan_warnings,
         blocking_errors=list(urls.blocking_errors),
+    )
+
+
+def _home_assistant_native_webrtc_enabled() -> bool:
+    return _env_bool("TOPOSYNC_HOME_ASSISTANT_NATIVE_WEBRTC_ENABLED")
+
+
+def _home_assistant_rtsp_host(request: Request) -> str:
+    configured = str(os.getenv("TOPOSYNC_HOME_ASSISTANT_RTSP_HOST") or "").strip()
+    if configured:
+        return configured
+    host = _request_host(request)
+    return host if host not in {"", "0.0.0.0"} else "127.0.0.1"
+
+
+def _redact_url_credentials(url: str | None) -> str | None:
+    raw = str(url or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = urllib_parse.urlsplit(raw)
+    except Exception:
+        return raw
+    if not parsed.username and not parsed.password:
+        return raw
+    host = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    netloc = f"[REDACTED]@{host}{port}"
+    return urllib_parse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+
+def _home_assistant_still_url_path(
+    *,
+    transmission_id: str,
+    output_id: str | None = None,
+    quality_profile_id: str | None = None,
+) -> str:
+    query: dict[str, str] = {}
+    if output_id:
+        query["output_id"] = output_id
+    if quality_profile_id:
+        query["quality_profile_id"] = quality_profile_id
+    suffix = f"?{urllib_parse.urlencode(query)}" if query else ""
+    return f"/api/streams/transmissions/{urllib_parse.quote(transmission_id, safe='')}/still.jpg{suffix}"
+
+
+def _home_assistant_webrtc_offer_url_path(
+    *,
+    transmission_id: str,
+    output_id: str | None = None,
+    quality_profile_id: str | None = None,
+) -> str:
+    query: dict[str, str] = {}
+    if output_id:
+        query["output_id"] = output_id
+    if quality_profile_id:
+        query["quality_profile_id"] = quality_profile_id
+    suffix = f"?{urllib_parse.urlencode(query)}" if query else ""
+    return f"/api/streams/transmissions/{urllib_parse.quote(transmission_id, safe='')}/webrtc/offer{suffix}"
+
+
+def _best_transmission_output_for_home_assistant(
+    transmission: Transmission,
+    *,
+    output_id: str | None = None,
+    quality_profile_id: str | None = None,
+) -> TransmissionOutput | None:
+    selected_output_id = str(output_id or "").strip()
+    selected_profile_id = str(quality_profile_id or "").strip()
+    enabled_outputs = [item for item in transmission.outputs if bool(item.enabled)]
+    if selected_output_id:
+        for output in enabled_outputs:
+            if output.id == selected_output_id:
+                return output
+    if selected_profile_id:
+        for output in enabled_outputs:
+            if output.protocol == "hls" and output.quality_profile_id == selected_profile_id:
+                return output
+    for preferred in ("stable_apple_tv", "quad_grid", "fullscreen_quality", "diagnostic_low"):
+        for output in enabled_outputs:
+            if output.protocol == "hls" and output.quality_profile_id == preferred:
+                return output
+    return next((item for item in enabled_outputs if item.protocol == "hls"), None) or next(iter(enabled_outputs), None)
+
+
+def _best_webrtc_output_for_home_assistant(
+    transmission: Transmission,
+    *,
+    quality_profile_id: str | None = None,
+) -> TransmissionOutput | None:
+    selected_profile_id = str(quality_profile_id or "").strip()
+    enabled_webrtc = [item for item in transmission.outputs if item.enabled and item.protocol == "webrtc"]
+    if selected_profile_id:
+        for output in enabled_webrtc:
+            if output.quality_profile_id == selected_profile_id:
+                return output
+    return next(iter(enabled_webrtc), None)
+
+
+def _output_dimensions_for_still(output: TransmissionOutput | None) -> tuple[int, int]:
+    if output is not None and output.resolution is not None:
+        return int(output.resolution.width), int(output.resolution.height)
+    profile = quality_profile_by_id(output.quality_profile_id if output is not None else DEFAULT_QUALITY_PROFILE_ID)
+    if profile is not None:
+        return int(profile.resolution.width), int(profile.resolution.height)
+    return 1280, 720
+
+
+async def _prime_home_assistant_entity_demand(
+    request: Request,
+    *,
+    transmission_id: str,
+    output_id: str | None,
+    quality_profile_id: str | None,
+    ttl_s: float = 90.0,
+) -> int:
+    bridge = _writer_bridge(request)
+    prime_demand = getattr(bridge, "prime_transmission_demand", None)
+    if not callable(prime_demand):
+        return 0
+    try:
+        return int(
+            await prime_demand(
+                transmission_id,
+                ttl_s=max(30.0, float(ttl_s)),
+                output_id=str(output_id or "").strip() or None,
+                quality_profile_id=str(quality_profile_id or "").strip() or None,
+            )
+        )
+    except Exception:
+        return 0
+
+
+def _post_whep_offer_sync(*, url: str, sdp: str) -> str:
+    request = urllib_request.Request(
+        str(url),
+        data=str(sdp).encode("utf-8"),
+        headers={
+            "content-type": "application/sdp",
+            "accept": "application/sdp",
+        },
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=10) as response:
+            return response.read().decode("utf-8", errors="replace")
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace") if exc.fp is not None else str(exc)
+        raise HTTPException(status_code=502, detail=f"WHEP offer failed: {exc.code} {detail[:300]}") from exc
+    except urllib_error.URLError as exc:
+        raise HTTPException(status_code=502, detail=f"WHEP offer failed: {exc.reason}") from exc
+
+
+async def _build_home_assistant_camera_item(
+    request: Request,
+    *,
+    transmission: Transmission,
+    name: str,
+    item_id: str,
+    camera_id: str | None = None,
+    live_view_id: str | None = None,
+    variant: CameraLiveVariant | None = None,
+) -> StreamingHomeAssistantCameraManifestItem:
+    warnings: list[str] = []
+    blocking_errors: list[str] = []
+    output = _best_transmission_output_for_home_assistant(
+        transmission,
+        output_id=variant.output_id if variant is not None else None,
+        quality_profile_id=variant.quality_profile_id if variant is not None else None,
+    )
+    output_id = output.id if output is not None else (variant.output_id if variant is not None else None)
+    quality_profile_id = (
+        output.quality_profile_id
+        if output is not None and output.quality_profile_id is not None
+        else variant.quality_profile_id if variant is not None else None
+    )
+    current_server_id = _current_server_id(request)
+    rtsp_url: str | None = None
+    redacted_rtsp_url: str | None = None
+    transmission_host = normalize_server_id(transmission.host_server_id, fallback="local")
+    if not transmission.enabled:
+        warnings.append("Transmission is disabled.")
+    if output is None:
+        blocking_errors.append("No enabled output is available for Home Assistant camera playback.")
+    elif transmission_host != current_server_id:
+        blocking_errors.append("Transmission is hosted on another processing server; Home Assistant entity export is local-only in this version.")
+    else:
+        engine_path = resolve_output_engine_path(transmission, output)
+        rtsp_url = await _engine_manager(request).get_read_url_for_path(
+            engine_path,
+            host=_home_assistant_rtsp_host(request),
+        )
+        redacted_rtsp_url = _redact_url_credentials(rtsp_url)
+
+    role = variant.role if variant is not None else None
+    native_webrtc_enabled = _home_assistant_native_webrtc_enabled()
+    webrtc_output = _best_webrtc_output_for_home_assistant(
+        transmission,
+        quality_profile_id=quality_profile_id,
+    )
+    return StreamingHomeAssistantCameraManifestItem(
+        id=item_id,
+        name=name,
+        camera_id=camera_id,
+        live_view_id=live_view_id,
+        variant_id=variant.id if variant is not None else None,
+        role=role,
+        transmission_id=transmission.id,
+        output_id=output_id,
+        quality_profile_id=quality_profile_id,
+        still_url=_home_assistant_still_url_path(
+            transmission_id=transmission.id,
+            output_id=output_id,
+            quality_profile_id=quality_profile_id,
+        ),
+        rtsp_url=rtsp_url,
+        redacted_rtsp_url=redacted_rtsp_url,
+        webrtc_offer_url=(
+            _home_assistant_webrtc_offer_url_path(
+                transmission_id=transmission.id,
+                output_id=webrtc_output.id,
+                quality_profile_id=webrtc_output.quality_profile_id,
+            )
+            if native_webrtc_enabled and webrtc_output is not None
+            else None
+        ),
+        capabilities={
+            "still": True,
+            "rtsp": rtsp_url is not None,
+            "native_webrtc": bool(native_webrtc_enabled and webrtc_output is not None),
+            "ptz": bool(role == "ptz"),
+        },
+        warnings=warnings,
+        blocking_errors=blocking_errors,
+    )
+
+
+async def _build_home_assistant_cameras_response(
+    request: Request,
+    *,
+    settings: StreamingExtensionSettings,
+) -> StreamingHomeAssistantCamerasResponse:
+    transmissions_by_id = {item.id: item for item in settings.transmissions}
+    cameras: list[StreamingHomeAssistantCameraManifestItem] = []
+    referenced_transmission_ids: set[str] = set()
+    for live_view in settings.camera_live_views:
+        if not live_view.enabled:
+            continue
+        for variant in live_view.variants:
+            if not variant.enabled:
+                continue
+            transmission = transmissions_by_id.get(variant.transmission_id)
+            if transmission is None:
+                continue
+            referenced_transmission_ids.add(transmission.id)
+            item_name = f"{live_view.name} · {variant.label}".strip(" ·")
+            cameras.append(
+                await _build_home_assistant_camera_item(
+                    request,
+                    transmission=transmission,
+                    name=item_name or transmission.name or transmission.id,
+                    item_id=f"{live_view.id}:{variant.id}",
+                    camera_id=live_view.camera_id,
+                    live_view_id=live_view.id,
+                    variant=variant,
+                )
+            )
+
+    for transmission in settings.transmissions:
+        if transmission.id in referenced_transmission_ids or not transmission.enabled:
+            continue
+        cameras.append(
+            await _build_home_assistant_camera_item(
+                request,
+                transmission=transmission,
+                name=transmission.name or transmission.id,
+                item_id=transmission.id,
+            )
+        )
+
+    return StreamingHomeAssistantCamerasResponse(
+        cameras=sorted(cameras, key=lambda item: (item.name.lower(), item.id)),
+        native_webrtc_enabled=_home_assistant_native_webrtc_enabled(),
+        warnings=[
+            "Home Assistant Cloud support is provided through Home Assistant camera entities; the Toposync ingress UI remains HLS-first."
+        ],
     )
 
 
@@ -3898,6 +4221,16 @@ def create_streaming_router() -> APIRouter:
             profiles=build_quality_profiles(),
         )
 
+    @router.get(
+        "/home-assistant/cameras",
+        response_model=StreamingHomeAssistantCamerasResponse,
+    )
+    async def home_assistant_cameras_manifest(request: Request) -> StreamingHomeAssistantCamerasResponse:
+        _require_auth(request, action="core:settings:read")
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        return await _build_home_assistant_cameras_response(request, settings=settings)
+
     @router.get("/camera-live-views", response_model=list[CameraLiveView])
     async def list_camera_live_views(request: Request) -> list[CameraLiveView]:
         _require_auth(request, action="core:settings:read")
@@ -5018,6 +5351,63 @@ def create_streaming_router() -> APIRouter:
             headers=passthrough_headers,
         )
 
+    @router.get("/transmissions/{transmission_id}/still.jpg")
+    async def transmission_still_jpeg(
+        request: Request,
+        transmission_id: str,
+        output_id: str | None = None,
+        quality_profile_id: str | None = None,
+    ) -> Response:
+        _require_auth(request, action="core:settings:read")
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        transmission = next((item for item in settings.transmissions if item.id == transmission_id), None)
+        if transmission is None:
+            raise HTTPException(status_code=404, detail="Transmission not found")
+
+        if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(request):
+            raise HTTPException(status_code=409, detail="Still image is only available on the transmission host server.")
+
+        output = _best_transmission_output_for_home_assistant(
+            transmission,
+            output_id=output_id,
+            quality_profile_id=quality_profile_id,
+        )
+        width, height = _output_dimensions_for_still(output)
+        await _prime_home_assistant_entity_demand(
+            request,
+            transmission_id=transmission.id,
+            output_id=output.id if output is not None else None,
+            quality_profile_id=output.quality_profile_id if output is not None else quality_profile_id,
+        )
+
+        stale_policy = settings.stale_policy
+        selected = await _runtime_state(request).get_selected_writer_frame(
+            transmission.id,
+            stale_after_s=stale_policy.stale_after_seconds,
+            placeholder_after_s=stale_policy.placeholder_after_seconds,
+        )
+        if selected.frame is None or selected.stale or selected.placeholder_active:
+            frame = get_placeholder_frame(width, height, mode=transmission.placeholder)
+            frame_state = "placeholder"
+        else:
+            frame = resize_frame_contain(selected.frame, width, height)
+            frame_state = "live"
+
+        try:
+            body, _ext, media_type = _encode_image_bytes(frame, fmt="jpg", jpeg_quality=82)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to encode still image: {exc}") from exc
+
+        headers = {
+            "cache-control": "no-store, max-age=0",
+            "pragma": "no-cache",
+            "x-toposync-frame-state": frame_state,
+        }
+        if selected.selected_frame_age_seconds is not None:
+            headers["x-toposync-selected-frame-age-seconds"] = f"{float(selected.selected_frame_age_seconds):.3f}"
+        return Response(content=body, media_type=media_type, headers=headers)
+
     @router.get("/transmissions/{transmission_id}/urls", response_model=TransmissionUrlsResponse)
     async def transmission_urls(
         request: Request,
@@ -5060,7 +5450,7 @@ def create_streaming_router() -> APIRouter:
     async def transmission_playback_plan(
         request: Request,
         transmission_id: str,
-        client: Literal["app", "web"] = "web",
+        client: StreamingPlaybackClientKind = "web",
         output_id: str | None = None,
         quality_profile_id: str | None = None,
     ) -> StreamingPlaybackPlanResponse:
@@ -5105,6 +5495,68 @@ def create_streaming_router() -> APIRouter:
             urls=urls,
             runtime_health=runtime_health,
             quality_profile_id=quality_profile_id,
+        )
+
+    @router.post(
+        "/transmissions/{transmission_id}/webrtc/offer",
+        response_model=StreamingHomeAssistantWebRtcOfferResponse,
+    )
+    async def home_assistant_webrtc_offer(
+        request: Request,
+        transmission_id: str,
+        body: StreamingHomeAssistantWebRtcOfferRequest,
+        output_id: str | None = None,
+        quality_profile_id: str | None = None,
+    ) -> StreamingHomeAssistantWebRtcOfferResponse:
+        _require_auth(request, action="core:settings:read")
+        if not _home_assistant_native_webrtc_enabled():
+            raise HTTPException(
+                status_code=409,
+                detail="Home Assistant native WebRTC is not enabled for Toposync yet.",
+            )
+
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        transmission = next((item for item in settings.transmissions if item.id == transmission_id), None)
+        if transmission is None:
+            raise HTTPException(status_code=404, detail="Transmission not found")
+        if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(request):
+            raise HTTPException(status_code=409, detail="WebRTC offer handling is only available on the transmission host server.")
+
+        selected_output_id = str(body.output_id or output_id or "").strip() or None
+        selected_profile_id = body.quality_profile_id or quality_profile_id
+        urls = await _resolve_local_transmission_urls(
+            request=request,
+            settings=settings,
+            transmission=transmission,
+            output_id=selected_output_id,
+            quality_profile_id=selected_profile_id,
+        )
+        webrtc_output = _best_webrtc_output(urls=urls)
+        if webrtc_output is None and selected_output_id:
+            urls = await _resolve_local_transmission_urls(
+                request=request,
+                settings=settings,
+                transmission=transmission,
+                quality_profile_id=selected_profile_id,
+            )
+            webrtc_output = _best_webrtc_output(urls=urls)
+        if webrtc_output is None:
+            raise HTTPException(status_code=409, detail="No WebRTC/WHEP output is available for this transmission.")
+
+        await _prime_home_assistant_entity_demand(
+            request,
+            transmission_id=transmission.id,
+            output_id=webrtc_output.output_id,
+            quality_profile_id=webrtc_output.quality_profile_id,
+        )
+        answer_sdp = await asyncio.to_thread(_post_whep_offer_sync, url=webrtc_output.url, sdp=body.sdp)
+        if not answer_sdp.strip():
+            raise HTTPException(status_code=502, detail="WHEP answer is empty.")
+        return StreamingHomeAssistantWebRtcOfferResponse(
+            transmission_id=transmission.id,
+            output_id=webrtc_output.output_id,
+            answer_sdp=answer_sdp,
         )
 
     @router.get(
@@ -5707,7 +6159,8 @@ def create_streaming_router() -> APIRouter:
         if transmission is None:
             raise HTTPException(status_code=404, detail="Transmission not found")
 
-        lease_seconds = float(payload.ttl_seconds or 45.0)
+        default_lease_seconds = 90.0 if payload.source == "home_assistant_entity" else 45.0
+        lease_seconds = float(payload.ttl_seconds or default_lease_seconds)
         if normalize_server_id(transmission.host_server_id, fallback="local") != _current_server_id(request):
             return TransmissionDemandHeartbeatResponse(
                 transmission_id=transmission_id,

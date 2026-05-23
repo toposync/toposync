@@ -148,6 +148,58 @@ Em 2026-05-22, foi entregue a primeira fatia da escada "sempre visualizável" no
 
 ---
 
+## 0.3. Atualização operacional: Home Assistant Cloud e contrato nativo de câmera
+
+Em 2026-05-22, a estratégia do Toposync para Home Assistant foi separada em dois caminhos, seguindo a lição prática observada no Frigate: **player web próprio** e **entidade nativa do Home Assistant** não são o mesmo contrato.
+
+### Decisão
+
+- A UI do Toposync dentro do HA ingress continua HLS-first.
+- WebRTC direto do player Toposync fica bloqueado por padrão no `client=ha_ingress`, porque HA ingress/Cloud não resolve por si só ICE, UDP, TURN e reachability do WHEP direto.
+- Home Assistant Cloud deve usar entidades `camera` nativas do HA, para que o Core/stream component e o frontend do HA assumam o contrato de playback remoto.
+- WebRTC nativo HA existe apenas como scaffold opt-in. A documentação oficial do HA indica que uma câmera que implementa WebRTC nativo passa a ser tratada como WebRTC e não usa o fallback HLS do stream component; por isso o default inicial fica desligado.
+
+### O que ficou implementado
+
+1. **Playback Plan com contexto HA explícito.**
+   `GET /api/streams/transmissions/{id}/playback-plan?client=ha_ingress` retorna ordem `HLS -> MSE -> WebRTC -> JSMpeg` e bloqueia WebRTC direto com motivo operacional. `client=ha_entity` não escolhe player web; aponta para o contrato de câmeras HA.
+
+2. **Manifesto HA-native.**
+   `GET /api/streams/home-assistant/cameras` retorna as câmeras/live views exportáveis para HA, preservando `transmission_id`, `output_id`, `quality_profile_id`, URL de still, RTSP interno e capacidades. O manifesto opera sobre Transmission/output do Toposync; não retorna URL direta da câmera de origem.
+
+3. **Still endpoint estável.**
+   `GET /api/streams/transmissions/{id}/still.jpg?output_id=&quality_profile_id=` retorna JPEG do último frame recente ou placeholder explícito, com cache curto/negado e headers de estado (`x-toposync-frame-state`, idade do frame quando disponível).
+
+4. **Heartbeat HA entity.**
+   `demand/heartbeat` aceita `source=home_assistant_entity`, usa lease default de 90s e permite TTL até 300s. O writer bridge também aceita esse TTL maior, evitando que a resposta prometa mais tempo do que o publisher realmente mantém.
+
+5. **Scaffold de integração Home Assistant.**
+   `integrations/home_assistant/custom_components/toposync` registra entidades `camera`; `stream_source()` renova demanda e retorna RTSP interno do Toposync/MediaMTX; `async_camera_image()` usa o still endpoint. A opção `enable_native_webrtc` fica `false` por padrão e, quando habilitada, encaminha ofertas para `/api/streams/transmissions/{id}/webrtc/offer`.
+
+### Múltiplos streams
+
+O manifesto HA-native preserva a variante da live view: thumbnail/grid, fullscreen, PTZ e diagnóstico não caem no primeiro output disponível. A seleção carrega `quality_profile_id` e `output_id`; quando WebRTC nativo está habilitado, o offer endpoint também tenta casar o WebRTC companion pelo mesmo `quality_profile_id`.
+
+### Regressões cobertas
+
+| Cenário | Critério |
+|---|---|
+| HA ingress playback plan | seleciona HLS, bloqueia WebRTC direto e mantém fallback ladder. |
+| HA entity playback plan | não escolhe player web e aponta para `/api/streams/home-assistant/cameras`. |
+| Manifesto HA com múltiplas variantes | thumbnail usa `quad_grid`; fullscreen usa `fullscreen_quality`; não vaza URL RTSP da câmera de origem. |
+| Manifesto HA com WebRTC opt-in | `webrtc_offer_url` preserva `quality_profile_id` da variante. |
+| Still endpoint | retorna JPEG válido com frame live ou placeholder explícito. |
+| Heartbeat HA entity | usa lease default de 90s e mantém o publisher sob demanda ativo por janela maior. |
+
+### Próximos passos
+
+1. Validar a integração em um Home Assistant real, local e via Nabu Casa, antes de habilitar WebRTC nativo por padrão.
+2. Definir como o add-on expõe a URL interna ideal para o HA Core (`TOPOSYNC_HOME_ASSISTANT_RTSP_HOST` e porta RTSP interna/publicada).
+3. Adicionar testes de integração com Home Assistant Core quando a dependência de teste estiver disponível.
+4. Medir se HA Cloud remoto mantém HLS visualizável via entidade câmera durante restart de publisher/MediaMTX.
+
+---
+
 ## 1. Evidências de código que mais importam
 
 | Camada | Evidência atual | Risco prático | Decisão recomendada |

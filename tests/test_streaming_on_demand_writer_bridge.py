@@ -315,6 +315,24 @@ async def _on_demand_prime_scenario() -> None:
     await bridge._tick_once(108.4)
     assert publisher_manager.stop_calls == ["transmission_prime:prime-path"]
 
+    publisher_manager.start_calls.clear()
+    publisher_manager.stop_calls.clear()
+    clock["now"] = 200.0
+    primed_outputs = await bridge.prime_transmission_demand("transmission_prime", ttl_s=180.0)
+    assert primed_outputs == 1
+
+    await bridge._tick_once(200.1)
+    assert publisher_manager.start_calls == ["transmission_prime:prime-path"]
+
+    await bridge._tick_once(321.0)
+    assert publisher_manager.stop_calls == []
+
+    await bridge._tick_once(381.1)
+    assert publisher_manager.stop_calls == []
+
+    await bridge._tick_once(383.4)
+    assert publisher_manager.stop_calls == ["transmission_prime:prime-path"]
+
 
 async def _stale_placeholder_scenario() -> None:
     extension_payload = {

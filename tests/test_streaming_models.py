@@ -303,6 +303,69 @@ def test_transmission_playback_plan_prefers_hls_for_native_app(
     assert "Native app playback uses HLS first." in payload["transports"][2]["blocking_errors"]
 
 
+def test_transmission_playback_plan_ha_ingress_blocks_direct_webrtc(
+    tmp_path: Path,
+) -> None:
+    with _create_client(tmp_path) as client:
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "HA ingress stream",
+                "path": "ha-ingress-stream",
+                "outputs": [
+                    {"id": "hls_main", "protocol": "hls", "enabled": True},
+                    {"id": "webrtc_low_latency", "protocol": "webrtc", "enabled": True},
+                ],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        plan_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/playback-plan?client=ha_ingress"
+        )
+
+    assert plan_res.status_code == 200
+    payload = plan_res.json()
+    assert payload["selected_transport"] == "hls"
+    assert [item["transport"] for item in payload["transports"]] == [
+        "hls",
+        "mse",
+        "webrtc",
+        "jsmpeg",
+    ]
+    webrtc = next(item for item in payload["transports"] if item["transport"] == "webrtc")
+    assert webrtc["available"] is False
+    assert "Home Assistant ingress" in " ".join(webrtc["blocking_errors"])
+    assert "Home Assistant ingress prefers HLS" in " ".join(payload["warnings"])
+
+
+def test_transmission_playback_plan_ha_entity_reports_camera_contract(
+    tmp_path: Path,
+) -> None:
+    with _create_client(tmp_path) as client:
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "HA entity stream",
+                "path": "ha-entity-stream",
+                "outputs": [{"id": "hls_main", "protocol": "hls", "enabled": True}],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        plan_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/playback-plan?client=ha_entity"
+        )
+
+    assert plan_res.status_code == 200
+    payload = plan_res.json()
+    assert payload["selected_transport"] is None
+    assert payload["transports"] == []
+    assert "Home Assistant camera contract" in " ".join(payload["warnings"])
+
+
 def test_transmission_playback_plan_respects_multi_stream_selection(
     tmp_path: Path,
 ) -> None:
@@ -369,6 +432,48 @@ def test_transmission_playback_plan_respects_multi_stream_selection(
     assert web_hls["available"] is True
     assert web_hls["output_id"] == "hls_fullscreen_quality"
     assert web_hls["quality_profile_id"] == "fullscreen_quality"
+
+
+def test_transmission_still_jpeg_returns_recent_runtime_frame(tmp_path: Path) -> None:
+    with _create_client(tmp_path) as client:
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Still stream",
+                "path": "still-stream",
+                "outputs": [
+                    {
+                        "id": "hls_main",
+                        "protocol": "hls",
+                        "enabled": True,
+                        "quality_profile_id": "stable_apple_tv",
+                        "resolution": {"width": 64, "height": 48},
+                    }
+                ],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+        runtime_state = client.app.state.streaming_runtime_state
+        asyncio.run(
+            runtime_state.update_writer_frame(
+                transmission_id=transmission_id,
+                writer_id="pipeline:still",
+                lifecycle_state=Lifecycle.UPDATE,
+                writer_priority=1,
+                frame=numpy.full((48, 64, 3), 220, dtype=numpy.uint8),
+                frame_ts=1.0,
+            )
+        )
+
+        still_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/still.jpg?quality_profile_id=stable_apple_tv"
+        )
+
+    assert still_res.status_code == 200
+    assert still_res.headers["content-type"].startswith("image/jpeg")
+    assert still_res.headers["x-toposync-frame-state"] == "live"
+    assert still_res.content.startswith(b"\xff\xd8\xff")
 
 
 def test_mediamtx_config_can_disable_local_metrics() -> None:

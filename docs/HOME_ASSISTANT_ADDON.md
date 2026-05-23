@@ -75,7 +75,7 @@ Todos passam a consumir o mesmo bundle publicado.
 
 Por padrão, o Dockerfile do add-on instala:
 
-- `toposync-streaming==0.4.24`
+- `toposync-streaming==0.4.25`
 
 Para testar contra outro índice, ajuste os build args:
 
@@ -118,6 +118,38 @@ Para expor streaming na rede local, configure a seção `Network` do add-on e ma
 A porta `18759/tcp` continua declarada como HLS direto avançado/diagnóstico, mas não é necessária para o app móvel quando `18756/tcp` está mapeada. A faixa recomendada do add-on é `18756-18762` quando as portas são habilitadas: `18756` para acesso direto e HLS proxied, `18757` para ingress/backend interno, `18758` para RTSP, `18759` para HLS direto avançado, `18760` para WHEP, `18761` para a API interna do MediaMTX e `18762/udp` para mídia WebRTC. A API do MediaMTX permanece interna e não é declarada em `ports`.
 
 Para WebRTC na LAN, `18760/tcp` cobre só a sinalização WHEP; o transporte de mídia ainda precisa de `18762/udp` mapeado, salvo uma configuração futura com TURN/TCP/TLS.
+
+## Home Assistant Cloud
+
+O caminho suportado para Home Assistant Cloud é **entidade nativa `camera` do Home Assistant**, não o player web do Toposync rodando dentro do ingress.
+
+Na prática:
+
+- a UI do Toposync pelo HA ingress continua HLS-first
+- `playback-plan?client=ha_ingress` bloqueia WebRTC direto por padrão
+- a integração HA `toposync` consome `GET /api/streams/home-assistant/cameras`
+- cada entidade `camera` usa `stream_source()` com RTSP interno do Toposync/MediaMTX
+- o HA Core fica responsável por transformar esse stream no caminho suportado pelo frontend/Cloud
+- `enable_native_webrtc` existe como opção avançada, default `false`
+
+Para a integração custom, o Toposync expõe:
+
+```text
+GET  /api/streams/home-assistant/cameras
+GET  /api/streams/transmissions/{id}/still.jpg?output_id=...&quality_profile_id=...
+POST /api/streams/transmissions/{id}/webrtc/offer
+POST /api/streams/transmissions/{id}/demand/heartbeat
+```
+
+O manifesto HA-native sempre referencia `Transmission`/`output` do Toposync. Ele não retorna RTSP direto da câmera de origem. Como câmeras podem ter mais de um stream, o manifesto preserva `quality_profile_id` e `output_id` para que thumbnail/grid, fullscreen, PTZ e diagnóstico não caiam no primeiro output disponível.
+
+Quando o HA Core precisa acessar o RTSP do MediaMTX por outro host interno, configure:
+
+```text
+TOPOSYNC_HOME_ASSISTANT_RTSP_HOST=<host-alcancavel-pelo-ha-core>
+```
+
+WebRTC nativo HA só deve ser habilitado depois de validar TURN/ICE/Cloud em ambiente real. A API do Home Assistant trata câmera WebRTC nativa como caminho WebRTC direto e não como fallback HLS transparente.
 
 ## Escopo atual
 

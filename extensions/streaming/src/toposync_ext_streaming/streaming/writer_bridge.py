@@ -238,7 +238,7 @@ class StreamWriterBridge:
         selected_profile_id = _as_str(quality_profile_id)
 
         now_monotonic = self._monotonic()
-        ttl = self._on_demand_prime_ttl_s if ttl_s is None else min(120.0, max(1.0, float(ttl_s)))
+        ttl = self._on_demand_prime_ttl_s if ttl_s is None else min(300.0, max(1.0, float(ttl_s)))
         _engine_settings, targets, _path_auth, _bypass, _ingest, _ingest_configs = await self._load_settings(now_monotonic)
 
         primed_publishers: set[str] = set()

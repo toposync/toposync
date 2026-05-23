@@ -48,7 +48,7 @@ StreamingObservabilityClassification = Literal[
     "event_gated_idle",
     "unknown",
 ]
-StreamingPlaybackClientKind = Literal["app", "web"]
+StreamingPlaybackClientKind = Literal["app", "web", "ha_ingress", "ha_entity"]
 StreamingPlaybackTransport = Literal["mse", "webrtc", "hls", "jsmpeg"]
 StreamingPlaybackEventSeverity = Literal["debug", "info", "warn", "error"]
 StreamingCameraSourceStatus = Literal[
@@ -956,6 +956,51 @@ class StreamingPlaybackPlanResponse(BaseModel):
     blocking_errors: list[str] = Field(default_factory=list)
 
 
+class StreamingHomeAssistantCameraManifestItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    camera_id: str | None = None
+    live_view_id: str | None = None
+    variant_id: str | None = None
+    role: StreamingCameraLiveVariantRole | None = None
+    transmission_id: str
+    output_id: str | None = None
+    quality_profile_id: StreamingQualityProfileId | None = None
+    still_url: str
+    rtsp_url: str | None = None
+    redacted_rtsp_url: str | None = None
+    webrtc_offer_url: str | None = None
+    capabilities: dict[str, bool] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    blocking_errors: list[str] = Field(default_factory=list)
+
+
+class StreamingHomeAssistantCamerasResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cameras: list[StreamingHomeAssistantCameraManifestItem] = Field(default_factory=list)
+    native_webrtc_enabled: bool = False
+    warnings: list[str] = Field(default_factory=list)
+
+
+class StreamingHomeAssistantWebRtcOfferRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sdp: str = Field(min_length=1)
+    output_id: str | None = None
+    quality_profile_id: StreamingQualityProfileId | None = None
+
+
+class StreamingHomeAssistantWebRtcOfferResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transmission_id: str
+    output_id: str | None = None
+    answer_sdp: str
+
+
 class CameraLiveViewGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1129,7 +1174,8 @@ class TransmissionDemandHeartbeatRequest(BaseModel):
     output_id: str | None = None
     quality_profile_id: StreamingQualityProfileId | None = None
     transport: Literal["hls", "webrtc", "rtsp"] = "hls"
-    ttl_seconds: float | None = Field(default=None, ge=5.0, le=120.0)
+    source: Literal["player", "home_assistant_entity"] = "player"
+    ttl_seconds: float | None = Field(default=None, ge=5.0, le=300.0)
 
 
 class TransmissionDemandHeartbeatResponse(BaseModel):

@@ -913,7 +913,7 @@ export type StreamingPlaybackPlanTransport = {
 
 export type StreamingPlaybackPlanResponse = {
   transmission_id: string;
-  client: "app" | "web";
+  client: "app" | "web" | "ha_ingress" | "ha_entity";
   lease_seconds: number;
   heartbeat_interval_seconds: number;
   transports: StreamingPlaybackPlanTransport[];
@@ -952,6 +952,7 @@ export type StreamingTransmissionDemandHeartbeatRequest = {
   outputId?: string | null;
   qualityProfileId?: StreamingQualityProfileId | null;
   transport: "hls" | "webrtc" | "rtsp";
+  source?: "player" | "home_assistant_entity";
   ttlSeconds?: number | null;
 };
 
@@ -2244,7 +2245,7 @@ export async function getStreamingTransmissionUrls(
 
 export async function getStreamingTransmissionPlaybackPlan(
   transmissionId: string,
-  options?: StreamingTransmissionUrlSelectionOptions & { client?: "app" | "web" },
+  options?: StreamingTransmissionUrlSelectionOptions & { client?: "app" | "web" | "ha_ingress" | "ha_entity" },
 ): Promise<StreamingPlaybackPlanResponse> {
   const params = new URLSearchParams();
   const outputId = String(options?.outputId || "").trim();
@@ -2283,6 +2284,7 @@ export async function heartbeatStreamingTransmissionDemand(
       output_id: request.outputId ?? null,
       quality_profile_id: request.qualityProfileId ?? null,
       transport: request.transport,
+      source: request.source ?? "player",
       ttl_seconds: request.ttlSeconds ?? null,
     }),
   });

@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import time
+import unicodedata
 import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -58,6 +59,11 @@ from .onvif import (
 
 EXTENSION_ID = "com.toposync.cameras"
 DEFAULT_CAMERA_DETECTION_MODEL_ID = "rfdetr_det_medium"
+PIPELINE_NAME_MAX_LENGTH = 120
+PRESET_PIPELINE_NAME_PARTS = {
+    "people_detection": "deteccao_simples_de_pessoas",
+    "people_mapping": "deteccao_e_mapeamento_de_pessoas",
+}
 
 
 class RtspSnapshotRequest(BaseModel):
@@ -1840,13 +1846,39 @@ class CamerasExtension(BaseExtension):
 
             return {"camera_id": cid, "compositions": compositions_out}
 
+        def _pipeline_name_part(value: str, fallback: str) -> str:
+            normalized = (
+                unicodedata.normalize("NFKD", str(value or ""))
+                .encode("ascii", "ignore")
+                .decode("ascii")
+            )
+            normalized = re.sub(r"[^A-Za-z0-9_]+", "_", normalized.lower()).strip("_")
+            return normalized or fallback
+
+        def _preset_pipeline_base(
+            camera: dict[str, Any] | None,
+            *,
+            camera_id: str,
+            preset: str,
+        ) -> str:
+            camera_record = camera if isinstance(camera, dict) else {}
+            camera_label = str(camera_record.get("name") or "").strip() or camera_id
+            camera_part = _pipeline_name_part(camera_label, "camera")
+            preset_part = PRESET_PIPELINE_NAME_PARTS.get(
+                preset,
+                _pipeline_name_part(preset, "pipeline"),
+            )
+            return f"{camera_part}_{preset_part}"
+
         def _unique_pipeline_name(base: str, *, existing_names: set[str]) -> str:
             base_safe = safe_pipeline_name(base)
             if base_safe not in existing_names:
                 return base_safe
             suffix = 2
             while True:
-                candidate = safe_pipeline_name(f"{base_safe}_{suffix}")
+                suffix_text = f"_{suffix}"
+                stem = base_safe[: max(1, PIPELINE_NAME_MAX_LENGTH - len(suffix_text))]
+                candidate = safe_pipeline_name(f"{stem}{suffix_text}")
                 if candidate not in existing_names:
                     return candidate
                 suffix += 1
@@ -2073,17 +2105,12 @@ class CamerasExtension(BaseExtension):
             existing_names = {p.name for p in pipelines}
             ext = await _read_ext_settings(request)
             camera = get_camera_device(ext, camera_id=cid)
-            default_source = get_camera_source(camera, kind="video", enabled_only=True) if camera else None
-            source_id = (
-                str(default_source.get("id") or "").strip()
-                if isinstance(default_source, dict)
-                else ""
-            )
             suggested: dict[str, str] = {}
-            if source_id:
+            if camera is not None:
                 for preset in ("people_detection", "people_mapping"):
                     suggested[preset] = _unique_pipeline_name(
-                        f"camera_{cid}__{source_id}__{preset}", existing_names=existing_names
+                        _preset_pipeline_base(camera, camera_id=cid, preset=preset),
+                        existing_names=existing_names,
                     )
 
             return CameraPipelinesResponse(
@@ -2155,7 +2182,8 @@ class CamerasExtension(BaseExtension):
                     )
             else:
                 pipeline_name = _unique_pipeline_name(
-                    f"camera_{cid}__{source_id}__{preset}", existing_names=existing_names
+                    _preset_pipeline_base(camera, camera_id=cid, preset=preset),
+                    existing_names=existing_names,
                 )
 
             try:

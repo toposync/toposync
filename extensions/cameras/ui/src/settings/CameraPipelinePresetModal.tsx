@@ -61,12 +61,23 @@ function safePipelineName(value: string): string {
   return out.slice(0, 120);
 }
 
-function presetSuffix(preset: CameraPipelinePreset): string {
-  return preset === "people_mapping" ? "people_mapping" : "people_detection";
+function pipelineNamePart(value: string, fallback: string): string {
+  const cleaned = String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+  return cleaned || fallback;
 }
 
-function defaultPipelineName(cameraId: string, sourceId: string, preset: CameraPipelinePreset): string {
-  return safePipelineName(`camera_${cameraId}__${sourceId || "source"}__${presetSuffix(preset)}`);
+function presetNamePart(preset: CameraPipelinePreset): string {
+  return preset === "people_mapping" ? "deteccao_e_mapeamento_de_pessoas" : "deteccao_simples_de_pessoas";
+}
+
+function defaultPipelineName(camera: CameraConfig, preset: CameraPipelinePreset): string {
+  const cameraPart = pipelineNamePart(camera.name || camera.id, "camera");
+  return safePipelineName(`${cameraPart}_${presetNamePart(preset)}`);
 }
 
 function sourceHasVideoOrigin(camera: CameraConfig, source: CameraSourceConfig | null): boolean {
@@ -134,7 +145,7 @@ export function CameraPipelinePresetModal({
     const nextSourceId = nextSource?.id ?? "";
     const nextSuggested =
       pipelineOverview?.suggested_pipeline_names?.[preset] ??
-      defaultPipelineName(camera.id, nextSourceId, preset);
+      defaultPipelineName(camera, preset);
     setSourceId(nextSourceId);
     setSuggestedName(nextSuggested);
     setPipelineName(nextSuggested);
@@ -147,7 +158,7 @@ export function CameraPipelinePresetModal({
 
   function updateSource(nextSourceId: string): void {
     const nextSource = videoSources.find((source) => source.id === nextSourceId) ?? null;
-    const nextSuggested = preset ? defaultPipelineName(camera.id, nextSourceId, preset) : "";
+    const nextSuggested = preset ? defaultPipelineName(camera, preset) : "";
     const previousSuggested = suggestedName;
     setSourceId(nextSourceId);
     setEnabled(sourceHasVideoOrigin(camera, nextSource));

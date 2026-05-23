@@ -7,4 +7,4 @@ __all__ = ["__version__"]
 try:
     __version__ = importlib_metadata.version("toposync-core")
 except importlib_metadata.PackageNotFoundError:
-    __version__ = "0.4.25"
+    __version__ = "0.5.0"

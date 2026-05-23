@@ -4,6 +4,9 @@ import type { HostI18n, SettingsPanel } from "@toposync/plugin-api";
 
 import {
   discoverOnvifDevices,
+  fetchCameraContexts,
+  fetchCameraPipelines,
+  fetchCamerasIndex,
   fetchCameraSnapshot,
   fetchCameraSourceHealth,
   fetchProcessingServers,
@@ -23,9 +26,12 @@ import {
 } from "../parsing";
 import type {
   CameraConfig,
+  CameraContextsResponse,
   CameraControlType,
   CameraIngestConfig,
   CameraOnvifConfig,
+  CameraPipelinePreset,
+  CameraPipelinesResponse,
   CameraSourceConfig,
   CameraSourceHealthItem,
   CameraSourceHealthResponse,
@@ -37,6 +43,7 @@ import type {
   RtspProbeResponse,
   StreamPublication,
 } from "../types";
+import { CameraPipelinePresetModal } from "./CameraPipelinePresetModal";
 import { SubModal } from "../ui/SubModal";
 
 type TranslateFn = ReturnType<HostI18n["useI18n"]>["t"];
@@ -135,6 +142,22 @@ function sourceHealthFor(
       (item) => String(item.camera_id || "").trim() === cameraId && String(item.camera_source_id || "").trim() === sourceId,
     ) ?? null
   );
+}
+
+function navigateInApp(pathname: string): void {
+  if (typeof window === "undefined") return;
+  const next = String(pathname || "/");
+  if (window.location.pathname !== next) window.history.pushState(null, "", next);
+  try {
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  } catch {
+    window.dispatchEvent(new Event("popstate"));
+  }
+}
+
+function openSettingsPanel(panelId: string): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent("toposync:open-settings-panel", { detail: { panelId } }));
 }
 
 function slugSourceId(value: string, fallback: string): string {
@@ -244,6 +267,15 @@ function CamerasSettingsPanelContent({
   const [activeSourceByCamera, setActiveSourceByCamera] = useState<Record<string, string>>({});
   const [query, setQuery] = useState("");
   const [sourceHealth, setSourceHealth] = useState<CameraSourceHealthResponse | null>(null);
+  const [savedCameraIds, setSavedCameraIds] = useState<Set<string> | null>(null);
+  const [cameraContexts, setCameraContexts] = useState<CameraContextsResponse | null>(null);
+  const [cameraContextsLoading, setCameraContextsLoading] = useState(false);
+  const [cameraContextsError, setCameraContextsError] = useState<string | null>(null);
+  const [cameraPipelines, setCameraPipelines] = useState<CameraPipelinesResponse | null>(null);
+  const [cameraPipelinesLoading, setCameraPipelinesLoading] = useState(false);
+  const [cameraPipelinesError, setCameraPipelinesError] = useState<string | null>(null);
+  const [pipelinePresetOpen, setPipelinePresetOpen] = useState<CameraPipelinePreset | null>(null);
+  const [pipelineNotice, setPipelineNotice] = useState<string | null>(null);
   const [streamPublications, setStreamPublications] = useState<StreamPublication[]>([]);
   const [streamPublicationError, setStreamPublicationError] = useState<string | null>(null);
   const [streamPublicationBusyByKey, setStreamPublicationBusyByKey] = useState<Record<string, boolean>>({});
@@ -281,6 +313,19 @@ function CamerasSettingsPanelContent({
     };
   }, []);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchCamerasIndex(controller.signal)
+      .then((index) => {
+        if (controller.signal.aborted) return;
+        setSavedCameraIds(new Set((index.cameras ?? []).map((camera) => String(camera.id || "").trim()).filter(Boolean)));
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setSavedCameraIds(new Set());
+      });
+    return () => controller.abort();
+  }, [settings]);
+
   const reloadStreamPublications = useCallback((signal?: AbortSignal) => {
     void fetchStreamPublications(undefined, signal)
       .then((items) => {
@@ -304,6 +349,7 @@ function CamerasSettingsPanelContent({
     setInspectError(null);
     setProbeResult(null);
     setProbeError(null);
+    setPipelineNotice(null);
   }, [activeCameraId]);
 
   useEffect(() => {
@@ -320,6 +366,61 @@ function CamerasSettingsPanelContent({
     "";
   const activeSource = activeCamera?.sources.find((source) => source.id === activeSourceId) ?? activeCamera?.sources[0] ?? null;
   const activeHealth = activeCamera && activeSource ? sourceHealthFor(sourceHealth, activeCamera.id, activeSource.id) : null;
+  const activeCameraPersisted = Boolean(activeCamera && savedCameraIds?.has(activeCamera.id));
+  const mappedCompositions = useMemo(
+    () =>
+      (cameraContexts?.compositions ?? []).filter((composition) =>
+        (composition.camera_elements ?? []).some((element) => Boolean(element.has_mapping)),
+      ),
+    [cameraContexts],
+  );
+  const hasMappedComposition = mappedCompositions.length > 0;
+
+  useEffect(() => {
+    if (!activeCamera || !activeCameraPersisted) {
+      setCameraContexts(null);
+      setCameraContextsLoading(false);
+      setCameraContextsError(null);
+      setCameraPipelines(null);
+      setCameraPipelinesLoading(false);
+      setCameraPipelinesError(null);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    setCameraContextsLoading(true);
+    setCameraContextsError(null);
+    void fetchCameraContexts(activeCamera.id, controller.signal)
+      .then((contexts) => {
+        if (!controller.signal.aborted) setCameraContexts(contexts);
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setCameraContexts(null);
+        setCameraContextsError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setCameraContextsLoading(false);
+      });
+
+    setCameraPipelinesLoading(true);
+    setCameraPipelinesError(null);
+    void fetchCameraPipelines(activeCamera.id, controller.signal)
+      .then((pipelines) => {
+        if (!controller.signal.aborted) setCameraPipelines(pipelines);
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setCameraPipelines(null);
+        setCameraPipelinesError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setCameraPipelinesLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [activeCamera?.id, activeCameraPersisted]);
+
   const publicationBySourceKey = useMemo(() => {
     const byKey = new Map<string, StreamPublication>();
     for (const publication of streamPublications) {
@@ -593,6 +694,30 @@ function CamerasSettingsPanelContent({
     } finally {
       setSnapshotBusy(false);
     }
+  }
+
+  async function reloadActiveCameraPipelines(): Promise<void> {
+    if (!activeCamera) return;
+    setCameraPipelinesLoading(true);
+    setCameraPipelinesError(null);
+    try {
+      setCameraPipelines(await fetchCameraPipelines(activeCamera.id));
+    } catch (error) {
+      setCameraPipelinesError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCameraPipelinesLoading(false);
+    }
+  }
+
+  function openPipelineEditor(pipelineName: string): void {
+    const name = String(pipelineName || "").trim();
+    if (!name) return;
+    navigateInApp(`/settings/pipelines/${encodeURIComponent(name)}`);
+  }
+
+  function handlePipelineCreated(pipelineName: string): void {
+    setPipelineNotice(t("ext.cameras.pipelines.created", { name: pipelineName }, "Pipeline created: {{name}}"));
+    void reloadActiveCameraPipelines();
   }
 
   return (
@@ -1091,6 +1216,158 @@ function CamerasSettingsPanelContent({
                   ) : null}
                 </div>
               )}
+
+              <div className="settingsSectionHeader">
+                <div>
+                  <div className="modalSectionTitle">{t("ext.cameras.mapping.title", {}, "Mapeamento")}</div>
+                  <div className="settingsDescription">
+                    {t("ext.cameras.mapping.help", {}, "Composições onde esta câmera aparece e se os pontos de controle estão mapeados.")}
+                  </div>
+                </div>
+              </div>
+
+              {savedCameraIds === null ? (
+                <div className="card">
+                  <div className="cardBody">{t("core.ui.loading", {}, "Carregando...")}</div>
+                </div>
+              ) : !activeCameraPersisted ? (
+                <div className="card">
+                  <div className="cardBody">
+                    {t(
+                      "ext.cameras.workflow.save_first",
+                      {},
+                      "Salve as alterações da câmera antes de continuar com mapeamento e pipelines.",
+                    )}
+                  </div>
+                </div>
+              ) : cameraContextsLoading ? (
+                <div className="card">
+                  <div className="cardBody">{t("core.ui.loading", {}, "Carregando...")}</div>
+                </div>
+              ) : cameraContextsError ? (
+                <div className="card">
+                  <div className="cardBody errorText">{cameraContextsError}</div>
+                </div>
+              ) : (cameraContexts?.compositions ?? []).length === 0 ? (
+                <div className="card">
+                  <div className="cardBody">
+                    <div>{t("ext.cameras.mapping.empty", {}, "Esta câmera não aparece em nenhuma composição.")}</div>
+                    <div className="rowWrap">
+                      <button className="chipButton" type="button" onClick={() => openSettingsPanel("__compositions__")}>
+                        {t("ext.cameras.mapping.open_compositions", {}, "Abrir composições")}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="settingsList" role="list">
+                  {(cameraContexts?.compositions ?? []).map((composition) => {
+                    const points = (composition.camera_elements ?? []).reduce(
+                      (sum, element) => sum + Number(element.control_points_pairs || 0),
+                      0,
+                    );
+                    const ready = (composition.camera_elements ?? []).some((element) => Boolean(element.has_mapping));
+                    return (
+                      <div className="settingsListItem" key={composition.id} role="listitem">
+                        <span className="settingsListTitle">{composition.name || composition.id}</span>
+                        <span className="settingsListMeta">
+                          {ready
+                            ? t("ext.cameras.mapping.ready", {}, "Pontos mapeados")
+                            : t("ext.cameras.mapping.missing", {}, "Faltam pontos mapeados")}
+                          {" · "}
+                          {t("ext.cameras.mapping.points_count", { count: points }, "{{count}} pontos")}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="settingsSectionHeader">
+                <div>
+                  <div className="modalSectionTitle">{t("ext.cameras.pipelines.title", {}, "Pipelines")}</div>
+                  <div className="settingsDescription">
+                    {t("ext.cameras.pipelines.help", {}, "Atalhos para pipelines que usam esta câmera e presets para criar novos.")}
+                  </div>
+                </div>
+              </div>
+
+              {savedCameraIds === null ? (
+                <div className="card">
+                  <div className="cardBody">{t("core.ui.loading", {}, "Carregando...")}</div>
+                </div>
+              ) : !activeCameraPersisted ? (
+                <div className="card">
+                  <div className="cardBody">
+                    {t(
+                      "ext.cameras.workflow.save_first",
+                      {},
+                      "Salve as alterações da câmera antes de continuar com mapeamento e pipelines.",
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="card">
+                  <div className="cardBody">
+                    {pipelineNotice ? <div className="settingsStatusMuted">{pipelineNotice}</div> : null}
+                    {cameraPipelinesError ? <div className="errorText">{cameraPipelinesError}</div> : null}
+                    {cameraPipelinesLoading ? <div>{t("core.ui.loading", {}, "Carregando...")}</div> : null}
+
+                    {!cameraPipelinesLoading && (cameraPipelines?.pipelines ?? []).length === 0 ? (
+                      <div className="settingsStatusMuted">{t("ext.cameras.pipelines.empty", {}, "Nenhum pipeline usa esta câmera ainda.")}</div>
+                    ) : null}
+
+                    {(cameraPipelines?.pipelines ?? []).length ? (
+                      <div className="settingsList" role="list">
+                        {(cameraPipelines?.pipelines ?? []).map((pipeline) => (
+                          <button
+                            className="settingsListItem"
+                            key={pipeline.name}
+                            type="button"
+                            onClick={() => openPipelineEditor(pipeline.name)}
+                          >
+                            <span className="settingsListTitle">{pipeline.name}</span>
+                            <span className="settingsListMeta">
+                              {pipeline.enabled === false
+                                ? t("ext.cameras.pipelines.disabled", {}, "Desativado")
+                                : t("ext.cameras.pipelines.enabled", {}, "Ativo")}
+                              {" · "}
+                              {pipeline.processing_server_id || "local"}
+                              {pipeline.source_ids?.length ? ` · ${pipeline.source_ids.join(", ")}` : ""}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    <div className="sectionDivider">
+                      <div className="rowWrap">
+                        <button
+                          className="primaryButton"
+                          type="button"
+                          disabled={!activeCamera.sources.some((source) => source.kind === "video" && source.enabled)}
+                          onClick={() => setPipelinePresetOpen("people_detection")}
+                        >
+                          {t("ext.cameras.pipeline_preset.people_detection.add", {}, "Adicionar detecção simples de pessoas")}
+                        </button>
+                        <button
+                          className="chipButton"
+                          type="button"
+                          disabled={!activeCamera.sources.some((source) => source.kind === "video" && source.enabled) || !hasMappedComposition}
+                          onClick={() => setPipelinePresetOpen("people_mapping")}
+                        >
+                          {t("ext.cameras.pipeline_preset.people_mapping.add", {}, "Adicionar detecção e mapeamento de pessoas")}
+                        </button>
+                      </div>
+                      {!hasMappedComposition ? (
+                        <div className="settingsStatusMuted">
+                          {t("ext.cameras.pipelines.mapping_required", {}, "Mapeie esta câmera em uma composição para criar o pipeline com mapeamento.")}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </main>
@@ -1101,6 +1378,21 @@ function CamerasSettingsPanelContent({
         {snapshotUrl ? <img src={snapshotUrl} alt={t("ext.cameras.settings.snapshot", {}, "Snapshot")} style={{ width: "100%" }} /> : null}
         {!snapshotError && !snapshotUrl ? <div className="cardBody">{snapshotBusy ? "Carregando..." : "Snapshot"}</div> : null}
       </SubModal>
+
+      {activeCamera ? (
+        <CameraPipelinePresetModal
+          open={Boolean(pipelinePresetOpen)}
+          preset={pipelinePresetOpen}
+          camera={activeCamera}
+          activeSourceId={activeSourceId}
+          pipelineOverview={cameraPipelines}
+          mappedCompositions={mappedCompositions}
+          processingServers={processingServers}
+          i18n={i18n}
+          onClose={() => setPipelinePresetOpen(null)}
+          onCreated={handlePipelineCreated}
+        />
+      ) : null}
     </div>
   );
 }

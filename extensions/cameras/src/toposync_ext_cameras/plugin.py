@@ -293,19 +293,31 @@ class CameraPtzStopRequest(BaseModel):
     zoom: bool = True
 
 
-class CameraPipelineWizardRequest(BaseModel):
-    preset: Literal["people", "vehicles_stopped", "pets"]
+class CameraPipelineSummary(BaseModel):
+    name: str
+    enabled: bool = True
+    processing_server_id: str = "local"
+    source_ids: list[str] = Field(default_factory=list)
+
+
+class CameraPipelinesResponse(BaseModel):
+    camera_id: str
+    pipelines: list[CameraPipelineSummary] = Field(default_factory=list)
+    suggested_pipeline_names: dict[str, str] = Field(default_factory=dict)
+
+
+class CameraPipelinePresetRequest(BaseModel):
+    preset: Literal["people_detection", "people_mapping"]
     source_id: str = ""
     pipeline_name: str = ""
     enabled: bool = True
     processing_server_id: str = "local"
     composition_id: str = ""
-    area_id: str = ""
     notification_title: str = ""
     notification_description: str = ""
 
 
-class CameraPipelineWizardResponse(BaseModel):
+class CameraPipelinePresetResponse(BaseModel):
     pipeline_name: str
 
 
@@ -1839,7 +1851,7 @@ class CamerasExtension(BaseExtension):
                     return candidate
                 suffix += 1
 
-        def _default_mapping_composition_id(cfg: Any, *, camera_id: str) -> str | None:
+        def _default_mapped_composition_id(cfg: Any, *, camera_id: str) -> str | None:
             cid = str(camera_id or "").strip()
             if not cid:
                 return None
@@ -1855,65 +1867,75 @@ class CamerasExtension(BaseExtension):
                         return str(getattr(composition, "id", "") or "").strip() or None
             return None
 
-        def _resolve_area_polygon(
-            cfg: Any, *, composition_id: str, area_id: str
-        ) -> tuple[str, list[dict[str, float]]]:
+        def _composition_has_camera_mapping(
+            cfg: Any, *, camera_id: str, composition_id: str
+        ) -> bool:
+            cid = str(camera_id or "").strip()
             comp_id = str(composition_id or "").strip()
-            aid = str(area_id or "").strip()
-            if not comp_id or not aid:
-                raise ValueError("composition_id and area_id are required")
-
+            if not cid or not comp_id:
+                return False
             for composition in getattr(cfg, "compositions", []):
                 if str(getattr(composition, "id", "") or "").strip() != comp_id:
                     continue
                 for element in getattr(composition, "elements", []):
-                    if str(getattr(element, "id", "") or "").strip() != aid:
+                    props = element.props if isinstance(getattr(element, "props", None), dict) else {}
+                    if str(props.get("camera_id", "")).strip() != cid:
                         continue
-                    if (
-                        str(getattr(element, "type", "") or "").strip()
-                        != "com.toposync.structural.area"
-                    ):
-                        raise ValueError("Selected element is not an area")
-                    props = (
-                        element.props if isinstance(getattr(element, "props", None), dict) else {}
-                    )
-                    vertices = props.get("vertices")
-                    if not isinstance(vertices, list) or len(vertices) < 3:
-                        raise ValueError("Area is missing vertices")
-                    points: list[dict[str, float]] = []
-                    for vertex in vertices:
-                        if not isinstance(vertex, dict):
-                            continue
-                        try:
-                            x = float(vertex.get("x"))
-                            z = float(vertex.get("z"))
-                        except Exception:
-                            continue
-                        if not math.isfinite(x) or not math.isfinite(z):
-                            continue
-                        points.append({"x": x, "z": z})
-                    if len(points) < 3:
-                        raise ValueError("Area vertices are invalid")
-                    name = str(getattr(element, "name", "") or "").strip() or aid
-                    return name, points
-                raise ValueError("Unknown area_id in composition")
-            raise ValueError("Unknown composition_id")
+                    control_point_sets = _parse_control_point_sets(props.get("control_point_sets"))
+                    if any(len(item.control_points) >= 4 for item in control_point_sets):
+                        return True
+                return False
+            return False
 
-        def _build_wizard_graph(
+        def _pipeline_source_ids_for_camera(
+            pipeline: Pipeline, *, camera_id: str
+        ) -> tuple[bool, list[str]]:
+            cid = str(camera_id or "").strip()
+            graph = pipeline.graph if isinstance(pipeline.graph, dict) else {}
+            nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+            source_ids: set[str] = set()
+            involved = False
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                operator_id = str(node.get("operator") or node.get("operator_id") or "").strip()
+                config = node.get("config") if isinstance(node.get("config"), dict) else {}
+                node_camera_id = str(config.get("camera_id") or "").strip()
+                if operator_id == "camera.source":
+                    if node_camera_id == cid:
+                        involved = True
+                        source_id = str(config.get("source_id") or "").strip()
+                        if source_id:
+                            source_ids.add(source_id)
+                    continue
+                if node_camera_id == cid and operator_id.startswith("camera."):
+                    involved = True
+            return involved, sorted(source_ids)
+
+        def _linear_edges(node_ids: list[str]) -> list[dict[str, Any]]:
+            edges: list[dict[str, Any]] = []
+            for index in range(len(node_ids) - 1):
+                edges.append(
+                    {
+                        "from": {"node": node_ids[index], "port": "out"},
+                        "to": {"node": node_ids[index + 1], "port": "in"},
+                        "maxsize": 2 if index < 3 else 8,
+                        "drop_policy": "drop_oldest",
+                    }
+                )
+            if edges:
+                edges[-1]["maxsize"] = 16
+            return edges
+
+        def _build_camera_preset_graph(
             *,
             preset: str,
             camera_id: str,
             source_id: str,
             composition_id: str,
-            area_name: str,
-            area_points: list[dict[str, float]],
             notification_title: str,
             notification_description: str,
         ) -> dict[str, Any]:
-            motion_hold_seconds = 6.0
-            if preset == "vehicles_stopped":
-                motion_hold_seconds = 10.0
-
             base_nodes: list[dict[str, Any]] = [
                 {
                     "id": "source",
@@ -1926,384 +1948,169 @@ class CamerasExtension(BaseExtension):
                     "config": {
                         "threshold": 0.010,
                         "activation_frames": 2,
-                        "hold_seconds": motion_hold_seconds,
-                        "emit_when_idle": preset == "vehicles_stopped",
+                        "hold_seconds": 6.0,
+                        "emit_when_idle": False,
+                    },
+                },
+                {
+                    "id": "detect",
+                    "operator": "vision.detect",
+                    "config": {
+                        "model_id": DEFAULT_CAMERA_DETECTION_MODEL_ID,
+                        "categories": ["person"],
+                        "confidence_threshold": 0.55,
+                        "emit_mode": "annotate",
+                    },
+                },
+                {
+                    "id": "track",
+                    "operator": "vision.track",
+                    "config": {
+                        "close_after_seconds": 5.0,
+                        "default_interval_seconds": 0.25,
+                        "tracker_id": "simple_iou_kalman",
+                        "emit_mode": "events",
                     },
                 },
             ]
 
-            if preset == "people":
-                nodes = [
-                    *base_nodes,
-                    {
-                        "id": "detect",
-                        "operator": "vision.detect",
-                        "config": {
-                            "model_id": DEFAULT_CAMERA_DETECTION_MODEL_ID,
-                            "categories": ["person"],
-                            "confidence_threshold": 0.55,
-                            "emit_mode": "annotate",
-                        },
-                    },
-                    {
-                        "id": "track",
-                        "operator": "vision.track",
-                        "config": {
-                            "close_after_seconds": 5.0,
-                            "tracker_id": "simple_iou_kalman",
-                            "emit_mode": "events",
-                        },
-                    },
-                    {"id": "map", "operator": "camera.camera_mapping", "config": {}},
+            tail_nodes: list[dict[str, Any]]
+            if preset == "people_detection":
+                tail_nodes = [
                     {
                         "id": "throttle",
                         "operator": "core.throttle",
-                        "config": {"interval_seconds": 5.0},
+                        "config": {"interval_seconds": 10.0},
                     },
                     {"id": "crop", "operator": "vision.crop_objects", "config": {}},
-                    {
-                        "id": "store",
-                        "operator": "core.store_images",
-                        "config": {
-                            "format": "webp",
-                        },
-                    },
+                    {"id": "store", "operator": "core.store_images", "config": {"format": "webp"}},
                     {
                         "id": "notify",
                         "operator": "core.notify",
                         "config": {
                             "notification_type": "pipelines.tracking",
                             "title": notification_title or "{{camera_name}}: Person detected",
-                            "description": notification_description or "{{camera_name}}",
+                            "description": notification_description
+                            or "{{object_category_label}} - {{camera_name}}",
                             "priority": "medium",
+                            "dedupe_key_template": "{{tracking_id}}",
                         },
                     },
                 ]
-                edges = [
-                    {
-                        "from": {"node": "source", "port": "out"},
-                        "to": {"node": "motion", "port": "in"},
-                        "maxsize": 2,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "motion", "port": "out"},
-                        "to": {"node": "detect", "port": "in"},
-                        "maxsize": 2,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "detect", "port": "out"},
-                        "to": {"node": "track", "port": "in"},
-                        "maxsize": 2,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "track", "port": "out"},
-                        "to": {"node": "map", "port": "in"},
-                        "maxsize": 8,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "map", "port": "out"},
-                        "to": {"node": "throttle", "port": "in"},
-                        "maxsize": 8,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "throttle", "port": "out"},
-                        "to": {"node": "crop", "port": "in"},
-                        "maxsize": 8,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "crop", "port": "out"},
-                        "to": {"node": "store", "port": "in"},
-                        "maxsize": 16,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "store", "port": "out"},
-                        "to": {"node": "notify", "port": "in"},
-                        "maxsize": 16,
-                        "drop_policy": "drop_oldest",
-                    },
-                ]
-                return {"schema_version": 1, "nodes": nodes, "edges": edges}
+                nodes = [*base_nodes, *tail_nodes]
+                node_ids = [str(node["id"]) for node in nodes]
+                return {"schema_version": 1, "nodes": nodes, "edges": _linear_edges(node_ids)}
 
-            if preset == "pets":
-                nodes = [
-                    *base_nodes,
+            if preset == "people_mapping":
+                if not composition_id:
+                    raise ValueError("composition_id is required for people_mapping")
+                tail_nodes = [
                     {
-                        "id": "detect",
-                        "operator": "vision.detect",
-                        "config": {
-                            "model_id": DEFAULT_CAMERA_DETECTION_MODEL_ID,
-                            "categories": ["cat", "dog"],
-                            "emit_mode": "annotate",
-                        },
+                        "id": "map",
+                        "operator": "camera.camera_mapping",
+                        "config": {"camera_id": camera_id, "composition_id": composition_id},
                     },
                     {
-                        "id": "track",
-                        "operator": "vision.track",
-                        "config": {
-                            "tracker_id": "simple_iou_kalman",
-                            "close_after_seconds": 5.0,
-                            "emit_mode": "events",
-                        },
+                        "id": "velocity",
+                        "operator": "camera.velocity_estimation",
+                        "config": {"filter_mode": "annotate", "min_elapsed_seconds": 0.05},
                     },
-                    {"id": "map", "operator": "camera.camera_mapping", "config": {}},
                     {
                         "id": "throttle",
                         "operator": "core.throttle",
-                        "config": {"interval_seconds": 8.0},
+                        "config": {"interval_seconds": 10.0},
                     },
-                    {
-                        "id": "crop",
-                        "operator": "vision.crop_objects",
-                        "config": {"padding_ratio": 0.12},
-                    },
-                    {
-                        "id": "store",
-                        "operator": "core.store_images",
-                        "config": {
-                            "format": "webp",
-                        },
-                    },
+                    {"id": "crop", "operator": "vision.crop_objects", "config": {}},
+                    {"id": "store", "operator": "core.store_images", "config": {"format": "webp"}},
                     {
                         "id": "notify",
                         "operator": "core.notify",
                         "config": {
                             "notification_type": "pipelines.tracking",
-                            "title": notification_title or "{{camera_name}}: Pet detected",
-                            "description": notification_description or "{{camera_name}}",
+                            "title": notification_title or "{{camera_name}}: Person mapped",
+                            "description": notification_description
+                            or "{{object_category_label}} - {{camera_name}}",
                             "priority": "medium",
+                            "dedupe_key_template": "{{tracking_id}}",
                         },
                     },
                 ]
-                edges = [
-                    {
-                        "from": {"node": "source", "port": "out"},
-                        "to": {"node": "motion", "port": "in"},
-                        "maxsize": 2,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "motion", "port": "out"},
-                        "to": {"node": "detect", "port": "in"},
-                        "maxsize": 2,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "detect", "port": "out"},
-                        "to": {"node": "track", "port": "in"},
-                        "maxsize": 2,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "track", "port": "out"},
-                        "to": {"node": "map", "port": "in"},
-                        "maxsize": 8,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "map", "port": "out"},
-                        "to": {"node": "throttle", "port": "in"},
-                        "maxsize": 8,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "throttle", "port": "out"},
-                        "to": {"node": "crop", "port": "in"},
-                        "maxsize": 8,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "crop", "port": "out"},
-                        "to": {"node": "store", "port": "in"},
-                        "maxsize": 16,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "store", "port": "out"},
-                        "to": {"node": "notify", "port": "in"},
-                        "maxsize": 16,
-                        "drop_policy": "drop_oldest",
-                    },
-                ]
-                return {"schema_version": 1, "nodes": nodes, "edges": edges}
-
-            if preset == "vehicles_stopped":
-                if not composition_id:
-                    raise ValueError("composition_id is required for vehicles_stopped")
-
-                nodes = [
-                    *base_nodes,
-                    {
-                        "id": "detect",
-                        "operator": "vision.detect",
-                        "config": {
-                            "model_id": DEFAULT_CAMERA_DETECTION_MODEL_ID,
-                            "categories": ["car", "motorcycle", "bicycle"],
-                            "confidence_threshold": 0.55,
-                            "inference_interval_seconds": 0.7,
-                            "emit_mode": "annotate",
-                        },
-                    },
-                    {
-                        "id": "track",
-                        "operator": "vision.track",
-                        "config": {
-                            "close_after_seconds": 8.0,
-                            "default_interval_seconds": 0.25,
-                            "tracker_id": "simple_iou_kalman",
-                            "emit_mode": "events",
-                            "pause_when_gate_closed": True,
-                            "max_paused_seconds": 900.0,
-                        },
-                    },
-                    {
-                        "id": "map",
-                        "operator": "camera.camera_mapping",
-                        "config": {"composition_id": composition_id},
-                    },
-                    {
-                        "id": "area",
-                        "operator": "camera.area_restriction",
-                        "config": (
-                            {
-                                "areas": [{"name": area_name, "points": area_points}],
-                                "include_area_names": [area_name],
-                                "drop_when_unmapped": True,
-                            }
-                            if area_name and area_points
-                            else {"areas": [], "include_area_names": [], "drop_when_unmapped": True}
-                        ),
-                    },
-                    {
-                        "id": "velocity",
-                        "operator": "camera.velocity_estimation",
-                        "config": {
-                            "filter_mode": "stopped_now",
-                            "min_elapsed_seconds": 0.05,
-                            "stopped_speed_threshold": 0.07,
-                        },
-                    },
-                    {
-                        "id": "throttle",
-                        "operator": "core.velocity_throttle",
-                        "config": {
-                            "moving_interval_seconds": 2.5,
-                            "stopped_interval_seconds": 120.0,
-                        },
-                    },
-                    {
-                        "id": "crop",
-                        "operator": "vision.crop_objects",
-                        "config": {"padding_ratio": 0.16},
-                    },
-                    {
-                        "id": "store",
-                        "operator": "core.store_images",
-                        "config": {
-                            "format": "webp",
-                        },
-                    },
-                    {
-                        "id": "notify",
-                        "operator": "core.notify",
-                        "config": {
-                            "notification_type": "pipelines.event",
-                            "title": notification_title or "{{camera_name}}: Vehicle stopped",
-                            "description": notification_description or "{{camera_name}}",
-                            "priority": "high",
-                        },
-                    },
-                ]
-                edges = [
-                    {
-                        "from": {"node": "source", "port": "out"},
-                        "to": {"node": "motion", "port": "in"},
-                        "maxsize": 2,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "motion", "port": "out"},
-                        "to": {"node": "detect", "port": "in"},
-                        "maxsize": 2,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "detect", "port": "out"},
-                        "to": {"node": "track", "port": "in"},
-                        "maxsize": 2,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "track", "port": "out"},
-                        "to": {"node": "map", "port": "in"},
-                        "maxsize": 8,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "map", "port": "out"},
-                        "to": {"node": "area", "port": "in"},
-                        "maxsize": 8,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "area", "port": "out"},
-                        "to": {"node": "velocity", "port": "in"},
-                        "maxsize": 8,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "velocity", "port": "out"},
-                        "to": {"node": "throttle", "port": "in"},
-                        "maxsize": 8,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "throttle", "port": "out"},
-                        "to": {"node": "crop", "port": "in"},
-                        "maxsize": 8,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "crop", "port": "out"},
-                        "to": {"node": "store", "port": "in"},
-                        "maxsize": 16,
-                        "drop_policy": "drop_oldest",
-                    },
-                    {
-                        "from": {"node": "store", "port": "out"},
-                        "to": {"node": "notify", "port": "in"},
-                        "maxsize": 16,
-                        "drop_policy": "drop_oldest",
-                    },
-                ]
-                return {"schema_version": 1, "nodes": nodes, "edges": edges}
+                nodes = [*base_nodes, *tail_nodes]
+                node_ids = [str(node["id"]) for node in nodes]
+                return {"schema_version": 1, "nodes": nodes, "edges": _linear_edges(node_ids)}
 
             raise ValueError("Unknown preset")
 
-        @app.post(
-            "/api/cameras/cameras/{camera_id}/pipeline-wizard",
-            response_model=CameraPipelineWizardResponse,
+        @app.get(
+            "/api/cameras/cameras/{camera_id}/pipelines",
+            response_model=CameraPipelinesResponse,
         )
-        async def create_camera_pipeline_from_wizard(
+        async def camera_pipelines(
+            request: Request, camera_id: str
+        ) -> CameraPipelinesResponse:
+            _require_auth(request, action="core:pipelines:read")
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            store = _config_store(request)
+            pipelines_out: list[CameraPipelineSummary] = []
+            pipelines = await store.list_pipelines()
+            for pipeline in pipelines:
+                involved, source_ids = _pipeline_source_ids_for_camera(pipeline, camera_id=cid)
+                if not involved:
+                    continue
+                pipelines_out.append(
+                    CameraPipelineSummary(
+                        name=pipeline.name,
+                        enabled=bool(pipeline.enabled),
+                        processing_server_id=str(pipeline.processing_server_id or "local").strip()
+                        or "local",
+                        source_ids=source_ids,
+                    )
+                )
+
+            existing_names = {p.name for p in pipelines}
+            ext = await _read_ext_settings(request)
+            camera = get_camera_device(ext, camera_id=cid)
+            default_source = get_camera_source(camera, kind="video", enabled_only=True) if camera else None
+            source_id = (
+                str(default_source.get("id") or "").strip()
+                if isinstance(default_source, dict)
+                else ""
+            )
+            suggested: dict[str, str] = {}
+            if source_id:
+                for preset in ("people_detection", "people_mapping"):
+                    suggested[preset] = _unique_pipeline_name(
+                        f"camera_{cid}__{source_id}__{preset}", existing_names=existing_names
+                    )
+
+            return CameraPipelinesResponse(
+                camera_id=cid,
+                pipelines=pipelines_out,
+                suggested_pipeline_names=suggested,
+            )
+
+        @app.post(
+            "/api/cameras/cameras/{camera_id}/pipelines/presets",
+            response_model=CameraPipelinePresetResponse,
+        )
+        async def create_camera_pipeline_from_preset(
             request: Request,
             camera_id: str,
-            body: CameraPipelineWizardRequest,
-        ) -> CameraPipelineWizardResponse:
+            body: CameraPipelinePresetRequest,
+        ) -> CameraPipelinePresetResponse:
             _require_auth(request, action="core:pipelines:write")
             cid = str(camera_id or "").strip()
             if not cid:
                 raise HTTPException(status_code=400, detail="camera_id is required")
 
             preset = str(body.preset or "").strip()
-            if preset not in {"people", "vehicles_stopped", "pets"}:
+            if preset not in {"people_detection", "people_mapping"}:
                 raise HTTPException(
-                    status_code=400, detail="preset must be one of: people, vehicles_stopped, pets"
+                    status_code=400,
+                    detail="preset must be one of: people_detection, people_mapping",
                 )
 
             store = _config_store(request)
@@ -2326,33 +2133,16 @@ class CamerasExtension(BaseExtension):
             cfg = await store.get_config()
 
             composition_id = str(body.composition_id or "").strip()
-            area_id = str(body.area_id or "").strip()
-            area_name = ""
-            area_points: list[dict[str, float]] = []
-
-            if preset == "vehicles_stopped":
+            if preset == "people_mapping":
                 if not composition_id:
-                    composition_id = _default_mapping_composition_id(cfg, camera_id=cid) or ""
-                if not composition_id:
+                    composition_id = _default_mapped_composition_id(cfg, camera_id=cid) or ""
+                if not _composition_has_camera_mapping(
+                    cfg, camera_id=cid, composition_id=composition_id
+                ):
                     raise HTTPException(
                         status_code=409,
-                        detail="Vehicle preset requires camera mapping. Add control points (>=4) in a composition first.",
+                        detail="Mapping preset requires this camera to have at least four mapped points in a composition.",
                     )
-                _require_auth(
-                    request,
-                    action="core:area:edit",
-                    resource_type="core:area",
-                    resource_selector=f"{composition_id}.{area_id}"
-                    if area_id
-                    else f"{composition_id}.*",
-                )
-                if area_id:
-                    try:
-                        area_name, area_points = _resolve_area_polygon(
-                            cfg, composition_id=composition_id, area_id=area_id
-                        )
-                    except ValueError as exc:
-                        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
             requested_name = str(body.pipeline_name or "").strip()
             existing_names = {p.name for p in await store.list_pipelines()}
@@ -2369,13 +2159,11 @@ class CamerasExtension(BaseExtension):
                 )
 
             try:
-                graph = _build_wizard_graph(
+                graph = _build_camera_preset_graph(
                     preset=preset,
                     camera_id=cid,
                     source_id=source_id,
                     composition_id=composition_id,
-                    area_name=area_name,
-                    area_points=area_points,
                     notification_title=str(body.notification_title or "").strip(),
                     notification_description=str(body.notification_description or "").strip(),
                 )
@@ -2413,4 +2201,4 @@ class CamerasExtension(BaseExtension):
                 except Exception:
                     pass
 
-            return CameraPipelineWizardResponse(pipeline_name=pipeline_name)
+            return CameraPipelinePresetResponse(pipeline_name=pipeline_name)

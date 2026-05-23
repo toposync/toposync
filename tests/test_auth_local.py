@@ -155,7 +155,7 @@ def test_event_grant_exclude_overrides_role(
         assert res.status_code == 200
 
 
-def test_cameras_pipeline_wizard_requires_pipelines_write(
+def test_cameras_pipeline_preset_requires_pipelines_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class _EP:
@@ -198,8 +198,8 @@ def test_cameras_pipeline_wizard_requires_pipelines_write(
         assert res.status_code == 200
 
         res = client.post(
-            "/api/cameras/cameras/cam1/pipeline-wizard",
-            json={"preset": "people", "pipeline_name": "cam1_people", "enabled": True},
+            "/api/cameras/cameras/cam1/pipelines/presets",
+            json={"preset": "people_detection", "pipeline_name": "cam1_people", "enabled": True},
         )
         assert res.status_code == 403
         assert res.json()["detail"] == "Permission denied"

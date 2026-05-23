@@ -1,8 +1,9 @@
 import type {
   CameraControlPointSet,
   CameraContextsResponse,
-  CameraPipelineWizardRequest,
-  CameraPipelineWizardResponse,
+  CameraPipelinePresetRequest,
+  CameraPipelinePresetResponse,
+  CameraPipelinesResponse,
   CameraPtzPreset,
   CameraSourceHealthResponse,
   CamerasIndex,
@@ -26,8 +27,16 @@ type ControlPointMapResponse = {
   quality?: Record<string, unknown> | null;
 };
 
-export async function fetchCamerasIndex(): Promise<CamerasIndex> {
-  const response = await fetch("/api/cameras/index");
+function splitSourceAndSignal(
+  sourceIdOrSignal?: string | AbortSignal,
+  signal?: AbortSignal,
+): { sourceId: string; signal?: AbortSignal } {
+  if (sourceIdOrSignal instanceof AbortSignal) return { sourceId: "", signal: sourceIdOrSignal };
+  return { sourceId: String(sourceIdOrSignal || "").trim(), signal };
+}
+
+export async function fetchCamerasIndex(signal?: AbortSignal): Promise<CamerasIndex> {
+  const response = await fetch("/api/cameras/index", { signal });
   if (!response.ok) throw new Error(`Failed to load cameras index: ${response.status}`);
   const data = await response.json();
   const record = readRecord(data);
@@ -149,9 +158,10 @@ export async function probeCameraRtsp(
   return response.json();
 }
 
-export async function fetchCameraSnapshot(cameraId: string, sourceId = "", signal?: AbortSignal): Promise<Blob> {
-  const query = sourceId ? `?source_id=${encodeURIComponent(sourceId)}` : "";
-  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/snapshot${query}`, { signal });
+export async function fetchCameraSnapshot(cameraId: string, sourceIdOrSignal: string | AbortSignal = "", signal?: AbortSignal): Promise<Blob> {
+  const resolved = splitSourceAndSignal(sourceIdOrSignal, signal);
+  const query = resolved.sourceId ? `?source_id=${encodeURIComponent(resolved.sourceId)}` : "";
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/snapshot${query}`, { signal: resolved.signal });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Snapshot failed: ${response.status}`);
@@ -161,11 +171,12 @@ export async function fetchCameraSnapshot(cameraId: string, sourceId = "", signa
 
 export async function fetchCameraPtzPresets(
   cameraId: string,
-  sourceId = "",
+  sourceIdOrSignal: string | AbortSignal = "",
   signal?: AbortSignal,
 ): Promise<{ camera_id: string; presets: CameraPtzPreset[] }> {
-  const query = sourceId ? `?source_id=${encodeURIComponent(sourceId)}` : "";
-  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/presets${query}`, { signal });
+  const resolved = splitSourceAndSignal(sourceIdOrSignal, signal);
+  const query = resolved.sourceId ? `?source_id=${encodeURIComponent(resolved.sourceId)}` : "";
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/presets${query}`, { signal: resolved.signal });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Failed to load PTZ presets: ${response.status}`);
@@ -175,11 +186,12 @@ export async function fetchCameraPtzPresets(
 
 export async function fetchCameraPtzStatus(
   cameraId: string,
-  sourceId = "",
+  sourceIdOrSignal: string | AbortSignal = "",
   signal?: AbortSignal,
 ): Promise<{ camera_id: string; status: PanTiltZoomState | null }> {
-  const query = sourceId ? `?source_id=${encodeURIComponent(sourceId)}` : "";
-  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/status${query}`, { signal });
+  const resolved = splitSourceAndSignal(sourceIdOrSignal, signal);
+  const query = resolved.sourceId ? `?source_id=${encodeURIComponent(resolved.sourceId)}` : "";
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/status${query}`, { signal: resolved.signal });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Failed to load PTZ status: ${response.status}`);
@@ -269,12 +281,21 @@ export async function fetchCameraContexts(cameraId: string, signal?: AbortSignal
   return response.json();
 }
 
-export async function createCameraPipelineFromWizard(
+export async function fetchCameraPipelines(cameraId: string, signal?: AbortSignal): Promise<CameraPipelinesResponse> {
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/pipelines`, { signal });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Failed to load camera pipelines: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function createCameraPipelinePreset(
   cameraId: string,
-  body: CameraPipelineWizardRequest,
+  body: CameraPipelinePresetRequest,
   signal?: AbortSignal,
-): Promise<CameraPipelineWizardResponse> {
-  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/pipeline-wizard`, {
+): Promise<CameraPipelinePresetResponse> {
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/pipelines/presets`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),

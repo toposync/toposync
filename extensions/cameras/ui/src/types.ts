@@ -233,21 +233,33 @@ export type CameraContextsResponse = {
   compositions: CameraContextComposition[];
 };
 
-export type CameraPipelineWizardPreset = "people" | "vehicles_stopped" | "pets";
+export type CameraPipelinePreset = "people_detection" | "people_mapping";
 
-export type CameraPipelineWizardRequest = {
-  preset: CameraPipelineWizardPreset;
+export type CameraPipelineSummary = {
+  name: string;
+  enabled: boolean;
+  processing_server_id?: string;
+  source_ids?: string[];
+};
+
+export type CameraPipelinesResponse = {
+  camera_id: string;
+  pipelines: CameraPipelineSummary[];
+  suggested_pipeline_names?: Partial<Record<CameraPipelinePreset, string>>;
+};
+
+export type CameraPipelinePresetRequest = {
+  preset: CameraPipelinePreset;
   source_id?: string;
   pipeline_name?: string;
   enabled?: boolean;
   processing_server_id?: string;
   composition_id?: string;
-  area_id?: string;
   notification_title?: string;
   notification_description?: string;
 };
 
-export type CameraPipelineWizardResponse = {
+export type CameraPipelinePresetResponse = {
   pipeline_name: string;
 };
 

@@ -471,6 +471,18 @@ export function SettingsScreen({
   }, [activePanelId]);
 
   useEffect(() => {
+    function handleOpenSettingsPanel(event: Event): void {
+      const detail = (event as CustomEvent<{ panelId?: unknown }>).detail;
+      const panelId = typeof detail?.panelId === "string" ? detail.panelId : "";
+      if (!panelId || !entries.some((entry) => entry.id === panelId)) return;
+      setActivePanelId(panelId);
+    }
+
+    window.addEventListener("toposync:open-settings-panel", handleOpenSettingsPanel);
+    return () => window.removeEventListener("toposync:open-settings-panel", handleOpenSettingsPanel);
+  }, [entries]);
+
+  useEffect(() => {
     if (lastSettingsRef.current === settings) return;
     lastSettingsRef.current = settings;
 

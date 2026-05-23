@@ -1,6 +1,6 @@
 [project]
 name = "toposync-ext-models"
-version = "0.1.15"
+version = "0.1.16"
 description = "Toposync first-party extension: import 3D models (GLB/GLTF) with 2D previews."
 readme = "README.md"
 license = "MIT"

@@ -1,6 +1,6 @@
 [project]
 name = "toposync-ext-ai"
-version = "0.1.17"
+version = "0.1.18"
 description = "Toposync first-party extension: AI-assisted image operators and provider routing."
 readme = "README.md"
 license = "MIT"

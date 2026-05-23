@@ -1122,16 +1122,14 @@ function ControlPointsModal({
     );
   }
 
-  async function handlePresetSelection(nextPresetToken: string) {
+  async function moveCameraToPresetToken(
+    nextPresetToken: string,
+    options?: { fallbackPresetName?: string | null; bindSelectedSet?: boolean; renameFromPreset?: boolean },
+  ) {
     const token = String(nextPresetToken || "").trim();
-    setSelectedPresetToken(token);
-    if (!token) {
-      captureCurrentPoseIntoSelectedSet(ptzStatusRef.current, { presetToken: null, presetName: null });
-      return;
-    }
-    if (!cameraId) return;
+    if (!token || !cameraId || !isPtzCamera) return;
     const preset = ptzPresets.find((item) => String(item.token || "").trim() === token) ?? null;
-    const presetName = String(preset?.name || "").trim() || token;
+    const presetName = String(preset?.name || options?.fallbackPresetName || "").trim() || token;
     const presetPose = {
       pan: typeof preset?.pan === "number" && Number.isFinite(preset.pan) ? preset.pan : null,
       tilt: typeof preset?.tilt === "number" && Number.isFinite(preset.tilt) ? preset.tilt : null,
@@ -1139,17 +1137,48 @@ function ControlPointsModal({
       preset_token: token,
       preset_name: presetName,
     };
-    updateSelectedSet({ label: presetName, pose_reference: presetPose });
+    setSelectedPresetToken(token);
+    if (options?.bindSelectedSet) updateSelectedSet({ label: presetName, pose_reference: presetPose });
     setPtzCommandBusy(true);
     setPtzErrorMessage(null);
     try {
       await gotoCameraPtzPreset(cameraId, token);
-      await settlePtzAndRefresh({ presetToken: token, presetName, renameFromPreset: true });
+      await settlePtzAndRefresh({
+        presetToken: token,
+        presetName,
+        renameFromPreset: options?.renameFromPreset === true,
+      });
     } catch (error) {
       setPtzErrorMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setPtzCommandBusy(false);
     }
+  }
+
+  async function handlePresetSelection(nextPresetToken: string) {
+    const token = String(nextPresetToken || "").trim();
+    setSelectedPresetToken(token);
+    if (!token) {
+      captureCurrentPoseIntoSelectedSet(ptzStatusRef.current, { presetToken: null, presetName: null });
+      return;
+    }
+    await moveCameraToPresetToken(token, { bindSelectedSet: true, renameFromPreset: true });
+  }
+
+  async function handleControlPointSetSelection(controlPointSet: CameraControlPointSet) {
+    const nextPresetToken = String(controlPointSet.pose_reference?.preset_token ?? "").trim();
+    if (moveHeldRef.current || moveVectorRef.current) {
+      await stopActivePtzMove({ force: true });
+    }
+    selectedSetIdRef.current = controlPointSet.id;
+    setSelectedSetId(controlPointSet.id);
+    setSelectedPointId(controlPointSet.control_points[0]?.id ?? null);
+    setSelectedPresetToken(nextPresetToken);
+    if (!nextPresetToken) return;
+    await moveCameraToPresetToken(nextPresetToken, {
+      fallbackPresetName: controlPointSet.pose_reference?.preset_name ?? null,
+      bindSelectedSet: false,
+    });
   }
 
   async function stopActivePtzMove(options?: { force?: boolean }) {
@@ -1257,9 +1286,9 @@ function ControlPointsModal({
                   type="button"
                   className="chipButton"
                   onClick={() => {
-                    setSelectedSetId(controlPointSet.id);
-                    setSelectedPointId(controlPointSet.control_points[0]?.id ?? null);
+                    void handleControlPointSetSelection(controlPointSet);
                   }}
+                  disabled={isPtzCamera && ptzCommandBusy}
                   style={{
                     minWidth: 190,
                     justifyContent: "space-between",

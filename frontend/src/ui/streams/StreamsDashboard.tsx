@@ -13,6 +13,7 @@ import {
   type StreamingCameraLiveVariant,
   type StreamingCameraLiveView,
   type StreamingCameraLiveViewPlaybackResponse,
+  type StreamingPlaybackPlanResponse,
   type StreamingQualityProfileId,
   type StreamingRuntimeTransmissionHealth,
   type StreamingTransmission,
@@ -95,6 +96,7 @@ const WEBRTC_WHEP_READY_ATTEMPTS = 8;
 const WEBRTC_WHEP_READY_RETRY_MS = 500;
 const RUNTIME_HEALTH_REFRESH_MS = 2000;
 const HLS_BROWSER_PROBE_TIMEOUT_MS = 2500;
+const HLS_LIVENESS_STALE_GRACE_MS = 5000;
 const DEMAND_HEARTBEAT_INTERVAL_MS = 10000;
 
 function readGridMode(): GridMode {
@@ -328,6 +330,7 @@ function hasHomeAssistantProxyHlsContract(urls: StreamingTransmissionUrlsRespons
 function buildPlaybackPlan(options: {
   transportPreference: StreamTransportPreference;
   urls: StreamingTransmissionUrlsResponse | undefined;
+  serverPlaybackPlan?: StreamingPlaybackPlanResponse | null;
   hlsUrl: string | null;
   webrtcUrl: string | null;
   lowLatencyRequested: boolean;
@@ -338,6 +341,9 @@ function buildPlaybackPlan(options: {
   const webRtcBlocked = webRtcIssueMessages.length > 0;
   const homeAssistantProxyHls = hasHomeAssistantProxyHlsContract(options.urls);
   const mobileTouchBrowser = isProbablyMobileTouchBrowser();
+  const serverSelectedTransport = String(options.serverPlaybackPlan?.selected_transport || "").trim().toLowerCase();
+  const serverPrefersHls = serverSelectedTransport === "hls";
+  const serverPrefersWebRtc = serverSelectedTransport === "webrtc";
 
   if (options.transportPreference === "hls") {
     return {
@@ -366,10 +372,11 @@ function buildPlaybackPlan(options: {
   }
 
   const hlsFirstForHomeAssistant = homeAssistantProxyHls && hasHls && !options.lowLatencyRequested;
+  const hlsFirstForServerPlan = serverPrefersHls && hasHls && !options.lowLatencyRequested;
   const hlsFirstForContract = webRtcBlocked && hasHls;
-  const preferHlsFirst = hlsFirstForHomeAssistant || hlsFirstForContract;
+  const preferHlsFirst = hlsFirstForHomeAssistant || hlsFirstForServerPlan || hlsFirstForContract;
   const allowWebRtc = hasWebRtc && !webRtcBlocked && (options.lowLatencyRequested || !preferHlsFirst || !hasHls);
-  const preferWebRtcFirst = allowWebRtc && (options.lowLatencyRequested || !preferHlsFirst);
+  const preferWebRtcFirst = allowWebRtc && (options.lowLatencyRequested || serverPrefersWebRtc || !preferHlsFirst);
   const effectiveMode: EffectiveTransportMode = preferWebRtcFirst
     ? options.lowLatencyRequested
       ? "ptz_webrtc"
@@ -1181,6 +1188,7 @@ function StreamTilePlayer({
   hlsQualityProfileId,
   label,
   urls,
+  playbackPlan: serverPlaybackPlan,
   overlayVisible,
   sourceHint,
   sourceHintTone,
@@ -1215,6 +1223,7 @@ function StreamTilePlayer({
   hlsQualityProfileId: StreamingQualityProfileId | null;
   label: string;
   urls?: StreamingTransmissionUrlsResponse;
+  playbackPlan?: StreamingPlaybackPlanResponse | null;
   overlayVisible: boolean;
   sourceHint: string | null;
   sourceHintTone: "muted" | "warn" | "error";
@@ -1266,11 +1275,12 @@ function StreamTilePlayer({
       buildPlaybackPlan({
         transportPreference,
         urls,
+        serverPlaybackPlan,
         hlsUrl,
         webrtcUrl,
         lowLatencyRequested,
       }),
-    [hlsUrl, lowLatencyRequested, transportPreference, urls, webrtcUrl],
+    [hlsUrl, lowLatencyRequested, serverPlaybackPlan, transportPreference, urls, webrtcUrl],
   );
   const { allowHls, allowWebRtc, preferWebRtcFirst } = playbackPlan;
   const transportTelemetryBase = useMemo(
@@ -1485,6 +1495,9 @@ function StreamTilePlayer({
     let retryTimerId: number | null = null;
     let attempt = 0;
     let hlsPlayer: Hls | null = null;
+    let hlsLivenessTimerId: number | null = null;
+    let hlsLastLiveKey: string | null = null;
+    let hlsLastChangedAtMs = 0;
     let peerConnection: RTCPeerConnection | null = null;
     let whepSessionUrl: string | null = null;
     let webrtcAbortController: AbortController | null = null;
@@ -1502,12 +1515,82 @@ function StreamTilePlayer({
     };
 
     const destroyHls = () => {
+      if (hlsLivenessTimerId != null) {
+        window.clearInterval(hlsLivenessTimerId);
+        hlsLivenessTimerId = null;
+      }
       try {
         hlsPlayer?.destroy();
       } catch {
         // ignore
       }
       hlsPlayer = null;
+    };
+
+    const startHlsLivenessMonitor = (sourceUrl: string) => {
+      if (hlsLivenessTimerId != null) {
+        window.clearInterval(hlsLivenessTimerId);
+        hlsLivenessTimerId = null;
+      }
+      hlsLastLiveKey = null;
+      hlsLastChangedAtMs = Date.now();
+
+      const sample = async () => {
+        try {
+          const probe = await probeBrowserHlsPlayback(sourceUrl, hlsAuthHeader);
+          if (cancelled) return;
+          const liveKey = `${probe.mediaSequence || ""}|${probe.tailSegmentUrl || ""}`;
+          const targetDurationMs = Math.max(2000, Number(probe.targetDuration || 0) * 1000 || 4000);
+          if (!hlsLastLiveKey || liveKey !== hlsLastLiveKey) {
+            hlsLastLiveKey = liveKey;
+            hlsLastChangedAtMs = Date.now();
+            setHlsProbeSummary(
+              ["live", probe.mediaSequence ? `seq ${probe.mediaSequence}` : null, probe.targetDuration ? `target ${probe.targetDuration}s` : null]
+                .filter(Boolean)
+                .join(" · "),
+            );
+            return;
+          }
+
+          const staleForMs = Date.now() - hlsLastChangedAtMs;
+          const staleThresholdMs = targetDurationMs * 3 + HLS_LIVENESS_STALE_GRACE_MS;
+          if (staleForMs >= staleThresholdMs) {
+            const message = i18n.t(
+              "core.ui.streams.errors.hls_liveness_stale",
+              {},
+              "HLS playlist stopped advancing.",
+            );
+            recordWebPlaybackEvent("hls_liveness_stale", {
+              severity: "warn",
+              message,
+              data: withTransportTelemetry({
+                media_playlist_url: probe.mediaPlaylistUrl,
+                tail_segment_url: probe.tailSegmentUrl,
+                media_sequence: probe.mediaSequence,
+                target_duration_seconds: probe.targetDuration,
+                stale_for_ms: staleForMs,
+              }),
+            });
+            setStatus("error");
+            setErrorText(message);
+            destroyPlayback();
+            scheduleRetry(message);
+          }
+        } catch (error) {
+          if (cancelled) return;
+          const message = asErrorMessage(error);
+          recordWebPlaybackEvent("hls_liveness_probe_error", {
+            severity: "warn",
+            message,
+            data: withTransportTelemetry({ playback_transport: "hls" }),
+          });
+        }
+      };
+
+      void sample();
+      hlsLivenessTimerId = window.setInterval(() => {
+        void sample();
+      }, 3000);
     };
 
     const clearWebRtcStatsTimer = () => {
@@ -1679,6 +1762,7 @@ function StreamTilePlayer({
       };
 
       video.src = sourceUrl;
+      startHlsLivenessMonitor(sourceUrl);
       try {
         await video.play();
       } catch {
@@ -1719,6 +1803,7 @@ function StreamTilePlayer({
       hls.on(HlsConstructor.Events.MANIFEST_PARSED, () => {
         setStatus("playing");
         setErrorText(null);
+        startHlsLivenessMonitor(hlsUrl ?? "");
         void video.play().catch(() => {});
       });
 
@@ -2841,6 +2926,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
                   hlsQualityProfileId={hlsOutput?.qualityProfileId ?? null}
                   label={transmissionName}
                   urls={urls}
+                  playbackPlan={playback?.playback_plan ?? null}
                   overlayVisible={uiVisible}
                   sourceHint={sourceHint}
                   sourceHintTone={sourceHintTone}

@@ -1,7 +1,7 @@
 
 # Dossiê técnico consolidado: qualidade, estabilidade e operação de streams no Toposync
 
-**Versão:** 2026-05-10
+**Versão:** 2026-05-22
 **Objetivo:** transformar o diagnóstico de instabilidade em um plano sólido de engenharia, apoiado em literatura, normas de streaming, evidência do código atual e prioridades práticas por camada: backend/server, frontend/web, app React Native/Expo e Home Assistant add-on.
 
 Este documento atualiza o dossiê técnico original sem perder seus detalhes. A primeira parte é a camada operacional nova: contratos de saúde, prioridades, critérios de aceite, métricas e runbooks. O dossiê original fica preservado no apêndice para manter a rastreabilidade.
@@ -87,6 +87,64 @@ Em 2026-05-09/2026-05-10, a investigação em ambiente real de Home Assistant mo
 | HLS player ativo | envia `demand/heartbeat` a cada 10s com lease padrão de 45s. |
 
 Nota de leitura: trechos antigos do apêndice preservado ainda mencionam `18759` como HLS público. Eles ficam mantidos por rastreabilidade histórica, mas são supersedidos por esta atualização: em `signed_proxy`, `18759` é porta interna/diagnóstico.
+
+---
+
+## 0.2. Atualização operacional: Playback Plan, Auto e múltiplos streams
+
+Em 2026-05-22, foi entregue a primeira fatia da escada "sempre visualizável" no Toposync. A mudança não troca o engine principal nem promove MSE/JSMpeg antes de existir infraestrutura real para eles. Ela cria o contrato central que permite a UI parar de decidir por heurísticas espalhadas.
+
+### O que ficou implementado
+
+1. **Playback Plan API.**
+   O backend passa a expor `GET /api/streams/transmissions/{id}/playback-plan?client=web|app&output_id=&quality_profile_id=`.
+
+2. **Plano embutido no live playback.**
+   A resposta de live view inclui `playback_plan`, permitindo que o dashboard web use a mesma política do backend ao montar o player.
+
+3. **Escada de transporte declarativa.**
+   Para web comum, a ordem de intenção é `MSE -> WebRTC -> HLS -> JSMpeg`. Como MSE/go2rtc e JSMpeg ainda não estão habilitados, ambos aparecem bloqueados com motivo explícito, e a seleção efetiva cai para WebRTC ou HLS.
+
+4. **Home Assistant e app continuam HLS-first.**
+   Em app nativo ou HA com HLS proxy, a ordem efetiva começa por HLS. WebRTC fica bloqueado para app e tratado como baixa latência/PTZ, não como caminho padrão de estabilidade.
+
+5. **Múltiplos streams por câmera/transmission.**
+   O plano respeita `output_id` e `quality_profile_id`. Isso é obrigatório porque câmeras podem ter mais de um stream/output, e a política não pode assumir que o primeiro HLS disponível é o stream correto para fullscreen, grid, diagnóstico ou PTZ.
+
+6. **Monitor HLS contínuo no web player.**
+   O dashboard passa a monitorar avanço de playlist e disponibilidade do tail segment durante o playback. Se a sequência não avança por janela proporcional ao `TARGETDURATION`, o player registra telemetria, derruba a tentativa corrente e entra no fluxo de recovery/fallback em vez de manter freeze silencioso.
+
+### Estado atual da escada
+
+| Transporte | Estado nesta fatia | Observação |
+|---|---|---|
+| HLS | ativo | fallback estável e caminho preferido em app/HA. |
+| WebRTC | ativo quando disponível | preferido no web comum enquanto MSE real não existir; não é default para app/HA. |
+| MSE | contrato declarado, bloqueado | requer sidecar `go2rtc` ou equivalente consumindo RTSP interno do MediaMTX e proxy assinado pelo Toposync. |
+| JSMpeg | contrato declarado, bloqueado | deve entrar só como fallback visual de emergência, baixa resolução/FPS, sob heartbeat. |
+
+### Regressões cobertas
+
+- Web comum com HLS + WebRTC seleciona WebRTC depois de marcar MSE como indisponível.
+- App/HA seleciona HLS e bloqueia WebRTC como caminho padrão.
+- Transmissão com múltiplos HLS por `quality_profile_id` seleciona o output solicitado, incluindo fullscreen, sem cair no primeiro HLS.
+- O contrato de tipos aceita URLs `mse` e `jsmpeg` sem gravar esses protocolos como outputs persistidos enquanto os workers reais não existem.
+
+### Validação desta fatia
+
+- `uv run pytest tests -q`: 502 testes.
+- `uv run pytest $(rg --files tests | rg 'test_streaming.*\.py$') -q`: 139 testes.
+- `npm --workspace @toposync/frontend run build`: OK, com warning conhecido de tamanho de bundle.
+- `npm --workspace @toposync/frontend run test:main2d`: 9 testes.
+- `git diff --check`: OK.
+
+### Próximos passos obrigatórios
+
+1. Implementar sidecar opcional `go2rtc` para MSE, com fonte RTSP interna do MediaMTX por transmission/output, nunca câmera direta.
+2. Expor MSE apenas via proxy assinado do Toposync, preservando HA ingress e tokens de mídia.
+3. Implementar JSMpeg sob demanda a partir do frame selecionado/runtime ou placeholder, não diretamente da câmera.
+4. Encerrar encoder JSMpeg quando não houver heartbeat ativo.
+5. Promover a UI Auto para alternância silenciosa completa entre transportes somente depois que MSE/JSMpeg tiverem execução real e testes de caos.
 
 ---
 

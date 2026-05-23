@@ -841,7 +841,7 @@ export type StreamingTransmissionCameraStatusResponse = {
 
 export type StreamingTransmissionUrlOutput = {
   output_id: string;
-  protocol: "hls" | "rtsp" | "webrtc";
+  protocol: "hls" | "rtsp" | "webrtc" | "mse" | "jsmpeg";
   resolved_engine_path: string;
   url: string;
   requires_auth?: boolean;
@@ -890,6 +890,38 @@ export type StreamingTransmissionUrlsResponse = {
   media_url_origin?: string | null;
 };
 
+export type StreamingPlaybackTransport = "mse" | "webrtc" | "hls" | "jsmpeg";
+
+export type StreamingPlaybackPlanTransport = {
+  transport: StreamingPlaybackTransport;
+  rank: number;
+  available: boolean;
+  output_id?: string | null;
+  protocol?: "hls" | "rtsp" | "webrtc" | "mse" | "jsmpeg" | null;
+  url?: string | null;
+  media_auth_type?: "none" | "signed_url" | "basic";
+  requires_auth?: boolean;
+  quality_profile_id?: StreamingQualityProfileId | null;
+  resolution?: StreamingResolution | null;
+  fps_limit?: number | null;
+  bitrate_kbps?: number | null;
+  latency_profile?: StreamingLatencyProfile | null;
+  blocking_errors?: string[];
+  warnings?: string[];
+  health?: Record<string, unknown>;
+};
+
+export type StreamingPlaybackPlanResponse = {
+  transmission_id: string;
+  client: "app" | "web";
+  lease_seconds: number;
+  heartbeat_interval_seconds: number;
+  transports: StreamingPlaybackPlanTransport[];
+  selected_transport?: StreamingPlaybackTransport | null;
+  warnings?: string[];
+  blocking_errors?: string[];
+};
+
 export type StreamingCameraLiveViewPlaybackResponse = {
   live_view: StreamingCameraLiveView;
   context: StreamingCameraLiveContext;
@@ -901,6 +933,7 @@ export type StreamingCameraLiveViewPlaybackResponse = {
   source_role?: string | null;
   transmission: StreamingTransmission;
   urls: StreamingTransmissionUrlsResponse;
+  playback_plan?: StreamingPlaybackPlanResponse | null;
   selected_output?: StreamingTransmissionUrlOutput | null;
   runtime_health?: StreamingRuntimeTransmissionHealth | Record<string, unknown> | null;
   source_health?: Record<string, unknown> | null;
@@ -2207,6 +2240,23 @@ export async function getStreamingTransmissionUrls(
   const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/urls${query}`);
   if (!res.ok) throw new Error(`Failed to fetch streaming URLs for ${transmissionId}: ${res.status}`);
   return (await res.json()) as StreamingTransmissionUrlsResponse;
+}
+
+export async function getStreamingTransmissionPlaybackPlan(
+  transmissionId: string,
+  options?: StreamingTransmissionUrlSelectionOptions & { client?: "app" | "web" },
+): Promise<StreamingPlaybackPlanResponse> {
+  const params = new URLSearchParams();
+  const outputId = String(options?.outputId || "").trim();
+  const qualityProfileId = String(options?.qualityProfileId || "").trim();
+  const client = String(options?.client || "web").trim();
+  if (outputId) params.set("output_id", outputId);
+  if (qualityProfileId) params.set("quality_profile_id", qualityProfileId);
+  if (client) params.set("client", client);
+  const query = params.toString() ? `?${params.toString()}` : "";
+  const res = await fetch(`/api/streams/transmissions/${encodeURIComponent(transmissionId)}/playback-plan${query}`);
+  if (!res.ok) throw new Error(`Failed to fetch streaming playback plan for ${transmissionId}: ${res.status}`);
+  return (await res.json()) as StreamingPlaybackPlanResponse;
 }
 
 export async function primeStreamingTransmissionDemand(

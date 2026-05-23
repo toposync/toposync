@@ -49,6 +49,7 @@ StreamingObservabilityClassification = Literal[
     "unknown",
 ]
 StreamingPlaybackClientKind = Literal["app", "web"]
+StreamingPlaybackTransport = Literal["mse", "webrtc", "hls", "jsmpeg"]
 StreamingPlaybackEventSeverity = Literal["debug", "info", "warn", "error"]
 StreamingCameraSourceStatus = Literal[
     "healthy",
@@ -893,7 +894,7 @@ class TransmissionOutputUrl(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     output_id: str
-    protocol: Literal["hls", "rtsp", "webrtc"]
+    protocol: Literal["hls", "rtsp", "webrtc", "mse", "jsmpeg"]
     resolved_engine_path: str
     url: str
     requires_auth: bool = False
@@ -919,6 +920,40 @@ class TransmissionUrlsResponse(BaseModel):
     blocking_errors: list[str] = Field(default_factory=list)
     public_base_path: str = "/"
     media_url_origin: str | None = None
+
+
+class StreamingPlaybackPlanTransport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transport: StreamingPlaybackTransport
+    rank: int = Field(ge=0)
+    available: bool
+    output_id: str | None = None
+    protocol: Literal["hls", "rtsp", "webrtc", "mse", "jsmpeg"] | None = None
+    url: str | None = None
+    media_auth_type: StreamingMediaAuthType = "none"
+    requires_auth: bool = False
+    quality_profile_id: StreamingQualityProfileId | None = None
+    resolution: Resolution | None = None
+    fps_limit: int | None = None
+    bitrate_kbps: int | None = None
+    latency_profile: Literal["normal", "low", "ultra_low"] | None = None
+    blocking_errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    health: dict[str, Any] = Field(default_factory=dict)
+
+
+class StreamingPlaybackPlanResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transmission_id: str
+    client: StreamingPlaybackClientKind
+    lease_seconds: float = Field(default=45.0, ge=5.0, le=120.0)
+    heartbeat_interval_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
+    transports: list[StreamingPlaybackPlanTransport] = Field(default_factory=list)
+    selected_transport: StreamingPlaybackTransport | None = None
+    warnings: list[str] = Field(default_factory=list)
+    blocking_errors: list[str] = Field(default_factory=list)
 
 
 class CameraLiveViewGenerateRequest(BaseModel):
@@ -959,6 +994,7 @@ class CameraLiveViewPlaybackResponse(BaseModel):
     source_role: str | None = None
     transmission: Transmission
     urls: TransmissionUrlsResponse
+    playback_plan: StreamingPlaybackPlanResponse | None = None
     selected_output: TransmissionOutputUrl | None = None
     runtime_health: dict[str, Any] | None = None
     source_health: dict[str, Any] | None = None

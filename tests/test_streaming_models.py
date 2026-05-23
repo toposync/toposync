@@ -233,6 +233,144 @@ def test_apply_quality_profiles_creates_profiled_hls_outputs_and_url_metadata(
         assert "quality-stream-hls_quad_grid" in output["resolved_engine_path"]
 
 
+def test_transmission_playback_plan_prefers_webrtc_after_unavailable_mse_for_web(
+    tmp_path: Path,
+) -> None:
+    with _create_client(tmp_path) as client:
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Plan stream",
+                "path": "plan-stream",
+                "outputs": [
+                    {"id": "hls_main", "protocol": "hls", "enabled": True},
+                    {"id": "webrtc_low_latency", "protocol": "webrtc", "enabled": True},
+                ],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        plan_res = client.get(f"/api/streams/transmissions/{transmission_id}/playback-plan?client=web")
+
+    assert plan_res.status_code == 200
+    payload = plan_res.json()
+    assert payload["selected_transport"] == "webrtc"
+    assert [item["transport"] for item in payload["transports"]] == [
+        "mse",
+        "webrtc",
+        "hls",
+        "jsmpeg",
+    ]
+    assert payload["transports"][0]["available"] is False
+    assert "MSE sidecar" in payload["transports"][0]["blocking_errors"][0]
+    assert payload["transports"][1]["available"] is True
+    assert payload["transports"][1]["output_id"] == "webrtc_low_latency"
+
+
+def test_transmission_playback_plan_prefers_hls_for_native_app(
+    tmp_path: Path,
+) -> None:
+    with _create_client(tmp_path) as client:
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "App plan stream",
+                "path": "app-plan-stream",
+                "outputs": [
+                    {"id": "hls_main", "protocol": "hls", "enabled": True},
+                    {"id": "webrtc_low_latency", "protocol": "webrtc", "enabled": True},
+                ],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        plan_res = client.get(f"/api/streams/transmissions/{transmission_id}/playback-plan?client=app")
+
+    assert plan_res.status_code == 200
+    payload = plan_res.json()
+    assert payload["selected_transport"] == "hls"
+    assert [item["transport"] for item in payload["transports"]] == [
+        "hls",
+        "mse",
+        "webrtc",
+        "jsmpeg",
+    ]
+    assert payload["transports"][0]["available"] is True
+    assert payload["transports"][0]["output_id"] == "hls_main"
+    assert payload["transports"][2]["available"] is False
+    assert "Native app playback uses HLS first." in payload["transports"][2]["blocking_errors"]
+
+
+def test_transmission_playback_plan_respects_multi_stream_selection(
+    tmp_path: Path,
+) -> None:
+    with _create_client(tmp_path) as client:
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Multi stream plan",
+                "path": "multi-stream-plan",
+                "outputs": [
+                    {
+                        "id": "hls_quad_grid",
+                        "protocol": "hls",
+                        "enabled": True,
+                        "quality_profile_id": "quad_grid",
+                        "resolution": {"width": 640, "height": 360},
+                    },
+                    {
+                        "id": "hls_fullscreen_quality",
+                        "protocol": "hls",
+                        "enabled": True,
+                        "quality_profile_id": "fullscreen_quality",
+                        "resolution": {"width": 1920, "height": 1080},
+                    },
+                    {"id": "webrtc_low_latency", "protocol": "webrtc", "enabled": True},
+                ],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        app_plan_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/playback-plan"
+            "?client=app&quality_profile_id=fullscreen_quality"
+        )
+        web_plan_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/playback-plan"
+            "?client=web&output_id=hls_fullscreen_quality"
+        )
+
+    assert app_plan_res.status_code == 200
+    app_payload = app_plan_res.json()
+    assert app_payload["selected_transport"] == "hls"
+    app_hls = next(item for item in app_payload["transports"] if item["transport"] == "hls")
+    assert app_hls["available"] is True
+    assert app_hls["output_id"] == "hls_fullscreen_quality"
+    assert app_hls["quality_profile_id"] == "fullscreen_quality"
+    assert app_hls["resolution"] == {"width": 1920, "height": 1080}
+
+    assert web_plan_res.status_code == 200
+    web_payload = web_plan_res.json()
+    assert web_payload["selected_transport"] == "hls"
+    assert [item["transport"] for item in web_payload["transports"]] == [
+        "mse",
+        "webrtc",
+        "hls",
+        "jsmpeg",
+    ]
+    web_webrtc = next(item for item in web_payload["transports"] if item["transport"] == "webrtc")
+    web_hls = next(item for item in web_payload["transports"] if item["transport"] == "hls")
+    assert web_webrtc["available"] is False
+    assert web_webrtc["output_id"] is None
+    assert "No WebRTC/WHEP output is available." in web_webrtc["blocking_errors"]
+    assert web_hls["available"] is True
+    assert web_hls["output_id"] == "hls_fullscreen_quality"
+    assert web_hls["quality_profile_id"] == "fullscreen_quality"
+
+
 def test_mediamtx_config_can_disable_local_metrics() -> None:
     config_text = render_mediamtx_config(
         bind_host="0.0.0.0",

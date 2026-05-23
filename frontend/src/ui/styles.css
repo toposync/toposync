@@ -4813,7 +4813,28 @@ video {
 .settingsSidebarList {
   display: flex;
   flex-direction: column;
+  gap: 14px;
+}
+
+.settingsSidebarGroup {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+}
+
+.settingsSidebarGroup + .settingsSidebarGroup {
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: 14px;
+}
+
+.settingsSidebarGroupTitle {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+  padding: 0 10px 2px;
+  text-transform: uppercase;
 }
 
 .settingsNavItem {

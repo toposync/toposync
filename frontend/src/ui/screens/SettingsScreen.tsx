@@ -60,7 +60,9 @@ const VIEW_PANEL_ID = "__view__";
 const COMPOSITIONS_PANEL_ID = "__compositions__";
 const CORE_PANEL_ID = "__core__";
 const EXTENSIONS_PANEL_ID = "__extensions__";
-const ACTIVE_PANEL_STORAGE_KEY = "toposync.settings.active_panel.v4";
+const CAMERAS_PANEL_ID = "com.toposync.cameras";
+const ACTIVE_PANEL_STORAGE_KEY = "toposync.settings.active_panel.v5";
+const PRIMARY_SETTINGS_PANEL_IDS = new Set([CORE_PANEL_ID, COMPOSITIONS_PANEL_ID, CAMERAS_PANEL_ID]);
 
 type ExitAction = "close" | "pipelines" | "processing_servers" | "access" | "logout" | "composition_editor";
 
@@ -138,7 +140,7 @@ export function SettingsScreen({
   onClose,
 }: Props): React.ReactElement {
   const { t, locale, setLocale } = i18n.useI18n();
-  const [activePanelId, setActivePanelId] = useState<string>(() => loadActivePanelId(VIEW_PANEL_ID));
+  const [activePanelId, setActivePanelId] = useState<string>(() => loadActivePanelId(CORE_PANEL_ID));
   const [draftExtensions, setDraftExtensions] = useState<Record<string, Record<string, unknown>>>(() => settings.extensions ?? {});
   const [dirtyExtensions, setDirtyExtensions] = useState<Record<string, boolean>>({});
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -485,7 +487,9 @@ export function SettingsScreen({
       desc: panel.description ? resolveLocalizedString(panel.description) : "",
       panel,
     }));
-    return [viewEntry, compositionsEntry, coreEntry, extensionsEntry, ...extEntries];
+    const primaryExtEntries = extEntries.filter((entry) => entry.id === CAMERAS_PANEL_ID);
+    const otherExtEntries = extEntries.filter((entry) => entry.id !== CAMERAS_PANEL_ID);
+    return [coreEntry, compositionsEntry, ...primaryExtEntries, viewEntry, ...otherExtEntries, extensionsEntry];
   }, [
     activeCompositionId,
     backendAvailable,
@@ -526,6 +530,29 @@ export function SettingsScreen({
   const activeEntry = useMemo(
     () => entries.find((entry) => entry.id === activePanelId) ?? entries[0],
     [activePanelId, entries],
+  );
+
+  const primarySidebarEntries = useMemo(
+    () => entries.filter((entry) => PRIMARY_SETTINGS_PANEL_IDS.has(entry.id)),
+    [entries],
+  );
+  const viewSidebarEntry = useMemo(
+    () => entries.find((entry) => entry.id === VIEW_PANEL_ID) ?? null,
+    [entries],
+  );
+  const extensionManagementSidebarEntry = useMemo(
+    () => entries.find((entry) => entry.id === EXTENSIONS_PANEL_ID) ?? null,
+    [entries],
+  );
+  const integrationSidebarEntries = useMemo(
+    () =>
+      entries.filter(
+        (entry) =>
+          entry.kind === "extension" &&
+          !PRIMARY_SETTINGS_PANEL_IDS.has(entry.id) &&
+          entry.id !== EXTENSIONS_PANEL_ID,
+      ),
+    [entries],
   );
 
   const unsavedSectionsLabel = useMemo(() => {
@@ -1235,6 +1262,46 @@ export function SettingsScreen({
     );
   }
 
+  function renderSidebarEntry(entry: SettingsEntry): React.ReactNode {
+    const selected = entry.id === activePanelId;
+    const isDirty = entry.kind === "extension" ? Boolean(dirtyExtensions[entry.id]) : false;
+    return (
+      <button
+        key={entry.id}
+        type="button"
+        className={["settingsNavItem", selected ? "isSelected" : ""].filter(Boolean).join(" ")}
+        onClick={() => setActivePanelId(entry.id)}
+      >
+        <span className="settingsNavIcon">
+          <Icon name={entry.icon} />
+        </span>
+        <span className="settingsNavText">
+          <span className="settingsNavTitleRow">
+            <span className="settingsNavTitle">{entry.title}</span>
+            {isDirty ? <span className="settingsNavDirtyDot" aria-label={t("core.ui.settings.unsaved_changes")} /> : null}
+          </span>
+          {entry.desc ? <span className="settingsNavDesc">{entry.desc}</span> : null}
+        </span>
+      </button>
+    );
+  }
+
+  function renderSidebarAction(action: ExitAction, icon: string, title: string, desc: string): React.ReactNode {
+    return (
+      <button key={action} type="button" className="settingsNavItem" onClick={() => requestExit(action)}>
+        <span className="settingsNavIcon">
+          <Icon name={icon} />
+        </span>
+        <span className="settingsNavText">
+          <span className="settingsNavTitleRow">
+            <span className="settingsNavTitle">{title}</span>
+          </span>
+          <span className="settingsNavDesc">{desc}</span>
+        </span>
+      </button>
+    );
+  }
+
   return (
     <div className="settingsRoot screenRoot">
       <div className="settingsTopbar">
@@ -1255,69 +1322,41 @@ export function SettingsScreen({
       <div className="settingsLayout">
         <div className="settingsSidebar">
           <div className="settingsSidebarList">
-            <button type="button" className="settingsNavItem" onClick={() => requestExit("pipelines")}>
-              <span className="settingsNavIcon">
-                <Icon name="diagram-project" />
-              </span>
-              <span className="settingsNavText">
-                <span className="settingsNavTitleRow">
-                  <span className="settingsNavTitle">{t("core.ui.settings.nav.pipelines.title")}</span>
-                </span>
-                <span className="settingsNavDesc">{t("core.ui.settings.nav.pipelines.desc")}</span>
-              </span>
-            </button>
+            <div className="settingsSidebarGroup">
+              <div className="settingsSidebarGroupTitle">{t("core.ui.settings.sidebar.main")}</div>
+              {primarySidebarEntries.map((entry) => renderSidebarEntry(entry))}
+              {renderSidebarAction(
+                "pipelines",
+                "diagram-project",
+                t("core.ui.settings.nav.pipelines.title"),
+                t("core.ui.settings.nav.pipelines.desc"),
+              )}
+            </div>
 
-            <button type="button" className="settingsNavItem" onClick={() => requestExit("processing_servers")}>
-              <span className="settingsNavIcon">
-                <Icon name="server" />
-              </span>
-              <span className="settingsNavText">
-                <span className="settingsNavTitleRow">
-                  <span className="settingsNavTitle">{t("core.ui.settings.nav.processing_servers.title")}</span>
-                </span>
-                <span className="settingsNavDesc">{t("core.ui.settings.nav.processing_servers.desc")}</span>
-              </span>
-            </button>
+            <div className="settingsSidebarGroup">
+              <div className="settingsSidebarGroupTitle">{t("core.ui.settings.sidebar.system")}</div>
+              {viewSidebarEntry ? renderSidebarEntry(viewSidebarEntry) : null}
+              {renderSidebarAction(
+                "processing_servers",
+                "server",
+                t("core.ui.settings.nav.processing_servers.title"),
+                t("core.ui.settings.nav.processing_servers.desc"),
+              )}
+              {integrationSidebarEntries.map((entry) => renderSidebarEntry(entry))}
+            </div>
 
-            {canManageAccess ? (
-              <button type="button" className="settingsNavItem" onClick={() => requestExit("access")}>
-                <span className="settingsNavIcon">
-                  <Icon name="users" />
-                </span>
-                <span className="settingsNavText">
-                  <span className="settingsNavTitleRow">
-                    <span className="settingsNavTitle">{t("core.ui.settings.nav.access.title")}</span>
-                  </span>
-                  <span className="settingsNavDesc">{t("core.ui.settings.nav.access.desc")}</span>
-                </span>
-              </button>
-            ) : null}
-
-            <div className="sectionDivider" style={{ margin: "12px 6px" }} />
-
-            {entries.map((entry) => {
-              const selected = entry.id === activePanelId;
-              const isDirty = entry.kind === "extension" ? Boolean(dirtyExtensions[entry.id]) : false;
-              return (
-                <button
-                  key={entry.id}
-                  type="button"
-                  className={["settingsNavItem", selected ? "isSelected" : ""].filter(Boolean).join(" ")}
-                  onClick={() => setActivePanelId(entry.id)}
-                >
-                  <span className="settingsNavIcon">
-                    <Icon name={entry.icon} />
-                  </span>
-                  <span className="settingsNavText">
-                    <span className="settingsNavTitleRow">
-                      <span className="settingsNavTitle">{entry.title}</span>
-                      {isDirty ? <span className="settingsNavDirtyDot" aria-label={t("core.ui.settings.unsaved_changes")} /> : null}
-                    </span>
-                    {entry.desc ? <span className="settingsNavDesc">{entry.desc}</span> : null}
-                  </span>
-                </button>
-              );
-            })}
+            <div className="settingsSidebarGroup">
+              <div className="settingsSidebarGroupTitle">{t("core.ui.settings.sidebar.admin")}</div>
+              {extensionManagementSidebarEntry ? renderSidebarEntry(extensionManagementSidebarEntry) : null}
+              {canManageAccess
+                ? renderSidebarAction(
+                    "access",
+                    "users",
+                    t("core.ui.settings.nav.access.title"),
+                    t("core.ui.settings.nav.access.desc"),
+                  )
+                : null}
+            </div>
           </div>
         </div>
 

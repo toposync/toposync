@@ -870,6 +870,7 @@ export function StreamTransportDebugScreen(): JSX.Element {
     let mediaSource: MediaSource | null = null;
     let mseSocket: WebSocket | null = null;
     let mseObjectUrl: string | null = null;
+    let mseSessionGeneration = 0;
     let jsmpegPlayer: { destroy?: () => void } | null = null;
     let hlsMediaRecoveries = 0;
     let playbackStartedAt = Date.now();
@@ -930,6 +931,7 @@ export function StreamTransportDebugScreen(): JSX.Element {
       whepSessionUrl = null;
       peerConnection?.close();
       peerConnection = null;
+      mseSessionGeneration += 1;
       mseSocket?.close();
       mseSocket = null;
       if (mseObjectUrl) URL.revokeObjectURL(mseObjectUrl);
@@ -1172,8 +1174,11 @@ export function StreamTransportDebugScreen(): JSX.Element {
       if (typeof MediaSource === "undefined") throw new Error("MediaSource is unavailable in this browser.");
       const wsUrl = normalizeWebSocketUrl(selectedOutput.url);
       appendEvent("info", "mse.start", "Starting generic WebSocket MSE playback.", { url: shortUrl(wsUrl) });
-      mediaSource = new MediaSource();
-      mseObjectUrl = URL.createObjectURL(mediaSource);
+      const sessionGeneration = mseSessionGeneration + 1;
+      mseSessionGeneration = sessionGeneration;
+      const localMediaSource = new MediaSource();
+      mediaSource = localMediaSource;
+      mseObjectUrl = URL.createObjectURL(localMediaSource);
       videoElement.src = mseObjectUrl;
       await new Promise<void>((resolve, reject) => {
         if (!mediaSource) {
@@ -1183,7 +1188,13 @@ export function StreamTransportDebugScreen(): JSX.Element {
         let settled = false;
         let sourceBuffer: SourceBuffer | null = null;
         const queue: ArrayBuffer[] = [];
+        const isActiveMseSession = (socket?: WebSocket | null) =>
+          !cancelled &&
+          mediaSource === localMediaSource &&
+          mseSessionGeneration === sessionGeneration &&
+          (!socket || mseSocket === socket);
         const timeout = window.setTimeout(() => {
+          if (!isActiveMseSession()) return;
           if (settled) return;
           settled = true;
           reject(new Error("Timed out waiting for MSE initialization data."));
@@ -1201,6 +1212,7 @@ export function StreamTransportDebugScreen(): JSX.Element {
           reject(error);
         };
         const flush = () => {
+          if (!isActiveMseSession() || localMediaSource.readyState !== "open") return;
           if (!sourceBuffer || sourceBuffer.updating || queue.length === 0) return;
           const next = queue.shift();
           if (!next) return;
@@ -1211,24 +1223,27 @@ export function StreamTransportDebugScreen(): JSX.Element {
           }
         };
         const openMseSocket = (attempt: number) => {
-          if (settled || sourceBuffer) return;
+          if (!isActiveMseSession() || settled || sourceBuffer) return;
           const socket = new WebSocket(wsUrl);
           mseSocket = socket;
           socket.binaryType = "arraybuffer";
           socket.addEventListener("open", () => {
+            if (!isActiveMseSession(socket)) return;
             appendEvent("info", "mse.websocket.open", "MSE WebSocket opened.", { attempt });
             socket.send(JSON.stringify({ type: "mse", value: MSE_CODEC_REQUEST }));
             appendEvent("debug", "mse.request", "MSE codec request sent.", { codecs: MSE_CODEC_REQUEST, attempt });
           });
-          socket.addEventListener("close", (event) =>
+          socket.addEventListener("close", (event) => {
+            if (!isActiveMseSession(socket)) return;
             appendEvent(event.wasClean ? "info" : "warn", "mse.websocket.close", "MSE WebSocket closed.", {
               code: event.code,
               reason: event.reason,
               was_clean: event.wasClean,
               attempt,
-            }),
-          );
+            });
+          });
           socket.addEventListener("error", () => {
+            if (!isActiveMseSession(socket)) return;
             appendEvent("error", "mse.websocket.error", "MSE WebSocket error.", { attempt });
             if (attempt < DEBUG_MSE_CONNECT_ATTEMPTS) {
               appendEvent("warn", "mse.warmup_retry", "Retrying MSE WebSocket after startup error.", { attempt });
@@ -1238,6 +1253,7 @@ export function StreamTransportDebugScreen(): JSX.Element {
             rejectOnce(new Error("MSE WebSocket failed."));
           });
           socket.addEventListener("message", (event) => {
+            if (!isActiveMseSession(socket)) return;
             if (typeof event.data === "string") {
               appendEvent("debug", "mse.websocket.text", "MSE text control message received.", { message: event.data.slice(0, 500), attempt });
               if (!sourceBuffer) {
@@ -1258,9 +1274,21 @@ export function StreamTransportDebugScreen(): JSX.Element {
                   rejectOnce(new Error(`Browser does not support MSE mime type: ${mime}`));
                   return;
                 }
-                sourceBuffer = mediaSource?.addSourceBuffer(mime) ?? null;
-                sourceBuffer?.addEventListener("updateend", flush);
-                sourceBuffer?.addEventListener("error", () => rejectOnce(new Error("MSE SourceBuffer error.")));
+                if (localMediaSource.readyState !== "open") {
+                  rejectOnce(new Error(`MSE MediaSource is ${localMediaSource.readyState}; cannot create SourceBuffer.`));
+                  return;
+                }
+                try {
+                  sourceBuffer = localMediaSource.addSourceBuffer(mime);
+                } catch (error) {
+                  rejectOnce(error);
+                  return;
+                }
+                sourceBuffer.addEventListener("updateend", flush);
+                sourceBuffer.addEventListener("error", () => {
+                  if (!isActiveMseSession()) return;
+                  rejectOnce(new Error("MSE SourceBuffer error."));
+                });
                 appendEvent("info", "mse.source_buffer", "MSE SourceBuffer created.", { mime });
                 void videoElement.play().catch((error) => appendEvent("warn", "mse.video.play_failed", asErrorMessage(error)));
                 resolveOnce();
@@ -1277,11 +1305,11 @@ export function StreamTransportDebugScreen(): JSX.Element {
           });
         };
         const onSourceOpen = () => {
-          if (!mediaSource) return;
+          if (!isActiveMseSession() || localMediaSource.readyState !== "open") return;
           appendEvent("info", "mse.source_open", "MediaSource opened.");
           openMseSocket(1);
         };
-        mediaSource.addEventListener("sourceopen", onSourceOpen, { once: true });
+        localMediaSource.addEventListener("sourceopen", onSourceOpen, { once: true });
       });
       await waitForVideoElementFrame(videoElement, DEBUG_MSE_FRAME_TIMEOUT_MS, "Timed out waiting for MSE video frame.");
     }

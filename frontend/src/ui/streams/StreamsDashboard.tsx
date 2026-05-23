@@ -1888,6 +1888,7 @@ function StreamTilePlayer({
     let mediaSource: MediaSource | null = null;
     let mseSocket: WebSocket | null = null;
     let mseObjectUrl: string | null = null;
+    let mseSessionGeneration = 0;
     let jsmpegPlayer: { destroy: () => void } | null = null;
     let peerConnection: RTCPeerConnection | null = null;
     let whepSessionUrl: string | null = null;
@@ -2020,6 +2021,7 @@ function StreamTilePlayer({
     };
 
     const destroyMse = () => {
+      mseSessionGeneration += 1;
       const socket = mseSocket;
       mseSocket = null;
       if (socket) {
@@ -2120,8 +2122,11 @@ function StreamTilePlayer({
         severity: "info",
         data: withTransportTelemetry({ url: wsUrl, output_id: mseOutputId ?? hlsOutputId ?? outputId }),
       });
-      mediaSource = new MediaSource();
-      mseObjectUrl = URL.createObjectURL(mediaSource);
+      const sessionGeneration = mseSessionGeneration + 1;
+      mseSessionGeneration = sessionGeneration;
+      const localMediaSource = new MediaSource();
+      mediaSource = localMediaSource;
+      mseObjectUrl = URL.createObjectURL(localMediaSource);
       video.src = mseObjectUrl;
       await new Promise<void>((resolve, reject) => {
         if (!mediaSource) {
@@ -2131,10 +2136,17 @@ function StreamTilePlayer({
         let settled = false;
         let sourceBuffer: SourceBuffer | null = null;
         const queue: ArrayBuffer[] = [];
+        const isActiveMseSession = (socket?: WebSocket | null) =>
+          !cancelled &&
+          mediaSource === localMediaSource &&
+          mseSessionGeneration === sessionGeneration &&
+          (!socket || mseSocket === socket);
         const timeoutId = window.setTimeout(() => {
+          if (!isActiveMseSession()) return;
           rejectOnce(new Error("Timed out waiting for MSE initialization data."));
         }, MSE_INIT_TIMEOUT_MS);
         const flush = () => {
+          if (!isActiveMseSession() || localMediaSource.readyState !== "open") return;
           if (!sourceBuffer || sourceBuffer.updating || queue.length === 0) return;
           const next = queue.shift();
           if (!next) return;
@@ -2157,11 +2169,12 @@ function StreamTilePlayer({
           reject(error);
         };
         const openMseSocket = (attempt: number) => {
-          if (settled || sourceBuffer) return;
+          if (!isActiveMseSession() || settled || sourceBuffer) return;
           const socket = new WebSocket(wsUrl);
           mseSocket = socket;
           socket.binaryType = "arraybuffer";
           socket.addEventListener("open", () => {
+            if (!isActiveMseSession(socket)) return;
             socket.send(JSON.stringify({ type: "mse", value: MSE_CODEC_REQUEST }));
             recordWebPlaybackEvent("mse_websocket_open", {
               severity: "debug",
@@ -2169,12 +2182,14 @@ function StreamTilePlayer({
             });
           });
           socket.addEventListener("close", (event) => {
+            if (!isActiveMseSession(socket)) return;
             recordWebPlaybackEvent("mse_websocket_close", {
               severity: event.wasClean ? "debug" : "warn",
               data: withTransportTelemetry({ code: event.code, reason: event.reason, was_clean: event.wasClean, attempt }),
             });
           });
           socket.addEventListener("error", () => {
+            if (!isActiveMseSession(socket)) return;
             if (attempt < MSE_CONNECT_ATTEMPTS) {
               recordWebPlaybackEvent("mse_warmup_retry", {
                 severity: "warn",
@@ -2186,6 +2201,7 @@ function StreamTilePlayer({
             rejectOnce(new Error("MSE WebSocket failed."));
           });
           socket.addEventListener("message", (event) => {
+            if (!isActiveMseSession(socket)) return;
             if (typeof event.data === "string") {
               if (!sourceBuffer) {
                 const mseError = errorFromMseControlMessage(event.data);
@@ -2209,9 +2225,21 @@ function StreamTilePlayer({
                   rejectOnce(new Error(`Browser does not support MSE mime type: ${mime}`));
                   return;
                 }
-                sourceBuffer = mediaSource?.addSourceBuffer(mime) ?? null;
-                sourceBuffer?.addEventListener("updateend", flush);
-                sourceBuffer?.addEventListener("error", () => rejectOnce(new Error("MSE SourceBuffer error.")));
+                if (localMediaSource.readyState !== "open") {
+                  rejectOnce(new Error(`MSE MediaSource is ${localMediaSource.readyState}; cannot create SourceBuffer.`));
+                  return;
+                }
+                try {
+                  sourceBuffer = localMediaSource.addSourceBuffer(mime);
+                } catch (error) {
+                  rejectOnce(error);
+                  return;
+                }
+                sourceBuffer.addEventListener("updateend", flush);
+                sourceBuffer.addEventListener("error", () => {
+                  if (!isActiveMseSession()) return;
+                  rejectOnce(new Error("MSE SourceBuffer error."));
+                });
                 recordWebPlaybackEvent("mse_source_buffer", {
                   severity: "info",
                   data: withTransportTelemetry({ mime, output_id: mseOutputId ?? hlsOutputId ?? outputId }),
@@ -2227,10 +2255,10 @@ function StreamTilePlayer({
           });
         };
         const onSourceOpen = () => {
-          if (!mediaSource) return;
+          if (!isActiveMseSession() || localMediaSource.readyState !== "open") return;
           openMseSocket(1);
         };
-        mediaSource.addEventListener("sourceopen", onSourceOpen, { once: true });
+        localMediaSource.addEventListener("sourceopen", onSourceOpen, { once: true });
       });
       await waitForVideoElementFrame(
         video,

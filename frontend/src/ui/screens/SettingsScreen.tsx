@@ -10,7 +10,14 @@ import {
   installRecommendedManagedExtension,
   removeManagedExtension,
 } from "../../util/api";
-import type { AppSettings, AuthUser, ExtensionManagementCatalog, ExtensionManagementItem } from "../../util/api";
+import type {
+  AppSettings,
+  AuthUser,
+  Composition,
+  CompositionSummary,
+  ExtensionManagementCatalog,
+  ExtensionManagementItem,
+} from "../../util/api";
 import { i18n, resolveLocalizedString } from "../../util/i18n";
 import type { Viewport3DBackground } from "../../util/theme";
 
@@ -36,6 +43,13 @@ type Props = {
   onOpenPipelines: () => void;
   onOpenProcessingServers: () => void;
   onOpenAccess: () => void;
+  compositions: CompositionSummary[];
+  activeCompositionId: string;
+  onActivateComposition: (compositionId: string) => Promise<Composition>;
+  onCreateComposition: (name: string) => Promise<Composition>;
+  onRenameComposition: (compositionId: string, name: string) => Promise<Composition>;
+  onDeleteComposition: (compositionId: string) => Promise<void>;
+  onOpenCompositionEditor: () => void;
   canManageAccess: boolean;
   authUser: AuthUser | null;
   onLogout: () => Promise<void>;
@@ -43,9 +57,12 @@ type Props = {
 };
 
 const VIEW_PANEL_ID = "__view__";
+const COMPOSITIONS_PANEL_ID = "__compositions__";
 const CORE_PANEL_ID = "__core__";
 const EXTENSIONS_PANEL_ID = "__extensions__";
 const ACTIVE_PANEL_STORAGE_KEY = "toposync.settings.active_panel.v4";
+
+type ExitAction = "close" | "pipelines" | "processing_servers" | "access" | "logout" | "composition_editor";
 
 type SettingsEntry =
   | {
@@ -108,6 +125,13 @@ export function SettingsScreen({
   onOpenPipelines,
   onOpenProcessingServers,
   onOpenAccess,
+  compositions,
+  activeCompositionId,
+  onActivateComposition,
+  onCreateComposition,
+  onRenameComposition,
+  onDeleteComposition,
+  onOpenCompositionEditor,
   canManageAccess,
   authUser,
   onLogout,
@@ -128,9 +152,14 @@ export function SettingsScreen({
   const [extensionActionId, setExtensionActionId] = useState<string | null>(null);
   const [extensionError, setExtensionError] = useState<string | null>(null);
   const [extensionNotice, setExtensionNotice] = useState<string | null>(null);
-  const [pendingExitAction, setPendingExitAction] = useState<
-    null | "close" | "pipelines" | "processing_servers" | "access" | "logout"
-  >(null);
+  const [newCompositionName, setNewCompositionName] = useState("");
+  const [editingCompositionId, setEditingCompositionId] = useState<string | null>(null);
+  const [editingCompositionName, setEditingCompositionName] = useState("");
+  const [confirmDeleteCompositionId, setConfirmDeleteCompositionId] = useState<string | null>(null);
+  const [compositionActionId, setCompositionActionId] = useState<string | null>(null);
+  const [compositionError, setCompositionError] = useState<string | null>(null);
+  const [pendingExitAction, setPendingExitAction] = useState<ExitAction | null>(null);
+  const [pendingCompositionEditorId, setPendingCompositionEditorId] = useState<string | null>(null);
   const lastSettingsRef = useRef<AppSettings>(settings);
 
   async function loadExtensionCatalog(): Promise<void> {
@@ -180,6 +209,33 @@ export function SettingsScreen({
     list.sort((a, b) => resolveLocalizedString(a.name).localeCompare(resolveLocalizedString(b.name)));
     return list;
   }, [panels, locale]);
+
+  const sortedCompositions = useMemo(
+    () => [...compositions].sort((a, b) => a.name.localeCompare(b.name, locale)),
+    [compositions, locale],
+  );
+
+  const canDeleteComposition = compositions.length > 1;
+
+  const dirtyExtensionIds = useMemo(() => {
+    return Object.entries(dirtyExtensions)
+      .filter(([, dirty]) => Boolean(dirty))
+      .map(([id]) => id)
+      .sort((a, b) => a.localeCompare(b));
+  }, [dirtyExtensions]);
+
+  const hasUnsavedChanges = dirtyExtensionIds.length > 0;
+
+  useEffect(() => {
+    const ids = new Set(compositions.map((composition) => composition.id));
+    if (editingCompositionId && !ids.has(editingCompositionId)) {
+      setEditingCompositionId(null);
+      setEditingCompositionName("");
+    }
+    if (confirmDeleteCompositionId && !ids.has(confirmDeleteCompositionId)) {
+      setConfirmDeleteCompositionId(null);
+    }
+  }, [compositions, confirmDeleteCompositionId, editingCompositionId]);
 
   const entries = useMemo<SettingsEntry[]>(() => {
     const viewEntry: SettingsEntry = {
@@ -341,6 +397,15 @@ export function SettingsScreen({
       ),
     };
 
+    const compositionsEntry: SettingsEntry = {
+      kind: "core",
+      id: COMPOSITIONS_PANEL_ID,
+      icon: "layer-group",
+      title: t("core.ui.settings.sections.compositions"),
+      desc: t("core.ui.settings.sections.compositions_desc"),
+      render: () => renderCompositionsPanel(),
+    };
+
     const coreEntry: SettingsEntry = {
       kind: "core",
       id: CORE_PANEL_ID,
@@ -420,12 +485,26 @@ export function SettingsScreen({
       desc: panel.description ? resolveLocalizedString(panel.description) : "",
       panel,
     }));
-    return [viewEntry, coreEntry, extensionsEntry, ...extEntries];
+    return [viewEntry, compositionsEntry, coreEntry, extensionsEntry, ...extEntries];
   }, [
+    activeCompositionId,
     backendAvailable,
+    canDeleteComposition,
+    compositionActionId,
+    compositionError,
+    confirmDeleteCompositionId,
+    editingCompositionId,
+    editingCompositionName,
     ghostWalls,
     graphicsQuality,
+    hasUnsavedChanges,
     locale,
+    newCompositionName,
+    onActivateComposition,
+    onCreateComposition,
+    onDeleteComposition,
+    onOpenCompositionEditor,
+    onRenameComposition,
     onSetGhostWalls,
     onSetGraphicsQuality,
     onSetThemeId,
@@ -434,6 +513,8 @@ export function SettingsScreen({
     onLogout,
     authUser,
     orderedPanels,
+    saving,
+    sortedCompositions,
     t,
     themeId,
     themes,
@@ -447,14 +528,6 @@ export function SettingsScreen({
     [activePanelId, entries],
   );
 
-  const dirtyExtensionIds = useMemo(() => {
-    return Object.entries(dirtyExtensions)
-      .filter(([, dirty]) => Boolean(dirty))
-      .map(([id]) => id)
-      .sort((a, b) => a.localeCompare(b));
-  }, [dirtyExtensions]);
-
-  const hasUnsavedChanges = dirtyExtensionIds.length > 0;
   const unsavedSectionsLabel = useMemo(() => {
     const labels = dirtyExtensionIds
       .map((id) => entries.find((entry) => entry.kind === "extension" && entry.id === id)?.title)
@@ -517,6 +590,97 @@ export function SettingsScreen({
     });
   }
 
+  async function createSettingsComposition(): Promise<void> {
+    const name = newCompositionName.trim();
+    if (!name || compositionActionId || !backendAvailable) return;
+    setCompositionActionId("create");
+    setCompositionError(null);
+    try {
+      await onCreateComposition(name);
+      setNewCompositionName("");
+      setEditingCompositionId(null);
+      setEditingCompositionName("");
+      setConfirmDeleteCompositionId(null);
+    } catch (err) {
+      setCompositionError(err instanceof Error ? err.message : t("core.compositions.error.create"));
+    } finally {
+      setCompositionActionId(null);
+    }
+  }
+
+  async function activateSettingsComposition(compositionId: string): Promise<void> {
+    if (compositionActionId || !backendAvailable || compositionId === activeCompositionId) return;
+    setCompositionActionId(`activate:${compositionId}`);
+    setCompositionError(null);
+    try {
+      await onActivateComposition(compositionId);
+      setConfirmDeleteCompositionId(null);
+    } catch (err) {
+      setCompositionError(err instanceof Error ? err.message : t("core.compositions.error.activate"));
+    } finally {
+      setCompositionActionId(null);
+    }
+  }
+
+  async function renameSettingsComposition(compositionId: string): Promise<void> {
+    const name = editingCompositionName.trim();
+    if (!name || compositionActionId || !backendAvailable) return;
+    setCompositionActionId(`rename:${compositionId}`);
+    setCompositionError(null);
+    try {
+      await onRenameComposition(compositionId, name);
+      setEditingCompositionId(null);
+      setEditingCompositionName("");
+    } catch (err) {
+      setCompositionError(err instanceof Error ? err.message : t("core.compositions.error.rename"));
+    } finally {
+      setCompositionActionId(null);
+    }
+  }
+
+  async function deleteSettingsComposition(compositionId: string): Promise<void> {
+    if (compositionActionId || !backendAvailable || !canDeleteComposition) return;
+    setCompositionActionId(`delete:${compositionId}`);
+    setCompositionError(null);
+    try {
+      await onDeleteComposition(compositionId);
+      setConfirmDeleteCompositionId(null);
+      setEditingCompositionId(null);
+      setEditingCompositionName("");
+    } catch (err) {
+      setCompositionError(err instanceof Error ? err.message : t("core.compositions.error.delete"));
+    } finally {
+      setCompositionActionId(null);
+    }
+  }
+
+  async function openSettingsCompositionEditor(compositionId: string): Promise<void> {
+    if (compositionActionId || !backendAvailable) return;
+    setCompositionActionId(`editor:${compositionId}`);
+    setCompositionError(null);
+    try {
+      if (compositionId !== activeCompositionId) {
+        await onActivateComposition(compositionId);
+      }
+      setCompositionActionId(null);
+      onOpenCompositionEditor();
+    } catch (err) {
+      setCompositionError(err instanceof Error ? err.message : t("core.ui.settings.compositions.error.open_editor"));
+      setCompositionActionId(null);
+    }
+  }
+
+  function requestOpenSettingsCompositionEditor(compositionId: string): void {
+    if (saving || compositionActionId) return;
+    if (hasUnsavedChanges) {
+      setPendingExitAction("composition_editor");
+      setPendingCompositionEditorId(compositionId);
+      setConfirmExitOpen(true);
+      return;
+    }
+    void openSettingsCompositionEditor(compositionId);
+  }
+
   async function saveAll(): Promise<void> {
     if (!backendAvailable || saving || dirtyExtensionIds.length === 0) return;
     setSaving(true);
@@ -543,8 +707,9 @@ export function SettingsScreen({
     setSaveError(null);
   }
 
-  function requestExit(action: "close" | "pipelines" | "processing_servers" | "access" | "logout"): void {
+  function requestExit(action: ExitAction): void {
     if (saving) return;
+    if (action !== "composition_editor") setPendingCompositionEditorId(null);
     if (hasUnsavedChanges) {
       setPendingExitAction(action);
       setConfirmExitOpen(true);
@@ -554,6 +719,7 @@ export function SettingsScreen({
     else if (action === "processing_servers") onOpenProcessingServers();
     else if (action === "access") onOpenAccess();
     else if (action === "logout") void onLogout();
+    else if (action === "composition_editor" && pendingCompositionEditorId) void openSettingsCompositionEditor(pendingCompositionEditorId);
     else onClose();
   }
 
@@ -562,6 +728,7 @@ export function SettingsScreen({
     if (pendingExitAction === "processing_servers") return t("core.ui.settings.confirm_open_processing_servers_title");
     if (pendingExitAction === "access") return t("core.ui.settings.confirm_open_access_title");
     if (pendingExitAction === "logout") return t("core.ui.auth.confirm_sign_out_title");
+    if (pendingExitAction === "composition_editor") return t("core.ui.settings.confirm_open_composition_editor_title");
     return t("core.ui.settings.confirm_close_title");
   }, [pendingExitAction, t]);
 
@@ -570,7 +737,8 @@ export function SettingsScreen({
       pendingExitAction === "pipelines" ||
       pendingExitAction === "processing_servers" ||
       pendingExitAction === "access" ||
-      pendingExitAction === "logout"
+      pendingExitAction === "logout" ||
+      pendingExitAction === "composition_editor"
     ) {
       const suffix = unsavedSectionsLabel ? ` (${unsavedSectionsLabel})` : "";
       return t("core.ui.settings.confirm_discard_continue_desc", { suffix });
@@ -583,7 +751,8 @@ export function SettingsScreen({
       pendingExitAction === "pipelines" ||
       pendingExitAction === "processing_servers" ||
       pendingExitAction === "access" ||
-      pendingExitAction === "logout"
+      pendingExitAction === "logout" ||
+      pendingExitAction === "composition_editor"
     ) {
       return t("core.ui.settings.confirm_discard_continue");
     }
@@ -647,6 +816,230 @@ export function SettingsScreen({
       if (result.ok) setExtensionManualSpec("");
       return result;
     });
+  }
+
+  function renderCompositionsPanel(): React.ReactNode {
+    const busy = Boolean(compositionActionId);
+
+    return (
+      <div className="settingsPanel compositionsSettingsPanel">
+        {!backendAvailable ? (
+          <div className="card">
+            <div className="cardTitle">{t("core.ui.settings.backend_offline_title")}</div>
+            <div className="cardBody">{t("core.ui.settings.backend_offline_desc")}</div>
+          </div>
+        ) : null}
+
+        <form
+          className="compositionsSettingsCreate"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void createSettingsComposition();
+          }}
+        >
+          <label className="field">
+            <span className="label">{t("core.compositions.section.new")}</span>
+            <input
+              className="input"
+              value={newCompositionName}
+              placeholder={t("core.compositions.new.placeholder")}
+              onChange={(event) => setNewCompositionName(event.target.value)}
+              disabled={busy || !backendAvailable}
+            />
+          </label>
+          <button
+            className="primaryButton"
+            type="submit"
+            aria-label={t("core.compositions.aria.create")}
+            disabled={busy || !backendAvailable || !newCompositionName.trim()}
+          >
+            <Icon name="plus" />
+            <span>{t("core.ui.settings.compositions.create")}</span>
+          </button>
+        </form>
+
+        <div className="sectionDivider" />
+
+        <div className="settingsSectionHeader">
+          <div>
+            <div className="modalSectionTitle">{t("core.compositions.section.list")}</div>
+            <div className="settingsDescription">
+              {t("core.ui.settings.compositions.list_desc", { count: sortedCompositions.length })}
+            </div>
+          </div>
+        </div>
+
+        {compositionError ? (
+          <div className="errorText" role="alert">
+            {compositionError}
+          </div>
+        ) : null}
+
+        <div className="compositionsSettingsList" role="list">
+          {sortedCompositions.map((composition) => {
+            const isActive = composition.id === activeCompositionId;
+            const isEditing = editingCompositionId === composition.id;
+            const isConfirmingDelete = confirmDeleteCompositionId === composition.id;
+            const rowBusy = compositionActionId?.endsWith(`:${composition.id}`) === true;
+            const mainLabel = isConfirmingDelete
+              ? t("core.compositions.delete_confirm", { name: composition.name })
+              : composition.name;
+
+            if (isEditing) {
+              return (
+                <div className="compositionsSettingsRow" key={composition.id} role="listitem">
+                  <div className="compositionsSettingsEditMain">
+                    <input
+                      className="input"
+                      value={editingCompositionName}
+                      onChange={(event) => setEditingCompositionName(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") void renameSettingsComposition(composition.id);
+                        if (event.key === "Escape") {
+                          setEditingCompositionId(null);
+                          setEditingCompositionName("");
+                        }
+                      }}
+                      disabled={busy || !backendAvailable}
+                      autoFocus
+                    />
+                  </div>
+                  <div className="compositionsSettingsActions">
+                    <button
+                      className="iconButton iconButtonPrimary"
+                      type="button"
+                      aria-label={t("core.compositions.aria.save_name")}
+                      title={t("core.compositions.aria.save_name")}
+                      disabled={busy || !backendAvailable || !editingCompositionName.trim()}
+                      onClick={() => void renameSettingsComposition(composition.id)}
+                    >
+                      <Icon name="check" />
+                    </button>
+                    <button
+                      className="iconButton"
+                      type="button"
+                      aria-label={t("core.compositions.aria.cancel")}
+                      title={t("core.compositions.aria.cancel")}
+                      disabled={busy}
+                      onClick={() => {
+                        setEditingCompositionId(null);
+                        setEditingCompositionName("");
+                      }}
+                    >
+                      <Icon name="xmark" />
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <div
+                className={["compositionsSettingsRow", isActive ? "isActive" : "", isConfirmingDelete ? "isDanger" : ""]
+                  .filter(Boolean)
+                  .join(" ")}
+                key={composition.id}
+                role="listitem"
+              >
+                <button
+                  className="compositionsSettingsMain"
+                  type="button"
+                  disabled={busy || !backendAvailable || isConfirmingDelete || isActive}
+                  onClick={() => void activateSettingsComposition(composition.id)}
+                  aria-label={
+                    isActive
+                      ? t("core.ui.settings.compositions.aria.active", { name: composition.name })
+                      : t("core.ui.settings.compositions.aria.select", { name: composition.name })
+                  }
+                >
+                  <span className="compositionsSettingsName">{mainLabel}</span>
+                  <span className="compositionsSettingsMeta">
+                    {isActive
+                      ? t("core.ui.settings.compositions.active")
+                      : t("core.ui.settings.compositions.available")}
+                  </span>
+                </button>
+
+                <div className="compositionsSettingsActions">
+                  {isConfirmingDelete ? (
+                    <>
+                      <button
+                        className="iconButton"
+                        type="button"
+                        aria-label={t("core.compositions.aria.cancel_delete")}
+                        title={t("core.compositions.aria.cancel_delete")}
+                        disabled={busy}
+                        onClick={() => setConfirmDeleteCompositionId(null)}
+                      >
+                        <Icon name="xmark" />
+                      </button>
+                      <button
+                        className="iconButton iconButtonDanger"
+                        type="button"
+                        aria-label={t("core.compositions.aria.confirm_delete")}
+                        title={t("core.compositions.aria.confirm_delete")}
+                        disabled={busy || !backendAvailable}
+                        onClick={() => void deleteSettingsComposition(composition.id)}
+                      >
+                        <Icon name="trash" />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        className="iconButton iconButtonPrimary"
+                        type="button"
+                        aria-label={t("core.ui.settings.compositions.aria.open_editor", { name: composition.name })}
+                        title={t("core.ui.settings.compositions.open_editor")}
+                        disabled={busy || !backendAvailable}
+                        onClick={() => requestOpenSettingsCompositionEditor(composition.id)}
+                      >
+                        <Icon name={rowBusy && compositionActionId?.startsWith("editor:") ? "rotate-right" : "pen-to-square"} />
+                      </button>
+                      <button
+                        className="iconButton"
+                        type="button"
+                        aria-label={t("core.compositions.aria.rename")}
+                        title={t("core.compositions.aria.rename")}
+                        disabled={busy || !backendAvailable}
+                        onClick={() => {
+                          setEditingCompositionId(composition.id);
+                          setEditingCompositionName(composition.name);
+                          setConfirmDeleteCompositionId(null);
+                          setCompositionError(null);
+                        }}
+                      >
+                        <Icon name="i-cursor" />
+                      </button>
+                      <button
+                        className="iconButton iconButtonDanger"
+                        type="button"
+                        aria-label={t("core.compositions.aria.delete")}
+                        title={!canDeleteComposition ? t("core.compositions.cannot_delete_last") : t("core.compositions.aria.delete")}
+                        disabled={busy || !backendAvailable || !canDeleteComposition}
+                        onClick={() => {
+                          if (!canDeleteComposition) return;
+                          setConfirmDeleteCompositionId(composition.id);
+                          setEditingCompositionId(null);
+                          setEditingCompositionName("");
+                          setCompositionError(null);
+                        }}
+                      >
+                        <Icon name="trash" />
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {sortedCompositions.length === 0 ? (
+            <div className="settingsStatusMuted">{t("core.ui.settings.compositions.empty")}</div>
+          ) : null}
+        </div>
+      </div>
+    );
   }
 
   function renderExtensionActions(item: ExtensionManagementItem): React.ReactNode {
@@ -1011,31 +1404,35 @@ export function SettingsScreen({
               <div className="settingsConfirmTitle">{exitTitle}</div>
               <div className="settingsConfirmDesc">{exitDesc}</div>
               <div className="rowWrap" style={{ justifyContent: "flex-end", marginTop: 14 }}>
-                <button
-                  className="chipButton"
-                  type="button"
-                  onClick={() => {
-                    setConfirmExitOpen(false);
-                    setPendingExitAction(null);
-                  }}
-                >
-                  {t("core.actions.cancel")}
-                </button>
-                <button
-                  className="dangerButton"
-                  type="button"
-                  onClick={() => {
-                    const action = pendingExitAction;
-                    discardAll();
-                    setConfirmExitOpen(false);
-                    setPendingExitAction(null);
-                    if (action === "pipelines") onOpenPipelines();
-                    else if (action === "processing_servers") onOpenProcessingServers();
-                    else if (action === "access") onOpenAccess();
-                    else if (action === "logout") void onLogout();
-                    else onClose();
-                  }}
-                >
+	                <button
+	                  className="chipButton"
+	                  type="button"
+	                  onClick={() => {
+	                    setConfirmExitOpen(false);
+	                    setPendingExitAction(null);
+	                    setPendingCompositionEditorId(null);
+	                  }}
+	                >
+	                  {t("core.actions.cancel")}
+	                </button>
+	                <button
+	                  className="dangerButton"
+	                  type="button"
+	                  onClick={() => {
+	                    const action = pendingExitAction;
+	                    const compositionId = pendingCompositionEditorId;
+	                    discardAll();
+	                    setConfirmExitOpen(false);
+	                    setPendingExitAction(null);
+	                    setPendingCompositionEditorId(null);
+	                    if (action === "pipelines") onOpenPipelines();
+	                    else if (action === "processing_servers") onOpenProcessingServers();
+	                    else if (action === "access") onOpenAccess();
+	                    else if (action === "logout") void onLogout();
+	                    else if (action === "composition_editor" && compositionId) void openSettingsCompositionEditor(compositionId);
+	                    else onClose();
+	                  }}
+	                >
                   {exitConfirmLabel}
                 </button>
               </div>

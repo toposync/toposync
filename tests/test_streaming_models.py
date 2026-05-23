@@ -21,9 +21,12 @@ from toposync_ext_streaming.api.models import (
 )
 from toposync_ext_streaming.api.routes import create_streaming_router
 from toposync_ext_streaming.streaming.engine_manager import (
+    MediaMtxEngineStatus,
+    MediaMtxPorts,
     MediaMtxEngineManager,
     _hls_should_bind_loopback,
 )
+from toposync_ext_streaming.streaming.go2rtc_manager import Go2RtcSidecarManager, Go2RtcSidecarStatus
 from toposync_ext_streaming.streaming.mediamtx_config import MediaMTXResolvedPorts, render_mediamtx_config
 from toposync_ext_streaming.streaming.playback_events import PlaybackEventStore
 from toposync_ext_streaming.streaming.publisher_manager import PublisherManager
@@ -48,6 +51,75 @@ def _create_client(tmp_path: Path) -> TestClient:
     app.state.streaming_publisher_manager = PublisherManager(data_dir=paths.data_dir)
     app.include_router(create_streaming_router())
     return TestClient(app)
+
+
+class _RunningEngineManagerStub(MediaMtxEngineManager):
+    def __init__(self, *, data_dir: Path) -> None:
+        super().__init__(data_dir=data_dir)
+        self.ports = MediaMtxPorts(rtsp=8554, hls=8888, webrtc=8889, api=9997, rtp=50000, rtcp=50001)
+
+    async def get_status(self) -> MediaMtxEngineStatus:
+        return MediaMtxEngineStatus(
+            running=True,
+            pid=123,
+            uptime_seconds=1.0,
+            started_at_unix=time.time(),
+            bind_host="127.0.0.1",
+            ports=self.ports,
+            last_error=None,
+            mediamtx_version="test",
+            platform="test",
+            binary_path="/tmp/mediamtx",
+            config_path="/tmp/mediamtx.yml",
+            log_path="/tmp/mediamtx.log",
+            test_path="test",
+            warnings=(),
+            restart_count=0,
+        )
+
+    async def ensure_running(self, *args, **kwargs) -> MediaMtxEngineStatus:  # noqa: ANN002, ANN003
+        return await self.get_status()
+
+    async def apply_settings(self, *args, **kwargs) -> MediaMtxEngineStatus:  # noqa: ANN002, ANN003
+        return await self.get_status()
+
+    async def restart(self, *args, **kwargs) -> MediaMtxEngineStatus:  # noqa: ANN002, ANN003
+        return await self.get_status()
+
+    async def get_read_url_for_path(self, path_slug: str, *, host: str | None = None) -> str:
+        return f"rtsp://{host or '127.0.0.1'}:{self.ports.rtsp}/{path_slug}"
+
+
+class _RunningMseSidecarStub(Go2RtcSidecarManager):
+    def __init__(self, *, data_dir: Path) -> None:
+        super().__init__(data_dir=data_dir)
+        self.streams: dict[str, str] = {}
+
+    async def get_status(self) -> Go2RtcSidecarStatus:
+        return self._status()
+
+    async def ensure_running(self, sidecar_settings, *, streams=None) -> Go2RtcSidecarStatus:  # noqa: ANN001
+        self.streams = dict(streams or {})
+        return self._status()
+
+    def _status(self) -> Go2RtcSidecarStatus:
+        return Go2RtcSidecarStatus(
+            running=True,
+            pid=456,
+            uptime_seconds=1.0,
+            started_at_unix=time.time(),
+            bind_host="127.0.0.1",
+            api_port=18764,
+            last_error=None,
+            go2rtc_version="test",
+            platform="test",
+            binary_path="/tmp/go2rtc",
+            config_path="/tmp/go2rtc.yaml",
+            log_path="/tmp/go2rtc.log",
+            warnings=(),
+            restart_count=1,
+            stream_count=len(self.streams),
+        )
 
 
 def test_transmission_path_is_sanitized_to_safe_slug() -> None:
@@ -223,8 +295,11 @@ def test_apply_quality_profiles_creates_profiled_hls_outputs_and_url_metadata(
         )
         assert urls_res.status_code == 200
         urls = urls_res.json()
-        assert [item["output_id"] for item in urls["outputs"]] == ["hls_quad_grid"]
-        output = urls["outputs"][0]
+        assert [(item["protocol"], item["output_id"]) for item in urls["outputs"]] == [
+            ("hls", "hls_quad_grid"),
+            ("jsmpeg", "hls_quad_grid"),
+        ]
+        output = next(item for item in urls["outputs"] if item["protocol"] == "hls")
         assert output["quality_profile_id"] == "quad_grid"
         assert output["resolution"] == {"width": 640, "height": 360}
         assert output["fps_limit"] == 10
@@ -233,7 +308,7 @@ def test_apply_quality_profiles_creates_profiled_hls_outputs_and_url_metadata(
         assert "quality-stream-hls_quad_grid" in output["resolved_engine_path"]
 
 
-def test_transmission_playback_plan_prefers_webrtc_after_unavailable_mse_for_web(
+def test_transmission_playback_plan_keeps_webrtc_contextual_for_web(
     tmp_path: Path,
 ) -> None:
     with _create_client(tmp_path) as client:
@@ -251,21 +326,90 @@ def test_transmission_playback_plan_prefers_webrtc_after_unavailable_mse_for_web
         assert created_res.status_code == 200
         transmission_id = str(created_res.json()["id"])
 
-        plan_res = client.get(f"/api/streams/transmissions/{transmission_id}/playback-plan?client=web")
+        passive_res = client.get(f"/api/streams/transmissions/{transmission_id}/playback-plan?client=web")
+        low_latency_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/playback-plan?client=web&context=ptz&low_latency=true"
+        )
 
-    assert plan_res.status_code == 200
-    payload = plan_res.json()
-    assert payload["selected_transport"] == "webrtc"
+    assert passive_res.status_code == 200
+    payload = passive_res.json()
+    assert payload["selected_transport"] == "hls"
     assert [item["transport"] for item in payload["transports"]] == [
         "mse",
+        "hls",
+        "jsmpeg",
         "webrtc",
+    ]
+    assert payload["transports"][0]["available"] is False
+    assert any(
+        "MSE sidecar" in item or "MediaMTX engine" in item
+        for item in payload["transports"][0]["blocking_errors"]
+    )
+    passive_webrtc = next(item for item in payload["transports"] if item["transport"] == "webrtc")
+    assert passive_webrtc["available"] is False
+    assert any("explicit low-latency or PTZ" in item for item in passive_webrtc["blocking_errors"])
+
+    assert low_latency_res.status_code == 200
+    low_latency_payload = low_latency_res.json()
+    assert low_latency_payload["selected_transport"] == "webrtc"
+    assert [item["transport"] for item in low_latency_payload["transports"]] == [
+        "webrtc",
+        "mse",
         "hls",
         "jsmpeg",
     ]
-    assert payload["transports"][0]["available"] is False
-    assert "MSE sidecar" in payload["transports"][0]["blocking_errors"][0]
-    assert payload["transports"][1]["available"] is True
-    assert payload["transports"][1]["output_id"] == "webrtc_low_latency"
+    assert low_latency_payload["transports"][0]["available"] is True
+    assert low_latency_payload["transports"][0]["output_id"] == "webrtc_low_latency"
+
+
+def test_mse_sidecar_adds_signed_mse_url_and_playback_plan_candidate(tmp_path: Path) -> None:
+    with _create_client(tmp_path) as client:
+        client.app.state.streaming_engine_manager = _RunningEngineManagerStub(
+            data_dir=tmp_path / "engine"
+        )
+        mse_manager = _RunningMseSidecarStub(data_dir=tmp_path / "mse")
+        client.app.state.streaming_mse_sidecar_manager = mse_manager
+        settings_res = client.patch("/api/streams/settings", json={"engine": {"enabled": True}})
+        assert settings_res.status_code == 200
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "MSE stream",
+                "path": "mse-stream",
+                "outputs": [
+                    {
+                        "id": "hls_main",
+                        "protocol": "hls",
+                        "enabled": True,
+                        "quality_profile_id": "fullscreen_quality",
+                    }
+                ],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        urls_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/urls?quality_profile_id=fullscreen_quality"
+        )
+        plan_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/playback-plan?client=web&quality_profile_id=fullscreen_quality"
+        )
+
+    assert urls_res.status_code == 200
+    urls_payload = urls_res.json()
+    mse_output = next(item for item in urls_payload["outputs"] if item["protocol"] == "mse")
+    assert mse_output["output_id"] == "hls_main"
+    assert mse_output["media_auth_type"] == "signed_url"
+    assert "/api/streams/media/mse/mse-stream/ws?media_token=" in mse_output["url"]
+    assert mse_manager.streams == {"mse-mse-stream": "rtsp://127.0.0.1:8554/mse-stream#tcp"}
+
+    assert plan_res.status_code == 200
+    plan_payload = plan_res.json()
+    assert plan_payload["selected_transport"] == "mse"
+    mse_plan = next(item for item in plan_payload["transports"] if item["transport"] == "mse")
+    assert mse_plan["available"] is True
+    assert mse_plan["output_id"] == "hls_main"
 
 
 def test_transmission_playback_plan_prefers_hls_for_native_app(
@@ -294,13 +438,14 @@ def test_transmission_playback_plan_prefers_hls_for_native_app(
     assert [item["transport"] for item in payload["transports"]] == [
         "hls",
         "mse",
-        "webrtc",
         "jsmpeg",
+        "webrtc",
     ]
     assert payload["transports"][0]["available"] is True
     assert payload["transports"][0]["output_id"] == "hls_main"
-    assert payload["transports"][2]["available"] is False
-    assert "Native app playback uses HLS first." in payload["transports"][2]["blocking_errors"]
+    webrtc = next(item for item in payload["transports"] if item["transport"] == "webrtc")
+    assert webrtc["available"] is False
+    assert "Native app playback uses HLS first." in webrtc["blocking_errors"]
 
 
 def test_transmission_playback_plan_ha_ingress_blocks_direct_webrtc(
@@ -331,8 +476,8 @@ def test_transmission_playback_plan_ha_ingress_blocks_direct_webrtc(
     assert [item["transport"] for item in payload["transports"]] == [
         "hls",
         "mse",
-        "webrtc",
         "jsmpeg",
+        "webrtc",
     ]
     webrtc = next(item for item in payload["transports"] if item["transport"] == "webrtc")
     assert webrtc["available"] is False
@@ -420,15 +565,15 @@ def test_transmission_playback_plan_respects_multi_stream_selection(
     assert web_payload["selected_transport"] == "hls"
     assert [item["transport"] for item in web_payload["transports"]] == [
         "mse",
-        "webrtc",
         "hls",
         "jsmpeg",
+        "webrtc",
     ]
     web_webrtc = next(item for item in web_payload["transports"] if item["transport"] == "webrtc")
     web_hls = next(item for item in web_payload["transports"] if item["transport"] == "hls")
     assert web_webrtc["available"] is False
     assert web_webrtc["output_id"] is None
-    assert "No WebRTC/WHEP output is available." in web_webrtc["blocking_errors"]
+    assert any("no WebRTC/WHEP output" in item for item in web_webrtc["blocking_errors"])
     assert web_hls["available"] is True
     assert web_hls["output_id"] == "hls_fullscreen_quality"
     assert web_hls["quality_profile_id"] == "fullscreen_quality"

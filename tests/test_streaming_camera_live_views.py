@@ -170,11 +170,49 @@ def test_generate_camera_live_view_uses_sub_for_thumbnail_and_main_for_large(tmp
     assert tx_by_id[variants["sub"]["transmission_id"]]["camera_controls"]["camera_source_id"] == "sub"
     assert tx_by_id[variants["main"]["transmission_id"]]["camera_controls"]["camera_source_id"] == "main"
     assert tx_by_id[variants["sub"]["transmission_id"]]["generated_by"] == "stream_publication"
+    assert [item["protocol"] for item in tx_by_id[variants["sub"]["transmission_id"]]["outputs"]] == ["hls", "hls", "hls", "hls"]
+    assert [item["protocol"] for item in tx_by_id[variants["main"]["transmission_id"]]["outputs"]] == ["hls", "hls", "hls", "hls"]
+    assert [item["protocol"] for item in tx_by_id[variants["zoom"]["transmission_id"]]["outputs"]] == [
+        "hls",
+        "hls",
+        "hls",
+        "hls",
+        "webrtc",
+    ]
 
     pipelines = asyncio.run(client.app.state.config_store.list_pipelines())
     pipeline_names = {item.name for item in pipelines}
     assert safe_pipeline_name(f"implicit__{variants['sub']['transmission_id']}") in pipeline_names
     assert safe_pipeline_name(f"implicit__{variants['main']['transmission_id']}") in pipeline_names
+    sub_pipeline = next(item for item in pipelines if item.name == safe_pipeline_name(f"implicit__{variants['sub']['transmission_id']}"))
+    sub_nodes = sub_pipeline.graph.get("nodes") if isinstance(sub_pipeline.graph.get("nodes"), list) else []
+    sub_edges = sub_pipeline.graph.get("edges") if isinstance(sub_pipeline.graph.get("edges"), list) else []
+    assert any(item.get("operator") == "stream.demand_gate" for item in sub_nodes if isinstance(item, dict))
+    assert {
+        "from": {"node": "demand", "port": "out"},
+        "to": {"node": "source", "port": "gate"},
+        "maxsize": 1,
+        "drop_policy": "drop_oldest",
+    } in sub_edges
+    assert sub_pipeline.graph["meta"]["streaming"]["demand_driven"] is True
+
+
+def test_camera_source_publication_can_enable_webrtc_explicitly(tmp_path: Path) -> None:
+    client = _create_client(tmp_path)
+
+    res = client.put(
+        "/api/streams/publications/camera-sources/front/main",
+        json={"transport_policy": {"enable_webrtc": True}},
+    )
+    assert res.status_code == 200, res.text
+
+    transmissions = client.get("/api/streams/transmissions").json()
+    main = next(
+        item
+        for item in transmissions
+        if item.get("generated_by") == "stream_publication" and item.get("camera_source_id") == "main"
+    )
+    assert "webrtc_low_latency" in {item["id"] for item in main["outputs"]}
 
 
 def test_camera_live_playback_resolves_context_to_selected_source_and_output(tmp_path: Path) -> None:

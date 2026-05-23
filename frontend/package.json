@@ -9,6 +9,7 @@
     "build": "npm run typecheck && webpack --mode production"
   },
   "dependencies": {
+    "@cycjimmy/jsmpeg-player": "^6.1.2",
     "@fortawesome/fontawesome-free": "^6.5.2",
     "@monaco-editor/react": "^4.7.0",
     "@toposync/plugin-api": "^0.3.0",

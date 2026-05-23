@@ -27,6 +27,13 @@ def detect_ffmpeg_platform() -> MediaMTXPlatform:
     return MediaMTXPlatform(os=os_key, arch=arch_key, key=key, exe_name=exe_name)
 
 
+def detect_go2rtc_platform() -> MediaMTXPlatform:
+    os_key, arch_key = _detect_platform_tuple()
+    key = f"{os_key}-{arch_key}"
+    exe_name = "go2rtc.exe" if os_key == "windows" else "go2rtc"
+    return MediaMTXPlatform(os=os_key, arch=arch_key, key=key, exe_name=exe_name)
+
+
 def _detect_platform_tuple() -> tuple[Literal["linux", "darwin", "windows"], Literal["x64", "arm64"]]:
     system = py_platform.system().strip().lower()
     machine = py_platform.machine().strip().lower()

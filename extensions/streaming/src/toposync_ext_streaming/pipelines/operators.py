@@ -5,9 +5,9 @@ from typing import Any, Literal
 
 import cv2
 import numpy
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from toposync.runtime.pipelines.execution import SinkRuntime
+from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, SinkRuntime, SourceOperatorRuntime
 from toposync.runtime.pipelines.images import normalize_artifact_name
 from toposync.runtime.pipelines.operator_registry import OperatorDiagnostic, OperatorRegistry
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
@@ -81,6 +81,21 @@ class PublishVideoConfig(BaseModel):
         return self
 
 
+class DemandGateConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transmission_id: str = ""
+    output_id: str = ""
+    quality_profile_id: str = ""
+    poll_interval_ms: int = Field(default=500, ge=100, le=10_000)
+    fail_open: bool = True
+
+    @field_validator("transmission_id", "output_id", "quality_profile_id", mode="after")
+    @classmethod
+    def _trim(cls, value: str) -> str:
+        return str(value or "").strip()
+
+
 class PublishVideoRuntime(SinkRuntime):
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = PublishVideoConfig.model_validate(config)
@@ -116,7 +131,90 @@ class PublishVideoRuntime(SinkRuntime):
         return []
 
 
+class DemandGateRuntime(SourceOperatorRuntime):
+    def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
+        self._config = DemandGateConfig.model_validate(config)
+        self._dependencies = dependencies
+        self._last_open: bool | None = None
+        self._last_payload: dict[str, Any] = {}
+
+    async def produce(self, context) -> Packet | None:  # noqa: ANN001
+        is_open, payload = await self._resolve_gate_state()
+        if self._last_open is not None and self._last_open == is_open:
+            self._last_payload = payload
+            return None
+
+        self._last_open = is_open
+        self._last_payload = payload
+        lifecycle = Lifecycle.OPEN if is_open else Lifecycle.CLOSE
+        stream_id = _demand_gate_stream_id(
+            self._config.transmission_id,
+            output_id=self._config.output_id,
+            quality_profile_id=self._config.quality_profile_id,
+        )
+        return Packet.create(
+            stream_id=stream_id,
+            lifecycle=lifecycle,
+            payload={
+                "gate_open": bool(is_open),
+                "transmission_id": self._config.transmission_id,
+                "output_id": self._config.output_id,
+                "quality_profile_id": self._config.quality_profile_id,
+                **payload,
+            },
+        )
+
+    async def idle_sleep(self, context) -> None:  # noqa: ANN001
+        await context.sleep(max(0.1, float(self._config.poll_interval_ms) / 1000.0))
+
+    async def _resolve_gate_state(self) -> tuple[bool, dict[str, Any]]:
+        services = self._dependencies.services
+        if services is None:
+            return bool(self._config.fail_open), {
+                "demand_active": bool(self._config.fail_open),
+                "reason": "services_unavailable",
+            }
+        try:
+            raw = await services.call(
+                "streaming.demand.snapshot",
+                transmission_id=self._config.transmission_id,
+                output_id=self._config.output_id,
+                quality_profile_id=self._config.quality_profile_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return bool(self._config.fail_open), {
+                "demand_active": bool(self._config.fail_open),
+                "reason": "demand_service_error",
+                "error": f"{exc.__class__.__name__}: {exc}",
+            }
+
+        snapshot = raw if isinstance(raw, dict) else {}
+        active = bool(snapshot.get("demand_active") or snapshot.get("active") or snapshot.get("demand_signal"))
+        return active, {
+            "demand_active": active,
+            "reason": str(snapshot.get("reason") or ("active_demand" if active else "no_active_demand")),
+            "viewer_count_total": int(snapshot.get("viewer_count_total") or 0),
+            "primed": bool(snapshot.get("primed")),
+            "hint_active": bool(snapshot.get("hint_active")),
+            "matched_outputs": int(snapshot.get("matched_outputs") or 0),
+        }
+
+
 def register_streaming_pipeline_operators(registry: OperatorRegistry) -> None:
+    if registry.get("stream.demand_gate") is None:
+        registry.register_operator(
+            operator_id="stream.demand_gate",
+            description="Demand-driven gate that opens camera capture only while a stream has viewers or heartbeat leases.",
+            config_model=DemandGateConfig,
+            inputs=[],
+            outputs=[{"name": "out"}],
+            capabilities=["streaming", "gate_control", "realtime"],
+            defaults=DemandGateConfig(transmission_id="stream_default").model_dump(mode="json"),
+            share_strategy="by_signature",
+            owner=EXTENSION_ID,
+            runtime_factory=lambda config, deps: DemandGateRuntime(config, deps),
+        )
+
     if registry.get("stream.publish_video") is not None:
         return
 
@@ -200,6 +298,14 @@ def _build_writer_id(context) -> str:  # noqa: ANN001
     pipeline_name = str(getattr(context, "pipeline_name", "pipeline") or "pipeline").strip()
     node_id = str(getattr(context, "node_id", "stream.publish_video") or "stream.publish_video").strip()
     return f"{pipeline_name}:{node_id}"
+
+
+def _demand_gate_stream_id(transmission_id: str, *, output_id: str = "", quality_profile_id: str = "") -> str:
+    transmission = str(transmission_id or "").strip() or "stream"
+    output = str(output_id or "").strip()
+    profile = str(quality_profile_id or "").strip()
+    suffix = ":".join(item for item in (output, profile) if item)
+    return f"demand:{transmission}:{suffix}" if suffix else f"demand:{transmission}"
 
 
 def _resolve_frame_ts(packet: Packet) -> float:

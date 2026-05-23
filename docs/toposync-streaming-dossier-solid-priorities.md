@@ -92,7 +92,9 @@ Nota de leitura: trechos antigos do apêndice preservado ainda mencionam `18759`
 
 ## 0.2. Atualização operacional: Playback Plan, Auto e múltiplos streams
 
-Em 2026-05-22, foi entregue a primeira fatia da escada "sempre visualizável" no Toposync. A mudança não troca o engine principal nem promove MSE/JSMpeg antes de existir infraestrutura real para eles. Ela cria o contrato central que permite a UI parar de decidir por heurísticas espalhadas.
+Em 2026-05-22, foi entregue a primeira fatia da escada "sempre visualizável" no Toposync. A mudança não troca o engine principal. Ela cria o contrato central que permite a UI parar de decidir por heurísticas espalhadas.
+
+Em 2026-05-23, o MSE deixou de ser apenas um candidato planejado: ele passou a ser executado por um sidecar opcional `go2rtc`, consumindo somente RTSP interno do MediaMTX e expondo ao navegador apenas um WebSocket assinado/proxyado pelo Toposync. No mesmo ciclo, JSMpeg passou a ser fallback visual real: FFmpeg é iniciado por sessão WebSocket assinada, consome apenas o frame selecionado do runtime da Transmission, não usa áudio e encerra quando a conexão fecha.
 
 ### O que ficou implementado
 
@@ -103,7 +105,7 @@ Em 2026-05-22, foi entregue a primeira fatia da escada "sempre visualizável" no
    A resposta de live view inclui `playback_plan`, permitindo que o dashboard web use a mesma política do backend ao montar o player.
 
 3. **Escada de transporte declarativa.**
-   Para web comum, a ordem de intenção é `MSE -> WebRTC -> HLS -> JSMpeg`. Como MSE/go2rtc e JSMpeg ainda não estão habilitados, ambos aparecem bloqueados com motivo explícito, e a seleção efetiva cai para WebRTC ou HLS.
+   Para web comum, a ordem de intenção é `MSE -> HLS -> JSMpeg` em telas passivas e `WebRTC -> MSE -> HLS -> JSMpeg` em baixa latência/PTZ. MSE só é selecionado quando MediaMTX, sidecar `go2rtc`, output backing e codec estão aptos; JSMpeg só é selecionado quando FFmpeg está disponível, o output HLS backing existe e os limites de sessão permitem.
 
 4. **Home Assistant e app continuam HLS-first.**
    Em app nativo ou HA com HLS proxy, a ordem efetiva começa por HLS. WebRTC fica bloqueado para app e tratado como baixa latência/PTZ, não como caminho padrão de estabilidade.
@@ -119,16 +121,16 @@ Em 2026-05-22, foi entregue a primeira fatia da escada "sempre visualizável" no
 | Transporte | Estado nesta fatia | Observação |
 |---|---|---|
 | HLS | ativo | fallback estável e caminho preferido em app/HA. |
-| WebRTC | ativo quando disponível | preferido no web comum enquanto MSE real não existir; não é default para app/HA. |
-| MSE | contrato declarado, bloqueado | requer sidecar `go2rtc` ou equivalente consumindo RTSP interno do MediaMTX e proxy assinado pelo Toposync. |
-| JSMpeg | contrato declarado, bloqueado | deve entrar só como fallback visual de emergência, baixa resolução/FPS, sob heartbeat. |
+| WebRTC | ativo quando disponível | usado para baixa latência/PTZ ou escolha explícita; não é default para app/HA. |
+| MSE | ativo quando sidecar está disponível | usa `go2rtc` v1.9.14 consumindo RTSP interno do MediaMTX e proxy assinado pelo Toposync. |
+| JSMpeg | ativo como fallback visual sob demanda | WebSocket assinado; FFmpeg por sessão; frame selecionado/runtime ou placeholder; baixa resolução/FPS, sem áudio. |
 
 ### Regressões cobertas
 
-- Web comum com HLS + WebRTC seleciona WebRTC depois de marcar MSE como indisponível.
+- Web comum passivo seleciona MSE quando sidecar e output backing existem; sem sidecar, cai para HLS com motivo claro.
 - App/HA seleciona HLS e bloqueia WebRTC como caminho padrão.
 - Transmissão com múltiplos HLS por `quality_profile_id` seleciona o output solicitado, incluindo fullscreen, sem cair no primeiro HLS.
-- O contrato de tipos aceita URLs `mse` e `jsmpeg` sem gravar esses protocolos como outputs persistidos enquanto os workers reais não existem.
+- O contrato de tipos aceita URL sintética `mse` derivada de output HLS/RTSP saudável sem gravar `TransmissionOutput(protocol="mse")` persistido.
 
 ### Validação desta fatia
 
@@ -140,11 +142,10 @@ Em 2026-05-22, foi entregue a primeira fatia da escada "sempre visualizável" no
 
 ### Próximos passos obrigatórios
 
-1. Implementar sidecar opcional `go2rtc` para MSE, com fonte RTSP interna do MediaMTX por transmission/output, nunca câmera direta.
-2. Expor MSE apenas via proxy assinado do Toposync, preservando HA ingress e tokens de mídia.
-3. Implementar JSMpeg sob demanda a partir do frame selecionado/runtime ou placeholder, não diretamente da câmera.
-4. Encerrar encoder JSMpeg quando não houver heartbeat ativo.
-5. Promover a UI Auto para alternância silenciosa completa entre transportes somente depois que MSE/JSMpeg tiverem execução real e testes de caos.
+1. Validar MSE com `go2rtc` em caos real: restart de MediaMTX, restart do sidecar, publisher frio e codec incompatível.
+2. Validar JSMpeg em caos real: câmera offline, pipeline fria, queda de WebSocket, limite de sessões e CPU sob múltiplos tiles.
+3. Medir custo de FFmpeg por sessão e ajustar defaults de `max_total_sessions`, `max_sessions_per_transmission`, FPS e bitrate.
+4. Manter JSMpeg como último recurso visual; se ele aparecer frequentemente no Auto, isso deve abrir investigação de HLS/MSE, não virar caminho normal.
 
 ---
 
@@ -345,8 +346,8 @@ Esta política substitui a ideia anterior de "WebRTC sempre primeiro no navegado
 Estado atual:
 
 - HLS, WebRTC e RTSP existem no runtime real via MediaMTX.
-- MSE está modelado no `Playback Plan`, mas depende de sidecar `go2rtc` real e proxy assinado.
-- JSMpeg está modelado como fallback, mas depende de worker/encoder sob demanda real.
+- MSE existe no runtime real quando o sidecar `go2rtc` está habilitado e rodando; o navegador usa apenas proxy WebSocket assinado do Toposync.
+- JSMpeg existe no runtime real como fallback visual sob demanda, com encoder FFmpeg por sessão e fonte no frame selecionado da Transmission.
 
 ### Regras de saúde e diagnóstico
 
@@ -414,11 +415,10 @@ Home Assistant:
 
 ### Pendências explícitas
 
-1. Implementar sidecar `go2rtc` opcional para MSE real, consumindo RTSP interno do MediaMTX.
-2. Implementar JSMpeg real sob demanda, baixa resolução/FPS, sem áudio, encerrado por heartbeat.
-3. Expandir `scripts/check_stream_transport_frames.mjs` para MSE/JSMpeg reais quando existirem.
-4. Validar Home Assistant Cloud com entidade câmera em ambiente real antes de habilitar WebRTC HA nativo por padrão.
-5. Criar testes de browser cobrindo troca automática de fonte entre grid, fullscreen e PTZ.
+1. Validar JSMpeg real em caos local: sessão fechando, câmera offline, publisher frio, limite de sessões e custo de CPU.
+2. Validar MSE com `go2rtc` em restart de engine/sidecar, codec incompatível e HA ingress antes de tratá-lo como caminho universal.
+3. Validar Home Assistant Cloud com entidade câmera em ambiente real antes de habilitar WebRTC HA nativo por padrão.
+4. Criar testes de browser cobrindo troca automática de fonte entre grid, fullscreen e PTZ.
 
 ---
 

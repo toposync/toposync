@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
@@ -17,7 +18,7 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 
 from toposync.runtime.auth import AuthContext, AuthRuntime
 from toposync.runtime.config_store import (
@@ -33,6 +34,8 @@ from toposync.runtime.pipelines.templates import camera_names_by_id, safe_pipeli
 from toposync.runtime.services import ServiceRegistry
 
 from ..streaming.engine_manager import MediaMtxEngineManager
+from ..streaming.go2rtc_binary import extract_go2rtc_binary, find_installed_go2rtc_binary
+from ..streaming.go2rtc_manager import Go2RtcSidecarManager, Go2RtcSidecarStatus
 from ..streaming.camera_ingest import (
     build_camera_ingest_definitions,
     build_camera_ingest_path_auth,
@@ -47,10 +50,11 @@ from ..streaming.ingest_auth import (
     REDACTED_PASSWORD,
     redact_ingest_secret,
 )
+from ..streaming.jsmpeg_manager import JsmpegSessionManager
 from ..streaming.mediamtx_api_client import MediaMtxApiClient
 from ..streaming.mediamtx_config import MediaMTXPathAuth, normalize_path_slug
 from ..streaming.mediamtx_binary import extract_mediamtx_binary, find_installed_mediamtx_binary
-from ..streaming.platform import detect_mediamtx_platform
+from ..streaming.platform import detect_go2rtc_platform, detect_mediamtx_platform
 from ..streaming.mediamtx_processes import (
     find_mediamtx_pids_for_config_path,
     kill_mediamtx_processes_for_config_path,
@@ -79,6 +83,8 @@ from .models import (
     StreamingExtensionSettings,
     StreamingHealthResponse,
     StreamingHlsProbeResponse,
+    StreamingMseSidecarStatusResponse,
+    StreamingJsmpegStatusResponse,
     StreamingApplyWebRtcCompanionResponse,
     StreamingApplyQualityProfilesRequest,
     StreamingApplyQualityProfilesResponse,
@@ -144,6 +150,10 @@ from .models import (
     resolve_output_engine_path,
 )
 
+MSE_PROXY_DEMAND_TTL_S = 45.0
+MSE_PROXY_PATH_READY_TIMEOUT_S = 4.0
+MSE_PROXY_PATH_READY_POLL_S = 0.25
+
 
 def _config_store(request: Request) -> ConfigStore:
     config_store = getattr(request.app.state, "config_store", None)
@@ -156,6 +166,30 @@ def _engine_manager(request: Request) -> MediaMtxEngineManager:
     manager = getattr(request.app.state, "streaming_engine_manager", None)
     if not isinstance(manager, MediaMtxEngineManager):
         raise HTTPException(status_code=500, detail="Streaming engine manager is not available")
+    return manager
+
+
+def _mse_sidecar_manager(request: Request | WebSocket) -> Go2RtcSidecarManager:
+    manager = getattr(request.app.state, "streaming_mse_sidecar_manager", None)
+    if isinstance(manager, Go2RtcSidecarManager):
+        return manager
+    config_store = _config_store(request)  # type: ignore[arg-type]
+    manager = Go2RtcSidecarManager(data_dir=config_store.paths.data_dir)
+    request.app.state.streaming_mse_sidecar_manager = manager
+    return manager
+
+
+def _jsmpeg_session_manager(request: Request | WebSocket) -> JsmpegSessionManager:
+    manager = getattr(request.app.state, "streaming_jsmpeg_session_manager", None)
+    if isinstance(manager, JsmpegSessionManager):
+        return manager
+    config_store = _config_store(request)  # type: ignore[arg-type]
+    runtime_state = _runtime_state(request)  # type: ignore[arg-type]
+    manager = JsmpegSessionManager(
+        data_dir=config_store.paths.data_dir,
+        runtime_state=runtime_state,
+    )
+    request.app.state.streaming_jsmpeg_session_manager = manager
     return manager
 
 
@@ -482,7 +516,8 @@ def _hls_proxy_public_base_path(request: Request) -> str:
     return "" if base_path == "/" else base_path.rstrip("/")
 
 
-MEDIA_TOKEN_SCOPE = "stream:hls:read"
+MEDIA_TOKEN_SCOPE = "stream:media:read"
+LEGACY_HLS_MEDIA_TOKEN_SCOPE = "stream:hls:read"
 
 
 def _hls_proxy_url(
@@ -496,6 +531,40 @@ def _hls_proxy_url(
     quoted_engine_path = urllib_parse.quote(str(engine_path or "").strip(), safe="")
     quoted_file_path = urllib_parse.quote(str(file_path or "").strip().lstrip("/"), safe="/._-~")
     url = f"{public_base_path}/api/streams/media/hls/{quoted_engine_path}/{quoted_file_path}"
+    token = str(media_token or "").strip()
+    if token:
+        url = f"{url}?media_token={urllib_parse.quote(token, safe='')}"
+    return url
+
+
+def _mse_stream_name_for_engine_path(engine_path: str) -> str:
+    return "mse-" + normalize_path_slug(str(engine_path or "").strip(), fallback="stream")
+
+
+def _mse_proxy_url(
+    request: Request,
+    engine_path: str,
+    *,
+    media_token: str = "",
+) -> str:
+    public_base_path = _hls_proxy_public_base_path(request)
+    quoted_engine_path = urllib_parse.quote(str(engine_path or "").strip(), safe="")
+    url = f"{public_base_path}/api/streams/media/mse/{quoted_engine_path}/ws"
+    token = str(media_token or "").strip()
+    if token:
+        url = f"{url}?media_token={urllib_parse.quote(token, safe='')}"
+    return url
+
+
+def _jsmpeg_proxy_url(
+    request: Request,
+    engine_path: str,
+    *,
+    media_token: str = "",
+) -> str:
+    public_base_path = _hls_proxy_public_base_path(request)
+    quoted_engine_path = urllib_parse.quote(str(engine_path or "").strip(), safe="")
+    url = f"{public_base_path}/api/streams/media/jsmpeg/{quoted_engine_path}/ws"
     token = str(media_token or "").strip()
     if token:
         url = f"{url}?media_token={urllib_parse.quote(token, safe='')}"
@@ -550,13 +619,14 @@ def _sign_media_payload(*, secret: str, payload: dict[str, Any]) -> str:
     return f"{payload_b64}.{_b64url_encode(signature)}"
 
 
-def _issue_hls_media_token(
+def _issue_media_token(
     *,
     config_store: ConfigStore,
     settings: StreamingExtensionSettings,
     transmission: Transmission,
     output: TransmissionOutput,
     engine_path: str,
+    transport: Literal["hls", "mse", "jsmpeg"],
 ) -> tuple[str, float, float]:
     now = time.time()
     ttl_s = max(30.0, float(settings.engine.media_auth.token_ttl_seconds))
@@ -565,6 +635,7 @@ def _issue_hls_media_token(
     renew_after = max(now, expires_at - min(renew_margin_s, ttl_s - 1.0))
     payload = {
         "scope": MEDIA_TOKEN_SCOPE,
+        "transport": transport,
         "transmission_id": transmission.id,
         "output_id": output.id,
         "engine_path": engine_path,
@@ -578,7 +649,25 @@ def _issue_hls_media_token(
     )
 
 
-def _verify_hls_media_token(*, config_store: ConfigStore, token: str) -> dict[str, Any]:
+def _issue_hls_media_token(
+    *,
+    config_store: ConfigStore,
+    settings: StreamingExtensionSettings,
+    transmission: Transmission,
+    output: TransmissionOutput,
+    engine_path: str,
+) -> tuple[str, float, float]:
+    return _issue_media_token(
+        config_store=config_store,
+        settings=settings,
+        transmission=transmission,
+        output=output,
+        engine_path=engine_path,
+        transport="hls",
+    )
+
+
+def _verify_media_token(*, config_store: ConfigStore, token: str) -> dict[str, Any]:
     raw_token = str(token or "").strip()
     if not raw_token:
         raise HTTPException(status_code=401, detail="media_token_invalid")
@@ -608,14 +697,30 @@ def _verify_hls_media_token(*, config_store: ConfigStore, token: str) -> dict[st
     return payload
 
 
-def _hls_output_for_media_token(
+def _verify_hls_media_token(*, config_store: ConfigStore, token: str) -> dict[str, Any]:
+    payload = _verify_media_token(config_store=config_store, token=token)
+    scope = str(payload.get("scope") or "")
+    transport = str(payload.get("transport") or "hls").strip().lower()
+    if scope not in {MEDIA_TOKEN_SCOPE, LEGACY_HLS_MEDIA_TOKEN_SCOPE} or transport != "hls":
+        raise HTTPException(status_code=401, detail="media_token_invalid")
+    return payload
+
+
+def _output_for_media_token(
     *,
     settings: StreamingExtensionSettings,
     engine_path: str,
     payload: dict[str, Any],
     current_server_id: str,
+    transport: Literal["hls", "mse", "jsmpeg"],
 ) -> tuple[Transmission, TransmissionOutput] | None:
-    if str(payload.get("scope") or "") != MEDIA_TOKEN_SCOPE:
+    scope = str(payload.get("scope") or "")
+    payload_transport = str(payload.get("transport") or "hls").strip().lower()
+    if scope not in {MEDIA_TOKEN_SCOPE, LEGACY_HLS_MEDIA_TOKEN_SCOPE}:
+        return None
+    if transport in {"mse", "jsmpeg"} and scope == LEGACY_HLS_MEDIA_TOKEN_SCOPE:
+        return None
+    if payload_transport != transport:
         return None
     if str(payload.get("engine_path") or "").strip() != str(engine_path or "").strip():
         return None
@@ -633,6 +738,22 @@ def _hls_output_for_media_token(
                 return None
             return transmission, output
     return None
+
+
+def _hls_output_for_media_token(
+    *,
+    settings: StreamingExtensionSettings,
+    engine_path: str,
+    payload: dict[str, Any],
+    current_server_id: str,
+) -> tuple[Transmission, TransmissionOutput] | None:
+    return _output_for_media_token(
+        settings=settings,
+        engine_path=engine_path,
+        payload=payload,
+        current_server_id=current_server_id,
+        transport="hls",
+    )
 
 
 def _build_network_contract(
@@ -1267,6 +1388,107 @@ def _rewrite_url_host(url: str, *, host: str) -> str:
     )
 
 
+async def _build_mse_sidecar_streams(
+    request: Request,
+    *,
+    settings: StreamingExtensionSettings,
+) -> dict[str, str]:
+    manager = _engine_manager(request)
+    streams: dict[str, str] = {}
+    current_server_id = _current_server_id(request)
+    for transmission in settings.transmissions:
+        if not transmission.enabled:
+            continue
+        if normalize_server_id(transmission.host_server_id, fallback="local") != current_server_id:
+            continue
+        for output in transmission.outputs:
+            if not output.enabled or output.protocol != "hls":
+                continue
+            engine_path = resolve_output_engine_path(transmission, output)
+            stream_name = _mse_stream_name_for_engine_path(engine_path)
+            try:
+                read_url = await manager.get_read_url_for_path(engine_path, host="127.0.0.1")
+            except Exception:
+                continue
+            streams[stream_name] = f"{read_url}#tcp"
+    return streams
+
+
+async def _apply_mse_sidecar_state(
+    request: Request,
+    *,
+    settings: StreamingExtensionSettings,
+) -> Go2RtcSidecarStatus:
+    manager = _mse_sidecar_manager(request)
+    if not settings.engine.enabled or not settings.engine.mse_sidecar.enabled:
+        return await manager.stop()
+    streams = await _build_mse_sidecar_streams(request, settings=settings)
+    return await manager.ensure_running(settings.engine.mse_sidecar, streams=streams)
+
+
+async def _mse_sidecar_api_reachable(status: Go2RtcSidecarStatus) -> bool:
+    if not status.running:
+        return False
+    try:
+        status_code, _body = await _fetch_text_with_status(
+            url=f"http://127.0.0.1:{int(status.api_port)}/api/streams",
+            timeout_s=1.5,
+        )
+        return 200 <= status_code < 500
+    except Exception:
+        return False
+
+
+async def _prime_mse_proxy_demand(
+    request: Request | WebSocket,
+    *,
+    transmission: Transmission,
+    output: TransmissionOutput,
+) -> int:
+    bridge = _writer_bridge(request)  # type: ignore[arg-type]
+    prime_demand = getattr(bridge, "prime_transmission_demand", None)
+    if not callable(prime_demand):
+        return 0
+    try:
+        return int(
+            await prime_demand(
+                transmission.id,
+                ttl_s=MSE_PROXY_DEMAND_TTL_S,
+                output_id=output.id,
+                quality_profile_id=output.quality_profile_id,
+            )
+        )
+    except Exception:
+        return 0
+
+
+async def _wait_for_mse_backing_path_ready(
+    request: Request | WebSocket,
+    *,
+    engine_path: str,
+    timeout_s: float = MSE_PROXY_PATH_READY_TIMEOUT_S,
+    poll_s: float = MSE_PROXY_PATH_READY_POLL_S,
+) -> bool:
+    normalized = str(engine_path or "").strip()
+    if not normalized:
+        return False
+    client = MediaMtxApiClient(
+        engine_manager=_engine_manager(request),  # type: ignore[arg-type]
+        request_timeout_s=min(0.75, max(0.25, float(poll_s) * 2.0)),
+    )
+    deadline = time.monotonic() + max(0.0, float(timeout_s))
+    while True:
+        try:
+            paths = await client.get_paths()
+        except Exception:
+            paths = []
+        if any(item.name == normalized and item.ready for item in paths):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(max(0.05, float(poll_s)))
+
+
 async def _resolve_local_transmission_urls(
     *,
     request: Request,
@@ -1312,6 +1534,22 @@ async def _resolve_local_transmission_urls(
     generic_warnings: list[str] = list(getattr(engine_status, "warnings", ()) or ())
     if not engine_status.running:
         generic_warnings.append("Engine is not running. URLs are based on preferred ports.")
+    mse_status: Go2RtcSidecarStatus | None = None
+    mse_warnings: list[str] = []
+    if engine_status.running and settings.engine.mse_sidecar.enabled:
+        try:
+            current_mse_status = await _mse_sidecar_manager(request).get_status()
+            if current_mse_status.running:
+                mse_status = await _apply_mse_sidecar_state(request, settings=settings)
+                mse_warnings.extend(list(getattr(mse_status, "warnings", ()) or ()))
+        except Exception as exc:
+            mse_warnings.append(f"MSE sidecar unavailable: {exc}")
+    jsmpeg_available = False
+    if settings.engine.jsmpeg.enabled:
+        try:
+            jsmpeg_available = _jsmpeg_session_manager(request).resolve_ffmpeg().path is not None
+        except Exception:
+            jsmpeg_available = False
     network_contract = _build_network_contract(
         request=request,
         settings=settings,
@@ -1400,6 +1638,52 @@ async def _resolve_local_transmission_urls(
                         **_output_quality_metadata(output),
                     )
                 )
+                if mse_status is not None and mse_status.running:
+                    media_token, mse_expires_at_unix, mse_renew_after_unix = _issue_media_token(
+                        config_store=_config_store(request),
+                        settings=settings,
+                        transmission=transmission,
+                        output=output,
+                        engine_path=engine_path,
+                        transport="mse",
+                    )
+                    outputs.append(
+                        TransmissionOutputUrl(
+                            output_id=output.id,
+                            protocol="mse",
+                            resolved_engine_path=engine_path,
+                            url=_mse_proxy_url(request, engine_path, media_token=media_token),
+                            requires_auth=False,
+                            auth_username=None,
+                            media_auth_type="signed_url",
+                            url_expires_at_unix=mse_expires_at_unix,
+                            renew_after_unix=mse_renew_after_unix,
+                            **_output_quality_metadata(output),
+                        )
+                    )
+                if jsmpeg_available:
+                    media_token, jsmpeg_expires_at_unix, jsmpeg_renew_after_unix = _issue_media_token(
+                        config_store=_config_store(request),
+                        settings=settings,
+                        transmission=transmission,
+                        output=output,
+                        engine_path=engine_path,
+                        transport="jsmpeg",
+                    )
+                    outputs.append(
+                        TransmissionOutputUrl(
+                            output_id=output.id,
+                            protocol="jsmpeg",
+                            resolved_engine_path=engine_path,
+                            url=_jsmpeg_proxy_url(request, engine_path, media_token=media_token),
+                            requires_auth=False,
+                            auth_username=None,
+                            media_auth_type="signed_url",
+                            url_expires_at_unix=jsmpeg_expires_at_unix,
+                            renew_after_unix=jsmpeg_renew_after_unix,
+                            **_output_quality_metadata(output),
+                        )
+                    )
                 continue
             if network_contract.public_hls_mode == "proxy":
                 url = _hls_proxy_url(request, engine_path) or ""
@@ -1429,10 +1713,57 @@ async def _resolve_local_transmission_urls(
                 **_output_quality_metadata(output),
             )
         )
+        if output.protocol == "hls" and mse_status is not None and mse_status.running:
+            media_token, mse_expires_at_unix, mse_renew_after_unix = _issue_media_token(
+                config_store=_config_store(request),
+                settings=settings,
+                transmission=transmission,
+                output=output,
+                engine_path=engine_path,
+                transport="mse",
+            )
+            outputs.append(
+                TransmissionOutputUrl(
+                    output_id=output.id,
+                    protocol="mse",
+                    resolved_engine_path=engine_path,
+                    url=_mse_proxy_url(request, engine_path, media_token=media_token),
+                    requires_auth=False,
+                    auth_username=None,
+                    media_auth_type="signed_url",
+                    url_expires_at_unix=mse_expires_at_unix,
+                    renew_after_unix=mse_renew_after_unix,
+                    **_output_quality_metadata(output),
+                )
+            )
+        if output.protocol == "hls" and jsmpeg_available:
+            media_token, jsmpeg_expires_at_unix, jsmpeg_renew_after_unix = _issue_media_token(
+                config_store=_config_store(request),
+                settings=settings,
+                transmission=transmission,
+                output=output,
+                engine_path=engine_path,
+                transport="jsmpeg",
+            )
+            outputs.append(
+                TransmissionOutputUrl(
+                    output_id=output.id,
+                    protocol="jsmpeg",
+                    resolved_engine_path=engine_path,
+                    url=_jsmpeg_proxy_url(request, engine_path, media_token=media_token),
+                    requires_auth=False,
+                    auth_username=None,
+                    media_auth_type="signed_url",
+                    url_expires_at_unix=jsmpeg_expires_at_unix,
+                    renew_after_unix=jsmpeg_renew_after_unix,
+                    **_output_quality_metadata(output),
+                )
+            )
 
     warnings = _dedupe_messages(
         [
             *generic_warnings,
+            *mse_warnings,
             *(
                 webrtc_warnings
                 if "webrtc" in candidate_protocols and "hls" not in candidate_protocols
@@ -1622,7 +1953,7 @@ def _output_quality_metadata(output: TransmissionOutput) -> dict[str, Any]:
 
 def _playback_plan_transport_from_output(
     *,
-    transport: Literal["webrtc", "hls"],
+    transport: Literal["webrtc", "hls", "mse", "jsmpeg"],
     rank: int,
     output: TransmissionOutputUrl | None,
     available: bool,
@@ -1674,6 +2005,46 @@ def _best_webrtc_output(*, urls: TransmissionUrlsResponse) -> TransmissionOutput
     return next((item for item in urls.outputs if item.protocol == "webrtc"), None)
 
 
+def _best_mse_output(
+    *,
+    urls: TransmissionUrlsResponse,
+    quality_profile_id: str | None = None,
+) -> TransmissionOutputUrl | None:
+    requested_profile_id = str(quality_profile_id or "").strip()
+    candidates = [item for item in urls.outputs if item.protocol == "mse"]
+    if not candidates:
+        return None
+    if requested_profile_id:
+        for item in candidates:
+            if item.quality_profile_id == requested_profile_id:
+                return item
+    for preferred in ("stable_apple_tv", "quad_grid", "fullscreen_quality"):
+        for item in candidates:
+            if item.quality_profile_id == preferred:
+                return item
+    return candidates[0]
+
+
+def _best_jsmpeg_output(
+    *,
+    urls: TransmissionUrlsResponse,
+    quality_profile_id: str | None = None,
+) -> TransmissionOutputUrl | None:
+    requested_profile_id = str(quality_profile_id or "").strip()
+    candidates = [item for item in urls.outputs if item.protocol == "jsmpeg"]
+    if not candidates:
+        return None
+    if requested_profile_id:
+        for item in candidates:
+            if item.quality_profile_id == requested_profile_id:
+                return item
+    for preferred in ("diagnostic_low", "quad_grid", "stable_apple_tv", "fullscreen_quality"):
+        for item in candidates:
+            if item.quality_profile_id == preferred:
+                return item
+    return candidates[0]
+
+
 def _runtime_health_for_playback_plan(
     runtime_health: StreamingRuntimeTransmissionHealth | None,
     output_id: str | None,
@@ -1712,6 +2083,7 @@ def _build_playback_plan_response(
     runtime_health: StreamingRuntimeTransmissionHealth | None = None,
     quality_profile_id: str | None = None,
     visual_context: StreamingCameraLiveContext | None = None,
+    transmission_role: str | None = None,
     low_latency_requested: bool = False,
 ) -> StreamingPlaybackPlanResponse:
     contract = urls.network_contract
@@ -1722,6 +2094,8 @@ def _build_playback_plan_response(
     )
     hls_output = _best_hls_output(urls=urls, quality_profile_id=quality_profile_id)
     webrtc_output = _best_webrtc_output(urls=urls)
+    mse_output = _best_mse_output(urls=urls, quality_profile_id=quality_profile_id)
+    jsmpeg_output = _best_jsmpeg_output(urls=urls, quality_profile_id=quality_profile_id)
 
     hls_blocking: list[str] = []
     if hls_output is None:
@@ -1729,7 +2103,9 @@ def _build_playback_plan_response(
 
     webrtc_blocking: list[str] = []
     if webrtc_output is None:
-        webrtc_blocking.append("No WebRTC/WHEP output is available.")
+        webrtc_blocking.append(
+            "This transmission has no WebRTC/WHEP output. Enable low-latency playback on a zoom/PTZ publication or set transport_policy.enable_webrtc=true."
+        )
     if client == "ha_ingress":
         webrtc_blocking.append(
             "Home Assistant ingress must use the Home Assistant native camera path for Cloud/WebRTC relay; direct Toposync WebRTC is disabled by default."
@@ -1740,7 +2116,11 @@ def _build_playback_plan_response(
         )
     web_webrtc_contextual = (
         client == "web"
-        and (bool(low_latency_requested) or str(visual_context or "").strip().lower() == "ptz")
+        and (
+            bool(low_latency_requested)
+            or str(visual_context or "").strip().lower() == "ptz"
+            or str(transmission_role or "").strip().lower() == "zoom"
+        )
     )
     if client == "web" and not web_webrtc_contextual:
         webrtc_blocking.append("WebRTC is reserved for explicit low-latency or PTZ playback.")
@@ -1752,12 +2132,30 @@ def _build_playback_plan_response(
         if message not in webrtc_blocking:
             webrtc_blocking.append(message)
 
-    mse_blocking = [
-        "MSE sidecar playback is not enabled yet. Falling back to native transports.",
-    ]
-    jsmpeg_blocking = [
-        "JSMpeg emergency fallback is not enabled yet. Falling back to HLS/WebRTC.",
-    ]
+    mse_blocking: list[str] = []
+    if not urls.engine_running:
+        mse_blocking.append("MediaMTX engine is not running; MSE needs the internal RTSP output.")
+    if hls_output is None:
+        mse_blocking.append("No HLS backing output is available for MSE.")
+    if mse_output is None:
+        sidecar_warning = next((message for message in urls.warnings if "mse sidecar" in message.lower()), "")
+        mse_blocking.append(sidecar_warning or "MSE sidecar is not running or has no stream for this output.")
+    jsmpeg_blocking: list[str] = []
+    if hls_output is None:
+        jsmpeg_blocking.append("No HLS backing output is available for JSMpeg.")
+    if jsmpeg_output is None:
+        jsmpeg_hint = next(
+            (
+                message
+                for message in urls.warnings
+                if "jsmpeg" in message.lower() or "ffmpeg" in message.lower()
+            ),
+            "",
+        )
+        jsmpeg_blocking.append(
+            jsmpeg_hint
+            or "JSMpeg fallback is unavailable. Check /api/streams/jsmpeg/status for FFmpeg and session limits."
+        )
 
     if client == "ha_entity":
         return StreamingPlaybackPlanResponse(
@@ -1775,7 +2173,7 @@ def _build_playback_plan_response(
         )
 
     if client in {"app", "ha_ingress"} or home_assistant_proxy_hls:
-        order: list[Literal["hls", "mse", "webrtc", "jsmpeg"]] = ["hls", "mse", "webrtc", "jsmpeg"]
+        order: list[Literal["hls", "mse", "webrtc", "jsmpeg"]] = ["hls", "mse", "jsmpeg", "webrtc"]
     elif web_webrtc_contextual:
         order = ["webrtc", "mse", "hls", "jsmpeg"]
     else:
@@ -1818,27 +2216,51 @@ def _build_playback_plan_response(
                 )
             )
         elif transport == "mse":
-            transports.append(
-                StreamingPlaybackPlanTransport(
-                    transport="mse",
-                    rank=rank,
-                    available=False,
-                    protocol="mse",
-                    blocking_errors=mse_blocking,
-                    health=_runtime_health_for_playback_plan(runtime_health, None),
+            if mse_output is not None:
+                transports.append(
+                    _playback_plan_transport_from_output(
+                        transport="mse",
+                        rank=rank,
+                        output=mse_output,
+                        available=not mse_blocking,
+                        blocking_errors=mse_blocking,
+                        health=_runtime_health_for_playback_plan(runtime_health, mse_output.output_id),
+                    )
                 )
-            )
+            else:
+                transports.append(
+                    StreamingPlaybackPlanTransport(
+                        transport="mse",
+                        rank=rank,
+                        available=False,
+                        protocol="mse",
+                        blocking_errors=mse_blocking,
+                        health=_runtime_health_for_playback_plan(runtime_health, None),
+                    )
+                )
         elif transport == "jsmpeg":
-            transports.append(
-                StreamingPlaybackPlanTransport(
-                    transport="jsmpeg",
-                    rank=rank,
-                    available=False,
-                    protocol="jsmpeg",
-                    blocking_errors=jsmpeg_blocking,
-                    health=_runtime_health_for_playback_plan(runtime_health, None),
+            if jsmpeg_output is not None:
+                transports.append(
+                    _playback_plan_transport_from_output(
+                        transport="jsmpeg",
+                        rank=rank,
+                        output=jsmpeg_output,
+                        available=not jsmpeg_blocking,
+                        blocking_errors=jsmpeg_blocking,
+                        health=_runtime_health_for_playback_plan(runtime_health, jsmpeg_output.output_id),
+                    )
                 )
-            )
+            else:
+                transports.append(
+                    StreamingPlaybackPlanTransport(
+                        transport="jsmpeg",
+                        rank=rank,
+                        available=False,
+                        protocol="jsmpeg",
+                        blocking_errors=jsmpeg_blocking,
+                        health=_runtime_health_for_playback_plan(runtime_health, None),
+                    )
+                )
 
     selected = next((item.transport for item in transports if item.available), None)
     plan_warnings = list(urls.warnings)
@@ -2485,6 +2907,21 @@ def _runtime_pipeline_stream_behavior(graph: dict[str, Any], *, event_gated: boo
     return "event_gated" if event_gated else "continuous"
 
 
+def _runtime_pipeline_demand_driven(
+    graph: dict[str, Any],
+    *,
+    nodes_by_id: dict[str, tuple[str, dict[str, Any]]],
+    upstream_node_ids: set[str],
+) -> bool:
+    meta = graph.get("meta")
+    meta = meta if isinstance(meta, dict) else {}
+    streaming = meta.get("streaming")
+    streaming = streaming if isinstance(streaming, dict) else {}
+    if bool(streaming.get("demand_driven")):
+        return True
+    return any(nodes_by_id.get(node_id, ("", {}))[0] == "stream.demand_gate" for node_id in upstream_node_ids)
+
+
 def _runtime_source_health_id(
     *,
     pipeline_name: str,
@@ -2556,6 +2993,11 @@ def _inspect_streaming_pipeline_links(pipeline: Pipeline) -> list[StreamingRunti
         )
         stream_behavior = _runtime_pipeline_stream_behavior(graph, event_gated=bool(reasons))
         event_gated = stream_behavior == "event_gated" or bool(reasons)
+        demand_driven = _runtime_pipeline_demand_driven(
+            graph,
+            nodes_by_id=nodes_by_id,
+            upstream_node_ids=upstream_node_ids,
+        )
         warnings = [_runtime_pipeline_warning(reason) for reason in reasons]
         if event_gated and not warnings:
             warnings.append(_runtime_pipeline_warning("explicit_event_gated"))
@@ -2583,6 +3025,7 @@ def _inspect_streaming_pipeline_links(pipeline: Pipeline) -> list[StreamingRunti
                 stream_behavior=stream_behavior,
                 event_gated=event_gated,
                 event_gate_reasons=reasons,
+                demand_driven=demand_driven,
                 warnings=warnings,
                 nodes=[
                     StreamingRuntimePipelineNode(
@@ -2685,18 +3128,19 @@ def _select_source_health(
 
 
 OBSERVABILITY_CLASSIFICATION_PRIORITY: dict[str, int] = {
-    "event_gated_idle": 0,
-    "network_contract_error": 1,
-    "auth_url_error": 2,
-    "source_stale": 3,
-    "source_pipeline_stale": 4,
-    "publisher_down": 5,
-    "hls_tail_unavailable": 6,
-    "hls_playlist_stale": 7,
-    "webrtc_transport_error": 8,
-    "app_player_lifecycle": 9,
-    "healthy": 10,
-    "unknown": 11,
+    "demand_idle": 0,
+    "event_gated_idle": 1,
+    "network_contract_error": 2,
+    "auth_url_error": 3,
+    "source_stale": 4,
+    "source_pipeline_stale": 5,
+    "publisher_down": 6,
+    "hls_tail_unavailable": 7,
+    "hls_playlist_stale": 8,
+    "webrtc_transport_error": 9,
+    "app_player_lifecycle": 10,
+    "healthy": 11,
+    "unknown": 12,
 }
 
 
@@ -2762,6 +3206,32 @@ def _output_has_active_demand(output: StreamingRuntimeOutputHealth) -> bool:
     return False
 
 
+async def _streaming_demand_snapshot(
+    request: Request,
+    *,
+    transmission_id: str,
+) -> dict[str, Any]:
+    bridge = getattr(request.app.state, "streaming_writer_bridge", None)
+    snapshot_fn = getattr(bridge, "get_transmission_demand_snapshot", None)
+    if not callable(snapshot_fn):
+        return {
+            "transmission_id": transmission_id,
+            "demand_active": False,
+            "viewer_count_total": 0,
+            "outputs": [],
+        }
+    try:
+        raw = await snapshot_fn(transmission_id)
+    except Exception:
+        return {
+            "transmission_id": transmission_id,
+            "demand_active": False,
+            "viewer_count_total": 0,
+            "outputs": [],
+        }
+    return raw if isinstance(raw, dict) else {}
+
+
 def _recent_events(events: list[Any], *, now_unix: float, window_seconds: float = 30.0) -> list[Any]:
     cutoff = float(now_unix) - max(1.0, float(window_seconds))
     return [
@@ -2791,6 +3261,45 @@ def _source_health_classification_evidence(
     return evidence[:4]
 
 
+def _recent_auth_url_classification(
+    *,
+    health: StreamingRuntimeTransmissionHealth,
+    output: StreamingRuntimeOutputHealth | None,
+    recent: list[Any],
+    texts: list[str],
+) -> tuple[str, list[str]] | None:
+    runtime_recovered = _runtime_playback_recovered(health, output)
+    auth_terms = ("auth", "authorization", "unauthorized", "forbidden", "401", "403")
+    url_terms = ("url", "loopback", "invalid", "port", "proxy", "not found", "404")
+    auth_url_events: list[tuple[Any, str]] = []
+    for event, text in zip(recent, texts, strict=False):
+        if any(term in text for term in auth_terms):
+            auth_url_events.append((event, "auth"))
+        elif "url" in text and any(term in text for term in url_terms):
+            auth_url_events.append((event, "url"))
+    if not auth_url_events:
+        return None
+    last_auth_url_event, last_auth_url_kind = max(
+        auth_url_events,
+        key=lambda item: _event_at_unix(item[0]),
+    )
+    last_auth_url_at = _event_at_unix(last_auth_url_event)
+    playback_recovered_at = _latest_event_at(
+        recent,
+        lambda event: _event_type(event) in {"hls_browser_probe", "hls_start", "playing", "ready_to_play"},
+    )
+    recovered_after_auth_url = (
+        runtime_recovered
+        and playback_recovered_at is not None
+        and playback_recovered_at >= last_auth_url_at
+    )
+    if recovered_after_auth_url:
+        return None
+    if last_auth_url_kind == "auth":
+        return "auth_url_error", ["Recent playback event indicates auth failure."]
+    return "auth_url_error", ["Recent playback event indicates URL/network playback failure."]
+
+
 def _classify_observability(
     *,
     health: StreamingRuntimeTransmissionHealth,
@@ -2804,6 +3313,12 @@ def _classify_observability(
     target_status = output.status if output is not None else health.status
     source_health = output.source_health if output is not None else health.source_health
 
+    if bool(getattr(output, "demand_idle", False) if output is not None else health.demand_idle):
+        return (
+            "demand_idle",
+            ["Stream is demand-driven and currently has no viewer or heartbeat demand."],
+        )
+
     if bool(getattr(output, "event_gated_idle", False) if output is not None else health.event_gated_idle):
         return (
             "event_gated_idle",
@@ -2814,6 +3329,15 @@ def _classify_observability(
         details = list(network_contract.blocking_errors)
         evidence.extend(details[:3] or [f"Network contract status is {network_contract.status}."])
         return "network_contract_error", evidence
+
+    auth_url_classification = _recent_auth_url_classification(
+        health=health,
+        output=output,
+        recent=recent,
+        texts=texts,
+    )
+    if auth_url_classification is not None:
+        return auth_url_classification
 
     if source_health is not None and (
         source_health.status in {
@@ -2847,34 +3371,6 @@ def _classify_observability(
         return "hls_playlist_stale", ["Recent HLS liveness event reports playlist stopped advancing."]
 
     runtime_recovered = _runtime_playback_recovered(health, output)
-    auth_terms = ("auth", "authorization", "unauthorized", "forbidden", "401", "403")
-    url_terms = ("url", "loopback", "invalid", "port", "proxy", "not found", "404")
-    auth_url_events: list[tuple[Any, str]] = []
-    for event, text in zip(recent, texts, strict=False):
-        if any(term in text for term in auth_terms):
-            auth_url_events.append((event, "auth"))
-        elif "url" in text and any(term in text for term in url_terms):
-            auth_url_events.append((event, "url"))
-    if auth_url_events:
-        last_auth_url_event, last_auth_url_kind = max(
-            auth_url_events,
-            key=lambda item: _event_at_unix(item[0]),
-        )
-        last_auth_url_at = _event_at_unix(last_auth_url_event)
-        playback_recovered_at = _latest_event_at(
-            recent,
-            lambda event: _event_type(event) in {"hls_browser_probe", "hls_start", "playing", "ready_to_play"},
-        )
-        recovered_after_auth_url = (
-            runtime_recovered
-            and playback_recovered_at is not None
-            and playback_recovered_at >= last_auth_url_at
-        )
-        if not recovered_after_auth_url:
-            if last_auth_url_kind == "auth":
-                return "auth_url_error", ["Recent playback event indicates auth failure."]
-            return "auth_url_error", ["Recent playback event indicates URL/network playback failure."]
-
     webrtc_error_terms = (
         "webrtc_signaling_error",
         "webrtc_transport_error",
@@ -3224,7 +3720,18 @@ async def _build_runtime_health(
         stream_behavior = pipeline_link.stream_behavior if pipeline_link is not None else "continuous"
         event_gated = bool(pipeline_link.event_gated) if pipeline_link is not None else False
         event_gate_reasons = list(pipeline_link.event_gate_reasons) if pipeline_link is not None else []
-        event_gated_idle = bool(event_gated and selection_status in {"offline", "stale"})
+        demand_driven = bool(pipeline_link.demand_driven) if pipeline_link is not None else False
+        demand_snapshot = await _streaming_demand_snapshot(request, transmission_id=transmission.id)
+        demand_outputs = demand_snapshot.get("outputs") if isinstance(demand_snapshot.get("outputs"), list) else []
+        demand_by_output_id = {
+            str(item.get("output_id") or "").strip(): item
+            for item in demand_outputs
+            if isinstance(item, dict) and str(item.get("output_id") or "").strip()
+        }
+        demand_active = bool(demand_snapshot.get("demand_active") or demand_snapshot.get("demand_signal"))
+        demand_idle = bool(demand_driven and not demand_active and selection_status in {"offline", "stale"})
+        health_selection_status = "offline" if demand_idle else selection_status
+        event_gated_idle = bool(event_gated and not demand_idle and health_selection_status in {"offline", "stale"})
         source_health = _select_source_health(
             source_health_by_id=source_health_by_id,
             pipeline_link=pipeline_link,
@@ -3238,12 +3745,18 @@ async def _build_runtime_health(
                 output_id=output_id,
             )
             viewer_count = int(viewer_count_by_output.get(output_key, 0))
+            output_demand = demand_by_output_id.get(output_id, {})
+            output_demand_signal = bool(
+                viewer_count > 0
+                or output_demand.get("primed")
+                or output_demand.get("hint_active")
+            )
             publisher_key = f"{transmission.id}:{resolved_engine_path}"
             publisher_status = publisher_status_by_output.get(publisher_key)
             publisher_running = bool(getattr(publisher_status, "running", False))
             publisher_last_error = getattr(publisher_status, "last_error", None)
             status = _output_status(
-                selection_status=selection_status,
+                selection_status=health_selection_status,
                 selected=selected,
                 publisher_running=publisher_running,
                 publisher_last_error=publisher_last_error,
@@ -3258,7 +3771,7 @@ async def _build_runtime_health(
                     resolved_engine_path=resolved_engine_path,
                     **_output_quality_metadata(output),
                     viewer_count=viewer_count,
-                    demand_signal=viewer_count > 0,
+                    demand_signal=output_demand_signal,
                     publisher_running=publisher_running,
                     publisher_pid=getattr(publisher_status, "pid", None),
                     publisher_frames_sent=int(getattr(publisher_status, "frames_sent", 0) or 0),
@@ -3286,6 +3799,8 @@ async def _build_runtime_health(
                     event_gated=event_gated,
                     event_gated_idle=event_gated_idle,
                     event_gate_reasons=event_gate_reasons,
+                    demand_driven=demand_driven,
+                    demand_idle=demand_idle,
                 )
             )
 
@@ -3295,7 +3810,7 @@ async def _build_runtime_health(
                 transmission_id=transmission.id,
                 enabled=bool(transmission.enabled),
                 status=_transmission_status(
-                    selection_status=selection_status,
+                    selection_status=health_selection_status,
                     output_statuses=output_statuses,
                 ),
                 active_writer_id=selected.active_writer_id,
@@ -3305,12 +3820,14 @@ async def _build_runtime_health(
                 last_live_frame_at_unix=selected.last_live_frame_at_unix,
                 fallback_active=bool(selected.fallback_active),
                 fallback_reason=selected.fallback_reason,
-                stale=bool(selected.stale),
-                placeholder_active=bool(selected.placeholder_active),
+                stale=bool(selected.stale and not demand_idle),
+                placeholder_active=bool(selected.placeholder_active and not demand_idle),
                 stream_behavior=stream_behavior,
                 event_gated=event_gated,
                 event_gated_idle=event_gated_idle,
                 event_gate_reasons=event_gate_reasons,
+                demand_driven=demand_driven,
+                demand_idle=demand_idle,
                 source_health=source_health,
                 outputs=outputs,
             )
@@ -3583,7 +4100,9 @@ def _publication_quality_profile(publication: StreamPublicationSpec) -> str:
 
 def _publication_outputs(publication: StreamPublicationSpec) -> list[TransmissionOutput]:
     outputs = _camera_live_hls_outputs()
-    enable_webrtc = bool(publication.transport_policy.get("enable_webrtc", False))
+    enable_webrtc = publication.role == "zoom" or bool(
+        publication.transport_policy.get("enable_webrtc", False)
+    )
     if enable_webrtc:
         outputs.append(_webrtc_low_latency_output())
     return outputs
@@ -4344,12 +4863,14 @@ async def _upsert_camera_live_pipelines(
                 "bypass_mode": "auto",
                 "resize_mode": "contain",
                 "stream_behavior": "continuous",
+                "demand_gate": True,
             },
         )
         graph.setdefault("meta", {}).setdefault("streaming", {})
         graph["meta"]["streaming"]["camera_live_view_id"] = str(extra.get("camera_live_view_id") or "")
         graph["meta"]["streaming"]["camera_live_variant_role"] = str(extra.get("camera_live_variant_role") or "")
         graph["meta"]["streaming"]["generated_by"] = "camera_live_view"
+        graph["meta"]["streaming"]["demand_driven"] = True
         pipeline = Pipeline(
             name=pipeline_name,
             enabled=True,
@@ -4425,6 +4946,7 @@ async def _upsert_stream_publication_pipelines(
                 "bypass_mode": "auto",
                 "resize_mode": "contain",
                 "stream_behavior": "continuous",
+                "demand_gate": True,
             },
         )
         graph.setdefault("meta", {}).setdefault("streaming", {})
@@ -4438,6 +4960,7 @@ async def _upsert_stream_publication_pipelines(
                 "role": publication.role,
                 "camera_live_view_id": publication.live_view_id or "",
                 "stream_behavior": "continuous",
+                "demand_driven": True,
             }
         )
         pipeline = Pipeline(
@@ -5094,6 +5617,7 @@ def create_streaming_router() -> APIRouter:
 
         try:
             await manager.stop()
+            await _mse_sidecar_manager(request).stop()
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to stop streaming engine: {exc}"
@@ -5196,6 +5720,156 @@ def create_streaming_router() -> APIRouter:
         if killed_pids:
             payload.warnings.insert(0, f"Cleaned up {len(killed_pids)} stale MediaMTX process(es).")
         return payload
+
+    @router.get("/mse/status", response_model=StreamingMseSidecarStatusResponse)
+    async def mse_sidecar_status(request: Request) -> StreamingMseSidecarStatusResponse:
+        _require_auth(request, action="core:settings:read")
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        manager = _mse_sidecar_manager(request)
+        status = await manager.get_status()
+
+        warnings: list[str] = list(status.warnings)
+        platform = status.platform
+        binary_path = status.binary_path
+        try:
+            platform_info = detect_go2rtc_platform()
+            platform = platform_info.key
+            installed = find_installed_go2rtc_binary(
+                platform=platform_info,
+                version=settings.engine.mse_sidecar.go2rtc_version,
+            )
+            if installed is not None:
+                binary_path = str(installed)
+        except Exception:
+            pass
+        if not settings.engine.mse_sidecar.enabled:
+            warnings.append("MSE sidecar is disabled in settings.")
+        if settings.engine.mse_sidecar.enabled and not settings.engine.enabled:
+            warnings.append("MSE sidecar needs the MediaMTX streaming engine to be enabled.")
+        if settings.engine.mse_sidecar.enabled and not status.running:
+            warnings.append("MSE sidecar is enabled but not running.")
+        if settings.engine.mse_sidecar.enabled and not status.running and not binary_path:
+            warnings.append(
+                "go2rtc binary is not installed yet. Starting MSE will download it (internet required), "
+                "or set TOPOSYNC_STREAMING_GO2RTC_PATH to a local path."
+            )
+        return StreamingMseSidecarStatusResponse(
+            enabled=bool(settings.engine.mse_sidecar.enabled),
+            running=status.running,
+            api_reachable=await _mse_sidecar_api_reachable(status),
+            pid=status.pid,
+            uptime_seconds=status.uptime_seconds,
+            started_at_unix=status.started_at_unix,
+            bind_host=status.bind_host,
+            api_port=status.api_port,
+            last_error=status.last_error,
+            go2rtc_version=status.go2rtc_version,
+            platform=platform,
+            binary_path=binary_path,
+            config_path=status.config_path,
+            log_path=status.log_path,
+            stream_count=status.stream_count,
+            warnings=_dedupe_messages(warnings),
+            restart_count=status.restart_count,
+        )
+
+    @router.post("/mse/download", response_model=StreamingMseSidecarStatusResponse)
+    async def mse_sidecar_download(request: Request) -> StreamingMseSidecarStatusResponse:
+        _require_auth(
+            request,
+            action="core:extension:settings:write",
+            resource_type="core:extension",
+            resource_selector=EXTENSION_ID,
+        )
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        try:
+            platform = detect_go2rtc_platform()
+            extract_go2rtc_binary(
+                data_dir=config_store.paths.data_dir,
+                platform=platform,
+                version=settings.engine.mse_sidecar.go2rtc_version,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to download go2rtc sidecar: {exc}") from exc
+        return await mse_sidecar_status(request)
+
+    @router.post("/mse/start", response_model=StreamingMseSidecarStatusResponse)
+    async def mse_sidecar_start(request: Request) -> StreamingMseSidecarStatusResponse:
+        _require_auth(
+            request,
+            action="core:extension:settings:write",
+            resource_type="core:extension",
+            resource_selector=EXTENSION_ID,
+        )
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        settings.engine.mse_sidecar.enabled = True
+        settings = await _save_settings(config_store, settings)
+        try:
+            await _apply_mse_sidecar_state(request, settings=settings)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to start MSE sidecar: {exc}") from exc
+        return await mse_sidecar_status(request)
+
+    @router.post("/mse/stop", response_model=StreamingMseSidecarStatusResponse)
+    async def mse_sidecar_stop(request: Request) -> StreamingMseSidecarStatusResponse:
+        _require_auth(
+            request,
+            action="core:extension:settings:write",
+            resource_type="core:extension",
+            resource_selector=EXTENSION_ID,
+        )
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        settings.engine.mse_sidecar.enabled = False
+        await _save_settings(config_store, settings)
+        await _mse_sidecar_manager(request).stop()
+        return await mse_sidecar_status(request)
+
+    @router.post("/mse/restart", response_model=StreamingMseSidecarStatusResponse)
+    async def mse_sidecar_restart(request: Request) -> StreamingMseSidecarStatusResponse:
+        _require_auth(
+            request,
+            action="core:extension:settings:write",
+            resource_type="core:extension",
+            resource_selector=EXTENSION_ID,
+        )
+        config_store = _config_store(request)
+        settings = await _load_settings(config_store)
+        settings.engine.mse_sidecar.enabled = True
+        settings = await _save_settings(config_store, settings)
+        try:
+            streams = await _build_mse_sidecar_streams(request, settings=settings)
+            await _mse_sidecar_manager(request).restart(settings.engine.mse_sidecar, streams=streams)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to restart MSE sidecar: {exc}") from exc
+        return await mse_sidecar_status(request)
+
+    @router.get("/jsmpeg/status", response_model=StreamingJsmpegStatusResponse)
+    async def jsmpeg_status(request: Request) -> StreamingJsmpegStatusResponse:
+        _require_auth(request, action="core:settings:read")
+        settings = await _load_settings(_config_store(request))
+        manager = _jsmpeg_session_manager(request)
+        status = await manager.get_status(settings.engine.jsmpeg)
+        warnings = list(status.warnings)
+        if settings.engine.jsmpeg.enabled and not settings.engine.enabled:
+            warnings.append("JSMpeg needs the streaming engine/demand runtime to be enabled.")
+        return StreamingJsmpegStatusResponse(
+            enabled=status.enabled,
+            ffmpeg_path=status.ffmpeg_path,
+            ffmpeg_source=status.ffmpeg_source,
+            ffmpeg_error=status.ffmpeg_error,
+            running_session_count=status.running_session_count,
+            max_total_sessions=status.max_total_sessions,
+            max_sessions_per_transmission=status.max_sessions_per_transmission,
+            sessions_by_transmission=status.sessions_by_transmission,
+            frames_encoded=status.frames_encoded,
+            bytes_sent=status.bytes_sent,
+            last_error=status.last_error,
+            warnings=_dedupe_messages(warnings),
+        )
 
     @router.get("/transmissions", response_model=list[Transmission])
     async def list_transmissions(request: Request) -> list[Transmission]:
@@ -5506,6 +6180,7 @@ def create_streaming_router() -> APIRouter:
                 runtime_health=runtime_item_for_plan,
                 quality_profile_id=variant.quality_profile_id,
                 visual_context=context,
+                transmission_role=str(variant.role or ""),
                 low_latency_requested=variant.preferred_transport == "webrtc" or context == "ptz",
             ),
             selected_output=selected_output,
@@ -6218,6 +6893,151 @@ def create_streaming_router() -> APIRouter:
             warnings=warnings,
         )
 
+    @router.websocket("/media/mse/{engine_path}/ws")
+    async def mse_media_proxy(websocket: WebSocket, engine_path: str) -> None:
+        config_store = _config_store(websocket)  # type: ignore[arg-type]
+        settings = await _load_settings(config_store)
+        normalized_engine_path = normalize_path_slug(engine_path, fallback="")
+        media_token = str(websocket.query_params.get("media_token") or "").strip()
+        try:
+            if not normalized_engine_path:
+                raise HTTPException(status_code=400, detail="Invalid MSE media path")
+            payload = _verify_media_token(config_store=config_store, token=media_token)
+            token_output = _output_for_media_token(
+                settings=settings,
+                engine_path=normalized_engine_path,
+                payload=payload,
+                current_server_id=_current_server_id(websocket),  # type: ignore[arg-type]
+                transport="mse",
+            )
+            if token_output is None:
+                raise HTTPException(status_code=401, detail="media_token_invalid")
+        except HTTPException:
+            await websocket.close(code=1008)
+            return
+        transmission, output = token_output
+
+        await _prime_mse_proxy_demand(websocket, transmission=transmission, output=output)
+        await _wait_for_mse_backing_path_ready(websocket, engine_path=normalized_engine_path)
+        try:
+            status = await _apply_mse_sidecar_state(websocket, settings=settings)  # type: ignore[arg-type]
+        except Exception:
+            await websocket.close(code=1011)
+            return
+        if not status.running:
+            await websocket.close(code=1011)
+            return
+
+        stream_name = _mse_stream_name_for_engine_path(normalized_engine_path)
+        upstream_url = (
+            f"ws://127.0.0.1:{int(status.api_port)}/api/ws?"
+            f"src={urllib_parse.quote(stream_name, safe='')}"
+        )
+        await websocket.accept()
+        try:
+            import websockets
+
+            async with websockets.connect(
+                upstream_url,
+                open_timeout=5.0,
+                close_timeout=2.0,
+                max_size=None,
+            ) as upstream:
+                async def client_to_upstream() -> None:
+                    try:
+                        while True:
+                            message = await websocket.receive()
+                            msg_type = message.get("type")
+                            if msg_type == "websocket.disconnect":
+                                break
+                            text = message.get("text")
+                            if text is not None:
+                                await upstream.send(str(text))
+                                continue
+                            data = message.get("bytes")
+                            if data is not None:
+                                await upstream.send(data)
+                    except WebSocketDisconnect:
+                        pass
+                    finally:
+                        with contextlib.suppress(Exception):
+                            await upstream.close()
+
+                async def upstream_to_client() -> None:
+                    async for message in upstream:
+                        if isinstance(message, bytes):
+                            await websocket.send_bytes(message)
+                        else:
+                            await websocket.send_text(str(message))
+
+                tasks = [
+                    asyncio.create_task(client_to_upstream()),
+                    asyncio.create_task(upstream_to_client()),
+                ]
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in pending:
+                    task.cancel()
+                for task in done:
+                    with contextlib.suppress(Exception):
+                        task.result()
+        except Exception:
+            with contextlib.suppress(Exception):
+                await websocket.close(code=1011)
+
+    @router.websocket("/media/jsmpeg/{engine_path}/ws")
+    async def jsmpeg_media_proxy(websocket: WebSocket, engine_path: str) -> None:
+        config_store = _config_store(websocket)  # type: ignore[arg-type]
+        settings = await _load_settings(config_store)
+        normalized_engine_path = normalize_path_slug(engine_path, fallback="")
+        media_token = str(websocket.query_params.get("media_token") or "").strip()
+        try:
+            if not normalized_engine_path:
+                raise HTTPException(status_code=400, detail="Invalid JSMpeg media path")
+            payload = _verify_media_token(config_store=config_store, token=media_token)
+            token_output = _output_for_media_token(
+                settings=settings,
+                engine_path=normalized_engine_path,
+                payload=payload,
+                current_server_id=_current_server_id(websocket),  # type: ignore[arg-type]
+                transport="jsmpeg",
+            )
+            if token_output is None:
+                raise HTTPException(status_code=401, detail="media_token_invalid")
+        except HTTPException:
+            await websocket.close(code=1008)
+            return
+        transmission, output = token_output
+
+        manager = _jsmpeg_session_manager(websocket)
+        blocking_errors = await manager.blocking_errors(
+            settings=settings.engine.jsmpeg,
+            transmission_id=transmission.id,
+        )
+        if blocking_errors:
+            await websocket.close(code=1013 if "limit" in " ".join(blocking_errors).lower() else 1011)
+            return
+
+        async def _prime_demand() -> object:
+            bridge = _writer_bridge(websocket)  # type: ignore[arg-type]
+            prime_demand = getattr(bridge, "prime_transmission_demand", None)
+            if not callable(prime_demand):
+                return 0
+            return await prime_demand(
+                transmission.id,
+                ttl_s=settings.engine.jsmpeg.lease_seconds,
+                output_id=output.id,
+                quality_profile_id=output.quality_profile_id,
+            )
+
+        await manager.stream(
+            websocket=websocket,
+            settings=settings.engine.jsmpeg,
+            stale_policy=settings.stale_policy,
+            transmission=transmission,
+            output=output,
+            prime_demand=_prime_demand,
+        )
+
     @router.get("/media/hls/{engine_path}/{file_path:path}")
     async def hls_media_proxy(request: Request, engine_path: str, file_path: str) -> Response:
         config_store = _config_store(request)
@@ -6453,6 +7273,7 @@ def create_streaming_router() -> APIRouter:
             runtime_health=runtime_health,
             quality_profile_id=quality_profile_id,
             visual_context=context,
+            transmission_role=str((getattr(transmission, "model_extra", {}) or {}).get("role") or ""),
             low_latency_requested=low_latency,
         )
 

@@ -87,6 +87,16 @@ def build_streaming_wizard_graph(
     )
     event_gated = stream_behavior == "event_gated"
     writer_priority = _coerce_int(options.get("writer_priority"), default=0)
+    demand_gate = _coerce_bool(options.get("demand_gate"), default=False)
+    demand_gate_fail_open = _coerce_bool(options.get("demand_gate_fail_open"), default=True)
+    demand_gate_output_id = _safe_text(options.get("demand_gate_output_id"))
+    demand_gate_quality_profile_id = _safe_text(options.get("demand_gate_quality_profile_id"))
+    demand_gate_poll_interval_ms = _coerce_int(
+        options.get("demand_gate_poll_interval_ms"),
+        default=500,
+        min_value=100,
+        max_value=10_000,
+    )
 
     fps_limit = _coerce_float(options.get("fps_limit"), default=0.0, min_value=0.0, max_value=60.0)
     default_motion_fps = 5.0
@@ -122,6 +132,21 @@ def build_streaming_wizard_graph(
     )
 
     current_node_id = "source"
+    if demand_gate:
+        nodes.append(
+            {
+                "id": "demand",
+                "operator": "stream.demand_gate",
+                "config": {
+                    "transmission_id": transmission_id,
+                    "output_id": demand_gate_output_id,
+                    "quality_profile_id": demand_gate_quality_profile_id,
+                    "poll_interval_ms": int(demand_gate_poll_interval_ms),
+                    "fail_open": bool(demand_gate_fail_open),
+                },
+            }
+        )
+        _append_gate_edge(edges, source_node_id="demand", target_node_id="source")
 
     if use_fps_reducer:
         nodes.append(
@@ -247,6 +272,7 @@ def build_streaming_wizard_graph(
                 "camera_source_id": camera_source_id,
                 "preset_id": preset_id,
                 "stream_behavior": stream_behavior,
+                "demand_driven": bool(demand_gate),
             },
         },
     }
@@ -289,6 +315,26 @@ def _append_edge(
             "drop_policy": "drop_oldest",
         }
     )
+
+
+def _append_gate_edge(
+    edges: list[dict[str, Any]],
+    *,
+    source_node_id: str,
+    target_node_id: str,
+) -> None:
+    edges.append(
+        {
+            "from": {"node": source_node_id, "port": "out"},
+            "to": {"node": target_node_id, "port": "gate"},
+            "maxsize": 1,
+            "drop_policy": "drop_oldest",
+        }
+    )
+
+
+def _safe_text(value: Any) -> str:
+    return str(value or "").strip()
 
 
 def _pick_name_component(
@@ -361,11 +407,21 @@ def _pick_choice(value: Any, *, allowed: set[str], default: str) -> str:
     return default
 
 
-def _coerce_int(value: Any, *, default: int) -> int:
+def _coerce_int(
+    value: Any,
+    *,
+    default: int,
+    min_value: int | None = None,
+    max_value: int | None = None,
+) -> int:
     try:
         parsed = int(value)
     except Exception:
-        return int(default)
+        parsed = int(default)
+    if min_value is not None:
+        parsed = max(int(min_value), parsed)
+    if max_value is not None:
+        parsed = min(int(max_value), parsed)
     return int(parsed)
 
 

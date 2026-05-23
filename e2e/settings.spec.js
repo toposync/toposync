@@ -18,6 +18,16 @@ async function openViewSettings(page) {
   return page;
 }
 
+async function openCompositionSettings(page) {
+  await page.goto("/settings");
+  await expect(page.getByText("Settings", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /^Compositions\b/ }).click();
+  const panel = page.locator(".compositionsSettingsPanel");
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText("Your compositions", { exact: true })).toBeVisible();
+  return panel;
+}
+
 async function openCompositions(page) {
   await page.goto("/");
   await page.getByRole("button", { name: /^Composition:/ }).click();
@@ -198,6 +208,69 @@ test("compositions can be created, renamed, and deleted", async ({ page, request
   }
 });
 
+test("compositions can be managed from settings and opened in the editor", async ({ page, request }) => {
+  const createdName = `E2E settings ${Date.now()}`;
+  const renamedName = `${createdName} renamed`;
+  let compositionId = null;
+
+  try {
+    const panel = await openCompositionSettings(page);
+
+    await panel.getByPlaceholder("Name (e.g. Ground, Upstairs...)").fill(createdName);
+    const createReq = page.waitForResponse(
+      (resp) => resp.url().includes("/api/compositions") && resp.request().method() === "POST" && resp.status() === 200,
+    );
+    await panel.getByRole("button", { name: "Create composition", exact: true }).click();
+    const createRes = await createReq;
+    const created = await createRes.json().catch(() => ({}));
+    if (created?.id) compositionId = created.id;
+
+    const createdRow = panel.locator(".compositionsSettingsRow").filter({ hasText: createdName });
+    await expect(createdRow).toBeVisible();
+    await expect(createdRow.getByText("Active", { exact: true })).toBeVisible();
+
+    await createdRow.getByRole("button", { name: "Rename composition", exact: true }).click();
+    const renameInput = panel.locator(".compositionsSettingsRow input.input");
+    await expect(renameInput).toBeVisible();
+    await renameInput.fill(renamedName);
+    const renameReq = page.waitForResponse(
+      (resp) => resp.url().includes("/api/compositions/") && resp.request().method() === "PATCH" && resp.status() === 200,
+    );
+    await panel.getByRole("button", { name: "Save name", exact: true }).click();
+    await renameReq;
+
+    const renamedRow = panel.locator(".compositionsSettingsRow").filter({ hasText: renamedName });
+    await expect(renamedRow).toBeVisible();
+    await renamedRow.getByRole("button", { name: new RegExp(`^Open editor for ${escapeRegExp(renamedName)}$`) }).click();
+
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByRole("button", { name: "Back", exact: true })).toBeVisible();
+
+    const panel2 = await openCompositionSettings(page);
+    const deleteRow = panel2.locator(".compositionsSettingsRow").filter({ hasText: renamedName });
+    await expect(deleteRow).toBeVisible();
+    await deleteRow.getByRole("button", { name: "Delete composition", exact: true }).click();
+    const deleteReq = page.waitForResponse(
+      (resp) => resp.url().includes("/api/compositions/") && resp.request().method() === "DELETE" && resp.status() === 200,
+    );
+    await deleteRow.getByRole("button", { name: "Confirm delete", exact: true }).click();
+    await deleteReq;
+
+    const listRes = await request.get("http://127.0.0.1:8000/api/compositions");
+    expect(listRes.ok()).toBeTruthy();
+    const listData = await listRes.json();
+    expect(listData?.compositions?.some((c) => c?.name === renamedName)).toBeFalsy();
+  } finally {
+    if (compositionId) {
+      try {
+        await request.delete(`http://127.0.0.1:8000/api/compositions/${encodeURIComponent(compositionId)}`);
+      } catch {
+        // ignore cleanup errors
+      }
+    }
+  }
+});
+
 test("wall tool can create a wall and persist to backend", async ({ page, request }) => {
   const name = `E2E wall ${Date.now()}`;
   let compositionId = null;
@@ -235,20 +308,18 @@ test("wall tool can create a wall and persist to backend", async ({ page, reques
     const box = await canvas.boundingBox();
     if (!box) throw new Error("Canvas has no bounding box");
 
-    const save = page.waitForResponse(
-      (resp) => resp.url().includes("/api/composition") && resp.request().method() === "PUT" && resp.status() === 200,
-    );
-
     await canvas.click({ position: { x: box.width * 0.6, y: box.height * 0.5 } });
     await canvas.click({ position: { x: box.width * 0.8, y: box.height * 0.65 } });
-    await save;
 
-    const res = await request.get("http://127.0.0.1:8000/api/composition");
-    expect(res.ok()).toBeTruthy();
-    const comp = await res.json();
-    const elements = Array.isArray(comp?.elements) ? comp.elements : [];
-    const afterWalls = elements.filter((el) => el?.type === "com.toposync.structural.wall").length;
-    expect(afterWalls).toBe(beforeWalls + 1);
+    await expect
+      .poll(async () => {
+        const res = await request.get("http://127.0.0.1:8000/api/composition");
+        if (!res.ok()) return -1;
+        const comp = await res.json();
+        const elements = Array.isArray(comp?.elements) ? comp.elements : [];
+        return elements.filter((el) => el?.type === "com.toposync.structural.wall").length;
+      })
+      .toBe(beforeWalls + 1);
   } finally {
     if (compositionId) {
       try {

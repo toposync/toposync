@@ -27,8 +27,10 @@ from .streaming.camera_ingest import (
 )
 from .streaming.distributed_sync import DistributedSettingsSync
 from .streaming.engine_manager import MediaMtxEngineManager
+from .streaming.go2rtc_manager import Go2RtcSidecarManager
 from .streaming.ingest_auth import CameraIngestCredentialStore
 from .streaming.ingest_resolver import CameraIngestResolver
+from .streaming.jsmpeg_manager import JsmpegSessionManager
 from .streaming.mediamtx_config import MediaMTXPathAuth
 from .streaming.playback_events import PlaybackEventStore
 from .streaming.publisher_manager import PublisherManager
@@ -53,6 +55,8 @@ class StreamingExtension(BaseExtension):
                 "api_prefixes": [
                     "/api/streams/settings",
                     "/api/streams/engine",
+                    "/api/streams/mse",
+                    "/api/streams/jsmpeg",
                     "/api/streams/transmissions",
                     "/api/streams/runtime",
                     "/api/streams/wizard",
@@ -77,8 +81,14 @@ class StreamingExtension(BaseExtension):
             settings = StreamingExtensionSettings.model_validate(current)
 
             engine_manager = MediaMtxEngineManager(data_dir=config_store.paths.data_dir)
+            mse_sidecar_manager = Go2RtcSidecarManager(data_dir=config_store.paths.data_dir)
             ingest_credential_store = CameraIngestCredentialStore(data_dir=config_store.paths.data_dir)
             runtime_state = TransmissionRuntimeState()
+            jsmpeg_session_manager = JsmpegSessionManager(
+                data_dir=config_store.paths.data_dir,
+                runtime_state=runtime_state,
+                logger=logger,
+            )
             playback_event_store = PlaybackEventStore(retention_seconds=900.0, max_events=500)
             publisher_manager = PublisherManager(data_dir=config_store.paths.data_dir, logger=logger, host_id=server_id)
             writer_bridge = StreamWriterBridge(
@@ -92,8 +102,10 @@ class StreamingExtension(BaseExtension):
             )
 
             app.state.streaming_engine_manager = engine_manager
+            app.state.streaming_mse_sidecar_manager = mse_sidecar_manager
             app.state.streaming_ingest_credential_store = ingest_credential_store
             app.state.streaming_runtime_state = runtime_state
+            app.state.streaming_jsmpeg_session_manager = jsmpeg_session_manager
             app.state.streaming_playback_event_store = playback_event_store
             app.state.streaming_publisher_manager = publisher_manager
             app.state.streaming_writer_bridge = writer_bridge
@@ -150,8 +162,21 @@ class StreamingExtension(BaseExtension):
                 resolved_url = str(resolution.get("rtsp_url") or "").strip()
                 return resolved_url or None
 
+            async def _streaming_demand_snapshot(
+                *,
+                transmission_id: str,
+                output_id: str = "",
+                quality_profile_id: str = "",
+            ) -> dict[str, object]:
+                return await writer_bridge.get_transmission_demand_snapshot(
+                    transmission_id,
+                    output_id=output_id,
+                    quality_profile_id=quality_profile_id,
+                )
+
             services.register("streaming.ingest.resolve_camera_source", _resolve_camera_ingest_source)
             services.register("streaming.ingest.resolve_rtsp_url", _resolve_camera_ingest_rtsp_url)
+            services.register("streaming.demand.snapshot", _streaming_demand_snapshot)
 
             try:
                 app_settings = await config_store.get_settings()
@@ -183,7 +208,9 @@ class StreamingExtension(BaseExtension):
                 sync_manager = getattr(app.state, "streaming_settings_sync", None)
                 if isinstance(sync_manager, DistributedSettingsSync):
                     await sync_manager.stop()
+                await jsmpeg_session_manager.stop_all()
                 await writer_bridge.stop()
+                await mse_sidecar_manager.stop()
                 await engine_manager.stop()
 
             register_extension_shutdown_callback(app, _shutdown_streaming)

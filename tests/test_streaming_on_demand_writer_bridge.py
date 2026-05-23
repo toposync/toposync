@@ -6,8 +6,11 @@ from types import SimpleNamespace
 
 import numpy
 
+from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.runtime import Lifecycle
+from toposync.runtime.services import ServiceRegistry
 from toposync_ext_streaming.api.models import EXTENSION_ID
+from toposync_ext_streaming.pipelines.operators import DemandGateRuntime
 from toposync_ext_streaming.streaming.publisher_manager import PublisherEncodingSettings, PublisherOutput
 from toposync_ext_streaming.streaming.runtime_state import TransmissionRuntimeState
 from toposync_ext_streaming.streaming.writer_bridge import StreamWriterBridge
@@ -114,6 +117,10 @@ def test_on_demand_does_not_flap_with_short_viewer_drop() -> None:
 
 def test_on_demand_prime_starts_without_viewers() -> None:
     asyncio.run(_on_demand_prime_scenario())
+
+
+def test_stream_demand_gate_follows_heartbeat_lease() -> None:
+    asyncio.run(_stream_demand_gate_heartbeat_scenario())
 
 
 def test_writer_bridge_publishes_placeholder_when_selected_frame_is_stale() -> None:
@@ -332,6 +339,63 @@ async def _on_demand_prime_scenario() -> None:
 
     await bridge._tick_once(383.4)
     assert publisher_manager.stop_calls == ["transmission_prime:prime-path"]
+
+
+async def _stream_demand_gate_heartbeat_scenario() -> None:
+    extension_payload = {
+        "engine": {"enabled": True, "expose_to_lan": False},
+        "transmissions": [
+            {
+                "id": "transmission_prime",
+                "path": "prime-path",
+                "enabled": True,
+                "outputs": [
+                    {
+                        "id": "main",
+                        "protocol": "hls",
+                        "enabled": True,
+                        "resolution": {"width": 320, "height": 180},
+                        "fps_limit": 12,
+                    }
+                ],
+            }
+        ],
+    }
+
+    clock = {"now": 100.0}
+    bridge = StreamWriterBridge(
+        config_store=_ConfigStoreStub(extension_payload),
+        engine_manager=_EngineManagerStub(),  # type: ignore[arg-type]
+        runtime_state=TransmissionRuntimeState(),
+        publisher_manager=_PublisherManagerStub(),  # type: ignore[arg-type]
+        mediamtx_api_client=_MediaMtxApiClientStub({"prime-path": 0}),  # type: ignore[arg-type]
+        logger=SimpleNamespace(exception=lambda *args, **kwargs: None),  # type: ignore[arg-type]
+        monotonic=lambda: float(clock["now"]),
+    )
+    services = ServiceRegistry()
+    services.register("streaming.demand.snapshot", bridge.get_transmission_demand_snapshot)
+    gate = DemandGateRuntime(
+        {"transmission_id": "transmission_prime", "output_id": "main"},
+        PipelineRuntimeDependencies(services=services),
+    )
+
+    closed = await gate.produce(SimpleNamespace())
+    assert closed is not None
+    assert closed.lifecycle == Lifecycle.CLOSE
+    assert closed.payload["reason"] == "no_active_demand"
+
+    primed_outputs = await bridge.prime_transmission_demand("transmission_prime", ttl_s=5.0, output_id="main")
+    assert primed_outputs == 1
+    opened = await gate.produce(SimpleNamespace())
+    assert opened is not None
+    assert opened.lifecycle == Lifecycle.OPEN
+    assert opened.payload["reason"] == "heartbeat_lease"
+
+    clock["now"] = 106.0
+    closed_again = await gate.produce(SimpleNamespace())
+    assert closed_again is not None
+    assert closed_again.lifecycle == Lifecycle.CLOSE
+    assert closed_again.payload["reason"] == "no_active_demand"
 
 
 async def _stale_placeholder_scenario() -> None:

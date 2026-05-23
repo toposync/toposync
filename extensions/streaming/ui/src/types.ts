@@ -297,6 +297,7 @@ export type StreamingRuntimeStatus = "live" | "degraded" | "stale" | "offline";
 export type StreamingStreamBehavior = "continuous" | "event_gated";
 export type StreamingObservabilityClassification =
   | "healthy"
+  | "demand_idle"
   | "source_stale"
   | "source_pipeline_stale"
   | "publisher_down"
@@ -376,6 +377,8 @@ export type StreamingRuntimeOutputHealth = {
   event_gated?: boolean;
   event_gated_idle?: boolean;
   event_gate_reasons?: string[];
+  demand_driven?: boolean;
+  demand_idle?: boolean;
   classification?: StreamingObservabilityClassification;
   evidence?: string[];
   active_playback_session_count?: number;
@@ -401,6 +404,8 @@ export type StreamingRuntimeTransmissionHealth = {
   event_gated?: boolean;
   event_gated_idle?: boolean;
   event_gate_reasons?: string[];
+  demand_driven?: boolean;
+  demand_idle?: boolean;
   classification?: StreamingObservabilityClassification;
   evidence?: string[];
   active_playback_session_count?: number;
@@ -444,6 +449,7 @@ export type StreamingRuntimePipelineLink = {
   stream_behavior?: StreamingStreamBehavior;
   event_gated?: boolean;
   event_gate_reasons?: string[];
+  demand_driven?: boolean;
   warnings?: string[];
   nodes?: StreamingRuntimePipelineNode[];
   edges?: StreamingRuntimePipelineEdge[];

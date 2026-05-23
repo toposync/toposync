@@ -195,6 +195,42 @@ def test_wizard_graph_adds_fps_reducer_when_fps_limit_is_set() -> None:
     assert stream_config.get("writer_priority") == 2
 
 
+def test_wizard_graph_can_gate_camera_source_by_stream_demand() -> None:
+    graph = build_streaming_wizard_graph(
+        transmission_id="transmission_main",
+        camera_id="camera_a",
+        camera_source_id="sub",
+        preset_id="simple_stream",
+        optional_parameters={
+            "demand_gate": True,
+            "demand_gate_output_id": "hls_quad_grid",
+            "demand_gate_quality_profile_id": "quad_grid",
+        },
+    )
+
+    operators = _operator_ids(graph)
+    assert "stream.demand_gate" in operators
+    gate_config = _operator_config(graph, operator_id="stream.demand_gate")
+    assert gate_config["transmission_id"] == "transmission_main"
+    assert gate_config["output_id"] == "hls_quad_grid"
+    assert gate_config["quality_profile_id"] == "quad_grid"
+
+    edges = graph.get("edges") if isinstance(graph.get("edges"), list) else []
+    assert {
+        "from": {"node": "demand", "port": "out"},
+        "to": {"node": "source", "port": "gate"},
+        "maxsize": 1,
+        "drop_policy": "drop_oldest",
+    } in edges
+    assert _streaming_meta(graph).get("demand_driven") is True
+
+    registry = OperatorRegistry()
+    register_builtin_operators(registry)
+    register_camera_pipeline_operators(registry)
+    register_streaming_pipeline_operators(registry)
+    PipelineGraphCompiler(registry).compile_pipeline(Pipeline(name="demand_gate_stream", graph=graph))
+
+
 def test_motion_preset_has_fps_reducer_even_without_optional_parameters() -> None:
     graph = build_streaming_wizard_graph(
         transmission_id="transmission_main",

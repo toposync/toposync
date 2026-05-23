@@ -106,7 +106,8 @@ module.exports = (_env, argv = {}) => {
         {
           context: ["/api", "/extensions", "/files"],
           target: backendTarget,
-          changeOrigin: true
+          changeOrigin: true,
+          ws: true
         }
       ]
     }

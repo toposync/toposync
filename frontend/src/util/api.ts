@@ -977,7 +977,7 @@ export type StreamingTransmissionDemandHeartbeatRequest = {
   playbackSessionId: string;
   outputId?: string | null;
   qualityProfileId?: StreamingQualityProfileId | null;
-  transport: "hls" | "webrtc" | "rtsp";
+  transport: "hls" | "webrtc" | "rtsp" | "mse" | "jsmpeg";
   source?: "player" | "home_assistant_entity";
   ttlSeconds?: number | null;
 };
@@ -996,6 +996,7 @@ export type StreamingEncoderMode = "auto" | "cpu";
 export type StreamingEncoderTrustState = "candidate" | "trusted" | "quarantined";
 export type StreamingObservabilityClassification =
   | "healthy"
+  | "demand_idle"
   | "source_stale"
   | "source_pipeline_stale"
   | "publisher_down"
@@ -1083,6 +1084,8 @@ export type StreamingOutputRuntimeStatus = {
   event_gated?: boolean;
   event_gated_idle?: boolean;
   event_gate_reasons?: string[];
+  demand_driven?: boolean;
+  demand_idle?: boolean;
   classification?: StreamingObservabilityClassification;
   evidence?: string[];
   active_playback_session_count?: number;
@@ -1127,6 +1130,8 @@ export type StreamingRuntimeOutputHealth = {
   event_gated?: boolean;
   event_gated_idle?: boolean;
   event_gate_reasons?: string[];
+  demand_driven?: boolean;
+  demand_idle?: boolean;
   classification?: StreamingObservabilityClassification;
   evidence?: string[];
   active_playback_session_count?: number;
@@ -1152,6 +1157,8 @@ export type StreamingRuntimeTransmissionHealth = {
   event_gated?: boolean;
   event_gated_idle?: boolean;
   event_gate_reasons?: string[];
+  demand_driven?: boolean;
+  demand_idle?: boolean;
   classification?: StreamingObservabilityClassification;
   evidence?: string[];
   active_playback_session_count?: number;
@@ -1199,6 +1206,7 @@ export type StreamingRuntimePipelineLink = {
   stream_behavior?: StreamingStreamBehavior;
   event_gated?: boolean;
   event_gate_reasons?: string[];
+  demand_driven?: boolean;
   warnings?: string[];
   nodes?: StreamingRuntimePipelineNode[];
   edges?: StreamingRuntimePipelineEdge[];

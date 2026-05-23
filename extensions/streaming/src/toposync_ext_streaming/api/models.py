@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ..streaming import MEDIAMTX_VERSION
+from ..streaming import GO2RTC_VERSION, MEDIAMTX_VERSION
 from ..streaming.mediamtx_config import normalize_path_slug
 
 
@@ -48,6 +48,7 @@ StreamingFallbackReason = Literal[
 ]
 StreamingObservabilityClassification = Literal[
     "healthy",
+    "demand_idle",
     "source_stale",
     "source_pipeline_stale",
     "publisher_down",
@@ -689,6 +690,50 @@ class StreamingMediaAuthSettingsPatch(BaseModel):
     renew_margin_seconds: float | None = Field(default=None, ge=1.0, le=3600.0)
 
 
+class StreamingMseSidecarSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    api_port: int = Field(default=18764, ge=1, le=65535)
+    go2rtc_version: str = GO2RTC_VERSION
+
+
+class StreamingMseSidecarSettingsPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool | None = None
+    api_port: int | None = Field(default=None, ge=1, le=65535)
+    go2rtc_version: str | None = None
+
+
+class StreamingJsmpegSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    max_width: int = Field(default=854, ge=160, le=1920)
+    max_height: int = Field(default=480, ge=120, le=1080)
+    fps: float = Field(default=8.0, ge=1.0, le=15.0)
+    bitrate_kbps: int = Field(default=700, ge=64, le=4000)
+    max_total_sessions: int = Field(default=8, ge=1, le=64)
+    max_sessions_per_transmission: int = Field(default=2, ge=1, le=16)
+    lease_seconds: float = Field(default=45.0, ge=5.0, le=120.0)
+    heartbeat_interval_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
+
+
+class StreamingJsmpegSettingsPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool | None = None
+    max_width: int | None = Field(default=None, ge=160, le=1920)
+    max_height: int | None = Field(default=None, ge=120, le=1080)
+    fps: float | None = Field(default=None, ge=1.0, le=15.0)
+    bitrate_kbps: int | None = Field(default=None, ge=64, le=4000)
+    max_total_sessions: int | None = Field(default=None, ge=1, le=64)
+    max_sessions_per_transmission: int | None = Field(default=None, ge=1, le=16)
+    lease_seconds: float | None = Field(default=None, ge=5.0, le=120.0)
+    heartbeat_interval_seconds: float | None = Field(default=None, ge=1.0, le=60.0)
+
+
 class StreamingEngineSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -697,6 +742,8 @@ class StreamingEngineSettings(BaseModel):
     metrics_enabled: bool = True
     encoder_policy: StreamingEncoderPolicySettings = Field(default_factory=StreamingEncoderPolicySettings)
     media_auth: StreamingMediaAuthSettings = Field(default_factory=StreamingMediaAuthSettings)
+    mse_sidecar: StreamingMseSidecarSettings = Field(default_factory=StreamingMseSidecarSettings)
+    jsmpeg: StreamingJsmpegSettings = Field(default_factory=StreamingJsmpegSettings)
     preferred_ports: StreamingPreferredPorts = Field(default_factory=StreamingPreferredPorts)
     mediamtx_version: str = MEDIAMTX_VERSION
     webrtc_ice_servers: list[str] = Field(default_factory=list)
@@ -759,6 +806,8 @@ class StreamingEngineSettingsPatch(BaseModel):
     metrics_enabled: bool | None = None
     encoder_policy: StreamingEncoderPolicySettingsPatch | None = None
     media_auth: StreamingMediaAuthSettingsPatch | None = None
+    mse_sidecar: StreamingMseSidecarSettingsPatch | None = None
+    jsmpeg: StreamingJsmpegSettingsPatch | None = None
     preferred_ports: StreamingPreferredPortsPatch | None = None
     mediamtx_version: str | None = None
     webrtc_ice_servers: list[str] | None = None
@@ -965,6 +1014,45 @@ class StreamingEngineStatusResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     restart_count: int = Field(default=0, ge=0)
     orphan_pids: list[int] = Field(default_factory=list)
+
+
+class StreamingMseSidecarStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    running: bool
+    api_reachable: bool = False
+    pid: int | None = None
+    uptime_seconds: float | None = None
+    started_at_unix: float | None = None
+    bind_host: str = "127.0.0.1"
+    api_port: int = Field(ge=1, le=65535)
+    last_error: str | None = None
+    go2rtc_version: str
+    platform: str | None = None
+    binary_path: str | None = None
+    config_path: str | None = None
+    log_path: str | None = None
+    stream_count: int = Field(default=0, ge=0)
+    warnings: list[str] = Field(default_factory=list)
+    restart_count: int = Field(default=0, ge=0)
+
+
+class StreamingJsmpegStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    ffmpeg_path: str | None = None
+    ffmpeg_source: str | None = None
+    ffmpeg_error: str | None = None
+    running_session_count: int = Field(default=0, ge=0)
+    max_total_sessions: int = Field(default=8, ge=1)
+    max_sessions_per_transmission: int = Field(default=2, ge=1)
+    sessions_by_transmission: dict[str, int] = Field(default_factory=dict)
+    frames_encoded: int = Field(default=0, ge=0)
+    bytes_sent: int = Field(default=0, ge=0)
+    last_error: str | None = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class TransmissionCreateRequest(BaseModel):
@@ -1268,7 +1356,7 @@ class TransmissionDemandHeartbeatRequest(BaseModel):
     playback_session_id: str = Field(min_length=1, max_length=256)
     output_id: str | None = None
     quality_profile_id: StreamingQualityProfileId | None = None
-    transport: Literal["hls", "webrtc", "rtsp"] = "hls"
+    transport: Literal["hls", "webrtc", "rtsp", "mse", "jsmpeg"] = "hls"
     source: Literal["player", "home_assistant_entity"] = "player"
     ttl_seconds: float | None = Field(default=None, ge=5.0, le=300.0)
 
@@ -1358,6 +1446,8 @@ class StreamingOutputRuntimeStatus(BaseModel):
     event_gated: bool = False
     event_gated_idle: bool = False
     event_gate_reasons: list[str] = Field(default_factory=list)
+    demand_driven: bool = False
+    demand_idle: bool = False
     classification: StreamingObservabilityClassification = "unknown"
     evidence: list[str] = Field(default_factory=list)
     active_playback_session_count: int = Field(default=0, ge=0)
@@ -1406,6 +1496,8 @@ class StreamingRuntimeOutputHealth(BaseModel):
     event_gated: bool = False
     event_gated_idle: bool = False
     event_gate_reasons: list[str] = Field(default_factory=list)
+    demand_driven: bool = False
+    demand_idle: bool = False
     classification: StreamingObservabilityClassification = "unknown"
     evidence: list[str] = Field(default_factory=list)
     active_playback_session_count: int = Field(default=0, ge=0)
@@ -1433,6 +1525,8 @@ class StreamingRuntimeTransmissionHealth(BaseModel):
     event_gated: bool = False
     event_gated_idle: bool = False
     event_gate_reasons: list[str] = Field(default_factory=list)
+    demand_driven: bool = False
+    demand_idle: bool = False
     classification: StreamingObservabilityClassification = "unknown"
     evidence: list[str] = Field(default_factory=list)
     active_playback_session_count: int = Field(default=0, ge=0)
@@ -1488,6 +1582,7 @@ class StreamingRuntimePipelineLink(BaseModel):
     stream_behavior: StreamingStreamBehavior = "continuous"
     event_gated: bool = False
     event_gate_reasons: list[str] = Field(default_factory=list)
+    demand_driven: bool = False
     warnings: list[str] = Field(default_factory=list)
     nodes: list[StreamingRuntimePipelineNode] = Field(default_factory=list)
     edges: list[StreamingRuntimePipelineEdge] = Field(default_factory=list)

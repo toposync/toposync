@@ -257,6 +257,96 @@ class StreamWriterBridge:
             primed_publishers.add(publisher_id)
         return len(primed_publishers)
 
+    async def get_transmission_demand_snapshot(
+        self,
+        transmission_id: str,
+        *,
+        output_id: str | None = None,
+        quality_profile_id: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_transmission_id = _as_str(transmission_id)
+        if not normalized_transmission_id:
+            return {
+                "transmission_id": "",
+                "demand_active": False,
+                "reason": "missing_transmission_id",
+                "viewer_count_total": 0,
+                "primed": False,
+                "hint_active": False,
+                "matched_outputs": 0,
+                "outputs": [],
+            }
+
+        selected_output_id = _as_str(output_id)
+        selected_profile_id = _as_str(quality_profile_id)
+        now_monotonic = self._monotonic()
+        _engine_settings, targets, _path_auth, _bypass, _ingest, _ingest_configs = await self._load_settings(now_monotonic)
+        viewer_count_by_output = await self._runtime_state.get_viewer_count_by_output()
+
+        outputs: list[dict[str, Any]] = []
+        viewer_count_total = 0
+        primed = False
+        hint_active = False
+        matched_outputs = 0
+
+        for target in targets:
+            if target.transmission_id != normalized_transmission_id:
+                continue
+            if selected_output_id and target.output_id != selected_output_id:
+                continue
+            if selected_profile_id and target.quality_profile_id != selected_profile_id:
+                continue
+
+            matched_outputs += 1
+            publisher_id = _publisher_id_for_target(target)
+            viewer_count = max(0, int(viewer_count_by_output.get(target.output_key, 0)))
+            viewer_count_total += viewer_count
+            primed_until = float(self._primed_demand_until_by_publisher.get(publisher_id, 0.0))
+            hint_until = float(self._no_stream_hint_until_by_path.get(target.publish_path, 0.0))
+            output_primed = primed_until > now_monotonic
+            output_hint = hint_until > now_monotonic
+            primed = primed or output_primed
+            hint_active = hint_active or output_hint
+            outputs.append(
+                {
+                    "output_key": target.output_key,
+                    "output_id": target.output_id,
+                    "quality_profile_id": target.quality_profile_id or "",
+                    "publisher_id": publisher_id,
+                    "publish_path": target.publish_path,
+                    "viewer_count": viewer_count,
+                    "primed": output_primed,
+                    "primed_expires_in_seconds": max(0.0, primed_until - now_monotonic),
+                    "hint_active": output_hint,
+                }
+            )
+
+        demand_active = viewer_count_total > 0 or primed or hint_active
+        if matched_outputs <= 0:
+            reason = "no_matching_outputs"
+        elif viewer_count_total > 0:
+            reason = "viewer_count"
+        elif primed:
+            reason = "heartbeat_lease"
+        elif hint_active:
+            reason = "engine_no_stream_hint"
+        else:
+            reason = "no_active_demand"
+
+        return {
+            "transmission_id": normalized_transmission_id,
+            "output_id": selected_output_id,
+            "quality_profile_id": selected_profile_id,
+            "demand_active": demand_active,
+            "demand_signal": demand_active,
+            "reason": reason,
+            "viewer_count_total": viewer_count_total,
+            "primed": primed,
+            "hint_active": hint_active,
+            "matched_outputs": matched_outputs,
+            "outputs": outputs,
+        }
+
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
             tick_started = time.monotonic()

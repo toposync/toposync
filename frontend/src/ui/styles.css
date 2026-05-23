@@ -2666,7 +2666,8 @@ video {
   background: transparent;
 }
 
-.streamsVideo {
+.streamsVideo,
+.streamsJsmpegCanvas {
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -2674,6 +2675,15 @@ video {
   background:
     radial-gradient(circle at center, transparent 48%, var(--color-viewport3d-vignette)),
     linear-gradient(160deg, var(--color-viewport3d-background-start), var(--color-viewport3d-background-end));
+  display: block;
+}
+
+.streamsVideo.isHidden,
+.streamsJsmpegCanvas.isHidden {
+  display: none;
+}
+
+.streamsJsmpegCanvas.isVisible {
   display: block;
 }
 
@@ -2728,6 +2738,35 @@ video {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.streamTransportDebugHeaderActions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.streamTransportDebugBackButton {
+  height: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-12);
+  font-weight: var(--font-weight-semibold);
+  background: color-mix(in srgb, var(--color-surface-solid) 72%, transparent);
+  cursor: pointer;
+}
+
+.streamTransportDebugBackButton:hover {
+  color: var(--color-text-primary);
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border-subtle));
+  background: color-mix(in srgb, var(--color-accent) 14%, var(--color-surface-solid));
 }
 
 .streamTransportDebugSwitch {
@@ -2804,6 +2843,10 @@ video {
 
 .streamTransportDebugOverlay.isError {
   border-color: color-mix(in srgb, var(--color-danger) 58%, var(--color-border-subtle));
+}
+
+.streamTransportDebugOverlay.isBlocked {
+  border-color: color-mix(in srgb, var(--color-warning) 58%, var(--color-border-subtle));
 }
 
 .streamTransportDebugOverlayTitle {
@@ -2891,6 +2934,102 @@ video {
   color: var(--color-text-muted);
 }
 
+.streamTransportDebugStage.isPicker {
+  background: var(--color-surface-page);
+  overflow: auto;
+}
+
+.streamTransportDebugPicker {
+  width: min(980px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: var(--space-5) 0;
+}
+
+.streamTransportDebugPickerHeader h2 {
+  margin: 0;
+  font-size: var(--font-size-20);
+  font-weight: var(--font-weight-semibold);
+}
+
+.streamTransportDebugPickerHeader p {
+  margin: var(--space-2) 0 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-13);
+}
+
+.streamTransportDebugPickerList {
+  margin-top: var(--space-4);
+  display: grid;
+  gap: var(--space-4);
+}
+
+.streamTransportDebugPickerGroup {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-2);
+  background: color-mix(in srgb, var(--color-surface-solid) 82%, transparent);
+  overflow: hidden;
+}
+
+.streamTransportDebugPickerGroupTitle {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-13);
+  font-weight: var(--font-weight-semibold);
+}
+
+.streamTransportDebugPickerRow {
+  min-height: 58px;
+  padding: var(--space-3) var(--space-4);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.streamTransportDebugPickerRow:last-child {
+  border-bottom: 0;
+}
+
+.streamTransportDebugPickerVariant {
+  font-size: var(--font-size-13);
+  font-weight: var(--font-weight-medium);
+}
+
+.streamTransportDebugPickerMeta {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-12);
+}
+
+.streamTransportDebugPickerLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+.streamTransportDebugPickerLinks a {
+  min-width: 62px;
+  height: 30px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  font-size: var(--font-size-11);
+  font-weight: var(--font-weight-semibold);
+  background: var(--color-surface-solid);
+}
+
+.streamTransportDebugPickerLinks a:hover {
+  color: var(--color-text-primary);
+  border-color: color-mix(in srgb, var(--color-accent) 58%, var(--color-border-subtle));
+}
+
 .streamTransportDebugConsole {
   min-height: 0;
   display: grid;
@@ -2925,7 +3064,7 @@ video {
 
 .streamTransportDebugLogLine {
   display: grid;
-  grid-template-columns: 74px 52px minmax(150px, 220px) minmax(200px, 1fr);
+  grid-template-columns: 74px 70px 52px minmax(150px, 220px) minmax(200px, 1fr);
   gap: var(--space-2);
   align-items: start;
   padding: 2px 0;
@@ -2933,7 +3072,7 @@ video {
 }
 
 .streamTransportDebugLogLine code {
-  grid-column: 4 / -1;
+  grid-column: 5 / -1;
   color: var(--color-text-muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -2948,6 +3087,7 @@ video {
 }
 
 .streamTransportDebugLogTime,
+.streamTransportDebugLogCategory,
 .streamTransportDebugLogSeverity,
 .streamTransportDebugLogType {
   white-space: nowrap;
@@ -2963,6 +3103,20 @@ video {
   overflow-wrap: anywhere;
 }
 
+.streamTransportDebugRepeatCount {
+  display: inline-flex;
+  align-items: center;
+  min-width: 24px;
+  height: 16px;
+  margin-left: var(--space-2);
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-surface-elevated) 70%, var(--color-border-subtle));
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
 @media (max-width: 900px) {
   .streamTransportDebugRoot {
     grid-template-rows: auto minmax(0, 1fr) minmax(220px, 34vh);
@@ -2971,6 +3125,10 @@ video {
   .streamTransportDebugHeader {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .streamTransportDebugHeaderActions {
+    align-items: flex-start;
   }
 
   .streamTransportDebugSwitch {
@@ -2986,7 +3144,7 @@ video {
   }
 
   .streamTransportDebugLogLine {
-    grid-template-columns: 70px 48px minmax(110px, 160px) minmax(160px, 1fr);
+    grid-template-columns: 70px 62px 48px minmax(110px, 160px) minmax(160px, 1fr);
   }
 }
 
@@ -5916,6 +6074,117 @@ video {
 
 .compositionBadge {
   color: rgba(251, 191, 36, 0.92);
+}
+
+.compositionsSettingsPanel {
+  display: grid;
+  gap: 12px;
+}
+
+.compositionsSettingsCreate {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+}
+
+.compositionsSettingsCreate .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.compositionsSettingsCreate .primaryButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compositionsSettingsList {
+  display: grid;
+  gap: 8px;
+}
+
+.compositionsSettingsRow {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-frost);
+  box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
+}
+
+.compositionsSettingsRow.isActive {
+  border-color: color-mix(in srgb, var(--color-accent-border) 70%, var(--color-border-subtle));
+  background: linear-gradient(135deg, var(--color-accent-background-strong), var(--color-accent-background-strong-2));
+}
+
+.compositionsSettingsRow.isDanger {
+  border-color: color-mix(in srgb, var(--color-danger) 54%, var(--color-border-subtle));
+}
+
+.compositionsSettingsMain,
+.compositionsSettingsEditMain {
+  min-width: 0;
+}
+
+.compositionsSettingsMain {
+  width: 100%;
+  padding: 3px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  text-align: left;
+  display: grid;
+  gap: 3px;
+}
+
+.compositionsSettingsMain:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.compositionsSettingsName {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compositionsSettingsMeta {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.compositionsSettingsActions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .compositionsSettingsCreate,
+  .compositionsSettingsRow {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .compositionsSettingsCreate {
+    flex-direction: column;
+  }
+
+  .compositionsSettingsCreate .primaryButton {
+    width: 100%;
+    justify-content: center;
+  }
 }
 
 .errorText {

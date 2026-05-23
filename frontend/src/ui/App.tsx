@@ -1078,6 +1078,10 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const openPipelinesSettings = useCallback(() => navigate("/settings/pipelines"), []);
   const openProcessingServersSettings = useCallback(() => navigate("/settings/processing-servers"), []);
   const openAccessSettings = useCallback(() => navigate("/settings/access"), []);
+  const openCompositionEditorFromSettings = useCallback(() => {
+    replace("/");
+    setScreen("editor");
+  }, []);
 
   const closeSettings = useCallback(() => replace(lastNonSettingsPathRef.current || "/"), []);
 
@@ -1138,6 +1142,13 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           onOpenPipelines={openPipelinesSettings}
           onOpenProcessingServers={openProcessingServersSettings}
           onOpenAccess={openAccessSettings}
+          compositions={compositions}
+          activeCompositionId={activeCompositionId}
+          onActivateComposition={activateCompositionById}
+          onCreateComposition={createNewComposition}
+          onRenameComposition={renameExistingComposition}
+          onDeleteComposition={deleteExistingComposition}
+          onOpenCompositionEditor={openCompositionEditorFromSettings}
           canManageAccess={Boolean(authMode === "bypass" || (authUser && (authUser.role === "owner" || authUser.role === "admin")))}
           authUser={authUser}
           onLogout={onLogout}

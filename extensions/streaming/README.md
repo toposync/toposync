@@ -35,7 +35,7 @@ The core design goal is reliability in local-first setups with highly dynamic pi
 - Demand priming to reduce "first connect" 404/no-stream failures.
 - Demand heartbeat for web, app, PiP, PTZ, and Home Assistant entity playback.
 - Distributed hosting via `Transmission.host_server_id`, plus URL proxying and processing-side settings sync.
-- Dashboard playback using a backend Playback Plan with HLS/WebRTC now, and MSE/JSMpeg declared as future/blocked candidates.
+- Dashboard playback using a backend Playback Plan with HLS/WebRTC, MSE through the optional go2rtc sidecar, and JSMpeg as an on-demand emergency visual fallback.
 
 ## Supported protocols (as implemented)
 
@@ -57,14 +57,26 @@ The core design goal is reliability in local-first setups with highly dynamic pi
 - Used by the Toposync dashboard when low latency, PTZ, or another explicit interactive context requests it.
 - Current implementation is LAN-first (HTTP, no TLS termination built in). If you expose streaming beyond LAN, plan to terminate TLS.
 
+### MSE
+- URL format: `ws://<toposync-host>/api/streams/media/mse/<path>/ws?media_token=...`
+- go2rtc consumes `rtsp://127.0.0.1:<mediamtx_rtsp_port>/<path>` from MediaMTX.
+- The browser never talks to go2rtc directly. Toposync verifies the signed media token and proxies text control messages plus binary fMP4 fragments.
+- Dashboard Auto can prefer MSE for passive web/grid/fullscreen playback when the sidecar is running and the backing output is browser-compatible.
+
+### JSMpeg
+- URL format: `ws://<toposync-host>/api/streams/media/jsmpeg/<path>/ws?media_token=...`
+- Intended only as an emergency visual fallback. It is video-only, low resolution/FPS, and does not carry audio.
+- Each browser WebSocket creates one isolated FFmpeg process that converts the selected runtime frame stream to MPEG-TS/MPEG-1. The process is stopped when the WebSocket closes.
+- The source is the selected Toposync Transmission frame, or an explicit placeholder while warming up/offline. It never pulls camera RTSP directly.
+
 ### Playback Plan candidates
 
 The Playback Plan API can return these transport candidates:
 
 - `hls`: stable baseline, active today.
 - `webrtc`: low-latency path, active today when context allows it.
-- `mse`: planned browser-first path through a go2rtc-style sidecar; currently returned as blocked/unavailable until the sidecar exists.
-- `jsmpeg`: planned emergency visual fallback; currently returned as blocked/unavailable until the worker exists.
+- `mse`: browser-first path through an optional go2rtc sidecar. go2rtc consumes the internal MediaMTX RTSP path, and browsers only connect through a signed Toposync WebSocket proxy.
+- `jsmpeg`: emergency visual fallback through a signed Toposync WebSocket. It is selected only after better browser transports are unavailable or fail.
 
 RTSP is not a browser transport. It remains the internal/ecosystem contract for HA Core, VLC/ffplay, Frigate/dev, go2rtc sidecars, and diagnostics.
 
@@ -86,6 +98,15 @@ Advanced pipeline publication:
   - Ensures the correct MediaMTX binary is available for the current OS/arch (downloads on demand when missing).
   - Renders a YAML config and starts/stops/restarts the MediaMTX process.
   - Resolves ports (preferred vs actual) and exposes engine status and test URLs.
+- `Go2RtcSidecarManager`
+  - Optionally downloads and starts go2rtc `v1.9.14` for browser MSE playback.
+  - Renders `runtime/streaming/go2rtc/go2rtc.yaml` from generated streaming outputs.
+  - Exposes no direct browser API; the dashboard uses the signed Toposync MSE proxy.
+  - Uses internal MediaMTX RTSP URLs only, never direct camera credentials or camera URLs.
+- `JsmpegSessionManager`
+  - Starts FFmpeg only while a signed JSMpeg WebSocket session is connected.
+  - Reads frames from `TransmissionRuntimeState`, resizes/contains them to the configured fallback profile, and writes MPEG-TS/MPEG-1 bytes to the browser.
+  - Enforces global and per-transmission session limits so the fallback cannot silently become the primary load path.
 - `TransmissionRuntimeState`
   - Stores latest frame per writer and per transmission.
   - Applies lifecycle and multi-writer arbitration to select the active writer.
@@ -665,6 +686,13 @@ All endpoints are under `/api/streams`.
 - `POST /api/streams/engine/stop`
 - `POST /api/streams/engine/restart`
 
+### MSE sidecar
+- `GET /api/streams/mse/status`
+- `POST /api/streams/mse/download`
+- `POST /api/streams/mse/start`
+- `POST /api/streams/mse/stop`
+- `POST /api/streams/mse/restart`
+
 ### Transmissions CRUD
 - `GET /api/streams/transmissions`
 - `POST /api/streams/transmissions`
@@ -739,6 +767,14 @@ Transmission URLs (`GET /api/streams/transmissions/{id}/urls`):
       "url": "http://127.0.0.1:8888/front-door/index.m3u8",
       "requires_auth": false,
       "auth_username": null
+    },
+    {
+      "output_id": "hls_main",
+      "protocol": "mse",
+      "resolved_engine_path": "front-door",
+      "url": "ws://127.0.0.1:8100/api/streams/media/mse/front-door/ws?media_token=...",
+      "requires_auth": false,
+      "auth_username": null
     }
   ],
   "warnings": []
@@ -751,25 +787,41 @@ Playback plan (`GET /api/streams/transmissions/{id}/playback-plan?client=web&con
 {
   "transmission_id": "uuid",
   "client": "web",
-  "selected_transport": "hls",
+  "selected_transport": "mse",
   "transports": [
     {
       "transport": "mse",
       "rank": 0,
-      "available": false,
-      "blocking_errors": ["MSE sidecar playback is not enabled yet. Falling back to native transports."]
+      "available": true,
+      "output_id": "hls_fullscreen_quality",
+      "url": "ws://127.0.0.1:8100/api/streams/media/mse/front-door/ws?media_token=...",
+      "fallback_rank": 0
     },
     {
       "transport": "hls",
       "rank": 1,
       "available": true,
       "output_id": "hls_fullscreen_quality",
-      "url": "http://127.0.0.1:8100/api/streams/media/hls/..."
+      "url": "http://127.0.0.1:8100/api/streams/media/hls/...",
+      "fallback_rank": 1
     }
   ],
   "hls_warnings": [],
   "webrtc_warnings": []
 }
+```
+
+Transport policy:
+
+- HLS is the stable browser/app/Home Assistant ingress baseline.
+- WebRTC/WHEP is generated for `zoom`/PTZ publications and for publications with `transport_policy.enable_webrtc=true`; regular `main`/`sub` streams stay HLS-only by default.
+- MSE is available when MediaMTX is running, the go2rtc sidecar is enabled/running, a backing HLS/RTSP output exists, and the browser codec path is compatible. Otherwise it is blocked with a specific reason.
+- JSMpeg is available when FFmpeg is available, the fallback is enabled, a backing HLS output exists, and session limits allow it. The fixed transport debug page does not silently fall back.
+
+Transport frame checks can be run with:
+
+```bash
+node scripts/check_stream_transport_frames.mjs --base-url http://127.0.0.1:8100 --matrix --transports hls,webrtc,mse,jsmpeg
 ```
 
 Camera source publication (`GET /api/streams/publications?camera_id=front`):
@@ -1007,6 +1059,7 @@ Then run Toposync as usual (see repo `docs/DEVELOPMENT.md`).
 
 - Public wheels do not ship MediaMTX binaries. The extension downloads the correct release asset on demand and caches it under `runtime/streaming/mediamtx/<version>/<platform>/`.
   - License notice: [LICENSE.mediamtx](LICENSE.mediamtx)
+- Public wheels do not ship go2rtc binaries. The MSE sidecar downloads go2rtc `v1.9.14` on demand and caches it under `runtime/streaming/go2rtc-bin/<version>/<platform>/`, unless `TOPOSYNC_STREAMING_GO2RTC_PATH` points to an explicit binary.
 - FFmpeg integration expects an external binary by default (`PATH` or `TOPOSYNC_STREAMING_FFMPEG_PATH`). Bundling FFmpeg binaries is optional and must be handled carefully for redistribution.
   - License placeholder: [LICENSE.ffmpeg](LICENSE.ffmpeg)
 
@@ -1017,7 +1070,7 @@ If you plan to ship FFmpeg binaries, pay attention to LGPL/GPL build flags and c
 - Video-only: audio is not published (`-an` in FFmpeg).
 - No built-in TLS for MediaMTX endpoints (LAN-first).
 - No Low-Latency HLS by default (to avoid TLS requirements and keep the default simpler).
-- MSE is represented in Playback Plan but does not have the go2rtc/sidecar proxy implementation yet.
-- JSMpeg is represented in Playback Plan but does not have the emergency fallback worker implementation yet.
+- MSE requires a running go2rtc sidecar and browser-compatible codec output. HEVC/H.265 paths must be transcoded to H.264/AAC-compatible browser output before MSE can be selected.
+- JSMpeg is video-only and intentionally low quality. It is a last-resort visual fallback, not a replacement for HLS/MSE/WebRTC and not an audio path.
 - Hardware encoding selection exists in code paths but is not exposed as a stable user-facing setting yet.
 - On-demand stops publishers, but does not stop arbitrary manual pipeline execution; pipeline compute is controlled by pipeline configuration and lifecycle semantics.

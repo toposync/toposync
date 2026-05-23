@@ -1,6 +1,6 @@
 [project]
 name = "toposync-ext-images"
-version = "0.2.0"
+version = "0.2.1"
 description = "Toposync first-party extension: import images as overlays or tracing references."
 readme = "README.md"
 license = "MIT"

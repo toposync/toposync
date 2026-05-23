@@ -18,7 +18,7 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
-from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 
 from toposync.runtime.auth import AuthContext, AuthRuntime
 from toposync.runtime.config_store import (
@@ -4040,6 +4040,41 @@ def _pipeline_publication_id(*, pipeline_name: str, publish_node_id: str) -> str
     return f"pipeline:{str(pipeline_name or '').strip()}:{str(publish_node_id or '').strip()}"
 
 
+def _pipeline_publication_live_view_id(*, pipeline_name: str, label: str, fallback: str) -> str:
+    configured = str(label or "").strip()
+    if configured:
+        return _live_slug("live", "pipeline", configured, fallback=fallback)
+    return _live_slug("live", "pipeline", pipeline_name, fallback=fallback)
+
+
+def _publication_live_view_label(publication: StreamPublicationSpec) -> str:
+    label = str(publication.live_view_label or "").strip()
+    if label:
+        return label
+    if publication.owner_kind == "pipeline_output":
+        return str(publication.pipeline_name or publication.label or publication.id).strip()
+    return str(publication.label or publication.id).strip()
+
+
+def _publication_variant_label(publication: StreamPublicationSpec) -> str:
+    return str(publication.variant_label or publication.label or publication.id).strip()
+
+
+def _publication_variant_id(publication: StreamPublicationSpec) -> str:
+    configured = str(publication.variant_id or "").strip()
+    if configured:
+        return _live_slug(configured, fallback=publication.id)
+    if publication.owner_kind == "pipeline_output" and publication.role in {"main", "sub", "zoom"}:
+        return publication.role
+    if publication.owner_kind == "camera_source":
+        return _live_slug(str(publication.camera_source_id or publication.id), fallback=publication.id)
+    return _live_slug(
+        publication.role,
+        _publication_variant_label(publication),
+        fallback=str(publication.publish_node_id or publication.id),
+    )
+
+
 def _source_publication_label(source: dict[str, Any]) -> str:
     role = _camera_source_role(source)
     source_name = _camera_source_name(source)
@@ -4139,20 +4174,11 @@ def _transmission_for_publication(publication: StreamPublicationSpec) -> Transmi
 
 def _variant_for_publication(publication: StreamPublicationSpec) -> CameraLiveVariant:
     quality_profile_id = _publication_quality_profile(publication)
-    if publication.owner_kind == "pipeline_output":
-        variant_id = _live_slug(
-            publication.pipeline_name or "pipeline",
-            publication.publish_node_id or publication.id,
-            publication.role,
-            fallback=publication.id,
-        )
-    else:
-        variant_id = str(publication.camera_source_id or publication.id).strip()
     return CameraLiveVariant(
-        id=_live_slug(variant_id, fallback=publication.id),
-        label=publication.label,
+        id=_publication_variant_id(publication),
+        label=_publication_variant_label(publication),
         role=publication.role,
-        camera_source_id=str(publication.camera_source_id or "").strip(),
+        camera_source_id=str(publication.camera_source_id or "").strip() or None,
         transmission_id=_publication_transmission_id(publication),
         output_id=f"hls_{quality_profile_id}",
         quality_profile_id=quality_profile_id,
@@ -4235,6 +4261,9 @@ def _reconcile_publication_specs(
         }:
             continue
         nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+        runtime_nodes = _runtime_pipeline_graph_nodes(graph)
+        runtime_edges = _runtime_pipeline_graph_edges(graph)
+        runtime_nodes_by_id = {node_id: (operator_id, cfg) for node_id, operator_id, cfg in runtime_nodes}
         for node in nodes:
             if not isinstance(node, dict):
                 continue
@@ -4249,8 +4278,19 @@ def _reconcile_publication_specs(
                 continue
             camera_id = str(cfg.get("publication_camera_id") or "").strip()
             camera_source_id = str(cfg.get("publication_camera_source_id") or "").strip()
-            if not camera_id or not camera_source_id:
-                continue
+            upstream_node_ids = _runtime_pipeline_upstream_node_ids(
+                publish_node_id=node_id,
+                edges=runtime_edges,
+            )
+            _source_node_id, _source_id, inferred_camera_id, inferred_camera_source_id = _runtime_pipeline_source_node(
+                pipeline_name=pipeline_name,
+                nodes_by_id=runtime_nodes_by_id,
+                upstream_node_ids=upstream_node_ids,
+            )
+            if not camera_id and inferred_camera_id:
+                camera_id = inferred_camera_id
+            if not camera_source_id and inferred_camera_source_id:
+                camera_source_id = inferred_camera_source_id
             publication_id = _pipeline_publication_id(
                 pipeline_name=pipeline_name, publish_node_id=node_id
             )
@@ -4260,15 +4300,35 @@ def _reconcile_publication_specs(
             role = str(cfg.get("publication_role") or payload.get("role") or "custom").strip().lower()
             if role not in {"main", "sub", "zoom", "custom"}:
                 role = "custom"
-            label = str(cfg.get("publication_label") or payload.get("label") or "").strip()
-            if not label:
-                label = f"{pipeline_name} · {node_id}"
+            variant_label = str(
+                cfg.get("publication_variant_label")
+                or cfg.get("publication_label")
+                or payload.get("variant_label")
+                or payload.get("label")
+                or ""
+            ).strip()
+            if not variant_label:
+                variant_label = "Principal" if role == "main" else "Baixa resolução" if role == "sub" else "Zoom" if role == "zoom" else "Personalizada"
+            label = variant_label
             device = camera_devices_by_id.get(camera_id)
+            live_view_label = str(
+                cfg.get("publication_live_view_label")
+                or payload.get("live_view_label")
+                or ""
+            ).strip()
             live_view_id = str(cfg.get("publication_live_view_id") or "").strip()
-            if not live_view_id and device is not None:
+            explicit_camera_target = bool(str(cfg.get("publication_camera_id") or "").strip())
+            if not live_view_id and explicit_camera_target and device is not None and not live_view_label:
                 live_view_id = _camera_live_view_id(device)
             if not live_view_id:
-                live_view_id = _live_slug("pipeline", pipeline_name, fallback=publication_id)
+                live_view_id = _pipeline_publication_live_view_id(
+                    pipeline_name=pipeline_name,
+                    label=live_view_label,
+                    fallback=publication_id,
+                )
+            if not live_view_label:
+                live_view_label = _camera_live_name(device) if explicit_camera_target and device is not None else pipeline_name
+            variant_id = str(cfg.get("publication_variant_id") or payload.get("variant_id") or "").strip()
             quality_policy = dict(payload.get("quality_policy") or {})
             quality_profile_id = str(cfg.get("publication_quality_profile_id") or "").strip()
             if quality_profile_id in QUALITY_PROFILE_ORDER:
@@ -4294,6 +4354,9 @@ def _reconcile_publication_specs(
                     "role": role,
                     "label": label,
                     "live_view_id": live_view_id,
+                    "live_view_label": live_view_label,
+                    "variant_id": variant_id or None,
+                    "variant_label": variant_label,
                     "host_server_id": normalize_server_id(
                         getattr(pipeline, "processing_server_id", "local"), fallback="local"
                     ),
@@ -4324,7 +4387,10 @@ def _build_artifacts_from_publications(
     app_settings: Any,
 ) -> tuple[list[CameraLiveView], list[Transmission], list[str]]:
     warnings: list[str] = []
-    publications_by_camera: dict[str, list[StreamPublicationSpec]] = {}
+    publications_by_live_view: dict[str, list[StreamPublicationSpec]] = {}
+    live_view_names: dict[str, str] = {}
+    live_view_camera_ids: dict[str, str | None] = {}
+    live_view_owner_kinds: dict[str, str] = {}
     devices_by_id = {
         str(device.get("id") or "").strip(): device
         for device in iter_camera_devices_from_app_settings(app_settings)
@@ -4336,30 +4402,77 @@ def _build_artifacts_from_publications(
             continue
         if not bool(publication.transport_policy.get("show_in_dashboard", True)):
             continue
-        if not publication.camera_id or not publication.camera_source_id:
-            warnings.append(f"Camera target is missing for publication '{publication.id}'.")
-            continue
-        device = devices_by_id.get(publication.camera_id)
-        if device is None:
-            warnings.append(f"Camera not found for publication '{publication.id}'.")
-            continue
-        source = resolve_camera_video_source(
-            device,
-            source_id=publication.camera_source_id,
-            enabled_only=True,
-        )
-        if source is None:
-            warnings.append(f"Camera source not found for publication '{publication.id}'.")
-            continue
-        publications_by_camera.setdefault(publication.camera_id, []).append(publication)
+        live_view_id = str(publication.live_view_id or "").strip()
+        live_view_name = _publication_live_view_label(publication)
+        owner_kind = publication.owner_kind
+        camera_id = str(publication.camera_id or "").strip() or None
+        if publication.owner_kind == "camera_source":
+            if not publication.camera_id or not publication.camera_source_id:
+                warnings.append(f"Camera target is missing for publication '{publication.id}'.")
+                continue
+            device = devices_by_id.get(publication.camera_id)
+            if device is None:
+                warnings.append(f"Camera not found for publication '{publication.id}'.")
+                continue
+            source = resolve_camera_video_source(
+                device,
+                source_id=publication.camera_source_id,
+                enabled_only=True,
+            )
+            if source is None:
+                warnings.append(f"Camera source not found for publication '{publication.id}'.")
+                continue
+            live_view_id = live_view_id or _camera_live_view_id(device)
+            live_view_name = _camera_live_name(device)
+            camera_id = publication.camera_id
+        elif publication.camera_id and publication.camera_source_id:
+            device = devices_by_id.get(publication.camera_id)
+            if device is None:
+                warnings.append(f"Camera not found for publication '{publication.id}'.")
+            else:
+                source = resolve_camera_video_source(
+                    device,
+                    source_id=publication.camera_source_id,
+                    enabled_only=True,
+                )
+                if source is None:
+                    warnings.append(f"Camera source not found for publication '{publication.id}'.")
+
+        if not live_view_id:
+            live_view_id = _pipeline_publication_live_view_id(
+                pipeline_name=str(publication.pipeline_name or publication.id),
+                label=live_view_name,
+                fallback=publication.id,
+            )
+        publications_by_live_view.setdefault(live_view_id, []).append(publication)
+        live_view_names.setdefault(live_view_id, live_view_name or live_view_id)
+        live_view_camera_ids.setdefault(live_view_id, camera_id)
+        if owner_kind != "camera_source":
+            live_view_owner_kinds[live_view_id] = "pipeline_output"
+        else:
+            live_view_owner_kinds.setdefault(live_view_id, "camera_source")
 
     live_views: list[CameraLiveView] = []
     transmissions: list[Transmission] = []
-    for camera_id, camera_publications in sorted(publications_by_camera.items()):
-        device = devices_by_id.get(camera_id)
-        if device is None:
-            continue
-        variants = [_variant_for_publication(publication) for publication in camera_publications]
+    for live_view_id, live_view_publications in sorted(publications_by_live_view.items()):
+        variants: list[CameraLiveVariant] = []
+        seen_variant_ids: set[str] = set()
+        for publication in live_view_publications:
+            variant = _variant_for_publication(publication)
+            if variant.id in seen_variant_ids:
+                variant = CameraLiveVariant.model_validate(
+                    {
+                        **variant.model_dump(mode="python"),
+                        "id": _live_slug(
+                            variant.id,
+                            publication.pipeline_name or "",
+                            publication.publish_node_id or publication.id,
+                            fallback=publication.id,
+                        ),
+                    }
+                )
+            seen_variant_ids.add(variant.id)
+            variants.append(variant)
         if not variants:
             continue
         defaults = CameraLiveViewDefaults(
@@ -4369,20 +4482,20 @@ def _build_artifacts_from_publications(
             fullscreen_variant_id=_pick_default_variant_id(variants, preferred_roles=("main", "zoom", "sub", "custom")),
             ptz_variant_id=_pick_default_variant_id(variants, preferred_roles=("zoom", "main", "sub", "custom")),
         )
-        live_view_id = _camera_live_view_id(device)
-        host_server_id = normalize_server_id(camera_publications[0].host_server_id, fallback="local")
+        host_server_id = normalize_server_id(live_view_publications[0].host_server_id, fallback="local")
         live_views.append(
             CameraLiveView(
                 id=live_view_id,
-                camera_id=camera_id,
-                name=_camera_live_name(device),
+                owner_kind=live_view_owner_kinds.get(live_view_id, "camera_source"),  # type: ignore[arg-type]
+                camera_id=live_view_camera_ids.get(live_view_id),
+                name=live_view_names.get(live_view_id, live_view_id),
                 enabled=True,
                 host_server_id=host_server_id,
                 defaults=defaults,
                 variants=variants,
             )
         )
-        transmissions.extend(_transmission_for_publication(publication) for publication in camera_publications)
+        transmissions.extend(_transmission_for_publication(publication) for publication in live_view_publications)
 
     return live_views, transmissions, warnings
 
@@ -4413,6 +4526,12 @@ def _merge_generated_publication_artifacts(
     for item in settings.camera_live_views:
         live_view_id = str(item.id or "")
         if live_view_id in generated_live_view_ids:
+            continue
+        if str(getattr(item, "owner_kind", "") or "").strip() == "pipeline_output":
+            for variant in item.variants:
+                transmission_id = str(variant.transmission_id or "").strip()
+                if transmission_id and transmission_id not in generated_transmission_ids:
+                    pruned_transmission_ids.add(transmission_id)
             continue
         camera_id = str(item.camera_id or "").strip()
         if camera_id and camera_id in managed_camera_ids:
@@ -4810,27 +4929,40 @@ def _sync_generated_camera_live_transmissions(
 
 
 async def _apply_streaming_engine_state(
-    request: Request,
+    target: Request | FastAPI,
     *,
     settings: StreamingExtensionSettings,
 ) -> None:
-    config_store = _config_store(request)
-    manager = _engine_manager(request)
+    app = target.app if isinstance(target, Request) else target
+    host_server_id = _current_server_id(target) if isinstance(target, Request) else normalize_server_id(
+        getattr(app.state, "streaming_server_id", "local"),
+        fallback="local",
+    )
+    config_store = getattr(app.state, "config_store", None)
+    manager = getattr(app.state, "streaming_engine_manager", None)
+    credential_store = getattr(app.state, "streaming_ingest_credential_store", None)
+    if not isinstance(config_store, ConfigStore) or not isinstance(manager, MediaMtxEngineManager):
+        return
     app_settings = await config_store.get_settings()
     camera_ingest_by_id = build_camera_ingest_definitions(
         app_settings=app_settings,
         ingest_settings=settings.camera_ingest,
-        host_server_id=_current_server_id(request),
+        host_server_id=host_server_id,
     )
+    if camera_ingest_by_id and isinstance(credential_store, CameraIngestCredentialStore):
+        path_auth = _path_auth_with_camera_ingest(
+            settings=settings,
+            host_server_id=host_server_id,
+            camera_ingest_by_id=camera_ingest_by_id,
+            ingest_credentials=credential_store.load_or_create(),
+        )
+    else:
+        path_auth = dict(list_path_read_auth_for_host(settings, host_server_id=host_server_id))
     await manager.ensure_running(
         settings.engine,
-        engine_paths=list_engine_paths_for_host(settings, host_server_id=_current_server_id(request))
+        engine_paths=list_engine_paths_for_host(settings, host_server_id=host_server_id)
         + [item.path_slug for item in camera_ingest_by_id.values()],
-        path_auth=_path_auth_for_camera_ingest_request(
-            request,
-            settings=settings,
-            camera_ingest_by_id=camera_ingest_by_id,
-        ),
+        path_auth=path_auth,
         path_configs=build_camera_ingest_path_configs(camera_ingest_by_id),
     )
 
@@ -4909,19 +5041,21 @@ async def _upsert_camera_live_pipelines(
 
 async def _upsert_stream_publication_pipelines(
     *,
-    request: Request,
+    target: Request | FastAPI,
     publications: list[StreamPublicationSpec],
     transmissions: list[Transmission],
     pruned_transmission_ids: set[str] | None = None,
 ) -> list[str]:
-    config_store = _config_store(request)
+    app = target.app if isinstance(target, Request) else target
+    config_store = getattr(app.state, "config_store", None)
+    if not isinstance(config_store, ConfigStore):
+        return []
+    _ = pruned_transmission_ids
     existing = {pipeline.name: pipeline for pipeline in await config_store.list_pipelines()}
-    compiler = getattr(request.app.state, "pipeline_graph_compiler", None)
+    compiler = getattr(app.state, "pipeline_graph_compiler", None)
     created_or_updated: list[str] = []
     deleted_any = False
     active_publication_ids = {publication.id for publication in publications if publication.enabled}
-    pruned_transmission_ids = set(pruned_transmission_ids or set())
-    active_transmission_ids = {transmission.id for transmission in transmissions}
     transmissions_by_publication_id = {
         str((transmission.model_extra or {}).get("publication_id") or "").strip(): transmission
         for transmission in transmissions
@@ -5010,39 +5144,7 @@ async def _upsert_stream_publication_pipelines(
             continue
         deleted_any = True
 
-    for pipeline in await config_store.list_pipelines():
-        if pipeline.name in created_or_updated:
-            continue
-        graph = pipeline.graph if isinstance(pipeline.graph, dict) else {}
-        nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
-        publish_target_ids: list[str] = []
-        has_publication_node = False
-        for node in nodes:
-            if not isinstance(node, dict):
-                continue
-            if str(node.get("operator") or "").strip() != "stream.publish_video":
-                continue
-            cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
-            target_id = str(cfg.get("transmission_id") or "").strip()
-            if target_id:
-                publish_target_ids.append(target_id)
-            if bool(cfg.get("publication_enabled", False)):
-                has_publication_node = True
-        if not publish_target_ids:
-            continue
-        if has_publication_node:
-            continue
-        targets_were_pruned = all(target_id in pruned_transmission_ids for target_id in publish_target_ids)
-        targets_are_orphaned = all(target_id not in active_transmission_ids for target_id in publish_target_ids)
-        if not targets_were_pruned and not targets_are_orphaned:
-            continue
-        try:
-            await config_store.delete_pipeline(pipeline.name)
-        except KeyError:
-            continue
-        deleted_any = True
-
-    orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+    orchestrator = getattr(app.state, "pipelines_orchestrator", None)
     if (created_or_updated or deleted_any or active_publication_ids) and orchestrator is not None:
         try:
             orchestrator.trigger_reload()
@@ -5053,7 +5155,7 @@ async def _upsert_stream_publication_pipelines(
 
 async def _sync_pipeline_output_publication_nodes(
     *,
-    request: Request,
+    target: Request | FastAPI,
     publications: list[StreamPublicationSpec],
 ) -> list[str]:
     publication_by_pipeline_node = {
@@ -5066,7 +5168,10 @@ async def _sync_pipeline_output_publication_nodes(
     if not publication_by_pipeline_node:
         return []
 
-    config_store = _config_store(request)
+    app = target.app if isinstance(target, Request) else target
+    config_store = getattr(app.state, "config_store", None)
+    if not isinstance(config_store, ConfigStore):
+        return []
     changed_pipelines: list[str] = []
     for pipeline in await config_store.list_pipelines():
         pipeline_name = str(getattr(pipeline, "name", "") or "").strip()
@@ -5100,7 +5205,7 @@ async def _sync_pipeline_output_publication_nodes(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         changed_pipelines.append(pipeline_name)
 
-    orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
+    orchestrator = getattr(app.state, "pipelines_orchestrator", None)
     if changed_pipelines and orchestrator is not None:
         try:
             orchestrator.trigger_reload()
@@ -5146,12 +5251,19 @@ async def _validate_camera_live_view_references(
 ) -> CameraLiveView:
     host_server_id = await _validate_host_server_id_for_request(request, live_view.host_server_id)
     app_settings = await _config_store(request).get_settings()
-    resolved_camera = _resolve_camera_source_from_settings(
-        app_settings,
-        camera_id=live_view.camera_id,
-        camera_source_id=None,
+    live_view_camera_id = str(live_view.camera_id or "").strip()
+    if str(getattr(live_view, "owner_kind", "") or "").strip() == "camera_source" and not live_view_camera_id:
+        raise HTTPException(status_code=409, detail="Camera not found or has no enabled video source")
+    resolved_camera = (
+        _resolve_camera_source_from_settings(
+            app_settings,
+            camera_id=live_view_camera_id,
+            camera_source_id=None,
+        )
+        if live_view_camera_id
+        else None
     )
-    if resolved_camera is None:
+    if live_view_camera_id and resolved_camera is None:
         raise HTTPException(status_code=409, detail="Camera not found or has no enabled video source")
 
     transmission_by_id = {item.id: item for item in settings.transmissions}
@@ -5159,16 +5271,18 @@ async def _validate_camera_live_view_references(
     payload["host_server_id"] = host_server_id
     normalized = CameraLiveView.model_validate(payload)
     for variant in normalized.variants:
-        source = _resolve_camera_source_from_settings(
-            app_settings,
-            camera_id=normalized.camera_id,
-            camera_source_id=variant.camera_source_id,
-        )
-        if source is None:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Camera source not found or disabled: {variant.camera_source_id}",
+        variant_source_id = str(variant.camera_source_id or "").strip()
+        if live_view_camera_id and variant_source_id:
+            source = _resolve_camera_source_from_settings(
+                app_settings,
+                camera_id=live_view_camera_id,
+                camera_source_id=variant_source_id,
             )
+            if source is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Camera source not found or disabled: {variant.camera_source_id}",
+                )
         transmission = transmission_by_id.get(variant.transmission_id)
         if transmission is None:
             raise HTTPException(
@@ -5186,17 +5300,27 @@ async def _validate_camera_live_view_references(
 
 async def _reconcile_streaming_publications(
     *,
-    request: Request,
+    request: Request | None = None,
+    app: FastAPI | None = None,
     settings: StreamingExtensionSettings | None = None,
 ) -> tuple[StreamingExtensionSettings, list[str]]:
-    config_store = _config_store(request)
+    target_app = request.app if request is not None else app
+    if target_app is None:
+        raise HTTPException(status_code=500, detail="Streaming reconciliation requires an app context")
+    config_store = getattr(target_app.state, "config_store", None)
+    if not isinstance(config_store, ConfigStore):
+        raise HTTPException(status_code=500, detail="Config store is unavailable")
+    current_server_id = _current_server_id(request) if request is not None else normalize_server_id(
+        getattr(target_app.state, "streaming_server_id", "local"),
+        fallback="local",
+    )
     loaded_settings = settings or await _load_settings(config_store)
     app_settings = await config_store.get_settings()
     pipelines = await config_store.list_pipelines()
     publications = _reconcile_publication_specs(
         settings=loaded_settings,
         app_settings=app_settings,
-        current_server_id=_current_server_id(request),
+        current_server_id=current_server_id,
         pipelines=pipelines,
     )
     live_views, transmissions, warnings = _build_artifacts_from_publications(
@@ -5212,16 +5336,16 @@ async def _reconcile_streaming_publications(
     saved = await _save_settings(config_store, reconciled)
     try:
         await _upsert_stream_publication_pipelines(
-            request=request,
+            target=request or target_app,
             publications=publications,
             transmissions=saved.transmissions,
             pruned_transmission_ids=pruned_transmission_ids,
         )
         await _sync_pipeline_output_publication_nodes(
-            request=request,
+            target=request or target_app,
             publications=publications,
         )
-        await _apply_streaming_engine_state(request, settings=saved)
+        await _apply_streaming_engine_state(request or target_app, settings=saved)
     except HTTPException:
         raise
     except Exception as exc:
@@ -5230,6 +5354,10 @@ async def _reconcile_streaming_publications(
             detail=f"Failed to apply streaming publication reconciliation: {exc}",
         ) from exc
     return saved, warnings
+
+
+async def reconcile_streaming_publications_for_app(app: FastAPI) -> tuple[StreamingExtensionSettings, list[str]]:
+    return await _reconcile_streaming_publications(app=app)
 
 
 def create_streaming_router() -> APIRouter:
@@ -5896,6 +6024,7 @@ def create_streaming_router() -> APIRouter:
         settings = await _load_settings(config_store)
         return await _build_home_assistant_cameras_response(request, settings=settings)
 
+    @router.get("/live-views", response_model=list[CameraLiveView])
     @router.get("/camera-live-views", response_model=list[CameraLiveView])
     async def list_camera_live_views(request: Request) -> list[CameraLiveView]:
         _require_auth(request, action="core:settings:read")
@@ -5962,6 +6091,7 @@ def create_streaming_router() -> APIRouter:
             warnings=warnings,
         )
 
+    @router.put("/live-views/{live_view_id}", response_model=CameraLiveView)
     @router.put("/camera-live-views/{live_view_id}", response_model=CameraLiveView)
     async def update_camera_live_view(
         request: Request,
@@ -6028,6 +6158,7 @@ def create_streaming_router() -> APIRouter:
             ) from exc
         return candidate_live_view
 
+    @router.delete("/live-views/{live_view_id}")
     @router.delete("/camera-live-views/{live_view_id}")
     async def delete_camera_live_view(request: Request, live_view_id: str) -> dict[str, bool]:
         _require_auth(
@@ -6075,6 +6206,10 @@ def create_streaming_router() -> APIRouter:
         return {"ok": True}
 
     @router.get(
+        "/live-views/{live_view_id}/playback",
+        response_model=CameraLiveViewPlaybackResponse,
+    )
+    @router.get(
         "/camera-live-views/{live_view_id}/playback",
         response_model=CameraLiveViewPlaybackResponse,
     )
@@ -6096,14 +6231,30 @@ def create_streaming_router() -> APIRouter:
             raise HTTPException(status_code=404, detail="Camera live variant not found")
 
         app_settings = await config_store.get_settings()
-        resolved_camera_source = _resolve_camera_source_from_settings(
-            app_settings,
-            camera_id=live_view.camera_id,
-            camera_source_id=variant.camera_source_id,
+        live_view_camera_id = str(live_view.camera_id or "").strip()
+        variant_camera_source_id = str(variant.camera_source_id or "").strip()
+        resolved_camera_source = (
+            _resolve_camera_source_from_settings(
+                app_settings,
+                camera_id=live_view_camera_id,
+                camera_source_id=variant_camera_source_id,
+            )
+            if live_view_camera_id and variant_camera_source_id
+            else None
         )
-        if resolved_camera_source is None:
+        camera_id = live_view_camera_id
+        camera_name = live_view.name
+        camera_source_id = variant_camera_source_id
+        camera_source_name = variant.label
+        source_role = str(variant.role or "") or None
+        source: dict[str, Any] | None = None
+        if resolved_camera_source is not None:
+            camera_id, device, camera_source_id, source = resolved_camera_source
+            camera_name = _camera_live_name(device)
+            camera_source_name = _camera_source_name(source)
+            source_role = _camera_source_role(source)
+        elif live_view_camera_id and variant_camera_source_id:
             raise HTTPException(status_code=409, detail="Camera source not found or disabled")
-        camera_id, device, camera_source_id, source = resolved_camera_source
 
         transmission = next(
             (item for item in settings.transmissions if item.id == variant.transmission_id),
@@ -6130,7 +6281,7 @@ def create_streaming_router() -> APIRouter:
 
         selected_output = _select_live_playback_output(urls=urls, variant=variant)
         warnings = [
-            *_camera_live_warnings(source=source, transmission=transmission),
+            *(_camera_live_warnings(source=source, transmission=transmission) if source is not None else []),
             *list(urls.warnings),
         ]
         blocking_errors = list(urls.blocking_errors)
@@ -6154,23 +6305,24 @@ def create_streaming_router() -> APIRouter:
             )
             if runtime_item_for_plan is not None:
                 runtime_health_payload = runtime_item_for_plan.model_dump(mode="json")
-            source_health = _source_health_for_camera(
-                await _camera_source_health_by_id(request),
-                camera_id=camera_id,
-                camera_source_id=camera_source_id,
-            )
-            if source_health is not None:
-                source_health_payload = source_health.model_dump(mode="json")
+            if camera_id and camera_source_id:
+                source_health = _source_health_for_camera(
+                    await _camera_source_health_by_id(request),
+                    camera_id=camera_id,
+                    camera_source_id=camera_source_id,
+                )
+                if source_health is not None:
+                    source_health_payload = source_health.model_dump(mode="json")
 
         return CameraLiveViewPlaybackResponse(
             live_view=live_view,
             context=context,
             variant=variant,
             camera_id=camera_id,
-            camera_name=_camera_live_name(device),
+            camera_name=camera_name,
             camera_source_id=camera_source_id,
-            camera_source_name=_camera_source_name(source),
-            source_role=_camera_source_role(source),
+            camera_source_name=camera_source_name,
+            source_role=source_role,
             transmission=transmission,
             urls=urls,
             playback_plan=_build_playback_plan_response(

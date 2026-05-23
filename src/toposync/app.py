@@ -3312,6 +3312,41 @@ def create_app() -> FastAPI:
                 ),
             )
 
+    async def _emit_pipeline_lifecycle_event(
+        request: Request,
+        event_name: str,
+        *,
+        operation: str,
+        pipeline: Pipeline,
+        previous_name: str | None = None,
+    ) -> None:
+        bus: EventBus | None = getattr(request.app.state, "bus", None)
+        if bus is None:
+            return
+        try:
+            await bus.emit(
+                event_name,
+                {
+                    "operation": operation,
+                    "pipeline_name": pipeline.name,
+                    "previous_name": previous_name,
+                    "pipeline": pipeline.model_dump(mode="json"),
+                },
+                context={"source": "core.pipelines.api"},
+            )
+        except Exception:
+            logger.warning("Pipeline lifecycle event '%s' failed.", event_name, exc_info=True)
+
+    async def _reload_pipeline_after_lifecycle_handlers(
+        config_store: ConfigStore,
+        pipeline: Pipeline,
+    ) -> Pipeline:
+        try:
+            latest = await config_store.get_pipeline(pipeline.name)
+        except PipelineValidationError:
+            return pipeline
+        return latest or pipeline
+
     def _suggest_duplicate_pipeline_name(*, base_name: str, existing_names: set[str]) -> str:
         base = str(base_name or "").strip() or "pipeline"
         suffix = 2
@@ -3358,6 +3393,13 @@ def create_app() -> FastAPI:
             await _validate_publish_video_host_affinity(config_store, body)
             compiler.compile_pipeline(body)
             saved = await config_store.create_pipeline(body)
+            await _emit_pipeline_lifecycle_event(
+                request,
+                "core.pipeline.saved",
+                operation="create",
+                pipeline=saved,
+            )
+            saved = await _reload_pipeline_after_lifecycle_handlers(config_store, saved)
             orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
             if orchestrator is not None:
                 try:
@@ -3414,6 +3456,14 @@ def create_app() -> FastAPI:
             await _validate_publish_video_host_affinity(config_store, duplicated)
             compiler.compile_pipeline(duplicated)
             saved = await config_store.create_pipeline(duplicated)
+            await _emit_pipeline_lifecycle_event(
+                request,
+                "core.pipeline.saved",
+                operation="duplicate",
+                pipeline=saved,
+                previous_name=source.name,
+            )
+            saved = await _reload_pipeline_after_lifecycle_handlers(config_store, saved)
         except GraphCompileError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PipelineAlreadyExistsError as exc:
@@ -3797,6 +3847,14 @@ def create_app() -> FastAPI:
             await _validate_publish_video_host_affinity(config_store, body)
             compiler.compile_pipeline(body)
             saved = await config_store.replace_pipeline(pipeline_name, body)
+            await _emit_pipeline_lifecycle_event(
+                request,
+                "core.pipeline.saved",
+                operation="replace",
+                pipeline=saved,
+                previous_name=pipeline_name if pipeline_name != saved.name else None,
+            )
+            saved = await _reload_pipeline_after_lifecycle_handlers(config_store, saved)
             orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
             if orchestrator is not None:
                 try:
@@ -3825,6 +3883,12 @@ def create_app() -> FastAPI:
                     telemetry_store.reset(removed.name)
                 except Exception:
                     pass
+            await _emit_pipeline_lifecycle_event(
+                request,
+                "core.pipeline.deleted",
+                operation="delete",
+                pipeline=removed,
+            )
             orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
             if orchestrator is not None:
                 try:

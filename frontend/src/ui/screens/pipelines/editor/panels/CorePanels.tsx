@@ -5,15 +5,10 @@ import CreatableSelect from "react-select/creatable";
 import {
   listHomeAssistantServers,
   listHomeAssistantServices,
-  listCamerasIndex,
-  listStreamingTransmissions,
-  type CameraSourceSummary,
-  type CameraSummary,
   type HomeAssistantServerInfo,
   type HomeAssistantServiceInfo,
   type PipelineStorageSummary,
   type PipelineOperatorDefinition,
-  type StreamingTransmission,
 } from "../../../../../util/api";
 import {
   buildPacketArtifactSuggestions,
@@ -1183,71 +1178,17 @@ type PublishVideoProps = {
   onUpdateConfig: UpdateConfig;
 };
 
-function cameraSourceOptionLabel(source: CameraSourceSummary): string {
-  const name = String(source.name || source.id || "").trim() || "Fonte";
-  const role = String(source.role || "").trim();
-  const width = typeof source.video?.width === "number" ? source.video.width : null;
-  const height = typeof source.video?.height === "number" ? source.video.height : null;
-  const resolution = width && height ? `${width}x${height}` : "";
-  return [name, role, resolution].filter(Boolean).join(" · ");
-}
-
 export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }: PublishVideoProps): React.ReactElement {
   const { t } = i18n.useI18n();
-  const [transmissions, setTransmissions] = useState<StreamingTransmission[]>([]);
-  const [cameras, setCameras] = useState<CameraSummary[]>([]);
-  const [loadingTransmissions, setLoadingTransmissions] = useState(false);
-  const [transmissionsError, setTransmissionsError] = useState<string | null>(null);
-  const [camerasError, setCamerasError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoadingTransmissions(true);
-    setTransmissionsError(null);
-
-    void listStreamingTransmissions()
-      .then((payload) => {
-        if (cancelled) return;
-        setTransmissions(Array.isArray(payload) ? payload : []);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setTransmissionsError(String(error instanceof Error ? error.message : error || "unknown error"));
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setLoadingTransmissions(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    setCamerasError(null);
-    void listCamerasIndex()
-      .then((payload) => {
-        if (cancelled) return;
-        setCameras(Array.isArray(payload.cameras) ? payload.cameras : []);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setCamerasError(String(error instanceof Error ? error.message : error || "unknown error"));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const transmissionId = String((config as any).transmission_id ?? "").trim();
-  const publicationEnabled = Boolean((config as any).publication_enabled ?? false);
-  const publicationCameraId = String((config as any).publication_camera_id ?? "").trim();
-  const publicationCameraSourceId = String((config as any).publication_camera_source_id ?? "").trim();
+  const publicationEnabled = Boolean((config as any).publication_enabled ?? !transmissionId);
+  const publicationLiveViewLabel = String((config as any).publication_live_view_label ?? "").trim();
+  const publicationVariantId = String((config as any).publication_variant_id ?? "").trim();
+  const publicationVariantLabel = String(
+    (config as any).publication_variant_label ?? (config as any).publication_label ?? "",
+  ).trim();
   const publicationRoleRaw = String((config as any).publication_role ?? "custom").trim().toLowerCase();
   const publicationRole = ["main", "sub", "zoom", "custom"].includes(publicationRoleRaw) ? publicationRoleRaw : "custom";
-  const publicationLabel = String((config as any).publication_label ?? "").trim();
   const publicationQualityProfileId = String((config as any).publication_quality_profile_id ?? "").trim();
   const publicationShowInDashboard = Boolean((config as any).publication_show_in_dashboard ?? true);
   const publicationShowInHomeAssistant = Boolean((config as any).publication_show_in_home_assistant ?? false);
@@ -1257,58 +1198,14 @@ export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }:
   const bypassMode = bypassModeRaw === "force_on" || bypassModeRaw === "force_off" ? bypassModeRaw : "auto";
   const writerPriorityRaw = Number((config as any).writer_priority ?? 0);
   const writerPriority = Number.isFinite(writerPriorityRaw) ? writerPriorityRaw : 0;
-  const transmissionOptions = useMemo<SelectOption[]>(() => {
-    const disabledSuffix = t("core.ui.pipelines.panels.publish_video.transmission_disabled_suffix", {}, "disabled");
-    return transmissions
-      .map((item) => {
-        const id = String(item?.id || "").trim();
-        if (!id) return null;
-        const name = String(item?.name || "").trim();
-        const path = String(item?.path || "").trim();
-        const enabled = item?.enabled !== false;
-        const title = name || path || id;
-        const details = [path ? `/${path}` : "", enabled ? "" : disabledSuffix].filter(Boolean).join(" • ");
-        return {
-          value: id,
-          label: details ? `${title} (${details})` : title,
-        };
-      })
-      .filter((option): option is SelectOption => Boolean(option))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, [t, transmissions]);
-
-  const selectedTransmissionOption = transmissionId
-    ? transmissionOptions.find((option) => option.value === transmissionId) ?? { value: transmissionId, label: transmissionId }
-    : null;
-  const cameraOptions = useMemo<SelectOption[]>(
-    () =>
-      cameras
-        .map((camera) => {
-          const id = String(camera.id || "").trim();
-          if (!id) return null;
-          return { value: id, label: String(camera.name || id).trim() || id };
-        })
-        .filter((option): option is SelectOption => Boolean(option))
-        .sort((a, b) => a.label.localeCompare(b.label)),
-    [cameras],
-  );
-  const selectedCamera = cameras.find((camera) => String(camera.id || "").trim() === publicationCameraId) ?? null;
-  const cameraSourceOptions = useMemo<SelectOption[]>(
-    () =>
-      (selectedCamera?.sources || [])
-        .filter((source) => source.enabled !== false && (String(source.kind || "video").trim().toLowerCase() || "video") === "video")
-        .map((source) => {
-          const id = String(source.id || "").trim();
-          if (!id) return null;
-          return { value: id, label: cameraSourceOptionLabel(source) };
-        })
-        .filter((option): option is SelectOption => Boolean(option)),
-    [selectedCamera],
-  );
-  const firstCamera = cameras.find((camera) => String(camera.id || "").trim()) ?? null;
-  const firstSource = (firstCamera?.sources || []).find(
-    (source) => source.enabled !== false && (String(source.kind || "video").trim().toLowerCase() || "video") === "video",
-  );
+  const roleFallbackLabel =
+    publicationRole === "main"
+      ? t("core.ui.pipelines.panels.publish_video.publication_role.main", {}, "Principal")
+      : publicationRole === "sub"
+        ? t("core.ui.pipelines.panels.publish_video.publication_role.sub", {}, "Baixa resolução")
+        : publicationRole === "zoom"
+          ? t("core.ui.pipelines.panels.publish_video.publication_role.zoom", {}, "Zoom")
+          : t("core.ui.pipelines.panels.publish_video.publication_role.custom", {}, "Personalizada");
 
   return (
     <div className="pipelinesOperatorConfigCard">
@@ -1321,19 +1218,16 @@ export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }:
             onUpdateConfig((prev) => ({
               ...prev,
               publication_enabled: checked,
-              publication_camera_id:
-                String((prev as any).publication_camera_id || "").trim() ||
-                String(firstCamera?.id || "").trim(),
-              publication_camera_source_id:
-                String((prev as any).publication_camera_source_id || "").trim() ||
-                String(firstSource?.id || "").trim(),
               publication_role: String((prev as any).publication_role || "custom").trim() || "custom",
-              publication_label: String((prev as any).publication_label || "").trim(),
+              publication_variant_label: String(
+                (prev as any).publication_variant_label || (prev as any).publication_label || "",
+              ).trim(),
+              publication_label: String((prev as any).publication_variant_label || (prev as any).publication_label || "").trim(),
               transmission_id: checked ? "" : String((prev as any).transmission_id || "").trim(),
             }));
           }}
         />
-        <span>{t("core.ui.pipelines.panels.publish_video.publication_enabled", {}, "Publicar como variante de câmera")}</span>
+        <span>{t("core.ui.pipelines.panels.publish_video.publication_enabled", {}, "Publicar este vídeo")}</span>
       </label>
 
       {publicationEnabled ? (
@@ -1342,39 +1236,35 @@ export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }:
             {t(
               "core.ui.pipelines.panels.publish_video.publication_hint",
               {},
-              "O TopoSync gera a transmissão técnica e coloca esta saída no seletor da câmera.",
+              "O TopoSync gera a transmissão técnica, a variante e os outputs necessários quando o pipeline é salvo.",
             )}
           </div>
-          {camerasError ? <div className="pipelinesInlineError">{camerasError}</div> : null}
           <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.publish_video.publication_camera", {}, "Câmera")}</span>
-            <Select<SelectOption, false>
-              styles={pipelinesReactSelectStyles}
-              options={cameraOptions}
-              value={cameraOptions.find((option) => option.value === publicationCameraId) ?? null}
-              placeholder={t("core.ui.pipelines.panels.publish_video.publication_camera_placeholder", {}, "Escolha a câmera")}
-              onChange={(value) => {
-                const nextCamera = cameras.find((camera) => String(camera.id || "").trim() === String(value?.value || "").trim()) ?? null;
-                const nextSource = (nextCamera?.sources || []).find(
-                  (source) => source.enabled !== false && (String(source.kind || "video").trim().toLowerCase() || "video") === "video",
-                );
-                onUpdateConfig((prev) => ({
-                  ...prev,
-                  publication_camera_id: String(value?.value || "").trim(),
-                  publication_camera_source_id: String(nextSource?.id || "").trim(),
-                }));
+            <span>{t("core.ui.pipelines.panels.publish_video.publication_live_view_label", {}, "Nome da transmissão")}</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={publicationLiveViewLabel}
+              placeholder={t("core.ui.pipelines.panels.publish_video.publication_live_view_label_placeholder", {}, "Garagem tratada")}
+              onChange={(event) => {
+                onUpdateConfig((prev) => ({ ...prev, publication_live_view_label: String(event.target.value || "") }));
               }}
             />
           </label>
           <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.publish_video.publication_source", {}, "Fonte base")}</span>
-            <Select<SelectOption, false>
-              styles={pipelinesReactSelectStyles}
-              options={cameraSourceOptions}
-              value={cameraSourceOptions.find((option) => option.value === publicationCameraSourceId) ?? null}
-              placeholder={t("core.ui.pipelines.panels.publish_video.publication_source_placeholder", {}, "Escolha a fonte")}
-              onChange={(value) => {
-                onUpdateConfig((prev) => ({ ...prev, publication_camera_source_id: String(value?.value || "").trim() }));
+            <span>{t("core.ui.pipelines.panels.publish_video.publication_variant_label", {}, "Nome da variante")}</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={publicationVariantLabel}
+              placeholder={roleFallbackLabel}
+              onChange={(event) => {
+                const nextValue = String(event.target.value || "");
+                onUpdateConfig((prev) => ({
+                  ...prev,
+                  publication_variant_label: nextValue,
+                  publication_label: nextValue,
+                }));
               }}
             />
           </label>
@@ -1394,17 +1284,24 @@ export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }:
             </select>
           </label>
           <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.publish_video.publication_label", {}, "Nome visível")}</span>
+            <span>{t("core.ui.pipelines.panels.publish_video.publication_variant_id", {}, "Chave da variante")}</span>
             <input
               className="pipelinesInput"
               type="text"
-              value={publicationLabel}
-              placeholder={t("core.ui.pipelines.panels.publish_video.publication_label_placeholder", {}, "Recorte tratado")}
+              value={publicationVariantId}
+              placeholder={t("core.ui.pipelines.panels.publish_video.publication_variant_id_placeholder", {}, "automatico")}
               onChange={(event) => {
-                onUpdateConfig((prev) => ({ ...prev, publication_label: String(event.target.value || "") }));
+                onUpdateConfig((prev) => ({ ...prev, publication_variant_id: String(event.target.value || "") }));
               }}
             />
           </label>
+          <div className="pipelinesStepHint">
+            {t(
+              "core.ui.pipelines.panels.publish_video.publication_variant_id_hint",
+              {},
+              "Deixe em branco para gerar uma chave estável pelo papel. Use a mesma transmissão com papéis diferentes para agrupar principal, baixa resolução e zoom.",
+            )}
+          </div>
           <label className="pipelinesLabel">
             <span>{t("core.ui.pipelines.panels.publish_video.publication_quality", {}, "Perfil de saída")}</span>
             <select
@@ -1442,32 +1339,29 @@ export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }:
             <span>{t("core.ui.pipelines.panels.publish_video.publication_home_assistant", {}, "Exportar para Home Assistant")}</span>
           </label>
         </>
-      ) : (
+      ) : showAdvanced ? (
         <>
           <label className="pipelinesLabel">
-            <span>{t("core.ui.pipelines.panels.publish_video.transmission")}</span>
-            <CreatableSelect<SelectOption, false>
-              styles={pipelinesReactSelectStyles}
-              options={transmissionOptions}
-              value={selectedTransmissionOption}
-              isClearable
-              placeholder={t("core.ui.pipelines.panels.publish_video.transmission_placeholder")}
-              onChange={(value) => {
-                onUpdateConfig((prev) => ({ ...prev, transmission_id: String(value?.value || "").trim() }));
+            <span>{t("core.ui.pipelines.panels.publish_video.transmission", {}, "Transmission técnica")}</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={transmissionId}
+              placeholder={t("core.ui.pipelines.panels.publish_video.transmission_placeholder", {}, "uso avançado")}
+              onChange={(event) => {
+                onUpdateConfig((prev) => ({ ...prev, transmission_id: String(event.target.value || "").trim() }));
               }}
             />
           </label>
-          {loadingTransmissions ? (
-            <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.publish_video.transmission_loading")}</div>
-          ) : transmissionsError ? (
-            <div className="pipelinesInlineError">{t("core.ui.pipelines.panels.publish_video.transmission_load_failed", { error: transmissionsError })}</div>
-          ) : transmissionOptions.length === 0 ? (
-            <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.publish_video.transmission_empty")}</div>
-          ) : (
-            <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.publish_video.transmission_hint")}</div>
-          )}
+          <div className="pipelinesStepHint">
+            {t(
+              "core.ui.pipelines.panels.publish_video.transmission_hint",
+              {},
+              "Campo técnico para diagnóstico. No fluxo normal, deixe Publicar este vídeo ativo e o reconciliador gerará o ID interno.",
+            )}
+          </div>
         </>
-      )}
+      ) : null}
 
       <label className="pipelinesLabel">
         <span>{t("core.ui.pipelines.panels.publish_video.resize_mode")}</span>

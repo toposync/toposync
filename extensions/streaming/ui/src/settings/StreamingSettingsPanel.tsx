@@ -69,8 +69,11 @@ import { WizardCreatePipelineFromTransmission } from "./WizardCreatePipelineFrom
 
 type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: string) => string;
 type BrowserDebugTransport = "hls" | "webrtc" | "mse" | "jsmpeg";
+type StreamingSettingsTab = "live" | "issues" | "playback" | "infrastructure" | "advanced";
+type StreamingIssueSeverity = "critical" | "warning" | "info";
 
 const BROWSER_DEBUG_TRANSPORTS: BrowserDebugTransport[] = ["hls", "webrtc", "mse", "jsmpeg"];
+const STREAMING_SETTINGS_TABS: StreamingSettingsTab[] = ["live", "issues", "playback", "infrastructure", "advanced"];
 
 function toSafeInt(value: string, fallback: number): number {
   const parsed = Number.parseInt(String(value || "").trim(), 10);
@@ -109,6 +112,28 @@ function streamingTransportDebugHref(options: {
   if (outputId) params.set("output_id", outputId);
   if (qualityProfileId) params.set("quality_profile_id", qualityProfileId);
   return `/streams/debug?${params.toString()}`;
+}
+
+function streamingTabLabel(tab: StreamingSettingsTab, t: TranslateFn): string {
+  if (tab === "live") return t("ext.streaming.settings.tab.live", {}, "Ao vivo");
+  if (tab === "issues") return t("ext.streaming.settings.tab.issues", {}, "Problemas");
+  if (tab === "playback") return t("ext.streaming.settings.tab.playback", {}, "Playback");
+  if (tab === "infrastructure") return t("ext.streaming.settings.tab.infrastructure", {}, "Infraestrutura");
+  return t("ext.streaming.settings.tab.advanced", {}, "Avançado");
+}
+
+function streamingTabIcon(tab: StreamingSettingsTab): string {
+  if (tab === "live") return "fa-solid fa-video";
+  if (tab === "issues") return "fa-solid fa-triangle-exclamation";
+  if (tab === "playback") return "fa-solid fa-circle-play";
+  if (tab === "infrastructure") return "fa-solid fa-server";
+  return "fa-solid fa-screwdriver-wrench";
+}
+
+function issueSeverityClass(severity: StreamingIssueSeverity): string {
+  if (severity === "critical") return "is-offline";
+  if (severity === "warning") return "is-degraded";
+  return "is-unknown";
 }
 
 function defaultCameraSourceId(camera: CameraIndexItem | null | undefined): string {
@@ -357,6 +382,10 @@ function runtimeStatusClass(status: StreamingRuntimeStatus | undefined): string 
   return "is-unknown";
 }
 
+function runtimeDemandIdle(item: StreamingRuntimeTransmissionHealth | null | undefined): boolean {
+  return Boolean(item?.demand_idle) || item?.classification === "demand_idle";
+}
+
 function observabilityClassificationLabel(value: string | undefined): string {
   if (value === "source_stale") return "Camera source stale";
   if (value === "source_pipeline_stale") return "Source/pipeline stale";
@@ -488,7 +517,7 @@ export function createStreamingSettingsPanel(): SettingsPanel {
   return {
     id: STREAMING_EXTENSION_ID,
     icon: "tower-broadcast",
-    name: { key: "ext.streaming.settings.name", fallback: "Streaming avançado" },
+    name: { key: "ext.streaming.settings.name", fallback: "Transmissões" },
     description: { key: "ext.streaming.settings.desc" },
     render: ({ i18n, settings }) => <StreamingSettingsPanelContent i18n={i18n} settings={settings} />,
   };
@@ -506,6 +535,7 @@ function StreamingSettingsPanelContent({
   const [healthLoading, setHealthLoading] = useState(true);
   const [health, setHealth] = useState<StreamsHealthResponse | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
+  const [activeStreamingTab, setActiveStreamingTab] = useState<StreamingSettingsTab>("live");
 
   const [engineLoading, setEngineLoading] = useState(true);
   const [engineBusy, setEngineBusy] = useState(false);
@@ -1593,41 +1623,316 @@ function StreamingSettingsPanelContent({
       ? t("ext.streaming.engine.refreshing", {}, "Atualizando…")
       : t("ext.streaming.engine.refresh", {}, "Atualizar");
   const activeTransmissionGenerated = isGeneratedTransmission(transmissionDraft);
+  const runtimeHealthByTransmissionId = useMemo(() => {
+    const map = new Map<string, StreamingRuntimeTransmissionHealth>();
+    for (const transmission of runtimeHealth?.transmissions ?? []) {
+      const transmissionId = String(transmission.transmission_id || "").trim();
+      if (transmissionId) map.set(transmissionId, transmission);
+    }
+    return map;
+  }, [runtimeHealth?.transmissions]);
+  const transmissionById = useMemo(() => {
+    const map = new Map<string, Transmission>();
+    for (const transmission of transmissions) {
+      const transmissionId = String(transmission.id || "").trim();
+      if (transmissionId) map.set(transmissionId, transmission);
+    }
+    return map;
+  }, [transmissions]);
+  const liveViewSummaries = useMemo(() => {
+    return cameraLiveViews.map((liveView) => {
+      const enabledVariants = (liveView.variants ?? []).filter((variant) => variant.enabled !== false);
+      const variantHealth = enabledVariants
+        .map((variant) => runtimeHealthByTransmissionId.get(String(variant.transmission_id || "").trim()) ?? null)
+        .filter((item): item is StreamingRuntimeTransmissionHealth => Boolean(item));
+      const hasNoPipeline = variantHealth.some(
+        (item) =>
+          !runtimeDemandIdle(item) &&
+          item.fallback_reason === "no_frame" &&
+          !String(item.active_writer_id || "").trim() &&
+          !String(item.selected_writer_id || "").trim(),
+      );
+      const hasDemandIdle = variantHealth.length > 0 && variantHealth.every((item) => runtimeDemandIdle(item));
+      const hasStale = variantHealth.some((item) => !runtimeDemandIdle(item) && (item.stale || item.status === "stale"));
+      const hasPublisherDown = variantHealth.some(
+        (item) =>
+          !runtimeDemandIdle(item) &&
+          (item.classification === "publisher_down" ||
+            (item.outputs ?? []).some(
+              (output) =>
+                output.publisher_running === false &&
+                (output.demand_signal || (output.viewer_count ?? 0) > 0 || (output.active_playback_session_count ?? 0) > 0),
+            )),
+      );
+      const hasLive = variantHealth.some((item) => item.status === "live");
+      const hasStartingSource = variantHealth.some((item) => item.source_health?.status === "starting");
+      let statusClass = "is-live";
+      let statusLabel = t("ext.streaming.live.status.live", {}, "Ao vivo");
+      let statusDetail = t("ext.streaming.live.status.live_detail", {}, "Pelo menos uma variante tem frame recente.");
+
+      if (liveView.enabled === false) {
+        statusClass = "is-unknown";
+        statusLabel = t("ext.streaming.live.status.disabled", {}, "Desativada");
+        statusDetail = t("ext.streaming.live.status.disabled_detail", {}, "A câmera não aparece no dashboard.");
+      } else if (enabledVariants.length === 0) {
+        statusClass = "is-offline";
+        statusLabel = t("ext.streaming.live.status.no_variants", {}, "Sem variantes");
+        statusDetail = t("ext.streaming.live.status.no_variants_detail", {}, "Nenhuma fonte está marcada para exibição.");
+      } else if (hasNoPipeline) {
+        statusClass = "is-offline";
+        statusLabel = t("ext.streaming.live.status.no_pipeline", {}, "Sem pipeline");
+        statusDetail = t("ext.streaming.live.status.no_pipeline_detail", {}, "Nenhum fluxo está alimentando esta publicação.");
+      } else if (hasStale) {
+        statusClass = "is-stale";
+        statusLabel = t("ext.streaming.live.status.stale", {}, "Stale");
+        statusDetail = t("ext.streaming.live.status.stale_detail", {}, "Existe publicação, mas o frame selecionado envelheceu.");
+      } else if (hasPublisherDown) {
+        statusClass = "is-degraded";
+        statusLabel = t("ext.streaming.live.status.publisher_down", {}, "Publisher parado");
+        statusDetail = t("ext.streaming.live.status.publisher_down_detail", {}, "A fonte tem frame, mas a saída de playback não está saudável.");
+      } else if (hasDemandIdle) {
+        statusClass = "is-unknown";
+        statusLabel = t("ext.streaming.live.status.idle", {}, "Ociosa");
+        statusDetail = t(
+          "ext.streaming.live.status.idle_detail",
+          {},
+          "Publicação sob demanda, sem viewer ou heartbeat ativo agora.",
+        );
+      } else if (!hasLive) {
+        statusClass = hasStartingSource ? "is-degraded" : "is-unknown";
+        statusLabel = t("ext.streaming.live.status.warming", {}, "Aquecendo");
+        statusDetail = t("ext.streaming.live.status.warming_detail", {}, "Aguardando primeiro frame ou saúde do runtime.");
+      }
+
+      return {
+        liveView,
+        enabledVariantCount: enabledVariants.length,
+        statusClass,
+        statusLabel,
+        statusDetail,
+      };
+    });
+  }, [cameraLiveViews, runtimeHealthByTransmissionId, t]);
+  const streamingIssues = useMemo(() => {
+    const issues: Array<{
+      key: string;
+      severity: StreamingIssueSeverity;
+      title: string;
+      detail: string;
+      actionLabel: string;
+      actionTab?: StreamingSettingsTab;
+      cameraId?: string | null;
+      transmissionId?: string | null;
+      pipelineName?: string | null;
+    }> = [];
+
+    if (!healthLoading && (healthError || health?.status !== "ok")) {
+      issues.push({
+        key: "backend-health",
+        severity: "critical",
+        title: t("ext.streaming.issues.backend_title", {}, "Backend de streaming indisponível"),
+        detail: healthError || t("ext.streaming.issues.backend_detail", {}, "A API de streaming não respondeu como saudável."),
+        actionLabel: t("ext.streaming.issues.action.infrastructure", {}, "Ver infraestrutura"),
+        actionTab: "infrastructure",
+      });
+    }
+
+    if (!engineLoading && !engineStatus?.running) {
+      issues.push({
+        key: "engine-stopped",
+        severity: "critical",
+        title: t("ext.streaming.issues.engine_stopped_title", {}, "MediaMTX parado"),
+        detail: t("ext.streaming.issues.engine_stopped_detail", {}, "Sem engine rodando, HLS/WebRTC/RTSP não conseguem publicar vídeo."),
+        actionLabel: t("ext.streaming.issues.action.infrastructure", {}, "Ver infraestrutura"),
+        actionTab: "infrastructure",
+      });
+    }
+
+    if (engineNetworkContractHasIssue) {
+      issues.push({
+        key: "network-contract",
+        severity: "warning",
+        title: t("ext.streaming.issues.network_title", {}, "Contrato de rede precisa de atenção"),
+        detail: engineNetworkContractMessages.join(" ") || engineNetworkContractStatus,
+        actionLabel: t("ext.streaming.issues.action.infrastructure", {}, "Ver infraestrutura"),
+        actionTab: "infrastructure",
+      });
+    }
+
+    for (const transmissionHealth of runtimeHealth?.transmissions ?? []) {
+      const transmissionId = String(transmissionHealth.transmission_id || "").trim();
+      if (!transmissionId) continue;
+      const transmission = transmissionById.get(transmissionId) ?? null;
+      const label =
+        String(transmission?.name || "").trim() ||
+        String(transmission?.path || "").trim() ||
+        transmissionId;
+      const noWriter =
+        !String(transmissionHealth.active_writer_id || "").trim() &&
+        !String(transmissionHealth.selected_writer_id || "").trim();
+      const noFrame = transmissionHealth.fallback_reason === "no_frame";
+      const demandIdle = runtimeDemandIdle(transmissionHealth);
+      const selectedPipeline = (runtimePipelineLinksByTransmissionId.get(transmissionId) ?? [])[0] ?? null;
+      const hasPublisherDown = (transmissionHealth.outputs ?? []).some(
+        (output) =>
+          output.publisher_running === false &&
+          (output.demand_signal || (output.viewer_count ?? 0) > 0 || (output.active_playback_session_count ?? 0) > 0),
+      );
+
+      if (!demandIdle && noFrame && noWriter) {
+        issues.push({
+          key: `${transmissionId}:no-pipeline`,
+          severity: "critical",
+          title: t("ext.streaming.issues.no_pipeline_title", { name: label }, `${label}: sem pipeline`),
+          detail: t(
+            "ext.streaming.issues.no_pipeline_detail",
+            {},
+            "Nenhuma pipeline está alimentando esta transmissão. Reconciliar a câmera costuma recriar o fluxo implícito.",
+          ),
+          actionLabel: t("ext.streaming.issues.action.reconcile", {}, "Reconciliar publicação"),
+          cameraId: transmission?.camera_id ?? null,
+          transmissionId,
+        });
+        continue;
+      }
+
+      if (!demandIdle && (transmissionHealth.classification === "publisher_down" || hasPublisherDown)) {
+        issues.push({
+          key: `${transmissionId}:publisher-down`,
+          severity: "critical",
+          title: t("ext.streaming.issues.publisher_down_title", { name: label }, `${label}: publisher parado`),
+          detail: t(
+            "ext.streaming.issues.publisher_down_detail",
+            {},
+            "A pipeline tem frame, mas a saída HLS/WebRTC não está publicando corretamente.",
+          ),
+          actionLabel: t("ext.streaming.issues.action.advanced", {}, "Inspecionar artefato"),
+          actionTab: "advanced",
+          transmissionId,
+          pipelineName: selectedPipeline?.pipeline_name ?? null,
+        });
+        continue;
+      }
+
+      if (!demandIdle && (transmissionHealth.stale || transmissionHealth.status === "stale")) {
+        issues.push({
+          key: `${transmissionId}:stale`,
+          severity: "warning",
+          title: t("ext.streaming.issues.stale_title", { name: label }, `${label}: frame stale`),
+          detail:
+            (transmissionHealth.evidence ?? []).join(" ") ||
+            t("ext.streaming.issues.stale_detail", {}, "A transmissão existe, mas o frame selecionado não está recente."),
+          actionLabel: selectedPipeline
+            ? t("ext.streaming.issues.action.pipeline", {}, "Ver pipeline")
+            : t("ext.streaming.issues.action.advanced", {}, "Inspecionar artefato"),
+          actionTab: selectedPipeline ? undefined : "advanced",
+          transmissionId,
+          pipelineName: selectedPipeline?.pipeline_name ?? null,
+        });
+      }
+    }
+
+    return issues.sort((a, b) => {
+      const weight: Record<StreamingIssueSeverity, number> = { critical: 0, warning: 1, info: 2 };
+      return weight[a.severity] - weight[b.severity] || a.title.localeCompare(b.title);
+    });
+  }, [
+    engineLoading,
+    engineNetworkContractHasIssue,
+    engineNetworkContractMessages,
+    engineNetworkContractStatus,
+    engineStatus?.running,
+    health?.status,
+    healthError,
+    healthLoading,
+    runtimeHealth?.transmissions,
+    runtimePipelineLinksByTransmissionId,
+    transmissionById,
+    t,
+  ]);
+  const criticalIssueCount = streamingIssues.filter((issue) => issue.severity === "critical").length;
+  const publishedLiveViewCount = liveViewSummaries.filter((summary) => summary.liveView.enabled !== false).length;
+  const liveVariantCount = liveViewSummaries.reduce((total, summary) => total + summary.enabledVariantCount, 0);
 
   return (
     <div className="streamingSettingsPanel">
-      <div className="card">
+      <div className="card streamingLiveHeroCard">
         <div className="cardBody">
-          <div className="modalSectionTitle" style={{ marginBottom: 6 }}>
-            {t("ext.streaming.settings.title", {}, "Streaming avançado")}
-          </div>
-          <div className="cardMeta">
-            {t(
-              "ext.streaming.settings.subtitle",
-              {},
-              "Transmissões, outputs e pipelines gerados aparecem aqui para diagnóstico. Para câmeras comuns, publique fontes pela configuração da câmera.",
-            )}
+          <div className="settingsDetailHeader">
+            <div>
+              <div className="modalSectionTitle" style={{ marginBottom: 4 }}>
+                {t("ext.streaming.settings.title", {}, "Transmissões")}
+              </div>
+              <div className="cardMeta">
+                {t(
+                  "ext.streaming.settings.subtitle",
+                  {},
+                  "Gerencie quais fontes aparecem no dashboard, veja se elas estão ao vivo e acesse ferramentas técnicas só quando precisar.",
+                )}
+              </div>
+            </div>
+            <div className="streamingLiveHeroMetrics" aria-label={t("ext.streaming.settings.summary", {}, "Resumo")}>
+              <div>
+                <strong>{publishedLiveViewCount}</strong>
+                <span>{t("ext.streaming.settings.summary_cameras", {}, "publicações")}</span>
+              </div>
+              <div>
+                <strong>{liveVariantCount}</strong>
+                <span>{t("ext.streaming.settings.summary_variants", {}, "variantes")}</span>
+              </div>
+              <div>
+                <strong>{criticalIssueCount}</strong>
+                <span>{t("ext.streaming.settings.summary_issues", {}, "críticos")}</span>
+              </div>
+            </div>
           </div>
 
-          <div className="streamingQuickSteps">
-            <div className="streamingQuickStepsTitle">{t("ext.streaming.settings.quickstart", {}, "Fluxo Recomendado")}</div>
-            <ol className="streamingQuickStepsList">
-              <li>{t("ext.streaming.settings.quickstart_step_1", {}, "Ative Transmitir nas fontes de câmera que devem aparecer no dashboard.")}</li>
-              <li>{t("ext.streaming.settings.quickstart_step_2", {}, "Use o papel da fonte para escolher Principal, Baixa resolução, Zoom ou Personalizada.")}</li>
-              <li>{t("ext.streaming.settings.quickstart_step_3", {}, "Use esta área apenas para diagnóstico ou transmissões manuais avançadas.")}</li>
-            </ol>
+          {criticalIssueCount > 0 ? (
+            <button
+              type="button"
+              className="streamingIssueBanner"
+              onClick={() => setActiveStreamingTab("issues")}
+            >
+              <i className="fa-solid fa-triangle-exclamation" aria-hidden="true" />
+              <span>
+                {t(
+                  "ext.streaming.settings.issue_banner",
+                  { count: criticalIssueCount },
+                  `${criticalIssueCount} problema(s) crítico(s) precisam de atenção.`,
+                )}
+              </span>
+            </button>
+          ) : null}
+
+          <div className="streamingSettingsTabs" role="tablist" aria-label={t("ext.streaming.settings.tabs", {}, "Seções de streaming")}>
+            {STREAMING_SETTINGS_TABS.map((tab) => {
+              const badge = tab === "issues" && streamingIssues.length > 0 ? streamingIssues.length : null;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeStreamingTab === tab}
+                  className={["settingsTab", activeStreamingTab === tab ? "isSelected" : ""].filter(Boolean).join(" ")}
+                  onClick={() => setActiveStreamingTab(tab)}
+                >
+                  <i className={streamingTabIcon(tab)} aria-hidden="true" />
+                  <span>{streamingTabLabel(tab, t)}</span>
+                  {badge ? <span className="pillBadge">{badge}</span> : null}
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
 
-      <div className="sectionDivider" />
-
+      {activeStreamingTab === "live" ? (
       <div className="card">
         <div className="cardBody">
           <div className="settingsDetailHeader" style={{ marginBottom: 10 }}>
             <div>
               <div className="modalSectionTitle" style={{ marginBottom: 4 }}>
-                {t("ext.streaming.live.title", {}, "Câmeras ao vivo")}
+                {t("ext.streaming.live.title", {}, "Publicações ao vivo")}
               </div>
               <div className="cardMeta">
                 {t(
@@ -1637,17 +1942,6 @@ function StreamingSettingsPanelContent({
                 )}
               </div>
             </div>
-            <button
-              className="primaryButton"
-              type="button"
-              disabled={cameraLiveGenerateBusy}
-              onClick={() => void generateLiveViewsAction()}
-            >
-              <i className="fa-solid fa-wand-magic-sparkles" aria-hidden="true" />{" "}
-              {cameraLiveGenerateBusy
-                ? t("ext.streaming.live.generating", {}, "Gerando…")
-                : t("ext.streaming.live.generate_all", {}, "Criar visualizações")}
-            </button>
           </div>
 
           {cameraLiveViewsLoading ? (
@@ -1661,8 +1955,21 @@ function StreamingSettingsPanelContent({
               {t(
                 "ext.streaming.live.empty",
                 {},
-                "Nenhuma visualização ao vivo criada. Gere a partir das câmeras cadastradas para usar a dashboard.",
+                "Nenhuma publicação ao vivo encontrada. Ative Transmitir nas fontes e reconcilie se a configuração já foi salva.",
               )}
+              <div style={{ marginTop: 10 }}>
+                <button
+                  className="primaryButton"
+                  type="button"
+                  disabled={cameraLiveGenerateBusy}
+                  onClick={() => void generateLiveViewsAction()}
+                >
+                  <i className="fa-solid fa-rotate" aria-hidden="true" />{" "}
+                  {cameraLiveGenerateBusy
+                    ? t("ext.streaming.live.generating", {}, "Reconciliando…")
+                    : t("ext.streaming.live.reconcile_all", {}, "Reconciliar transmissões")}
+                </button>
+              </div>
             </div>
           ) : null}
 
@@ -1670,28 +1977,48 @@ function StreamingSettingsPanelContent({
             <div className="streamingFormGrid" style={{ marginTop: 12 }}>
               <div>
                 <div className="cardMeta" style={{ marginBottom: 8 }}>
-                  {t("ext.streaming.live.configured_count", { count: cameraLiveViews.length }, `${cameraLiveViews.length} câmera(s) ao vivo`)}
+                  {t("ext.streaming.live.configured_count", { count: cameraLiveViews.length }, `${cameraLiveViews.length} publicações ao vivo`)}
                 </div>
                 <div className="settingsList">
-                  {cameraLiveViews.map((liveView) => {
+                  {liveViewSummaries.map((summary) => {
+                    const liveView = summary.liveView;
                     const camera = cameraById(availableCameras, liveView.camera_id);
-                    const sourceSummary = liveView.variants
-                      .filter((variant) => variant.enabled !== false)
-                      .slice(0, 4)
-                      .map((variant) => `${liveContextLabel(variant.role, t)}: ${cameraSourceLabel(availableCameras, liveView.camera_id, variant.camera_source_id)}`)
-                      .join(" · ");
+                    const enabledVariants = liveView.variants.filter((variant) => variant.enabled !== false);
+                    const visibleVariants = enabledVariants.slice(0, 3);
+                    const hiddenVariantCount = Math.max(0, enabledVariants.length - visibleVariants.length);
                     return (
                       <button
                         key={liveView.id}
                         type="button"
-                        className={["settingsListItem", activeCameraLiveViewId === liveView.id ? "isActive" : ""].filter(Boolean).join(" ")}
+                        className={["streamingCameraSummaryItem", activeCameraLiveViewId === liveView.id ? "isActive" : ""].filter(Boolean).join(" ")}
                         onClick={() => setActiveCameraLiveViewId(liveView.id)}
                       >
-                        <span>
-                          <strong>{liveView.name || camera?.name || liveView.camera_id}</strong>
-                          <span className="cardMeta">{sourceSummary || t("ext.streaming.live.no_variants", {}, "Sem variantes configuradas")}</span>
+                        <span className="streamingCameraSummaryMain">
+                          <span className="streamingCameraSummaryHeader">
+                            <strong>{liveView.name || camera?.name || liveView.camera_id}</strong>
+                          </span>
+                          <span className="streamingCameraVariantChips">
+                            {visibleVariants.length > 0 ? (
+                              visibleVariants.map((variant) => (
+                                <span key={variant.id} className="streamingCameraVariantChip">
+                                  <span>{liveContextLabel(variant.role, t)}</span>
+                                  <span>{cameraSourceLabel(availableCameras, liveView.camera_id, variant.camera_source_id)}</span>
+                                </span>
+                              ))
+                            ) : (
+                              <span className="cardMeta">{t("ext.streaming.live.no_variants", {}, "Sem variantes configuradas")}</span>
+                            )}
+                            {hiddenVariantCount > 0 ? (
+                              <span className="streamingCameraVariantChip">
+                                {t("ext.streaming.live.more_variants", { count: hiddenVariantCount }, `+${hiddenVariantCount}`)}
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="streamingCameraSummaryDetail">{summary.statusDetail}</span>
                         </span>
-                        {liveView.enabled === false ? <span className="badge">{t("ext.streaming.transmissions.badge_disabled", {}, "off")}</span> : null}
+                        <span className={["streamingRuntimeBadge", summary.statusClass].join(" ")}>
+                          {summary.statusLabel}
+                        </span>
                       </button>
                     );
                   })}
@@ -1811,7 +2138,7 @@ function StreamingSettingsPanelContent({
                     <div className="rowWrap" style={{ marginTop: 12, justifyContent: "space-between" }}>
                       <button className="chipButton" type="button" disabled={cameraLiveGenerateBusy} onClick={() => void generateLiveViewsAction(cameraLiveDraft.camera_id)}>
                         <i className="fa-solid fa-rotate" aria-hidden="true" />{" "}
-                        {t("ext.streaming.live.regenerate_one", {}, "Recriar padrões desta câmera")}
+                        {t("ext.streaming.live.regenerate_one", {}, "Reconciliar esta publicação")}
                       </button>
                       <button className="dangerButton" type="button" disabled={cameraLiveDraftBusy} onClick={() => void deleteActiveCameraLiveView()}>
                         {t("ext.streaming.transmissions.delete", {}, "Excluir")}
@@ -1828,9 +2155,182 @@ function StreamingSettingsPanelContent({
           ) : null}
         </div>
       </div>
+      ) : null}
 
-      <div className="sectionDivider" />
+      {activeStreamingTab === "issues" ? (
+        <div className="card">
+          <div className="cardBody">
+            <div className="settingsDetailHeader" style={{ marginBottom: 8 }}>
+              <div>
+                <div className="modalSectionTitle" style={{ marginBottom: 4 }}>
+                  {t("ext.streaming.issues.title", {}, "Problemas")}
+                </div>
+                <div className="cardMeta">
+                  {t(
+                    "ext.streaming.issues.subtitle",
+                    {},
+                    "Causas acionáveis aparecem antes de avisos técnicos de transporte.",
+                  )}
+                </div>
+              </div>
+              <button
+                className="chipButton"
+                type="button"
+                disabled={runtimeHealthLoading}
+                onClick={() => {
+                  void fetchRuntimeHealthData(undefined, true);
+                  void fetchRuntimePipelinesData();
+                  void fetchRuntimeObservabilityData();
+                  void fetchEngineData();
+                  void fetchHealthData();
+                }}
+              >
+                <i className="fa-solid fa-rotate-right" aria-hidden="true" />{" "}
+                {t("ext.streaming.issues.refresh", {}, "Atualizar")}
+              </button>
+            </div>
 
+            {streamingIssues.length === 0 ? (
+              <div className="streamingStatusOk">
+                {t("ext.streaming.issues.empty", {}, "Nenhum problema crítico detectado nas câmeras publicadas.")}
+              </div>
+            ) : (
+              <div className="streamingIssueList">
+                {streamingIssues.map((issue) => (
+                  <div key={issue.key} className="settingsInlinePanel streamingIssueItem">
+                    <div>
+                      <div className="rowWrap" style={{ gap: 8, marginBottom: 6 }}>
+                        <span className={["streamingRuntimeBadge", issueSeverityClass(issue.severity)].join(" ")}>
+                          {issue.severity === "critical"
+                            ? t("ext.streaming.issues.severity.critical", {}, "Crítico")
+                            : issue.severity === "warning"
+                              ? t("ext.streaming.issues.severity.warning", {}, "Atenção")
+                              : t("ext.streaming.issues.severity.info", {}, "Info")}
+                        </span>
+                        <strong>{issue.title}</strong>
+                      </div>
+                      <div className="cardMeta">{issue.detail}</div>
+                    </div>
+                    <button
+                      className="chipButton"
+                      type="button"
+                      onClick={() => {
+                        if (issue.pipelineName) {
+                          openPipelineScreen(issue.pipelineName);
+                          return;
+                        }
+                        if (issue.cameraId) {
+                          void generateLiveViewsAction(issue.cameraId);
+                          return;
+                        }
+                        if (issue.transmissionId) {
+                          setActiveTransmissionId(issue.transmissionId);
+                        }
+                        setActiveStreamingTab(issue.actionTab ?? "advanced");
+                      }}
+                    >
+                      {issue.actionLabel}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {activeStreamingTab === "playback" ? (
+        <div className="card">
+          <div className="cardBody">
+            <div className="settingsDetailHeader" style={{ marginBottom: 8 }}>
+              <div>
+                <div className="modalSectionTitle" style={{ marginBottom: 4 }}>
+                  {t("ext.streaming.playback.title", {}, "Playback")}
+                </div>
+                <div className="cardMeta">
+                  {t(
+                    "ext.streaming.playback.subtitle",
+                    {},
+                    "Valide transportes por câmera sem deixar a experiência normal trocar automaticamente.",
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="streamingPlaybackPolicyGrid">
+              <div className="settingsInfoBlock">
+                <div className="cardMeta">{t("ext.streaming.playback.policy_grid", {}, "Grid web")}</div>
+                <strong>MSE → HLS → JSMpeg</strong>
+              </div>
+              <div className="settingsInfoBlock">
+                <div className="cardMeta">{t("ext.streaming.playback.policy_fullscreen", {}, "Tela cheia")}</div>
+                <strong>MSE → HLS</strong>
+              </div>
+              <div className="settingsInfoBlock">
+                <div className="cardMeta">{t("ext.streaming.playback.policy_low_latency", {}, "Baixa latência/PTZ")}</div>
+                <strong>WebRTC → MSE → HLS</strong>
+              </div>
+              <div className="settingsInfoBlock">
+                <div className="cardMeta">{t("ext.streaming.playback.policy_ha", {}, "Home Assistant")}</div>
+                <strong>HLS → MSE → JSMpeg</strong>
+              </div>
+            </div>
+
+            {cameraLiveViews.length === 0 ? (
+              <div className="settingsStatusMuted">
+                {t("ext.streaming.playback.empty", {}, "Crie câmeras ao vivo para gerar links de debug por transporte.")}
+              </div>
+            ) : (
+              <div className="streamingPlaybackList">
+                {cameraLiveViews.map((liveView) => (
+                  <div key={liveView.id} className="settingsInlinePanel">
+                    <div className="settingsDetailHeader" style={{ marginBottom: 8 }}>
+                      <div>
+                        <div className="cardTitle">{liveView.name || liveView.camera_id}</div>
+                        <div className="cardMeta">
+                          {t("ext.streaming.playback.camera_hint", {}, "Cada botão abre o transporte fixo na tela de debug.")}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="streamingPlaybackVariantGrid">
+                      {(liveView.variants ?? []).filter((variant) => variant.enabled !== false).map((variant) => (
+                        <div key={variant.id} className="streamingPlaybackVariant">
+                          <div>
+                            <strong>{liveContextLabel(variant.role, t)}</strong>
+                            <span className="cardMeta">
+                              {qualityProfileUiLabel(variant.quality_profile_id, t)} · {transportUiLabel(variant.preferred_transport, t)}
+                            </span>
+                          </div>
+                          <div className="rowWrap" style={{ gap: 6, justifyContent: "flex-end" }}>
+                            {BROWSER_DEBUG_TRANSPORTS.map((transport) => (
+                              <a
+                                key={`${variant.id}:${transport}`}
+                                className="chipButton"
+                                style={{ alignItems: "center", display: "inline-flex", textDecoration: "none" }}
+                                href={streamingTransportDebugHref({
+                                  transmissionId: variant.transmission_id,
+                                  transport,
+                                  outputId: variant.output_id,
+                                  qualityProfileId: variant.quality_profile_id ?? null,
+                                })}
+                              >
+                                {transport.toUpperCase()}
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {activeStreamingTab === "infrastructure" ? (
+      <>
       <div className="card">
         <div className="cardBody">
           <div className="settingsDetailHeader" style={{ marginBottom: 8 }}>
@@ -1979,13 +2479,15 @@ function StreamingSettingsPanelContent({
           )}
         </div>
       </div>
+      </>
+      ) : null}
 
-      <div className="sectionDivider" />
-
+      {activeStreamingTab === "advanced" ? (
+      <>
       <div className="card">
         <div className="cardBody">
           <div className="cardMeta">
-            {t("ext.streaming.settings.transmissions", {}, "Transmissões avançadas")}: {transmissionsCount}
+            {t("ext.streaming.settings.transmissions", {}, "Artefatos avançados")}: {transmissionsCount}
           </div>
 
           {healthLoading ? <div className="settingsStatusMuted">{t("ext.streaming.settings.health.loading")}</div> : null}
@@ -3997,6 +4499,8 @@ function StreamingSettingsPanelContent({
           )}
         </div>
       </div>
+      </>
+      ) : null}
 
       <SubModal
         open={createModalOpen}

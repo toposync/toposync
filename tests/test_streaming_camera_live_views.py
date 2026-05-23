@@ -318,7 +318,7 @@ def test_camera_source_publication_can_disable_generated_stream(tmp_path: Path) 
     assert safe_pipeline_name("implicit__tx-camera-front-sub-sub") not in pipeline_names
 
 
-def test_reconcile_prunes_shadowed_legacy_live_view_artifacts(tmp_path: Path) -> None:
+def test_reconcile_prunes_shadowed_legacy_live_view_artifacts_without_deleting_manual_pipeline(tmp_path: Path) -> None:
     client = _create_client(tmp_path)
 
     async def _seed_shadowed_live_view() -> None:
@@ -407,7 +407,7 @@ def test_reconcile_prunes_shadowed_legacy_live_view_artifacts(tmp_path: Path) ->
     assert all(item["id"] != "legacy-front-sub" for item in payload["transmissions"])
 
     pipeline_names = {item.name for item in asyncio.run(client.app.state.config_store.list_pipelines())}
-    assert "legacy_front_sub_live" not in pipeline_names
+    assert "legacy_front_sub_live" in pipeline_names
 
 
 def test_pipeline_publish_video_publication_generates_custom_variant(tmp_path: Path) -> None:
@@ -471,6 +471,128 @@ def test_pipeline_publish_video_publication_generates_custom_variant(tmp_path: P
     )
     node = pipeline.graph["nodes"][0]
     assert node["config"]["transmission_id"] == transmission["id"]
+
+
+def test_pipeline_publish_video_without_camera_generates_generic_live_view(tmp_path: Path) -> None:
+    client = _create_client(tmp_path)
+
+    async def _add_pipeline() -> None:
+        await client.app.state.config_store.create_pipeline(
+            Pipeline(
+                name="garagem_people_detection",
+                enabled=True,
+                processing_server_id="local",
+                editor_mode="interactive",
+                graph={
+                    "schema_version": 1,
+                    "nodes": [
+                        {
+                            "id": "stream",
+                            "operator": "stream.publish_video",
+                            "config": {
+                                "publication_enabled": True,
+                                "publication_live_view_label": "Garagem pessoas",
+                                "publication_role": "main",
+                                "publication_variant_label": "Principal tratado",
+                                "publication_quality_profile_id": "fullscreen_quality",
+                            },
+                        }
+                    ],
+                    "edges": [],
+                },
+            )
+        )
+
+    asyncio.run(_add_pipeline())
+
+    res = client.post("/api/streams/reconcile")
+
+    assert res.status_code == 200, res.text
+    payload = res.json()
+    publication = next(item for item in payload["publications"] if item["owner_kind"] == "pipeline_output")
+    assert publication["camera_id"] is None
+    assert publication["camera_source_id"] is None
+    assert publication["live_view_label"] == "Garagem pessoas"
+    assert publication["variant_label"] == "Principal tratado"
+
+    live_view = next(item for item in payload["camera_live_views"] if item["name"] == "Garagem pessoas")
+    assert live_view["owner_kind"] == "pipeline_output"
+    assert live_view["camera_id"] is None
+    assert [item["id"] for item in live_view["variants"]] == ["main"]
+    assert live_view["variants"][0]["camera_source_id"] is None
+    assert live_view["variants"][0]["label"] == "Principal tratado"
+
+    transmission = next(item for item in payload["transmissions"] if item.get("publication_id") == publication["id"])
+    assert transmission["owner_kind"] == "pipeline_output"
+    assert transmission["camera_controls"] is None
+    assert transmission["camera_id"] is None
+    assert transmission["camera_source_id"] is None
+
+    pipeline = next(
+        item
+        for item in asyncio.run(client.app.state.config_store.list_pipelines())
+        if item.name == "garagem_people_detection"
+    )
+    assert pipeline.graph["nodes"][0]["config"]["transmission_id"] == transmission["id"]
+
+
+def test_pipeline_publish_video_groups_roles_by_manual_live_view_label(tmp_path: Path) -> None:
+    client = _create_client(tmp_path)
+
+    async def _add_pipelines() -> None:
+        for name, role, label, profile in [
+            ("garagem_main_processed", "main", "Principal tratada", "fullscreen_quality"),
+            ("garagem_sub_processed", "sub", "Baixa tratada", "quad_grid"),
+        ]:
+            await client.app.state.config_store.create_pipeline(
+                Pipeline(
+                    name=name,
+                    enabled=True,
+                    processing_server_id="local",
+                    editor_mode="interactive",
+                    graph={
+                        "schema_version": 1,
+                        "nodes": [
+                            {
+                                "id": "publish",
+                                "operator": "stream.publish_video",
+                                "config": {
+                                    "publication_enabled": True,
+                                    "publication_live_view_label": "Garagem tratada",
+                                    "publication_role": role,
+                                    "publication_variant_label": label,
+                                    "publication_quality_profile_id": profile,
+                                },
+                            }
+                        ],
+                        "edges": [],
+                    },
+                )
+            )
+
+    asyncio.run(_add_pipelines())
+
+    res = client.post("/api/streams/reconcile")
+
+    assert res.status_code == 200, res.text
+    payload = res.json()
+    live_view = next(item for item in payload["camera_live_views"] if item["name"] == "Garagem tratada")
+    variants = {item["id"]: item for item in live_view["variants"]}
+    assert live_view["owner_kind"] == "pipeline_output"
+    assert set(variants) == {"main", "sub"}
+    assert variants["main"]["label"] == "Principal tratada"
+    assert variants["main"]["quality_profile_id"] == "fullscreen_quality"
+    assert variants["sub"]["label"] == "Baixa tratada"
+    assert variants["sub"]["quality_profile_id"] == "quad_grid"
+    assert live_view["defaults"]["thumbnail_variant_id"] == "sub"
+    assert live_view["defaults"]["fullscreen_variant_id"] == "main"
+
+    publications = [item for item in payload["publications"] if item["owner_kind"] == "pipeline_output"]
+    assert {item["pipeline_name"] for item in publications} == {
+        "garagem_main_processed",
+        "garagem_sub_processed",
+    }
+    assert len({item["live_view_id"] for item in publications}) == 1
 
 
 def test_home_assistant_camera_manifest_preserves_live_view_stream_variants(tmp_path: Path) -> None:

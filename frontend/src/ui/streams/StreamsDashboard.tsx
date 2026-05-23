@@ -3703,7 +3703,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
         <div className="main2dCenterHint">
           <div className="card">
             <div className="cardBody">
-              {t("core.ui.streams.empty", {}, "Nenhuma câmera ao vivo habilitada. Crie em Configurações > Transmissões > Câmeras ao vivo.")}
+              {t("core.ui.streams.empty", {}, "Nenhuma transmissão ao vivo habilitada. Crie em Configurações > Transmissões.")}
             </div>
           </div>
         </div>

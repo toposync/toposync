@@ -138,7 +138,7 @@ export async function fetchTransmissions(signal?: AbortSignal): Promise<Transmis
 }
 
 export async function fetchCameraLiveViews(signal?: AbortSignal): Promise<CameraLiveView[]> {
-  return requestJson<CameraLiveView[]>("/api/streams/camera-live-views", { signal });
+  return requestJson<CameraLiveView[]>("/api/streams/live-views", { signal });
 }
 
 export async function generateCameraLiveViews(

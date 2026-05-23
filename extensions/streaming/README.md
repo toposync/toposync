@@ -18,6 +18,17 @@ The core design goal is reliability in local-first setups with highly dynamic pi
 - Multiple writers can write to the same Transmission when using advanced/manual flows.
 - Encoding should happen only when there is actual playback demand.
 
+The canonical product and engineering principles for streaming are documented in
+[`docs/toposync-streaming-dossier-solid-priorities.md`](../../docs/toposync-streaming-dossier-solid-priorities.md#00-principios-permanentes-de-streaming).
+In short:
+
+- User-facing flows deal with publishable sources and variants; `Transmission`, outputs, engine paths, and quality profile IDs are advanced artifacts.
+- Stability wins over latency and quality: live requires fresh selected frames, an active writer, and a healthy selected output.
+- Transport is contextual: HLS is the stable baseline, MSE is preferred for passive web when the sidecar is healthy, WebRTC is explicit low latency/PTZ, and JSMpeg is the last visual fallback.
+- Home Assistant Cloud support goes through native HA `camera` entities, not direct WebRTC inside the Toposync ingress player.
+- Expensive work must be demand driven and scoped to the active stream/output/session.
+- The core remains generic; streaming-specific reconciliation and policy live in this extension.
+
 ## Implemented features (high level)
 
 - MediaMTX engine lifecycle management (start/stop/restart/status) with on-demand binary install (download + SHA256 verification) and dynamic port resolution.

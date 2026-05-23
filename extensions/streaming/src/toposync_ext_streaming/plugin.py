@@ -17,7 +17,11 @@ from .api.models import (
     list_path_read_auth_for_host,
     normalize_server_id,
 )
-from .api.routes import create_streaming_router, ensure_streaming_settings_defaults
+from .api.routes import (
+    create_streaming_router,
+    ensure_streaming_settings_defaults,
+    reconcile_streaming_publications_for_app,
+)
 from .pipelines import StreamingRuntimeBindings, register_streaming_pipeline_operators, set_streaming_runtime_bindings
 from .streaming.camera_ingest import (
     CameraIngestDefinition,
@@ -216,6 +220,15 @@ class StreamingExtension(BaseExtension):
             register_extension_shutdown_callback(app, _shutdown_streaming)
         else:
             set_streaming_runtime_bindings(None)
+
+        async def _reconcile_after_pipeline_change(_payload: object, _context: dict[str, object]) -> None:
+            try:
+                await reconcile_streaming_publications_for_app(app)
+            except Exception:
+                logger.warning("Streaming publication reconciliation after pipeline change failed.", exc_info=True)
+
+        bus.on("core.pipeline.saved", _reconcile_after_pipeline_change, priority=0)
+        bus.on("core.pipeline.deleted", _reconcile_after_pipeline_change, priority=0)
 
         registry = getattr(app.state, "pipeline_operator_registry", None)
         if isinstance(registry, OperatorRegistry):

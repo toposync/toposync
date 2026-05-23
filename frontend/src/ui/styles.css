@@ -5293,6 +5293,201 @@ video {
   row-gap: 10px;
 }
 
+.streamingLiveHeroCard .cardBody {
+  gap: 12px;
+}
+
+.streamingLiveHeroMetrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(80px, 1fr));
+  gap: 8px;
+  min-width: min(100%, 300px);
+}
+
+.streamingLiveHeroMetrics > div {
+  min-width: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--color-surface-frost) 72%, transparent);
+  padding: 8px 10px;
+}
+
+.streamingLiveHeroMetrics strong,
+.streamingLiveHeroMetrics span {
+  display: block;
+  line-height: 1.2;
+}
+
+.streamingLiveHeroMetrics strong {
+  color: var(--color-text-primary);
+  font-size: 18px;
+}
+
+.streamingLiveHeroMetrics span {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.streamingIssueBanner {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 42%, var(--color-border-subtle));
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  color: var(--color-text-primary);
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.streamingSettingsTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.streamingIssueList,
+.streamingPlaybackList {
+  display: grid;
+  gap: 10px;
+}
+
+.streamingCameraSummaryItem {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px;
+  min-height: 110px;
+  text-align: left;
+  color: var(--color-text-primary);
+  background: var(--color-surface-frost);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-elevation-1), var(--shadow-inner-highlight);
+  padding: 14px;
+  cursor: pointer;
+}
+
+.streamingCameraSummaryItem:hover {
+  border-color: color-mix(in srgb, var(--color-accent-border) 62%, var(--color-border-subtle));
+  background: color-mix(in srgb, var(--color-surface-frost) 82%, var(--color-accent-background-strong));
+}
+
+.streamingCameraSummaryItem.isActive {
+  background: linear-gradient(135deg, var(--color-accent-background-strong), var(--color-accent-background-strong-2));
+  border-color: var(--color-accent-border);
+}
+
+.streamingCameraSummaryMain {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.streamingCameraSummaryHeader {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.streamingCameraSummaryHeader strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.streamingCameraVariantChips {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.streamingCameraVariantChip {
+  max-width: 100%;
+  min-height: 42px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--color-text-muted);
+  padding: 7px 9px;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.streamingCameraVariantChip > span:first-child {
+  color: var(--color-text-primary);
+  font-weight: 800;
+}
+
+.streamingCameraVariantChip > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.streamingCameraSummaryDetail {
+  display: block;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.streamingIssueItem {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.streamingIssueItem > div {
+  min-width: 0;
+}
+
+.streamingPlaybackPolicyGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.streamingPlaybackVariantGrid {
+  display: grid;
+  gap: 8px;
+}
+
+.streamingPlaybackVariant {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(0, auto);
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: 8px;
+}
+
+.streamingPlaybackVariant:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.streamingPlaybackVariant .cardMeta {
+  display: block;
+  margin-top: 2px;
+}
+
 .streamingFormGrid {
   display: grid;
   gap: 10px;
@@ -5913,6 +6108,16 @@ video {
   .streamingFormGridCreatePrimary,
   .streamingFormGridCreateOutput {
     grid-template-columns: 1fr;
+  }
+
+  .streamingLiveHeroMetrics,
+  .streamingCameraSummaryItem,
+  .streamingPlaybackVariant {
+    grid-template-columns: 1fr;
+  }
+
+  .streamingIssueItem {
+    flex-direction: column;
   }
 }
 

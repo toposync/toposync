@@ -23,6 +23,7 @@ StreamingMediaAuthType = Literal["none", "signed_url", "basic"]
 StreamingCameraLiveContext = Literal["thumbnail", "pip", "large", "fullscreen", "ptz"]
 StreamingPublicationOwnerKind = Literal["camera_source", "pipeline_output"]
 StreamingPublicationRole = Literal["main", "sub", "zoom", "custom"]
+StreamingLiveViewOwnerKind = Literal["camera_source", "pipeline_output", "manual"]
 StreamingCameraLiveVariantRole = Literal[
     "thumbnail",
     "pip",
@@ -296,7 +297,7 @@ class CameraLiveVariant(BaseModel):
     id: str
     label: str = ""
     role: StreamingCameraLiveVariantRole = "custom"
-    camera_source_id: str
+    camera_source_id: str | None = None
     transmission_id: str
     output_id: str | None = None
     quality_profile_id: StreamingQualityProfileId | None = None
@@ -323,8 +324,6 @@ class CameraLiveVariant(BaseModel):
     def _validate_required_ids(self) -> "CameraLiveVariant":
         if not self.id:
             raise ValueError("Camera live variant id is required")
-        if not self.camera_source_id:
-            raise ValueError(f"camera_source_id is required for camera live variant '{self.id}'")
         if not self.transmission_id:
             raise ValueError(f"transmission_id is required for camera live variant '{self.id}'")
         if not self.label:
@@ -336,7 +335,8 @@ class CameraLiveView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(default_factory=lambda: str(uuid4()))
-    camera_id: str
+    owner_kind: StreamingLiveViewOwnerKind = "camera_source"
+    camera_id: str | None = None
     name: str = ""
     enabled: bool = True
     host_server_id: str = "local"
@@ -345,8 +345,19 @@ class CameraLiveView(BaseModel):
 
     @field_validator("id", "camera_id", "name", "host_server_id", mode="before")
     @classmethod
-    def _trim_text(cls, value: Any) -> str:
-        return str(value or "").strip()
+    def _trim_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value or "").strip()
+        return normalized or None
+
+    @field_validator("owner_kind", mode="before")
+    @classmethod
+    def _normalize_owner_kind(cls, value: Any) -> str:
+        normalized = str(value or "camera_source").strip().lower()
+        if normalized in {"camera_source", "pipeline_output", "manual"}:
+            return normalized
+        return "camera_source"
 
     @field_validator("host_server_id", mode="before")
     @classmethod
@@ -357,10 +368,10 @@ class CameraLiveView(BaseModel):
     def _validate_live_view(self) -> "CameraLiveView":
         if not self.id:
             self.id = str(uuid4())
-        if not self.camera_id:
+        if self.owner_kind == "camera_source" and not self.camera_id:
             raise ValueError("camera_id is required for camera live view")
         if not self.name:
-            self.name = self.camera_id
+            self.name = self.camera_id or self.id
 
         variant_ids: set[str] = set()
         for variant in self.variants:
@@ -397,6 +408,9 @@ class StreamPublicationSpec(BaseModel):
     role: StreamingPublicationRole = "custom"
     label: str = ""
     live_view_id: str | None = None
+    live_view_label: str | None = None
+    variant_id: str | None = None
+    variant_label: str | None = None
     host_server_id: str = "local"
     quality_policy: dict[str, Any] = Field(default_factory=dict)
     transport_policy: dict[str, Any] = Field(default_factory=dict)
@@ -409,6 +423,9 @@ class StreamPublicationSpec(BaseModel):
         "publish_node_id",
         "label",
         "live_view_id",
+        "live_view_label",
+        "variant_id",
+        "variant_label",
         "host_server_id",
         mode="before",
     )
@@ -451,7 +468,9 @@ class StreamPublicationSpec(BaseModel):
             if not self.publish_node_id:
                 raise ValueError("publish_node_id is required for pipeline output publication")
         if not self.label:
-            self.label = self.id
+            self.label = self.variant_label or self.id
+        if not self.variant_label:
+            self.variant_label = self.label
         return self
 
 
@@ -1215,10 +1234,10 @@ class CameraLiveViewPlaybackResponse(BaseModel):
     live_view: CameraLiveView
     context: StreamingCameraLiveContext
     variant: CameraLiveVariant
-    camera_id: str
-    camera_name: str
-    camera_source_id: str
-    camera_source_name: str
+    camera_id: str = ""
+    camera_name: str = ""
+    camera_source_id: str = ""
+    camera_source_name: str = ""
     source_role: str | None = None
     transmission: Transmission
     urls: TransmissionUrlsResponse

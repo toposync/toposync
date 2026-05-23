@@ -782,6 +782,7 @@ export type StreamingTransmission = {
 
 export type StreamingCameraLiveContext = "thumbnail" | "pip" | "large" | "fullscreen" | "ptz";
 export type StreamingPublicationOwnerKind = "camera_source" | "pipeline_output";
+export type StreamingLiveViewOwnerKind = "camera_source" | "pipeline_output" | "manual";
 export type StreamingPublicationRole = "main" | "sub" | "zoom" | "custom";
 export type StreamingCameraLiveVariantRole = StreamingCameraLiveContext | StreamingPublicationRole;
 export type StreamingCameraLiveTransportPreference = "auto" | "hls" | "webrtc";
@@ -797,6 +798,9 @@ export type StreamingStreamPublication = {
   role: StreamingPublicationRole;
   label: string;
   live_view_id?: string | null;
+  live_view_label?: string | null;
+  variant_id?: string | null;
+  variant_label?: string | null;
   host_server_id?: string;
   quality_policy?: Record<string, unknown>;
   transport_policy?: Record<string, unknown>;
@@ -814,7 +818,7 @@ export type StreamingCameraLiveVariant = {
   id: string;
   label: string;
   role: StreamingCameraLiveVariantRole;
-  camera_source_id: string;
+  camera_source_id?: string | null;
   transmission_id: string;
   output_id?: string | null;
   quality_profile_id?: StreamingQualityProfileId | null;
@@ -824,7 +828,8 @@ export type StreamingCameraLiveVariant = {
 
 export type StreamingCameraLiveView = {
   id: string;
-  camera_id: string;
+  owner_kind?: StreamingLiveViewOwnerKind;
+  camera_id?: string | null;
   name: string;
   enabled?: boolean;
   host_server_id?: string;
@@ -2206,7 +2211,7 @@ export async function listStreamingTransmissions(): Promise<StreamingTransmissio
 }
 
 export async function listStreamingCameraLiveViews(): Promise<StreamingCameraLiveView[]> {
-  const res = await fetch("/api/streams/camera-live-views");
+  const res = await fetch("/api/streams/live-views");
   if (!res.ok) throw new Error(`Failed to list live cameras: ${res.status}`);
   return (await res.json()) as StreamingCameraLiveView[];
 }
@@ -2272,7 +2277,7 @@ export async function getStreamingCameraLiveViewPlayback(
   if (variantId) params.set("variant_id", variantId);
   const query = params.toString();
   const res = await fetch(
-    `/api/streams/camera-live-views/${encodeURIComponent(liveViewId)}/playback${query ? `?${query}` : ""}`,
+    `/api/streams/live-views/${encodeURIComponent(liveViewId)}/playback${query ? `?${query}` : ""}`,
   );
   if (!res.ok) throw new Error(`Failed to resolve live camera playback for ${liveViewId}: ${res.status}`);
   return (await res.json()) as StreamingCameraLiveViewPlaybackResponse;

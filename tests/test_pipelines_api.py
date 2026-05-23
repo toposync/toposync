@@ -304,6 +304,52 @@ def test_pipelines_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         assert res.json() == {"pipelines": []}
 
 
+def test_pipelines_api_emits_lifecycle_events(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client(tmp_path, monkeypatch) as client:
+        events: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+        bus = client.app.state.bus
+
+        def _record_saved(payload: Any, context: dict[str, Any]) -> None:
+            events.append(("saved", dict(payload), dict(context)))
+
+        def _record_deleted(payload: Any, context: dict[str, Any]) -> None:
+            events.append(("deleted", dict(payload), dict(context)))
+
+        bus.on("core.pipeline.saved", _record_saved)
+        bus.on("core.pipeline.deleted", _record_deleted)
+
+        created = client.post(
+            "/api/pipelines",
+            json=Pipeline(
+                name="manual_publish",
+                graph={"schema_version": 1, "nodes": [], "edges": []},
+            ).model_dump(),
+        )
+        assert created.status_code == 201, created.text
+
+        replaced = client.put(
+            "/api/pipelines/manual_publish",
+            json=Pipeline(
+                name="manual_publish_v2",
+                graph={"schema_version": 1, "nodes": [], "edges": []},
+            ).model_dump(),
+        )
+        assert replaced.status_code == 200, replaced.text
+
+        deleted = client.delete("/api/pipelines/manual_publish_v2")
+        assert deleted.status_code == 200, deleted.text
+
+        assert [event[0] for event in events] == ["saved", "saved", "deleted"]
+        assert events[0][1]["operation"] == "create"
+        assert events[0][1]["pipeline_name"] == "manual_publish"
+        assert events[0][2]["source"] == "core.pipelines.api"
+        assert events[1][1]["operation"] == "replace"
+        assert events[1][1]["pipeline_name"] == "manual_publish_v2"
+        assert events[1][1]["previous_name"] == "manual_publish"
+        assert events[2][1]["operation"] == "delete"
+        assert events[2][1]["pipeline_name"] == "manual_publish_v2"
+
+
 def test_pipelines_api_duplicate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with _create_client(tmp_path, monkeypatch) as client:
         payload = Pipeline(

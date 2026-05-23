@@ -40,6 +40,71 @@ Quando um relógio para e outro continua repetindo o último estado, o usuário 
 
 ---
 
+## 0.0. Principios permanentes de streaming
+
+Esta seção é normativa para decisões futuras de produto e engenharia no streaming do Toposync. Ela resume os princípios consolidados durante as investigações de HLS, WebRTC, MSE, JSMpeg, Home Assistant, Frigate, múltiplos streams por câmera, pipelines implícitos e publicação manual de pipelines.
+
+### Modelo mental e UX
+
+- O usuário padrão gerencia **fontes publicáveis** e variantes visíveis, não `Transmission`, `output_id`, `engine_path` ou `quality_profile_id`.
+- Para câmeras comuns, o fluxo principal é: adicionar câmera/fonte, marcar `Transmitir`, escolher papel/nome quando necessário, e deixar a extensão reconciliar pipelines, transmissões e outputs.
+- `Transmissions` são artefatos técnicos e continuam disponíveis para diagnóstico/avançado, mas não são o caminho primário de uso.
+- Para pipelines manuais, o operador `stream.publish_video` deve expressar a intenção **Publicar este vídeo**: nome da transmissão, nome da variante, papel, visibilidade e perfil visual. O usuário não deve precisar criar uma Transmission antes.
+- Câmera/fonte/papel é a camada de decisão primária da UI. Transporte e qualidade são políticas operacionais abaixo disso.
+- O usuário deve conseguir responder rapidamente: “está publicado?”, “está ao vivo?”, “se não está, qual é a próxima ação?”.
+
+### Estabilidade antes de qualidade
+
+- Nunca marcar como `live` apenas porque FFmpeg, MediaMTX, go2rtc, JSMpeg ou o player estão rodando.
+- `Live` exige frame selecionado recente, writer ativo/selecionado, fonte recente quando houver fonte, e output saudável.
+- Frame antigo repetido é `stale` ou placeholder; nunca deve ser apresentado como live.
+- Stalls de aquecimento podem ser tratados como recuperáveis quando o player volta a tocar, mas não podem mascarar ausência real de pipeline, publisher parado ou fonte velha.
+- Se não há writer/pipeline alimentando a transmissão, a causa principal deve ser explícita: `Nenhuma pipeline está alimentando esta transmissão.`
+- Placeholder e still recente são estados visuais válidos, mas não são live.
+
+### Política de transporte
+
+- HLS é a base estável e universal, especialmente para app, HA ingress, remoto, fallback e cenários de rede imprevisível.
+- MSE é o caminho preferencial para web passivo quando a infraestrutura real está disponível: sidecar `go2rtc` rodando, MediaMTX saudável, output backing correto, codec compatível e proxy assinado funcional.
+- WebRTC é contextual: PTZ, zoom, baixa latência explícita, two-way ou escolha fixa em debug. Ele não deve abrir para todos os tiles por padrão.
+- JSMpeg é último recurso visual, sem áudio, baixa resolução/FPS, e só deve entrar depois de falha ou indisponibilidade real dos transportes melhores.
+- RTSP não é transporte de navegador. Ele continua como contrato interno/ecossistema para HA Core, Frigate/dev, VLC, go2rtc sidecar e diagnóstico.
+- Debug por transporte deve ser fixo e honesto. Se o usuário escolheu MSE, a tela testa MSE; se falhar, registra a falha em vez de cair silenciosamente para HLS.
+
+### Home Assistant
+
+- HA ingress/UI continua HLS-first. WebRTC direto do player Toposync fica bloqueado por padrão nesse contexto.
+- O caminho correto para Home Assistant Cloud é entidade nativa `camera` do Home Assistant, não o player web do Toposync dentro de iframe/ingress tentando resolver ICE/UDP direto.
+- O manifesto HA-native nunca deve expor URL direta da câmera nem credenciais brutas.
+- WebRTC nativo HA permanece opt-in até validação real com HA Cloud, TURN/ICE e comportamento de fallback do HA.
+
+### Sob demanda e custo
+
+- Trabalho pesado deve existir apenas enquanto houver demanda real ou lease ativo para aquele stream/output.
+- Heartbeat explícito sustenta tile, player, PiP, PTZ, debug e entidade HA enquanto estão ativos.
+- MSE/go2rtc, JSMpeg/FFmpeg, publishers e pipelines implícitos não devem virar custo permanente sem viewer relevante.
+- Cada sessão JSMpeg cria seu processo FFmpeg e encerra no disconnect. Limites globais e por transmissão impedem que fallback visual vire caminho normal de carga.
+- Se JSMpeg aparecer frequentemente em Auto, isso é sinal para investigar HLS/MSE/WebRTC, não para normalizar JSMpeg como principal.
+
+### Diagnóstico e mensagens
+
+- Warning de transporte não selecionado não pode virar causa principal.
+- Se HLS/MSE está tocando de forma saudável, warning de WebRTC fica em diagnóstico técnico, não no erro principal.
+- O diagnóstico principal deve priorizar: URL/auth bloqueante, runtime sem frame, source stale, publisher/output parado, liveness HLS, transporte ativo e só depois warnings secundários.
+- Toda validação importante de transporte deve olhar frame real quando possível, não apenas HTTP 200, WebSocket aberto ou contador de processo.
+- Logs da tela de debug devem diferenciar bloqueado esperado, aquecendo, tocando, stall recuperável, erro fatal e encerramento normal.
+
+### Arquitetura e extensões
+
+- O core permanece genérico. Ele pode emitir eventos e prover infraestrutura, mas não conhece `stream.publish_video`, câmeras, MediaMTX, HLS, MSE ou JSMpeg.
+- Regras de streaming ficam na extensão `com.toposync.streaming`.
+- Nada deve ser implementado como caso especial de Reolink, Tapo, Garagem, Frente ou qualquer câmera específica. As decisões vêm de papéis, publicações, capacidades, saúde e políticas.
+- O reconciliador é a autoridade para artefatos gerados: publicações, live views, transmissões, outputs e pipelines implícitos.
+- Artefatos gerados podem ser recriados/pruned quando `generated_by` indica posse da extensão. Pipelines manuais do usuário não devem ser apagados por limpeza automática.
+- Configuração antiga pode ser descartada enquanto o produto ainda não foi publicado, mas o desenho precisa continuar incremental para migrações futuras.
+
+---
+
 ## 0.1. Atualização operacional: Home Assistant, HLS assinado e WebRTC
 
 Em 2026-05-09/2026-05-10, a investigação em ambiente real de Home Assistant mostrou uma causa concreta de fragilidade que não estava suficientemente explícita neste dossiê: **HLS via ingress e HLS via acesso direto precisam ser tratados como um único contrato público de mídia, não como URLs montadas localmente por pedaços independentes**.

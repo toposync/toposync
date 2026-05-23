@@ -42,10 +42,13 @@ class PublishVideoConfig(BaseModel):
     resize_mode: Literal["contain", "none"] = "contain"
     writer_priority: int = 0
     bypass_mode: Literal["auto", "force_on", "force_off"] = "auto"
-    publication_enabled: bool = False
+    publication_enabled: bool = True
     publication_camera_id: str = ""
     publication_camera_source_id: str = ""
     publication_live_view_id: str = ""
+    publication_live_view_label: str = ""
+    publication_variant_id: str = ""
+    publication_variant_label: str = ""
     publication_role: Literal["main", "sub", "zoom", "custom"] = "custom"
     publication_label: str = ""
     publication_show_in_dashboard: bool = True
@@ -57,6 +60,9 @@ class PublishVideoConfig(BaseModel):
         "publication_camera_id",
         "publication_camera_source_id",
         "publication_live_view_id",
+        "publication_live_view_label",
+        "publication_variant_id",
+        "publication_variant_label",
         "publication_label",
         "publication_quality_profile_id",
         mode="after",
@@ -72,12 +78,6 @@ class PublishVideoConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_publication_target(self) -> "PublishVideoConfig":
-        if self.transmission_id or not self.publication_enabled:
-            return self
-        if not self.publication_camera_id:
-            raise ValueError("publication_camera_id is required when transmission_id is generated")
-        if not self.publication_camera_source_id:
-            raise ValueError("publication_camera_source_id is required when transmission_id is generated")
         return self
 
 
@@ -220,12 +220,12 @@ def register_streaming_pipeline_operators(registry: OperatorRegistry) -> None:
 
     registry.register_operator(
         operator_id="stream.publish_video",
-        description="Publishes pipeline video frames to a configured transmission output.",
+        description="Publishes pipeline video frames as a generated live transmission variant.",
         config_model=PublishVideoConfig,
         inputs=[{"name": "in", "required": True}],
         outputs=[],
         capabilities=["streaming", "sink", "realtime"],
-        defaults=PublishVideoConfig(transmission_id="stream_default").model_dump(mode="json"),
+        defaults=PublishVideoConfig(publication_enabled=True).model_dump(mode="json"),
         share_strategy="never",
         requires_media_fields=["ts", "width", "height"],
         input_modalities=["video"],

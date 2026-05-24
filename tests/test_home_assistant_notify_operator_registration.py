@@ -113,10 +113,14 @@ def test_home_assistant_notify_operator_is_registered_and_lists_notify_services(
         operators = operators_res.json()["operators"]
         operator_ids = {str(item.get("id") or "") for item in operators}
         assert "home_assistant.notify" in operator_ids
+        assert "home_assistant.boolean_state" in operator_ids
 
         notify_operator = next(item for item in operators if item.get("id") == "home_assistant.notify")
         assert notify_operator["defaults"]["notify_when"] == "open"
         assert notify_operator["defaults"]["close_behavior"] == "ignore"
+        boolean_operator = next(item for item in operators if item.get("id") == "home_assistant.boolean_state")
+        assert boolean_operator["defaults"]["target_mode"] == "managed_state"
+        assert boolean_operator["defaults"]["shutdown_behavior"] == "off"
 
         services_res = client.get("/api/home_assistant/ha-main/services?domain=notify")
         assert services_res.status_code == 200
@@ -134,3 +138,49 @@ def test_home_assistant_notify_operator_is_registered_and_lists_notify_services(
                 "description": "Main phone",
             },
         ]
+
+
+def test_home_assistant_set_state_service_posts_to_states(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, calls = _create_client(tmp_path, monkeypatch)
+
+    with client:
+        config_store = client.app.state.config_store
+        client.portal.call(
+            config_store.patch_extension_settings,
+            EXTENSION_ID,
+            {
+                "servers": [
+                    {
+                        "id": "ha-main",
+                        "name": "Casa",
+                        "host": "http://ha.local:8123",
+                        "apiKey": "secret-token",
+                    }
+                ],
+            },
+        )
+
+        async def _call_set_state() -> Any:
+            return await client.app.state.services.call(
+                "home_assistant.set_state",
+                server_id="ha-main",
+                entity_id="binary_sensor.toposync_garage_motion",
+                state="on",
+                attributes={"friendly_name": "Garage motion", "device_class": "motion"},
+            )
+
+        assert client.portal.call(_call_set_state) == {"ok": True}
+
+    assert calls == [
+        {
+            "url": "http://ha.local:8123/api/states/binary_sensor.toposync_garage_motion",
+            "headers": {"Authorization": "Bearer secret-token"},
+            "json": {
+                "state": "on",
+                "attributes": {"friendly_name": "Garage motion", "device_class": "motion"},
+            },
+        }
+    ]

@@ -3,8 +3,10 @@ import Select, { type MultiValue, type SingleValue } from "react-select";
 import CreatableSelect from "react-select/creatable";
 
 import {
+  getHomeAssistantRegistry,
   listHomeAssistantServers,
   listHomeAssistantServices,
+  type HomeAssistantRegistryResponse,
   type HomeAssistantServerInfo,
   type HomeAssistantServiceInfo,
   type PipelineStorageSummary,
@@ -1538,6 +1540,334 @@ export function NotifyConfigCard({ config, showAdvanced, onUpdateConfig }: Notif
             {t("core.ui.pipelines.panels.notify.dedupe_key_hint_prefix")} <code>{"{{tracking_id}}"}</code>, <code>{"{{camera_id}}"}</code>,{" "}
             <code>{"{{object_category_label}}"}</code>.
           </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+const HA_BOOLEAN_DEVICE_CLASSES = ["motion", "occupancy", "presence", "opening", "problem", "tamper", ""] as const;
+
+function slugifyHomeAssistantEntityKey(value: string): string {
+  const normalized = String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!normalized) return "";
+  return /^[0-9]/.test(normalized) ? `s_${normalized}` : normalized.slice(0, 80);
+}
+
+export function HomeAssistantBooleanStateConfigCard({ config, showAdvanced, onUpdateConfig }: NotifyProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const [servers, setServers] = useState<HomeAssistantServerInfo[]>([]);
+  const [loadingServers, setLoadingServers] = useState(false);
+  const [serversError, setServersError] = useState<string | null>(null);
+  const [registry, setRegistry] = useState<HomeAssistantRegistryResponse | null>(null);
+  const [loadingRegistry, setLoadingRegistry] = useState(false);
+  const [registryError, setRegistryError] = useState<string | null>(null);
+
+  const serverId = String((config as any).server_id ?? "").trim();
+  const targetModeRaw = String((config as any).target_mode ?? "managed_state").trim();
+  const targetMode = targetModeRaw === "existing_input_boolean" ? "existing_input_boolean" : "managed_state";
+  const managedName = textConfigValue((config as any).managed_name);
+  const managedEntityKey = String((config as any).managed_entity_key ?? "").trim();
+  const managedEntityKeyPreview = managedEntityKey || slugifyHomeAssistantEntityKey(managedName);
+  const managedEntityPreview = managedEntityKeyPreview ? `binary_sensor.toposync_${managedEntityKeyPreview}` : "";
+  const deviceClassRaw = String((config as any).device_class ?? "motion").trim();
+  const deviceClass = HA_BOOLEAN_DEVICE_CLASSES.includes(deviceClassRaw as any) ? deviceClassRaw : "motion";
+  const existingEntityId = String((config as any).existing_entity_id ?? "").trim();
+  const booleanPath = textConfigValue((config as any).boolean_path);
+  const shutdownBehaviorRaw = String((config as any).shutdown_behavior ?? "off").trim();
+  const shutdownBehavior = ["off", "unavailable", "keep"].includes(shutdownBehaviorRaw) ? shutdownBehaviorRaw : "off";
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingServers(true);
+    setServersError(null);
+
+    void listHomeAssistantServers()
+      .then((payload) => {
+        if (cancelled) return;
+        setServers(Array.isArray(payload) ? payload : []);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setServersError(String(error instanceof Error ? error.message : error || "unknown error"));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoadingServers(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!serverId || targetMode !== "existing_input_boolean") {
+      setRegistry(null);
+      setRegistryError(null);
+      setLoadingRegistry(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingRegistry(true);
+    setRegistryError(null);
+
+    void getHomeAssistantRegistry(serverId)
+      .then((payload) => {
+        if (cancelled) return;
+        setRegistry(payload);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setRegistryError(String(error instanceof Error ? error.message : error || "unknown error"));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoadingRegistry(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [serverId, targetMode]);
+
+  const serverOptions = useMemo(
+    () =>
+      servers
+        .map((server) => {
+          const id = String(server.id || "").trim();
+          if (!id) return null;
+          const name = String(server.name || "").trim();
+          const host = String(server.host || "").trim();
+          return { value: id, label: name ? `${name} (${host || id})` : host || id };
+        })
+        .filter((option): option is SelectOption => Boolean(option))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [servers],
+  );
+
+  const inputBooleanOptions = useMemo(
+    () =>
+      (registry?.entities ?? [])
+        .map((entity) => {
+          const entityId = String(entity.entity_id || "").trim();
+          const domain = String(entity.domain || entityId.split(".", 1)[0] || "").trim();
+          if (!entityId || domain !== "input_boolean") return null;
+          const name = String(entity.name || "").trim();
+          return { value: entityId, label: name && name !== entityId ? `${name} (${entityId})` : entityId };
+        })
+        .filter((option): option is SelectOption => Boolean(option))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [registry],
+  );
+
+  const selectedInputBoolean = existingEntityId
+    ? inputBooleanOptions.find((option) => option.value === existingEntityId) ?? { value: existingEntityId, label: existingEntityId }
+    : null;
+
+  const deviceClassOptions = useMemo(
+    () =>
+      HA_BOOLEAN_DEVICE_CLASSES.map((value) => ({
+        value,
+        label: t(`core.ui.pipelines.panels.home_assistant_boolean_state.device_class.${value || "none"}`),
+      })),
+    [t],
+  );
+
+  useEffect(() => {
+    if (serverId || serverOptions.length === 0) return;
+    const preferredServer = serverOptions[0] ?? null;
+    if (!preferredServer) return;
+    onUpdateConfig((prev) => {
+      const currentServerId = String((prev as any).server_id ?? "").trim();
+      if (currentServerId) return prev;
+      return { ...prev, server_id: preferredServer.value };
+    });
+  }, [onUpdateConfig, serverId, serverOptions]);
+
+  useEffect(() => {
+    if (targetMode !== "managed_state" || managedEntityKey || !managedName.trim()) return;
+    const nextKey = slugifyHomeAssistantEntityKey(managedName);
+    if (!nextKey) return;
+    onUpdateConfig((prev) => {
+      const currentKey = String((prev as any).managed_entity_key ?? "").trim();
+      if (currentKey) return prev;
+      return { ...prev, managed_entity_key: nextKey };
+    });
+  }, [managedEntityKey, managedName, onUpdateConfig, targetMode]);
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.home_assistant_boolean_state.server")}</span>
+        <select
+          className="pipelinesSelect"
+          value={serverId}
+          onChange={(event) => {
+            const nextServerId = String(event.target.value || "").trim();
+            onUpdateConfig((prev) => ({
+              ...prev,
+              server_id: nextServerId,
+              existing_entity_id: nextServerId === serverId ? String((prev as any).existing_entity_id ?? "") : "",
+            }));
+          }}
+        >
+          <option value="">{t("core.ui.pipelines.panels.home_assistant_boolean_state.server_placeholder")}</option>
+          {serverOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {loadingServers ? (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_boolean_state.server_loading")}</div>
+      ) : serversError ? (
+        <div className="pipelinesInlineError">
+          {t("core.ui.pipelines.panels.home_assistant_boolean_state.server_load_failed", { error: serversError })}
+        </div>
+      ) : servers.length === 0 ? (
+        <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_boolean_state.server_empty")}</div>
+      ) : null}
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.home_assistant_boolean_state.target_mode")}</span>
+        <select
+          className="pipelinesSelect"
+          value={targetMode}
+          onChange={(event) => {
+            const nextMode = String(event.target.value || "managed_state").trim();
+            onUpdateConfig((prev) => ({
+              ...prev,
+              target_mode: nextMode === "existing_input_boolean" ? "existing_input_boolean" : "managed_state",
+            }));
+          }}
+        >
+          <option value="managed_state">{t("core.ui.pipelines.panels.home_assistant_boolean_state.target_mode.managed_state")}</option>
+          <option value="existing_input_boolean">
+            {t("core.ui.pipelines.panels.home_assistant_boolean_state.target_mode.existing_input_boolean")}
+          </option>
+        </select>
+      </label>
+
+      {targetMode === "managed_state" ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.home_assistant_boolean_state.managed_name")}</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={managedName}
+              placeholder={t("core.ui.pipelines.panels.home_assistant_boolean_state.managed_name_placeholder")}
+              onChange={(event) => {
+                const nextName = String(event.target.value ?? "");
+                onUpdateConfig((prev) => {
+                  const currentKey = String((prev as any).managed_entity_key ?? "").trim();
+                  const next = { ...prev, managed_name: nextName };
+                  if (!currentKey) {
+                    const nextKey = slugifyHomeAssistantEntityKey(nextName);
+                    if (nextKey) (next as any).managed_entity_key = nextKey;
+                  }
+                  return next;
+                });
+              }}
+            />
+          </label>
+          {managedEntityPreview ? (
+            <div className="pipelinesStepHint">
+              {t("core.ui.pipelines.panels.home_assistant_boolean_state.managed_entity_preview", { entity_id: managedEntityPreview })}
+            </div>
+          ) : (
+            <div className="pipelinesInlineError">{t("core.ui.pipelines.panels.home_assistant_boolean_state.managed_name_required")}</div>
+          )}
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.home_assistant_boolean_state.device_class")}</span>
+            <select
+              className="pipelinesSelect"
+              value={deviceClass}
+              onChange={(event) => {
+                const nextValue = String(event.target.value || "").trim();
+                onUpdateConfig((prev) => ({ ...prev, device_class: HA_BOOLEAN_DEVICE_CLASSES.includes(nextValue as any) ? nextValue : "motion" }));
+              }}
+            >
+              {deviceClassOptions.map((option) => (
+                <option key={option.value || "none"} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </>
+      ) : (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.home_assistant_boolean_state.existing_entity")}</span>
+            <Select<SelectOption, false>
+              styles={pipelinesReactSelectStyles}
+              options={inputBooleanOptions}
+              value={selectedInputBoolean}
+              isClearable
+              isDisabled={!serverId}
+              placeholder={t("core.ui.pipelines.panels.home_assistant_boolean_state.existing_entity_placeholder")}
+              onChange={(value) => {
+                onUpdateConfig((prev) => ({ ...prev, existing_entity_id: String(value?.value || "").trim() }));
+              }}
+            />
+          </label>
+          {!serverId ? (
+            <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_boolean_state.existing_select_server_first")}</div>
+          ) : loadingRegistry ? (
+            <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_boolean_state.existing_loading")}</div>
+          ) : registryError ? (
+            <div className="pipelinesInlineError">
+              {t("core.ui.pipelines.panels.home_assistant_boolean_state.existing_load_failed", { error: registryError })}
+            </div>
+          ) : inputBooleanOptions.length === 0 ? (
+            <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.home_assistant_boolean_state.existing_empty")}</div>
+          ) : !existingEntityId ? (
+            <div className="pipelinesInlineError">{t("core.ui.pipelines.panels.home_assistant_boolean_state.existing_required")}</div>
+          ) : null}
+        </>
+      )}
+
+      {showAdvanced ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.home_assistant_boolean_state.boolean_path")}</span>
+            <input
+              className="pipelinesInput"
+              type="text"
+              value={booleanPath}
+              placeholder={t("core.ui.pipelines.panels.home_assistant_boolean_state.boolean_path_placeholder")}
+              onChange={(event) => {
+                onUpdateConfig((prev) => ({ ...prev, boolean_path: String(event.target.value ?? "") }));
+              }}
+            />
+          </label>
+
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.home_assistant_boolean_state.shutdown_behavior")}</span>
+            <select
+              className="pipelinesSelect"
+              value={shutdownBehavior}
+              onChange={(event) => {
+                const nextValue = String(event.target.value || "off").trim();
+                onUpdateConfig((prev) => ({ ...prev, shutdown_behavior: ["off", "unavailable", "keep"].includes(nextValue) ? nextValue : "off" }));
+              }}
+            >
+              <option value="off">{t("core.ui.pipelines.panels.home_assistant_boolean_state.shutdown_behavior.off")}</option>
+              <option value="unavailable">{t("core.ui.pipelines.panels.home_assistant_boolean_state.shutdown_behavior.unavailable")}</option>
+              <option value="keep">{t("core.ui.pipelines.panels.home_assistant_boolean_state.shutdown_behavior.keep")}</option>
+            </select>
+          </label>
         </>
       ) : null}
     </div>

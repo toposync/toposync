@@ -40,6 +40,7 @@ export const PIPELINE_PRESET_OPERATOR_IDS = [
   "core.store_images",
   "core.notify",
   "home_assistant.notify",
+  "home_assistant.boolean_state",
   "stream.publish_video",
 ];
 
@@ -222,6 +223,7 @@ export const PIPELINE_OPERATOR_UX = {
   "core.store_images": { group: "output", level: "basic", order: 10 },
   "core.notify": { group: "output", level: "basic", order: 20 },
   "home_assistant.notify": { group: "output", level: "basic", order: 30 },
+  "home_assistant.boolean_state": { group: "output", level: "basic", order: 35 },
   "stream.publish_video": { group: "output", level: "basic", order: 40 },
   "core.sink": { group: "output", level: "advanced", order: 900 },
   "dist.project_to_origin": { group: "output", level: "advanced", order: 910 },
@@ -282,6 +284,7 @@ export const OPERATOR_FRIENDLY_NAMES: Record<string, string> = {
   "core.store_images": "Save images",
   "core.notify": "Send notification",
   "home_assistant.notify": "Notify through Home Assistant",
+  "home_assistant.boolean_state": "Set Home Assistant boolean state",
   "stream.publish_video": "Publish video",
 };
 

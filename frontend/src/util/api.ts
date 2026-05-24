@@ -733,6 +733,25 @@ export type HomeAssistantServiceInfo = {
   description?: string;
 };
 
+export type HomeAssistantRegistryEntityInfo = {
+  entity_id: string;
+  name?: string;
+  icon?: string;
+  domain?: string;
+  device_id?: string;
+};
+
+export type HomeAssistantRegistryDeviceInfo = {
+  id: string;
+  name?: string;
+};
+
+export type HomeAssistantRegistryResponse = {
+  entities: HomeAssistantRegistryEntityInfo[];
+  devices: HomeAssistantRegistryDeviceInfo[];
+  device_entities: Record<string, string[]>;
+};
+
 export type NotificationsPage = {
   notifications: Notification[];
   next_cursor: number | null;
@@ -2238,6 +2257,20 @@ export async function listHomeAssistantServers(): Promise<HomeAssistantServerInf
   if (!res.ok) throw new Error(`Failed to list Home Assistant servers: ${res.status}`);
   const body = await res.json();
   return Array.isArray(body) ? (body as HomeAssistantServerInfo[]) : [];
+}
+
+export async function getHomeAssistantRegistry(serverId: string): Promise<HomeAssistantRegistryResponse> {
+  const res = await fetch(`/api/home_assistant/${encodeURIComponent(serverId)}/registry`);
+  if (!res.ok) throw new Error(`Failed to load Home Assistant registry: ${res.status}`);
+  const body = await res.json();
+  return {
+    entities: Array.isArray(body?.entities) ? (body.entities as HomeAssistantRegistryEntityInfo[]) : [],
+    devices: Array.isArray(body?.devices) ? (body.devices as HomeAssistantRegistryDeviceInfo[]) : [],
+    device_entities:
+      body?.device_entities && typeof body.device_entities === "object" && !Array.isArray(body.device_entities)
+        ? (body.device_entities as Record<string, string[]>)
+        : {},
+  };
 }
 
 export async function listHomeAssistantServices(

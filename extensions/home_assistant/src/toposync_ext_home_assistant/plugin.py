@@ -379,6 +379,40 @@ class HomeAssistantExtension(BaseExtension):
             except Exception:  # noqa: BLE001
                 return None
 
+        async def _set_state(
+            server: HomeAssistantServer,
+            entity_id: str,
+            state: str,
+            attributes: dict[str, Any] | None = None,
+        ) -> Any:
+            client = self._http
+            if client is None:
+                raise RuntimeError("HA client not ready")
+            normalized_entity_id = str(entity_id or "").strip()
+            normalized_state = str(state or "").strip()
+            if not normalized_entity_id or any(ch.isspace() for ch in normalized_entity_id) or "/" in normalized_entity_id:
+                raise HTTPException(status_code=400, detail="Invalid HA entity id")
+            if not normalized_state:
+                raise HTTPException(status_code=400, detail="Invalid HA state")
+
+            res = await client.post(
+                f"{server.apiBase}/states/{normalized_entity_id}",
+                headers={"Authorization": f"Bearer {server.apiKey}"},
+                json={"state": normalized_state, "attributes": dict(attributes or {})},
+            )
+            if res.status_code == 401:
+                raise HTTPException(status_code=401, detail="HA auth failed")
+            if res.status_code >= 400:
+                raise HTTPException(status_code=502, detail=f"HA set state failed: {res.status_code}")
+            try:
+                payload = res.json()
+            except Exception:  # noqa: BLE001
+                payload = None
+            if isinstance(payload, dict):
+                self._state_cache.setdefault(server.id, {})[normalized_entity_id] = payload
+                self._state_cache_at.setdefault(server.id, {})[normalized_entity_id] = time.monotonic()
+            return payload
+
         async def _service_call_service(
             *,
             server_id: str,
@@ -390,6 +424,18 @@ class HomeAssistantExtension(BaseExtension):
             return await _call_service(server, domain, service_name, dict(data or {}))
 
         services.register("home_assistant.call_service", _service_call_service)
+
+        async def _set_state_service(
+            *,
+            server_id: str,
+            entity_id: str,
+            state: str,
+            attributes: dict[str, Any] | None = None,
+        ) -> Any:
+            server = await get_server(server_id)
+            return await _set_state(server, entity_id, state, attributes)
+
+        services.register("home_assistant.set_state", _set_state_service)
 
         async def _fetch_state(server: HomeAssistantServer, entity_id: str) -> dict[str, Any] | None:
             client = self._http

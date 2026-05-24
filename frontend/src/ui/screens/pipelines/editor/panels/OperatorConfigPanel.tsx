@@ -11,6 +11,7 @@ import {
   DebounceConfigCard,
   DebugConfigCard,
   FilterConfigCard,
+  HomeAssistantBooleanStateConfigCard,
   HomeAssistantNotifyConfigCard,
   NotifyConfigCard,
   PublishVideoConfigCard,
@@ -356,6 +357,9 @@ export function OperatorConfigPanel({
   }
   if (operatorId === "home_assistant.notify") {
     return <HomeAssistantNotifyConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
+  }
+  if (operatorId === "home_assistant.boolean_state") {
+    return <HomeAssistantBooleanStateConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;
   }
   if (operatorId === "stream.publish_video") {
     return <PublishVideoConfigCard config={config} showAdvanced={showAdvanced} onUpdateConfig={onUpdateConfig} />;

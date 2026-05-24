@@ -4,6 +4,7 @@ import type {
   CompositionElement,
   CompositionElementPatch,
   EditorFileDropEvent,
+  EditorToolPointerEvent,
   EditorToolSession,
   ElementType,
   PlanePoint,
@@ -36,6 +37,8 @@ type Props = {
   onUndo?: () => void;
   onRedo?: () => void;
   initialFit?: "content";
+  minScale?: number;
+  maxScale?: number;
 };
 
 function toVector2(x: number, y: number): Vector2 {
@@ -294,6 +297,7 @@ type Interaction =
       startScreen: Vector2;
       startCamera: Camera2D;
       startedByLeft: boolean;
+      forwardClickToTool: boolean;
       moved: boolean;
     }
   | {
@@ -370,6 +374,8 @@ export function Viewport2D({
   onUndo,
   onRedo,
   initialFit,
+  minScale = 18,
+  maxScale = 240,
 }: Props): React.ReactElement {
   const { locale } = i18n.useI18n();
 
@@ -387,6 +393,8 @@ export function Viewport2D({
   const enableKeyboardShortcutsRef = useRef<boolean>(enableKeyboardShortcuts);
   const toolSnapToGridRef = useRef<boolean>(toolSnapToGrid);
   const initialFitRef = useRef<Props["initialFit"]>(initialFit);
+  const minScaleRef = useRef(minScale);
+  const maxScaleRef = useRef(maxScale);
 
   const selectedRef = useRef<string[]>(selectedElementIds ?? []);
   const onSelectRef = useRef<Props["onSelectElements"]>(onSelectElements);
@@ -449,6 +457,18 @@ export function Viewport2D({
     initialFitAppliedRef.current = false;
     drawRef.current?.();
   }, [initialFit]);
+
+  useEffect(() => {
+    minScaleRef.current = minScale;
+    cameraRef.current.scale = clamp(cameraRef.current.scale, minScaleRef.current, maxScaleRef.current);
+    drawRef.current?.();
+  }, [minScale]);
+
+  useEffect(() => {
+    maxScaleRef.current = maxScale;
+    cameraRef.current.scale = clamp(cameraRef.current.scale, minScaleRef.current, maxScaleRef.current);
+    drawRef.current?.();
+  }, [maxScale]);
 
   useEffect(() => {
     hiddenElementIdsRef.current = new Set(hiddenElementIds ?? []);
@@ -664,7 +684,8 @@ export function Viewport2D({
       const spanZ = Math.max(1e-6, bounds.maxZ - bounds.minZ);
       const usableWidth = Math.max(1, width - 32);
       const usableHeight = Math.max(1, height - 32);
-      const scale = Math.max(4, Math.min(260, Math.min(usableWidth / spanX, usableHeight / spanZ)));
+      const fitMinScale = Math.min(4, minScaleRef.current);
+      const scale = clamp(Math.min(usableWidth / spanX, usableHeight / spanZ), fitMinScale, maxScaleRef.current);
       cameraRef.current = {
         cx: (bounds.minX + bounds.maxX) / 2,
         cz: (bounds.minZ + bounds.maxZ) / 2,
@@ -1280,14 +1301,11 @@ export function Viewport2D({
       return toPlanePoint((screen.x - originX) / scale + cx, (screen.y - originY) / scale + cz);
     }
 
-    function toToolEvent(
+    function buildToolEvent(
       kind: "down" | "move" | "up" | "cancel" | "dblclick",
       e: PointerEvent,
       buttonsOverride?: number,
-    ): void {
-      const session = toolSessionRef.current;
-      if (!session?.onPointerEvent) return;
-
+    ): EditorToolPointerEvent {
       const rect = canvasEl.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -1296,7 +1314,7 @@ export function Viewport2D({
       const shouldSnap = toolSnapToGridRef.current && !e.altKey;
       const world = shouldSnap ? snapPoint(worldRaw, SNAP_STEP) : worldRaw;
 
-      session.onPointerEvent({
+      return {
         kind,
         world,
         screen,
@@ -1307,7 +1325,17 @@ export function Viewport2D({
         altKey: e.altKey,
         metaKey: e.metaKey,
         ctrlKey: e.ctrlKey,
-      });
+      };
+    }
+
+    function toToolEvent(
+      kind: "down" | "move" | "up" | "cancel" | "dblclick",
+      e: PointerEvent,
+      buttonsOverride?: number,
+    ): void {
+      const session = toolSessionRef.current;
+      if (!session?.onPointerEvent) return;
+      session.onPointerEvent(buildToolEvent(kind, e, buttonsOverride));
       requestDraw();
     }
 
@@ -1660,6 +1688,18 @@ export function Viewport2D({
       const y = e.clientY - rect.top;
       const screen = toVector2(x, y);
       const world = screenToWorld(screen);
+      const toolDownEvent = session?.onPointerEvent ? buildToolEvent("down", e) : null;
+      const toolCapturesPointer =
+        Boolean(session?.onPointerEvent) &&
+        (session?.shouldCapturePointer ? session.shouldCapturePointer(toolDownEvent!) : !panRequested);
+
+      if (toolCapturesPointer) {
+        onBeginUndoGroupRef.current?.();
+        interactionRef.current = { kind: "tool", pointerId: e.pointerId };
+        session?.onPointerEvent?.(toolDownEvent!);
+        requestDraw();
+        return;
+      }
 
       if (panRequested) {
         interactionRef.current = {
@@ -1668,6 +1708,7 @@ export function Viewport2D({
           startScreen: screen,
           startCamera: { ...cameraRef.current },
           startedByLeft: e.button === 0 && !spacePressed,
+          forwardClickToTool: Boolean(session?.onPointerEvent && !session.shouldCapturePointer && e.button === 0 && !spacePressed),
           moved: e.button !== 0,
         };
         requestDraw();
@@ -1814,13 +1855,6 @@ export function Viewport2D({
 	          }
 	        }
 	      }
-
-	      if (session) {
-	        onBeginUndoGroupRef.current?.();
-	        interactionRef.current = { kind: "tool", pointerId: e.pointerId };
-	        toToolEvent("down", e);
-        return;
-      }
 
       if (e.button !== 0) return;
 
@@ -2232,7 +2266,7 @@ export function Viewport2D({
 
       if (interaction.kind === "pan") {
         if (interaction.pointerId !== e.pointerId) return;
-        if (interaction.startedByLeft && !interaction.moved && interactionModeRef.current === "navigate") {
+        if (interaction.forwardClickToTool && interaction.startedByLeft && !interaction.moved && interactionModeRef.current === "navigate") {
           toToolEvent("down", e, 1);
           toToolEvent("up", e, 0);
         }
@@ -2355,7 +2389,7 @@ export function Viewport2D({
       const before = toPlanePoint((x - originX) / camera.scale + camera.cx, (y - originY) / camera.scale + camera.cz);
 
       const zoomFactor = Math.pow(2, -e.deltaY / 420);
-      const nextScale = clamp(camera.scale * zoomFactor, 18, 240);
+      const nextScale = clamp(camera.scale * zoomFactor, minScaleRef.current, maxScaleRef.current);
       camera.scale = nextScale;
 
       camera.cx = before.x - (x - originX) / nextScale;

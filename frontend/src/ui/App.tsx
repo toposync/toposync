@@ -519,7 +519,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       },
       i18n,
       ui: {
-        Viewport2DReplica: ({ session, className, style, initialFit, interactionMode }) => {
+        Viewport2DReplica: ({ session, className, style, initialFit, interactionMode, minScale, maxScale }) => {
           const currentComposition = useSyncExternalStore(
             compositionStore.subscribe,
             compositionStore.getSnapshot,
@@ -541,6 +541,8 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
                 enableKeyboardShortcuts={false}
                 toolSnapToGrid={false}
                 initialFit={initialFit}
+                minScale={minScale}
+                maxScale={maxScale}
               />
             </div>
           );

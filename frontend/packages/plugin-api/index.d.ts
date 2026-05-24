@@ -324,6 +324,7 @@ export type EditorToolContext = {
 };
 
 export type EditorToolSession = {
+  shouldCapturePointer?: (event: EditorToolPointerEvent) => boolean;
   onPointerEvent?: (event: EditorToolPointerEvent) => void;
   onKeyDown?: (event: KeyboardEvent) => void;
   renderOverlay2D?: (args: { ctx: CanvasRenderingContext2D; viewport: Viewport2DContext }) => void;
@@ -359,6 +360,8 @@ export type Viewport2DReplicaProps = {
   session?: EditorToolSession | null;
   initialFit?: "content";
   interactionMode?: "navigate" | "select";
+  minScale?: number;
+  maxScale?: number;
 };
 
 export type LiveViewPlayerProps = {

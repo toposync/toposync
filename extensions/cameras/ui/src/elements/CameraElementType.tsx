@@ -1282,6 +1282,13 @@ function CameraCalibrationModal({
     }
 
     return {
+      shouldCapturePointer: (event: EditorToolPointerEvent) => {
+        if (movingToViewId || event.kind !== "down" || event.button !== 0) return false;
+        const viewId = selectedViewIdRef.current;
+        const currentView = viewsRef.current.find((view) => view.id === viewId) ?? viewsRef.current[0] ?? null;
+        if (!currentView) return false;
+        return Boolean(resolveHoverState(event, currentView.projection_model.world_quad, viewportRef.current));
+      },
       onPointerEvent: (event: EditorToolPointerEvent) => {
         if (movingToViewId) return;
         const viewId = selectedViewIdRef.current;
@@ -1567,7 +1574,8 @@ function CameraCalibrationModal({
         <div style={{ position: "relative", flex: 1, minHeight: 0, borderRadius: 14, border: "1px solid rgba(255,255,255,0.14)", overflow: "hidden", background: "rgba(0,0,0,0.20)" }}>
           <host.ui.Viewport2DReplica
             initialFit="content"
-            interactionMode="select"
+            interactionMode="navigate"
+            minScale={2}
             session={toolSession}
             style={{ width: "100%", height: "100%" }}
           />

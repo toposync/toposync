@@ -604,6 +604,33 @@ export type CamerasIndexResponse = {
   cameras: CameraSummary[];
 };
 
+export type CameraOnvifEventItem = {
+  name: string;
+  type?: string;
+};
+
+export type CameraOnvifEventDescriptor = {
+  topic: string;
+  item_name?: string;
+  item_type?: string;
+  is_property?: boolean;
+  is_boolean?: boolean;
+  label?: string;
+  source_items?: CameraOnvifEventItem[];
+  key_items?: CameraOnvifEventItem[];
+  data_items?: CameraOnvifEventItem[];
+};
+
+export type CameraOnvifEventsResponse = {
+  camera_id: string;
+  camera_name?: string;
+  available?: boolean;
+  error?: string;
+  event_xaddr?: string;
+  boolean_states: CameraOnvifEventDescriptor[];
+  events: CameraOnvifEventDescriptor[];
+};
+
 export type CameraContextArea = {
   id: string;
   name: string;
@@ -2105,6 +2132,28 @@ export async function listCamerasIndex(): Promise<CamerasIndexResponse> {
   if (!res.ok) throw new Error(`Failed to list cameras index: ${res.status}`);
   const body = (await res.json()) as { cameras?: CameraSummary[] };
   return { cameras: Array.isArray(body.cameras) ? body.cameras : [] };
+}
+
+export async function getCameraOnvifEvents(
+  cameraId: string,
+  signal?: AbortSignal,
+): Promise<CameraOnvifEventsResponse> {
+  const res = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/onvif/events`, { signal });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const detail = (body as any)?.detail ? String((body as any).detail) : String(res.status);
+    throw new Error(detail);
+  }
+  const body = (await res.json()) as Partial<CameraOnvifEventsResponse>;
+  return {
+    camera_id: String(body.camera_id || cameraId),
+    camera_name: String(body.camera_name || ""),
+    available: Boolean(body.available),
+    error: String(body.error || ""),
+    event_xaddr: String(body.event_xaddr || ""),
+    boolean_states: Array.isArray(body.boolean_states) ? body.boolean_states : [],
+    events: Array.isArray(body.events) ? body.events : [],
+  };
 }
 
 export async function getCameraContexts(cameraId: string): Promise<CameraContextsResponse> {

@@ -2,12 +2,20 @@ import React from "react";
 import Select, { type MultiValue, type SingleValue } from "react-select";
 import type { StylesConfig } from "react-select";
 
-import type { CameraContextsResponse, CamerasIndexResponse, CameraSourceSummary, PipelineOperatorDefinition } from "../../../../../util/api";
+import type {
+  CameraContextsResponse,
+  CameraOnvifEventDescriptor,
+  CameraOnvifEventsResponse,
+  CamerasIndexResponse,
+  CameraSourceSummary,
+  PipelineOperatorDefinition,
+} from "../../../../../util/api";
+import { getCameraOnvifEvents } from "../../../../../util/api";
 import { i18n } from "../../../../../util/i18n";
 
 import { buildArtifactSuggestions, pipelinesReactSelectStyles } from "../../constants";
 import type { CameraAreaOption, InteractiveStep, SelectOption, TelemetryFieldInspectorRequest } from "../../types";
-import { prettyOperatorName, textConfigValue } from "../../utils";
+import { humanizeIdentifier, prettyOperatorName, textConfigValue } from "../../utils";
 import { PipelinesNumberInput } from "../PipelinesNumberInput";
 import {
   CropRectangleDrawModal,
@@ -176,6 +184,327 @@ export function CameraSourceConfigCard({
         </select>
       </label>
       <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.camera_source.hint_backend")}</div>
+    </div>
+  );
+}
+
+type OnvifOperatorCameraProps = {
+  config: Record<string, unknown>;
+  camerasIndex: CamerasIndexResponse;
+  cameraSelectOptions: SelectOption[];
+  cameraSelectOptionById: Map<string, SelectOption>;
+  showAdvanced: boolean;
+  onUpdateConfig: UpdateConfig;
+};
+
+type OnvifEventOption = SelectOption & {
+  descriptor: CameraOnvifEventDescriptor;
+};
+
+const onvifSingleSelectStyles = pipelinesReactSelectStyles as unknown as StylesConfig<OnvifEventOption, false>;
+const onvifMultiSelectStyles = pipelinesReactSelectStyles as unknown as StylesConfig<OnvifEventOption, true>;
+
+function useOnvifEvents(cameraId: string): {
+  value: CameraOnvifEventsResponse | null;
+  loading: boolean;
+  error: string | null;
+} {
+  const [value, setValue] = React.useState<CameraOnvifEventsResponse | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const cid = String(cameraId || "").trim();
+    if (!cid) {
+      setValue(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    const controller = new AbortController();
+    setLoading(true);
+    setError(null);
+    getCameraOnvifEvents(cid, controller.signal)
+      .then((next) => {
+        setValue(next);
+        setError(String(next.error || "").trim() || null);
+      })
+      .catch((err: any) => {
+        if (controller.signal.aborted) return;
+        setValue(null);
+        setError(String(err?.message ?? err));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [cameraId]);
+
+  return { value, loading, error };
+}
+
+function onvifDescriptorKey(descriptor: Pick<CameraOnvifEventDescriptor, "topic" | "item_name">): string {
+  return JSON.stringify([String(descriptor.topic || "").trim(), String(descriptor.item_name || "").trim()]);
+}
+
+function parseOnvifDescriptorKey(value: string): { topic: string; item_name: string } {
+  try {
+    const parsed = JSON.parse(String(value || ""));
+    if (Array.isArray(parsed)) {
+      return { topic: String(parsed[0] || "").trim(), item_name: String(parsed[1] || "").trim() };
+    }
+  } catch {
+    return { topic: "", item_name: "" };
+  }
+  return { topic: "", item_name: "" };
+}
+
+function onvifEventLabel(descriptor: CameraOnvifEventDescriptor): string {
+  const label = String(descriptor.label || "").trim();
+  return label || onvifTopicContext(descriptor) || humanizeIdentifier(String(descriptor.item_name || "").trim());
+}
+
+function onvifTopicContext(descriptor: CameraOnvifEventDescriptor): string {
+  const topic = String(descriptor.topic || "").trim();
+  if (!topic) return "";
+  const parts = topic.split("/").map((part) => part.trim()).filter((part) => part.length > 0);
+  if (parts.length <= 1) return humanizeIdentifier(parts[0] || "");
+  return humanizeIdentifier(parts[parts.length - 2] || parts[parts.length - 1] || "");
+}
+
+function buildOnvifEventOptions(descriptors: CameraOnvifEventDescriptor[]): OnvifEventOption[] {
+  const base = (descriptors || [])
+    .map((descriptor) => ({
+      value: onvifDescriptorKey(descriptor),
+      label: onvifEventLabel(descriptor),
+      descriptor,
+    }))
+    .filter((option) => option.value && option.label);
+  const counts = new Map<string, number>();
+  for (const option of base) counts.set(option.label, (counts.get(option.label) ?? 0) + 1);
+  return base
+    .map((option) => {
+      if ((counts.get(option.label) ?? 0) <= 1) return option;
+      const context = onvifTopicContext(option.descriptor);
+      return context ? { ...option, label: `${option.label} · ${context}` } : option;
+    })
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function selectedCameraOptionForConfig(
+  config: Record<string, unknown>,
+  cameraSelectOptionById: Map<string, SelectOption>,
+): SelectOption | null {
+  const cameraId = String((config as any).camera_id ?? "").trim();
+  if (!cameraId) return null;
+  return cameraSelectOptionById.get(cameraId) ?? { value: cameraId, label: cameraId };
+}
+
+export function OnvifStateGateConfigCard({
+  config,
+  camerasIndex,
+  cameraSelectOptions,
+  cameraSelectOptionById,
+  showAdvanced,
+  onUpdateConfig,
+}: OnvifOperatorCameraProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const cameraId = String((config as any).camera_id ?? "").trim();
+  const topic = String((config as any).topic ?? "").trim();
+  const itemName = String((config as any).item_name ?? "").trim();
+  const openWhen = (config as any).open_when !== false;
+  const failOpen = Boolean((config as any).fail_open);
+  const holdSeconds = Number((config as any).hold_seconds ?? 5);
+  const pollIntervalMs = Number((config as any).poll_interval_ms ?? 500);
+  const selectedCameraOption = selectedCameraOptionForConfig(config, cameraSelectOptionById);
+  const selectedCamera = (camerasIndex.cameras || []).find((camera) => String(camera.id || "").trim() === cameraId) ?? null;
+  const onvifEvents = useOnvifEvents(cameraId);
+  const conditionOptions = React.useMemo(
+    () => buildOnvifEventOptions(onvifEvents.value?.boolean_states ?? []),
+    [onvifEvents.value],
+  );
+  const selectedConditionKey = onvifDescriptorKey({ topic, item_name: itemName });
+  const selectedCondition =
+    conditionOptions.find((option) => option.value === selectedConditionKey) ??
+    (topic ? { value: selectedConditionKey, label: itemName || topic, descriptor: { topic, item_name: itemName } } : null);
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.onvif.camera")}</span>
+        <Select<SelectOption, false>
+          styles={pipelinesReactSelectStyles}
+          options={cameraSelectOptions}
+          value={selectedCameraOption}
+          isClearable
+          placeholder={t("core.ui.pipelines.panels.onvif.camera_placeholder")}
+          onChange={(value: SingleValue<SelectOption>) => {
+            onUpdateConfig((prev) => ({ ...prev, camera_id: value?.value ?? "", topic: "", item_name: "" }));
+          }}
+        />
+      </label>
+
+      {selectedCamera && String(selectedCamera.control?.type || "").toLowerCase() !== "onvif" ? (
+        <div className="pipelinesInlineError">{t("core.ui.pipelines.panels.onvif.not_onvif")}</div>
+      ) : null}
+      {cameraId && onvifEvents.loading ? <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.onvif.loading")}</div> : null}
+      {cameraId && onvifEvents.error ? <div className="pipelinesInlineError">{onvifEvents.error}</div> : null}
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.onvif.condition")}</span>
+        <Select<OnvifEventOption, false>
+          styles={onvifSingleSelectStyles}
+          options={conditionOptions}
+          value={selectedCondition}
+          isClearable
+          isDisabled={!cameraId || onvifEvents.loading}
+          placeholder={t("core.ui.pipelines.panels.onvif.condition_placeholder")}
+          onChange={(value: SingleValue<OnvifEventOption>) => {
+            const selected = parseOnvifDescriptorKey(value?.value ?? "");
+            onUpdateConfig((prev) => ({ ...prev, topic: selected.topic, item_name: selected.item_name }));
+          }}
+        />
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.onvif.open_when")}</span>
+        <select
+          className="pipelinesSelect"
+          value={openWhen ? "true" : "false"}
+          onChange={(event) => onUpdateConfig((prev) => ({ ...prev, open_when: event.target.value !== "false" }))}
+        >
+          <option value="true">{t("core.ui.pipelines.panels.onvif.open_when.true")}</option>
+          <option value="false">{t("core.ui.pipelines.panels.onvif.open_when.false")}</option>
+        </select>
+      </label>
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.onvif.fail_behavior")}</span>
+        <select
+          className="pipelinesSelect"
+          value={failOpen ? "open" : "closed"}
+          onChange={(event) => onUpdateConfig((prev) => ({ ...prev, fail_open: event.target.value === "open" }))}
+        >
+          <option value="closed">{t("core.ui.pipelines.panels.onvif.fail_behavior.closed")}</option>
+          <option value="open">{t("core.ui.pipelines.panels.onvif.fail_behavior.open")}</option>
+        </select>
+      </label>
+
+      {showAdvanced ? (
+        <>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.onvif.hold_seconds")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={0}
+              max={300}
+              step={0.5}
+              value={Number.isFinite(holdSeconds) ? holdSeconds : 5}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(0, Math.min(300, nextValue)) : 5;
+                onUpdateConfig((prev) => ({ ...prev, hold_seconds: normalized }));
+              }}
+            />
+          </label>
+          <label className="pipelinesLabel">
+            <span>{t("core.ui.pipelines.panels.onvif.poll_interval_ms")}</span>
+            <PipelinesNumberInput
+              className="pipelinesInput"
+              min={100}
+              max={60000}
+              step={100}
+              value={Number.isFinite(pollIntervalMs) ? pollIntervalMs : 500}
+              onChange={(nextValue) => {
+                const normalized = Number.isFinite(nextValue) ? Math.max(100, Math.min(60000, Math.round(nextValue))) : 500;
+                onUpdateConfig((prev) => ({ ...prev, poll_interval_ms: normalized }));
+              }}
+            />
+          </label>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+export function OnvifEventSourceConfigCard({
+  config,
+  camerasIndex,
+  cameraSelectOptions,
+  cameraSelectOptionById,
+  showAdvanced,
+  onUpdateConfig,
+}: OnvifOperatorCameraProps): React.ReactElement {
+  const { t } = i18n.useI18n();
+  const cameraId = String((config as any).camera_id ?? "").trim();
+  const pollIntervalMs = Number((config as any).poll_interval_ms ?? 500);
+  const selectedCameraOption = selectedCameraOptionForConfig(config, cameraSelectOptionById);
+  const selectedCamera = (camerasIndex.cameras || []).find((camera) => String(camera.id || "").trim() === cameraId) ?? null;
+  const onvifEvents = useOnvifEvents(cameraId);
+  const eventOptions = React.useMemo(() => buildOnvifEventOptions(onvifEvents.value?.events ?? []), [onvifEvents.value]);
+  const filtersRaw = Array.isArray((config as any).event_filters) ? ((config as any).event_filters as any[]) : [];
+  const selectedKeys = new Set(
+    filtersRaw
+      .map((item) => onvifDescriptorKey({ topic: String(item?.topic || ""), item_name: String(item?.item_name || "") }))
+      .filter((value) => value.length > 0),
+  );
+  const selectedOptions = eventOptions.filter((option) => selectedKeys.has(option.value));
+
+  return (
+    <div className="pipelinesOperatorConfigCard">
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.onvif.camera")}</span>
+        <Select<SelectOption, false>
+          styles={pipelinesReactSelectStyles}
+          options={cameraSelectOptions}
+          value={selectedCameraOption}
+          isClearable
+          placeholder={t("core.ui.pipelines.panels.onvif.camera_placeholder")}
+          onChange={(value: SingleValue<SelectOption>) => {
+            onUpdateConfig((prev) => ({ ...prev, camera_id: value?.value ?? "", event_filters: [] }));
+          }}
+        />
+      </label>
+
+      {selectedCamera && String(selectedCamera.control?.type || "").toLowerCase() !== "onvif" ? (
+        <div className="pipelinesInlineError">{t("core.ui.pipelines.panels.onvif.not_onvif")}</div>
+      ) : null}
+      {cameraId && onvifEvents.loading ? <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.onvif.loading")}</div> : null}
+      {cameraId && onvifEvents.error ? <div className="pipelinesInlineError">{onvifEvents.error}</div> : null}
+
+      <label className="pipelinesLabel">
+        <span>{t("core.ui.pipelines.panels.onvif.events")}</span>
+        <Select<OnvifEventOption, true>
+          styles={onvifMultiSelectStyles}
+          options={eventOptions}
+          value={selectedOptions}
+          isMulti
+          isClearable
+          isDisabled={!cameraId || onvifEvents.loading}
+          placeholder={t("core.ui.pipelines.panels.onvif.events_placeholder")}
+          onChange={(value: MultiValue<OnvifEventOption>) => {
+            const event_filters = value.map((option) => parseOnvifDescriptorKey(option.value));
+            onUpdateConfig((prev) => ({ ...prev, event_filters }));
+          }}
+        />
+      </label>
+      <div className="pipelinesStepHint">{t("core.ui.pipelines.panels.onvif.events_hint")}</div>
+
+      {showAdvanced ? (
+        <label className="pipelinesLabel">
+          <span>{t("core.ui.pipelines.panels.onvif.poll_interval_ms")}</span>
+          <PipelinesNumberInput
+            className="pipelinesInput"
+            min={100}
+            max={60000}
+            step={100}
+            value={Number.isFinite(pollIntervalMs) ? pollIntervalMs : 500}
+            onChange={(nextValue) => {
+              const normalized = Number.isFinite(nextValue) ? Math.max(100, Math.min(60000, Math.round(nextValue))) : 500;
+              onUpdateConfig((prev) => ({ ...prev, poll_interval_ms: normalized }));
+            }}
+          />
+        </label>
+      ) : null}
     </div>
   );
 }

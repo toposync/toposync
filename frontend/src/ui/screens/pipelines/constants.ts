@@ -5,6 +5,8 @@ import type { SelectOption } from "./types";
 export const PIPELINE_PRESET_OPERATOR_IDS = [
   "camera.source",
   "core.schedule_gate",
+  "camera.onvif_state_gate",
+  "camera.onvif_event_source",
   "camera.motion_bgsub_adaptive",
   "camera.motion_sample_bg",
   "camera.motion_gate",
@@ -167,6 +169,8 @@ export const PIPELINE_OPERATOR_RECIPES = [
 export const PIPELINE_OPERATOR_UX = {
   "camera.source": { group: "input", level: "basic", order: 10 },
   "core.schedule_gate": { group: "input", level: "advanced", order: 20 },
+  "camera.onvif_state_gate": { group: "input", level: "advanced", order: 25 },
+  "camera.onvif_event_source": { group: "input", level: "advanced", order: 26 },
   "core.source": { group: "input", level: "advanced", order: 900 },
   "core.synthetic_source": { group: "input", level: "advanced", order: 910 },
   "core.demo_frame_sequence_source": { group: "input", level: "advanced", order: 920 },

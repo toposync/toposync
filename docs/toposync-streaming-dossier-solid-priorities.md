@@ -65,7 +65,7 @@ Esta seção é normativa para decisões futuras de produto e engenharia no stre
 ### Política de transporte
 
 - HLS é a base estável e universal, especialmente para app, HA ingress, remoto, fallback e cenários de rede imprevisível.
-- MSE é o caminho preferencial para web passivo quando a infraestrutura real está disponível: sidecar `go2rtc` rodando, MediaMTX saudável, output backing correto, codec compatível e proxy assinado funcional.
+- MSE é o caminho preferencial para web passivo quando a infraestrutura real está disponível: sidecar `go2rtc` habilitado/iniciável, MediaMTX saudável, output backing correto, codec compatível e proxy assinado funcional. O processo pode ficar parado enquanto não há viewer MSE.
 - WebRTC é contextual: PTZ, zoom, baixa latência explícita, two-way ou escolha fixa em debug. Ele não deve abrir para todos os tiles por padrão.
 - JSMpeg é último recurso visual, sem áudio, baixa resolução/FPS, e só deve entrar depois de falha ou indisponibilidade real dos transportes melhores.
 - RTSP não é transporte de navegador. Ele continua como contrato interno/ecossistema para HA Core, Frigate/dev, VLC, go2rtc sidecar e diagnóstico.
@@ -161,6 +161,8 @@ Em 2026-05-22, foi entregue a primeira fatia da escada "sempre visualizável" no
 
 Em 2026-05-23, o MSE deixou de ser apenas um candidato planejado: ele passou a ser executado por um sidecar opcional `go2rtc`, consumindo somente RTSP interno do MediaMTX e expondo ao navegador apenas um WebSocket assinado/proxyado pelo Toposync. No mesmo ciclo, JSMpeg passou a ser fallback visual real: FFmpeg é iniciado por sessão WebSocket assinada, consome apenas o frame selecionado do runtime da Transmission, não usa áudio e encerra quando a conexão fecha.
 
+Ainda em 2026-05-23, o ciclo de vida do MSE foi ajustado para ser realmente sob demanda: o Playback Plan pode retornar MSE disponível quando o sidecar está **habilitado e iniciável**, mesmo que o processo `go2rtc` esteja parado. A abertura do WebSocket assinado é o ponto que prima demanda, aguarda o path RTSP interno do MediaMTX, inicia/atualiza o `go2rtc`, aguarda a API do sidecar e então proxya MIME/fMP4 para o navegador. Portanto, `GET /api/streams/mse/status` com `running=false` não é erro por si só; pode significar apenas que não há sessão MSE ativa.
+
 ### O que ficou implementado
 
 1. **Playback Plan API.**
@@ -187,15 +189,16 @@ Em 2026-05-23, o MSE deixou de ser apenas um candidato planejado: ele passou a s
 |---|---|---|
 | HLS | ativo | fallback estável e caminho preferido em app/HA. |
 | WebRTC | ativo quando disponível | usado para baixa latência/PTZ ou escolha explícita; não é default para app/HA. |
-| MSE | ativo quando sidecar está disponível | usa `go2rtc` v1.9.14 consumindo RTSP interno do MediaMTX e proxy assinado pelo Toposync. |
+| MSE | ativo quando sidecar está habilitado/iniciável | usa `go2rtc` v1.9.14 consumindo RTSP interno do MediaMTX e proxy assinado pelo Toposync; o processo pode ficar parado até o primeiro viewer MSE. |
 | JSMpeg | ativo como fallback visual sob demanda | WebSocket assinado; FFmpeg por sessão; frame selecionado/runtime ou placeholder; baixa resolução/FPS, sem áudio. |
 
 ### Regressões cobertas
 
-- Web comum passivo seleciona MSE quando sidecar e output backing existem; sem sidecar, cai para HLS com motivo claro.
+- Web comum passivo seleciona MSE quando sidecar está habilitado/iniciável e output backing existe; sem binário/engine/output, cai para HLS com motivo claro.
 - App/HA seleciona HLS e bloqueia WebRTC como caminho padrão.
 - Transmissão com múltiplos HLS por `quality_profile_id` seleciona o output solicitado, incluindo fullscreen, sem cair no primeiro HLS.
 - O contrato de tipos aceita URL sintética `mse` derivada de output HLS/RTSP saudável sem gravar `TransmissionOutput(protocol="mse")` persistido.
+- Matar o `go2rtc` não deve quebrar a próxima sessão MSE; o próximo WebSocket assinado deve reiniciar o sidecar sob demanda.
 
 ### Validação desta fatia
 
@@ -207,7 +210,7 @@ Em 2026-05-23, o MSE deixou de ser apenas um candidato planejado: ele passou a s
 
 ### Próximos passos obrigatórios
 
-1. Validar MSE com `go2rtc` em caos real: restart de MediaMTX, restart do sidecar, publisher frio e codec incompatível.
+1. Validar MSE com `go2rtc` em caos real: restart de MediaMTX, restart do sidecar, publisher frio, codec incompatível e sessão fechada por TTL.
 2. Validar JSMpeg em caos real: câmera offline, pipeline fria, queda de WebSocket, limite de sessões e CPU sob múltiplos tiles.
 3. Medir custo de FFmpeg por sessão e ajustar defaults de `max_total_sessions`, `max_sessions_per_transmission`, FPS e bitrate.
 4. Manter JSMpeg como último recurso visual; se ele aparecer frequentemente no Auto, isso deve abrir investigação de HLS/MSE, não virar caminho normal.
@@ -411,7 +414,7 @@ Esta política substitui a ideia anterior de "WebRTC sempre primeiro no navegado
 Estado atual:
 
 - HLS, WebRTC e RTSP existem no runtime real via MediaMTX.
-- MSE existe no runtime real quando o sidecar `go2rtc` está habilitado e rodando; o navegador usa apenas proxy WebSocket assinado do Toposync.
+- MSE existe no runtime real quando o sidecar `go2rtc` está habilitado e iniciável; o navegador usa apenas proxy WebSocket assinado do Toposync, que inicia/atualiza o sidecar na abertura da sessão.
 - JSMpeg existe no runtime real como fallback visual sob demanda, com encoder FFmpeg por sessão e fonte no frame selecionado da Transmission.
 
 ### Regras de saúde e diagnóstico

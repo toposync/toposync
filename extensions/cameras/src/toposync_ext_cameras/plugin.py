@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 
-from toposync.extensions import BaseExtension
+from toposync.extensions import BaseExtension, register_extension_shutdown_callback
 from toposync.runtime.auth import AuthContext, AuthRuntime
 from toposync.runtime.config_store import (
     ConfigStore,
@@ -42,13 +42,14 @@ from .settings import (
     get_camera_source_credentials,
     get_camera_source_origin,
     get_camera_source_origin_type,
-    get_default_camera_source,
     iter_camera_devices,
     normalize_cameras_settings,
 )
 from .onvif import (
+    OnvifCameraEventContext,
     OnvifClient,
     OnvifDiscoveredDevice,
+    OnvifEventStateManager,
     OnvifError,
     OnvifProfile,
     discover_onvif_devices,
@@ -137,6 +138,33 @@ class CameraSourceHealthResponse(BaseModel):
     offline_after_seconds: float
     retention_seconds: float
     sources: list[CameraSourceHealthItem] = Field(default_factory=list)
+
+
+class OnvifEventItemResponse(BaseModel):
+    name: str
+    type: str = ""
+
+
+class OnvifEventDescriptorResponse(BaseModel):
+    topic: str
+    item_name: str = ""
+    item_type: str = ""
+    is_property: bool = False
+    is_boolean: bool = False
+    label: str = ""
+    source_items: list[OnvifEventItemResponse] = Field(default_factory=list)
+    key_items: list[OnvifEventItemResponse] = Field(default_factory=list)
+    data_items: list[OnvifEventItemResponse] = Field(default_factory=list)
+
+
+class CameraOnvifEventsResponse(BaseModel):
+    camera_id: str
+    camera_name: str = ""
+    available: bool = False
+    error: str = ""
+    event_xaddr: str = ""
+    boolean_states: list[OnvifEventDescriptorResponse] = Field(default_factory=list)
+    events: list[OnvifEventDescriptorResponse] = Field(default_factory=list)
 
 
 class OnvifInspectRequest(BaseModel):
@@ -283,6 +311,13 @@ class CameraPtzActionResponse(BaseModel):
 class CameraPtzGotoPresetRequest(BaseModel):
     preset_token: str
     source_id: str = ""
+
+
+class CameraPtzAbsoluteMoveRequest(BaseModel):
+    source_id: str = ""
+    pan: float | None = None
+    tilt: float | None = None
+    zoom: float | None = None
 
 
 class CameraPtzMoveRequest(BaseModel):
@@ -717,6 +752,103 @@ class CamerasExtension(BaseExtension):
                 return max(min_value, min(max_value, float(default)))
             return max(min_value, min(max_value, value))
 
+        async def _resolve_onvif_event_context(camera_id: str) -> OnvifCameraEventContext:
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            store = getattr(app.state, "config_store", None)
+            if store is None:
+                raise HTTPException(status_code=500, detail="Toposync config_store not available")
+
+            app_settings = await store.get_settings()
+            ext = app_settings.extensions.get(EXTENSION_ID, {})
+            ext_rec = normalize_cameras_settings(ext)
+            camera = get_camera_device(ext_rec, camera_id=cid)
+            if camera is None:
+                raise HTTPException(status_code=404, detail="Camera not found")
+
+            control = camera.get("control") if isinstance(camera.get("control"), dict) else {}
+            if str(control.get("type") or "").strip().lower() != "onvif":
+                raise HTTPException(status_code=409, detail="Camera is not configured for ONVIF")
+
+            onvif_raw = camera.get("onvif")
+            onvif = onvif_raw if isinstance(onvif_raw, dict) else {}
+            xaddr = normalize_onvif_xaddr(str(onvif.get("xaddr") or "").strip())
+            if not xaddr:
+                raise HTTPException(status_code=409, detail="Camera is missing ONVIF xaddr")
+
+            username, password = get_camera_onvif_credentials(camera)
+            return OnvifCameraEventContext(
+                camera_id=cid,
+                camera_name=str(camera.get("name") or "").strip(),
+                xaddr=xaddr,
+                username=username,
+                password=password,
+                event_xaddr=str(onvif.get("event_xaddr") or "").strip(),
+                timeout_s=_env_float(
+                    "TOPOSYNC_CAMERA_ONVIF_TIMEOUT_S",
+                    3.5,
+                    min_value=0.5,
+                    max_value=20.0,
+                ),
+            )
+
+        onvif_event_manager = OnvifEventStateManager(
+            resolve_context=_resolve_onvif_event_context,
+            pull_timeout_s=_env_float(
+                "TOPOSYNC_CAMERA_ONVIF_EVENTS_PULL_TIMEOUT_S",
+                5.0,
+                min_value=0.5,
+                max_value=30.0,
+            ),
+            reconnect_backoff_s=_env_float(
+                "TOPOSYNC_CAMERA_ONVIF_EVENTS_RECONNECT_BACKOFF_S",
+                5.0,
+                min_value=0.5,
+                max_value=120.0,
+            ),
+            descriptors_ttl_s=_env_float(
+                "TOPOSYNC_CAMERA_ONVIF_EVENTS_DESCRIPTORS_TTL_S",
+                300.0,
+                min_value=5.0,
+                max_value=3600.0,
+            ),
+        )
+        app.state.camera_onvif_event_manager = onvif_event_manager
+        register_extension_shutdown_callback(app, onvif_event_manager.shutdown)
+
+        async def _svc_onvif_events_list(*, camera_id: str) -> dict[str, Any]:
+            return await onvif_event_manager.list_descriptors(str(camera_id or "").strip())
+
+        async def _svc_onvif_events_snapshot(
+            *,
+            camera_id: str,
+            topic: str,
+            item_name: str,
+        ) -> dict[str, Any]:
+            return await onvif_event_manager.snapshot(
+                camera_id=str(camera_id or "").strip(),
+                topic=str(topic or "").strip(),
+                item_name=str(item_name or "").strip(),
+            )
+
+        async def _svc_onvif_events_recent(
+            *,
+            camera_id: str,
+            after_sequence: int = 0,
+            limit: int = 32,
+        ) -> dict[str, Any]:
+            return await onvif_event_manager.recent_events(
+                camera_id=str(camera_id or "").strip(),
+                after_sequence=int(after_sequence or 0),
+                limit=int(limit or 32),
+            )
+
+        services.register("cameras.onvif_events.list", _svc_onvif_events_list)
+        services.register("cameras.onvif_events.snapshot", _svc_onvif_events_snapshot)
+        services.register("cameras.onvif_events.recent_events", _svc_onvif_events_recent)
+
         def _get_onvif_ptz_lock(key: str) -> asyncio.Lock:
             lock = onvif_ptz_locks.get(key)
             if lock is None:
@@ -1012,6 +1144,44 @@ class CamerasExtension(BaseExtension):
                 "utc_time": str(status.utc_time or "").strip(),
             }
 
+        async def _svc_ptz_absolute_move(
+            *,
+            camera_id: str,
+            camera_source_id: str | None = None,
+            pan: float | None = None,
+            tilt: float | None = None,
+            zoom: float | None = None,
+        ) -> dict[str, Any]:
+            def _safe_optional_float(value: float | None) -> float | None:
+                if value is None:
+                    return None
+                parsed = float(value)
+                return parsed if math.isfinite(parsed) else None
+
+            safe_pan = _safe_optional_float(pan)
+            safe_tilt = _safe_optional_float(tilt)
+            safe_zoom = _safe_optional_float(zoom)
+            if (safe_pan is None) != (safe_tilt is None):
+                raise HTTPException(status_code=400, detail="pan and tilt must be provided together")
+            if safe_pan is None and safe_tilt is None and safe_zoom is None:
+                raise HTTPException(status_code=400, detail="at least one absolute PTZ position axis is required")
+
+            client, ptz_xaddr, profile_token, _source_id = await _resolve_onvif_ptz_context(
+                camera_id=str(camera_id or "").strip(),
+                camera_source_id=camera_source_id,
+            )
+            try:
+                await client.absolute_move(
+                    ptz_xaddr,
+                    profile_token=profile_token,
+                    pan=safe_pan,
+                    tilt=safe_tilt,
+                    zoom=safe_zoom,
+                )
+            except OnvifError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            return {"ok": True}
+
         async def _svc_ptz_continuous_move(
             *,
             camera_id: str,
@@ -1105,6 +1275,7 @@ class CamerasExtension(BaseExtension):
         services.register("cameras.ptz.list_presets", _svc_ptz_list_presets)
         services.register("cameras.ptz.goto_preset", _svc_ptz_goto_preset)
         services.register("cameras.ptz.get_status", _svc_ptz_get_status)
+        services.register("cameras.ptz.absolute_move", _svc_ptz_absolute_move)
         services.register("cameras.ptz.continuous_move", _svc_ptz_continuous_move)
         services.register("cameras.ptz.stop", _svc_ptz_stop)
         app.state.camera_source_health_store = get_global_source_health_store()
@@ -1256,6 +1427,26 @@ class CamerasExtension(BaseExtension):
                 )
 
             return {"cameras": cameras}
+
+        @app.get(
+            "/api/cameras/cameras/{camera_id}/onvif/events",
+            response_model=CameraOnvifEventsResponse,
+        )
+        async def camera_onvif_events(
+            request: Request,
+            camera_id: str,
+        ) -> CameraOnvifEventsResponse:
+            _require_auth(request, action="core:settings:read")
+            try:
+                raw = await _services(request).call(
+                    "cameras.onvif_events.list",
+                    camera_id=str(camera_id or "").strip(),
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            return CameraOnvifEventsResponse.model_validate(raw if isinstance(raw, dict) else {})
 
         def _normalized_host(url: str) -> str:
             raw = str(url or "").strip()
@@ -1621,6 +1812,37 @@ class CamerasExtension(BaseExtension):
                     raw_status if isinstance(raw_status, dict) else {}
                 ),
             )
+
+        @app.post(
+            "/api/cameras/cameras/{camera_id}/ptz/absolute-move",
+            response_model=CameraPtzActionResponse,
+        )
+        async def camera_ptz_absolute_move(
+            request: Request,
+            camera_id: str,
+            body: CameraPtzAbsoluteMoveRequest,
+        ) -> CameraPtzActionResponse:
+            _require_auth(request, action="core:settings:read")
+            cid = str(camera_id or "").strip()
+            if not cid:
+                raise HTTPException(status_code=400, detail="camera_id is required")
+
+            services = _services(request)
+            try:
+                await services.call(
+                    "cameras.ptz.absolute_move",
+                    camera_id=cid,
+                    camera_source_id=str(getattr(body, "source_id", "") or "").strip() or None,
+                    pan=body.pan,
+                    tilt=body.tilt,
+                    zoom=body.zoom,
+                )
+            except KeyError:
+                raise HTTPException(
+                    status_code=503, detail="Camera PTZ controls are not available"
+                ) from None
+
+            return CameraPtzActionResponse(ok=True)
 
         @app.post(
             "/api/cameras/cameras/{camera_id}/ptz/move", response_model=CameraPtzActionResponse

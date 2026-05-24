@@ -473,6 +473,28 @@ def _tptz_get_status_body(profile_token: str) -> str:
     )
 
 
+def _tptz_absolute_move_body(
+    profile_token: str,
+    *,
+    pan: float | None,
+    tilt: float | None,
+    zoom: float | None,
+) -> str:
+    token = _xml_escape(profile_token)
+    position_parts: list[str] = []
+    if pan is not None and tilt is not None:
+        position_parts.append(f'<tt:PanTilt x="{float(pan):.6f}" y="{float(tilt):.6f}" />')
+    if zoom is not None:
+        position_parts.append(f'<tt:Zoom x="{float(zoom):.6f}" />')
+    position_xml = "<tptz:Position>" + "".join(position_parts) + "</tptz:Position>"
+    return (
+        f'<tptz:AbsoluteMove xmlns:tptz="{PTZ_NS}" xmlns:tt="{TT_NS}">'
+        f"<tptz:ProfileToken>{token}</tptz:ProfileToken>"
+        f"{position_xml}"
+        "</tptz:AbsoluteMove>"
+    )
+
+
 def _tptz_continuous_move_body(
     profile_token: str,
     *,
@@ -635,6 +657,35 @@ class OnvifClient:
         body_xml = _tptz_get_status_body(token)
         soap_action = _action(PTZ_NS, "GetStatus")
         return await self._call_and_parse_ptz_status(url=url, body_xml=body_xml, soap_action=soap_action)
+
+    async def absolute_move(
+        self,
+        ptz_xaddr: str,
+        *,
+        profile_token: str,
+        pan: float | None,
+        tilt: float | None,
+        zoom: float | None,
+    ) -> None:
+        url = str(ptz_xaddr or "").strip()
+        token = str(profile_token or "").strip()
+        if not url:
+            raise OnvifError("Missing ONVIF PTZ service URL")
+        if not token:
+            raise OnvifError("Missing ONVIF profile token")
+        if (pan is None) != (tilt is None):
+            raise OnvifError("ONVIF absolute pan and tilt must be provided together")
+        if pan is None and tilt is None and zoom is None:
+            raise OnvifError("Missing ONVIF absolute PTZ position")
+
+        body_xml = _tptz_absolute_move_body(token, pan=pan, tilt=tilt, zoom=zoom)
+        soap_action = _action(PTZ_NS, "AbsoluteMove")
+        await self._call_and_raise_if_fault(
+            url=url,
+            body_xml=body_xml,
+            soap_action=soap_action,
+            operation="AbsoluteMove",
+        )
 
     async def continuous_move(
         self,

@@ -218,6 +218,24 @@ export async function gotoCameraPtzPreset(
   return response.json();
 }
 
+export async function moveCameraPtzAbsolute(
+  cameraId: string,
+  body: { source_id?: string; pan?: number | null; tilt?: number | null; zoom?: number | null },
+  signal?: AbortSignal,
+): Promise<{ ok: boolean }> {
+  const response = await fetch(`/api/cameras/cameras/${encodeURIComponent(cameraId)}/ptz/absolute-move`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Failed to move PTZ camera to position: ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function moveCameraPtz(
   cameraId: string,
   body: { source_id?: string; pan: number; tilt: number; zoom: number; timeout_s?: number | null },

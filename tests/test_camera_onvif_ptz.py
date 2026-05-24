@@ -68,6 +68,11 @@ def test_onvif_client_ptz_presets_status_and_moves(monkeypatch: pytest.MonkeyPat
             return status_xml
         if action.endswith("/GotoPreset"):
             return ok_envelope
+        if action.endswith("/AbsoluteMove"):
+            assert b"<tptz:AbsoluteMove" in body
+            assert b'<tt:PanTilt x="0.250000" y="-0.250000" />' in body
+            assert b'<tt:Zoom x="0.500000" />' in body
+            return ok_envelope
         if action.endswith("/ContinuousMove"):
             return ok_envelope
         if action.endswith("/RelativeMove"):
@@ -103,6 +108,13 @@ def test_onvif_client_ptz_presets_status_and_moves(monkeypatch: pytest.MonkeyPat
             "http://192.168.0.10/onvif/ptz_service",
             profile_token="profile-main",
             preset_token="home",
+        )
+        await client.absolute_move(
+            "http://192.168.0.10/onvif/ptz_service",
+            profile_token="profile-main",
+            pan=0.25,
+            tilt=-0.25,
+            zoom=0.5,
         )
         await client.continuous_move(
             "http://192.168.0.10/onvif/ptz_service",

@@ -23,6 +23,7 @@ import {
   gotoCameraPtzPreset,
   mapControlPoint,
   moveCameraPtz,
+  moveCameraPtzAbsolute,
   stopCameraPtz,
 } from "../api/camerasApi";
 import { CAMERA_ELEMENT_TYPE_ID, CONTROL_POINT_COLORS } from "../constants";
@@ -1122,6 +1123,10 @@ function ControlPointsModal({
     );
   }
 
+  function readPoseAxis(value: unknown): number | null {
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  }
+
   async function moveCameraToPresetToken(
     nextPresetToken: string,
     options?: { fallbackPresetName?: string | null; bindSelectedSet?: boolean; renameFromPreset?: boolean },
@@ -1155,6 +1160,44 @@ function ControlPointsModal({
     }
   }
 
+  async function moveCameraToPoseReference(poseReference: CameraPoseReference | null | undefined) {
+    if (!poseReference || !cameraId || !isPtzCamera) return;
+    const presetToken = String(poseReference.preset_token ?? "").trim();
+    const presetName = String(poseReference.preset_name ?? "").trim() || presetToken || null;
+    const pan = readPoseAxis(poseReference.pan);
+    const tilt = readPoseAxis(poseReference.tilt);
+    const zoom = readPoseAxis(poseReference.zoom);
+    const hasPanTilt = pan !== null && tilt !== null;
+    const hasAbsolutePosition = hasPanTilt || zoom !== null;
+    if (!hasAbsolutePosition) {
+      if (presetToken) {
+        await moveCameraToPresetToken(presetToken, {
+          fallbackPresetName: presetName,
+          bindSelectedSet: false,
+        });
+      }
+      return;
+    }
+
+    setPtzCommandBusy(true);
+    setPtzErrorMessage(null);
+    try {
+      await moveCameraPtzAbsolute(cameraId, {
+        pan: hasPanTilt ? pan : null,
+        tilt: hasPanTilt ? tilt : null,
+        zoom,
+      });
+      await settlePtzAndRefresh({
+        presetToken: presetToken || null,
+        presetName,
+      });
+    } catch (error) {
+      setPtzErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPtzCommandBusy(false);
+    }
+  }
+
   async function handlePresetSelection(nextPresetToken: string) {
     const token = String(nextPresetToken || "").trim();
     setSelectedPresetToken(token);
@@ -1174,11 +1217,7 @@ function ControlPointsModal({
     setSelectedSetId(controlPointSet.id);
     setSelectedPointId(controlPointSet.control_points[0]?.id ?? null);
     setSelectedPresetToken(nextPresetToken);
-    if (!nextPresetToken) return;
-    await moveCameraToPresetToken(nextPresetToken, {
-      fallbackPresetName: controlPointSet.pose_reference?.preset_name ?? null,
-      bindSelectedSet: false,
-    });
+    await moveCameraToPoseReference(controlPointSet.pose_reference);
   }
 
   async function stopActivePtzMove(options?: { force?: boolean }) {

@@ -229,6 +229,67 @@ _ONVIF_STREAM_TTL_S = _read_env_float(
 )
 
 
+class OnvifStateGateConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    camera_id: str = ""
+    topic: str = ""
+    item_name: str = ""
+    open_when: bool = True
+    fail_open: bool = False
+    hold_seconds: float = Field(default=5.0, ge=0.0, le=300.0)
+    poll_interval_ms: int = Field(default=500, ge=100, le=60_000)
+    stream_id: str = ""
+
+    @field_validator("camera_id", "topic", "item_name", "stream_id", mode="after")
+    @classmethod
+    def _trim(cls, value: str) -> str:
+        return str(value or "").strip()
+
+
+class OnvifEventFilterConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    topic: str = ""
+    item_name: str = ""
+
+    @field_validator("topic", "item_name", mode="after")
+    @classmethod
+    def _trim(cls, value: str) -> str:
+        return str(value or "").strip()
+
+
+class OnvifEventSourceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    camera_id: str = ""
+    event_filters: list[OnvifEventFilterConfig] = Field(default_factory=list)
+    poll_interval_ms: int = Field(default=500, ge=100, le=60_000)
+    stream_id: str = ""
+
+    @field_validator("camera_id", "stream_id", mode="after")
+    @classmethod
+    def _trim(cls, value: str) -> str:
+        return str(value or "").strip()
+
+    @field_validator("event_filters", mode="after")
+    @classmethod
+    def _limit_filters(cls, value: list[OnvifEventFilterConfig]) -> list[OnvifEventFilterConfig]:
+        out: list[OnvifEventFilterConfig] = []
+        seen: set[tuple[str, str]] = set()
+        for item in value:
+            topic = str(item.topic or "").strip()
+            item_name = str(item.item_name or "").strip()
+            key = (topic, item_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+            if len(out) >= 64:
+                break
+        return out
+
+
 def _get_onvif_lock(key: str) -> asyncio.Lock:
     lock = _ONVIF_STREAM_LOCKS.get(key)
     if lock is None:
@@ -778,6 +839,244 @@ class _CameraSourcePendingError(RuntimeError):
 
 class _CameraSourceTransientError(RuntimeError):
     """Transient runtime error while the source is retrying capture startup/recovery."""
+
+
+def _onvif_gate_stream_id(config: OnvifStateGateConfig, context: Any) -> str:
+    configured = str(config.stream_id or "").strip()
+    if configured:
+        return configured
+    camera_id = str(config.camera_id or "").strip() or "camera"
+    topic = str(config.topic or "").strip().replace("/", ":") or "state"
+    item_name = str(config.item_name or "").strip() or "value"
+    return f"onvif_gate:{camera_id}:{topic}:{item_name}:{context.pipeline_name}:{context.node_id}"
+
+
+def _onvif_event_stream_id(config: OnvifEventSourceConfig, context: Any, event: dict[str, Any]) -> str:
+    configured = str(config.stream_id or "").strip()
+    if configured:
+        return configured
+    camera_id = str(config.camera_id or "").strip() or str(event.get("camera_id") or "").strip() or "camera"
+    topic = str(event.get("topic") or "").strip().replace("/", ":") or "event"
+    return f"onvif_event:{camera_id}:{topic}:{context.pipeline_name}:{context.node_id}"
+
+
+def _onvif_event_bool(event: dict[str, Any], item_name: str = "") -> bool | None:
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    wanted = str(item_name or "").strip()
+    values: list[Any] = []
+    if wanted:
+        values.append(data.get(wanted))
+    else:
+        values.extend(data.values())
+    for value in values:
+        if isinstance(value, bool):
+            return value
+        text = str(value or "").strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+class OnvifStateGateRuntime(SourceOperatorRuntime):
+    def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
+        self._config = OnvifStateGateConfig.model_validate(config)
+        self._dependencies = dependencies
+        self._last_open: bool | None = None
+        self._last_raw_active: bool | None = None
+        self._hold_until_ts = 0.0
+
+    async def produce(self, context) -> Packet | None:  # noqa: ANN001
+        gate_open, payload = await self._resolve_gate_state()
+        if self._last_open is not None and self._last_open == gate_open:
+            return None
+        self._last_open = gate_open
+        lifecycle = Lifecycle.OPEN if gate_open else Lifecycle.CLOSE
+        return Packet.create(
+            stream_id=_onvif_gate_stream_id(self._config, context),
+            lifecycle=lifecycle,
+            payload={
+                "gate_open": bool(gate_open),
+                "camera_id": self._config.camera_id,
+                "onvif": payload,
+            },
+            metadata={
+                "camera_id": self._config.camera_id,
+                "onvif_gate_open": bool(gate_open),
+            },
+        )
+
+    async def idle_sleep(self, context) -> None:  # noqa: ANN001
+        await context.sleep(max(0.1, float(self._config.poll_interval_ms) / 1000.0))
+
+    async def _resolve_gate_state(self) -> tuple[bool, dict[str, Any]]:
+        now = time.time()
+        payload: dict[str, Any] = {
+            "topic": self._config.topic,
+            "item_name": self._config.item_name,
+            "open_when": bool(self._config.open_when),
+            "fail_open": bool(self._config.fail_open),
+            "hold_seconds": float(self._config.hold_seconds),
+            "evaluated_at_ts": now,
+        }
+        services = self._dependencies.services
+        if services is None:
+            gate_open = bool(self._config.fail_open)
+            payload.update(
+                {
+                    "known": False,
+                    "value": None,
+                    "matched": False,
+                    "reason": "services_unavailable",
+                    "error": "Pipeline services are unavailable",
+                }
+            )
+            return gate_open, payload
+
+        try:
+            raw = await services.call(
+                "cameras.onvif_events.snapshot",
+                camera_id=self._config.camera_id,
+                topic=self._config.topic,
+                item_name=self._config.item_name,
+            )
+        except Exception as exc:  # noqa: BLE001
+            gate_open = bool(self._config.fail_open)
+            payload.update(
+                {
+                    "known": False,
+                    "value": None,
+                    "matched": False,
+                    "reason": "onvif_events_service_error",
+                    "error": f"{exc.__class__.__name__}: {exc}",
+                }
+            )
+            return gate_open, payload
+
+        snapshot = raw if isinstance(raw, dict) else {}
+        known = bool(snapshot.get("known"))
+        available = bool(snapshot.get("available"))
+        error = str(snapshot.get("error") or "").strip()
+        value = snapshot.get("value")
+        matched = known and isinstance(value, bool) and value == bool(self._config.open_when)
+        if error and not available:
+            gate_open = bool(self._config.fail_open)
+            reason = "onvif_unavailable"
+        elif matched:
+            self._hold_until_ts = 0.0
+            gate_open = True
+            reason = "matched"
+        else:
+            if self._last_raw_active is True and float(self._config.hold_seconds) > 0.0:
+                self._hold_until_ts = max(self._hold_until_ts, now + float(self._config.hold_seconds))
+            gate_open = bool(self._hold_until_ts and now < self._hold_until_ts)
+            reason = "hold" if gate_open else ("unknown" if not known else "not_matched")
+        self._last_raw_active = bool(matched)
+        payload.update(
+            {
+                "known": known,
+                "available": available,
+                "value": value if isinstance(value, bool) else None,
+                "matched": bool(matched),
+                "reason": reason,
+                "label": str(snapshot.get("label") or "").strip(),
+                "last_event_ts": snapshot.get("last_event_ts"),
+                "last_changed_ts": snapshot.get("last_changed_ts"),
+                "hold_until_ts": self._hold_until_ts or None,
+                "error": error,
+            }
+        )
+        return gate_open, payload
+
+
+class OnvifEventSourceRuntime(SourceOperatorRuntime):
+    def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
+        self._config = OnvifEventSourceConfig.model_validate(config)
+        self._dependencies = dependencies
+        self._last_sequence = 0
+        self._pending: list[Packet] = []
+
+    async def produce(self, context) -> Packet | None:  # noqa: ANN001
+        if self._pending:
+            return self._pending.pop(0)
+
+        services = self._dependencies.services
+        if services is None:
+            return None
+        try:
+            raw = await services.call(
+                "cameras.onvif_events.recent_events",
+                camera_id=self._config.camera_id,
+                after_sequence=self._last_sequence,
+                limit=64,
+            )
+        except Exception:
+            return None
+        snapshot = raw if isinstance(raw, dict) else {}
+        events = snapshot.get("events") if isinstance(snapshot.get("events"), list) else []
+        max_seen = self._last_sequence
+        for event_raw in events:
+            event = event_raw if isinstance(event_raw, dict) else {}
+            try:
+                sequence = int(event.get("sequence") or 0)
+            except Exception:
+                sequence = 0
+            if sequence > max_seen:
+                max_seen = sequence
+            if not self._matches_event(event):
+                continue
+            self._pending.append(self._packet_for_event(event, context))
+        self._last_sequence = max_seen
+        if self._pending:
+            return self._pending.pop(0)
+        return None
+
+    async def idle_sleep(self, context) -> None:  # noqa: ANN001
+        await context.sleep(max(0.1, float(self._config.poll_interval_ms) / 1000.0))
+
+    def _matches_event(self, event: dict[str, Any]) -> bool:
+        filters = list(self._config.event_filters or [])
+        if not filters:
+            return True
+        topic = str(event.get("topic") or "").strip()
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        for item in filters:
+            wanted_topic = str(item.topic or "").strip()
+            wanted_item = str(item.item_name or "").strip()
+            if wanted_topic and wanted_topic != topic:
+                continue
+            if wanted_item and wanted_item not in data:
+                continue
+            return True
+        return False
+
+    def _packet_for_event(self, event: dict[str, Any], context: Any) -> Packet:
+        item_name = ""
+        filters = list(self._config.event_filters or [])
+        if len(filters) == 1:
+            item_name = str(filters[0].item_name or "").strip()
+        value = _onvif_event_bool(event, item_name=item_name)
+        operation = str(event.get("operation") or "").strip().lower()
+        lifecycle = Lifecycle.UPDATE
+        if value is True:
+            lifecycle = Lifecycle.OPEN
+        elif value is False or operation == "deleted":
+            lifecycle = Lifecycle.CLOSE
+        payload = {
+            "camera_id": self._config.camera_id,
+            "onvif_event": {
+                "camera_id": self._config.camera_id,
+                **event,
+                "boolean_value": value,
+            },
+        }
+        return Packet.create(
+            stream_id=_onvif_event_stream_id(self._config, context, event),
+            lifecycle=lifecycle,
+            payload=payload,
+            metadata={"camera_id": self._config.camera_id},
+        )
 
 
 class CameraSourceRuntime(SourceOperatorRuntime):
@@ -2624,6 +2923,44 @@ class ObjectDetectionYOLORuntime(_BaseYoloRuntime):
 
 
 def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
+    registry.register_operator(
+        operator_id="camera.onvif_state_gate",
+        description="ONVIF boolean state gate that can open camera.source only while the selected camera state matches.",
+        config_model=OnvifStateGateConfig,
+        inputs=[],
+        outputs=[{"name": "out"}],
+        capabilities=["camera", "onvif", "gate_control", "realtime"],
+        defaults=OnvifStateGateConfig().model_dump(),
+        produces_payload_keys=["gate_open", "camera_id", "onvif"],
+        share_strategy="never",
+        owner="com.toposync.cameras",
+        ui={
+            "pipeline_group": "input",
+            "pipeline_level": "advanced",
+            "pipeline_order": 25,
+            "aliases": ["ONVIF", "motion", "event", "gate"],
+        },
+        runtime_factory=lambda config, deps: OnvifStateGateRuntime(config, deps),
+    )
+    registry.register_operator(
+        operator_id="camera.onvif_event_source",
+        description="ONVIF event source that emits normalized camera notifications without opening video.",
+        config_model=OnvifEventSourceConfig,
+        inputs=[],
+        outputs=[{"name": "out"}],
+        capabilities=["source", "camera", "onvif", "realtime"],
+        defaults=OnvifEventSourceConfig().model_dump(),
+        produces_payload_keys=["camera_id", "onvif_event"],
+        share_strategy="never",
+        owner="com.toposync.cameras",
+        ui={
+            "pipeline_group": "input",
+            "pipeline_level": "advanced",
+            "pipeline_order": 26,
+            "aliases": ["ONVIF", "notification", "event"],
+        },
+        runtime_factory=lambda config, deps: OnvifEventSourceRuntime(config, deps),
+    )
     registry.register_operator(
         operator_id="camera.source",
         description="Camera frame source using the existing camera extension frame grabber.",

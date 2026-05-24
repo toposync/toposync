@@ -72,7 +72,8 @@ In short:
 - URL format: `ws://<toposync-host>/api/streams/media/mse/<path>/ws?media_token=...`
 - go2rtc consumes `rtsp://127.0.0.1:<mediamtx_rtsp_port>/<path>` from MediaMTX.
 - The browser never talks to go2rtc directly. Toposync verifies the signed media token and proxies text control messages plus binary fMP4 fragments.
-- Dashboard Auto can prefer MSE for passive web/grid/fullscreen playback when the sidecar is running and the backing output is browser-compatible.
+- Dashboard Auto can prefer MSE for passive web/grid/fullscreen playback when the sidecar is enabled/startable and the backing output is browser-compatible.
+- A stopped go2rtc process is normal when no MSE viewer is connected. Toposync returns a signed MSE URL when the sidecar can be started, then starts/updates go2rtc on the first MSE WebSocket session.
 
 ### JSMpeg
 - URL format: `ws://<toposync-host>/api/streams/media/jsmpeg/<path>/ws?media_token=...`
@@ -114,6 +115,7 @@ Advanced pipeline publication:
   - Renders `runtime/streaming/go2rtc/go2rtc.yaml` from generated streaming outputs.
   - Exposes no direct browser API; the dashboard uses the signed Toposync MSE proxy.
   - Uses internal MediaMTX RTSP URLs only, never direct camera credentials or camera URLs.
+  - Does not need to run permanently. URL resolution treats "stopped but startable" as available; the signed MSE proxy starts it when a browser actually connects.
 - `JsmpegSessionManager`
   - Starts FFmpeg only while a signed JSMpeg WebSocket session is connected.
   - Reads frames from `TransmissionRuntimeState`, resizes/contains them to the configured fallback profile, and writes MPEG-TS/MPEG-1 bytes to the browser.
@@ -826,7 +828,7 @@ Transport policy:
 
 - HLS is the stable browser/app/Home Assistant ingress baseline.
 - WebRTC/WHEP is generated for `zoom`/PTZ publications and for publications with `transport_policy.enable_webrtc=true`; regular `main`/`sub` streams stay HLS-only by default.
-- MSE is available when MediaMTX is running, the go2rtc sidecar is enabled/running, a backing HLS/RTSP output exists, and the browser codec path is compatible. Otherwise it is blocked with a specific reason.
+- MSE is available when MediaMTX is running, the go2rtc sidecar is enabled and startable, a backing HLS/RTSP output exists, and the browser codec path is compatible. The go2rtc process may be stopped until the first MSE WebSocket connects. Otherwise it is blocked with a specific reason.
 - JSMpeg is available when FFmpeg is available, the fallback is enabled, a backing HLS output exists, and session limits allow it. The fixed transport debug page does not silently fall back.
 
 Transport frame checks can be run with:
@@ -1028,6 +1030,24 @@ Debug:
 - `GET /api/streams/runtime/diagnostics`
 - Check MediaMTX and FFmpeg logs paths from that payload.
 
+### MSE does not start or does not render
+Common causes:
+- go2rtc binary is missing.
+- MediaMTX is stopped or the backing RTSP path is still warming up.
+- The browser does not support the returned fMP4 MIME/codecs.
+- The output is HEVC/H.265 and has not been transcoded to a browser-compatible H.264/AAC path.
+
+Expected behavior:
+- `GET /api/streams/mse/status` can show `running=false` with no warning. That means no active MSE viewer is connected.
+- `GET /api/streams/transmissions/{id}/playback-plan?client=web` can still return MSE available when the sidecar is startable.
+- Opening `/streams/debug?transport=mse...` should start go2rtc on demand and log: demand priming, backing RTSP wait, go2rtc API wait, MIME, binary fragments, and first frame.
+
+Debug:
+- `GET /api/streams/mse/status`
+- `GET /api/streams/transmissions/{id}/playback-plan?client=web&quality_profile_id=...`
+- `node scripts/check_stream_transport_frames.mjs --base-url http://127.0.0.1:8100 --live-view-id <id> --context thumbnail --transports mse`
+- If go2rtc is killed, the next signed MSE WebSocket session should restart it automatically.
+
 ### FFmpeg not found
 Publishers require `ffmpeg`.
 
@@ -1049,6 +1069,9 @@ Under the Toposync data dir (`data_dir`), the extension uses:
   - `runtime/streaming/mediamtx.yml`
 - MediaMTX logs:
   - `runtime/streaming/logs/mediamtx-YYYYMMDD-HHMMSS.log`
+- go2rtc MSE config/log:
+  - `runtime/streaming/go2rtc/go2rtc.yaml`
+  - `runtime/streaming/go2rtc/go2rtc.log`
 - Per-output publisher logs:
   - `runtime/streaming/logs/ffmpeg-<output_key>-YYYYMMDD-HHMMSS.log`
 - Publish credential secret (HMAC seed for per-path publish user/pass):
@@ -1070,7 +1093,7 @@ Then run Toposync as usual (see repo `docs/DEVELOPMENT.md`).
 
 - Public wheels do not ship MediaMTX binaries. The extension downloads the correct release asset on demand and caches it under `runtime/streaming/mediamtx/<version>/<platform>/`.
   - License notice: [LICENSE.mediamtx](LICENSE.mediamtx)
-- Public wheels do not ship go2rtc binaries. The MSE sidecar downloads go2rtc `v1.9.14` on demand and caches it under `runtime/streaming/go2rtc-bin/<version>/<platform>/`, unless `TOPOSYNC_STREAMING_GO2RTC_PATH` points to an explicit binary.
+- Public wheels do not ship go2rtc binaries. The MSE sidecar downloads go2rtc `v1.9.14` on demand and caches it under `~/.toposync/runtime/streaming/go2rtc/<version>/<platform>/`, unless `TOPOSYNC_STREAMING_GO2RTC_PATH` points to an explicit binary.
 - FFmpeg integration expects an external binary by default (`PATH` or `TOPOSYNC_STREAMING_FFMPEG_PATH`). Bundling FFmpeg binaries is optional and must be handled carefully for redistribution.
   - License placeholder: [LICENSE.ffmpeg](LICENSE.ffmpeg)
 
@@ -1081,7 +1104,7 @@ If you plan to ship FFmpeg binaries, pay attention to LGPL/GPL build flags and c
 - Video-only: audio is not published (`-an` in FFmpeg).
 - No built-in TLS for MediaMTX endpoints (LAN-first).
 - No Low-Latency HLS by default (to avoid TLS requirements and keep the default simpler).
-- MSE requires a running go2rtc sidecar and browser-compatible codec output. HEVC/H.265 paths must be transcoded to H.264/AAC-compatible browser output before MSE can be selected.
+- MSE requires an enabled/startable go2rtc sidecar and browser-compatible codec output. The process may be stopped while idle. HEVC/H.265 paths must be transcoded to H.264/AAC-compatible browser output before MSE can be selected.
 - JSMpeg is video-only and intentionally low quality. It is a last-resort visual fallback, not a replacement for HLS/MSE/WebRTC and not an audio path.
 - Hardware encoding selection exists in code paths but is not exposed as a stable user-facing setting yet.
 - On-demand stops publishers, but does not stop arbitrary manual pipeline execution; pipeline compute is controlled by pipeline configuration and lifecycle semantics.

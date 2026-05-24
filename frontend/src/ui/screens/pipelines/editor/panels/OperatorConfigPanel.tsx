@@ -33,6 +33,8 @@ import {
   MotionGateConfigCard,
   MotionSampleBgConfigCard,
   ObjectCropConfigCard,
+  OnvifEventSourceConfigCard,
+  OnvifStateGateConfigCard,
   VelocityEstimationConfigCard,
 } from "./CameraPanels";
 import { VisionConfigCard } from "./VisionPanels";
@@ -115,6 +117,30 @@ export function OperatorConfigPanel({
         camerasIndex={camerasIndex}
         cameraSelectOptions={cameraSelectOptions}
         cameraSelectOptionById={cameraSelectOptionById}
+        onUpdateConfig={onUpdateConfig}
+      />
+    );
+  }
+  if (operatorId === "camera.onvif_state_gate") {
+    return (
+      <OnvifStateGateConfigCard
+        config={config}
+        camerasIndex={camerasIndex}
+        cameraSelectOptions={cameraSelectOptions}
+        cameraSelectOptionById={cameraSelectOptionById}
+        showAdvanced={showAdvanced}
+        onUpdateConfig={onUpdateConfig}
+      />
+    );
+  }
+  if (operatorId === "camera.onvif_event_source") {
+    return (
+      <OnvifEventSourceConfigCard
+        config={config}
+        camerasIndex={camerasIndex}
+        cameraSelectOptions={cameraSelectOptions}
+        cameraSelectOptionById={cameraSelectOptionById}
+        showAdvanced={showAdvanced}
         onUpdateConfig={onUpdateConfig}
       />
     );

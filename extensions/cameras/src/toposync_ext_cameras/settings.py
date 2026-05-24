@@ -14,6 +14,7 @@ class CameraOnvifConfig(BaseModel):
     password: str = ""
     media_xaddr: str | None = None
     ptz_xaddr: str | None = None
+    event_xaddr: str | None = None
     hardware: str | None = None
 
     @field_validator("xaddr", "username", "password", mode="before")
@@ -21,7 +22,7 @@ class CameraOnvifConfig(BaseModel):
     def _trim_text(cls, value: Any) -> str:
         return str(value or "").strip()
 
-    @field_validator("device_id", "media_xaddr", "ptz_xaddr", "hardware", mode="before")
+    @field_validator("device_id", "media_xaddr", "ptz_xaddr", "event_xaddr", "hardware", mode="before")
     @classmethod
     def _trim_strings(cls, value: Any) -> str | None:
         if value is None:

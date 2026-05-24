@@ -707,6 +707,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.demo_frame_sequence_source": "Use demo frames",
     "core.ui.pipelines.operator_name.camera.source": "Use camera",
     "core.ui.pipelines.operator_name.core.schedule_gate": "Limit by schedule",
+    "core.ui.pipelines.operator_name.camera.onvif_state_gate": "ONVIF condition",
+    "core.ui.pipelines.operator_name.camera.onvif_event_source": "ONVIF events",
     "core.ui.pipelines.operator_name.camera.motion_bgsub_adaptive": "Filter motion with the default detector",
     "core.ui.pipelines.operator_name.camera.motion_sample_bg": "Filter motion with samples",
     "core.ui.pipelines.operator_name.camera.motion_gate": "Filter by motion",
@@ -756,6 +758,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.dist.project_to_origin": "Send to origin",
     "core.ui.pipelines.operator_description.camera.source": "Reads frames from the selected camera or from an RTSP source.",
     "core.ui.pipelines.operator_description.core.schedule_gate": "Keeps the flow active only on the selected days and times.",
+    "core.ui.pipelines.operator_description.camera.onvif_state_gate":
+      "Opens a downstream camera only while a selected ONVIF boolean state matches.",
+    "core.ui.pipelines.operator_description.camera.onvif_event_source":
+      "Emits normalized ONVIF notifications from a camera without opening video.",
     "core.ui.pipelines.operator_description.camera.motion_bgsub_adaptive":
       "Detects motion with adaptive background subtraction and, by default, lets frames pass only while motion is active or during the configured hold time.",
     "core.ui.pipelines.operator_description.camera.motion_sample_bg":
@@ -910,6 +916,24 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.schedule_gate.hint": "Place this before Camera source to pause RTSP reads while the gate is closed.",
     "core.ui.pipelines.panels.schedule_gate.timezone_optional": "Time zone (optional)",
     "core.ui.pipelines.panels.schedule_gate.timezone_placeholder": "Leave empty for local time",
+
+    "core.ui.pipelines.panels.onvif.camera": "Camera",
+    "core.ui.pipelines.panels.onvif.camera_placeholder": "Select camera...",
+    "core.ui.pipelines.panels.onvif.not_onvif": "This camera is not configured for ONVIF.",
+    "core.ui.pipelines.panels.onvif.loading": "Loading ONVIF events...",
+    "core.ui.pipelines.panels.onvif.condition": "Condition",
+    "core.ui.pipelines.panels.onvif.condition_placeholder": "Select ONVIF state...",
+    "core.ui.pipelines.panels.onvif.open_when": "Run when",
+    "core.ui.pipelines.panels.onvif.open_when.true": "Active",
+    "core.ui.pipelines.panels.onvif.open_when.false": "Inactive",
+    "core.ui.pipelines.panels.onvif.fail_behavior": "If unavailable",
+    "core.ui.pipelines.panels.onvif.fail_behavior.closed": "Stay closed",
+    "core.ui.pipelines.panels.onvif.fail_behavior.open": "Stay open",
+    "core.ui.pipelines.panels.onvif.hold_seconds": "Hold after inactive (s)",
+    "core.ui.pipelines.panels.onvif.poll_interval_ms": "Poll interval (ms)",
+    "core.ui.pipelines.panels.onvif.events": "Events",
+    "core.ui.pipelines.panels.onvif.events_placeholder": "All ONVIF events",
+    "core.ui.pipelines.panels.onvif.events_hint": "Empty selection emits every ONVIF event from this camera.",
 
     "core.ui.pipelines.panels.category_gate.mode": "Mode",
     "core.ui.pipelines.panels.category_gate.mode.include_only": "Include only",
@@ -2654,6 +2678,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.demo_frame_sequence_source": "Usar frames de demonstração",
     "core.ui.pipelines.operator_name.camera.source": "Usar câmera",
     "core.ui.pipelines.operator_name.core.schedule_gate": "Limitar por horário",
+    "core.ui.pipelines.operator_name.camera.onvif_state_gate": "Condição ONVIF",
+    "core.ui.pipelines.operator_name.camera.onvif_event_source": "Eventos ONVIF",
     "core.ui.pipelines.operator_name.camera.motion_bgsub_adaptive": "Filtrar movimento com detector padrão",
     "core.ui.pipelines.operator_name.camera.motion_sample_bg": "Filtrar movimento com amostras",
     "core.ui.pipelines.operator_name.camera.motion_gate": "Filtrar por movimento",
@@ -2703,6 +2729,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.dist.project_to_origin": "Enviar para origem",
     "core.ui.pipelines.operator_description.camera.source": "Lê frames da câmera selecionada ou de uma fonte RTSP.",
     "core.ui.pipelines.operator_description.core.schedule_gate": "Deixa o fluxo ativo apenas nos dias e horários escolhidos.",
+    "core.ui.pipelines.operator_description.camera.onvif_state_gate":
+      "Abre uma câmera adiante apenas enquanto o estado ONVIF selecionado combina.",
+    "core.ui.pipelines.operator_description.camera.onvif_event_source":
+      "Emite notificações ONVIF normalizadas de uma câmera sem abrir vídeo.",
     "core.ui.pipelines.operator_description.camera.motion_bgsub_adaptive":
       "Detecta movimento com subtração adaptativa de fundo e, por padrão, deixa passar frames apenas enquanto há movimento ou durante o tempo de espera configurado.",
     "core.ui.pipelines.operator_description.camera.motion_sample_bg":
@@ -2858,6 +2888,24 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.schedule_gate.hint": "Coloque antes do Camera source para pausar leituras RTSP enquanto o gate estiver fechado.",
     "core.ui.pipelines.panels.schedule_gate.timezone_optional": "Fuso horário (opcional)",
     "core.ui.pipelines.panels.schedule_gate.timezone_placeholder": "Deixe vazio para o horário local",
+
+    "core.ui.pipelines.panels.onvif.camera": "Câmera",
+    "core.ui.pipelines.panels.onvif.camera_placeholder": "Selecionar câmera...",
+    "core.ui.pipelines.panels.onvif.not_onvif": "Esta câmera não está configurada para ONVIF.",
+    "core.ui.pipelines.panels.onvif.loading": "Carregando eventos ONVIF...",
+    "core.ui.pipelines.panels.onvif.condition": "Condição",
+    "core.ui.pipelines.panels.onvif.condition_placeholder": "Selecionar estado ONVIF...",
+    "core.ui.pipelines.panels.onvif.open_when": "Executar quando",
+    "core.ui.pipelines.panels.onvif.open_when.true": "Ativo",
+    "core.ui.pipelines.panels.onvif.open_when.false": "Inativo",
+    "core.ui.pipelines.panels.onvif.fail_behavior": "Se indisponível",
+    "core.ui.pipelines.panels.onvif.fail_behavior.closed": "Ficar fechado",
+    "core.ui.pipelines.panels.onvif.fail_behavior.open": "Ficar aberto",
+    "core.ui.pipelines.panels.onvif.hold_seconds": "Manter após inativo (s)",
+    "core.ui.pipelines.panels.onvif.poll_interval_ms": "Intervalo de leitura (ms)",
+    "core.ui.pipelines.panels.onvif.events": "Eventos",
+    "core.ui.pipelines.panels.onvif.events_placeholder": "Todos os eventos ONVIF",
+    "core.ui.pipelines.panels.onvif.events_hint": "Seleção vazia emite todos os eventos ONVIF desta câmera.",
 
     "core.ui.pipelines.panels.category_gate.mode": "Modo",
     "core.ui.pipelines.panels.category_gate.mode.include_only": "Incluir apenas",

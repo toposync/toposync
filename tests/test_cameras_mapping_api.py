@@ -350,6 +350,21 @@ def test_camera_ptz_routes_forward_to_services(tmp_path: Path, monkeypatch: pyte
             assert camera_source_id is None
             return {"pan": 0.1, "tilt": -0.2, "zoom": 0.3, "move_status": "IDLE", "error": "", "utc_time": "2026-01-01T00:00:00Z"}
 
+        async def absolute_move(
+            *,
+            camera_id: str,
+            pan: float | None = None,
+            tilt: float | None = None,
+            zoom: float | None = None,
+            camera_source_id: str | None = None,
+        ):
+            assert camera_id == "cam1"
+            assert camera_source_id is None
+            assert pan == pytest.approx(0.1)
+            assert tilt == pytest.approx(-0.2)
+            assert zoom == pytest.approx(0.3)
+            return {"ok": True}
+
         async def move(
             *,
             camera_id: str,
@@ -379,6 +394,7 @@ def test_camera_ptz_routes_forward_to_services(tmp_path: Path, monkeypatch: pyte
         services.register("cameras.ptz.list_presets", list_presets)
         services.register("cameras.ptz.goto_preset", goto_preset)
         services.register("cameras.ptz.get_status", get_status)
+        services.register("cameras.ptz.absolute_move", absolute_move)
         services.register("cameras.ptz.continuous_move", move)
         services.register("cameras.ptz.stop", stop)
 
@@ -393,6 +409,13 @@ def test_camera_ptz_routes_forward_to_services(tmp_path: Path, monkeypatch: pyte
         status = client.get("/api/cameras/cameras/cam1/ptz/status")
         assert status.status_code == 200, status.text
         assert status.json()["status"]["move_status"] == "IDLE"
+
+        absolute_move_res = client.post(
+            "/api/cameras/cameras/cam1/ptz/absolute-move",
+            json={"pan": 0.1, "tilt": -0.2, "zoom": 0.3},
+        )
+        assert absolute_move_res.status_code == 200, absolute_move_res.text
+        assert absolute_move_res.json()["ok"] is True
 
         move_res = client.post(
             "/api/cameras/cameras/cam1/ptz/move",

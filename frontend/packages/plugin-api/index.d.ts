@@ -11,6 +11,7 @@ export type ViewSettings = {
   wallHeight: number;
   ghostWalls?: boolean;
   graphicsQuality?: GraphicsQuality;
+  renderViewSettings?: Record<string, Record<string, unknown>>;
 };
 
 export type Locale = "en" | "pt-BR";
@@ -358,8 +359,17 @@ export type Viewport2DReplicaProps = {
   session?: EditorToolSession | null;
 };
 
+export type LiveViewPlayerProps = {
+  cameraId?: string;
+  liveViewId?: string;
+  context?: "thumbnail" | "large" | "fullscreen" | "pip" | "ptz" | "spatial_map";
+  className?: string;
+  style?: import("react").CSSProperties;
+};
+
 export type HostUi = {
   Viewport2DReplica: (props: Viewport2DReplicaProps) => import("react").ReactNode;
+  LiveViewPlayer?: (props: LiveViewPlayerProps) => import("react").ReactNode;
 };
 
 export type RenderViewContext = {
@@ -381,6 +391,11 @@ export type RenderViewDefinition = {
   icon?: string;
   order?: number;
   render: (ctx: RenderViewContext) => import("react").ReactNode;
+  renderSettings?: (ctx: {
+    i18n: HostI18n;
+    settings: Record<string, unknown>;
+    updateSettings: (patch: Record<string, unknown>) => void;
+  }) => import("react").ReactNode;
 };
 
 export type EditorToolGroup = {

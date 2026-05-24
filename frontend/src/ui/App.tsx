@@ -68,6 +68,7 @@ import { PipelinesScreen } from "./screens/PipelinesScreen";
 import { ProcessingServersScreen } from "./screens/ProcessingServersScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 import { AccessScreen } from "./screens/AccessScreen";
+import { StreamsDashboard, type StreamsDashboardContext } from "./streams/StreamsDashboard";
 import { StreamTransportDebugScreen } from "./streams/StreamTransportDebugScreen";
 
 type ExtensionRecord = {
@@ -94,6 +95,7 @@ const LEGACY_STORAGE_KEY = "toposync.composition.v1";
 const SAVE_DEBOUNCE_MS = 400;
 const VIEW_SETTINGS_STORAGE_KEY = "toposync.view.v1";
 const HISTORY_LIMIT = 120;
+type RenderViewSettingsMap = Record<string, Record<string, unknown>>;
 
 function isWallHeightPreset(value: unknown): value is WallHeightPreset {
   return value === "low" || value === "medium" || value === "high";
@@ -136,11 +138,32 @@ function loadGraphicsQuality(): GraphicsQuality {
   return isGraphicsQuality(raw) ? raw : "simplified";
 }
 
-function saveViewSettings(preset: WallHeightPreset, ghostWalls: boolean, graphicsQuality: GraphicsQuality): void {
+function loadRenderViewSettings(): RenderViewSettingsMap {
+  const rec = loadViewSettingsRecord();
+  const raw = rec.render_view_settings;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: RenderViewSettingsMap = {};
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) out[id] = value as Record<string, unknown>;
+  }
+  return out;
+}
+
+function saveViewSettings(
+  preset: WallHeightPreset,
+  ghostWalls: boolean,
+  graphicsQuality: GraphicsQuality,
+  renderViewSettings: RenderViewSettingsMap,
+): void {
   try {
     localStorage.setItem(
       VIEW_SETTINGS_STORAGE_KEY,
-      JSON.stringify({ wall_height_preset: preset, ghost_walls: ghostWalls, graphics_quality: graphicsQuality }),
+      JSON.stringify({
+        wall_height_preset: preset,
+        ghost_walls: ghostWalls,
+        graphics_quality: graphicsQuality,
+        render_view_settings: renderViewSettings,
+      }),
     );
   } catch {
     // ignore
@@ -290,6 +313,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const [wallHeightPreset, setWallHeightPreset] = useState<WallHeightPreset>(() => loadWallHeightPreset());
   const [ghostWalls, setGhostWalls] = useState<boolean>(() => loadGhostWalls());
   const [graphicsQuality, setGraphicsQuality] = useState<GraphicsQuality>(() => loadGraphicsQuality());
+  const [renderViewSettings, setRenderViewSettings] = useState<RenderViewSettingsMap>(() => loadRenderViewSettings());
   const [themeId, setThemeId] = useState<string>(() => loadThemeId());
   const [viewport3dBackground, setViewport3dBackground] = useState<Viewport3DBackground>(() => loadViewport3DBackground());
   const [settings, setSettings] = useState<AppSettings>({ core: {}, extensions: {} });
@@ -346,13 +370,24 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       wallHeight: wallHeightForPreset(wallHeightPreset),
       ghostWalls,
       graphicsQuality,
+      renderViewSettings,
     }),
-    [ghostWalls, graphicsQuality, wallHeightPreset],
+    [ghostWalls, graphicsQuality, renderViewSettings, wallHeightPreset],
   );
 
   useEffect(() => {
-    saveViewSettings(wallHeightPreset, ghostWalls, graphicsQuality);
-  }, [ghostWalls, graphicsQuality, wallHeightPreset]);
+    saveViewSettings(wallHeightPreset, ghostWalls, graphicsQuality, renderViewSettings);
+  }, [ghostWalls, graphicsQuality, renderViewSettings, wallHeightPreset]);
+
+  const patchRenderViewSettings = useCallback((viewId: string, patch: Record<string, unknown>) => {
+    setRenderViewSettings((prev) => ({
+      ...prev,
+      [viewId]: {
+        ...(prev[viewId] ?? {}),
+        ...(patch ?? {}),
+      },
+    }));
+  }, []);
 
   useEffect(() => {
     saveThemeId(themeId);
@@ -505,6 +540,28 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
                 activeToolSession={session ?? null}
                 enableKeyboardShortcuts={false}
                 toolSnapToGrid={false}
+              />
+            </div>
+          );
+        },
+        LiveViewPlayer: ({ cameraId, liveViewId, context, className, style }) => {
+          const normalizedContext: StreamsDashboardContext =
+            context === "thumbnail" ||
+            context === "large" ||
+            context === "fullscreen" ||
+            context === "pip" ||
+            context === "ptz"
+              ? context
+              : "large";
+          return (
+            <div className={className} style={{ position: "relative", minHeight: 0, ...style }}>
+              <StreamsDashboard
+                uiVisible={true}
+                isActive={true}
+                embedded={true}
+                cameraId={cameraId}
+                liveViewId={liveViewId}
+                defaultContext={normalizedContext}
               />
             </div>
           );
@@ -1136,6 +1193,9 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
           onSetWallHeightPreset={setWallHeightPreset}
           onSetGhostWalls={setGhostWalls}
           onSetGraphicsQuality={setGraphicsQuality}
+          renderViews={Object.values(renderViewsById)}
+          renderViewSettings={renderViewSettings}
+          onPatchRenderViewSettings={patchRenderViewSettings}
           panels={Object.values(settingsPanelsById)}
           themes={themeOptions}
           themeId={themeId}

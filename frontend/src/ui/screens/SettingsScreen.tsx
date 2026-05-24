@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-import type { GraphicsQuality, HostApi, SettingsPanel, ThemeDefinition, WallHeightPreset } from "@toposync/plugin-api";
+import type { GraphicsQuality, HostApi, RenderViewDefinition, SettingsPanel, ThemeDefinition, WallHeightPreset } from "@toposync/plugin-api";
 
 import {
   disableManagedExtension,
@@ -32,6 +32,9 @@ type Props = {
   onSetWallHeightPreset: (preset: WallHeightPreset) => void;
   onSetGhostWalls: (enabled: boolean) => void;
   onSetGraphicsQuality: (quality: GraphicsQuality) => void;
+  renderViews: RenderViewDefinition[];
+  renderViewSettings: Record<string, Record<string, unknown>>;
+  onPatchRenderViewSettings: (viewId: string, patch: Record<string, unknown>) => void;
   panels: SettingsPanel[];
   themes: ThemeDefinition[];
   themeId: string;
@@ -116,6 +119,9 @@ export function SettingsScreen({
   onSetWallHeightPreset,
   onSetGhostWalls,
   onSetGraphicsQuality,
+  renderViews,
+  renderViewSettings,
+  onPatchRenderViewSettings,
   panels,
   themes,
   themeId,
@@ -215,6 +221,14 @@ export function SettingsScreen({
   const sortedCompositions = useMemo(
     () => [...compositions].sort((a, b) => a.name.localeCompare(b.name, locale)),
     [compositions, locale],
+  );
+
+  const renderViewsWithSettings = useMemo(
+    () =>
+      renderViews
+        .filter((view) => Boolean(view.renderSettings))
+        .sort((a, b) => (a.order ?? 1000) - (b.order ?? 1000) || resolveLocalizedString(a.name).localeCompare(resolveLocalizedString(b.name), locale)),
+    [locale, renderViews],
   );
 
   const canDeleteComposition = compositions.length > 1;
@@ -395,6 +409,30 @@ export function SettingsScreen({
               );
             })}
           </div>
+
+          {renderViewsWithSettings.length > 0 ? (
+            <>
+              <div className="sectionDivider" />
+              <div className="modalSectionTitle">{t("core.ui.settings.render_views", undefined, "Renderizações")}</div>
+              {renderViewsWithSettings.map((view) => {
+                const renderSettings = view.renderSettings;
+                if (!renderSettings) return null;
+                return (
+                  <div key={view.id} className="card" style={{ marginBottom: 12 }}>
+                    <div className="cardTitle">{resolveLocalizedString(view.name)}</div>
+                    {view.description ? <div className="cardBody">{resolveLocalizedString(view.description)}</div> : null}
+                    <div style={{ marginTop: 12 }}>
+                      {renderSettings({
+                        i18n,
+                        settings: renderViewSettings[view.id] ?? {},
+                        updateSettings: (patch) => onPatchRenderViewSettings(view.id, patch ?? {}),
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          ) : null}
         </div>
       ),
     };
@@ -517,7 +555,10 @@ export function SettingsScreen({
     onLogout,
     authUser,
     orderedPanels,
+    onPatchRenderViewSettings,
     saving,
+    renderViewSettings,
+    renderViewsWithSettings,
     sortedCompositions,
     t,
     themeId,

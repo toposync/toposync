@@ -27,10 +27,15 @@ import { StreamsPtzOverlay } from "./StreamsPtzOverlay";
 import { createJsmpegPlayer } from "./jsmpegPlayer";
 
 type GridMode = "1x1" | "2x2";
+export type StreamsDashboardContext = StreamingCameraLiveContext;
 
 type Props = {
   uiVisible: boolean;
   isActive: boolean;
+  embedded?: boolean;
+  cameraId?: string;
+  liveViewId?: string;
+  defaultContext?: StreamingCameraLiveContext;
 };
 
 type TilePlaybackStatus = "idle" | "loading" | "playing" | "error" | "unsupported";
@@ -3401,9 +3406,16 @@ function StreamTilePlayer({
   );
 }
 
-export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactElement {
+export function StreamsDashboard({
+  uiVisible,
+  isActive,
+  embedded = false,
+  cameraId,
+  liveViewId,
+  defaultContext,
+}: Props): React.ReactElement {
   const { t } = i18n.useI18n();
-  const [gridMode, setGridMode] = useState<GridMode>(() => readGridMode());
+  const [gridMode, setGridMode] = useState<GridMode>(() => (embedded ? "1x1" : readGridMode()));
   const [pageIndex, setPageIndex] = useState(0);
 
   const [liveViews, setLiveViews] = useState<StreamingCameraLiveView[]>([]);
@@ -3433,13 +3445,13 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
   });
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (embedded || typeof window === "undefined") return;
     try {
       localStorage.setItem(GRID_MODE_STORAGE_KEY, gridMode);
     } catch {
       // ignore
     }
-  }, [gridMode]);
+  }, [embedded, gridMode]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -3504,14 +3516,20 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
     };
   }, []);
 
-  const enabledLiveViews = useMemo(
-    () => liveViews.filter((item) => item && item.enabled !== false),
-    [liveViews],
-  );
+  const enabledLiveViews = useMemo(() => {
+    const normalizedCameraId = String(cameraId || "").trim();
+    const normalizedLiveViewId = String(liveViewId || "").trim();
+    return liveViews.filter((item) => {
+      if (!item || item.enabled === false) return false;
+      if (normalizedLiveViewId && String(item.id || "").trim() !== normalizedLiveViewId) return false;
+      if (normalizedCameraId && String(item.camera_id || "").trim() !== normalizedCameraId) return false;
+      return true;
+    });
+  }, [cameraId, liveViewId, liveViews]);
 
-  const pageSize = gridMode === "1x1" ? 1 : 4;
+  const pageSize = embedded || gridMode === "1x1" ? 1 : 4;
   const pageCount = Math.max(1, Math.ceil(enabledLiveViews.length / pageSize));
-  const basePlaybackContext: StreamingCameraLiveContext = gridMode === "1x1" ? "large" : "thumbnail";
+  const basePlaybackContext: StreamingCameraLiveContext = embedded ? defaultContext ?? "large" : gridMode === "1x1" ? "large" : "thumbnail";
   const contextForLiveView = useCallback(
     (liveViewId: string): StreamingCameraLiveContext => displayContextByLiveViewId[liveViewId] ?? basePlaybackContext,
     [basePlaybackContext, displayContextByLiveViewId],
@@ -3716,7 +3734,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
   }
 
   return (
-    <div className="viewportRoot streamsRoot">
+    <div className={["viewportRoot", "streamsRoot", embedded ? "isEmbedded" : ""].filter(Boolean).join(" ")}>
       {error ? (
         <div className="main2dCenterHint">
           <div className="card">
@@ -3738,7 +3756,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
       ) : null}
 
       {!error && enabledLiveViews.length > 0 ? (
-        <div className={["streamsGrid", gridMode === "1x1" ? "is1x1" : "is2x2"].join(" ")}>
+        <div className={["streamsGrid", embedded || gridMode === "1x1" ? "is1x1" : "is2x2"].join(" ")}>
           {pageTiles.map((liveView, slotIndex) => {
             if (!liveView) {
               return <div key={`slot-empty-${slotIndex}`} className="streamsTile streamsTileEmpty" />;
@@ -3980,7 +3998,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
         onClose={closePtzOverlay}
       />
 
-      <div className={["streamsHud", uiVisible ? "isVisible" : "isHidden"].join(" ")}>
+      {!embedded ? <div className={["streamsHud", uiVisible ? "isVisible" : "isHidden"].join(" ")}>
         <div className="streamsHudGroup">
           <button
             type="button"
@@ -4029,7 +4047,7 @@ export function StreamsDashboard({ uiVisible, isActive }: Props): React.ReactEle
             <Icon name="chevron-right" />
           </button>
         </div>
-      </div>
+      </div> : null}
     </div>
   );
 }

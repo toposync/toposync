@@ -1,16 +1,21 @@
 import type { CameraControlPointSet, ProjectionMeshData, Vector2, WorldPoint } from "./types";
 
 export type ProjectionStrategyId = "homography_grid" | "constrained_trapezoid";
+export type ProjectionMeshDensity = 34 | 64 | 96;
+
+export type ProjectionBuildOptions = {
+  gridDivisions?: ProjectionMeshDensity;
+};
 
 export type ProjectionStrategy = {
   id: ProjectionStrategyId;
-  buildMesh: (set: CameraControlPointSet) => ProjectionMeshData | null;
+  buildMesh: (set: CameraControlPointSet, options?: ProjectionBuildOptions) => ProjectionMeshData | null;
 };
 
 type Pair = { image: Vector2; world: WorldPoint };
 type HomographyEstimate = { hImageToWorld: number[]; inlierPairs: Pair[] };
 
-const GRID_DIVISIONS = 34;
+const DEFAULT_GRID_DIVISIONS: ProjectionMeshDensity = 34;
 const PROJECTION_Y_OFFSET = 0.026;
 const HOMOGRAPHY_REPROJECTION_THRESHOLD_UV = 0.02;
 const MIN_TRAPEZOID_EDGE_LENGTH = 1e-4;
@@ -391,13 +396,14 @@ function buildQuadMesh(corners: Vector2[]): ProjectionMeshData | null {
 
 export const homographyGridProjectionStrategy: ProjectionStrategy = {
   id: "homography_grid",
-  buildMesh(set) {
+  buildMesh(set, options) {
     const pairs = validPairs(set);
     if (pairs.length < 4) return null;
     const estimate = estimateRobustHomography(pairs);
     if (!estimate) return null;
     const hull = convexHull(estimate.inlierPairs.map((pair) => pair.image));
     if (hull.length < 3) return null;
+    const gridDivisions = options?.gridDivisions ?? DEFAULT_GRID_DIVISIONS;
 
     const vertices: number[] = [];
     const uvs: number[] = [];
@@ -409,8 +415,8 @@ export const homographyGridProjectionStrategy: ProjectionStrategy = {
       const existing = vertexByGrid.get(key);
       if (existing != null) return existing;
 
-      const u = gx / GRID_DIVISIONS;
-      const v = gy / GRID_DIVISIONS;
+      const u = gx / gridDivisions;
+      const v = gy / gridDivisions;
       const mapped = mapHomography(estimate.hImageToWorld, { x: u, y: v });
       const world = mapped ? { x: mapped.x, z: mapped.y } : null;
       if (!world) return null;
@@ -421,9 +427,9 @@ export const homographyGridProjectionStrategy: ProjectionStrategy = {
       return index;
     };
 
-    for (let gy = 0; gy < GRID_DIVISIONS; gy += 1) {
-      for (let gx = 0; gx < GRID_DIVISIONS; gx += 1) {
-        const center = { x: (gx + 0.5) / GRID_DIVISIONS, y: (gy + 0.5) / GRID_DIVISIONS };
+    for (let gy = 0; gy < gridDivisions; gy += 1) {
+      for (let gx = 0; gx < gridDivisions; gx += 1) {
+        const center = { x: (gx + 0.5) / gridDivisions, y: (gy + 0.5) / gridDivisions };
         if (!pointInPolygon(center, hull)) continue;
         const a = getVertex(gx, gy);
         const b = getVertex(gx + 1, gy);

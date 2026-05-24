@@ -330,7 +330,7 @@ export function createCameraElementType(host: TopoSyncHost): ElementType {
     renderEditorModal: ({ element, update, remove, close }) => (
       <CameraEditor element={element} update={update} remove={remove} close={close} i18n={i18n} host={host} />
     ),
-    renderActionModal: ({ element }) => <CameraAction element={element} i18n={i18n} />,
+    renderActionModal: ({ element }) => <CameraAction element={element} i18n={i18n} host={host} />,
   };
 }
 
@@ -1867,10 +1867,11 @@ function normalizePoseReference(poseReference: CameraPoseReference | null | unde
   };
 }
 
-function CameraAction({ element, i18n }: { element: CompositionElement; i18n: HostI18n }): React.ReactElement {
+function CameraAction({ element, i18n, host }: { element: CompositionElement; i18n: HostI18n; host: TopoSyncHost }): React.ReactElement {
   const { t } = i18n.useI18n();
   const props = readRecord(element.props);
   const cameraId = readString(props.camera_id).trim();
+  const LiveViewPlayer = host.ui.LiveViewPlayer;
 
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -1901,7 +1902,7 @@ function CameraAction({ element, i18n }: { element: CompositionElement; i18n: Ho
   };
 
   useEffect(() => {
-    if (!cameraId) return;
+    if (!cameraId || LiveViewPlayer) return;
     refresh();
     return () => {
       refreshAbortRef.current?.abort();
@@ -1912,7 +1913,7 @@ function CameraAction({ element, i18n }: { element: CompositionElement; i18n: Ho
       });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraId]);
+  }, [cameraId, LiveViewPlayer]);
 
   if (!cameraId) {
     return <div className="cardBody">{t("ext.cameras.action.no_camera")}</div>;
@@ -1922,14 +1923,30 @@ function CameraAction({ element, i18n }: { element: CompositionElement; i18n: Ho
     <div>
       <div className="rowWrap" style={{ justifyContent: "space-between" }}>
         <div className="label">{readString(props.camera_name) || cameraId}</div>
-        <button className="chipButton" type="button" onClick={refresh} disabled={loading}>
-          {loading ? t("ext.cameras.action.loading") : t("ext.cameras.action.refresh")}
-        </button>
+        {!LiveViewPlayer ? (
+          <button className="chipButton" type="button" onClick={refresh} disabled={loading}>
+            {loading ? t("ext.cameras.action.loading") : t("ext.cameras.action.refresh")}
+          </button>
+        ) : null}
       </div>
 
       <div className="sectionDivider" />
 
-      {errorMessage ? (
+      {LiveViewPlayer ? (
+        <div
+          style={{
+            position: "relative",
+            height: "min(62vh, 560px)",
+            minHeight: 320,
+            borderRadius: 14,
+            overflow: "hidden",
+            border: "1px solid rgba(255,255,255,0.14)",
+            background: "rgba(0,0,0,0.35)",
+          }}
+        >
+          <LiveViewPlayer cameraId={cameraId} context="large" style={{ width: "100%", height: "100%" }} />
+        </div>
+      ) : errorMessage ? (
         <div className="card">
           <div className="cardBody">{errorMessage}</div>
         </div>

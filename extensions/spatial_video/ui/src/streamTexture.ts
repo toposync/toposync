@@ -63,8 +63,8 @@ function chooseTransports(playback: StreamingPlaybackResponse): Array<{
 
   for (const item of planned) {
     const output =
-      (item.output_id ? outputs.find((candidate) => candidate.output_id === item.output_id) : null) ??
       (item.url ? ({ output_id: item.output_id || item.transport, protocol: item.transport, url: item.url } as StreamingOutputUrl) : null) ??
+      (item.output_id ? outputs.find((candidate) => candidate.output_id === item.output_id && candidate.protocol === item.transport) : null) ??
       byTransport.get(item.transport);
     if (output && (item.transport === "mse" || item.transport === "hls" || item.transport === "jsmpeg")) {
       push(item.transport, output);

@@ -11,8 +11,9 @@ import type {
 
 import { fetchCameraPtzPresets, fetchCameraPtzStatus, fetchLiveViews } from "./api";
 import { resolveProjectionCandidates } from "./candidates";
-import { projectionStrategies, type ProjectionStrategyId } from "./projection";
+import { projectionStrategies, type ProjectionMeshDensity, type ProjectionStrategyId } from "./projection";
 import { resolveActiveProjectionPose } from "./ptzProjection";
+import { readSpatialVideoSettings, SPATIAL_VIDEO_RENDER_VIEW_ID } from "./spatialSettings";
 import { StreamTextureSource, type StreamTextureSnapshot } from "./streamTexture";
 import type { CameraControlPointSet, CameraLiveView, ProjectionCandidate, PtzPreset, PtzStatus } from "./types";
 
@@ -24,22 +25,11 @@ type ProjectionEntry = {
   material: THREE.MeshBasicMaterial;
   setId: string;
   strategyId: ProjectionStrategyId;
+  meshDensity: ProjectionMeshDensity;
 };
 
 const MAX_PIXEL_RATIO = 2;
 const DEFAULT_WORLD_BOUNDS: BoundsXZ = { minX: -1, maxX: 1, minZ: -1, maxZ: 1 };
-const PROJECTION_MODE_OPTIONS: Array<{ id: ProjectionStrategyId; label: string; title: string }> = [
-  {
-    id: "homography_grid",
-    label: "Seguro",
-    title: "Usa a malha calibrada apenas dentro dos pontos de controle confiáveis.",
-  },
-  {
-    id: "constrained_trapezoid",
-    label: "Trapézio",
-    title: "Projeta o frame completo em um trapézio leve, calculado a partir dos pontos confiáveis.",
-  },
-];
 
 function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -159,8 +149,12 @@ function boundsChanged(a: BoundsXZ, b: BoundsXZ): boolean {
   );
 }
 
-function createProjectionGeometry(set: CameraControlPointSet, strategyId: ProjectionStrategyId): THREE.BufferGeometry | null {
-  const meshData = projectionStrategies[strategyId].buildMesh(set);
+function createProjectionGeometry(
+  set: CameraControlPointSet,
+  strategyId: ProjectionStrategyId,
+  meshDensity: ProjectionMeshDensity,
+): THREE.BufferGeometry | null {
+  const meshData = projectionStrategies[strategyId].buildMesh(set, { gridDivisions: meshDensity });
   if (!meshData) return null;
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(meshData.positions, 3));
@@ -175,6 +169,49 @@ function snapshotLabel(snapshot: StreamTextureSnapshot): string {
   if (snapshot.status === "loading") return "Aquecendo";
   if (snapshot.status === "error") return snapshot.message;
   return "Aguardando";
+}
+
+type MarkerVideoStatus = {
+  kind: "loading" | "error" | "unmatched";
+  icon: string;
+  title: string;
+  color: string;
+  background: string;
+  border: string;
+};
+
+function markerVideoStatus(snapshot: StreamTextureSnapshot | null, poseStatus: string | null | undefined): MarkerVideoStatus | null {
+  if (poseStatus === "unmatched") {
+    return {
+      kind: "unmatched",
+      icon: "location-dot",
+      title: "Pose atual sem mapeamento de projeção.",
+      color: "rgb(251,191,36)",
+      background: "rgba(120,53,15,0.92)",
+      border: "rgba(251,191,36,0.72)",
+    };
+  }
+  if (snapshot?.status === "error") {
+    return {
+      kind: "error",
+      icon: "triangle-exclamation",
+      title: snapshot.message || "Falha na transmissão espacial.",
+      color: "rgb(254,202,202)",
+      background: "rgba(127,29,29,0.94)",
+      border: "rgba(248,113,113,0.78)",
+    };
+  }
+  if (!snapshot || snapshot.status === "idle" || snapshot.status === "loading") {
+    return {
+      kind: "loading",
+      icon: "spinner",
+      title: snapshot ? snapshotLabel(snapshot) : "Aquecendo transmissão.",
+      color: "rgb(186,230,253)",
+      background: "rgba(12,74,110,0.94)",
+      border: "rgba(125,211,252,0.78)",
+    };
+  }
+  return null;
 }
 
 function elementLayerRank(element: CompositionElement, elementTypesById: Record<string, ElementType>): number {
@@ -326,6 +363,7 @@ export function SpatialVideoView({
   elements,
   elementTypesById,
   compositionId,
+  viewSettings,
   onElementActivated,
 }: RenderViewContext): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -346,7 +384,12 @@ export function SpatialVideoView({
   const [ptzByCamera, setPtzByCamera] = useState<Record<string, PtzStatus | null>>({});
   const [presetsByCamera, setPresetsByCamera] = useState<Record<string, PtzPreset[]>>({});
   const [version, setVersion] = useState(0);
-  const [projectionStrategyId, setProjectionStrategyId] = useState<ProjectionStrategyId>("homography_grid");
+  const spatialSettings = useMemo(
+    () => readSpatialVideoSettings(viewSettings.renderViewSettings?.[SPATIAL_VIDEO_RENDER_VIEW_ID]),
+    [viewSettings.renderViewSettings],
+  );
+  const projectionStrategyId = spatialSettings.projectionStrategyId;
+  const meshDensity = spatialSettings.meshDensity;
 
   const requestRender = useCallback(() => setVersion((prev) => prev + 1), []);
 
@@ -551,13 +594,14 @@ export function SpatialVideoView({
       const set = pose?.set ?? candidate.initialControlPointSet;
       const visible = pose?.status !== "unmatched";
       const existing = projectionEntriesRef.current.get(candidate.id);
-      if (existing && (existing.setId !== set.id || existing.strategyId !== projectionStrategyId)) {
-        const geometry = createProjectionGeometry(set, projectionStrategyId);
+      if (existing && (existing.setId !== set.id || existing.strategyId !== projectionStrategyId || existing.meshDensity !== meshDensity)) {
+        const geometry = createProjectionGeometry(set, projectionStrategyId, meshDensity);
         if (geometry) {
           existing.mesh.geometry.dispose();
           existing.mesh.geometry = geometry;
           existing.setId = set.id;
           existing.strategyId = projectionStrategyId;
+          existing.meshDensity = meshDensity;
         }
       }
       if (existing) {
@@ -567,7 +611,7 @@ export function SpatialVideoView({
         continue;
       }
 
-      const geometry = createProjectionGeometry(set, projectionStrategyId);
+      const geometry = createProjectionGeometry(set, projectionStrategyId, meshDensity);
       if (!geometry) continue;
       const material = new THREE.MeshBasicMaterial({
         color: 0xffffff,
@@ -600,12 +644,13 @@ export function SpatialVideoView({
         material,
         setId: set.id,
         strategyId: projectionStrategyId,
+        meshDensity,
       });
       group.add(mesh);
       source.start();
     }
     requestRender();
-  }, [activePoses, candidates, projectionStrategyId, requestRender]);
+  }, [activePoses, candidates, meshDensity, projectionStrategyId, requestRender]);
 
   const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -683,20 +728,25 @@ export function SpatialVideoView({
     }
   }, [elementTypesById, elements, onElementActivated]);
 
-  const candidateSnapshots = candidates.map((candidate) => ({
-    candidate,
-    pose: activePoses.get(candidate.id),
-    snapshot: projectionEntriesRef.current.get(candidate.id)?.source.getSnapshot() ?? null,
-  }));
+  const markerStatusByElementId = useMemo(() => {
+    const out = new Map<string, MarkerVideoStatus>();
+    for (const candidate of candidates) {
+      const pose = activePoses.get(candidate.id);
+      const snapshot = projectionEntriesRef.current.get(candidate.id)?.source.getSnapshot() ?? null;
+      const status = markerVideoStatus(snapshot, pose?.status);
+      if (status) out.set(candidate.element.id, status);
+    }
+    return out;
+  }, [activePoses, candidates, version]);
   const markers = useMemo(() => markerEntries(elements, elementTypesById), [elementTypesById, elements, version]);
   const markerButtons = useMemo(() => {
     const { width, height } = lastSizeRef.current;
     const rect = { width, height } as DOMRect;
     return markers.map(({ elementId, marker }, index) => {
       const screen = worldToScreen({ x: marker.x, z: marker.z }, rect, viewBounds);
-      return { elementId, marker, index, x: screen.x, y: screen.y };
+      return { elementId, marker, status: markerStatusByElementId.get(elementId) ?? null, index, x: screen.x, y: screen.y };
     });
-  }, [markers, viewBounds]);
+  }, [markerStatusByElementId, markers, viewBounds]);
 
   return (
     <div
@@ -727,12 +777,26 @@ export function SpatialVideoView({
         layer="above-video"
         zIndex={2}
       />
+      <style>
+        {`
+          @keyframes spatialVideoMarkerSpin {
+            to { transform: rotate(360deg); }
+          }
+        `}
+      </style>
       <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 3 }}>
-        {markerButtons.map(({ elementId, marker, index, x, y }) => (
+        {markerButtons.map(({ elementId, marker, status, index, x, y }) => (
           <button
             key={`${elementId}:${marker.id || index}`}
             type="button"
-            title={marker.subtitle ? `${marker.title} · ${marker.subtitle}` : marker.title}
+            className={[
+              "main2dMarkerButton",
+              marker.className ?? "",
+              marker.state === "on" ? "isOn" : "",
+              marker.state === "off" ? "isOff" : "",
+              marker.state === "unknown" ? "isUnknown" : "",
+            ].filter(Boolean).join(" ")}
+            title={[marker.subtitle ? `${marker.title} · ${marker.subtitle}` : marker.title, status?.title].filter(Boolean).join(" · ")}
             aria-label={marker.title}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={() => onElementActivated?.(elementId, "click")}
@@ -754,104 +818,64 @@ export function SpatialVideoView({
               padding: 0,
             }}
           >
-            <span
+            <i
+              className={`fa-solid fa-${marker.icon || "circle-dot"}`}
               aria-hidden="true"
               style={{
-                width: 13,
-                height: 9,
-                borderRadius: 4,
-                border: "1.5px solid currentColor",
-                display: "block",
-                position: "relative",
+                fontSize: 14,
+                lineHeight: 1,
               }}
-            >
+            />
+            {status ? (
               <span
+                aria-hidden="true"
                 style={{
                   position: "absolute",
-                  left: "50%",
-                  bottom: -7,
-                  width: 0,
-                  height: 0,
-                  marginLeft: -4,
-                  borderLeft: "4px solid transparent",
-                  borderRight: "4px solid transparent",
-                  borderTop: "6px solid rgb(251,191,36)",
+                  right: -4,
+                  bottom: -4,
+                  width: 17,
+                  height: 17,
+                  borderRadius: 999,
+                  display: "grid",
+                  placeItems: "center",
+                  border: `1px solid ${status.border}`,
+                  background: status.background,
+                  color: status.color,
+                  boxShadow: "0 6px 12px rgba(0,0,0,0.32)",
                 }}
-              />
-            </span>
+              >
+                <i
+                  className={`fa-solid fa-${status.icon}`}
+                  style={{
+                    fontSize: status.kind === "loading" ? 10 : 9,
+                    animation: status.kind === "loading" ? "spatialVideoMarkerSpin 0.9s linear infinite" : undefined,
+                  }}
+                />
+              </span>
+            ) : null}
           </button>
         ))}
       </div>
-      <div
-        className="card"
-        style={{
-          position: "absolute",
-          right: 18,
-          top: 68,
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "8px 10px",
-          borderRadius: 8,
-          pointerEvents: "auto",
-          zIndex: 4,
-        }}
-        onPointerDown={(event) => event.stopPropagation()}
-        onWheel={(event) => event.stopPropagation()}
-      >
-        <span className="cardMeta" style={{ fontWeight: 700 }}>Projeção</span>
-        <div style={{ display: "flex", gap: 4 }}>
-          {PROJECTION_MODE_OPTIONS.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              className="chipButton"
-              title={option.title}
-              aria-pressed={projectionStrategyId === option.id}
-              onClick={() => setProjectionStrategyId(option.id)}
-              style={{
-                minHeight: 28,
-                padding: "5px 9px",
-                borderColor: projectionStrategyId === option.id ? "rgba(125,211,252,0.72)" : undefined,
-                background: projectionStrategyId === option.id ? "rgba(14,165,233,0.16)" : undefined,
-              }}
-            >
-              {option.label}
-            </button>
-          ))}
+      {liveViewsLoading || liveViewsError || candidates.length === 0 ? (
+        <div
+          style={{
+            position: "absolute",
+            left: 18,
+            bottom: 18,
+            maxWidth: 420,
+            pointerEvents: "none",
+            zIndex: 4,
+          }}
+        >
+          {liveViewsLoading ? (
+            <div className="card" style={{ padding: 12 }}>Carregando transmissões mapeadas...</div>
+          ) : liveViewsError ? (
+            <div className="card" style={{ padding: 12 }}>Falha ao carregar transmissões: {liveViewsError}</div>
+          ) : (
+            <div className="card" style={{ padding: 12 }}>Nenhuma câmera mapeada com transmissão ativa nesta composição.</div>
+          )}
         </div>
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          left: 18,
-          bottom: 18,
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-          maxWidth: 420,
-          pointerEvents: "none",
-          zIndex: 4,
-        }}
-      >
-        {liveViewsLoading ? (
-          <div className="card" style={{ padding: 12 }}>Carregando transmissões mapeadas...</div>
-        ) : liveViewsError ? (
-          <div className="card" style={{ padding: 12 }}>Falha ao carregar transmissões: {liveViewsError}</div>
-        ) : candidates.length === 0 ? (
-          <div className="card" style={{ padding: 12 }}>Nenhuma câmera mapeada com transmissão ativa nesta composição.</div>
-        ) : (
-          candidateSnapshots.map(({ candidate, pose, snapshot }) => (
-            <div key={candidate.id} className="card" style={{ padding: 10, borderRadius: 8 }}>
-              <div style={{ fontWeight: 700, fontSize: 13 }}>{candidate.label}</div>
-              <div className="cardMeta" style={{ marginTop: 2 }}>
-                {snapshot ? snapshotLabel(snapshot) : "Aquecendo"} · {pose?.set.label ?? candidate.initialControlPointSet.label}
-                {pose?.status === "unmatched" ? " · pose sem mapeamento" : ""}
-              </div>
-            </div>
-          ))
-        )}
-      </div>
+      ) : null}
     </div>
   );
 }

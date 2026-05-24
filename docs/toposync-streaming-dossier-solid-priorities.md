@@ -58,8 +58,8 @@ Esta seção é normativa para decisões futuras de produto e engenharia no stre
 - Nunca marcar como `live` apenas porque FFmpeg, MediaMTX, go2rtc, JSMpeg ou o player estão rodando.
 - `Live` exige frame selecionado recente, writer ativo/selecionado, fonte recente quando houver fonte, e output saudável.
 - Frame antigo repetido é `stale` ou placeholder; nunca deve ser apresentado como live.
-- Stalls de aquecimento podem ser tratados como recuperáveis quando o player volta a tocar, mas não podem mascarar ausência real de pipeline, publisher parado ou fonte velha.
-- Se não há writer/pipeline alimentando a transmissão, a causa principal deve ser explícita: `Nenhuma pipeline está alimentando esta transmissão.`
+- Stalls de aquecimento podem ser tratados como recuperáveis quando o player volta a tocar, mas não podem mascarar ausência real de fluxo, publisher parado ou fonte velha.
+- Se não há writer/fluxo alimentando a transmissão, a causa principal deve ser explícita: `Nenhum fluxo está alimentando esta transmissão.`
 - Placeholder e still recente são estados visuais válidos, mas não são live.
 
 ### Política de transporte
@@ -431,9 +431,9 @@ Regras de mensagem principal:
 
 | Condição | Mensagem principal |
 |---|---|
-| `fallback_reason=no_frame` e sem writer | `Nenhuma pipeline está alimentando esta transmissão.` |
-| writer presente, mas publisher/output parado | `Pipeline tem frame, mas publisher HLS/WebRTC não está rodando.` |
-| fonte/pipeline velha | Mostrar idade do frame, writer esperado e output selecionado. |
+| `fallback_reason=no_frame` e sem writer | `Nenhum fluxo está alimentando esta transmissão.` |
+| writer presente, mas publisher/output parado | `O fluxo tem frame, mas publisher HLS/WebRTC não está rodando.` |
+| fonte/fluxo velha | Mostrar idade do frame, writer esperado e output selecionado. |
 | HLS saudável e WebRTC indisponível | Warning técnico secundário, não causa principal. |
 | placeholder/still | Estado visual válido, mas nunca `Live`. |
 

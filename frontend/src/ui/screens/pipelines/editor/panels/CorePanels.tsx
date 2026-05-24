@@ -1238,7 +1238,7 @@ export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }:
             {t(
               "core.ui.pipelines.panels.publish_video.publication_hint",
               {},
-              "O TopoSync gera a transmissão técnica, a variante e os outputs necessários quando o pipeline é salvo.",
+              "O TopoSync gera a transmissão técnica, a variante e os outputs necessários quando o fluxo é salvo.",
             )}
           </div>
           <label className="pipelinesLabel">

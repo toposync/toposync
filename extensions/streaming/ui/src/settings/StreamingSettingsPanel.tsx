@@ -211,7 +211,7 @@ function isGeneratedTransmission(transmission: Transmission | null | undefined):
 
 function generatedTransmissionLabel(transmission: Transmission, t: TranslateFn): string {
   if (transmission.owner_kind === "pipeline_output") {
-    return t("ext.streaming.transmissions.generated_by_pipeline", {}, "Gerada por operador de pipeline");
+    return t("ext.streaming.transmissions.generated_by_pipeline", {}, "Gerada por operador de fluxo");
   }
   if (transmission.generated_by === "stream_publication" || transmission.publication_id) {
     return t("ext.streaming.transmissions.generated_by_publication", {}, "Gerada por fonte de câmera publicável");
@@ -1680,7 +1680,7 @@ function StreamingSettingsPanelContent({
         statusDetail = t("ext.streaming.live.status.no_variants_detail", {}, "Nenhuma fonte está marcada para exibição.");
       } else if (hasNoPipeline) {
         statusClass = "is-offline";
-        statusLabel = t("ext.streaming.live.status.no_pipeline", {}, "Sem pipeline");
+        statusLabel = t("ext.streaming.live.status.no_pipeline", {}, "Sem fluxo");
         statusDetail = t("ext.streaming.live.status.no_pipeline_detail", {}, "Nenhum fluxo está alimentando esta publicação.");
       } else if (hasStale) {
         statusClass = "is-stale";
@@ -1783,11 +1783,11 @@ function StreamingSettingsPanelContent({
         issues.push({
           key: `${transmissionId}:no-pipeline`,
           severity: "critical",
-          title: t("ext.streaming.issues.no_pipeline_title", { name: label }, `${label}: sem pipeline`),
+          title: t("ext.streaming.issues.no_pipeline_title", { name: label }, `${label}: sem fluxo`),
           detail: t(
             "ext.streaming.issues.no_pipeline_detail",
             {},
-            "Nenhuma pipeline está alimentando esta transmissão. Reconciliar a câmera costuma recriar o fluxo implícito.",
+            "Nenhum fluxo está alimentando esta transmissão. Reconciliar a câmera costuma recriar o fluxo implícito.",
           ),
           actionLabel: t("ext.streaming.issues.action.reconcile", {}, "Reconciliar publicação"),
           cameraId: transmission?.camera_id ?? null,
@@ -1804,7 +1804,7 @@ function StreamingSettingsPanelContent({
           detail: t(
             "ext.streaming.issues.publisher_down_detail",
             {},
-            "A pipeline tem frame, mas a saída HLS/WebRTC não está publicando corretamente.",
+            "O fluxo tem frame, mas a saída HLS/WebRTC não está publicando corretamente.",
           ),
           actionLabel: t("ext.streaming.issues.action.advanced", {}, "Inspecionar artefato"),
           actionTab: "advanced",
@@ -1823,7 +1823,7 @@ function StreamingSettingsPanelContent({
             (transmissionHealth.evidence ?? []).join(" ") ||
             t("ext.streaming.issues.stale_detail", {}, "A transmissão existe, mas o frame selecionado não está recente."),
           actionLabel: selectedPipeline
-            ? t("ext.streaming.issues.action.pipeline", {}, "Ver pipeline")
+            ? t("ext.streaming.issues.action.pipeline", {}, "Ver fluxo")
             : t("ext.streaming.issues.action.advanced", {}, "Inspecionar artefato"),
           actionTab: selectedPipeline ? undefined : "advanced",
           transmissionId,
@@ -1938,7 +1938,7 @@ function StreamingSettingsPanelContent({
                 {t(
                   "ext.streaming.live.subtitle",
                   {},
-                  "As variantes são geradas a partir das fontes publicáveis de câmera e dos operadores de pipeline que publicam vídeo.",
+                  "As variantes são geradas a partir das fontes publicáveis de câmera e dos operadores de fluxo que publicam vídeo.",
                 )}
               </div>
             </div>

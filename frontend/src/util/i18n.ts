@@ -2480,9 +2480,9 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.streams.health.camera_source_blocked": "A fonte da câmera não está alimentando frames pelo ingest/origem configurado. {{details}}",
     "core.ui.streams.health.camera_source_not_feeding": "A fonte da câmera ainda não está alimentando frames.",
     "core.ui.streams.health.hls_warming_up": "Aquecendo transmissão HLS...",
-    "core.ui.streams.health.no_pipeline_frame": "Nenhuma pipeline está alimentando esta transmissão.",
-    "core.ui.streams.health.publisher_down": "A pipeline tem frame selecionado, mas o publisher HLS/WebRTC não está rodando.",
-    "core.ui.streams.health.source_pipeline_stale": "A pipeline parou de alimentar frames recentes.{{suffix}}",
+    "core.ui.streams.health.no_pipeline_frame": "Nenhum fluxo está alimentando esta transmissão.",
+    "core.ui.streams.health.publisher_down": "O fluxo tem frame selecionado, mas o publisher HLS/WebRTC não está rodando.",
+    "core.ui.streams.health.source_pipeline_stale": "O fluxo parou de alimentar frames recentes.{{suffix}}",
     "core.ui.streams.source.status": "Status da fonte",
     "core.ui.streams.source.camera": "Câmera",
     "core.ui.streams.source.backend": "Backend",
@@ -2847,7 +2847,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_description.home_assistant.notify":
       "Envia notificações push pelo serviço notify do Home Assistant.",
     "core.ui.pipelines.operator_description.home_assistant.boolean_state":
-      "Mantém um sinal booleano no Home Assistant sincronizado com o lifecycle do pipeline.",
+      "Mantém um sinal booleano no Home Assistant sincronizado com o lifecycle do fluxo.",
     "core.ui.pipelines.operator_description.stream.publish_video":
       "Publica os frames deste fluxo como variante de câmera ou em uma transmissão avançada.",
     "core.ui.pipelines.operator_description.ai.condition_filter":
@@ -3056,7 +3056,7 @@ const translationsByLocale: Record<Locale, Translations> = {
 
     "core.ui.pipelines.storage.title": "Armazenamento",
     "core.ui.pipelines.storage.subtitle": "Retenção gerenciada para arquivos gravados por Salvar imagens.",
-    "core.ui.pipelines.storage.limit_gib": "Orçamento do pipeline (GiB)",
+    "core.ui.pipelines.storage.limit_gib": "Orçamento do fluxo (GiB)",
     "core.ui.pipelines.storage.clean_now": "Limpar agora",
     "core.ui.pipelines.storage.cleaning": "Limpando",
     "core.ui.pipelines.storage.empty": "Nenhum arquivo salvo ainda.",
@@ -3118,7 +3118,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.home_assistant_boolean_state.existing_required": "Escolha um helper input_boolean.",
     "core.ui.pipelines.panels.home_assistant_boolean_state.boolean_path": "Campo booleano",
     "core.ui.pipelines.panels.home_assistant_boolean_state.boolean_path_placeholder": "payload.onvif_event.boolean_value",
-    "core.ui.pipelines.panels.home_assistant_boolean_state.shutdown_behavior": "Quando o pipeline parar",
+    "core.ui.pipelines.panels.home_assistant_boolean_state.shutdown_behavior": "Quando o fluxo parar",
     "core.ui.pipelines.panels.home_assistant_boolean_state.shutdown_behavior.off": "Desligar",
     "core.ui.pipelines.panels.home_assistant_boolean_state.shutdown_behavior.unavailable": "Marcar indisponível",
     "core.ui.pipelines.panels.home_assistant_boolean_state.shutdown_behavior.keep": "Manter último estado",
@@ -4041,7 +4041,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.ingest.badge": "INGEST",
     "core.ui.pipelines.ingest.direct": "Este fluxo abrirá conexão direta com a origem da câmera {{camera}}.",
     "core.ui.pipelines.ingest.centralizer_mismatch":
-      "Este pipeline roda em {{pipelineHost}} e lerá a câmera {{camera}} pelo ingest em {{ingestHost}}.",
+      "Este fluxo roda em {{pipelineHost}} e lerá a câmera {{camera}} pelo ingest em {{ingestHost}}.",
 
     "core.ui.settings.nav.pipelines.title": "Fluxos",
     "core.ui.settings.nav.pipelines.desc": "Crie e edite fluxos.",

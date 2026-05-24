@@ -726,7 +726,7 @@ function CamerasSettingsPanelContent({
         <div>
           <div className="settingsTitle">{t("ext.cameras.settings.name", {}, "Câmeras")}</div>
           <div className="settingsDescription">
-            {t("ext.cameras.settings.multi_source_help", {}, "Cada câmera representa um dispositivo físico; pipelines escolhem uma fonte da câmera.")}
+            {t("ext.cameras.settings.multi_source_help", {}, "Cada câmera representa um dispositivo físico; fluxos escolhem uma fonte da câmera.")}
           </div>
         </div>
         <div className="rowWrap">
@@ -930,7 +930,7 @@ function CamerasSettingsPanelContent({
                 <div>
                   <div className="modalSectionTitle">{t("ext.cameras.settings.sources.title", {}, "Fontes da câmera")}</div>
                   <div className="settingsDescription">
-                    {t("ext.cameras.settings.sources.help", {}, "Pipelines, snapshots e diagnósticos escolhem uma destas fontes.")}
+                    {t("ext.cameras.settings.sources.help", {}, "Fluxos, snapshots e diagnósticos escolhem uma destas fontes.")}
                   </div>
                 </div>
                 <button className="chipButton" type="button" onClick={() => addRtspSource(activeCamera)}>
@@ -1236,7 +1236,7 @@ function CamerasSettingsPanelContent({
                     {t(
                       "ext.cameras.workflow.save_first",
                       {},
-                      "Salve as alterações da câmera antes de continuar com mapeamento e pipelines.",
+                      "Salve as alterações da câmera antes de continuar com mapeamento e fluxos.",
                     )}
                   </div>
                 </div>
@@ -1285,9 +1285,9 @@ function CamerasSettingsPanelContent({
 
               <div className="settingsSectionHeader">
                 <div>
-                  <div className="modalSectionTitle">{t("ext.cameras.pipelines.title", {}, "Pipelines")}</div>
+                  <div className="modalSectionTitle">{t("ext.cameras.pipelines.title", {}, "Fluxos")}</div>
                   <div className="settingsDescription">
-                    {t("ext.cameras.pipelines.help", {}, "Atalhos para pipelines que usam esta câmera e presets para criar novos.")}
+                    {t("ext.cameras.pipelines.help", {}, "Atalhos para fluxos que usam esta câmera e presets para criar novos.")}
                   </div>
                 </div>
               </div>
@@ -1302,7 +1302,7 @@ function CamerasSettingsPanelContent({
                     {t(
                       "ext.cameras.workflow.save_first",
                       {},
-                      "Salve as alterações da câmera antes de continuar com mapeamento e pipelines.",
+                      "Salve as alterações da câmera antes de continuar com mapeamento e fluxos.",
                     )}
                   </div>
                 </div>
@@ -1314,7 +1314,7 @@ function CamerasSettingsPanelContent({
                     {cameraPipelinesLoading ? <div>{t("core.ui.loading", {}, "Carregando...")}</div> : null}
 
                     {!cameraPipelinesLoading && (cameraPipelines?.pipelines ?? []).length === 0 ? (
-                      <div className="settingsStatusMuted">{t("ext.cameras.pipelines.empty", {}, "Nenhum pipeline usa esta câmera ainda.")}</div>
+                      <div className="settingsStatusMuted">{t("ext.cameras.pipelines.empty", {}, "Nenhum fluxo usa esta câmera ainda.")}</div>
                     ) : null}
 
                     {(cameraPipelines?.pipelines ?? []).length ? (
@@ -1361,7 +1361,7 @@ function CamerasSettingsPanelContent({
                       </div>
                       {!hasMappedComposition ? (
                         <div className="settingsStatusMuted">
-                          {t("ext.cameras.pipelines.mapping_required", {}, "Mapeie esta câmera em uma composição para criar o pipeline com mapeamento.")}
+                          {t("ext.cameras.pipelines.mapping_required", {}, "Mapeie esta câmera em uma composição para criar o fluxo com mapeamento.")}
                         </div>
                       ) : null}
                     </div>

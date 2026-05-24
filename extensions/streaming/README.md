@@ -995,7 +995,7 @@ Fix:
 The primary user-facing message for this class is:
 
 ```text
-Nenhuma pipeline está alimentando esta transmissão.
+Nenhum fluxo está alimentando esta transmissão.
 ```
 
 ### HLS plays but WebRTC warning appears

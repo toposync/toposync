@@ -1,7 +1,9 @@
 import type { CameraControlPointSet, ProjectionMeshData, Vector2, WorldPoint } from "./types";
 
+export type ProjectionStrategyId = "homography_grid" | "constrained_trapezoid";
+
 export type ProjectionStrategy = {
-  id: string;
+  id: ProjectionStrategyId;
   buildMesh: (set: CameraControlPointSet) => ProjectionMeshData | null;
 };
 
@@ -11,6 +13,10 @@ type HomographyEstimate = { hImageToWorld: number[]; inlierPairs: Pair[] };
 const GRID_DIVISIONS = 34;
 const PROJECTION_Y_OFFSET = 0.026;
 const HOMOGRAPHY_REPROJECTION_THRESHOLD_UV = 0.02;
+const MIN_TRAPEZOID_EDGE_LENGTH = 1e-4;
+const MAX_TRAPEZOID_WIDTH_RATIO = 2.5;
+const MAX_TRAPEZOID_CONTROL_SPAN_RATIO = 2.8;
+const TRAPEZOID_IMAGE_PADDING = 0.04;
 
 function finiteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -154,6 +160,76 @@ function pointDistance(a: Vector2, b: Vector2): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+function vectorLength(point: Vector2): number {
+  return Math.hypot(point.x, point.y);
+}
+
+function normalizeVector(point: Vector2): Vector2 | null {
+  const length = vectorLength(point);
+  if (!Number.isFinite(length) || length < MIN_TRAPEZOID_EDGE_LENGTH) return null;
+  return { x: point.x / length, y: point.y / length };
+}
+
+function addVector(a: Vector2, b: Vector2): Vector2 {
+  return { x: a.x + b.x, y: a.y + b.y };
+}
+
+function subtractVector(a: Vector2, b: Vector2): Vector2 {
+  return { x: a.x - b.x, y: a.y - b.y };
+}
+
+function scaleVector(point: Vector2, scale: number): Vector2 {
+  return { x: point.x * scale, y: point.y * scale };
+}
+
+function midpoint(a: Vector2, b: Vector2): Vector2 {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+function dot(a: Vector2, b: Vector2): number {
+  return a.x * b.x + a.y * b.y;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function controlWorldSpan(pairs: Pair[]): number {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const pair of pairs) {
+    minX = Math.min(minX, pair.world.x);
+    maxX = Math.max(maxX, pair.world.x);
+    minY = Math.min(minY, pair.world.z);
+    maxY = Math.max(maxY, pair.world.z);
+  }
+  const span = Math.hypot(maxX - minX, maxY - minY);
+  return Number.isFinite(span) && span > MIN_TRAPEZOID_EDGE_LENGTH ? span : 1;
+}
+
+function imageBounds(pairs: Pair[]): { minX: number; maxX: number; minY: number; maxY: number } | null {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const pair of pairs) {
+    minX = Math.min(minX, pair.image.x);
+    maxX = Math.max(maxX, pair.image.x);
+    minY = Math.min(minY, pair.image.y);
+    maxY = Math.max(maxY, pair.image.y);
+  }
+  if (![minX, maxX, minY, maxY].every(Number.isFinite)) return null;
+  if (maxX - minX < MIN_TRAPEZOID_EDGE_LENGTH || maxY - minY < MIN_TRAPEZOID_EDGE_LENGTH) return null;
+  return {
+    minX: clamp(minX - TRAPEZOID_IMAGE_PADDING, 0, 1),
+    maxX: clamp(maxX + TRAPEZOID_IMAGE_PADDING, 0, 1),
+    minY: clamp(minY - TRAPEZOID_IMAGE_PADDING, 0, 1),
+    maxY: clamp(maxY + TRAPEZOID_IMAGE_PADDING, 0, 1),
+  };
+}
+
 function median(values: number[]): number {
   if (values.length === 0) return Infinity;
   const sorted = [...values].sort((a, b) => a - b);
@@ -230,6 +306,89 @@ function pointKey(x: number, y: number): string {
   return `${x}:${y}`;
 }
 
+function trapezoidCornersFromHomography(estimate: HomographyEstimate): Vector2[] | null {
+  const bounds = imageBounds(estimate.inlierPairs);
+  if (!bounds) return null;
+  const corners = [
+    mapHomography(estimate.hImageToWorld, { x: bounds.minX, y: bounds.minY }),
+    mapHomography(estimate.hImageToWorld, { x: bounds.maxX, y: bounds.minY }),
+    mapHomography(estimate.hImageToWorld, { x: bounds.maxX, y: bounds.maxY }),
+    mapHomography(estimate.hImageToWorld, { x: bounds.minX, y: bounds.maxY }),
+  ];
+  if (corners.some((corner) => !corner)) return null;
+  const [topLeft, topRight, bottomRight, bottomLeft] = corners as Vector2[];
+
+  const topEdge = subtractVector(topRight, topLeft);
+  const bottomEdge = subtractVector(bottomRight, bottomLeft);
+  const topLength = vectorLength(topEdge);
+  const bottomLength = vectorLength(bottomEdge);
+  if (topLength < MIN_TRAPEZOID_EDGE_LENGTH || bottomLength < MIN_TRAPEZOID_EDGE_LENGTH) return null;
+
+  const topAxis = normalizeVector(topEdge);
+  const bottomAxis = normalizeVector(bottomEdge);
+  if (!topAxis || !bottomAxis) return null;
+
+  let axisX = normalizeVector(addVector(topAxis, bottomAxis));
+  if (!axisX) axisX = topAxis;
+
+  const topCenter = midpoint(topLeft, topRight);
+  const bottomCenter = midpoint(bottomLeft, bottomRight);
+  const centerDelta = subtractVector(bottomCenter, topCenter);
+  let axisY = { x: -axisX.y, y: axisX.x };
+  if (dot(centerDelta, axisY) < 0) axisY = scaleVector(axisY, -1);
+  let height = Math.abs(dot(centerDelta, axisY));
+  if (height < MIN_TRAPEZOID_EDGE_LENGTH) height = vectorLength(centerDelta);
+  if (height < MIN_TRAPEZOID_EDGE_LENGTH) return null;
+
+  const controlSpan = controlWorldSpan(estimate.inlierPairs);
+  const maxDimension = controlSpan * MAX_TRAPEZOID_CONTROL_SPAN_RATIO;
+  let constrainedTopLength = clamp(topLength, MIN_TRAPEZOID_EDGE_LENGTH, maxDimension);
+  let constrainedBottomLength = clamp(bottomLength, MIN_TRAPEZOID_EDGE_LENGTH, maxDimension);
+  const smallerWidth = Math.max(MIN_TRAPEZOID_EDGE_LENGTH, Math.min(constrainedTopLength, constrainedBottomLength));
+  const largerWidth = Math.max(constrainedTopLength, constrainedBottomLength);
+  if (largerWidth / smallerWidth > MAX_TRAPEZOID_WIDTH_RATIO) {
+    const cappedLarger = smallerWidth * MAX_TRAPEZOID_WIDTH_RATIO;
+    if (constrainedTopLength > constrainedBottomLength) constrainedTopLength = cappedLarger;
+    else constrainedBottomLength = cappedLarger;
+  }
+
+  const constrainedHeight = clamp(height, MIN_TRAPEZOID_EDGE_LENGTH, maxDimension);
+  const center = midpoint(topCenter, bottomCenter);
+  const topConstrainedCenter = addVector(center, scaleVector(axisY, -constrainedHeight / 2));
+  const bottomConstrainedCenter = addVector(center, scaleVector(axisY, constrainedHeight / 2));
+  const halfTop = scaleVector(axisX, constrainedTopLength / 2);
+  const halfBottom = scaleVector(axisX, constrainedBottomLength / 2);
+
+  return [
+    subtractVector(topConstrainedCenter, halfTop),
+    addVector(topConstrainedCenter, halfTop),
+    addVector(bottomConstrainedCenter, halfBottom),
+    subtractVector(bottomConstrainedCenter, halfBottom),
+  ];
+}
+
+function buildQuadMesh(corners: Vector2[]): ProjectionMeshData | null {
+  if (corners.length !== 4) return null;
+  return {
+    positions: new Float32Array([
+      corners[0].x,
+      PROJECTION_Y_OFFSET,
+      corners[0].y,
+      corners[1].x,
+      PROJECTION_Y_OFFSET,
+      corners[1].y,
+      corners[2].x,
+      PROJECTION_Y_OFFSET,
+      corners[2].y,
+      corners[3].x,
+      PROJECTION_Y_OFFSET,
+      corners[3].y,
+    ]),
+    uvs: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]),
+    indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+  };
+}
+
 export const homographyGridProjectionStrategy: ProjectionStrategy = {
   id: "homography_grid",
   buildMesh(set) {
@@ -282,4 +441,21 @@ export const homographyGridProjectionStrategy: ProjectionStrategy = {
       indices: new Uint32Array(indices),
     };
   },
+};
+
+export const constrainedTrapezoidProjectionStrategy: ProjectionStrategy = {
+  id: "constrained_trapezoid",
+  buildMesh(set) {
+    const pairs = validPairs(set);
+    if (pairs.length < 4) return null;
+    const estimate = estimateRobustHomography(pairs);
+    if (!estimate) return null;
+    const corners = trapezoidCornersFromHomography(estimate);
+    return corners ? buildQuadMesh(corners) : null;
+  },
+};
+
+export const projectionStrategies: Record<ProjectionStrategyId, ProjectionStrategy> = {
+  homography_grid: homographyGridProjectionStrategy,
+  constrained_trapezoid: constrainedTrapezoidProjectionStrategy,
 };

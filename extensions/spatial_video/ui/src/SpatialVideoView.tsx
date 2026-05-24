@@ -11,7 +11,7 @@ import type {
 
 import { fetchCameraPtzPresets, fetchCameraPtzStatus, fetchLiveViews } from "./api";
 import { resolveProjectionCandidates } from "./candidates";
-import { homographyGridProjectionStrategy } from "./projection";
+import { projectionStrategies, type ProjectionStrategyId } from "./projection";
 import { resolveActiveProjectionPose } from "./ptzProjection";
 import { StreamTextureSource, type StreamTextureSnapshot } from "./streamTexture";
 import type { CameraControlPointSet, CameraLiveView, ProjectionCandidate, PtzPreset, PtzStatus } from "./types";
@@ -23,10 +23,23 @@ type ProjectionEntry = {
   mesh: THREE.Mesh;
   material: THREE.MeshBasicMaterial;
   setId: string;
+  strategyId: ProjectionStrategyId;
 };
 
 const MAX_PIXEL_RATIO = 2;
 const DEFAULT_WORLD_BOUNDS: BoundsXZ = { minX: -1, maxX: 1, minZ: -1, maxZ: 1 };
+const PROJECTION_MODE_OPTIONS: Array<{ id: ProjectionStrategyId; label: string; title: string }> = [
+  {
+    id: "homography_grid",
+    label: "Seguro",
+    title: "Usa a malha calibrada apenas dentro dos pontos de controle confiáveis.",
+  },
+  {
+    id: "constrained_trapezoid",
+    label: "Trapézio",
+    title: "Projeta o frame completo em um trapézio leve, calculado a partir dos pontos confiáveis.",
+  },
+];
 
 function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -146,8 +159,8 @@ function boundsChanged(a: BoundsXZ, b: BoundsXZ): boolean {
   );
 }
 
-function createProjectionGeometry(set: CameraControlPointSet): THREE.BufferGeometry | null {
-  const meshData = homographyGridProjectionStrategy.buildMesh(set);
+function createProjectionGeometry(set: CameraControlPointSet, strategyId: ProjectionStrategyId): THREE.BufferGeometry | null {
+  const meshData = projectionStrategies[strategyId].buildMesh(set);
   if (!meshData) return null;
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(meshData.positions, 3));
@@ -333,6 +346,7 @@ export function SpatialVideoView({
   const [ptzByCamera, setPtzByCamera] = useState<Record<string, PtzStatus | null>>({});
   const [presetsByCamera, setPresetsByCamera] = useState<Record<string, PtzPreset[]>>({});
   const [version, setVersion] = useState(0);
+  const [projectionStrategyId, setProjectionStrategyId] = useState<ProjectionStrategyId>("homography_grid");
 
   const requestRender = useCallback(() => setVersion((prev) => prev + 1), []);
 
@@ -537,12 +551,13 @@ export function SpatialVideoView({
       const set = pose?.set ?? candidate.initialControlPointSet;
       const visible = pose?.status !== "unmatched";
       const existing = projectionEntriesRef.current.get(candidate.id);
-      if (existing && existing.setId !== set.id) {
-        const geometry = createProjectionGeometry(set);
+      if (existing && (existing.setId !== set.id || existing.strategyId !== projectionStrategyId)) {
+        const geometry = createProjectionGeometry(set, projectionStrategyId);
         if (geometry) {
           existing.mesh.geometry.dispose();
           existing.mesh.geometry = geometry;
           existing.setId = set.id;
+          existing.strategyId = projectionStrategyId;
         }
       }
       if (existing) {
@@ -552,7 +567,7 @@ export function SpatialVideoView({
         continue;
       }
 
-      const geometry = createProjectionGeometry(set);
+      const geometry = createProjectionGeometry(set, projectionStrategyId);
       if (!geometry) continue;
       const material = new THREE.MeshBasicMaterial({
         color: 0xffffff,
@@ -584,12 +599,13 @@ export function SpatialVideoView({
         mesh,
         material,
         setId: set.id,
+        strategyId: projectionStrategyId,
       });
       group.add(mesh);
       source.start();
     }
     requestRender();
-  }, [activePoses, candidates, requestRender]);
+  }, [activePoses, candidates, projectionStrategyId, requestRender]);
 
   const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -765,6 +781,45 @@ export function SpatialVideoView({
             </span>
           </button>
         ))}
+      </div>
+      <div
+        className="card"
+        style={{
+          position: "absolute",
+          right: 18,
+          top: 68,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "8px 10px",
+          borderRadius: 8,
+          pointerEvents: "auto",
+          zIndex: 4,
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+        onWheel={(event) => event.stopPropagation()}
+      >
+        <span className="cardMeta" style={{ fontWeight: 700 }}>Projeção</span>
+        <div style={{ display: "flex", gap: 4 }}>
+          {PROJECTION_MODE_OPTIONS.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              className="chipButton"
+              title={option.title}
+              aria-pressed={projectionStrategyId === option.id}
+              onClick={() => setProjectionStrategyId(option.id)}
+              style={{
+                minHeight: 28,
+                padding: "5px 9px",
+                borderColor: projectionStrategyId === option.id ? "rgba(125,211,252,0.72)" : undefined,
+                background: projectionStrategyId === option.id ? "rgba(14,165,233,0.16)" : undefined,
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
       </div>
       <div
         style={{

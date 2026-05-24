@@ -41,10 +41,22 @@ export function Modal({
   if (!open) return null;
   if (typeof document === "undefined") return null;
 
+  const stopPortalEventPropagation = (event: React.SyntheticEvent) => {
+    event.stopPropagation();
+  };
+
   return createPortal(
     <div
       className="modalBackdrop"
+      onPointerDown={stopPortalEventPropagation}
+      onPointerMove={stopPortalEventPropagation}
+      onPointerUp={stopPortalEventPropagation}
+      onPointerCancel={stopPortalEventPropagation}
+      onClick={stopPortalEventPropagation}
+      onDoubleClick={stopPortalEventPropagation}
+      onWheel={stopPortalEventPropagation}
       onMouseDown={(e) => {
+        e.stopPropagation();
         if (e.target === e.currentTarget) onClose();
       }}
       role="presentation"

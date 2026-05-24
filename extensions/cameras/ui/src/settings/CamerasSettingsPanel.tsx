@@ -1262,8 +1262,8 @@ function CamerasSettingsPanelContent({
               ) : (
                 <div className="settingsList" role="list">
                   {(cameraContexts?.compositions ?? []).map((composition) => {
-                    const points = (composition.camera_elements ?? []).reduce(
-                      (sum, element) => sum + Number(element.control_points_pairs || 0),
+                    const calibratedViews = (composition.camera_elements ?? []).reduce(
+                      (sum, element) => sum + Number(element.calibrated_views || 0),
                       0,
                     );
                     const ready = (composition.camera_elements ?? []).some((element) => Boolean(element.has_mapping));
@@ -1272,10 +1272,10 @@ function CamerasSettingsPanelContent({
                         <span className="settingsListTitle">{composition.name || composition.id}</span>
                         <span className="settingsListMeta">
                           {ready
-                            ? t("ext.cameras.mapping.ready", {}, "Pontos mapeados")
-                            : t("ext.cameras.mapping.missing", {}, "Faltam pontos mapeados")}
+                            ? t("ext.cameras.mapping.ready", {}, "Vistas calibradas")
+                            : t("ext.cameras.mapping.missing", {}, "Faltam vistas calibradas")}
                           {" · "}
-                          {t("ext.cameras.mapping.points_count", { count: points }, "{{count}} pontos")}
+                          {t("ext.cameras.mapping.views_count", { count: calibratedViews }, "{{count}} vistas")}
                         </span>
                       </div>
                     );

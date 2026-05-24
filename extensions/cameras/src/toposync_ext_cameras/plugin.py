@@ -32,7 +32,11 @@ from toposync.runtime.services import ServiceRegistry
 
 from .pipelines.operators import register_camera_pipeline_operators
 from .processing.mapping import ControlPointMapper
-from .pipelines.postprocess import _parse_control_point_sets  # noqa: PLC2701
+from .pipelines.postprocess import (  # noqa: PLC2701
+    _parse_calibrated_views_as_control_point_sets,
+    _parse_control_point_sets,
+    _parse_mapping_control_point_sets_from_props,
+)
 from .source_health import get_global_source_health_store
 from .settings import (
     flatten_camera_device_for_ui,
@@ -272,6 +276,11 @@ class ControlPointMapQuery(BaseModel):
 
 class ControlPointMapRequest(BaseModel):
     control_point_set: ControlPointMapSet
+    query: ControlPointMapQuery
+
+
+class ProjectionMapRequest(BaseModel):
+    calibrated_view: dict[str, Any]
     query: ControlPointMapQuery
 
 
@@ -1654,6 +1663,48 @@ class CamerasExtension(BaseExtension):
 
             return OnvifStreamUriResponse(rtsp_url=uri)
 
+        def _map_control_point_set(control_point_set: Any, query: ControlPointMapQuery) -> dict[str, Any]:
+            if control_point_set is None or len(control_point_set.control_points) < 4:
+                return {"world": None} if query.kind == "image" else {"image": None}
+
+            try:
+                mapper = ControlPointMapper(list(control_point_set.control_points))
+            except RuntimeError as exc:
+                raise HTTPException(status_code=501, detail=str(exc)) from exc
+            except Exception:
+                return {"world": None} if query.kind == "image" else {"image": None}
+
+            if query.kind == "image":
+                if query.y is None:
+                    raise HTTPException(status_code=400, detail="y is required for image mapping")
+                u = float(query.x)
+                v = float(query.y)
+                if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
+                    return {"world": None, "quality": mapper.quality.as_dict()}
+                mapped = mapper.map(u, v)
+                if mapped is None:
+                    return {"world": None, "quality": mapper.quality.as_dict()}
+                x, z = mapped
+                return {"world": {"x": x, "z": z}, "quality": mapper.quality.as_dict()}
+
+            if query.z is None:
+                raise HTTPException(status_code=400, detail="z is required for world mapping")
+            x = float(query.x)
+            z = float(query.z)
+            mapped = mapper.map_world_to_image(x, z)
+            if mapped is None:
+                return {"image": None, "quality": mapper.quality.as_dict()}
+            u, v = mapped
+            if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
+                return {"image": None, "quality": mapper.quality.as_dict()}
+            return {"image": {"x": u, "y": v}, "quality": mapper.quality.as_dict()}
+
+        @app.post("/api/cameras/projection/map")
+        async def map_camera_projection(body: ProjectionMapRequest) -> dict[str, Any]:
+            control_point_sets = _parse_calibrated_views_as_control_point_sets([body.calibrated_view])
+            control_point_set = control_point_sets[0] if control_point_sets else None
+            return _map_control_point_set(control_point_set, body.query)
+
         @app.post("/api/cameras/control_points/map")
         async def map_control_points(body: ControlPointMapRequest) -> dict[str, Any]:
             control_point_sets = _parse_control_point_sets(
@@ -1678,40 +1729,7 @@ class CamerasExtension(BaseExtension):
                 ]
             )
             control_point_set = control_point_sets[0] if control_point_sets else None
-            if control_point_set is None or len(control_point_set.control_points) < 4:
-                return {"world": None} if body.query.kind == "image" else {"image": None}
-
-            try:
-                mapper = ControlPointMapper(list(control_point_set.control_points))
-            except RuntimeError as exc:
-                raise HTTPException(status_code=501, detail=str(exc)) from exc
-            except Exception:
-                return {"world": None} if body.query.kind == "image" else {"image": None}
-
-            if body.query.kind == "image":
-                if body.query.y is None:
-                    raise HTTPException(status_code=400, detail="y is required for image mapping")
-                u = float(body.query.x)
-                v = float(body.query.y)
-                if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
-                    return {"world": None, "quality": mapper.quality.as_dict()}
-                mapped = mapper.map(u, v)
-                if mapped is None:
-                    return {"world": None, "quality": mapper.quality.as_dict()}
-                x, z = mapped
-                return {"world": {"x": x, "z": z}, "quality": mapper.quality.as_dict()}
-
-            if body.query.z is None:
-                raise HTTPException(status_code=400, detail="z is required for world mapping")
-            x = float(body.query.x)
-            z = float(body.query.z)
-            mapped = mapper.map_world_to_image(x, z)
-            if mapped is None:
-                return {"image": None, "quality": mapper.quality.as_dict()}
-            u, v = mapped
-            if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
-                return {"image": None, "quality": mapper.quality.as_dict()}
-            return {"image": {"x": u, "y": v}, "quality": mapper.quality.as_dict()}
+            return _map_control_point_set(control_point_set, body.query)
 
         @app.get(
             "/api/cameras/cameras/{camera_id}/ptz/presets", response_model=CameraPtzPresetsResponse
@@ -2001,7 +2019,7 @@ class CamerasExtension(BaseExtension):
                     props = element.props if isinstance(element.props, dict) else {}
                     if str(props.get("camera_id", "")).strip() != cid:
                         continue
-                    control_point_sets = _parse_control_point_sets(props.get("control_point_sets"))
+                    control_point_sets = _parse_mapping_control_point_sets_from_props(props)
                     camera_elements.append(
                         {
                             "id": element.id,
@@ -2009,6 +2027,7 @@ class CamerasExtension(BaseExtension):
                             "control_points_pairs": sum(
                                 len(item.control_points) for item in control_point_sets
                             ),
+                            "calibrated_views": len(control_point_sets),
                             "has_mapping": any(
                                 len(item.control_points) >= 4 for item in control_point_sets
                             ),
@@ -2116,7 +2135,7 @@ class CamerasExtension(BaseExtension):
                     )
                     if str(props.get("camera_id", "")).strip() != cid:
                         continue
-                    control_point_sets = _parse_control_point_sets(props.get("control_point_sets"))
+                    control_point_sets = _parse_mapping_control_point_sets_from_props(props)
                     if any(len(item.control_points) >= 4 for item in control_point_sets):
                         return str(getattr(composition, "id", "") or "").strip() or None
             return None
@@ -2135,7 +2154,7 @@ class CamerasExtension(BaseExtension):
                     props = element.props if isinstance(getattr(element, "props", None), dict) else {}
                     if str(props.get("camera_id", "")).strip() != cid:
                         continue
-                    control_point_sets = _parse_control_point_sets(props.get("control_point_sets"))
+                    control_point_sets = _parse_mapping_control_point_sets_from_props(props)
                     if any(len(item.control_points) >= 4 for item in control_point_sets):
                         return True
                 return False

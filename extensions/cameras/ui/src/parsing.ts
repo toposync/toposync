@@ -1,12 +1,16 @@
 import type {
   CameraConfig,
+  CameraCalibratedView,
   CameraConnectionType,
   CameraControlPoint,
   CameraControlPointSet,
+  CameraImageRegion,
   CameraIngestConfig,
   CameraIngestMode,
   CameraOnvifConfig,
   CameraPoseReference,
+  CameraProjectionModel,
+  CameraProjectionWorldQuad,
   CameraMappingQuality,
   CameraSourceConfig,
   CameraSourceOriginConfig,
@@ -51,6 +55,16 @@ export function readWorldPoint(value: unknown): { x: number; z: number } | null 
   const z = readFiniteNumber(record.z, NaN);
   if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
   return { x, z };
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    const normalized = readString(item).trim();
+    if (normalized && !out.includes(normalized)) out.push(normalized);
+  }
+  return out;
 }
 
 export function readOptionalFiniteNumber(value: unknown): number | null {
@@ -118,6 +132,190 @@ export function readControlPointSets(value: unknown): CameraControlPointSet[] {
     });
   }
   return output;
+}
+
+export function defaultImageRegion(): CameraImageRegion {
+  return {
+    top_left: { x: 0, y: 0 },
+    bottom_right: { x: 1, y: 1 },
+  };
+}
+
+export function createDefaultWorldQuad(center: { x: number; z: number }, options?: { estimated?: boolean }): CameraProjectionWorldQuad {
+  const width = options?.estimated ? 2.4 : 3.2;
+  const depth = options?.estimated ? 1.6 : 2.2;
+  return {
+    top_left: { x: center.x - width / 2, z: center.z - depth },
+    top_right: { x: center.x + width / 2, z: center.z - depth },
+    bottom_right: { x: center.x + width / 2, z: center.z },
+    bottom_left: { x: center.x - width / 2, z: center.z },
+  };
+}
+
+function readImageRegion(value: unknown): CameraImageRegion {
+  const record = readRecord(value);
+  const topLeft = readNormalizedPoint(record.top_left) ?? { x: 0, y: 0 };
+  const bottomRight = readNormalizedPoint(record.bottom_right) ?? { x: 1, y: 1 };
+  return {
+    top_left: {
+      x: Math.min(topLeft.x, bottomRight.x),
+      y: Math.min(topLeft.y, bottomRight.y),
+    },
+    bottom_right: {
+      x: Math.max(topLeft.x, bottomRight.x),
+      y: Math.max(topLeft.y, bottomRight.y),
+    },
+  };
+}
+
+function readWorldQuad(value: unknown): CameraProjectionWorldQuad | null {
+  const record = readRecord(value);
+  const topLeft = readWorldPoint(record.top_left);
+  const topRight = readWorldPoint(record.top_right);
+  const bottomRight = readWorldPoint(record.bottom_right);
+  const bottomLeft = readWorldPoint(record.bottom_left);
+  if (!topLeft || !topRight || !bottomRight || !bottomLeft) return null;
+  return {
+    top_left: topLeft,
+    top_right: topRight,
+    bottom_right: bottomRight,
+    bottom_left: bottomLeft,
+  };
+}
+
+export function readProjectionModel(value: unknown, fallbackCenter?: { x: number; z: number }): CameraProjectionModel {
+  const record = readRecord(value);
+  return {
+    type: "image_quad_on_world",
+    image_region: readImageRegion(record.image_region),
+    world_quad: readWorldQuad(record.world_quad) ?? createDefaultWorldQuad(fallbackCenter ?? { x: 0, z: 0 }, { estimated: true }),
+    future_mesh: null,
+  };
+}
+
+export function createDefaultCalibratedView(
+  index = 0,
+  center: { x: number; z: number },
+  options?: {
+    label?: string;
+    poseReference?: CameraPoseReference | null;
+    projectionModel?: CameraProjectionModel;
+    estimated?: boolean;
+  },
+): CameraCalibratedView {
+  const estimated = options?.estimated === true;
+  return {
+    id: createUniqueId(),
+    label: options?.label?.trim() || (index === 0 ? "Vista padrão" : `Vista ${index + 1}`),
+    pose_reference: options?.poseReference ?? null,
+    stream_scope: { compatible_roles: ["main", "sub"], compatible_source_ids: [] },
+    projection_model:
+      options?.projectionModel ?? {
+        type: "image_quad_on_world",
+        image_region: defaultImageRegion(),
+        world_quad: createDefaultWorldQuad(center, { estimated }),
+        future_mesh: null,
+      },
+    projection_quality: {
+      status: estimated ? "estimated" : "incomplete",
+      estimated,
+      note: null,
+    },
+  };
+}
+
+export function readCalibratedViews(value: unknown, fallbackCenter?: { x: number; z: number }): CameraCalibratedView[] {
+  if (!Array.isArray(value)) return [];
+  const output: CameraCalibratedView[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const record = readRecord(value[index]);
+    const id = readString(record.id).trim();
+    if (!id) continue;
+    const streamScope = readRecord(record.stream_scope);
+    const projectionQuality = readRecord(record.projection_quality);
+    const status = readString(projectionQuality.status).trim();
+    output.push({
+      id,
+      label: readString(record.label).trim() || `Vista ${index + 1}`,
+      pose_reference: readCameraPoseReference(record.pose_reference),
+      stream_scope: {
+        compatible_roles: readStringArray(streamScope.compatible_roles),
+        compatible_source_ids: readStringArray(streamScope.compatible_source_ids),
+      },
+      projection_model: readProjectionModel(record.projection_model, fallbackCenter),
+      projection_quality: {
+        status: status === "ready" || status === "estimated" || status === "incomplete" ? status : undefined,
+        estimated: projectionQuality.estimated === true,
+        note: readString(projectionQuality.note).trim() || null,
+      },
+    });
+  }
+  return output;
+}
+
+export function controlPointSetFromCalibratedView(view: CameraCalibratedView): CameraControlPointSet {
+  const region = view.projection_model.image_region;
+  const quad = view.projection_model.world_quad;
+  return {
+    id: view.id,
+    label: view.label,
+    pose_reference: view.pose_reference ?? null,
+    control_points: [
+      { id: "top_left", label: "A", image: region.top_left, world: quad.top_left },
+      { id: "top_right", label: "B", image: { x: region.bottom_right.x, y: region.top_left.y }, world: quad.top_right },
+      { id: "bottom_right", label: "C", image: region.bottom_right, world: quad.bottom_right },
+      { id: "bottom_left", label: "D", image: { x: region.top_left.x, y: region.bottom_right.y }, world: quad.bottom_left },
+    ],
+  };
+}
+
+export function controlPointSetsFromCalibratedViews(views: CameraCalibratedView[]): CameraControlPointSet[] {
+  return views.map(controlPointSetFromCalibratedView);
+}
+
+export function summarizeCalibratedViewQuality(view: CameraCalibratedView): CameraMappingQuality {
+  const set = controlPointSetFromCalibratedView(view);
+  const quality = summarizeControlPointSetQuality(set);
+  if (view.projection_quality?.status === "incomplete") {
+    return {
+      ...quality,
+      status: "incomplete",
+    };
+  }
+  return {
+    ...quality,
+    status: view.projection_quality?.status === "ready" ? "good" : view.projection_quality?.status === "estimated" ? "review" : quality.status,
+  };
+}
+
+export function calibratedViewsFromControlPointSets(controlPointSets: CameraControlPointSet[]): CameraCalibratedView[] {
+  return controlPointSets
+    .map((set, index): CameraCalibratedView | null => {
+      const complete = set.control_points.filter((point) => point.image && point.world);
+      if (complete.length < 4) return null;
+      const firstFour = complete.slice(0, 4);
+      const imageXs = firstFour.map((point) => point.image!.x);
+      const imageYs = firstFour.map((point) => point.image!.y);
+      return {
+        id: set.id || createUniqueId(),
+        label: set.label || `Vista ${index + 1}`,
+        pose_reference: set.pose_reference ?? null,
+        stream_scope: { compatible_roles: ["main", "sub"], compatible_source_ids: [] },
+        projection_model: {
+          type: "image_quad_on_world",
+          image_region: defaultImageRegion(),
+          world_quad: {
+            top_left: firstFour[0].world!,
+            top_right: firstFour[1].world!,
+            bottom_right: firstFour[2].world!,
+            bottom_left: firstFour[3].world!,
+          },
+          future_mesh: null,
+        },
+        projection_quality: { status: "ready", estimated: false, note: null },
+      };
+    })
+    .filter((item): item is CameraCalibratedView => Boolean(item));
 }
 
 export function createDefaultControlPointSet(

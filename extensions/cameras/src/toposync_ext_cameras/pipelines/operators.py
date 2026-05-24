@@ -36,7 +36,11 @@ from toposync.runtime.pipelines.operator_registry import (
     payload_path_hint,
 )
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
-from toposync.runtime.pipelines.telemetry import METRIC_MOTION_SCORE, METRIC_VISION_CONFIDENCE
+from toposync.runtime.pipelines.telemetry import (
+    METRIC_MOTION_SCORE,
+    METRIC_ONVIF_GATE_OPEN,
+    METRIC_VISION_CONFIDENCE,
+)
 
 from ..processing.frame_grabber import FrameGrabber
 from ..processing.camera_hub import CameraHub
@@ -227,6 +231,7 @@ _ONVIF_STREAM_TTL_S = _read_env_float(
     min_value=10.0,
     max_value=86_400.0,
 )
+_ONVIF_GATE_TELEMETRY_INTERVAL_S = 1.0
 
 
 class OnvifStateGateConfig(BaseModel):
@@ -879,6 +884,16 @@ def _onvif_event_bool(event: dict[str, Any], item_name: str = "") -> bool | None
     return None
 
 
+def _onvif_gate_telemetry_ts(payload: dict[str, Any]) -> float:
+    try:
+        ts_s = float(payload.get("evaluated_at_ts") or 0.0)
+    except Exception:
+        ts_s = 0.0
+    if math.isfinite(ts_s) and ts_s > 0.0:
+        return ts_s
+    return time.time()
+
+
 class OnvifStateGateRuntime(SourceOperatorRuntime):
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = OnvifStateGateConfig.model_validate(config)
@@ -886,9 +901,12 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
         self._last_open: bool | None = None
         self._last_raw_active: bool | None = None
         self._hold_until_ts = 0.0
+        self._last_telemetry_open: bool | None = None
+        self._last_telemetry_ts = 0.0
 
     async def produce(self, context) -> Packet | None:  # noqa: ANN001
         gate_open, payload = await self._resolve_gate_state()
+        self._observe_gate_telemetry(context, gate_open=gate_open, payload=payload)
         if self._last_open is not None and self._last_open == gate_open:
             return None
         self._last_open = gate_open
@@ -909,6 +927,22 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
 
     async def idle_sleep(self, context) -> None:  # noqa: ANN001
         await context.sleep(max(0.1, float(self._config.poll_interval_ms) / 1000.0))
+
+    def _observe_gate_telemetry(self, context: Any, *, gate_open: bool, payload: dict[str, Any]) -> None:
+        observe_numeric = getattr(context, "observe_telemetry_numeric", None)
+        if not callable(observe_numeric):
+            return
+        ts_s = _onvif_gate_telemetry_ts(payload)
+        state_changed = self._last_telemetry_open is None or self._last_telemetry_open != bool(gate_open)
+        due = (ts_s - float(self._last_telemetry_ts or 0.0)) >= _ONVIF_GATE_TELEMETRY_INTERVAL_S
+        if not state_changed and not due:
+            return
+        self._last_telemetry_open = bool(gate_open)
+        self._last_telemetry_ts = ts_s
+        try:
+            observe_numeric(METRIC_ONVIF_GATE_OPEN, 1.0 if gate_open else 0.0, now_s=ts_s)
+        except Exception:
+            pass
 
     async def _resolve_gate_state(self) -> tuple[bool, dict[str, Any]]:
         now = time.time()

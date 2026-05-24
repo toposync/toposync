@@ -12,6 +12,7 @@ from toposync.app import create_app
 from toposync.runtime.config_store import Pipeline
 from toposync.runtime.pipelines import Lifecycle, OperatorRegistry, PipelineGraphCompiler
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+from toposync.runtime.pipelines.telemetry import METRIC_ONVIF_GATE_OPEN
 from toposync.runtime.services import ServiceRegistry
 import toposync.extensions.manager as ext_manager_mod
 from toposync_ext_cameras.onvif.events import (
@@ -277,29 +278,41 @@ def test_onvif_state_gate_runtime_defaults_closed_and_honors_state() -> None:
     class Context:
         pipeline_name = "probe"
         node_id = "gate"
+        observations: list[tuple[str, float]] = []
 
         async def sleep(self, seconds: float) -> None:
             _ = seconds
 
+        def observe_telemetry_numeric(self, metric_id: str, value: float, *, now_s: float | None = None) -> None:
+            _ = now_s
+            self.observations.append((metric_id, value))
+
+    context = Context()
+
     async def scenario() -> None:
-        closed = await runtime.produce(Context())
+        closed = await runtime.produce(context)
         assert closed is not None
         assert closed.lifecycle == Lifecycle.CLOSE
         assert closed.payload["gate_open"] is False
 
         state.update({"known": True, "value": True})
-        opened = await runtime.produce(Context())
+        opened = await runtime.produce(context)
         assert opened is not None
         assert opened.lifecycle == Lifecycle.OPEN
         assert opened.payload["gate_open"] is True
 
         state.update({"known": True, "value": False})
-        closed_again = await runtime.produce(Context())
+        closed_again = await runtime.produce(context)
         assert closed_again is not None
         assert closed_again.lifecycle == Lifecycle.CLOSE
         assert closed_again.payload["gate_open"] is False
 
     asyncio.run(scenario())
+    assert context.observations == [
+        (METRIC_ONVIF_GATE_OPEN, 0.0),
+        (METRIC_ONVIF_GATE_OPEN, 1.0),
+        (METRIC_ONVIF_GATE_OPEN, 0.0),
+    ]
 
 
 def test_onvif_state_gate_can_fail_open_when_configured() -> None:

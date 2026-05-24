@@ -6,7 +6,7 @@ First-party extension focused on camera integration for the global Pipelines run
 
 - RTSP camera settings and indexing (`/api/cameras/index`)
 - RTSP snapshot endpoints used by UI/tools
-- Control-point-set mapping endpoint for camera/composition interpolation
+- Visual calibration and projection mapping endpoints for camera/composition interpolation
 - Camera pipeline operators registry integration
 - Camera element/editor UI in the composition
 
@@ -17,13 +17,18 @@ The old per-camera detections runtime (`/api/cameras/detections/*`, `cameras.tra
 - `GET /api/cameras/index`
 - `POST /api/cameras/rtsp/snapshot`
 - `GET /api/cameras/cameras/{camera_id}/snapshot`
+- `POST /api/cameras/projection/map`
 - `POST /api/cameras/control_points/map`
 
-`camera.camera_mapping` and the editor now use `control_point_sets` as the canonical mapping model:
+`camera.camera_mapping` and the editor use `calibrated_views` as the canonical mapping model:
 
-- fixed camera: one set with `pose_reference = null`
-- PTZ camera: one or more sets, optionally bound to a `pose_reference`
-- preview API: receives a single `control_point_set` payload and maps `image <-> world`
+- fixed camera: one default calibrated view with `pose_reference = null`
+- PTZ camera: one or more calibrated views bound to `pose_reference` or presets
+- projection model: `image_quad_on_world`, with an image region and a world-space quadrilateral
+- stream scope: `main` and `sub` are compatible by default; `zoom` needs an explicit calibrated view/scope
+- mapping runtime: derives internal control-point pairs from calibrated views so pipeline outputs keep `payload.world`
+
+The legacy `control_points` mapping endpoint remains as a low-level diagnostic adapter. New UI and extension code should use calibrated views and `/api/cameras/projection/map`.
 
 ## Pipeline operators (registered by this extension)
 

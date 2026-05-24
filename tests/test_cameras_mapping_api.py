@@ -41,11 +41,35 @@ def _valid_control_points() -> list[dict[str, object]]:
     ]
 
 
+def _valid_calibrated_views() -> list[dict[str, object]]:
+    return [
+        {
+            "id": "main",
+            "label": "Vista principal",
+            "pose_reference": None,
+            "stream_scope": {"compatible_roles": ["main", "sub"], "compatible_source_ids": []},
+            "projection_model": {
+                "type": "image_quad_on_world",
+                "image_region": {"top_left": {"x": 0.0, "y": 0.0}, "bottom_right": {"x": 1.0, "y": 1.0}},
+                "world_quad": {
+                    "top_left": {"x": 0.0, "z": 0.0},
+                    "top_right": {"x": 10.0, "z": 0.0},
+                    "bottom_right": {"x": 10.0, "z": 10.0},
+                    "bottom_left": {"x": 0.0, "z": 10.0},
+                },
+                "future_mesh": None,
+            },
+            "projection_quality": {"status": "ready", "estimated": False, "note": None},
+        }
+    ]
+
+
 def _camera_composition(
     *,
     camera_id: str = "cam1",
     composition_id: str = "yard",
     control_points: list[dict[str, object]] | None = None,
+    calibrated_views: list[dict[str, object]] | None = None,
 ) -> Composition:
     return Composition(
         id=composition_id,
@@ -59,13 +83,19 @@ def _camera_composition(
                 rotation=Vector3(),
                 props={
                     "camera_id": camera_id,
-                    "control_point_sets": [
-                        {
-                            "id": "main",
-                            "label": "Main",
-                            "control_points": control_points if control_points is not None else _valid_control_points(),
+                    **(
+                        {"calibrated_views": calibrated_views}
+                        if calibrated_views is not None
+                        else {
+                            "control_point_sets": [
+                                {
+                                    "id": "main",
+                                    "label": "Main",
+                                    "control_points": control_points if control_points is not None else _valid_control_points(),
+                                }
+                            ]
                         }
-                    ],
+                    ),
                 },
             )
         ],
@@ -130,6 +160,23 @@ def test_control_points_map_accepts_control_point_set_payload(tmp_path: Path, mo
         assert body["quality"]["number_of_inliers"] == 4
 
 
+def test_projection_map_accepts_calibrated_view_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _create_client_with_cameras(tmp_path, monkeypatch) as client:
+        res = client.post(
+            "/api/cameras/projection/map",
+            json={
+                "calibrated_view": _valid_calibrated_views()[0],
+                "query": {"kind": "image", "x": 0.5, "y": 0.5},
+            },
+        )
+
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["world"]["x"] == pytest.approx(5.0, abs=1e-6)
+        assert body["world"]["z"] == pytest.approx(5.0, abs=1e-6)
+        assert body["quality"]["number_of_points"] == 4
+
+
 def test_camera_mapping_diagnostics_reports_camera_without_composition() -> None:
     alerts = _camera_mapping_alerts(compositions=[])
 
@@ -150,7 +197,15 @@ def test_camera_mapping_diagnostics_reports_missing_control_points() -> None:
 
 
 def test_camera_mapping_diagnostics_accepts_calibrated_composition() -> None:
-    alerts = _camera_mapping_alerts(compositions=[_camera_composition()])
+    alerts = _camera_mapping_alerts(
+        compositions=[_camera_composition(calibrated_views=_valid_calibrated_views())]
+    )
+
+    assert _camera_mapping_alert_codes(alerts) == set()
+
+
+def test_camera_mapping_diagnostics_inline_calibrated_views_skip_composition_check() -> None:
+    alerts = _camera_mapping_alerts(mapping_config={"calibrated_views": _valid_calibrated_views()}, compositions=[])
 
     assert _camera_mapping_alert_codes(alerts) == set()
 

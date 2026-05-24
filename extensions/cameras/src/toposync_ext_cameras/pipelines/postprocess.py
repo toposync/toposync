@@ -92,7 +92,9 @@ def _world_mapping_expression_hints() -> list[Any]:
 
 def _camera_mapping_diagnostics(config: dict[str, Any], context: dict[str, Any]) -> list[OperatorDiagnostic]:
     parsed = CameraMappingConfig.model_validate(config)
-    if _control_point_sets_from_models(parsed.control_point_sets):
+    if _control_point_sets_from_calibrated_view_models(parsed.calibrated_views) or _control_point_sets_from_models(
+        parsed.control_point_sets
+    ):
         return []
 
     camera_id = parsed.camera_id or _infer_camera_mapping_camera_id(context)
@@ -141,9 +143,9 @@ def _camera_mapping_diagnostics(config: dict[str, Any], context: dict[str, Any])
                 code="camera_mapping_control_points_missing",
                 message=(
                     f"Camera '{camera_id}' is in composition(s) {composition_names}, "
-                    "but none has at least four valid control point pairs."
+                    "but none has a valid calibrated view."
                 ),
-                suggestion="Add at least four control point pairs to the camera element, or provide inline control_point_sets.",
+                suggestion="Calibrate a camera view in the composition, or provide inline calibrated_views.",
                 details={
                     "camera_id": camera_id,
                     "composition_labels": [_diagnostic_composition_label(item) for item in matched_without_mapping],
@@ -156,7 +158,7 @@ def _camera_mapping_diagnostics(config: dict[str, Any], context: dict[str, Any])
             severity="error",
             code="camera_mapping_camera_not_in_composition",
             message=f"Camera '{camera_id}' is not placed in any composition available to Camera Mapping.",
-            suggestion="Add the camera to a composition and calibrate it with at least four control point pairs.",
+            suggestion="Add the camera to a composition and calibrate a camera view.",
             details={"camera_id": camera_id, "scope_kind": "any"},
         )
     ]
@@ -221,9 +223,9 @@ def _diagnose_camera_mapping_composition(
                 code="camera_mapping_control_points_missing",
                 message=(
                     f"Camera '{camera_id}' is in composition {composition_label}, "
-                    "but it does not have a control point set with at least four pairs."
+                    "but it does not have a valid calibrated view."
                 ),
-                suggestion="Add at least four control point pairs to the camera element, or provide inline control_point_sets.",
+                suggestion="Calibrate a camera view in the composition, or provide inline calibrated_views.",
                 details={"camera_id": camera_id, "composition_labels": [composition_label]},
             )
         ]
@@ -243,7 +245,7 @@ def _camera_mapping_composition_status(*, composition: Any, camera_id: str) -> d
         if str(props.get("camera_id") or "").strip() != camera_id:
             continue
         found = True
-        control_point_sets = _parse_control_point_sets(props.get("control_point_sets"))
+        control_point_sets = _parse_mapping_control_point_sets_from_props(props)
         if any(len(item.control_points) >= 4 for item in control_point_sets):
             has_mapping = True
             break
@@ -717,6 +719,78 @@ class CameraMappingControlPointSet(BaseModel):
         return str(value or "").strip()
 
 
+class CameraMappingImageRegion(BaseModel):
+    top_left: CameraMappingControlPointImage = Field(
+        default_factory=lambda: CameraMappingControlPointImage(x=0.0, y=0.0)
+    )
+    bottom_right: CameraMappingControlPointImage = Field(
+        default_factory=lambda: CameraMappingControlPointImage(x=1.0, y=1.0)
+    )
+
+
+class CameraMappingWorldQuad(BaseModel):
+    top_left: CameraMappingControlPointWorld
+    top_right: CameraMappingControlPointWorld
+    bottom_right: CameraMappingControlPointWorld
+    bottom_left: CameraMappingControlPointWorld
+
+
+class CameraMappingProjectionModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["image_quad_on_world"] = "image_quad_on_world"
+    image_region: CameraMappingImageRegion = Field(default_factory=CameraMappingImageRegion)
+    world_quad: CameraMappingWorldQuad
+    future_mesh: None = None
+
+
+class CameraMappingStreamScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    compatible_roles: list[str] = Field(default_factory=lambda: ["main", "sub"])
+    compatible_source_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("compatible_roles", "compatible_source_ids", mode="before")
+    @classmethod
+    def _normalize_string_list(cls, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        out: list[str] = []
+        for item in value:
+            normalized = str(item or "").strip()
+            if normalized and normalized not in out:
+                out.append(normalized)
+        return out
+
+
+class CameraMappingProjectionQuality(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    status: Literal["ready", "estimated", "incomplete"] | None = None
+    estimated: bool = False
+    note: str | None = None
+
+
+class CameraMappingCalibratedView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    label: str = ""
+    pose_reference: CameraMappingPoseReference | None = None
+    stream_scope: CameraMappingStreamScope = Field(default_factory=CameraMappingStreamScope)
+    projection_model: CameraMappingProjectionModel
+    projection_quality: CameraMappingProjectionQuality = Field(default_factory=CameraMappingProjectionQuality)
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _validate_id(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("id is required")
+        return normalized
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def _trim_label(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+
 class CameraMappingPoseSelectionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     sigma_pan: float = Field(default=0.04, gt=0.0, le=1000.0)
@@ -753,6 +827,7 @@ class CameraMappingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     camera_id: str = ""
     composition_id: str = ""
+    calibrated_views: list[CameraMappingCalibratedView] = Field(default_factory=list)
     control_point_sets: list[CameraMappingControlPointSet] = Field(default_factory=list)
     bbox_field: str = "object_bbox01"
     image_uv_field: str = "image_uv"
@@ -2979,7 +3054,9 @@ class CameraMappingRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict[str, Any], dependencies: PipelineRuntimeDependencies) -> None:
         self._config = CameraMappingConfig.model_validate(config)
         self._dependencies = dependencies
-        self._inline_control_point_sets = _control_point_sets_from_models(self._config.control_point_sets)
+        self._inline_control_point_sets = _control_point_sets_from_calibrated_view_models(
+            self._config.calibrated_views
+        ) or _control_point_sets_from_models(self._config.control_point_sets)
         self._homography_config = HomographyEstimationConfig(
             method=self._config.homography.method,
             normalized_image_threshold=float(self._config.homography.normalized_image_threshold),
@@ -3064,6 +3141,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             "v": float(point[1]),
             "composition_id": composition_id,
             "control_point_set_id": selection.control_point_set.id,
+            "calibrated_view_id": selection.control_point_set.id,
             "control_point_set_label": selection.control_point_set.label,
             "pose_distance": (float(selection.pose_distance) if selection.pose_distance is not None else None),
             "pose_axes_used": list(selection.pose_axes_used),
@@ -3074,6 +3152,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         if self._config.attach_mapping_metadata:
             metadata["composition_id"] = composition_id
             metadata["control_point_set_id"] = selection.control_point_set.id
+            metadata["calibrated_view_id"] = selection.control_point_set.id
         return [replace(packet, payload=payload, metadata=metadata)]
 
     async def _resolve_control_point_sets(self, *, camera_id: str) -> tuple[str | None, tuple[ControlPointSet, ...]]:
@@ -3099,7 +3178,7 @@ class CameraMappingRuntime(TransformOperatorRuntime):
                 camera_id_value = str(props.get("camera_id", "")).strip()
                 if not camera_id_value or camera_id_value != camera_id:
                     continue
-                control_point_sets = tuple(_parse_control_point_sets(props.get("control_point_sets")))
+                control_point_sets = tuple(_parse_mapping_control_point_sets_from_props(props))
                 valid_sets = tuple(item for item in control_point_sets if len(item.control_points) >= 4)
                 if not valid_sets:
                     continue
@@ -3771,7 +3850,7 @@ def register_camera_postprocess_operators(registry: OperatorRegistry) -> None:
     )
     registry.register_operator(
         operator_id="camera.camera_mapping",
-        description="Maps image position to world coordinates using camera control points.",
+        description="Maps image position to world coordinates using calibrated camera views.",
         config_model=CameraMappingConfig,
         inputs=[{"name": "in", "required": True}],
         outputs=[{"name": "out"}],
@@ -4362,10 +4441,10 @@ def _parse_pose_reference(value: Any) -> PoseReference | None:
     pan = _optional_float(rec.get("pan"))
     tilt = _optional_float(rec.get("tilt"))
     zoom = _optional_float(rec.get("zoom"))
-    if pan is None and tilt is None and zoom is None:
-        return None
     preset_token = str(rec.get("preset_token") or "").strip() or None
     preset_name = str(rec.get("preset_name") or "").strip() or None
+    if pan is None and tilt is None and zoom is None and not preset_token and not preset_name:
+        return None
     return PoseReference(pan=pan, tilt=tilt, zoom=zoom, preset_token=preset_token, preset_name=preset_name)
 
 
@@ -4388,6 +4467,82 @@ def _parse_control_point_sets(value: Any) -> list[ControlPointSet]:
             )
         )
     return out
+
+
+def _control_point_set_from_calibrated_view_record(value: Any, *, index: int = 0) -> ControlPointSet | None:
+    rec = value if isinstance(value, dict) else {}
+    view_id = str(rec.get("id") or "").strip()
+    if not view_id:
+        return None
+    label = str(rec.get("label") or "").strip() or view_id or f"view-{index + 1}"
+    projection_model = rec.get("projection_model") if isinstance(rec.get("projection_model"), dict) else {}
+    image_region = projection_model.get("image_region") if isinstance(projection_model.get("image_region"), dict) else {}
+    world_quad = projection_model.get("world_quad") if isinstance(projection_model.get("world_quad"), dict) else {}
+    top_left_image = image_region.get("top_left") if isinstance(image_region.get("top_left"), dict) else {"x": 0.0, "y": 0.0}
+    bottom_right_image = (
+        image_region.get("bottom_right")
+        if isinstance(image_region.get("bottom_right"), dict)
+        else {"x": 1.0, "y": 1.0}
+    )
+    try:
+        image_left = float(top_left_image.get("x"))
+        image_top = float(top_left_image.get("y"))
+        image_right = float(bottom_right_image.get("x"))
+        image_bottom = float(bottom_right_image.get("y"))
+    except Exception:
+        return None
+    if not (0.0 <= image_left <= 1.0 and 0.0 <= image_top <= 1.0 and 0.0 <= image_right <= 1.0 and 0.0 <= image_bottom <= 1.0):
+        return None
+    if image_right <= image_left or image_bottom <= image_top:
+        return None
+
+    def _world(corner: str) -> tuple[float, float] | None:
+        raw = world_quad.get(corner) if isinstance(world_quad.get(corner), dict) else {}
+        try:
+            x = float(raw.get("x"))
+            z = float(raw.get("z"))
+        except Exception:
+            return None
+        if not math.isfinite(x) or not math.isfinite(z):
+            return None
+        return x, z
+
+    top_left_world = _world("top_left")
+    top_right_world = _world("top_right")
+    bottom_right_world = _world("bottom_right")
+    bottom_left_world = _world("bottom_left")
+    if not top_left_world or not top_right_world or not bottom_right_world or not bottom_left_world:
+        return None
+
+    control_points = (
+        ControlPointPair(image_u=image_left, image_v=image_top, world_x=top_left_world[0], world_z=top_left_world[1]),
+        ControlPointPair(image_u=image_right, image_v=image_top, world_x=top_right_world[0], world_z=top_right_world[1]),
+        ControlPointPair(image_u=image_right, image_v=image_bottom, world_x=bottom_right_world[0], world_z=bottom_right_world[1]),
+        ControlPointPair(image_u=image_left, image_v=image_bottom, world_x=bottom_left_world[0], world_z=bottom_left_world[1]),
+    )
+    return ControlPointSet(
+        id=view_id,
+        label=label,
+        pose_reference=_parse_pose_reference(rec.get("pose_reference")),
+        control_points=control_points,
+    )
+
+
+def _parse_calibrated_views_as_control_point_sets(value: Any) -> list[ControlPointSet]:
+    raw = value if isinstance(value, list) else []
+    out: list[ControlPointSet] = []
+    for index, item in enumerate(raw):
+        control_point_set = _control_point_set_from_calibrated_view_record(item, index=index)
+        if control_point_set is not None and len(control_point_set.control_points) >= 4:
+            out.append(control_point_set)
+    return out
+
+
+def _parse_mapping_control_point_sets_from_props(props: dict[str, Any]) -> list[ControlPointSet]:
+    calibrated = _parse_calibrated_views_as_control_point_sets(props.get("calibrated_views"))
+    if calibrated:
+        return calibrated
+    return _parse_control_point_sets(props.get("control_point_sets"))
 
 
 def _control_point_sets_from_models(value: list[CameraMappingControlPointSet]) -> tuple[ControlPointSet, ...]:
@@ -4422,6 +4577,11 @@ def _control_point_sets_from_models(value: list[CameraMappingControlPointSet]) -
             )
         )
     return tuple(item for item in out if item.id and len(item.control_points) >= 4)
+
+
+def _control_point_sets_from_calibrated_view_models(value: list[CameraMappingCalibratedView]) -> tuple[ControlPointSet, ...]:
+    raw = [item.model_dump(mode="json") for item in value]
+    return tuple(_parse_calibrated_views_as_control_point_sets(raw))
 
 
 def _read_pan_tilt_zoom_state(value: Any) -> PanTiltZoomState | None:

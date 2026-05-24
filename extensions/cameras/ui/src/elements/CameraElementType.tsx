@@ -28,21 +28,32 @@ import {
 } from "../api/camerasApi";
 import { CAMERA_ELEMENT_TYPE_ID, CONTROL_POINT_COLORS } from "../constants";
 import {
+  calibratedViewsFromControlPointSets,
+  controlPointSetFromCalibratedView,
+  createDefaultCalibratedView,
   createDefaultControlPointSet,
   createUniqueId,
+  defaultImageRegion,
   duplicateControlPointSetForNewView,
   labelForIndex,
+  readCalibratedViews,
   readControlPointSets,
   readRecord,
   readString,
+  summarizeCalibratedViewQuality,
   summarizeControlPointSetQuality,
 } from "../parsing";
 import type {
+  CameraCalibratedView,
   CameraConnectionType,
   CameraControlPoint,
   CameraControlPointSet,
+  CameraProjectionCornerKey,
+  CameraProjectionWorldQuad,
   CameraPoseReference,
   CameraPtzPreset,
+  CameraSourceConfig,
+  CameraSourceRole,
   CamerasIndex,
   PanTiltZoomState,
 } from "../types";
@@ -98,6 +109,30 @@ function normalizePtzMoveStatus(value: string | null | undefined): "moving" | "i
   return "unknown";
 }
 
+function poseHasAbsoluteTarget(poseReference: CameraPoseReference | null | undefined): boolean {
+  return (
+    (typeof poseReference?.pan === "number" && Number.isFinite(poseReference.pan) && typeof poseReference?.tilt === "number" && Number.isFinite(poseReference.tilt)) ||
+    (typeof poseReference?.zoom === "number" && Number.isFinite(poseReference.zoom))
+  );
+}
+
+function absoluteMovePayloadForPose(
+  sourceId: string,
+  poseReference: CameraPoseReference,
+): { source_id?: string; pan?: number | null; tilt?: number | null; zoom?: number | null } {
+  const hasPanTilt =
+    typeof poseReference.pan === "number" &&
+    Number.isFinite(poseReference.pan) &&
+    typeof poseReference.tilt === "number" &&
+    Number.isFinite(poseReference.tilt);
+  return {
+    ...(sourceId ? { source_id: sourceId } : {}),
+    pan: hasPanTilt ? poseReference.pan : null,
+    tilt: hasPanTilt ? poseReference.tilt : null,
+    zoom: typeof poseReference.zoom === "number" && Number.isFinite(poseReference.zoom) ? poseReference.zoom : null,
+  };
+}
+
 function formatPtzTelemetryValue(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : "—";
 }
@@ -113,6 +148,125 @@ function cameraBounds(element: CompositionElement): BoundsXZ {
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+type CameraSnapshotSourceOption = Pick<CameraSourceConfig, "id" | "name" | "enabled" | "is_default" | "kind" | "role"> & {
+  has_ptz?: boolean;
+};
+
+const CALIBRATION_SNAPSHOT_ROLE_ORDER: CameraSourceRole[] = ["sub", "main", "custom", "zoom"];
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function isTransientSnapshotError(error: unknown): boolean {
+  if (isAbortError(error)) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return /failed to fetch|networkerror|load failed|ecconnrefused|temporarily unavailable/i.test(message);
+}
+
+async function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+  await new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      window.clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function fetchCameraSnapshotWithRetry(
+  cameraId: string,
+  sourceId: string,
+  signal: AbortSignal,
+  attempts = 3,
+): Promise<Blob> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fetchCameraSnapshot(cameraId, sourceId, signal);
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      lastError = error;
+      if (attempt >= attempts - 1 || !isTransientSnapshotError(error)) break;
+      await waitForRetry(450 + attempt * 650, signal);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "Snapshot failed"));
+}
+
+function snapshotSourceDisplayName(source: CameraSnapshotSourceOption | null): string {
+  if (!source) return "";
+  return source.name || source.id;
+}
+
+function resolvePreferredCalibrationSnapshotSourceId(
+  view: CameraCalibratedView | null,
+  sources: CameraSnapshotSourceOption[],
+): string {
+  const enabledVideoSources = sources.filter((source) => source.enabled !== false && source.kind === "video");
+  if (!enabledVideoSources.length) return "";
+
+  const compatibleSourceIds = (view?.stream_scope?.compatible_source_ids ?? []).map((item) => String(item || "").trim()).filter(Boolean);
+  for (const sourceId of compatibleSourceIds) {
+    if (enabledVideoSources.some((source) => source.id === sourceId)) return sourceId;
+  }
+
+  const compatibleRoles = view?.stream_scope?.compatible_roles?.length
+    ? view.stream_scope.compatible_roles.map((role) => String(role || "").trim())
+    : ["main", "sub"];
+  const explicitZoomAllowed = compatibleRoles.includes("zoom") || compatibleSourceIds.length > 0;
+  const allowedRoles = new Set(compatibleRoles.filter((role) => explicitZoomAllowed || role !== "zoom"));
+  const roleCandidates = enabledVideoSources.filter((source) => allowedRoles.has(source.role));
+  const candidates = roleCandidates.length ? roleCandidates : enabledVideoSources;
+
+  const defaultCandidate = candidates.find((source) => source.is_default);
+  if (defaultCandidate && allowedRoles.has(defaultCandidate.role)) return defaultCandidate.id;
+
+  const sorted = [...candidates].sort((left, right) => {
+    const leftIndex = CALIBRATION_SNAPSHOT_ROLE_ORDER.indexOf(left.role);
+    const rightIndex = CALIBRATION_SNAPSHOT_ROLE_ORDER.indexOf(right.role);
+    return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
+  });
+  return sorted[0]?.id ?? "";
+}
+
+function resolvePreferredCalibrationPtzSourceId(
+  view: CameraCalibratedView | null,
+  sources: CameraSnapshotSourceOption[],
+): string {
+  const ptzSources = sources.filter((source) => source.enabled !== false && source.kind === "video" && source.has_ptz === true);
+  if (!ptzSources.length) return "";
+
+  const compatibleSourceIds = (view?.stream_scope?.compatible_source_ids ?? []).map((item) => String(item || "").trim()).filter(Boolean);
+  for (const sourceId of compatibleSourceIds) {
+    if (ptzSources.some((source) => source.id === sourceId)) return sourceId;
+  }
+
+  const compatibleRoles = view?.stream_scope?.compatible_roles?.length
+    ? view.stream_scope.compatible_roles.map((role) => String(role || "").trim())
+    : ["main", "sub"];
+  const explicitZoomAllowed = compatibleRoles.includes("zoom") || compatibleSourceIds.length > 0;
+  const allowedRoles = new Set(compatibleRoles.filter((role) => explicitZoomAllowed || role !== "zoom"));
+  const roleCandidates = ptzSources.filter((source) => allowedRoles.has(source.role));
+  const candidates = roleCandidates.length ? roleCandidates : ptzSources;
+
+  const defaultCandidate = candidates.find((source) => source.is_default);
+  if (defaultCandidate) return defaultCandidate.id;
+
+  const sorted = [...candidates].sort((left, right) => {
+    const leftIndex = CALIBRATION_SNAPSHOT_ROLE_ORDER.indexOf(left.role);
+    const rightIndex = CALIBRATION_SNAPSHOT_ROLE_ORDER.indexOf(right.role);
+    return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
+  });
+  return sorted[0]?.id ?? "";
 }
 
 export function createCameraElementType(host: TopoSyncHost): ElementType {
@@ -353,12 +507,16 @@ function CameraEditor({
   const props = readRecord(element.props);
   const selectedCameraId = readString(props.camera_id).trim();
   const existingControlPointSets = useMemo(() => readControlPointSets(props.control_point_sets), [props.control_point_sets]);
+  const existingCalibratedViews = useMemo(() => {
+    const direct = readCalibratedViews(props.calibrated_views, element.position);
+    return direct.length ? direct : calibratedViewsFromControlPointSets(existingControlPointSets);
+  }, [element.position, existingControlPointSets, props.calibrated_views]);
   const readySets = useMemo(
-    () => existingControlPointSets.filter((item) => summarizeControlPointSetQuality(item).status !== "incomplete").length,
-    [existingControlPointSets],
+    () => existingCalibratedViews.filter((item) => summarizeCalibratedViewQuality(item).status !== "incomplete").length,
+    [existingCalibratedViews],
   );
-  const totalSets = existingControlPointSets.length;
-  const [isControlPointsOpen, setIsControlPointsOpen] = useState(false);
+  const totalSets = existingCalibratedViews.length;
+  const [isCalibrationOpen, setIsCalibrationOpen] = useState(false);
 
   const [camerasIndex, setCamerasIndex] = useState<CamerasIndex | null>(null);
   const [indexErrorMessage, setIndexErrorMessage] = useState<string | null>(null);
@@ -381,11 +539,27 @@ function CameraEditor({
   const cameraOptions = useMemo(() => {
     const cameras = camerasIndex?.cameras ?? [];
     return cameras
-      .map((camera) => ({
-        id: readString((camera as any).id),
-        name: readString((camera as any).name),
-        connectionType: readString((camera as any).control?.type).trim().toLowerCase() as CameraConnectionType | "",
-      }))
+      .map((camera) => {
+        const sources = Array.isArray((camera as any).sources)
+          ? ((camera as any).sources as any[])
+              .map((source) => ({
+                id: readString(source?.id).trim(),
+                name: readString(source?.name).trim(),
+                enabled: source?.enabled !== false,
+                is_default: source?.is_default === true,
+                kind: (readString(source?.kind).trim() || "video") as CameraSourceConfig["kind"],
+                role: (readString(source?.role).trim() || "custom") as CameraSourceRole,
+                has_ptz: source?.origin?.has_ptz === true,
+              }))
+              .filter((source) => Boolean(source.id)) as CameraSnapshotSourceOption[]
+          : [];
+        return {
+          id: readString((camera as any).id),
+          name: readString((camera as any).name),
+          connectionType: readString((camera as any).control?.type).trim().toLowerCase() as CameraConnectionType | "",
+          sources,
+        };
+      })
       .filter((camera) => Boolean(camera.id));
   }, [camerasIndex]);
   const selectedCamera = useMemo(
@@ -431,26 +605,26 @@ function CameraEditor({
       )}
 
       <div className="field">
-        <label className="label">{t("ext.cameras.editor.control_points")}</label>
+        <label className="label">{t("ext.cameras.editor.calibration")}</label>
         <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
           <div className="cardMeta">
             {totalSets > 0
               ? t("ext.cameras.editor.control_sets_some", { ready: readySets, total: totalSets })
-              : t("ext.cameras.editor.control_points_none")}
+              : t("ext.cameras.editor.calibration_none")}
           </div>
 
           <button
             className="chipButton"
             type="button"
             disabled={!selectedCameraId}
-            onClick={() => setIsControlPointsOpen(true)}
+            onClick={() => setIsCalibrationOpen(true)}
           >
-            {t("ext.cameras.editor.control_sets_open")}
+            {t("ext.cameras.editor.calibration_open")}
           </button>
         </div>
         {totalSets > 0 && readySets === 0 ? (
           <div className="cardMeta" style={{ marginTop: 6 }}>
-            {t("ext.cameras.editor.control_sets_hint")}
+            {t("ext.cameras.editor.calibration_hint")}
           </div>
         ) : null}
       </div>
@@ -474,17 +648,1394 @@ function CameraEditor({
         </button>
       </div>
 
-      <ControlPointsModal
-        open={isControlPointsOpen}
-        onClose={() => setIsControlPointsOpen(false)}
+      <CameraCalibrationModal
+        open={isCalibrationOpen}
+        onClose={() => setIsCalibrationOpen(false)}
         host={host}
         i18n={i18n}
+        element={element}
         cameraId={selectedCameraId}
         cameraConnectionType={selectedCamera?.connectionType || null}
-        initialSets={existingControlPointSets}
-        onSave={(controlPointSets) => update({ props: { control_point_sets: controlPointSets } })}
+        cameraSources={selectedCamera?.sources ?? []}
+        initialViews={existingCalibratedViews}
+        onSave={(calibratedViews) => update({ props: { calibrated_views: calibratedViews, control_point_sets: undefined } })}
       />
     </div>
+  );
+}
+
+const CALIBRATION_CORNERS: CameraProjectionCornerKey[] = ["top_left", "top_right", "bottom_right", "bottom_left"];
+
+type CalibrationDragState =
+  | {
+      kind: "move";
+      startWorld: { x: number; z: number };
+      startQuad: CameraProjectionWorldQuad;
+    }
+  | {
+      kind: "corner";
+      corner: CameraProjectionCornerKey;
+      startQuad: CameraProjectionWorldQuad;
+    }
+  | {
+      kind: "rotate";
+      centerWorld: { x: number; z: number };
+      startAngle: number;
+      startQuad: CameraProjectionWorldQuad;
+      snappedDelta: number;
+    };
+
+type CalibrationHoverState =
+  | { kind: "move" }
+  | { kind: "corner"; corner: CameraProjectionCornerKey }
+  | { kind: "rotate" }
+  | null;
+
+type CalibrationRotateHandleInfo = {
+  centerWorld: { x: number; z: number };
+  centerScreen: { x: number; y: number };
+  handleScreen: { x: number; y: number };
+  radiusPx: number;
+  hitRadiusPx: number;
+};
+
+function cloneWorldQuad(quad: CameraProjectionWorldQuad): CameraProjectionWorldQuad {
+  return {
+    top_left: { ...quad.top_left },
+    top_right: { ...quad.top_right },
+    bottom_right: { ...quad.bottom_right },
+    bottom_left: { ...quad.bottom_left },
+  };
+}
+
+function worldQuadPoints(quad: CameraProjectionWorldQuad): Array<{ x: number; z: number }> {
+  return CALIBRATION_CORNERS.map((corner) => quad[corner]);
+}
+
+function translateWorldQuad(quad: CameraProjectionWorldQuad, delta: { x: number; z: number }): CameraProjectionWorldQuad {
+  return {
+    top_left: { x: quad.top_left.x + delta.x, z: quad.top_left.z + delta.z },
+    top_right: { x: quad.top_right.x + delta.x, z: quad.top_right.z + delta.z },
+    bottom_right: { x: quad.bottom_right.x + delta.x, z: quad.bottom_right.z + delta.z },
+    bottom_left: { x: quad.bottom_left.x + delta.x, z: quad.bottom_left.z + delta.z },
+  };
+}
+
+function quadCenter(quad: CameraProjectionWorldQuad): { x: number; z: number } {
+  const points = worldQuadPoints(quad);
+  return {
+    x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+    z: points.reduce((sum, point) => sum + point.z, 0) / points.length,
+  };
+}
+
+function rotateWorldQuad(quad: CameraProjectionWorldQuad, radians: number): CameraProjectionWorldQuad {
+  const center = quadCenter(quad);
+  const sin = Math.sin(radians);
+  const cos = Math.cos(radians);
+  const next = cloneWorldQuad(quad);
+  for (const corner of CALIBRATION_CORNERS) {
+    const dx = quad[corner].x - center.x;
+    const dz = quad[corner].z - center.z;
+    next[corner] = {
+      x: center.x + dx * cos - dz * sin,
+      z: center.z + dx * sin + dz * cos,
+    };
+  }
+  return next;
+}
+
+function normalizeAngleRad(angle: number): number {
+  return Math.atan2(Math.sin(angle), Math.cos(angle));
+}
+
+function calibrationRotationDelta(rawDelta: number, event: EditorToolPointerEvent): number {
+  const stepDegrees = event.shiftKey ? 5 : 15;
+  const stepRadians = (stepDegrees * Math.PI) / 180;
+  return event.altKey ? rawDelta : Math.round(rawDelta / stepRadians) * stepRadians;
+}
+
+function screenDistanceSquared(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return dx * dx + dy * dy;
+}
+
+function calibrationRotateHandleInfo(
+  quad: CameraProjectionWorldQuad,
+  viewport: Viewport2DContext,
+): CalibrationRotateHandleInfo {
+  const centerWorld = quadCenter(quad);
+  const centerScreen = viewport.worldToScreen(centerWorld);
+  const points = worldQuadPoints(quad).map((point) => viewport.worldToScreen(point));
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const extent = Math.max(maxX - minX, maxY - minY, 36);
+  const radiusPx = Math.max(34, Math.min(92, extent / 2 + 34));
+  const topMid = {
+    x: (points[0].x + points[1].x) / 2,
+    y: (points[0].y + points[1].y) / 2,
+  };
+  let dx = topMid.x - centerScreen.x;
+  let dy = topMid.y - centerScreen.y;
+  const length = Math.hypot(dx, dy);
+  if (length < 1e-6) {
+    dx = 0;
+    dy = -1;
+  } else {
+    dx /= length;
+    dy /= length;
+  }
+  return {
+    centerWorld,
+    centerScreen,
+    handleScreen: {
+      x: centerScreen.x + dx * radiusPx,
+      y: centerScreen.y + dy * radiusPx,
+    },
+    radiusPx,
+    hitRadiusPx: 13,
+  };
+}
+
+function nearestWorldQuadCornerByScreen(
+  screen: { x: number; y: number },
+  quad: CameraProjectionWorldQuad,
+  viewport: Viewport2DContext,
+  thresholdPx: number,
+): CameraProjectionCornerKey | null {
+  let best: { corner: CameraProjectionCornerKey; distanceSquared: number } | null = null;
+  for (const corner of CALIBRATION_CORNERS) {
+    const point = viewport.worldToScreen(quad[corner]);
+    const distanceSquared = screenDistanceSquared(screen, point);
+    if (distanceSquared > thresholdPx * thresholdPx) continue;
+    if (!best || distanceSquared < best.distanceSquared) best = { corner, distanceSquared };
+  }
+  return best?.corner ?? null;
+}
+
+function pointInWorldQuad(point: { x: number; z: number }, quad: CameraProjectionWorldQuad): boolean {
+  const points = worldQuadPoints(quad);
+  let inside = false;
+  for (let index = 0, previous = points.length - 1; index < points.length; previous = index, index += 1) {
+    const currentPoint = points[index];
+    const previousPoint = points[previous];
+    const intersects =
+      currentPoint.z > point.z !== previousPoint.z > point.z &&
+      point.x <
+        ((previousPoint.x - currentPoint.x) * (point.z - currentPoint.z)) /
+          ((previousPoint.z - currentPoint.z) || 1e-12) +
+          currentPoint.x;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function nearestWorldQuadCorner(
+  point: { x: number; z: number },
+  quad: CameraProjectionWorldQuad,
+  thresholdWorld: number,
+): CameraProjectionCornerKey | null {
+  let best: { corner: CameraProjectionCornerKey; distance: number } | null = null;
+  for (const corner of CALIBRATION_CORNERS) {
+    const candidate = quad[corner];
+    const distance = Math.hypot(candidate.x - point.x, candidate.z - point.z);
+    if (distance > thresholdWorld) continue;
+    if (!best || distance < best.distance) best = { corner, distance };
+  }
+  return best?.corner ?? null;
+}
+
+function sourceRegionPixels(view: CameraCalibratedView, image: HTMLImageElement): {
+  topLeft: { x: number; y: number };
+  topRight: { x: number; y: number };
+  bottomRight: { x: number; y: number };
+  bottomLeft: { x: number; y: number };
+} {
+  const region = view.projection_model.image_region;
+  const width = Math.max(1, image.naturalWidth || image.width || 1);
+  const height = Math.max(1, image.naturalHeight || image.height || 1);
+  const left = region.top_left.x * width;
+  const top = region.top_left.y * height;
+  const right = region.bottom_right.x * width;
+  const bottom = region.bottom_right.y * height;
+  return {
+    topLeft: { x: left, y: top },
+    topRight: { x: right, y: top },
+    bottomRight: { x: right, y: bottom },
+    bottomLeft: { x: left, y: bottom },
+  };
+}
+
+function drawImageTriangle(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  source: [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }],
+  dest: [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }],
+): void {
+  const [s0, s1, s2] = source;
+  const [d0, d1, d2] = dest;
+  const denominator = s0.x * (s1.y - s2.y) + s1.x * (s2.y - s0.y) + s2.x * (s0.y - s1.y);
+  if (Math.abs(denominator) < 1e-8) return;
+  const a = (d0.x * (s1.y - s2.y) + d1.x * (s2.y - s0.y) + d2.x * (s0.y - s1.y)) / denominator;
+  const b = (d0.y * (s1.y - s2.y) + d1.y * (s2.y - s0.y) + d2.y * (s0.y - s1.y)) / denominator;
+  const c = (d0.x * (s2.x - s1.x) + d1.x * (s0.x - s2.x) + d2.x * (s1.x - s0.x)) / denominator;
+  const d = (d0.y * (s2.x - s1.x) + d1.y * (s0.x - s2.x) + d2.y * (s1.x - s0.x)) / denominator;
+  const e =
+    (d0.x * (s1.x * s2.y - s2.x * s1.y) +
+      d1.x * (s2.x * s0.y - s0.x * s2.y) +
+      d2.x * (s0.x * s1.y - s1.x * s0.y)) /
+    denominator;
+  const f =
+    (d0.y * (s1.x * s2.y - s2.x * s1.y) +
+      d1.y * (s2.x * s0.y - s0.x * s2.y) +
+      d2.y * (s0.x * s1.y - s1.x * s0.y)) /
+    denominator;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(d0.x, d0.y);
+  ctx.lineTo(d1.x, d1.y);
+  ctx.lineTo(d2.x, d2.y);
+  ctx.closePath();
+  ctx.clip();
+  ctx.transform(a, b, c, d, e, f);
+  ctx.drawImage(image, 0, 0);
+  ctx.restore();
+}
+
+function CameraCalibrationModal({
+  open,
+  onClose,
+  host,
+  i18n,
+  element,
+  cameraId,
+  cameraConnectionType,
+  cameraSources,
+  initialViews,
+  onSave,
+}: {
+  open: boolean;
+  onClose: () => void;
+  host: TopoSyncHost;
+  i18n: HostI18n;
+  element: CompositionElement;
+  cameraId: string;
+  cameraConnectionType: CameraConnectionType | null;
+  cameraSources: CameraSnapshotSourceOption[];
+  initialViews: CameraCalibratedView[];
+  onSave: (views: CameraCalibratedView[]) => void;
+}): React.ReactElement | null {
+  const { t } = i18n.useI18n();
+  const isPtzCamera = cameraConnectionType === "onvif";
+  const [views, setViews] = useState<CameraCalibratedView[]>([]);
+  const [selectedViewId, setSelectedViewId] = useState<string | null>(null);
+  const [poseModalOpen, setPoseModalOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
+  const [snapshotImage, setSnapshotImage] = useState<HTMLImageElement | null>(null);
+  const [snapshotErrorMessage, setSnapshotErrorMessage] = useState<string | null>(null);
+  const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [importingPresets, setImportingPresets] = useState(false);
+  const [movingToViewId, setMovingToViewId] = useState<string | null>(null);
+  const snapshotAbortRef = useRef<AbortController | null>(null);
+  const snapshotUrlRef = useRef<string | null>(null);
+  const selectedViewIdRef = useRef<string | null>(null);
+  const viewsRef = useRef<CameraCalibratedView[]>([]);
+  const dragStateRef = useRef<CalibrationDragState | null>(null);
+  const hoverStateRef = useRef<CalibrationHoverState>(null);
+  const viewportRef = useRef<Viewport2DContext | null>(null);
+  const viewportScaleRef = useRef(30);
+  const viewSelectionRequestRef = useRef(0);
+
+  const selectedView = useMemo(
+    () => views.find((view) => view.id === selectedViewId) ?? views[0] ?? null,
+    [selectedViewId, views],
+  );
+  const preferredSnapshotSourceId = useMemo(
+    () => resolvePreferredCalibrationSnapshotSourceId(selectedView, cameraSources),
+    [cameraSources, selectedView?.stream_scope],
+  );
+  const preferredSnapshotSource = useMemo(
+    () => cameraSources.find((source) => source.id === preferredSnapshotSourceId) ?? null,
+    [cameraSources, preferredSnapshotSourceId],
+  );
+
+  useEffect(() => {
+    selectedViewIdRef.current = selectedViewId;
+  }, [selectedViewId]);
+
+  useEffect(() => {
+    viewsRef.current = views;
+  }, [views]);
+
+  useEffect(() => {
+    snapshotUrlRef.current = snapshotUrl;
+  }, [snapshotUrl]);
+
+  useEffect(() => {
+    if (!open) return;
+    const baseViews = initialViews.length
+      ? initialViews.map((view) => ({
+          ...view,
+          pose_reference: view.pose_reference ? { ...view.pose_reference } : null,
+          stream_scope: {
+            compatible_roles:
+              view.stream_scope?.compatible_roles && view.stream_scope.compatible_roles.length
+                ? [...view.stream_scope.compatible_roles]
+                : ["main", "sub"],
+            compatible_source_ids: [...(view.stream_scope?.compatible_source_ids ?? [])],
+          },
+          projection_model: {
+            ...view.projection_model,
+            image_region: defaultImageRegion(),
+            world_quad: cloneWorldQuad(view.projection_model.world_quad),
+            future_mesh: null,
+          },
+          projection_quality: { ...(view.projection_quality ?? {}) },
+        }))
+      : [createDefaultCalibratedView(0, element.position, { label: t("ext.cameras.calibration.default_view") })];
+    setViews(baseViews);
+    setSelectedViewId(baseViews[0]?.id ?? null);
+    if (baseViews[0]) void selectView(baseViews[0]);
+  }, [element.position, initialViews, open, t]);
+
+  const loadCalibrationSnapshotFromSourceAsync = useCallback(
+    async (sourceId: string, sourceName: string) => {
+      if (!cameraId) return;
+      snapshotAbortRef.current?.abort();
+      const controller = new AbortController();
+      snapshotAbortRef.current = controller;
+      setSnapshotLoading(true);
+      setSnapshotErrorMessage(null);
+      try {
+        const blob = await fetchCameraSnapshotWithRetry(cameraId, sourceId, controller.signal);
+        const nextUrl = URL.createObjectURL(blob);
+        setSnapshotUrl((previous) => {
+          if (previous) URL.revokeObjectURL(previous);
+          return nextUrl;
+        });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        const message = error instanceof Error ? error.message : String(error);
+        setSnapshotErrorMessage(sourceName ? `${sourceName}: ${message}` : message);
+      } finally {
+        if (!controller.signal.aborted) setSnapshotLoading(false);
+      }
+    },
+    [cameraId],
+  );
+
+  const loadCalibrationSnapshotFromSource = useCallback(
+    (sourceId: string, sourceName: string) => {
+      void loadCalibrationSnapshotFromSourceAsync(sourceId, sourceName);
+      return () => snapshotAbortRef.current?.abort();
+    },
+    [loadCalibrationSnapshotFromSourceAsync],
+  );
+
+  const loadCalibrationSnapshot = useCallback(() => {
+    if (!cameraId) return () => undefined;
+    return loadCalibrationSnapshotFromSource(preferredSnapshotSourceId, snapshotSourceDisplayName(preferredSnapshotSource));
+  }, [cameraId, loadCalibrationSnapshotFromSource, preferredSnapshotSource, preferredSnapshotSourceId]);
+
+  const loadCalibrationSnapshotForViewAsync = useCallback(
+    async (view: CameraCalibratedView | null) => {
+      const sourceId = resolvePreferredCalibrationSnapshotSourceId(view, cameraSources);
+      const source = cameraSources.find((item) => item.id === sourceId) ?? null;
+      await loadCalibrationSnapshotFromSourceAsync(sourceId, snapshotSourceDisplayName(source));
+    },
+    [cameraSources, loadCalibrationSnapshotFromSourceAsync],
+  );
+
+  const loadCalibrationSnapshotForView = useCallback(
+    (view: CameraCalibratedView | null) => {
+      const sourceId = resolvePreferredCalibrationSnapshotSourceId(view, cameraSources);
+      const source = cameraSources.find((item) => item.id === sourceId) ?? null;
+      return loadCalibrationSnapshotFromSource(sourceId, snapshotSourceDisplayName(source));
+    },
+    [cameraSources, loadCalibrationSnapshotFromSource],
+  );
+
+  const refreshCurrentCalibrationSnapshot = useCallback(() => {
+    const currentView = viewsRef.current.find((view) => view.id === selectedViewIdRef.current) ?? viewsRef.current[0] ?? null;
+    loadCalibrationSnapshotForView(currentView);
+  }, [loadCalibrationSnapshotForView]);
+
+  useEffect(() => {
+    if (!open) {
+      viewSelectionRequestRef.current += 1;
+      snapshotAbortRef.current?.abort();
+      setSnapshotErrorMessage(null);
+      setSnapshotLoading(false);
+      setSnapshotImage(null);
+      setSnapshotUrl((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return null;
+      });
+      setDragging(false);
+      setMovingToViewId(null);
+      dragStateRef.current = null;
+      return;
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!snapshotUrl) {
+      setSnapshotImage(null);
+      return;
+    }
+    let cancelled = false;
+    const image = new Image();
+    image.onload = () => {
+      if (!cancelled) setSnapshotImage(image);
+    };
+    image.onerror = () => {
+      if (!cancelled) setSnapshotImage(null);
+    };
+    image.src = snapshotUrl;
+    return () => {
+      cancelled = true;
+    };
+  }, [snapshotUrl]);
+
+  useEffect(() => {
+    return () => {
+      snapshotAbortRef.current?.abort();
+      if (snapshotUrlRef.current) URL.revokeObjectURL(snapshotUrlRef.current);
+    };
+  }, []);
+
+  function updateSelectedView(updater: (view: CameraCalibratedView) => CameraCalibratedView) {
+    const currentId = selectedViewIdRef.current;
+    if (!currentId) return;
+    setViews((previous) => previous.map((view) => (view.id === currentId ? updater(view) : view)));
+  }
+
+  function updateSelectedQuad(nextQuad: CameraProjectionWorldQuad, status: "ready" | "estimated" = "ready") {
+    updateSelectedView((view) => ({
+      ...view,
+      projection_model: {
+        ...view.projection_model,
+        world_quad: cloneWorldQuad(nextQuad),
+      },
+      projection_quality: {
+        ...(view.projection_quality ?? {}),
+        status,
+        estimated: status === "estimated",
+      },
+    }));
+  }
+
+  async function waitForPtzToSettle(sourceId: string): Promise<PanTiltZoomState | null> {
+    await sleep(750);
+    let latestStatus: PanTiltZoomState | null = null;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      try {
+        const response = await fetchCameraPtzStatus(cameraId, sourceId);
+        latestStatus = response.status ?? latestStatus;
+      } catch (error) {
+        setSnapshotErrorMessage(error instanceof Error ? error.message : String(error));
+        break;
+      }
+      if (attempt > 0 && normalizePtzMoveStatus(latestStatus?.move_status) !== "moving") break;
+      await sleep(450);
+    }
+    await sleep(350);
+    return latestStatus;
+  }
+
+  async function selectView(view: CameraCalibratedView) {
+    const requestId = viewSelectionRequestRef.current + 1;
+    viewSelectionRequestRef.current = requestId;
+    selectedViewIdRef.current = view.id;
+    setSelectedViewId(view.id);
+    setMovingToViewId(view.id);
+    setSnapshotErrorMessage(null);
+    setSnapshotImage(null);
+    try {
+      if (isPtzCamera && cameraId) {
+        const poseReference = view.pose_reference ?? null;
+        const presetToken = String(poseReference?.preset_token ?? "").trim();
+        const sourceId = resolvePreferredCalibrationPtzSourceId(view, cameraSources);
+        if (presetToken) {
+          await gotoCameraPtzPreset(cameraId, presetToken, sourceId);
+          await waitForPtzToSettle(sourceId);
+        } else if (poseHasAbsoluteTarget(poseReference)) {
+          await moveCameraPtzAbsolute(cameraId, absoluteMovePayloadForPose(sourceId, poseReference!));
+          await waitForPtzToSettle(sourceId);
+        }
+      }
+      if (viewSelectionRequestRef.current === requestId) await loadCalibrationSnapshotForViewAsync(view);
+    } catch (error) {
+      if (viewSelectionRequestRef.current === requestId) setSnapshotErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (viewSelectionRequestRef.current === requestId) setMovingToViewId(null);
+    }
+  }
+
+  function addView() {
+    setViews((previous) => {
+      const source = selectedView ?? previous[0] ?? null;
+      const nextView = createDefaultCalibratedView(previous.length, element.position, {
+        label: t("ext.cameras.calibration.view_label", { index: previous.length + 1 }),
+      });
+      if (source?.stream_scope) {
+        nextView.stream_scope = {
+          compatible_roles: source.stream_scope.compatible_roles?.length ? [...source.stream_scope.compatible_roles] : ["main", "sub"],
+          compatible_source_ids: [...(source.stream_scope.compatible_source_ids ?? [])],
+        };
+      }
+      setSelectedViewId(nextView.id);
+      return [...previous, nextView];
+    });
+  }
+
+  function removeSelectedView() {
+    if (!selectedViewId || views.length <= 1) return;
+    setViews((previous) => {
+      const filtered = previous.filter((view) => view.id !== selectedViewId);
+      setSelectedViewId(filtered[0]?.id ?? null);
+      return filtered;
+    });
+  }
+
+  async function importPresetViews() {
+    if (!cameraId || !isPtzCamera) return;
+    setImportingPresets(true);
+    setSnapshotErrorMessage(null);
+    try {
+      const response = await fetchCameraPtzPresets(cameraId, resolvePreferredCalibrationPtzSourceId(selectedView, cameraSources));
+      const presets = Array.isArray(response.presets) ? response.presets : [];
+      setViews((previous) => {
+        const existingTokens = new Set(previous.map((view) => String(view.pose_reference?.preset_token ?? "").trim()).filter(Boolean));
+        const source = selectedView ?? previous[0] ?? null;
+        const additions: CameraCalibratedView[] = [];
+        for (const preset of presets) {
+          const token = String(preset.token || "").trim();
+          if (!token || existingTokens.has(token)) continue;
+          const nextView = createDefaultCalibratedView(previous.length + additions.length, element.position, {
+            label: String(preset.name || "").trim() || token,
+            poseReference: {
+              pan: typeof preset.pan === "number" && Number.isFinite(preset.pan) ? preset.pan : null,
+              tilt: typeof preset.tilt === "number" && Number.isFinite(preset.tilt) ? preset.tilt : null,
+              zoom: typeof preset.zoom === "number" && Number.isFinite(preset.zoom) ? preset.zoom : null,
+              preset_token: token,
+              preset_name: String(preset.name || "").trim() || token,
+            },
+          });
+          if (source?.stream_scope) {
+            nextView.stream_scope = {
+              compatible_roles: source.stream_scope.compatible_roles?.length ? [...source.stream_scope.compatible_roles] : ["main", "sub"],
+              compatible_source_ids: [...(source.stream_scope.compatible_source_ids ?? [])],
+            };
+          }
+          additions.push(nextView);
+        }
+        if (additions.length > 0) setSelectedViewId(additions[0].id);
+        return [...previous, ...additions];
+      });
+    } catch (error) {
+      setSnapshotErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setImportingPresets(false);
+    }
+  }
+
+  function setCompatibleRole(role: string, enabled: boolean) {
+    updateSelectedView((view) => {
+      const current = view.stream_scope?.compatible_roles?.length ? view.stream_scope.compatible_roles : ["main", "sub"];
+      const next = enabled ? Array.from(new Set([...current, role])) : current.filter((item) => item !== role);
+      return {
+        ...view,
+        stream_scope: {
+          compatible_roles: next,
+          compatible_source_ids: [...(view.stream_scope?.compatible_source_ids ?? [])],
+        },
+      };
+    });
+  }
+
+  const toolSession = useMemo<EditorToolSession>(() => {
+    function resolveHoverState(
+      event: EditorToolPointerEvent,
+      quad: CameraProjectionWorldQuad,
+      viewport: Viewport2DContext | null,
+    ): CalibrationHoverState {
+      if (viewport) {
+        const corner = nearestWorldQuadCornerByScreen(event.screen, quad, viewport, 13);
+        if (corner) return { kind: "corner", corner };
+        const rotateInfo = calibrationRotateHandleInfo(quad, viewport);
+        if (screenDistanceSquared(event.screen, rotateInfo.handleScreen) <= rotateInfo.hitRadiusPx * rotateInfo.hitRadiusPx) {
+          return { kind: "rotate" };
+        }
+      } else {
+        const thresholdWorld = Math.max(0.08, 18 / Math.max(1, viewportScaleRef.current));
+        const corner = nearestWorldQuadCorner(event.world, quad, thresholdWorld);
+        if (corner) return { kind: "corner", corner };
+      }
+      return pointInWorldQuad(event.world, quad) ? { kind: "move" } : null;
+    }
+
+    return {
+      onPointerEvent: (event: EditorToolPointerEvent) => {
+        if (movingToViewId) return;
+        const viewId = selectedViewIdRef.current;
+        const currentView = viewsRef.current.find((view) => view.id === viewId) ?? viewsRef.current[0] ?? null;
+        if (!currentView) return;
+        const quad = currentView.projection_model.world_quad;
+        if (event.kind === "down") {
+          const viewport = viewportRef.current;
+          const hover = resolveHoverState(event, quad, viewport);
+          hoverStateRef.current = hover;
+          if (hover?.kind === "corner") {
+            dragStateRef.current = { kind: "corner", corner: hover.corner, startQuad: cloneWorldQuad(quad) };
+          } else if (hover?.kind === "rotate" && viewport) {
+            const rotateInfo = calibrationRotateHandleInfo(quad, viewport);
+            dragStateRef.current = {
+              kind: "rotate",
+              centerWorld: rotateInfo.centerWorld,
+              startAngle: Math.atan2(event.world.z - rotateInfo.centerWorld.z, event.world.x - rotateInfo.centerWorld.x),
+              startQuad: cloneWorldQuad(quad),
+              snappedDelta: 0,
+            };
+          } else if (hover?.kind === "move") {
+            dragStateRef.current = { kind: "move", startWorld: { x: event.world.x, z: event.world.z }, startQuad: cloneWorldQuad(quad) };
+          } else {
+            dragStateRef.current = null;
+          }
+          setDragging(Boolean(dragStateRef.current));
+          return;
+        }
+        if (event.kind === "up" || event.kind === "cancel") {
+          dragStateRef.current = null;
+          setDragging(false);
+          return;
+        }
+        if (event.kind !== "move") return;
+        if (!dragStateRef.current) {
+          hoverStateRef.current = resolveHoverState(event, quad, viewportRef.current);
+          return;
+        }
+        const drag = dragStateRef.current;
+        if (drag.kind === "corner") {
+          const nextQuad = cloneWorldQuad(drag.startQuad);
+          nextQuad[drag.corner] = { x: event.world.x, z: event.world.z };
+          updateSelectedQuad(nextQuad);
+          return;
+        }
+        if (drag.kind === "rotate") {
+          const currentAngle = Math.atan2(event.world.z - drag.centerWorld.z, event.world.x - drag.centerWorld.x);
+          const snappedDelta = calibrationRotationDelta(normalizeAngleRad(currentAngle - drag.startAngle), event);
+          dragStateRef.current = { ...drag, snappedDelta };
+          updateSelectedQuad(rotateWorldQuad(drag.startQuad, snappedDelta));
+          return;
+        }
+        updateSelectedQuad(
+          translateWorldQuad(drag.startQuad, {
+            x: event.world.x - drag.startWorld.x,
+            z: event.world.z - drag.startWorld.z,
+          }),
+        );
+      },
+      renderOverlay2D: ({ ctx, viewport }) => {
+        viewportRef.current = viewport;
+        viewportScaleRef.current = viewport.scale;
+        if (movingToViewId) return;
+        const viewId = selectedViewIdRef.current;
+        const currentView = viewsRef.current.find((view) => view.id === viewId) ?? viewsRef.current[0] ?? null;
+        if (!currentView) return;
+        const quad = currentView.projection_model.world_quad;
+        const points = worldQuadPoints(quad).map((point) => viewport.worldToScreen(point));
+        const rotateInfo = calibrationRotateHandleInfo(quad, viewport);
+        const activeDrag = dragStateRef.current;
+        const hover = hoverStateRef.current;
+        ctx.save();
+        ctx.globalAlpha = dragging ? 0.46 : 0.72;
+        if (snapshotImage) {
+          const source = sourceRegionPixels(currentView, snapshotImage);
+          drawImageTriangle(ctx, snapshotImage, [source.topLeft, source.topRight, source.bottomRight], [points[0], points[1], points[2]]);
+          drawImageTriangle(ctx, snapshotImage, [source.topLeft, source.bottomRight, source.bottomLeft], [points[0], points[2], points[3]]);
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(points[0].x, points[0].y);
+          for (const point of points.slice(1)) ctx.lineTo(point.x, point.y);
+          ctx.closePath();
+          ctx.fillStyle = "rgba(56,189,248,0.18)";
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (const point of points.slice(1)) ctx.lineTo(point.x, point.y);
+        ctx.closePath();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "rgba(56,189,248,0.95)";
+        ctx.stroke();
+        const rotateHot = activeDrag?.kind === "rotate" || hover?.kind === "rotate";
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = rotateHot ? "rgba(125,211,252,0.95)" : "rgba(226,232,240,0.72)";
+        ctx.beginPath();
+        ctx.moveTo(rotateInfo.centerScreen.x, rotateInfo.centerScreen.y);
+        ctx.lineTo(rotateInfo.handleScreen.x, rotateInfo.handleScreen.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(rotateInfo.centerScreen.x, rotateInfo.centerScreen.y, 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(15,23,42,0.85)";
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "rgba(226,232,240,0.78)";
+        ctx.stroke();
+        ctx.shadowColor = rotateHot ? "rgba(56,189,248,0.48)" : "rgba(0,0,0,0)";
+        ctx.shadowBlur = rotateHot ? 12 : 0;
+        ctx.beginPath();
+        ctx.arc(rotateInfo.handleScreen.x, rotateInfo.handleScreen.y, 8, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(15,23,42,0.96)";
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = rotateHot ? "rgba(56,189,248,0.98)" : "rgba(226,232,240,0.72)";
+        ctx.stroke();
+        if (activeDrag?.kind === "rotate") {
+          const text = `${Math.round((activeDrag.snappedDelta * 180) / Math.PI)}°`;
+          ctx.font = "12px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          const metrics = ctx.measureText(text);
+          const boxWidth = metrics.width + 18;
+          const boxHeight = 24;
+          const x0 = rotateInfo.handleScreen.x - boxWidth / 2;
+          const y0 = rotateInfo.handleScreen.y - 28;
+          ctx.fillStyle = "rgba(15,23,42,0.92)";
+          ctx.strokeStyle = "rgba(148,163,184,0.42)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          roundRectPath(ctx, x0, y0, boxWidth, boxHeight, 999);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = "rgba(241,245,249,0.96)";
+          ctx.fillText(text, rotateInfo.handleScreen.x, y0 + boxHeight / 2);
+        }
+        points.forEach((point, index) => {
+          const corner = CALIBRATION_CORNERS[index];
+          const hot =
+            (activeDrag?.kind === "corner" && activeDrag.corner === corner) ||
+            (hover?.kind === "corner" && hover.corner === corner);
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, hot ? 8 : 7, 0, Math.PI * 2);
+          ctx.fillStyle = CONTROL_POINT_COLORS[index % CONTROL_POINT_COLORS.length];
+          ctx.fill();
+          ctx.lineWidth = hot ? 2.5 : 2;
+          ctx.strokeStyle = hot ? "rgba(226,232,240,0.95)" : "rgba(0,0,0,0.75)";
+          ctx.stroke();
+        });
+        ctx.restore();
+      },
+      getCursor: () => {
+        if (movingToViewId) return "default";
+        if (dragStateRef.current) return "grabbing";
+        if (hoverStateRef.current?.kind === "move") return "move";
+        if (hoverStateRef.current) return "grab";
+        return "default";
+      },
+    };
+  }, [dragging, movingToViewId, snapshotImage]);
+
+  if (!open) return null;
+
+  const selectedQuality = selectedView ? summarizeCalibratedViewQuality(selectedView) : null;
+  const compatibleRoles = selectedView?.stream_scope?.compatible_roles?.length ? selectedView.stream_scope.compatible_roles : ["main", "sub"];
+
+  return (
+    <SubModal
+      open={open}
+      onClose={onClose}
+      title={t("ext.cameras.calibration.title")}
+      panelStyle={{ width: "min(1440px, calc(100vw - 28px))", height: "calc(100vh - 28px)", maxHeight: "calc(100vh - 28px)" }}
+      bodyStyle={{ padding: 0, overflow: "hidden", display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 12, flex: 1, minHeight: 0 }}>
+        <div className="rowWrap" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <div className="rowWrap" style={{ gap: 8, flexWrap: "wrap" }}>
+            {(isPtzCamera || views.length > 1 ? views : views.slice(0, 1)).map((view, index) => {
+              const quality = summarizeCalibratedViewQuality(view);
+              const isSelected = selectedView?.id === view.id;
+              const statusColor =
+                quality.status === "good"
+                  ? "rgba(34,197,94,0.92)"
+                  : quality.status === "review"
+                    ? "rgba(251,191,36,0.92)"
+                    : "rgba(148,163,184,0.88)";
+              return (
+                <button
+                  key={view.id}
+                  type="button"
+                  className="chipButton"
+                  onClick={() => void selectView(view)}
+                  style={{
+                    minWidth: 190,
+                    justifyContent: "space-between",
+                    borderColor: isSelected ? "rgba(56,189,248,0.55)" : "rgba(255,255,255,0.14)",
+                    background: isSelected ? "rgba(56,189,248,0.10)" : undefined,
+                  }}
+                >
+                  <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
+                    <span>{view.label || t("ext.cameras.calibration.view_label", { index: index + 1 })}</span>
+                    <span className="cardMeta">
+                      {movingToViewId === view.id
+                        ? t("ext.cameras.control.ptz_status_moving")
+                        : quality.status === "good"
+                        ? t("ext.cameras.control.quality_good")
+                        : quality.status === "review"
+                          ? t("ext.cameras.calibration.quality_estimated")
+                          : t("ext.cameras.calibration.quality_incomplete")}
+                    </span>
+                  </span>
+                  <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 999, background: statusColor }} />
+                </button>
+              );
+            })}
+            {isPtzCamera ? (
+              <>
+                <button className="chipButton" type="button" onClick={addView}>
+                  <i className="fa-solid fa-plus" aria-hidden="true" />
+                  <span>{t("ext.cameras.calibration.add_view")}</span>
+                </button>
+                <button className="chipButton" type="button" onClick={() => void importPresetViews()} disabled={importingPresets}>
+                  {importingPresets ? t("ext.cameras.control.loading") : t("ext.cameras.calibration.import_presets")}
+                </button>
+              </>
+            ) : null}
+            <button
+              className="iconButton"
+              type="button"
+              onClick={removeSelectedView}
+              aria-label={t("core.actions.delete")}
+              disabled={!isPtzCamera || views.length <= 1}
+            >
+              <i className="fa-solid fa-trash" aria-hidden="true" />
+            </button>
+          </div>
+          <div className="rowWrap" style={{ justifyContent: "flex-end", alignItems: "center", gap: 8 }}>
+            <div className="cardMeta" style={{ textAlign: "right" }}>
+              {movingToViewId
+                ? t("ext.cameras.control.ptz_status_moving")
+                : snapshotLoading
+                  ? t("ext.cameras.control.loading")
+                : snapshotErrorMessage
+                  ? snapshotErrorMessage
+                  : selectedQuality?.status === "good"
+                    ? t("ext.cameras.calibration.ready")
+                    : t("ext.cameras.calibration.drag_help")}
+            </div>
+            <button
+              className="iconButton"
+              type="button"
+              onClick={loadCalibrationSnapshot}
+              disabled={snapshotLoading || !cameraId}
+              aria-label={t("ext.cameras.control.refresh_snapshot")}
+              title={t("ext.cameras.control.refresh_snapshot")}
+            >
+              <i className="fa-solid fa-rotate-right" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+
+        {selectedView ? (
+          <div style={{ display: "grid", gridTemplateColumns: isPtzCamera ? "minmax(260px, 1fr) auto" : "minmax(260px, 1fr)", gap: 10, alignItems: "end" }}>
+            <div className="field" style={{ marginBottom: 0 }}>
+              <label className="label">{t("ext.cameras.control.position_name")}</label>
+              <input
+                className="input"
+                value={selectedView.label}
+                onChange={(event) => updateSelectedView((view) => ({ ...view, label: event.target.value }))}
+              />
+            </div>
+            {isPtzCamera ? (
+              <button className="chipButton" type="button" onClick={() => setPoseModalOpen(true)}>
+                <i className="fa-solid fa-video" aria-hidden="true" />
+                <span>{t("ext.cameras.calibration.position_camera")}</span>
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div style={{ position: "relative", flex: 1, minHeight: 0, borderRadius: 14, border: "1px solid rgba(255,255,255,0.14)", overflow: "hidden", background: "rgba(0,0,0,0.20)" }}>
+          <host.ui.Viewport2DReplica
+            initialFit="content"
+            interactionMode="select"
+            session={toolSession}
+            style={{ width: "100%", height: "100%" }}
+          />
+        </div>
+
+        {selectedView ? (
+          <div className="card" style={{ marginBottom: 0 }}>
+            <div className="cardBody" style={{ display: "flex", flexDirection: "column", gap: 10, padding: 12 }}>
+              <button className="chipButton" type="button" onClick={() => setAdvancedOpen((value) => !value)} style={{ alignSelf: "flex-start" }}>
+                {t("ext.cameras.calibration.advanced_streams")}
+              </button>
+              {advancedOpen ? (
+                <div className="rowWrap" style={{ gap: 12 }}>
+                  {["main", "sub", "zoom", "custom"].map((role) => (
+                    <label key={role} className="cardMeta" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <input
+                        type="checkbox"
+                        checked={compatibleRoles.includes(role)}
+                        onChange={(event) => setCompatibleRole(role, event.target.checked)}
+                      />
+                      {role === "main"
+                        ? t("ext.cameras.calibration.role_main")
+                        : role === "sub"
+                          ? t("ext.cameras.calibration.role_sub")
+                          : role === "zoom"
+                            ? t("ext.cameras.calibration.role_zoom")
+                            : t("ext.cameras.calibration.role_custom")}
+                    </label>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="rowWrap" style={{ justifyContent: "space-between" }}>
+          <button className="chipButton" type="button" onClick={onClose}>
+            {t("core.actions.cancel")}
+          </button>
+          <button
+            className="primaryButton"
+            type="button"
+            onClick={() => {
+              onSave(
+                views.map((view, index) => ({
+                  ...view,
+                  label: view.label.trim() || t("ext.cameras.calibration.view_label", { index: index + 1 }),
+                  pose_reference: normalizePoseReference(view.pose_reference),
+                  stream_scope: {
+                    compatible_roles:
+                      view.stream_scope?.compatible_roles && view.stream_scope.compatible_roles.length
+                        ? view.stream_scope.compatible_roles
+                        : ["main", "sub"],
+                    compatible_source_ids: view.stream_scope?.compatible_source_ids ?? [],
+                  },
+                  projection_model: {
+                    ...view.projection_model,
+                    image_region: defaultImageRegion(),
+                    future_mesh: null,
+                  },
+                })),
+              );
+              onClose();
+            }}
+          >
+            {t("core.actions.save")}
+          </button>
+        </div>
+      </div>
+      <CameraPoseModal
+        open={poseModalOpen}
+        onClose={() => setPoseModalOpen(false)}
+        i18n={i18n}
+        cameraId={cameraId}
+        cameraSources={cameraSources}
+        selectedView={selectedView}
+        onSnapshotRefreshRequested={refreshCurrentCalibrationSnapshot}
+        onCapture={(poseReference, label) => {
+          updateSelectedView((view) => ({
+            ...view,
+            label: label || view.label,
+            pose_reference: poseReference,
+          }));
+        }}
+      />
+    </SubModal>
+  );
+}
+
+function CameraPoseModal({
+  open,
+  onClose,
+  i18n,
+  cameraId,
+  cameraSources,
+  selectedView,
+  onSnapshotRefreshRequested,
+  onCapture,
+}: {
+  open: boolean;
+  onClose: () => void;
+  i18n: HostI18n;
+  cameraId: string;
+  cameraSources: CameraSnapshotSourceOption[];
+  selectedView: CameraCalibratedView | null;
+  onSnapshotRefreshRequested: () => void;
+  onCapture: (poseReference: CameraPoseReference, label?: string | null) => void;
+}): React.ReactElement | null {
+  const { t } = i18n.useI18n();
+  const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
+  const [presets, setPresets] = useState<CameraPtzPreset[]>([]);
+  const [status, setStatus] = useState<PanTiltZoomState | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [activeMoveId, setActiveMoveId] = useState<string | null>(null);
+  const [selectedPresetToken, setSelectedPresetToken] = useState("");
+  const moveTimerRef = useRef<number | null>(null);
+  const moveVectorRef = useRef<{ pan: number; tilt: number; zoom: number } | null>(null);
+  const snapshotUrlRef = useRef<string | null>(null);
+  const preferredSnapshotSourceId = useMemo(
+    () => resolvePreferredCalibrationSnapshotSourceId(selectedView, cameraSources),
+    [cameraSources, selectedView?.stream_scope],
+  );
+  const preferredPtzSourceId = useMemo(
+    () => resolvePreferredCalibrationPtzSourceId(selectedView, cameraSources),
+    [cameraSources, selectedView?.stream_scope],
+  );
+  const panTiltControls = useMemo(
+    () => [
+      {
+        id: "up",
+        icon: "fa-arrow-up",
+        label: t("ext.cameras.control.tilt_up"),
+        vector: { pan: 0, tilt: PTZ_TILT_SPEED, zoom: 0 },
+      },
+      {
+        id: "left",
+        icon: "fa-arrow-left",
+        label: t("ext.cameras.control.pan_left"),
+        vector: { pan: -PTZ_PAN_SPEED, tilt: 0, zoom: 0 },
+      },
+      {
+        id: "stop",
+        icon: "fa-stop",
+        label: t("ext.cameras.control.stop"),
+        vector: { pan: 0, tilt: 0, zoom: 0 },
+      },
+      {
+        id: "right",
+        icon: "fa-arrow-right",
+        label: t("ext.cameras.control.pan_right"),
+        vector: { pan: PTZ_PAN_SPEED, tilt: 0, zoom: 0 },
+      },
+      {
+        id: "down",
+        icon: "fa-arrow-down",
+        label: t("ext.cameras.control.tilt_down"),
+        vector: { pan: 0, tilt: -PTZ_TILT_SPEED, zoom: 0 },
+      },
+    ],
+    [t],
+  );
+  const zoomControls = useMemo(
+    () => [
+      {
+        id: "zoom-in",
+        icon: "fa-plus",
+        label: t("ext.cameras.control.zoom_in"),
+        vector: { pan: 0, tilt: 0, zoom: PTZ_ZOOM_SPEED },
+      },
+      {
+        id: "zoom-out",
+        icon: "fa-minus",
+        label: t("ext.cameras.control.zoom_out"),
+        vector: { pan: 0, tilt: 0, zoom: -PTZ_ZOOM_SPEED },
+      },
+    ],
+    [t],
+  );
+
+  useEffect(() => {
+    snapshotUrlRef.current = snapshotUrl;
+  }, [snapshotUrl]);
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedPresetToken(String(selectedView?.pose_reference?.preset_token ?? "").trim());
+  }, [open, selectedView?.id]);
+
+  const refreshStatus = useCallback(async () => {
+    if (!cameraId) return null;
+    try {
+      const response = await fetchCameraPtzStatus(cameraId, preferredPtzSourceId);
+      const nextStatus = response.status ?? null;
+      setStatus(nextStatus);
+      return nextStatus;
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+      return null;
+    }
+  }, [cameraId, preferredPtzSourceId]);
+
+  const refreshSnapshot = useCallback(async () => {
+    if (!cameraId) return;
+    const controller = new AbortController();
+    try {
+      setErrorMessage(null);
+      const blob = await fetchCameraSnapshotWithRetry(cameraId, preferredSnapshotSourceId, controller.signal);
+      const nextUrl = URL.createObjectURL(blob);
+      setSnapshotUrl((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return nextUrl;
+      });
+    } catch (error) {
+      if (isAbortError(error)) return;
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    }
+  }, [cameraId, preferredSnapshotSourceId]);
+
+  const waitForPtzSettle = useCallback(async () => {
+    await sleep(750);
+    let nextStatus: PanTiltZoomState | null = null;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      nextStatus = await refreshStatus();
+      if (attempt > 0 && normalizePtzMoveStatus(nextStatus?.move_status) !== "moving") break;
+      await sleep(450);
+    }
+    await sleep(350);
+    return nextStatus;
+  }, [refreshStatus]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setErrorMessage(null);
+    void fetchCameraPtzPresets(cameraId, preferredPtzSourceId)
+      .then((items) => {
+        if (!cancelled) setPresets(Array.isArray(items.presets) ? items.presets : []);
+      })
+      .catch((error) => {
+        if (!cancelled) setErrorMessage(error instanceof Error ? error.message : String(error));
+      });
+    void (async () => {
+      const poseReference = selectedView?.pose_reference ?? null;
+      const presetToken = String(poseReference?.preset_token ?? "").trim();
+      const needsMove = Boolean(presetToken) || poseHasAbsoluteTarget(poseReference);
+      if (needsMove) {
+        setBusy(true);
+        setSnapshotUrl((previous) => {
+          if (previous) URL.revokeObjectURL(previous);
+          return null;
+        });
+      }
+      try {
+        if (presetToken) {
+          await gotoCameraPtzPreset(cameraId, presetToken, preferredPtzSourceId);
+          if (cancelled) return;
+          await waitForPtzSettle();
+        } else if (poseHasAbsoluteTarget(poseReference)) {
+          await moveCameraPtzAbsolute(cameraId, absoluteMovePayloadForPose(preferredPtzSourceId, poseReference!));
+          if (cancelled) return;
+          await waitForPtzSettle();
+        } else {
+          await refreshStatus();
+        }
+        if (cancelled) return;
+        await refreshSnapshot();
+        onSnapshotRefreshRequested();
+      } catch (error) {
+        if (!cancelled) setErrorMessage(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+    const interval = window.setInterval(() => {
+      void refreshStatus();
+    }, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [cameraId, onSnapshotRefreshRequested, open, preferredPtzSourceId, refreshSnapshot, refreshStatus, selectedView?.id, waitForPtzSettle]);
+
+  useEffect(() => {
+    if (open) return;
+    setSnapshotUrl((previous) => {
+      if (previous) URL.revokeObjectURL(previous);
+      return null;
+    });
+    setActiveMoveId(null);
+    moveVectorRef.current = null;
+    if (moveTimerRef.current !== null) {
+      window.clearInterval(moveTimerRef.current);
+      moveTimerRef.current = null;
+    }
+  }, [open]);
+
+  useEffect(() => {
+    return () => {
+      if (snapshotUrlRef.current) URL.revokeObjectURL(snapshotUrlRef.current);
+      if (moveTimerRef.current !== null) window.clearInterval(moveTimerRef.current);
+    };
+  }, []);
+
+  function poseFromStatus(nextStatus: PanTiltZoomState | null, preset?: CameraPtzPreset | null): CameraPoseReference | null {
+    if (!nextStatus && !preset) return null;
+    return {
+      pan: typeof nextStatus?.pan === "number" && Number.isFinite(nextStatus.pan) ? nextStatus.pan : preset?.pan ?? null,
+      tilt: typeof nextStatus?.tilt === "number" && Number.isFinite(nextStatus.tilt) ? nextStatus.tilt : preset?.tilt ?? null,
+      zoom: typeof nextStatus?.zoom === "number" && Number.isFinite(nextStatus.zoom) ? nextStatus.zoom : preset?.zoom ?? null,
+      preset_token: preset?.token ?? null,
+      preset_name: preset?.name ?? null,
+    };
+  }
+
+  async function stopMove(force?: boolean, options?: { refresh?: boolean }) {
+    const vector = moveVectorRef.current;
+    moveVectorRef.current = null;
+    setActiveMoveId(null);
+    if (moveTimerRef.current !== null) {
+      window.clearInterval(moveTimerRef.current);
+      moveTimerRef.current = null;
+    }
+    if (!cameraId || (!force && !vector)) return;
+    try {
+      await stopCameraPtz(cameraId, {
+        ...(preferredPtzSourceId ? { source_id: preferredPtzSourceId } : {}),
+        pan_tilt: force || Boolean(vector && (Math.abs(vector.pan) > 1e-6 || Math.abs(vector.tilt) > 1e-6)),
+        zoom: force || Boolean(vector && Math.abs(vector.zoom) > 1e-6),
+      });
+      if (options?.refresh === false) return;
+      await waitForPtzSettle();
+      await refreshSnapshot();
+      onSnapshotRefreshRequested();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function beginMove(moveId: string, vector: { pan: number; tilt: number; zoom: number }) {
+    if (!cameraId || busy) return;
+    moveVectorRef.current = vector;
+    setSelectedPresetToken("");
+    setActiveMoveId(moveId);
+    const send = async () => {
+      try {
+        await moveCameraPtz(cameraId, {
+          ...(preferredPtzSourceId ? { source_id: preferredPtzSourceId } : {}),
+          ...vector,
+          timeout_s: PTZ_MOVE_TIMEOUT_S,
+        });
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : String(error));
+        await stopMove(true);
+      }
+    };
+    void send();
+    if (moveTimerRef.current !== null) window.clearInterval(moveTimerRef.current);
+    moveTimerRef.current = window.setInterval(() => {
+      void send();
+    }, PTZ_MOVE_REPEAT_MS);
+  }
+
+  async function gotoPreset(token: string) {
+    const preset = presets.find((item) => item.token === token) ?? null;
+    if (!preset) return;
+    setSelectedPresetToken(token);
+    setBusy(true);
+    setErrorMessage(null);
+    try {
+      await gotoCameraPtzPreset(cameraId, token, preferredPtzSourceId);
+      const nextStatus = await waitForPtzSettle();
+      await refreshSnapshot();
+      const pose = poseFromStatus(nextStatus, preset);
+      if (pose) onCapture(pose);
+      onSnapshotRefreshRequested();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function renderMoveButton(control: (typeof panTiltControls)[number] | (typeof zoomControls)[number]) {
+    return (
+      <button
+        key={control.id}
+        type="button"
+        className="iconButton"
+        aria-label={control.label}
+        title={control.label}
+        onMouseDown={() => (control.id === "stop" ? void stopMove(true) : beginMove(control.id, control.vector))}
+        onMouseUp={() => void stopMove()}
+        onMouseLeave={() => void stopMove()}
+        style={{ background: activeMoveId === control.id ? "rgba(56,189,248,0.14)" : undefined }}
+      >
+        <i className={`fa-solid ${control.icon}`} aria-hidden="true" />
+      </button>
+    );
+  }
+
+  if (!open) return null;
+
+  return (
+    <SubModal open={open} onClose={() => void stopMove(true, { refresh: false }).then(onClose)} title={t("ext.cameras.calibration.position_camera")}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div className="card" style={{ marginBottom: 0 }}>
+          <div className="cardBody" style={{ padding: 10 }}>
+            {snapshotUrl ? (
+              <img src={snapshotUrl} alt="" style={{ display: "block", width: "100%", maxHeight: "48vh", objectFit: "contain", borderRadius: 10 }} />
+            ) : (
+              <div className="cardMeta">{t("ext.cameras.control.loading")}</div>
+            )}
+          </div>
+        </div>
+        <div className="rowWrap" style={{ gap: 8 }}>
+          <select
+            className="input"
+            style={{ maxWidth: 280 }}
+            value={selectedPresetToken}
+            onChange={(event) => {
+              const token = event.target.value;
+              setSelectedPresetToken(token);
+              if (token) void gotoPreset(token);
+            }}
+            disabled={busy}
+          >
+            <option value="">{t("ext.cameras.control.preset_optional")}</option>
+            {presets.map((preset) => (
+              <option key={preset.token} value={preset.token}>
+                {preset.name || preset.token}
+              </option>
+            ))}
+          </select>
+          <button
+            className="primaryButton"
+            type="button"
+            onClick={() => {
+              const pose = poseFromStatus(status, null);
+              if (pose) onCapture(pose, selectedView?.label ?? null);
+              onSnapshotRefreshRequested();
+              onClose();
+            }}
+          >
+            {t("ext.cameras.calibration.capture_pose")}
+          </button>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 18, alignItems: "flex-start" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 46px)", gap: 8 }}>
+            <div aria-hidden="true" />
+            {panTiltControls.slice(0, 1).map(renderMoveButton)}
+            <div aria-hidden="true" />
+            {panTiltControls.slice(1, 4).map(renderMoveButton)}
+            <div aria-hidden="true" />
+            {panTiltControls.slice(4).map(renderMoveButton)}
+            <div aria-hidden="true" />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "46px", gap: 8 }}>
+            {zoomControls.map(renderMoveButton)}
+          </div>
+        </div>
+        <div className="cardMeta">
+          {t("ext.cameras.control.pose_pan")}: {formatPtzTelemetryValue(status?.pan)} · {t("ext.cameras.control.pose_tilt")}:{" "}
+          {formatPtzTelemetryValue(status?.tilt)} · {t("ext.cameras.control.pose_zoom")}: {formatPtzTelemetryValue(status?.zoom)}
+        </div>
+        {errorMessage ? <div className="errorText">{errorMessage}</div> : null}
+      </div>
+    </SubModal>
   );
 }
 
@@ -1791,7 +3342,7 @@ function ControlPointsModal({
                 overflow: "hidden",
               }}
             >
-              <host.ui.Viewport2DReplica session={toolSession} style={{ width: "100%", height: "100%" }} />
+              <host.ui.Viewport2DReplica interactionMode="select" session={toolSession} style={{ width: "100%", height: "100%" }} />
             </div>
           </div>
         </div>

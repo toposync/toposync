@@ -189,6 +189,38 @@ export type CameraMappingQuality = {
   is_pose_bound: boolean;
 };
 
+export type CameraProjectionCornerKey = "top_left" | "top_right" | "bottom_right" | "bottom_left";
+
+export type CameraProjectionWorldQuad = Record<CameraProjectionCornerKey, { x: number; z: number }>;
+
+export type CameraImageRegion = {
+  top_left: { x: number; y: number };
+  bottom_right: { x: number; y: number };
+};
+
+export type CameraProjectionModel = {
+  type: "image_quad_on_world";
+  image_region: CameraImageRegion;
+  world_quad: CameraProjectionWorldQuad;
+  future_mesh?: null;
+};
+
+export type CameraCalibratedView = {
+  id: string;
+  label: string;
+  pose_reference?: CameraPoseReference | null;
+  stream_scope?: {
+    compatible_roles?: string[];
+    compatible_source_ids?: string[];
+  };
+  projection_model: CameraProjectionModel;
+  projection_quality?: {
+    status?: "ready" | "estimated" | "incomplete";
+    estimated?: boolean;
+    note?: string | null;
+  };
+};
+
 export type PanTiltZoomState = {
   pan?: number | null;
   tilt?: number | null;
@@ -218,6 +250,7 @@ export type CameraContextCameraElement = {
   id: string;
   name: string;
   control_points_pairs: number;
+  calibrated_views?: number;
   has_mapping: boolean;
 };
 

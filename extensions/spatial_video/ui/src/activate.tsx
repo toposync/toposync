@@ -1,9 +1,11 @@
 import React from "react";
 import type { TopoSyncHost } from "@toposync/plugin-api";
 
+import { SpatialVideo3DView } from "./SpatialVideo3DView";
 import { SpatialVideoView } from "./SpatialVideoView";
 import {
   readSpatialVideoSettings,
+  SPATIAL_VIDEO_3D_RENDER_VIEW_ID,
   SPATIAL_VIDEO_MESH_DENSITY_OPTIONS,
   SPATIAL_VIDEO_PROJECTION_OPTIONS,
   SPATIAL_VIDEO_RENDER_VIEW_ID,
@@ -73,5 +75,17 @@ export function activate(host: TopoSyncHost): void {
         </div>
       );
     },
+  });
+
+  host.registerRenderView({
+    id: SPATIAL_VIDEO_3D_RENDER_VIEW_ID,
+    name: { key: "ext.spatial_video.render_3d.title", fallback: "Visão 360 3D" },
+    description: {
+      key: "ext.spatial_video.render_3d.desc",
+      fallback: "Projeta câmeras ao vivo mapeadas em uma cena 3D.",
+    },
+    icon: "cube",
+    order: 41,
+    render: (ctx) => <SpatialVideo3DView {...ctx} />,
   });
 }

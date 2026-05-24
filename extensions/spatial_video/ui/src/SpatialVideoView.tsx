@@ -5,17 +5,19 @@ import type {
   BoundsXZ,
   CompositionElement,
   ElementType,
-  Main2DMarker,
   RenderViewContext,
 } from "@toposync/plugin-api";
 
 import { fetchCameraPtzPresets, fetchCameraPtzStatus, fetchLiveViews } from "./api";
 import { resolveProjectionCandidates } from "./candidates";
-import { projectionStrategies, type ProjectionMeshDensity, type ProjectionStrategyId } from "./projection";
+import { markerEntries, markerVideoStatus, type MarkerVideoStatus } from "./markers";
+import type { ProjectionMeshDensity, ProjectionStrategyId } from "./projection";
+import { createProjectionGeometry } from "./projectionGeometry";
 import { resolveActiveProjectionPose } from "./ptzProjection";
 import { readSpatialVideoSettings, SPATIAL_VIDEO_RENDER_VIEW_ID } from "./spatialSettings";
-import { StreamTextureSource, type StreamTextureSnapshot } from "./streamTexture";
-import type { CameraControlPointSet, CameraLiveView, ProjectionCandidate, PtzPreset, PtzStatus } from "./types";
+import { SpatialVideoCompatibilityNotice } from "./SpatialVideoCompatibilityNotice";
+import { StreamTextureSource } from "./streamTexture";
+import type { CameraLiveView, PtzPreset, PtzStatus } from "./types";
 
 type ProjectionEntry = {
   candidateId: string;
@@ -149,71 +151,6 @@ function boundsChanged(a: BoundsXZ, b: BoundsXZ): boolean {
   );
 }
 
-function createProjectionGeometry(
-  set: CameraControlPointSet,
-  strategyId: ProjectionStrategyId,
-  meshDensity: ProjectionMeshDensity,
-): THREE.BufferGeometry | null {
-  const meshData = projectionStrategies[strategyId].buildMesh(set, { gridDivisions: meshDensity });
-  if (!meshData) return null;
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.BufferAttribute(meshData.positions, 3));
-  geometry.setAttribute("uv", new THREE.BufferAttribute(meshData.uvs, 2));
-  geometry.setIndex(new THREE.BufferAttribute(meshData.indices, 1));
-  geometry.computeBoundingSphere();
-  return geometry;
-}
-
-function snapshotLabel(snapshot: StreamTextureSnapshot): string {
-  if (snapshot.status === "playing") return `${snapshot.transport?.toUpperCase() ?? "VIDEO"} ao vivo`;
-  if (snapshot.status === "loading") return "Aquecendo";
-  if (snapshot.status === "error") return snapshot.message;
-  return "Aguardando";
-}
-
-type MarkerVideoStatus = {
-  kind: "loading" | "error" | "unmatched";
-  icon: string;
-  title: string;
-  color: string;
-  background: string;
-  border: string;
-};
-
-function markerVideoStatus(snapshot: StreamTextureSnapshot | null, poseStatus: string | null | undefined): MarkerVideoStatus | null {
-  if (poseStatus === "unmatched") {
-    return {
-      kind: "unmatched",
-      icon: "location-dot",
-      title: "Pose atual sem mapeamento de projeção.",
-      color: "rgb(251,191,36)",
-      background: "rgba(120,53,15,0.92)",
-      border: "rgba(251,191,36,0.72)",
-    };
-  }
-  if (snapshot?.status === "error") {
-    return {
-      kind: "error",
-      icon: "triangle-exclamation",
-      title: snapshot.message || "Falha na transmissão espacial.",
-      color: "rgb(254,202,202)",
-      background: "rgba(127,29,29,0.94)",
-      border: "rgba(248,113,113,0.78)",
-    };
-  }
-  if (!snapshot || snapshot.status === "idle" || snapshot.status === "loading") {
-    return {
-      kind: "loading",
-      icon: "spinner",
-      title: snapshot ? snapshotLabel(snapshot) : "Aquecendo transmissão.",
-      color: "rgb(186,230,253)",
-      background: "rgba(12,74,110,0.94)",
-      border: "rgba(125,211,252,0.78)",
-    };
-  }
-  return null;
-}
-
 function elementLayerRank(element: CompositionElement, elementTypesById: Record<string, ElementType>): number {
   const group = elementTypesById[element.type]?.layerGroup ?? "";
   if (group === "background") return -1;
@@ -342,21 +279,6 @@ function worldToScreen(point: { x: number; z: number }, rect: DOMRect, bounds: B
     x: ((point.x - bounds.minX) / Math.max(1e-6, bounds.maxX - bounds.minX)) * rect.width,
     y: ((point.z - bounds.minZ) / Math.max(1e-6, bounds.maxZ - bounds.minZ)) * rect.height,
   };
-}
-
-function markerEntries(elements: CompositionElement[], elementTypesById: Record<string, ElementType>): Array<{ elementId: string; marker: Main2DMarker }> {
-  const out: Array<{ elementId: string; marker: Main2DMarker }> = [];
-  for (const element of elements) {
-    const def = elementTypesById[element.type];
-    if (!def?.getMain2DMarker) continue;
-    try {
-      const marker = def.getMain2DMarker({ element });
-      if (marker) out.push({ elementId: marker.elementId || element.id, marker });
-    } catch (error) {
-      console.warn(`[spatial-video:getMain2DMarker:${element.type}]`, error);
-    }
-  }
-  return out;
 }
 
 export function SpatialVideoView({
@@ -856,26 +778,11 @@ export function SpatialVideoView({
           </button>
         ))}
       </div>
-      {liveViewsLoading || liveViewsError || candidates.length === 0 ? (
-        <div
-          style={{
-            position: "absolute",
-            left: 18,
-            bottom: 18,
-            maxWidth: 420,
-            pointerEvents: "none",
-            zIndex: 4,
-          }}
-        >
-          {liveViewsLoading ? (
-            <div className="card" style={{ padding: 12 }}>Carregando transmissões mapeadas...</div>
-          ) : liveViewsError ? (
-            <div className="card" style={{ padding: 12 }}>Falha ao carregar transmissões: {liveViewsError}</div>
-          ) : (
-            <div className="card" style={{ padding: 12 }}>Nenhuma câmera mapeada com transmissão ativa nesta composição.</div>
-          )}
-        </div>
-      ) : null}
+      <SpatialVideoCompatibilityNotice
+        loading={liveViewsLoading}
+        error={liveViewsError}
+        hasCompatibleProjection={candidates.length > 0}
+      />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import type { ProjectionMeshDensity, ProjectionStrategyId } from "./projection";
 
 export const SPATIAL_VIDEO_RENDER_VIEW_ID = "spatial_video";
+export const SPATIAL_VIDEO_3D_RENDER_VIEW_ID = "spatial_video_3d";
 
 export type SpatialVideoSettings = {
   projectionStrategyId: ProjectionStrategyId;
@@ -36,17 +37,17 @@ export const SPATIAL_VIDEO_MESH_DENSITY_OPTIONS: Array<{
 }> = [
   {
     id: 34,
-    label: "L34",
+    label: "34",
     description: "Equilíbrio padrão entre suavidade e custo de GPU.",
   },
   {
     id: 64,
-    label: "L64",
+    label: "64",
     description: "Mais detalhe para projeções curvas ou próximas.",
   },
   {
     id: 96,
-    label: "L96",
+    label: "96",
     description: "Malha densa para validação fina; use apenas quando necessário.",
   },
 ];

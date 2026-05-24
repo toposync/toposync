@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 
 METRIC_MOTION_SCORE = "motion.score"
+METRIC_ONVIF_GATE_OPEN = "onvif.gate_open"
 METRIC_VISION_CONFIDENCE = "vision.confidence"
 METRIC_AI_CONDITION_CONFIDENCE = "ai.condition_filter.confidence"
 METRIC_STORE_IMAGE = "store.image"
@@ -1575,6 +1576,14 @@ def create_default_pipeline_telemetry_store() -> PipelineTelemetryStore | None:
                 histogram_max=0.10,
                 histogram_bins=120,
                 min_sample_interval_s=motion_sample_interval,
+            ),
+            NumericMetricSpec(
+                metric_id=METRIC_ONVIF_GATE_OPEN,
+                window_seconds=window_seconds,
+                bucket_seconds=bucket_seconds,
+                histogram_min=0.0,
+                histogram_max=1.0,
+                histogram_bins=2,
             ),
             NumericMetricSpec(
                 metric_id=METRIC_VISION_CONFIDENCE,

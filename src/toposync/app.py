@@ -77,6 +77,7 @@ from toposync.runtime.pipelines.telemetry import (
     MAX_IMAGE_MARKER_QUERY_LIMIT,
     METRIC_AI_CONDITION_CONFIDENCE,
     METRIC_MOTION_SCORE,
+    METRIC_ONVIF_GATE_OPEN,
     METRIC_STORE_IMAGE,
     METRIC_VISION_CONFIDENCE,
     create_default_pipeline_telemetry_disk_checkpoint,
@@ -110,6 +111,7 @@ from toposync.runtime.pipelines.templates import (
 logger = logging.getLogger("toposync")
 DEFAULT_PIPELINES_TELEMETRY_METRICS = [
     METRIC_MOTION_SCORE,
+    METRIC_ONVIF_GATE_OPEN,
     METRIC_VISION_CONFIDENCE,
     METRIC_AI_CONDITION_CONFIDENCE,
 ]

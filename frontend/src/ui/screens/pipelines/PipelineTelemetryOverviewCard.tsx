@@ -126,7 +126,7 @@ function TelemetryMarkerImage({ src, alt }: { src: string; alt: string }): React
 const RANGE_SHORT_SECONDS = 2 * 60 * 60;
 const RANGE_DEFAULT_SECONDS = 24 * 60 * 60;
 const RANGE_LONG_SECONDS = 3 * 24 * 60 * 60;
-const AGGREGATE_METRIC_IDS = ["motion.score", "vision.confidence", "ai.condition_filter.confidence"];
+const AGGREGATE_METRIC_IDS = ["motion.score", "onvif.gate_open", "vision.confidence", "ai.condition_filter.confidence"];
 const MARKER_FETCH_LIMIT = 40_000;
 const MARKER_CLUSTER_DISTANCE = 9;
 const MARKER_CLUSTER_SPAN_LIMIT = 18;
@@ -168,6 +168,7 @@ function clamp01(value: number): number {
 
 function metricLabel(metricId: string, t: TranslateFn): string {
   if (metricId === "motion.score") return t("core.ui.pipelines.telemetry.metric.motion_score", {}, "Motion score");
+  if (metricId === "onvif.gate_open") return t("core.ui.pipelines.telemetry.metric.onvif_gate_open", {}, "ONVIF condition");
   if (metricId === "vision.confidence") return t("core.ui.pipelines.telemetry.metric.yolo_confidence", {}, "Vision confidence");
   if (metricId === "ai.condition_filter.confidence") return t("core.ui.pipelines.telemetry.metric.ai_condition_confidence", {}, "AI filter confidence");
   return metricId;
@@ -531,6 +532,10 @@ export function PipelineTelemetryOverviewCard({
         step.operatorId === "camera.motion_sample_bg"
       ) {
         const item = { nodeId: step.nodeId, metricId: "motion.score" };
+        unique.set(`${item.metricId}:${item.nodeId}`, item);
+      }
+      if (step.operatorId === "camera.onvif_state_gate") {
+        const item = { nodeId: step.nodeId, metricId: "onvif.gate_open" };
         unique.set(`${item.metricId}:${item.nodeId}`, item);
       }
       if (

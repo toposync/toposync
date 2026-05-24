@@ -11,6 +11,7 @@ This distribution installs:
 - `toposync-ext-images`
 - `toposync-ext-cameras`
 - `toposync-ext-vision`
+- `toposync-ext-spatial-video`
 - `onnxruntime`
 
 The official first-party vision runtime in this bundle is ONNX Runtime on CPU by default.

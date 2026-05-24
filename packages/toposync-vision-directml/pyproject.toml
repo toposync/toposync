@@ -1,19 +1,20 @@
 [project]
 name = "toposync-vision-directml"
-version = "0.6.0"
+version = "0.7.0"
 description = "Toposync application bundle with ONNX Runtime DirectML acceleration."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
-  "toposync-core==0.6.0",
-  "toposync-ext-structural==0.3.0",
-  "toposync-ext-models==0.3.0",
-  "toposync-ext-home-assistant==0.3.0",
-  "toposync-ext-images==0.3.0",
-  "toposync-ext-cameras==0.3.0",
-  "toposync-ext-vision==0.3.0",
+  "toposync-core==0.7.0",
+  "toposync-ext-structural==0.4.0",
+  "toposync-ext-models==0.4.0",
+  "toposync-ext-home-assistant==0.4.0",
+  "toposync-ext-images==0.4.0",
+  "toposync-ext-cameras==0.4.0",
+  "toposync-ext-vision==0.4.0",
+  "toposync-ext-spatial-video==0.4.0",
   "onnxruntime-directml>=1.20",
 ]
 
@@ -32,3 +33,4 @@ toposync-ext-home-assistant = { path = "../../extensions/home_assistant" }
 toposync-ext-images = { path = "../../extensions/images" }
 toposync-ext-cameras = { path = "../../extensions/cameras" }
 toposync-ext-vision = { path = "../../extensions/vision" }
+toposync-ext-spatial-video = { path = "../../extensions/spatial_video" }

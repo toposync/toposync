@@ -78,6 +78,7 @@ def test_extension_management_catalog_includes_loaded_and_recommended(
     catalog = response.json()
     active = _item_by_id(catalog, "com.test.active")
     ai = _item_by_id(catalog, "com.toposync.ai")
+    spatial_video = _item_by_id(catalog, "com.toposync.spatial_video")
     streaming = _item_by_id(catalog, "com.toposync.streaming")
 
     assert active["status"] == "active"
@@ -86,6 +87,9 @@ def test_extension_management_catalog_includes_loaded_and_recommended(
     assert ai["recommended"] is True
     assert ai["pip_spec"] == "toposync-ext-ai"
     assert ai["status"] in {"not_installed", "pending_restart", "active"}
+    assert spatial_video["recommended"] is True
+    assert spatial_video["pip_spec"] == "toposync-ext-spatial-video"
+    assert spatial_video["status"] in {"not_installed", "pending_restart", "active"}
     assert streaming["recommended"] is True
     assert streaming["pip_spec"] == "toposync-ext-streaming"
     assert streaming["status"] in {"not_installed", "pending_restart", "active"}

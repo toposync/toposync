@@ -83,6 +83,14 @@ RECOMMENDED_EXTENSIONS: tuple[RecommendedExtension, ...] = (
         category="pipeline",
     ),
     RecommendedExtension(
+        extension_id="com.toposync.spatial_video",
+        name="Spatial Video",
+        description="Projeta video de cameras calibradas em composicoes 3D.",
+        package="toposync-ext-spatial-video",
+        pip_spec="toposync-ext-spatial-video",
+        category="visual",
+    ),
+    RecommendedExtension(
         extension_id="com.toposync.ai",
         name="AI",
         description="Adiciona provedores de IA, fallback e operadores visuais para pipelines.",

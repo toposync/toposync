@@ -220,6 +220,7 @@ O pacote `toposync` já instala o conjunto padrão:
 - `toposync-ext-images`
 - `toposync-ext-cameras`
 - `toposync-ext-vision`
+- `toposync-ext-spatial-video`
 - `onnxruntime`
 
 Esse é o bundle padrão em CPU.

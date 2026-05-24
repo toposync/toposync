@@ -357,6 +357,8 @@ export type Viewport2DReplicaProps = {
   className?: string;
   style?: import("react").CSSProperties;
   session?: EditorToolSession | null;
+  initialFit?: "content";
+  interactionMode?: "navigate" | "select";
 };
 
 export type LiveViewPlayerProps = {

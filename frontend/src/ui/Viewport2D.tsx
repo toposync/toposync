@@ -12,6 +12,7 @@ import type {
 } from "@toposync/plugin-api";
 
 import { i18n } from "../util/i18n";
+import { computeMain2DBounds, padBounds } from "./main2d/shared";
 import { DEFAULT_THEME_ID } from "../util/theme";
 
 type Props = {
@@ -34,6 +35,7 @@ type Props = {
   onEndUndoGroup?: () => void;
   onUndo?: () => void;
   onRedo?: () => void;
+  initialFit?: "content";
 };
 
 function toVector2(x: number, y: number): Vector2 {
@@ -367,6 +369,7 @@ export function Viewport2D({
   onEndUndoGroup,
   onUndo,
   onRedo,
+  initialFit,
 }: Props): React.ReactElement {
   const { locale } = i18n.useI18n();
 
@@ -383,6 +386,7 @@ export function Viewport2D({
   const interactionModeRef = useRef<"navigate" | "select">(interactionMode);
   const enableKeyboardShortcutsRef = useRef<boolean>(enableKeyboardShortcuts);
   const toolSnapToGridRef = useRef<boolean>(toolSnapToGrid);
+  const initialFitRef = useRef<Props["initialFit"]>(initialFit);
 
   const selectedRef = useRef<string[]>(selectedElementIds ?? []);
   const onSelectRef = useRef<Props["onSelectElements"]>(onSelectElements);
@@ -397,6 +401,7 @@ export function Viewport2D({
   const onRedoRef = useRef<Props["onRedo"]>(onRedo);
 
   const cameraRef = useRef<Camera2D>({ cx: 0, cz: 0, scale: 52 });
+  const initialFitAppliedRef = useRef(false);
   const interactionRef = useRef<Interaction>({ kind: "none" });
   const hoverRef = useRef<string | null>(null);
   const rotateHoverRef = useRef(false);
@@ -438,6 +443,12 @@ export function Viewport2D({
   useEffect(() => {
     toolSnapToGridRef.current = toolSnapToGrid;
   }, [toolSnapToGrid]);
+
+  useEffect(() => {
+    initialFitRef.current = initialFit;
+    initialFitAppliedRef.current = false;
+    drawRef.current?.();
+  }, [initialFit]);
 
   useEffect(() => {
     hiddenElementIdsRef.current = new Set(hiddenElementIds ?? []);
@@ -642,6 +653,26 @@ export function Viewport2D({
 
     drawRef.current = requestDraw;
 
+    function applyInitialFitIfNeeded(width: number, height: number) {
+      if (initialFitRef.current !== "content") return;
+      if (initialFitAppliedRef.current) return;
+      if (width <= 0 || height <= 0) return;
+      if (elementsRef.current.length === 0) return;
+
+      const bounds = padBounds(computeMain2DBounds(elementsRef.current, elementTypesRef.current), 0.08, 0.5);
+      const spanX = Math.max(1e-6, bounds.maxX - bounds.minX);
+      const spanZ = Math.max(1e-6, bounds.maxZ - bounds.minZ);
+      const usableWidth = Math.max(1, width - 32);
+      const usableHeight = Math.max(1, height - 32);
+      const scale = Math.max(4, Math.min(260, Math.min(usableWidth / spanX, usableHeight / spanZ)));
+      cameraRef.current = {
+        cx: (bounds.minX + bounds.maxX) / 2,
+        cz: (bounds.minZ + bounds.maxZ) / 2,
+        scale,
+      };
+      initialFitAppliedRef.current = true;
+    }
+
     function resize() {
       const dpr = window.devicePixelRatio || 1;
       const w = canvasEl.clientWidth;
@@ -649,12 +680,14 @@ export function Viewport2D({
       canvasEl.width = Math.max(1, Math.floor(w * dpr));
       canvasEl.height = Math.max(1, Math.floor(h * dpr));
       ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+      applyInitialFitIfNeeded(w, h);
       requestDraw();
     }
 
     function draw() {
       const w = canvasEl.clientWidth;
       const h = canvasEl.clientHeight;
+      applyInitialFitIfNeeded(w, h);
 
       ctx2d.clearRect(0, 0, w, h);
       const signature = stylesSignature();

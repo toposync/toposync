@@ -57,6 +57,18 @@ function includeBounds(bounds: BoundsXZ & { empty?: boolean }, input: BoundsXZ |
 }
 
 function includeControlPointBounds(bounds: BoundsXZ & { empty?: boolean }, element: CompositionElement): void {
+  const calibratedViews = Array.isArray(element.props?.calibrated_views) ? element.props.calibrated_views : [];
+  for (const rawView of calibratedViews) {
+    const view = readRecord(rawView);
+    const projection = readRecord(view.projection_model);
+    const quad = readRecord(projection.world_quad);
+    for (const corner of ["top_left", "top_right", "bottom_right", "bottom_left"]) {
+      const point = readRecord(quad[corner]);
+      const x = finiteNumber(point.x);
+      const z = finiteNumber(point.z);
+      if (x != null && z != null) includePoint(bounds, { x, z }, 0.12);
+    }
+  }
   const sets = Array.isArray(element.props?.control_point_sets) ? element.props.control_point_sets : [];
   for (const rawSet of sets) {
     const set = readRecord(rawSet);

@@ -519,7 +519,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       },
       i18n,
       ui: {
-        Viewport2DReplica: ({ session, className, style }) => {
+        Viewport2DReplica: ({ session, className, style, initialFit, interactionMode }) => {
           const currentComposition = useSyncExternalStore(
             compositionStore.subscribe,
             compositionStore.getSnapshot,
@@ -536,10 +536,11 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
               <Viewport2D
                 elements={currentComposition.elements}
                 elementTypesById={currentElementTypes}
-                interactionMode="navigate"
+                interactionMode={interactionMode ?? "navigate"}
                 activeToolSession={session ?? null}
                 enableKeyboardShortcuts={false}
                 toolSnapToGrid={false}
+                initialFit={initialFit}
               />
             </div>
           );

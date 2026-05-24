@@ -22,6 +22,10 @@ export type CameraControlPointSet = {
   id: string;
   label: string;
   pose_reference?: CameraPoseReference | null;
+  stream_scope?: {
+    compatible_roles?: string[];
+    compatible_source_ids?: string[];
+  };
   control_points?: CameraControlPoint[];
 };
 

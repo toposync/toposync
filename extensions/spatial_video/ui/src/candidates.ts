@@ -10,6 +10,16 @@ function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    const normalized = readString(item);
+    if (normalized && !out.includes(normalized)) out.push(normalized);
+  }
+  return out;
+}
+
 function hasNumberPair(value: unknown, keys: readonly string[]): boolean {
   const rec = readRecord(value);
   return keys.every((key) => typeof rec[key] === "number" && Number.isFinite(rec[key]));
@@ -21,6 +31,61 @@ export function completeControlPointCount(set: CameraControlPointSet): number {
 
 export function mappedControlPointSets(element: CompositionElement): CameraControlPointSet[] {
   const props = readRecord(element.props);
+  const calibratedViews = Array.isArray(props.calibrated_views) ? props.calibrated_views : [];
+  const mappedViews = calibratedViews
+    .map((item, index): CameraControlPointSet | null => {
+      const rec = readRecord(item);
+      const id = readString(rec.id) || `${element.id}:calibrated-view:${index}`;
+      const label = readString(rec.label) || `Vista ${index + 1}`;
+      const projection = readRecord(rec.projection_model);
+      const imageRegion = readRecord(projection.image_region);
+      const worldQuad = readRecord(projection.world_quad);
+      const topLeftImage = readRecord(imageRegion.top_left);
+      const bottomRightImage = readRecord(imageRegion.bottom_right);
+      const corners = {
+        top_left: readRecord(worldQuad.top_left),
+        top_right: readRecord(worldQuad.top_right),
+        bottom_right: readRecord(worldQuad.bottom_right),
+        bottom_left: readRecord(worldQuad.bottom_left),
+      };
+      if (
+        !hasNumberPair(topLeftImage, ["x", "y"]) ||
+        !hasNumberPair(bottomRightImage, ["x", "y"]) ||
+        !hasNumberPair(corners.top_left, ["x", "z"]) ||
+        !hasNumberPair(corners.top_right, ["x", "z"]) ||
+        !hasNumberPair(corners.bottom_right, ["x", "z"]) ||
+        !hasNumberPair(corners.bottom_left, ["x", "z"])
+      ) {
+        return null;
+      }
+      const streamScope = readRecord(rec.stream_scope);
+      return {
+        id,
+        label,
+        pose_reference: readRecord(rec.pose_reference),
+        stream_scope: {
+          compatible_roles: readStringArray(streamScope.compatible_roles),
+          compatible_source_ids: readStringArray(streamScope.compatible_source_ids),
+        },
+        control_points: [
+          { id: "top_left", image: topLeftImage as { x: number; y: number }, world: corners.top_left as { x: number; z: number } },
+          {
+            id: "top_right",
+            image: { x: Number(bottomRightImage.x), y: Number(topLeftImage.y) },
+            world: corners.top_right as { x: number; z: number },
+          },
+          { id: "bottom_right", image: bottomRightImage as { x: number; y: number }, world: corners.bottom_right as { x: number; z: number } },
+          {
+            id: "bottom_left",
+            image: { x: Number(topLeftImage.x), y: Number(bottomRightImage.y) },
+            world: corners.bottom_left as { x: number; z: number },
+          },
+        ],
+      };
+    })
+    .filter((item): item is CameraControlPointSet => Boolean(item));
+  if (mappedViews.length > 0) return mappedViews;
+
   const raw = Array.isArray(props.control_point_sets) ? props.control_point_sets : [];
   return raw
     .map((item, index): CameraControlPointSet | null => {
@@ -32,6 +97,7 @@ export function mappedControlPointSets(element: CompositionElement): CameraContr
         id,
         label,
         pose_reference: readRecord(rec.pose_reference),
+        stream_scope: { compatible_roles: ["main", "sub"], compatible_source_ids: [] },
         control_points: controlPoints as CameraControlPointSet["control_points"],
       };
       return completeControlPointCount(set) >= 4 ? set : null;
@@ -64,11 +130,25 @@ export function resolveProjectionCandidates(
     const variants = (liveView.variants ?? []).filter((variant) => variant.enabled !== false);
     if (variants.length === 0) continue;
 
+    const preferredSet = sets[0];
+    const compatibleRoles = preferredSet.stream_scope?.compatible_roles?.length
+      ? preferredSet.stream_scope.compatible_roles
+      : ["main", "sub"];
+    const compatibleSourceIds = preferredSet.stream_scope?.compatible_source_ids ?? [];
+    const compatibleVariants = variants.filter((variant) => {
+      const roleOk = compatibleRoles.includes(String(variant.role || ""));
+      const sourceId = String(variant.camera_source_id || "").trim();
+      const sourceOk = compatibleSourceIds.length === 0 || compatibleSourceIds.includes(sourceId);
+      return roleOk && sourceOk;
+    });
+    if (compatibleVariants.length === 0) continue;
+    const variantPool = compatibleVariants;
     const preferredVariant =
-      variants.find((variant) => variant.role === "sub") ??
-      variants.find((variant) => variant.role === "thumbnail") ??
-      variants.find((variant) => variant.role === "main") ??
-      variants[0] ??
+      variantPool.find((variant) => variant.role === "sub") ??
+      variantPool.find((variant) => variant.role === "thumbnail") ??
+      variantPool.find((variant) => variant.role === "main") ??
+      variantPool.find((variant) => variant.role === "custom") ??
+      variantPool[0] ??
       null;
 
     out.push({

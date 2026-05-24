@@ -7,6 +7,7 @@ import type {
   HostApi,
   Notification,
   NotificationRenderer,
+  RenderViewDefinition,
   ViewSettings,
 } from "@toposync/plugin-api";
 
@@ -43,6 +44,7 @@ type Props = {
   notificationsHasMore: boolean;
   activeNotificationId: string | null;
   notificationsLoading: boolean;
+  renderViews: RenderViewDefinition[];
   onSelectNotification: (notificationId: string) => void;
   onLoadMoreNotifications: () => void;
   api: HostApi;
@@ -217,10 +219,17 @@ function expectedFilteredCount(filter: NotificationsFilter, count: Notifications
   return total;
 }
 
-type RenderMode = "3d" | "2d" | "vector2d" | "streams";
+type BuiltinRenderMode = "3d" | "2d" | "vector2d" | "streams";
+type RenderMode = BuiltinRenderMode | string;
 
 const RENDER_MODE_STORAGE_KEY = "toposync.render_mode.v1";
 const STREAMS_OVERLAY_IDLE_MS = 2500;
+
+const BUILTIN_RENDER_MODES = new Set<string>(["3d", "2d", "vector2d", "streams"]);
+
+function isBuiltinRenderMode(value: string): value is BuiltinRenderMode {
+  return BUILTIN_RENDER_MODES.has(value);
+}
 
 export function MainScreen({
   compositionName,
@@ -237,6 +246,7 @@ export function MainScreen({
   notificationsHasMore,
   activeNotificationId,
   notificationsLoading,
+  renderViews,
   onSelectNotification,
   onLoadMoreNotifications,
   api,
@@ -266,7 +276,7 @@ export function MainScreen({
   const [renderMode, setRenderMode] = useState<RenderMode>(() => {
     try {
       const saved = localStorage.getItem(RENDER_MODE_STORAGE_KEY);
-      return saved === "2d" || saved === "vector2d" || saved === "streams" ? saved : "3d";
+      return saved && saved.trim() ? saved.trim() : "3d";
     } catch {
       return "3d";
     }
@@ -677,6 +687,29 @@ export function MainScreen({
 
   const clearFilter = useCallback(() => setFilter({ ...DEFAULT_FILTER }), []);
 
+  const orderedRenderViews = useMemo(
+    () =>
+      [...renderViews]
+        .filter((view) => view.id && !isBuiltinRenderMode(view.id))
+        .sort((a, b) => (a.order ?? 1000) - (b.order ?? 1000) || a.id.localeCompare(b.id)),
+    [renderViews],
+  );
+  const activeRenderView = orderedRenderViews.find((view) => view.id === renderMode) ?? null;
+
+  useEffect(() => {
+    if (isBuiltinRenderMode(renderMode) || activeRenderView || !extensionsLoaded) return;
+    setRenderMode("3d");
+  }, [activeRenderView, extensionsLoaded, renderMode]);
+
+  const renderViewText = useCallback(
+    (value: RenderViewDefinition["name"] | RenderViewDefinition["description"] | undefined, fallback: string) => {
+      if (!value) return fallback;
+      if (typeof value === "string") return value;
+      return t(value.key, value.params, value.fallback ?? fallback);
+    },
+    [t],
+  );
+
   const renderModeLabel =
     renderMode === "3d"
       ? "3D"
@@ -684,7 +717,11 @@ export function MainScreen({
         ? "2D"
         : renderMode === "vector2d"
           ? t("core.ui.render_modal.option_vector2d.title", {}, "2D (Vector)")
-          : t("core.ui.render_modal.option_streams.title", {}, "Streams");
+          : renderMode === "streams"
+            ? t("core.ui.render_modal.option_streams.title", {}, "Streams")
+            : activeRenderView
+              ? renderViewText(activeRenderView.name, activeRenderView.id)
+              : t("core.ui.render_modal.option_loading.title", {}, "Loading view");
   const viewportLoadingMessage =
     renderMode === "streams"
       ? null
@@ -740,8 +777,36 @@ export function MainScreen({
               activeNotification={activeNotification}
               activeNotificationRenderer={activeNotificationRenderer}
             />
-          ) : (
+          ) : activeRenderView ? (
+            <>
+              {activeRenderView.render({
+                compositionId: activeCompositionId,
+                compositionName,
+                elements,
+                elementTypesById,
+                viewSettings,
+                activeNotification,
+                activeNotificationRenderer,
+                onElementActivated: handleElementActivated,
+                onOpenImage: (args) => {
+                  setImageModal({
+                    url: args.url,
+                    title: args.title ?? t("core.ui.image_preview"),
+                    subtitle: args.subtitle,
+                  });
+                },
+              })}
+            </>
+          ) : renderMode === "streams" ? (
             <StreamsDashboard uiVisible={streamsOverlayVisible} isActive={renderMode === "streams"} />
+          ) : (
+            <div className="viewportRoot mainViewportLoadingRoot">
+              <div className="mainViewportLoadingCard">
+                <div className="mainViewportLoadingText">
+                  {t("core.ui.render_modal.option_unavailable", {}, "This render view is not available.")}
+                </div>
+              </div>
+            </div>
           )}
         </>
       )}
@@ -1124,6 +1189,31 @@ export function MainScreen({
               {t("core.ui.render_modal.option_streams.desc", {}, "Display configured transmissions in a paged live dashboard.")}
             </div>
           </div>
+          {orderedRenderViews.map((view) => {
+            const title = renderViewText(view.name, view.id);
+            const desc = renderViewText(view.description, "");
+            return (
+              <div
+                key={view.id}
+                className={["choiceItem", renderMode === view.id ? "isSelected" : ""].filter(Boolean).join(" ")}
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setRenderMode(view.id);
+                  setIsRenderModalOpen(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    setRenderMode(view.id);
+                    setIsRenderModalOpen(false);
+                  }
+                }}
+              >
+                <div className="choiceTitle">{title}</div>
+                {desc ? <div className="choiceDesc">{desc}</div> : null}
+              </div>
+            );
+          })}
         </div>
       </Modal>
 

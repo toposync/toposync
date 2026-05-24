@@ -362,6 +362,27 @@ export type HostUi = {
   Viewport2DReplica: (props: Viewport2DReplicaProps) => import("react").ReactNode;
 };
 
+export type RenderViewContext = {
+  compositionId: string;
+  compositionName: string;
+  elements: CompositionElement[];
+  elementTypesById: Record<string, ElementType>;
+  viewSettings: ViewSettings;
+  activeNotification?: Notification | null;
+  activeNotificationRenderer?: NotificationRenderer | null;
+  onElementActivated?: (elementId: string, intent?: "click" | "dblclick" | "longpress") => void;
+  onOpenImage?: (args: { url: string; title?: string; subtitle?: string }) => void;
+};
+
+export type RenderViewDefinition = {
+  id: string;
+  name: LocalizedString;
+  description?: LocalizedString;
+  icon?: string;
+  order?: number;
+  render: (ctx: RenderViewContext) => import("react").ReactNode;
+};
+
 export type EditorToolGroup = {
   id: string;
   name?: LocalizedString;
@@ -385,6 +406,7 @@ export type TopoSyncHost = {
   registerFileDropHandler: (handler: FileDropHandler) => void;
   registerSettingsPanel: (panel: SettingsPanel) => void;
   registerPipelineOperatorPanel: (panel: PipelineOperatorPanel) => void;
+  registerRenderView: (view: RenderViewDefinition) => void;
   registerTheme: (theme: ThemeDefinition) => void;
   api: HostApi;
   i18n: HostI18n;

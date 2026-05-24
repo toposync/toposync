@@ -2524,6 +2524,7 @@ extensions = [
     { name = "toposync-ext-home-assistant" },
     { name = "toposync-ext-images" },
     { name = "toposync-ext-models" },
+    { name = "toposync-ext-spatial-video" },
     { name = "toposync-ext-streaming" },
     { name = "toposync-ext-structural" },
     { name = "toposync-ext-vision" },
@@ -2551,6 +2552,7 @@ extensions = [
     { name = "toposync-ext-home-assistant", editable = "extensions/home_assistant" },
     { name = "toposync-ext-images", editable = "extensions/images" },
     { name = "toposync-ext-models", editable = "extensions/models" },
+    { name = "toposync-ext-spatial-video", editable = "extensions/spatial_video" },
     { name = "toposync-ext-streaming", editable = "extensions/streaming" },
     { name = "toposync-ext-structural", editable = "extensions/structural" },
     { name = "toposync-ext-vision", editable = "extensions/vision" },
@@ -2632,6 +2634,17 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "toposync-core", specifier = ">=0.3.0" }]
+
+[[package]]
+name = "toposync-ext-spatial-video"
+version = "0.1.0"
+source = { editable = "extensions/spatial_video" }
+dependencies = [
+    { name = "toposync-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "toposync-core", specifier = ">=0.6.0" }]
 
 [[package]]
 name = "toposync-ext-streaming"

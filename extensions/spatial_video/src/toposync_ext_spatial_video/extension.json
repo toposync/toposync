@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "id": "com.toposync.spatial_video",
+  "name": "Spatial Video",
+  "version": "0.1.0",
+  "frontend": {
+    "kind": "module-federation",
+    "remote_entry": "remoteEntry.js",
+    "scope": "spatial_video",
+    "module": "./activate"
+  }
+}

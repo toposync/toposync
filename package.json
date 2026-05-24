@@ -14,7 +14,7 @@
     "build:frontend": "npm --workspace @toposync/frontend run build",
     "typecheck:plugin-api": "npm --workspace @toposync/plugin-api run typecheck",
     "pack:plugin-api": "npm --workspace @toposync/plugin-api run pack:dry-run",
-    "build:extensions": "npm --workspace @toposync/extension-structural-ui run build && npm --workspace @toposync/extension-models-ui run build && npm --workspace @toposync/extension-home-assistant-ui run build && npm --workspace @toposync/extension-cameras-ui run build && npm --workspace @toposync/extension-images-ui run build && npm --workspace @toposync/extension-streaming-ui run build && npm --workspace @toposync/extension-ai-ui run build",
+    "build:extensions": "npm --workspace @toposync/extension-structural-ui run build && npm --workspace @toposync/extension-models-ui run build && npm --workspace @toposync/extension-home-assistant-ui run build && npm --workspace @toposync/extension-cameras-ui run build && npm --workspace @toposync/extension-images-ui run build && npm --workspace @toposync/extension-streaming-ui run build && npm --workspace @toposync/extension-ai-ui run build && npm --workspace @toposync/extension-spatial-video-ui run build",
     "test:stream-frames": "node scripts/check_stream_transport_frames.mjs",
     "test:e2e": "playwright test"
   },

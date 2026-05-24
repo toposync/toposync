@@ -4814,7 +4814,7 @@ def _build_camera_live_view_for_device(
 
 def _variant_id_for_context(live_view: CameraLiveView, context: StreamingCameraLiveContext) -> str:
     defaults = live_view.defaults
-    if context == "thumbnail":
+    if context in {"thumbnail", "spatial_map"}:
         return defaults.thumbnail_variant_id
     if context == "pip":
         return defaults.pip_variant_id

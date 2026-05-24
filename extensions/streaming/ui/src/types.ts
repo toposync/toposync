@@ -163,7 +163,7 @@ export type TransmissionUrlsResponse = {
   media_url_origin?: string | null;
 };
 
-export type CameraLiveContext = "thumbnail" | "pip" | "large" | "fullscreen" | "ptz";
+export type CameraLiveContext = "thumbnail" | "pip" | "large" | "fullscreen" | "ptz" | "spatial_map";
 export type StreamingPublicationOwnerKind = "camera_source" | "pipeline_output";
 export type StreamingLiveViewOwnerKind = "camera_source" | "pipeline_output" | "manual";
 export type StreamingPublicationRole = "main" | "sub" | "zoom" | "custom";

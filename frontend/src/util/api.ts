@@ -826,7 +826,7 @@ export type StreamingTransmission = {
   camera_live_variant_role?: string;
 };
 
-export type StreamingCameraLiveContext = "thumbnail" | "pip" | "large" | "fullscreen" | "ptz";
+export type StreamingCameraLiveContext = "thumbnail" | "pip" | "large" | "fullscreen" | "ptz" | "spatial_map";
 export type StreamingPublicationOwnerKind = "camera_source" | "pipeline_output";
 export type StreamingLiveViewOwnerKind = "camera_source" | "pipeline_output" | "manual";
 export type StreamingPublicationRole = "main" | "sub" | "zoom" | "custom";

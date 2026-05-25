@@ -104,6 +104,80 @@ def test_normalize_manual_camera_keeps_rtsp_source_credentials() -> None:
     assert source["origin"]["stream_password"] == "stream-pass"
 
 
+def test_onvif_inspect_falls_back_to_common_ports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from toposync_ext_cameras.onvif import OnvifError, OnvifProfile
+    import toposync_ext_cameras.plugin as cameras_plugin
+
+    attempts: list[str] = []
+
+    class FakeOnvifClient:
+        def __init__(
+            self,
+            *,
+            xaddr: str,
+            username: str,
+            password: str,
+            timeout_s: float,
+            auth_mode: str,
+        ) -> None:
+            self.xaddr = xaddr
+            self.username = username
+            self.password = password
+            self.timeout_s = timeout_s
+            self.auth_mode = auth_mode
+
+        async def get_capabilities(self) -> tuple[str | None, str | None]:
+            attempts.append(self.xaddr)
+            if ":2020/" not in self.xaddr:
+                raise OnvifError("<urlopen error [Errno 111] Connection refused>")
+            return (
+                "http://192.168.0.10:2020/onvif/service",
+                "http://192.168.0.10:2020/onvif/service",
+            )
+
+        async def get_profiles(self, media_xaddr: str) -> list[OnvifProfile]:
+            assert media_xaddr == "http://192.168.0.10:2020/onvif/service"
+            return [
+                OnvifProfile(
+                    token="profile_1",
+                    name="mainStream",
+                    encoding="H264",
+                    width=1920,
+                    height=1080,
+                    fps=25,
+                )
+            ]
+
+        async def get_stream_uri(self, media_xaddr: str, *, profile_token: str) -> str:
+            assert media_xaddr == "http://192.168.0.10:2020/onvif/service"
+            assert profile_token == "profile_1"
+            return "rtsp://192.168.0.10/stream1"
+
+    monkeypatch.setattr(cameras_plugin, "OnvifClient", FakeOnvifClient)
+    with _create_client_with_cameras(tmp_path, monkeypatch) as client:
+        response = client.post(
+            "/api/cameras/onvif/inspect",
+            json={
+                "xaddr": "192.168.0.10",
+                "username": "camera",
+                "password": "secret",
+                "timeout_ms": 500,
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert attempts[:2] == [
+        "http://192.168.0.10/onvif/device_service",
+        "http://192.168.0.10:2020/onvif/device_service",
+    ]
+    assert body["xaddr"] == "http://192.168.0.10:2020/onvif/device_service"
+    assert body["media_xaddr"] == "http://192.168.0.10:2020/onvif/service"
+    assert body["profiles"][0]["stream_uri"] == "rtsp://192.168.0.10/stream1"
+
+
 def test_normalize_ignores_legacy_cameras_key() -> None:
     from toposync_ext_cameras.settings import normalize_cameras_settings
 

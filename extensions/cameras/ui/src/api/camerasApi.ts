@@ -27,6 +27,20 @@ type ControlPointMapResponse = {
   quality?: Record<string, unknown> | null;
 };
 
+async function readErrorDetail(response: Response, fallback: string): Promise<string> {
+  const text = await response.text().catch(() => "");
+  if (!text) return fallback;
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown };
+    const detail = parsed?.detail;
+    if (typeof detail === "string" && detail.trim()) return detail.trim();
+    if (Array.isArray(detail) && detail.length) return detail.map((item) => String(item)).join(" ");
+  } catch {
+    // Non-JSON error bodies are already useful enough to show directly.
+  }
+  return text;
+}
+
 function splitSourceAndSignal(
   sourceIdOrSignal?: string | AbortSignal,
   signal?: AbortSignal,
@@ -343,8 +357,7 @@ export async function inspectOnvif(
     signal,
   });
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(detail || `ONVIF inspect failed: ${response.status}`);
+    throw new Error(await readErrorDetail(response, `ONVIF inspect failed: ${response.status}`));
   }
   return response.json();
 }

@@ -11,6 +11,7 @@ from .client import (
     OnvifPtzStatus,
     normalize_onvif_xaddr,
     normalize_rtsp_url,
+    onvif_xaddr_candidates,
 )
 from .discovery import (
     OnvifDiscoveredDevice,
@@ -58,5 +59,6 @@ __all__ = [
     "parse_ws_discovery_probe_matches",
     "resolve_onvif_discovery_targets",
     "normalize_onvif_xaddr",
+    "onvif_xaddr_candidates",
     "normalize_rtsp_url",
 ]

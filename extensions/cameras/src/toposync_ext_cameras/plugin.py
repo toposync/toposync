@@ -58,6 +58,7 @@ from .onvif import (
     OnvifProfile,
     discover_onvif_devices,
     normalize_onvif_xaddr,
+    onvif_xaddr_candidates,
     resolve_onvif_discovery_targets,
 )
 
@@ -1568,24 +1569,41 @@ class CamerasExtension(BaseExtension):
 
         @app.post("/api/cameras/onvif/inspect", response_model=OnvifInspectResponse)
         async def onvif_inspect(body: OnvifInspectRequest) -> OnvifInspectResponse:
-            xaddr = normalize_onvif_xaddr(body.xaddr)
-            if not xaddr:
+            candidates = onvif_xaddr_candidates(body.xaddr)
+            if not candidates:
                 raise HTTPException(status_code=400, detail="xaddr is required")
 
             timeout_s = max(0.5, float(body.timeout_ms) / 1000.0)
-            client = OnvifClient(
-                xaddr=xaddr,
-                username=str(body.username or ""),
-                password=str(body.password or ""),
-                timeout_s=timeout_s,
-                auth_mode=body.auth,
-            )
-
             warnings: list[str] = []
-            try:
-                media_xaddr, ptz_xaddr = await client.get_capabilities()
-            except OnvifError as exc:
-                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            client: OnvifClient | None = None
+            xaddr = ""
+            media_xaddr: str | None = None
+            ptz_xaddr: str | None = None
+            errors: list[str] = []
+            for candidate in candidates:
+                candidate_client = OnvifClient(
+                    xaddr=candidate,
+                    username=str(body.username or ""),
+                    password=str(body.password or ""),
+                    timeout_s=timeout_s,
+                    auth_mode=body.auth,
+                )
+                try:
+                    media_xaddr, ptz_xaddr = await candidate_client.get_capabilities()
+                except OnvifError as exc:
+                    errors.append(f"{candidate}: {exc}")
+                    continue
+                client = candidate_client
+                xaddr = candidate
+                break
+
+            if client is None or not xaddr:
+                detail = (
+                    errors[-1]
+                    if len(errors) <= 1
+                    else "Could not reach ONVIF. Tried: " + "; ".join(errors)
+                )
+                raise HTTPException(status_code=502, detail=detail)
 
             profiles: list[OnvifProfileInfo] = []
             if media_xaddr:

@@ -23,6 +23,8 @@ TRT_NS = "http://www.onvif.org/ver10/media/wsdl"
 TT_NS = "http://www.onvif.org/ver10/schema"
 PTZ_NS = "http://www.onvif.org/ver20/ptz/wsdl"
 
+ONVIF_ALTERNATE_DEVICE_SERVICE_PORTS = (2020, 8000, 8080, 8899)
+
 
 class OnvifError(RuntimeError):
     pass
@@ -80,6 +82,79 @@ def normalize_onvif_xaddr(raw: str) -> str:
     if not path or path == "/":
         path = "/onvif/device_service"
     return urllib.parse.urlunsplit(parsed._replace(path=path))
+
+
+def onvif_xaddr_candidates(raw: str) -> list[str]:
+    primary = normalize_onvif_xaddr(raw)
+    if not primary:
+        return []
+
+    value = str(raw or "").strip()
+    parsed_input = _parse_onvif_input(value)
+    if parsed_input is None:
+        return [primary]
+
+    if _safe_parsed_port(parsed_input) is not None:
+        return [primary]
+
+    host = parsed_input.hostname
+    if not host:
+        return [primary]
+
+    if "://" in value:
+        scheme = str(parsed_input.scheme or "").lower()
+        if scheme != "http":
+            return [primary]
+        path = parsed_input.path or ""
+        if path not in {"", "/", "/onvif/device_service"}:
+            return [primary]
+    else:
+        scheme = "http"
+        path = parsed_input.path or ""
+        if path not in {"", "/"}:
+            return [primary]
+
+    primary_parsed = urllib.parse.urlsplit(primary)
+    candidate_path = primary_parsed.path or "/onvif/device_service"
+    candidates = [primary]
+    for port in ONVIF_ALTERNATE_DEVICE_SERVICE_PORTS:
+        candidate = urllib.parse.urlunsplit(
+            (
+                scheme,
+                _format_host_port(host, port),
+                candidate_path,
+                "",
+                "",
+            )
+        )
+        if candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
+
+
+def _parse_onvif_input(value: str) -> urllib.parse.SplitResult | None:
+    try:
+        if "://" in value:
+            parsed = urllib.parse.urlsplit(value)
+        else:
+            parsed = urllib.parse.urlsplit(f"//{value}")
+    except Exception:
+        return None
+    return parsed if parsed.netloc else None
+
+
+def _safe_parsed_port(parsed: urllib.parse.SplitResult) -> int | None:
+    try:
+        return parsed.port
+    except ValueError:
+        return None
+
+
+def _format_host_port(host: str, port: int) -> str:
+    value = str(host or "").strip()
+    if ":" in value and not value.startswith("["):
+        value = f"[{value}]"
+    return f"{value}:{int(port)}"
 
 
 def normalize_rtsp_url(raw: str) -> str:

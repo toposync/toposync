@@ -19,6 +19,29 @@ def test_normalize_onvif_xaddr_adds_default_path_when_missing() -> None:
     assert normalize_onvif_xaddr("http://192.168.0.10/") == "http://192.168.0.10/onvif/device_service"
 
 
+def test_onvif_xaddr_candidates_try_common_ports_for_plain_host() -> None:
+    from toposync_ext_cameras.onvif import onvif_xaddr_candidates
+
+    assert onvif_xaddr_candidates("192.168.0.10") == [
+        "http://192.168.0.10/onvif/device_service",
+        "http://192.168.0.10:2020/onvif/device_service",
+        "http://192.168.0.10:8000/onvif/device_service",
+        "http://192.168.0.10:8080/onvif/device_service",
+        "http://192.168.0.10:8899/onvif/device_service",
+    ]
+
+
+def test_onvif_xaddr_candidates_keep_explicit_port_or_path() -> None:
+    from toposync_ext_cameras.onvif import onvif_xaddr_candidates
+
+    assert onvif_xaddr_candidates("192.168.0.10:2020") == [
+        "http://192.168.0.10:2020/onvif/device_service"
+    ]
+    assert onvif_xaddr_candidates("http://192.168.0.10/custom/service") == [
+        "http://192.168.0.10/custom/service"
+    ]
+
+
 def test_normalize_rtsp_url_strips_credentials() -> None:
     from toposync_ext_cameras.onvif import normalize_rtsp_url
 

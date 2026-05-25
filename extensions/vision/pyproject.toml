@@ -1,6 +1,6 @@
 [project]
 name = "toposync-ext-vision"
-version = "0.4.1"
+version = "0.4.2"
 description = "Toposync first-party extension: task-oriented vision operators."
 readme = "README.md"
 license = "MIT"

@@ -518,6 +518,7 @@ def _hls_proxy_public_base_path(request: Request) -> str:
 
 MEDIA_TOKEN_SCOPE = "stream:media:read"
 LEGACY_HLS_MEDIA_TOKEN_SCOPE = "stream:hls:read"
+MAX_MEDIA_TOKEN_TTL_OVERRIDE_SECONDS = 1800.0
 
 
 def _hls_proxy_url(
@@ -651,9 +652,18 @@ def _issue_media_token(
     output: TransmissionOutput,
     engine_path: str,
     transport: Literal["hls", "mse", "jsmpeg"],
+    ttl_seconds: float | None = None,
 ) -> tuple[str, float, float]:
     now = time.time()
-    ttl_s = max(30.0, float(settings.engine.media_auth.token_ttl_seconds))
+    configured_ttl_s = max(30.0, float(settings.engine.media_auth.token_ttl_seconds))
+    if ttl_seconds is not None:
+        requested_ttl_s = max(
+            30.0,
+            min(float(ttl_seconds), MAX_MEDIA_TOKEN_TTL_OVERRIDE_SECONDS),
+        )
+        ttl_s = max(configured_ttl_s, requested_ttl_s)
+    else:
+        ttl_s = configured_ttl_s
     renew_margin_s = max(1.0, float(settings.engine.media_auth.renew_margin_seconds))
     expires_at = now + ttl_s
     renew_after = max(now, expires_at - min(renew_margin_s, ttl_s - 1.0))
@@ -680,6 +690,7 @@ def _issue_hls_media_token(
     transmission: Transmission,
     output: TransmissionOutput,
     engine_path: str,
+    ttl_seconds: float | None = None,
 ) -> tuple[str, float, float]:
     return _issue_media_token(
         config_store=config_store,
@@ -688,6 +699,7 @@ def _issue_hls_media_token(
         output=output,
         engine_path=engine_path,
         transport="hls",
+        ttl_seconds=ttl_seconds,
     )
 
 
@@ -1535,6 +1547,7 @@ async def _resolve_local_transmission_urls(
     transmission: Transmission,
     output_id: str | None = None,
     quality_profile_id: str | None = None,
+    media_token_ttl_seconds: float | None = None,
 ) -> TransmissionUrlsResponse:
     bridge = _writer_bridge(request)
     prime_demand = getattr(bridge, "prime_transmission_demand", None)
@@ -1672,6 +1685,7 @@ async def _resolve_local_transmission_urls(
                     transmission=transmission,
                     output=output,
                     engine_path=engine_path,
+                    ttl_seconds=media_token_ttl_seconds,
                 )
                 url = _hls_proxy_url(request, engine_path, media_token=media_token) or ""
                 media_auth_type = "signed_url"
@@ -1701,6 +1715,7 @@ async def _resolve_local_transmission_urls(
                         output=output,
                         engine_path=engine_path,
                         transport="mse",
+                        ttl_seconds=media_token_ttl_seconds,
                     )
                     outputs.append(
                         TransmissionOutputUrl(
@@ -1724,6 +1739,7 @@ async def _resolve_local_transmission_urls(
                         output=output,
                         engine_path=engine_path,
                         transport="jsmpeg",
+                        ttl_seconds=media_token_ttl_seconds,
                     )
                     outputs.append(
                         TransmissionOutputUrl(
@@ -1776,6 +1792,7 @@ async def _resolve_local_transmission_urls(
                 output=output,
                 engine_path=engine_path,
                 transport="mse",
+                ttl_seconds=media_token_ttl_seconds,
             )
             outputs.append(
                 TransmissionOutputUrl(
@@ -1799,6 +1816,7 @@ async def _resolve_local_transmission_urls(
                 output=output,
                 engine_path=engine_path,
                 transport="jsmpeg",
+                ttl_seconds=media_token_ttl_seconds,
             )
             outputs.append(
                 TransmissionOutputUrl(
@@ -1846,6 +1864,7 @@ async def _resolve_remote_transmission_urls(
     transmission: Transmission,
     output_id: str | None = None,
     quality_profile_id: str | None = None,
+    media_token_ttl_seconds: float | None = None,
 ) -> TransmissionUrlsResponse:
     servers_by_id = await _processing_servers_by_id(config_store)
     host_server_id = normalize_server_id(transmission.host_server_id, fallback="local")
@@ -1872,6 +1891,7 @@ async def _resolve_remote_transmission_urls(
         for key, value in {
             "output_id": str(output_id or "").strip(),
             "quality_profile_id": str(quality_profile_id or "").strip(),
+            "media_token_ttl_seconds": str(media_token_ttl_seconds or "").strip(),
         }.items()
         if value
     }
@@ -6285,6 +6305,7 @@ def create_streaming_router() -> APIRouter:
         live_view_id: str,
         context: StreamingCameraLiveContext = "thumbnail",
         variant_id: str | None = None,
+        media_token_ttl_seconds: float | None = None,
     ) -> CameraLiveViewPlaybackResponse:
         _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)
@@ -6338,12 +6359,14 @@ def create_streaming_router() -> APIRouter:
                 settings=settings,
                 transmission=transmission,
                 quality_profile_id=variant.quality_profile_id,
+                media_token_ttl_seconds=media_token_ttl_seconds,
             )
         else:
             urls = await _resolve_remote_transmission_urls(
                 config_store=config_store,
                 transmission=transmission,
                 quality_profile_id=variant.quality_profile_id,
+                media_token_ttl_seconds=media_token_ttl_seconds,
             )
 
         selected_output = _select_live_playback_output(urls=urls, variant=variant)
@@ -7435,6 +7458,7 @@ def create_streaming_router() -> APIRouter:
         transmission_id: str,
         output_id: str | None = None,
         quality_profile_id: str | None = None,
+        media_token_ttl_seconds: float | None = None,
     ) -> TransmissionUrlsResponse:
         _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)
@@ -7456,12 +7480,14 @@ def create_streaming_router() -> APIRouter:
                 transmission=transmission,
                 output_id=output_id,
                 quality_profile_id=quality_profile_id,
+                media_token_ttl_seconds=media_token_ttl_seconds,
             )
         return await _resolve_remote_transmission_urls(
             config_store=config_store,
             transmission=transmission,
             output_id=output_id,
             quality_profile_id=quality_profile_id,
+            media_token_ttl_seconds=media_token_ttl_seconds,
         )
 
     @router.get(
@@ -7476,6 +7502,7 @@ def create_streaming_router() -> APIRouter:
         quality_profile_id: str | None = None,
         context: StreamingCameraLiveContext | None = None,
         low_latency: bool = False,
+        media_token_ttl_seconds: float | None = None,
     ) -> StreamingPlaybackPlanResponse:
         _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)
@@ -7493,6 +7520,7 @@ def create_streaming_router() -> APIRouter:
                 transmission=transmission,
                 output_id=output_id,
                 quality_profile_id=quality_profile_id,
+                media_token_ttl_seconds=media_token_ttl_seconds,
             )
             runtime_health: StreamingRuntimeTransmissionHealth | None = None
             try:
@@ -7509,6 +7537,7 @@ def create_streaming_router() -> APIRouter:
                 transmission=transmission,
                 output_id=output_id,
                 quality_profile_id=quality_profile_id,
+                media_token_ttl_seconds=media_token_ttl_seconds,
             )
             runtime_health = None
 
@@ -7688,6 +7717,7 @@ def create_streaming_router() -> APIRouter:
         transmission_id: str,
         output_id: str | None = None,
         quality_profile_id: str | None = None,
+        media_token_ttl_seconds: float | None = None,
     ) -> TransmissionUrlsResponse:
         _require_auth(request, action="core:settings:read")
         config_store = _config_store(request)
@@ -7716,6 +7746,7 @@ def create_streaming_router() -> APIRouter:
             transmission=transmission,
             output_id=output_id,
             quality_profile_id=quality_profile_id,
+            media_token_ttl_seconds=media_token_ttl_seconds,
         )
 
     @router.get("/distributed/settings/{server_id}", response_model=StreamingExtensionSettings)

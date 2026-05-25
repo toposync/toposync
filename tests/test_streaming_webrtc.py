@@ -279,6 +279,39 @@ def test_home_assistant_contract_returns_proxied_hls_url(
     assert any("WebRTC WHEP unavailable" in item for item in payload["webrtc_warnings"])
 
 
+def test_signed_hls_urls_can_extend_media_token_ttl(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    monkeypatch.setattr(
+        "toposync_ext_streaming.api.routes.time.time",
+        lambda: 1_700_000_000.0,
+    )
+    engine_manager = _EngineManagerStub(data_dir=tmp_path)
+
+    with _create_client(tmp_path, engine_manager=engine_manager) as client:
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Apple TV HLS stream",
+                "path": "apple-tv-main",
+                "outputs": [{"id": "main_hls", "protocol": "hls", "enabled": True}],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        urls_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/urls?media_token_ttl_seconds=1800"
+        )
+
+    assert urls_res.status_code == 200
+    output = urls_res.json()["outputs"][0]
+    assert output["media_auth_type"] == "signed_url"
+    assert output["url_expires_at_unix"] == 1_700_001_800.0
+    assert output["renew_after_unix"] == 1_700_001_740.0
+
+
 def test_hls_output_is_omitted_when_direct_hls_port_mismatches_in_fail_mode(
     tmp_path: Path,
     monkeypatch,  # noqa: ANN001

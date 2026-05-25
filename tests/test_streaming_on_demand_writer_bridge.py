@@ -325,19 +325,19 @@ async def _on_demand_prime_scenario() -> None:
     publisher_manager.start_calls.clear()
     publisher_manager.stop_calls.clear()
     clock["now"] = 200.0
-    primed_outputs = await bridge.prime_transmission_demand("transmission_prime", ttl_s=180.0)
+    primed_outputs = await bridge.prime_transmission_demand("transmission_prime", ttl_s=900.0)
     assert primed_outputs == 1
 
     await bridge._tick_once(200.1)
     assert publisher_manager.start_calls == ["transmission_prime:prime-path"]
 
-    await bridge._tick_once(321.0)
+    await bridge._tick_once(1001.0)
     assert publisher_manager.stop_calls == []
 
-    await bridge._tick_once(381.1)
+    await bridge._tick_once(1101.1)
     assert publisher_manager.stop_calls == []
 
-    await bridge._tick_once(383.4)
+    await bridge._tick_once(1103.4)
     assert publisher_manager.stop_calls == ["transmission_prime:prime-path"]
 
 

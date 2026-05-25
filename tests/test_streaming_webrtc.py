@@ -719,6 +719,22 @@ def test_transmission_urls_primes_demand_hint(tmp_path: Path) -> None:
         assert ha_heartbeat_payload["lease_seconds"] == 90.0
         assert bridge.calls[-1] == (transmission_id, 90.0, "prime_hls", None)
 
+        pip_heartbeat_res = client.post(
+            f"/api/streams/transmissions/{transmission_id}/demand/heartbeat",
+            json={
+                "playback_session_id": "pip-1",
+                "output_id": "prime_hls",
+                "quality_profile_id": None,
+                "transport": "hls",
+                "ttl_seconds": 900.0,
+            },
+        )
+        assert pip_heartbeat_res.status_code == 200
+        pip_heartbeat_payload = pip_heartbeat_res.json()
+        assert pip_heartbeat_payload["renewed"] is True
+        assert pip_heartbeat_payload["lease_seconds"] == 900.0
+        assert bridge.calls[-1] == (transmission_id, 900.0, "prime_hls", None)
+
 
 def test_transmission_urls_and_prime_accept_quality_profile_selection(tmp_path: Path) -> None:
     with _create_client(tmp_path) as client:

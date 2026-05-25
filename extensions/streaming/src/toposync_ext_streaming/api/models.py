@@ -1377,7 +1377,7 @@ class TransmissionDemandHeartbeatRequest(BaseModel):
     quality_profile_id: StreamingQualityProfileId | None = None
     transport: Literal["hls", "webrtc", "rtsp", "mse", "jsmpeg"] = "hls"
     source: Literal["player", "home_assistant_entity"] = "player"
-    ttl_seconds: float | None = Field(default=None, ge=5.0, le=300.0)
+    ttl_seconds: float | None = Field(default=None, ge=5.0, le=1800.0)
 
 
 class TransmissionDemandHeartbeatResponse(BaseModel):

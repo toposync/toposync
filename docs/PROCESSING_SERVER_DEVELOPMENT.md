@@ -9,6 +9,7 @@ The processing server is used by distributed pipelines. It receives pipeline con
 - Python `3.11+`
 - `uv`
 - Optional for camera pipelines: `ffmpeg` available in `PATH`
+- Optional for distributed streaming/MSE: install `toposync-streaming`; the processing server downloads `go2rtc` automatically on first MSE sidecar start, unless `TOPOSYNC_STREAMING_GO2RTC_PATH` points to a local binary
 
 Node.js is not required to run the processing server itself. It is only needed if you also run the frontend UI.
 

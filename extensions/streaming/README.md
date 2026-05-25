@@ -1093,7 +1093,7 @@ Then run Toposync as usual (see repo `docs/DEVELOPMENT.md`).
 
 - Public wheels do not ship MediaMTX binaries. The extension downloads the correct release asset on demand and caches it under `runtime/streaming/mediamtx/<version>/<platform>/`.
   - License notice: [LICENSE.mediamtx](LICENSE.mediamtx)
-- Public wheels do not ship go2rtc binaries. The MSE sidecar downloads go2rtc `v1.9.14` on demand and caches it under `~/.toposync/runtime/streaming/go2rtc/<version>/<platform>/`, unless `TOPOSYNC_STREAMING_GO2RTC_PATH` points to an explicit binary.
+- Public wheels do not ship go2rtc binaries. The MSE sidecar downloads go2rtc `v1.9.14` automatically on first start and caches it under `~/.toposync/runtime/streaming/go2rtc/<version>/<platform>/`, unless `TOPOSYNC_STREAMING_GO2RTC_PATH` points to an explicit binary. The official Docker/Home Assistant images can pre-bundle `/usr/local/bin/go2rtc` and set that environment variable so MSE does not depend on a runtime download.
 - FFmpeg integration expects an external binary by default (`PATH` or `TOPOSYNC_STREAMING_FFMPEG_PATH`). Bundling FFmpeg binaries is optional and must be handled carefully for redistribution.
   - License placeholder: [LICENSE.ffmpeg](LICENSE.ffmpeg)
 

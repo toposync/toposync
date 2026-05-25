@@ -76,6 +76,7 @@ Nesse caso:
 - `ffmpeg` entra como dependência de sistema da imagem
 - `toposync-ext-streaming` entra como wheel adicional no mesmo container
 - o runtime do MediaMTX passa a persistir em `/data/runtime`
+- o binário `go2rtc` já vem em `/usr/local/bin/go2rtc`, e `TOPOSYNC_STREAMING_GO2RTC_PATH` fica configurado para o MSE
 
 Para uma extensão extra distribuída por pacote Python:
 
@@ -252,7 +253,7 @@ Para adicionar o stack de streaming:
 uv pip install ./packages/toposync-streaming
 ```
 
-Esse bundle instala `toposync` + `toposync-ext-streaming`. O runtime de streaming baixa o MediaMTX sob demanda quando a engine é iniciada, e o FFmpeg deve vir do `PATH` ou de `TOPOSYNC_STREAMING_FFMPEG_PATH`.
+Esse bundle instala `toposync` + `toposync-ext-streaming`. O runtime de streaming baixa o MediaMTX sob demanda quando a engine é iniciada, baixa o `go2rtc` automaticamente no primeiro start de MSE, e o FFmpeg deve vir do `PATH` ou de `TOPOSYNC_STREAMING_FFMPEG_PATH`.
 
 Para instalar uma extensão extra de comunidade, basta instalar o pacote Python e reiniciar o backend:
 

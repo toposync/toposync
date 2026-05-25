@@ -571,15 +571,10 @@ def _mse_sidecar_start_blocking_errors(
     if settings.engine.enabled and settings.engine.mse_sidecar.enabled:
         try:
             platform = detect_go2rtc_platform()
-            installed = find_installed_go2rtc_binary(
+            find_installed_go2rtc_binary(
                 platform=platform,
                 version=settings.engine.mse_sidecar.go2rtc_version,
             )
-            if installed is None:
-                errors.append(
-                    "go2rtc binary is not installed. Use /api/streams/mse/download or set "
-                    "TOPOSYNC_STREAMING_GO2RTC_PATH before using MSE."
-                )
         except Exception as exc:
             errors.append(f"go2rtc binary is unavailable: {exc}")
     return _dedupe_messages(errors)
@@ -5951,7 +5946,7 @@ def create_streaming_router() -> APIRouter:
             warnings.append("MSE sidecar needs the MediaMTX streaming engine to be enabled.")
         if settings.engine.mse_sidecar.enabled and not status.running and not binary_path:
             warnings.append(
-                "go2rtc binary is not installed yet. Starting MSE will download it (internet required), "
+                "go2rtc binary is not installed yet. The next MSE start will download it automatically (internet required), "
                 "or set TOPOSYNC_STREAMING_GO2RTC_PATH to a local path."
             )
         return StreamingMseSidecarStatusResponse(

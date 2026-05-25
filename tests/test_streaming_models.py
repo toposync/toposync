@@ -508,7 +508,7 @@ def test_mse_url_is_available_when_sidecar_is_stopped_but_startable(
     assert mse_plan["blocking_errors"] == []
 
 
-def test_mse_plan_reports_missing_binary_without_hiding_hls(
+def test_mse_plan_allows_auto_download_without_hiding_hls(
     tmp_path: Path,
     monkeypatch,  # noqa: ANN001
 ) -> None:
@@ -556,8 +556,76 @@ def test_mse_plan_reports_missing_binary_without_hiding_hls(
 
     assert urls_res.status_code == 200
     urls_payload = urls_res.json()
+    mse_output = next(item for item in urls_payload["outputs"] if item["protocol"] == "mse")
+    assert mse_output["output_id"] == "hls_main"
+    assert "/api/streams/media/mse/missing-go2rtc-stream/ws?media_token=" in mse_output["url"]
+    assert not any("go2rtc binary is not installed" in item for item in urls_payload["warnings"])
+
+    assert plan_res.status_code == 200
+    plan_payload = plan_res.json()
+    assert plan_payload["selected_transport"] == "mse"
+    hls_plan = next(item for item in plan_payload["transports"] if item["transport"] == "hls")
+    mse_plan = next(item for item in plan_payload["transports"] if item["transport"] == "mse")
+    assert hls_plan["available"] is True
+    assert mse_plan["available"] is True
+    assert mse_plan["blocking_errors"] == []
+
+
+def test_mse_plan_reports_invalid_go2rtc_override_without_hiding_hls(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    def raise_missing_override(**_kwargs):  # noqa: ANN001
+        raise FileNotFoundError(
+            "TOPOSYNC_STREAMING_GO2RTC_PATH points to a missing go2rtc binary: /missing/go2rtc"
+        )
+
+    monkeypatch.setattr(
+        streaming_routes,
+        "find_installed_go2rtc_binary",
+        raise_missing_override,
+    )
+    with _create_client(tmp_path) as client:
+        client.app.state.streaming_engine_manager = _RunningEngineManagerStub(
+            data_dir=tmp_path / "engine"
+        )
+        client.app.state.streaming_mse_sidecar_manager = _StoppedMseSidecarStub(
+            data_dir=tmp_path / "mse"
+        )
+        settings_res = client.patch(
+            "/api/streams/settings",
+            json={"engine": {"enabled": True, "mse_sidecar": {"enabled": True}}},
+        )
+        assert settings_res.status_code == 200
+        created_res = client.post(
+            "/api/streams/transmissions",
+            json={
+                "name": "Invalid go2rtc override stream",
+                "path": "invalid-go2rtc-override-stream",
+                "outputs": [
+                    {
+                        "id": "hls_main",
+                        "protocol": "hls",
+                        "enabled": True,
+                        "quality_profile_id": "fullscreen_quality",
+                    }
+                ],
+            },
+        )
+        assert created_res.status_code == 200
+        transmission_id = str(created_res.json()["id"])
+
+        urls_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/urls?quality_profile_id=fullscreen_quality"
+        )
+        plan_res = client.get(
+            f"/api/streams/transmissions/{transmission_id}/playback-plan?client=web&quality_profile_id=fullscreen_quality"
+        )
+
+    assert urls_res.status_code == 200
+    urls_payload = urls_res.json()
     assert not any(item["protocol"] == "mse" for item in urls_payload["outputs"])
-    assert any("go2rtc binary is not installed" in item for item in urls_payload["warnings"])
+    assert any("go2rtc binary is unavailable" in item for item in urls_payload["warnings"])
 
     assert plan_res.status_code == 200
     plan_payload = plan_res.json()
@@ -566,7 +634,7 @@ def test_mse_plan_reports_missing_binary_without_hiding_hls(
     mse_plan = next(item for item in plan_payload["transports"] if item["transport"] == "mse")
     assert hls_plan["available"] is True
     assert mse_plan["available"] is False
-    assert any("go2rtc binary is not installed" in item for item in mse_plan["blocking_errors"])
+    assert any("TOPOSYNC_STREAMING_GO2RTC_PATH" in item for item in mse_plan["blocking_errors"])
 
 
 def test_transmission_playback_plan_prefers_hls_for_native_app(

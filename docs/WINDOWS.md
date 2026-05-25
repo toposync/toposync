@@ -94,6 +94,16 @@ Observação:
 
 - CUDA exige driver NVIDIA e stack CUDA/cuDNN compatíveis com o `onnxruntime-gpu`.
 
+### Streaming/MSE
+
+Para adicionar o stack de streaming em uma instalação Windows:
+
+```powershell
+uv pip install --upgrade --refresh toposync-streaming==0.7.0
+```
+
+O MediaMTX e o `go2rtc` são baixados sob demanda pelo runtime de streaming. No caso do MSE, o próximo start do sidecar baixa automaticamente o asset Windows correto (`go2rtc_win64.zip` ou `go2rtc_win_arm64.zip`), salvo se `TOPOSYNC_STREAMING_GO2RTC_PATH` apontar para um binário local.
+
 ## 6) Instalar o processing server como serviço
 
 Para provisionar uma máquina Windows como processing server permanente, use o script:

@@ -47,7 +47,7 @@ uv venv .venv --python 3.12
 ## 4) Instalar o bundle padrão
 
 ```powershell
-uv pip install --upgrade --refresh toposync==0.7.0
+uv pip install --upgrade --refresh toposync==0.7.1
 ```
 
 Depois rode:
@@ -79,7 +79,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 Para máquinas Windows com GPU compatível via DirectML:
 
 ```powershell
-uv pip install --upgrade --refresh toposync-vision-directml==0.7.0
+uv pip install --upgrade --refresh toposync-vision-directml==0.7.1
 ```
 
 ### CUDA
@@ -87,7 +87,7 @@ uv pip install --upgrade --refresh toposync-vision-directml==0.7.0
 Para NVIDIA:
 
 ```powershell
-uv pip install --upgrade --refresh toposync-vision-cuda==0.7.0
+uv pip install --upgrade --refresh toposync-vision-cuda==0.7.1
 ```
 
 Observação:
@@ -99,7 +99,7 @@ Observação:
 Para adicionar o stack de streaming em uma instalação Windows:
 
 ```powershell
-uv pip install --upgrade --refresh toposync-streaming==0.7.0
+uv pip install --upgrade --refresh toposync-streaming==0.7.1
 ```
 
 O MediaMTX e o `go2rtc` são baixados sob demanda pelo runtime de streaming. No caso do MSE, o próximo start do sidecar baixa automaticamente o asset Windows correto (`go2rtc_win64.zip` ou `go2rtc_win_arm64.zip`), salvo se `TOPOSYNC_STREAMING_GO2RTC_PATH` apontar para um binário local.

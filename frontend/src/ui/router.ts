@@ -1,10 +1,12 @@
 import { useSyncExternalStore } from "react";
 
+import { getToposyncBasePath, resolveToposyncUrl } from "@toposync/plugin-api";
+
 type Listener = () => void;
 
 const listeners = new Set<Listener>();
 let popstateAttached = false;
-let currentPathname = typeof window === "undefined" ? "/" : window.location.pathname || "/";
+let currentPathname = snapshotPathname();
 let previousPathname: string | null = null;
 
 function emit(options?: { updatePrevious?: boolean }): void {
@@ -29,7 +31,14 @@ function subscribe(listener: Listener): () => void {
 
 function snapshotPathname(): string {
   if (typeof window === "undefined") return "/";
-  return window.location.pathname || "/";
+  const pathname = window.location.pathname || "/";
+  const basePath = getToposyncBasePath();
+  if (basePath === "/") return pathname;
+  if (pathname === basePath) return "/";
+  if (pathname.startsWith(`${basePath}/`)) {
+    return pathname.slice(basePath.length) || "/";
+  }
+  return pathname;
 }
 
 export function usePathname(): string {
@@ -43,15 +52,15 @@ export function getPreviousPathname(): string | null {
 export function navigate(pathname: string): void {
   const next = String(pathname || "/");
   if (typeof window === "undefined") return;
-  if (window.location.pathname === next) return;
-  window.history.pushState(null, "", next);
+  if (snapshotPathname() === next) return;
+  window.history.pushState(null, "", resolveToposyncUrl(next));
   emit({ updatePrevious: true });
 }
 
 export function replace(pathname: string): void {
   const next = String(pathname || "/");
   if (typeof window === "undefined") return;
-  if (window.location.pathname === next) return;
-  window.history.replaceState(null, "", next);
+  if (snapshotPathname() === next) return;
+  window.history.replaceState(null, "", resolveToposyncUrl(next));
   emit({ updatePrevious: false });
 }

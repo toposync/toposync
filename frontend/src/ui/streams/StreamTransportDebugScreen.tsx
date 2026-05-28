@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type Hls from "hls.js";
+import { resolveToposyncUrl } from "@toposync/plugin-api";
 
 import {
   getStreamingCameraLiveViewPlayback,
@@ -19,6 +20,7 @@ import {
   type StreamingTransmissionUrlOutput,
   type StreamingTransmissionUrlsResponse,
 } from "../../util/api";
+import { navigate } from "../router";
 import { createJsmpegPlayer } from "./jsmpegPlayer";
 
 type DebugTransport = StreamingPlaybackTransport;
@@ -189,7 +191,7 @@ function buildLiveViewDebugUrl(
   const qualityProfileId = String(variant.quality_profile_id || "").trim();
   if (outputId) params.set("output_id", outputId);
   if (qualityProfileId) params.set("quality_profile_id", qualityProfileId);
-  return `/streams/debug?${params.toString()}`;
+  return resolveToposyncUrl(`/streams/debug?${params.toString()}`);
 }
 
 function normalizeOptionalText(value: string | null): string | null {
@@ -227,8 +229,7 @@ function openStreamingSettings(): void {
   } catch {
     // ignore
   }
-  window.history.pushState(null, "", "/settings");
-  window.dispatchEvent(new PopStateEvent("popstate"));
+  navigate("/settings");
 }
 
 function withBasicAuthInUrl(url: string, auth: BasicAuthCredentials | null): string {
@@ -1428,7 +1429,7 @@ export function StreamTransportDebugScreen(): JSX.Element {
                 <a
                   key={item}
                   className={`streamTransportDebugTransportLink ${item === transport ? "isActive" : ""}`}
-                  href={`/streams/debug?${params.toString()}`}
+                  href={resolveToposyncUrl(`/streams/debug?${params.toString()}`)}
                 >
                   {item.toUpperCase()}
                 </a>

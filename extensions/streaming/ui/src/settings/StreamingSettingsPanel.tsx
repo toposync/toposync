@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
+import { resolveToposyncUrl } from "@toposync/plugin-api";
 import type { SettingsPanel, TopoSyncHost } from "@toposync/plugin-api";
 
 import {
@@ -111,7 +112,7 @@ function streamingTransportDebugHref(options: {
   const qualityProfileId = String(options.qualityProfileId || "").trim();
   if (outputId) params.set("output_id", outputId);
   if (qualityProfileId) params.set("quality_profile_id", qualityProfileId);
-  return `/streams/debug?${params.toString()}`;
+  return resolveToposyncUrl(`/streams/debug?${params.toString()}`);
 }
 
 function streamingTabLabel(tab: StreamingSettingsTab, t: TranslateFn): string {

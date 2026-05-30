@@ -5,4 +5,206 @@ sidebar_position: 2
 
 # Environment variables {/* #environment-variables */}
 
-This page is under construction.
+This page lists the environment variables that are useful for installing, operating, debugging, and packaging Toposync.
+
+It is not a complete dump of every internal tuning flag. Prefer the UI and API for normal product configuration, and use environment variables for process-level behavior such as ports, data directories, auth mode, Docker builds, processing servers, and media runtime integration.
+
+For installation commands, start with [Choose your installation](../installation/choose-your-installation.mdx). For file paths, see [File locations](file-locations.mdx). For ports, see [Ports](ports.mdx).
+
+## How to use them {/* #how-to-use-them */}
+
+For one-off terminal runs:
+
+```bash
+TOPOSYNC_DATA_DIR=./toposync-data toposync serve
+```
+
+For long-running services, define the variables in the service manager, Docker Compose file, Home Assistant add-on environment, or Windows service installer.
+
+Command-line flags should be preferred when a supported flag exists:
+
+```bash
+toposync serve --host 0.0.0.0 --port 8000 --data-dir ./toposync-data
+```
+
+## Most common variables {/* #most-common-variables */}
+
+| Variable | Typical value | Purpose |
+| --- | --- | --- |
+| `TOPOSYNC_DATA_DIR` | `/data`, `./toposync-data` | Overrides where Toposync stores configuration, files, runtime data, and extension data. |
+| `TOPOSYNC_BACKEND_PORT` | `8000` | Default port for `toposync serve` when `--port` is not passed. |
+| `TOPOSYNC_PROCESSING_PORT` | `49321` | Default port for `toposync processing-serve` when `--port` is not passed. |
+| `TOPOSYNC_AUTH_MODE` | `enforced`, `bypass`, `ingress`, `hybrid` | Selects the authentication mode. Use `bypass` only for local development. |
+| `TOPOSYNC_FRONTEND_DIR` | `/path/to/frontend/dist` | Uses an external built frontend instead of the packaged frontend. Mostly for development and packaging diagnostics. |
+| `TOPOSYNC_NO_FRONTEND` | `1` | Disables frontend serving. Useful for API-only diagnostics. |
+| `TOPOSYNC_PROCESSING_USERNAME` | `toposync` | Enables Basic Auth for a processing server. |
+| `TOPOSYNC_PROCESSING_PASSWORD` | strong password | Enables Basic Auth for a processing server. |
+| `TOPOSYNC_STREAMING_FFMPEG_PATH` | `/usr/bin/ffmpeg` | Points the streaming extension to an FFmpeg binary. |
+| `TOPOSYNC_VISION_ONNXRUNTIME_PROVIDERS` | `CUDAExecutionProvider,CPUExecutionProvider` | Overrides ONNX Runtime provider order for advanced diagnostics. |
+
+## Core runtime {/* #core-runtime */}
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `TOPOSYNC_DATA_DIR` | Platform-specific data directory | Same effect as `--data-dir`. |
+| `TOPOSYNC_BACKEND_PORT` | `8000` | Used by `toposync serve` if `--port` is omitted. |
+| `TOPOSYNC_PROCESSING_PORT` | `49321` | Used by `toposync processing-serve` if `--port` is omitted. |
+| `TOPOSYNC_ROLE` | Auto-selected | Set to `processing` by `toposync processing-serve`. Usually do not set manually. |
+| `TOPOSYNC_FRONTEND_DIR` | Packaged frontend | Overrides the production frontend location. |
+| `TOPOSYNC_NO_FRONTEND` | Not set | Any non-empty value disables frontend serving. |
+| `TOPOSYNC_EXTENSION_AUTO_INSTALL_ON_STARTUP` | `1` | Set to `0` to disable extension auto-install checks on startup. |
+| `TOPOSYNC_ARTIFACT_MAX_BYTES_PER_PACKET` | `134217728` | Advanced pipeline artifact transport limit. |
+| `TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_PER_PIPELINE` | `536870912` | Advanced per-pipeline artifact limit. |
+| `TOPOSYNC_ARTIFACT_MAX_TOTAL_BYTES_GLOBAL` | `1073741824` | Advanced global artifact limit. |
+
+## Authentication {/* #authentication */}
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `TOPOSYNC_AUTH_MODE` | `enforced` | Use `enforced` for normal installs, `bypass` for local development, `ingress` behind a trusted ingress proxy, or `hybrid` for Home Assistant hybrid access. |
+| `TOPOSYNC_AUTH_COOKIE_SECURE` | `auto` | Set to `true` or `false` only when deployment requires an explicit cookie policy. |
+| `TOPOSYNC_AUTH_ACCESS_TTL_S` | `1800` | Access token lifetime in seconds. |
+| `TOPOSYNC_AUTH_REFRESH_TTL_S` | `7776000` | Refresh token lifetime in seconds. |
+| `TOPOSYNC_AUTH_PAIRING_TTL_S` | `300` | Pairing code lifetime in seconds. |
+| `TOPOSYNC_AUTH_REFRESH_ROTATION_GRACE_S` | `30` | Grace period for refresh rotation. |
+| `TOPOSYNC_AUTH_EVENT_ALLOWLIST` | Built-in defaults | Advanced event-stream auth allowlist. |
+| `TOPOSYNC_AUTH_SCRYPT_N` | Built-in default | Advanced password hashing cost. |
+| `TOPOSYNC_AUTH_SCRYPT_R` | Built-in default | Advanced password hashing cost. |
+| `TOPOSYNC_AUTH_SCRYPT_P` | Built-in default | Advanced password hashing cost. |
+
+Ingress and Home Assistant authentication:
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `TOPOSYNC_AUTH_INGRESS_USER_ID_HEADER` | `x-remote-user-id` | Header that identifies the ingress user. |
+| `TOPOSYNC_AUTH_INGRESS_USERNAME_HEADER` | `x-remote-user-name` | Header that provides the username. |
+| `TOPOSYNC_AUTH_INGRESS_DISPLAY_NAME_HEADER` | `x-remote-user-display-name` | Header that provides a display name. |
+| `TOPOSYNC_AUTH_INGRESS_ROLE` | `owner` | Role assigned to ingress users. |
+| `TOPOSYNC_AUTH_INGRESS_TRUSTED_IPS` | Localhost plus Home Assistant supervisor defaults | Comma-separated trusted proxy IPs/hosts. |
+| `TOPOSYNC_AUTH_INGRESS_ENFORCE_TRUSTED` | `true` | Rejects ingress headers from untrusted clients when enabled. |
+
+## Processing servers {/* #processing-servers */}
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `TOPOSYNC_PROCESSING_USERNAME` | Not set | Enables Basic Auth when set. |
+| `TOPOSYNC_PROCESSING_PASSWORD` | Not set | Enables Basic Auth when set. |
+| `TOPOSYNC_PROCESSING_SERVER_ID` | Depends on installer/runtime | Identifies a processing server for distributed routing and streaming host affinity. |
+| `TOPOSYNC_PROCESSING_STATUS_DIAGNOSTICS_TIMEOUT` | `3.5` | Timeout used while collecting processing diagnostics. |
+| `TOPOSYNC_PROCESSING_OBSERVABILITY_FLUSH_INTERVAL_MS` | Built-in default | Advanced processing observability flush interval. |
+| `TOPOSYNC_PROCESSING_OBSERVABILITY_BATCH_SIZE` | Built-in default | Advanced processing observability batch size. |
+| `TOPOSYNC_PROCESSING_OBSERVABILITY_MAX_BUFFER` | Built-in default | Advanced processing observability buffer limit. |
+
+## Docker and builds {/* #docker-and-builds */}
+
+| Variable | Used by | Notes |
+| --- | --- | --- |
+| `TOPOSYNC_PORT` | `docker-compose.yml` | Host port mapped to container port `8000`. |
+| `TOPOSYNC_DATA_VOLUME` | `docker-compose.yml` | Host path mounted at `/data`. Defaults to `./toposync-data`. |
+| `TOPOSYNC_DOCKER_TARGET` | `docker-compose.yml` | Build target. Defaults to `runtime-cpu`; CUDA uses `runtime-cuda`. |
+| `TOPOSYNC_APT_PACKAGES` | `Dockerfile` | Extra Debian packages installed into the image, for example `ffmpeg`. |
+| `TOPOSYNC_EXTRA_WHEELS` | `Dockerfile` | Extra wheel patterns copied from `/wheelhouse`. |
+| `TOPOSYNC_EXTRA_PIP_PACKAGES` | `Dockerfile` | Extra Python packages installed at image build time. |
+| `TOPOSYNC_INSTALL_WHEEL` | `Dockerfile` | Main wheel pattern installed from `/wheelhouse`. |
+| `TOPOSYNC_ENV_FILE` | `scripts/dev.js` | Alternative environment file for local development. |
+
+## Home Assistant add-on {/* #home-assistant-add-on */}
+
+Most users should configure the add-on through the Home Assistant UI. These variables describe the runtime contract used by the add-on container.
+
+| Variable | Typical value | Notes |
+| --- | --- | --- |
+| `TOPOSYNC_DEPLOYMENT_TARGET` | `home_assistant_addon` | Marks the runtime as the Home Assistant add-on. |
+| `TOPOSYNC_DATA_DIR` | `/data` | Add-on data directory inside the container. |
+| `TOPOSYNC_AUTH_MODE` | `home_assistant_hybrid` | Lets ingress use Home Assistant auth while direct access keeps Toposync auth. |
+| `TOPOSYNC_HOME_ASSISTANT_CONNECTION_MODE` | `supervisor` | Uses the Supervisor API from inside the add-on. |
+| `SUPERVISOR_TOKEN` | Provided by Home Assistant | Token injected by Supervisor; do not create it manually. |
+| `TOPOSYNC_ADDON_NETWORK_SNAPSHOT_PATH` | `/data/runtime/streaming/addon-network.json` | Runtime snapshot used by streaming diagnostics. |
+| `TOPOSYNC_ADDON_PUBLIC_HOSTS` | LAN hostnames/IPs | Extra hosts advertised for WebRTC and direct access. |
+| `TOPOSYNC_EXPECTED_DIRECT_API_PORT` | `18756` | Port expected for direct UI/API proxy. |
+| `TOPOSYNC_EXPECTED_RTSP_PORT` | `18758` | Port expected for RTSP output. |
+| `TOPOSYNC_EXPECTED_HLS_PORT` | `18759` | Only expected when direct HLS mode is enabled. |
+| `TOPOSYNC_EXPECTED_WEBRTC_PORT` | `18760` | Port expected for WebRTC/WHEP signaling. |
+| `TOPOSYNC_EXPECTED_WEBRTC_UDP_PORT` | `18762` | Port expected for WebRTC UDP media. |
+| `TOPOSYNC_FAIL_STREAM_URLS_ON_PORT_MISMATCH` | `1` | Fails unsafe streaming URLs when the add-on network mapping does not match. |
+
+## Streaming {/* #streaming */}
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `TOPOSYNC_STREAMING_ENGINE_PATH` | Auto-download/cache | Path to MediaMTX binary or directory containing it. |
+| `TOPOSYNC_STREAMING_ENGINE_CACHE_DIR` | `~/.toposync/runtime` or `/data/runtime` in containers | Cache root for downloaded MediaMTX. |
+| `TOPOSYNC_STREAMING_ENGINE_DOWNLOAD_BASE_URL` | Built-in upstream | Mirror base URL for MediaMTX downloads. |
+| `TOPOSYNC_STREAMING_GO2RTC_PATH` | Auto-download/cache or `/usr/local/bin/go2rtc` in packaged images | Path to go2rtc binary. |
+| `TOPOSYNC_STREAMING_GO2RTC_CACHE_DIR` | `~/.toposync/runtime` | Cache root for downloaded go2rtc. |
+| `TOPOSYNC_STREAMING_GO2RTC_DOWNLOAD_BASE_URL` | Built-in upstream | Mirror base URL for go2rtc downloads. |
+| `TOPOSYNC_STREAMING_FFMPEG_PATH` | `ffmpeg` on `PATH` | Explicit FFmpeg binary path. |
+| `TOPOSYNC_STREAMING_HLS_PUBLIC_MODE` | `proxy` in the add-on | Use `proxy` for signed/proxied HLS URLs. Direct HLS is mainly diagnostic. |
+| `TOPOSYNC_STREAMING_WEBRTC_ADDITIONAL_HOSTS` | Not set | Comma-separated hosts advertised to WebRTC clients. |
+| `TOPOSYNC_STREAMING_WEBRTC_LOCAL_UDP_ADDRESS` | Runtime default | Static ICE UDP bind address, for example `:18762`. |
+| `TOPOSYNC_STREAMING_WEBRTC_LOCAL_TCP_ADDRESS` | Not set | Optional ICE TCP bind address when UDP is blocked. |
+| `TOPOSYNC_STREAMING_ENABLE_BYPASS` | `0` | Advanced bypass mode for streaming internals. |
+| `TOPOSYNC_STREAMING_FFMPEG_LOGLEVEL` | `warning` | FFmpeg logging level. |
+
+Distributed streaming sync:
+
+| Variable | Notes |
+| --- | --- |
+| `TOPOSYNC_STREAMING_SYNC_CORE_URL` | Origin URL for remote streaming host sync. |
+| `TOPOSYNC_CORE_URL` | Fallback origin URL for remote streaming host sync. |
+| `TOPOSYNC_STREAMING_SYNC_BEARER_TOKEN` | Bearer token for sync auth. |
+| `TOPOSYNC_STREAMING_SYNC_USERNAME` | Username for sync auth. |
+| `TOPOSYNC_STREAMING_SYNC_PASSWORD` | Password for sync auth. |
+| `TOPOSYNC_STREAMING_SYNC_INTERVAL_SECONDS` | Sync poll interval. |
+| `TOPOSYNC_STREAMING_SYNC_TIMEOUT_SECONDS` | Sync request timeout. |
+
+## Cameras {/* #cameras */}
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `TOPOSYNC_CAMERA_SNAPSHOT_TTL_S` | `0.8` | Snapshot cache time-to-live. |
+| `TOPOSYNC_CAMERA_SNAPSHOT_FFMPEG_CONCURRENCY` | `2` | FFmpeg snapshot concurrency. |
+| `TOPOSYNC_ONVIF_DISCOVERY_TTL_S` | `60` | Discovery cache time-to-live. |
+| `TOPOSYNC_ONVIF_DISCOVERY_SUPERVISOR_NETWORK` | `true` | Enables Home Assistant supervisor-network discovery path. |
+| `TOPOSYNC_ONVIF_DISCOVERY_MULTICAST` | `true` | Enables ONVIF multicast discovery. |
+| `TOPOSYNC_ONVIF_DISCOVERY_LIMITED_BROADCAST` | `true` | Enables limited broadcast discovery. |
+| `TOPOSYNC_ONVIF_DISCOVERY_TARGETS` | Not set | Comma-separated manual ONVIF discovery targets. |
+| `TOPOSYNC_CAMERA_ONVIF_TIMEOUT_S` | Runtime default | ONVIF request timeout. |
+| `TOPOSYNC_RTSP_OPEN_TIMEOUT_MS` | `8000` | RTSP open timeout. |
+| `TOPOSYNC_RTSP_READ_TIMEOUT_MS` | `8000` | RTSP read timeout. |
+
+## Vision {/* #vision */}
+
+| Variable | Notes |
+| --- | --- |
+| `TOPOSYNC_VISION_ONNXRUNTIME_PROVIDERS` | Comma-separated ONNX Runtime provider order. Use only when diagnosing provider selection. |
+| `TOPOSYNC_VISION_MANIFESTS_DIR` | Extra directory for vision manifests. |
+| `TOPOSYNC_VISION_MANIFEST_PATHS` | Extra manifest files or directories. |
+| `TOPOSYNC_VISION_MODEL_SOURCE_<MODEL_ID>` | Per-model source override. |
+| `TOPOSYNC_VISION_MODEL_URL_<MODEL_ID>` | Per-model URL override. |
+| `TOPOSYNC_VISION_MODEL_PATH_<MODEL_ID>` | Per-model local path override. |
+| `TOPOSYNC_VISION_OFFICIAL_MODEL_SOURCE_DIR` | Local directory for official model artifacts. |
+| `TOPOSYNC_VISION_OFFICIAL_MODEL_BASE_URL` | Base URL for official model artifacts. |
+| `TOPOSYNC_VISION_HF_EXPORT_PIP_SPECS` | Advanced Hugging Face export dependencies. |
+| `TOPOSYNC_VISION_LOCAL_BUILDER_RUNTIME` | Advanced local model builder runtime. |
+| `TOPOSYNC_VISION_LOCAL_BUILDER_PYTHON` | Advanced local model builder Python executable. |
+| `TOPOSYNC_VISION_LOCAL_BUILDER_IMAGE` | Advanced local model builder image. |
+| `TOPOSYNC_VISION_RFDETR_PIP_SPEC` | Advanced RF-DETR dependency override. |
+
+## Troubleshooting {/* #troubleshooting */}
+
+### An environment variable does nothing
+
+Check whether the same setting was also passed as a command-line flag. For supported flags, the command line is usually clearer and easier to verify.
+
+### A service does not see the variable
+
+Interactive shell variables do not automatically apply to system services, Docker containers, Windows services, or Home Assistant add-ons. Set the variable in the service definition or container configuration.
+
+### The UI is missing
+
+Remove `TOPOSYNC_NO_FRONTEND` and any incorrect `TOPOSYNC_FRONTEND_DIR`, then restart `toposync serve`.
+
+### Processing server auth fails
+
+Verify that the origin registration uses the same username and password configured with `TOPOSYNC_PROCESSING_USERNAME` and `TOPOSYNC_PROCESSING_PASSWORD`.

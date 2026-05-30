@@ -5,4 +5,210 @@ sidebar_position: 4
 
 # Ports {/* #ports */}
 
-This page is under construction.
+This page lists the practical ports you need for installation, troubleshooting, Home Assistant, Docker, streaming, and processing servers.
+
+For installation commands, use the [installation guides](../installation/choose-your-installation.mdx). For full configuration behavior, the dedicated configuration reference will be written separately.
+
+## Quick reference {/* #quick-reference */}
+
+| Port | Protocol | Used by | Public by default | Notes |
+| --- | --- | --- | --- | --- |
+| `8000` | TCP / HTTP | Toposync origin UI and API | Yes in Docker, local-only in Python unless bound to `0.0.0.0` | Default `toposync serve` port. |
+| `49321` | TCP / HTTP | Processing server API | Only if you bind/publish it | Default `toposync processing-serve` port. |
+| `18756` | TCP / HTTP | Home Assistant add-on direct UI/API proxy | No | Optional host mapping for browser/mobile direct access. |
+| `18757` | TCP / HTTP | Home Assistant add-on internal backend/ingress | No | Supervisor ingress target, not meant for direct LAN use. |
+| `18758` | TCP / RTSP | Home Assistant add-on RTSP output | No | Optional streaming mapping. |
+| `18759` | TCP / HLS | Home Assistant add-on direct HLS engine | No | Internal/diagnostic. Normal HLS goes through `18756` proxy. |
+| `18760` | TCP / HTTP | Home Assistant add-on WebRTC/WHEP signaling | No | Optional streaming mapping. |
+| `18761` | TCP / HTTP | Home Assistant add-on MediaMTX API | No | Internal; do not publish by default. |
+| `18762` | UDP | Home Assistant add-on WebRTC media | No | Optional WebRTC mapping. |
+| `18763` | TCP / HTTP | Documentation site local preview | Local development only | Used by `npm run docs:start` and `npm run docs:serve`. |
+| `18764` | TCP / HTTP/WebSocket | Streaming MSE sidecar API | Internal | Used by the streaming extension when MSE sidecar is enabled. |
+| `50000-50001` | UDP | MediaMTX RTP/RTCP pair | Depends on engine exposure | Automatically moved if unavailable. |
+
+## Origin server {/* #origin-server */}
+
+The origin server is the main Toposync process:
+
+```bash
+toposync serve
+```
+
+Defaults:
+
+| Setting | Default |
+| --- | --- |
+| Bind host | `127.0.0.1` |
+| Port | `8000` |
+| Healthcheck | `GET /api/health` |
+| UI | `GET /` |
+| API | `GET /api/...` |
+
+Expose it on the local network:
+
+```bash
+toposync serve --host 0.0.0.0 --port 8000
+```
+
+Change the default port through environment:
+
+```bash
+TOPOSYNC_BACKEND_PORT=8080 toposync serve
+```
+
+Docker maps the same internal port through `TOPOSYNC_PORT`:
+
+```bash
+TOPOSYNC_PORT=8080 docker compose up -d --build
+```
+
+## Processing server {/* #processing-server */}
+
+The processing server is used for distributed pipelines:
+
+```bash
+toposync processing-serve --host 0.0.0.0 --port 49321
+```
+
+Defaults:
+
+| Setting | Default |
+| --- | --- |
+| Bind host | `127.0.0.1` |
+| Port | `49321` |
+| Healthcheck/status | `GET /api/processing/status` |
+| Authentication | Off unless `TOPOSYNC_PROCESSING_USERNAME` or `TOPOSYNC_PROCESSING_PASSWORD` is set |
+
+Change the default port:
+
+```bash
+TOPOSYNC_PROCESSING_PORT=49322 toposync processing-serve
+```
+
+If the processing server is remote, the origin must be able to reach:
+
+```text
+http://processing-host:49321
+```
+
+Use Basic Auth on real networks:
+
+```bash
+TOPOSYNC_PROCESSING_USERNAME=toposync \
+TOPOSYNC_PROCESSING_PASSWORD='<strong-password>' \
+toposync processing-serve --host 0.0.0.0 --port 49321
+```
+
+## Docker {/* #docker */}
+
+The local Docker image listens on `8000` inside the container.
+
+Default Compose mapping:
+
+```yaml
+ports:
+  - "${TOPOSYNC_PORT:-8000}:8000"
+```
+
+Examples:
+
+```bash
+docker compose up -d --build
+TOPOSYNC_PORT=8080 docker compose up -d --build
+```
+
+Healthcheck inside the image:
+
+```text
+http://127.0.0.1:8000/api/health
+```
+
+## Home Assistant add-on {/* #home-assistant-add-on */}
+
+The add-on uses a project-owned port range to avoid common collisions.
+
+| Port | Published in add-on config | Role |
+| --- | --- | --- |
+| `18756/tcp` | Optional mapping | Direct Toposync UI/API proxy for browsers and mobile apps. |
+| `18757/tcp` | Internal ingress port | Main Toposync backend behind Home Assistant ingress. |
+| `18758/tcp` | Optional mapping | RTSP streaming output. |
+| `18759/tcp` | Internal only | Direct HLS engine; normal public HLS should use the proxy. |
+| `18760/tcp` | Optional mapping | WebRTC/WHEP signaling. |
+| `18761/tcp` | Internal only | MediaMTX API. |
+| `18762/udp` | Optional mapping | WebRTC media transport. |
+
+Direct access is disabled until the user maps `18756/tcp` in the add-on Network section:
+
+```yaml
+18756/tcp: 18756
+```
+
+Then use:
+
+```text
+http://homeassistant.local:18756/
+http://home-assistant-ip:18756/
+```
+
+Ingress uses `18757` internally. Do not try to open `18757` from the LAN.
+
+## Streaming outside Home Assistant {/* #streaming-outside-home-assistant */}
+
+When the streaming extension runs outside the Home Assistant add-on, MediaMTX defaults are:
+
+| Port | Protocol | Purpose |
+| --- | --- | --- |
+| `8554` | TCP / RTSP | RTSP output. |
+| `8888` | TCP / HTTP | HLS output. |
+| `8889` | TCP / HTTP | WebRTC/WHEP signaling. |
+| `9997` | TCP / HTTP | MediaMTX API. |
+| `9998` | TCP / HTTP | MediaMTX metrics, loopback-bound by default. |
+| `18762` | UDP | WebRTC media transport. |
+| `50000-50001` | UDP | RTP/RTCP pair. |
+
+The engine picks another free port when a preferred port is busy. Check the runtime status in the streaming settings or API if playback URLs do not match what you expect.
+
+## Development ports {/* #development-ports */}
+
+| Port | Used by |
+| --- | --- |
+| `8000` | Development backend. |
+| `5173` or the webpack-selected next port | Frontend dev server. |
+| `18763` | Documentation site. |
+| `49321` | Processing server when testing distributed pipelines. |
+
+The development script reads `.env` by default, or another file set through `TOPOSYNC_ENV_FILE`.
+
+## Troubleshooting {/* #troubleshooting */}
+
+### `Connection refused`
+
+Confirm that the process is bound to a network-visible host. For a remote machine, use `--host 0.0.0.0`, not the default `127.0.0.1`.
+
+### Port already in use
+
+For the origin:
+
+```bash
+toposync serve --port 8080
+```
+
+For Docker:
+
+```bash
+TOPOSYNC_PORT=8080 docker compose up -d
+```
+
+For processing:
+
+```bash
+toposync processing-serve --port 49322
+```
+
+### Home Assistant direct port does not open
+
+Mapping a port in the add-on config is required. Declared ports are not automatically exposed on the host.
+
+### HLS works in the sidebar but not outside Home Assistant
+
+Start with `18756/tcp`. HLS normally goes through the Toposync HTTP proxy there. Do not publish `18759/tcp` unless you are doing advanced diagnostics.

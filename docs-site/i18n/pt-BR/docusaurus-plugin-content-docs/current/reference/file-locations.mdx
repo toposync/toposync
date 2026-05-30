@@ -5,4 +5,215 @@ sidebar_position: 3
 
 # Locais de arquivos {/* #file-locations */}
 
-Esta página está em construção.
+Esta página explica onde o Toposync armazena configuração, arquivos enviados, dados de runtime, logs e artefatos de extensões em cada forma de instalação.
+
+Para portas, veja [Portas](ports.mdx). Para variáveis de ambiente, veja [Variáveis de ambiente](environment-variables.mdx). Para instalação, comece por [Escolha sua instalação](../installation/choose-your-installation.mdx).
+
+## Regras do diretório de dados {/* #data-directory-rules */}
+
+O Toposync tem um diretório de dados principal. Ele contém configuração local, arquivos do usuário, arquivos gerados, bancos de runtime, estado de pipelines e dados específicos de extensões.
+
+Ordem efetiva de resolução:
+
+1. `--data-dir`, quando passado para `toposync serve` ou `toposync processing-serve`.
+2. `TOPOSYNC_DATA_DIR`, quando definido pelo ambiente do processo.
+3. Um diretório `.toposync-data` no diretório atual, quando ele já existe.
+4. O diretório padrão da plataforma.
+
+Padrões por plataforma:
+
+| Sistema | Diretório de dados padrão |
+| --- | --- |
+| Linux | `$XDG_DATA_HOME/toposync`, ou `~/.local/share/toposync` quando `XDG_DATA_HOME` não está definido. |
+| macOS | `~/Library/Application Support/Toposync` |
+| Windows | `%APPDATA%\Toposync`, ou `%LOCALAPPDATA%\Toposync`, depois `~/Toposync` como fallback. |
+| Docker | `/data` dentro do container. |
+| Add-on Home Assistant | `/data` dentro do container do add-on. |
+
+Para instalações previsíveis, defina o diretório explicitamente:
+
+```bash
+toposync serve --data-dir ./toposync-data
+```
+
+## Arquivos e pastas principais {/* #main-files-and-folders */}
+
+Dentro do diretório de dados:
+
+| Caminho | Função |
+| --- | --- |
+| `config.json` | Configuração local principal, incluindo settings, composição, pipelines e registros de servidores de processamento. |
+| `files/` | Uploads, assets do usuário, arquivos gerados e artefatos de pipeline. |
+| `files/pipeline_snapshots/` | Snapshots de etapas de pipeline usados por prévias e diagnósticos. |
+| `auth/auth.sqlite3` | Banco local de autenticação. |
+| `notifications/notifications.sqlite3` | Armazenamento de notificações. |
+| `storage/pipeline_storage.sqlite3` | Armazenamento chave/valor de pipelines. |
+| `telemetry/*.tlm1` | Snapshots de telemetria de pipelines. |
+| `runtime/` | Arquivos gerados em runtime e estado de runtime de extensões. |
+| `vision-models/` | Artefatos oficiais ou instalados de modelos de vision. |
+| `vision-manifests/` | Manifests customizados de vision. |
+
+Não edite `config.json` com o servidor rodando. Prefira a UI ou a API. Se precisar editar manualmente, pare o Toposync antes e faça backup.
+
+## Instalações Python {/* #python-installs */}
+
+Layout recomendado:
+
+```bash
+mkdir -p ~/toposync
+cd ~/toposync
+uv venv .venv --python 3.12
+source .venv/bin/activate
+uv pip install toposync
+toposync serve --data-dir ./toposync-data
+```
+
+Isso cria:
+
+```text
+~/toposync/.venv/
+~/toposync/toposync-data/
+```
+
+Se você omitir `--data-dir`, o Toposync usa as regras de resolução acima.
+
+## Checkout de desenvolvimento local {/* #local-development-checkout */}
+
+O script de desenvolvimento usa `.toposync-data` por padrão:
+
+```bash
+TOPOSYNC_AUTH_MODE=bypass npm run dev
+```
+
+Caminhos padrão de desenvolvimento:
+
+| Caminho | Função |
+| --- | --- |
+| `.toposync-data/` | Diretório de dados de desenvolvimento. |
+| `frontend/dist/` | Saída compilada do frontend. |
+| `docs-site/build/` | Site de documentação compilado. |
+| `release-dist/` | Artefatos locais de release ao construir pacotes. |
+
+O script de desenvolvimento lê `.env` por padrão. Use `TOPOSYNC_ENV_FILE` para apontar outro arquivo de ambiente.
+
+## Docker {/* #docker */}
+
+A imagem Docker usa `/data` dentro do container:
+
+```yaml
+volumes:
+  - "${TOPOSYNC_DATA_VOLUME:-./toposync-data}:/data"
+```
+
+Caminho padrão no host:
+
+```text
+./toposync-data
+```
+
+Para sobrescrever:
+
+```bash
+TOPOSYNC_DATA_VOLUME=/srv/toposync/data docker compose up -d --build
+```
+
+Caminhos de runtime no container:
+
+| Caminho | Função |
+| --- | --- |
+| `/data/config.json` | Configuração principal. |
+| `/data/files/` | Arquivos do usuário e arquivos gerados. |
+| `/data/runtime/` | Cache de runtime de streaming e configurações de mídia geradas. |
+
+## Add-on Home Assistant {/* #home-assistant-add-on */}
+
+Dentro do container do add-on, o Toposync usa:
+
+```text
+/data
+```
+
+O Home Assistant Supervisor gerencia esse diretório. No shell do host Home Assistant, os dados de add-ons normalmente aparecem em:
+
+```text
+/addon_configs/<slug-do-add-on>/
+```
+
+O slug exato depende de como o repositório foi instalado. Procure a entrada do add-on Toposync dentro de `/addon_configs`.
+
+Caminhos úteis dentro do container:
+
+| Caminho | Função |
+| --- | --- |
+| `/data/config.json` | Configuração do Toposync. |
+| `/data/files/` | Arquivos enviados e gerados. |
+| `/data/runtime/streaming/` | Configurações e diagnósticos de runtime de streaming. |
+| `/data/runtime/streaming/addon-network.json` | Snapshot de rede do add-on usado por diagnósticos de streaming. |
+
+Se o add-on estiver usando muito disco, comece por `files/`, snapshots de pipeline e artefatos de mídia gerados.
+
+## Serviço Windows de processamento {/* #windows-processing-service */}
+
+O instalador suportado do serviço Windows usa:
+
+```text
+%ProgramData%\Toposync\ProcessingServer
+```
+
+Layout padrão:
+
+| Caminho | Função |
+| --- | --- |
+| `%ProgramData%\Toposync\ProcessingServer\data\` | Diretório de dados do servidor de processamento. |
+| `%ProgramData%\Toposync\ProcessingServer\logs\` | Logs do serviço. |
+| `%ProgramData%\Toposync\ProcessingServer\processing-server-registration.json` | Payload de registro para adicionar o servidor ao Toposync principal. |
+
+O serviço define `TOPOSYNC_DATA_DIR` para o diretório de dados do serviço.
+
+## Arquivos de runtime de streaming {/* #streaming-runtime-files */}
+
+Quando streaming está instalado, a extensão pode usar ou criar:
+
+| Caminho | Função |
+| --- | --- |
+| `runtime/streaming/mediamtx.yml` | Configuração gerada do MediaMTX. |
+| `runtime/streaming/go2rtc.yaml` | Configuração gerada do go2rtc. |
+| `runtime/streaming/ffmpeg/` | Binários FFmpeg extraídos quando um build empacota FFmpeg. |
+| `~/.toposync/runtime/streaming/mediamtx/` | Cache padrão de download do MediaMTX fora de Docker/add-on. |
+| `~/.toposync/runtime/streaming/go2rtc/` | Cache padrão de download do go2rtc fora de Docker/add-on. |
+
+Docker e add-on Home Assistant normalmente movem caches de runtime para `/data/runtime` ou usam binários pré-instalados.
+
+## Verificar os caminhos ativos {/* #verify-the-active-paths */}
+
+Com o Toposync rodando:
+
+```bash
+curl http://127.0.0.1:8000/api/system/info
+```
+
+A resposta inclui `data_dir`, `config_path` e `files_dir` ativos.
+
+## Troubleshooting {/* #troubleshooting */}
+
+### Não encontro meu diretório de dados
+
+Inicie o Toposync com um diretório explícito:
+
+```bash
+toposync serve --data-dir ./toposync-data
+```
+
+Depois confira `/api/system/info`.
+
+### Os dados do Docker sumiram após rebuild
+
+Confirme que você está usando um bind mount estável no host por `TOPOSYNC_DATA_VOLUME` ou pelo padrão `./toposync-data`.
+
+### O uso de disco no Home Assistant está crescendo
+
+Verifique o diretório de dados do add-on em busca de arquivos gerados, snapshots de pipeline, arquivos de runtime de streaming e assets grandes enviados pelo usuário.
+
+### O serviço de processamento foi reinstalado, mas dados antigos continuam
+
+O script de uninstall remove o serviço. Ele pode não remover `%ProgramData%\Toposync\ProcessingServer\data\` automaticamente se os dados forem preservados por segurança. Remova manualmente apenas depois de confirmar que não precisa mais do registro nem do cache local.

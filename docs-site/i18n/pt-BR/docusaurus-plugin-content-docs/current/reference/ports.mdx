@@ -5,4 +5,210 @@ sidebar_position: 4
 
 # Portas {/* #ports */}
 
-Esta página está em construção.
+Esta página lista as portas práticas usadas para instalação, diagnóstico, Home Assistant, Docker, streaming e servidores de processamento.
+
+Para comandos de instalação, use os [guias de instalação](../installation/choose-your-installation.mdx). Para configuração detalhada, a referência dedicada de configuração será escrita separadamente.
+
+## Referência rápida {/* #quick-reference */}
+
+| Porta | Protocolo | Usado por | Público por padrão | Observações |
+| --- | --- | --- | --- | --- |
+| `8000` | TCP / HTTP | UI e API do servidor principal Toposync | Sim no Docker, apenas local em Python se não usar `0.0.0.0` | Porta padrão de `toposync serve`. |
+| `49321` | TCP / HTTP | API do servidor de processamento | Só se você expor/publicar | Porta padrão de `toposync processing-serve`. |
+| `18756` | TCP / HTTP | Proxy direto de UI/API do add-on Home Assistant | Não | Mapeamento opcional para acesso direto por navegador ou aplicativo móvel. |
+| `18757` | TCP / HTTP | Backend interno/ingress do add-on Home Assistant | Não | Alvo do ingress do Supervisor, não é para acesso direto pela rede local. |
+| `18758` | TCP / RTSP | Saída RTSP do add-on Home Assistant | Não | Mapeamento opcional de streaming. |
+| `18759` | TCP / HLS | Motor HLS direto do add-on Home Assistant | Não | Interno/diagnóstico. HLS normal passa pelo proxy em `18756`. |
+| `18760` | TCP / HTTP | Sinalização WebRTC/WHEP do add-on Home Assistant | Não | Mapeamento opcional de streaming. |
+| `18761` | TCP / HTTP | API do MediaMTX no add-on Home Assistant | Não | Interno; não publique por padrão. |
+| `18762` | UDP | Mídia WebRTC do add-on Home Assistant | Não | Mapeamento opcional para WebRTC. |
+| `18763` | TCP / HTTP | Prévia local do site de documentação | Apenas desenvolvimento local | Usado por `npm run docs:start` e `npm run docs:serve`. |
+| `18764` | TCP / HTTP/WebSocket | API do sidecar MSE de streaming | Interno | Usado pela extensão de streaming quando o sidecar MSE está ativo. |
+| `50000-50001` | UDP | Par RTP/RTCP do MediaMTX | Depende da exposição do motor | Movido automaticamente se estiver indisponível. |
+
+## Servidor principal {/* #origin-server */}
+
+O servidor principal é o processo Toposync principal:
+
+```bash
+toposync serve
+```
+
+Padrões:
+
+| Configuração | Padrão |
+| --- | --- |
+| Host de bind | `127.0.0.1` |
+| Porta | `8000` |
+| Healthcheck | `GET /api/health` |
+| UI | `GET /` |
+| API | `GET /api/...` |
+
+Exponha na rede local:
+
+```bash
+toposync serve --host 0.0.0.0 --port 8000
+```
+
+Mude a porta padrão por variável de ambiente:
+
+```bash
+TOPOSYNC_BACKEND_PORT=8080 toposync serve
+```
+
+No Docker, o mesmo serviço interno é mapeado por `TOPOSYNC_PORT`:
+
+```bash
+TOPOSYNC_PORT=8080 docker compose up -d --build
+```
+
+## Servidor de processamento {/* #processing-server */}
+
+O servidor de processamento é usado para pipelines distribuídos:
+
+```bash
+toposync processing-serve --host 0.0.0.0 --port 49321
+```
+
+Padrões:
+
+| Configuração | Padrão |
+| --- | --- |
+| Host de bind | `127.0.0.1` |
+| Porta | `49321` |
+| Healthcheck/status | `GET /api/processing/status` |
+| Autenticação | Desativada, a menos que `TOPOSYNC_PROCESSING_USERNAME` ou `TOPOSYNC_PROCESSING_PASSWORD` esteja definido |
+
+Mude a porta padrão:
+
+```bash
+TOPOSYNC_PROCESSING_PORT=49322 toposync processing-serve
+```
+
+Se o servidor de processamento for remoto, o servidor principal precisa acessar:
+
+```text
+http://processing-host:49321
+```
+
+Use Basic Auth em redes reais:
+
+```bash
+TOPOSYNC_PROCESSING_USERNAME=toposync \
+TOPOSYNC_PROCESSING_PASSWORD='<senha-forte>' \
+toposync processing-serve --host 0.0.0.0 --port 49321
+```
+
+## Docker {/* #docker */}
+
+A imagem local do Docker escuta em `8000` dentro do container.
+
+Mapeamento padrão do Compose:
+
+```yaml
+ports:
+  - "${TOPOSYNC_PORT:-8000}:8000"
+```
+
+Exemplos:
+
+```bash
+docker compose up -d --build
+TOPOSYNC_PORT=8080 docker compose up -d --build
+```
+
+Healthcheck dentro da imagem:
+
+```text
+http://127.0.0.1:8000/api/health
+```
+
+## Add-on Home Assistant {/* #home-assistant-add-on */}
+
+O add-on usa uma faixa própria de portas para evitar colisões comuns.
+
+| Porta | Publicada na configuração do add-on | Função |
+| --- | --- | --- |
+| `18756/tcp` | Mapeamento opcional | Proxy direto de UI/API para navegadores e aplicativos móveis. |
+| `18757/tcp` | Porta interna de ingress | Backend principal do Toposync atrás do ingress do Home Assistant. |
+| `18758/tcp` | Mapeamento opcional | Saída RTSP. |
+| `18759/tcp` | Apenas interna | Motor HLS direto; HLS público normal deve usar o proxy. |
+| `18760/tcp` | Mapeamento opcional | Sinalização WebRTC/WHEP. |
+| `18761/tcp` | Apenas interna | API do MediaMTX. |
+| `18762/udp` | Mapeamento opcional | Transporte de mídia WebRTC. |
+
+O acesso direto fica desativado até você mapear `18756/tcp` na seção Network do add-on:
+
+```yaml
+18756/tcp: 18756
+```
+
+Depois use:
+
+```text
+http://homeassistant.local:18756/
+http://ip-do-home-assistant:18756/
+```
+
+O ingress usa `18757` internamente. Não tente abrir `18757` pela rede local.
+
+## Streaming fora do Home Assistant {/* #streaming-outside-home-assistant */}
+
+Quando a extensão de streaming roda fora do add-on Home Assistant, os padrões do MediaMTX são:
+
+| Porta | Protocolo | Função |
+| --- | --- | --- |
+| `8554` | TCP / RTSP | Saída RTSP. |
+| `8888` | TCP / HTTP | Saída HLS. |
+| `8889` | TCP / HTTP | Sinalização WebRTC/WHEP. |
+| `9997` | TCP / HTTP | API do MediaMTX. |
+| `9998` | TCP / HTTP | Métricas do MediaMTX, em loopback por padrão. |
+| `18762` | UDP | Transporte de mídia WebRTC. |
+| `50000-50001` | UDP | Par RTP/RTCP. |
+
+O motor escolhe outra porta livre quando uma porta preferida está ocupada. Confira o status de runtime nas configurações de streaming ou na API se as URLs de playback não baterem com o esperado.
+
+## Portas de desenvolvimento {/* #development-ports */}
+
+| Porta | Usado por |
+| --- | --- |
+| `8000` | Backend de desenvolvimento. |
+| `5173` ou a próxima porta escolhida pelo webpack | Servidor de desenvolvimento do frontend. |
+| `18763` | Site de documentação. |
+| `49321` | Servidor de processamento ao testar pipelines distribuídos. |
+
+O script de desenvolvimento lê `.env` por padrão, ou outro arquivo definido por `TOPOSYNC_ENV_FILE`.
+
+## Troubleshooting {/* #troubleshooting */}
+
+### `Connection refused`
+
+Confirme que o processo está usando um host visível na rede. Para uma máquina remota, use `--host 0.0.0.0`, não o padrão `127.0.0.1`.
+
+### Porta em uso
+
+Para o servidor principal:
+
+```bash
+toposync serve --port 8080
+```
+
+Para Docker:
+
+```bash
+TOPOSYNC_PORT=8080 docker compose up -d
+```
+
+Para processamento:
+
+```bash
+toposync processing-serve --port 49322
+```
+
+### A porta direta do Home Assistant não abre
+
+É necessário mapear a porta na configuração do add-on. Portas declaradas não ficam automaticamente expostas no host.
+
+### HLS funciona na sidebar, mas não fora do Home Assistant
+
+Comece por `18756/tcp`. O HLS normalmente passa pelo proxy HTTP do Toposync nessa porta. Não publique `18759/tcp`, exceto em diagnóstico avançado.

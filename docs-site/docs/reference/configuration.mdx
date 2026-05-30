@@ -5,4 +5,47 @@ sidebar_position: 1
 
 # Configuration {/* #configuration */}
 
-This page is under construction.
+Toposync has several configuration layers. This page is a short map so operators know where to change each kind of setting. A deeper configuration reference will be written separately.
+
+## Configuration layers {/* #configuration-layers */}
+
+| Layer | Best for | Where it lives |
+| --- | --- | --- |
+| UI settings | Normal product setup, extension settings, camera setup, Home Assistant connection, pipelines | Stored through the Toposync API in the active data directory. |
+| Command-line flags | One-off process behavior such as host, port, data directory, frontend override | Passed to `toposync serve` or `toposync processing-serve`. |
+| Environment variables | Services, Docker, Home Assistant add-on, Windows service, processing servers, media runtime paths | Defined by the shell, service manager, container, or add-on runtime. |
+| `config.json` | Last-resort manual recovery or migration | Inside the active data directory. |
+| Extension manifests | Extension identity, compatibility, backend/frontend contribution points | Packaged inside extension wheels. |
+
+## What to use first {/* #what-to-use-first */}
+
+Use the UI first for product behavior. Use command-line flags for local process options. Use environment variables for deployment and runtime integration.
+
+Examples:
+
+```bash
+toposync serve --host 0.0.0.0 --port 8000 --data-dir ./toposync-data
+```
+
+```bash
+TOPOSYNC_AUTH_MODE=bypass npm run dev
+```
+
+Do not edit `config.json` while Toposync is running.
+
+## Practical references {/* #practical-references */}
+
+- [Environment variables](environment-variables.mdx)
+- [File locations](file-locations.mdx)
+- [Ports](ports.mdx)
+- [Choose your installation](../installation/choose-your-installation.mdx)
+
+## Troubleshooting {/* #troubleshooting */}
+
+### A setting changed but behavior did not
+
+Restart the process if the setting is an environment variable or command-line flag. UI settings are generally applied through the API, but some extension runtime changes may still require restart.
+
+### I need to recover from a broken config
+
+Stop Toposync, copy the data directory as a backup, then inspect `config.json`. Keep the JSON valid and avoid deleting unknown extension data unless you know which extension owns it.

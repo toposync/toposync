@@ -5,4 +5,47 @@ sidebar_position: 1
 
 # Configuração {/* #configuration */}
 
-Esta página está em construção.
+O Toposync tem várias camadas de configuração. Esta página é um mapa curto para operadores saberem onde alterar cada tipo de ajuste. Uma referência de configuração mais profunda será escrita separadamente.
+
+## Camadas de configuração {/* #configuration-layers */}
+
+| Camada | Melhor uso | Onde fica |
+| --- | --- | --- |
+| Configurações pela UI | Setup normal do produto, settings de extensões, câmeras, conexão Home Assistant e pipelines | Armazenadas pela API do Toposync no diretório de dados ativo. |
+| Flags de linha de comando | Comportamento pontual do processo, como host, porta, diretório de dados e override de frontend | Passadas para `toposync serve` ou `toposync processing-serve`. |
+| Variáveis de ambiente | Serviços, Docker, add-on Home Assistant, serviço Windows, servidores de processamento e caminhos de runtime de mídia | Definidas pelo shell, gerenciador de serviços, container ou runtime do add-on. |
+| `config.json` | Recuperação manual ou migração como último recurso | Dentro do diretório de dados ativo. |
+| Manifests de extensões | Identidade, compatibilidade e pontos de contribuição backend/frontend da extensão | Empacotados dentro dos wheels das extensões. |
+
+## O que usar primeiro {/* #what-to-use-first */}
+
+Use a UI primeiro para comportamento do produto. Use flags de linha de comando para opções locais de processo. Use variáveis de ambiente para deploy e integração de runtime.
+
+Exemplos:
+
+```bash
+toposync serve --host 0.0.0.0 --port 8000 --data-dir ./toposync-data
+```
+
+```bash
+TOPOSYNC_AUTH_MODE=bypass npm run dev
+```
+
+Não edite `config.json` enquanto o Toposync estiver rodando.
+
+## Referências práticas {/* #practical-references */}
+
+- [Variáveis de ambiente](environment-variables.mdx)
+- [Locais de arquivos](file-locations.mdx)
+- [Portas](ports.mdx)
+- [Escolha sua instalação](../installation/choose-your-installation.mdx)
+
+## Troubleshooting {/* #troubleshooting */}
+
+### Uma configuração mudou, mas o comportamento não
+
+Reinicie o processo se a configuração for variável de ambiente ou flag de linha de comando. Settings de UI normalmente são aplicados pela API, mas algumas mudanças de runtime de extensões ainda podem exigir reinício.
+
+### Preciso recuperar uma configuração quebrada
+
+Pare o Toposync, copie o diretório de dados como backup e então inspecione `config.json`. Mantenha o JSON válido e evite apagar dados desconhecidos de extensões se você não souber qual extensão é dona deles.

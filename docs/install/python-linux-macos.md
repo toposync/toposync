@@ -94,14 +94,16 @@ Em outro terminal:
 ```bash
 curl -I http://127.0.0.1:8000/
 curl http://127.0.0.1:8000/api/health
-curl http://127.0.0.1:8000/api/extensions
+curl http://127.0.0.1:8000/api/auth/status
 ```
 
 O esperado:
 
 - `/` responde `200`;
 - `/api/health` responde `200`;
-- `/api/extensions` lista as extensões carregadas.
+- `/api/auth/status` responde JSON e pode indicar `requires_setup: true` no primeiro acesso.
+
+Depois de concluir o setup/login pela UI, a API autenticada passa a responder as rotas protegidas, como `/api/extensions`.
 
 ## Como Atualizar
 
@@ -140,6 +142,7 @@ Confirme se o servidor está rodando e se `/api/health` responde:
 
 ```bash
 curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/auth/status
 ```
 
 ### Quero streaming

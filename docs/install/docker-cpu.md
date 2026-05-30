@@ -83,14 +83,16 @@ http://<ip-do-servidor>:8000/
 ```bash
 curl -I http://127.0.0.1:8000/
 curl http://127.0.0.1:8000/api/health
-curl http://127.0.0.1:8000/api/extensions
+curl http://127.0.0.1:8000/api/auth/status
 ```
 
 O esperado:
 
 - `/` responde `200`;
 - `/api/health` responde `200`;
-- `/api/extensions` lista as extensões carregadas.
+- `/api/auth/status` responde JSON e pode indicar `requires_setup: true` no primeiro acesso.
+
+Depois de concluir o setup/login pela UI, a API autenticada passa a responder as rotas protegidas, como `/api/extensions`.
 
 ## Streaming Opcional
 
@@ -153,6 +155,7 @@ Teste o healthcheck:
 
 ```bash
 curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/auth/status
 ```
 
 ### Quero GPU

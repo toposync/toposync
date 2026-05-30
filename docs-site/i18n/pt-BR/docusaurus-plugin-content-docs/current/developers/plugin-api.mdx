@@ -5,4 +5,479 @@ sidebar_position: 4
 
 # Plugin API {/* #plugin-api */}
 
-Esta página está em construção.
+`@toposync/plugin-api` é o contrato TypeScript público entre o host frontend do Toposync e extensões frontend carregadas por Module Federation.
+
+Use esta página quando estiver construindo o lado de UI de uma extensão. Para o pacote Python, entry point, `extension.json`, assets estáticos e empacotamento em wheel, veja [Autoria de extensões](./extension-authoring.mdx).
+
+## Estado atual {/* #current-status */}
+
+A API já é usada pelas extensões first-party do Toposync. Ela foi desenhada para virar o contrato público estável para extensões frontend de terceiros, mas o ecossistema externo ainda não foi totalmente validado.
+
+Isso significa:
+
+- autores de extensões de terceiros devem tratar isto como contrato pretendido, não como garantia final de marketplace;
+- extensões devem mirar uma versão do host Toposync que foi testada e declarar compatibilidade no `extension.json` Python;
+- o pacote é types-first e deve ser importado com `import type` sempre que possível;
+- orientações de bundle, dependências compartilhadas e versionamento podem ser refinadas conforme extensões externas forem testadas fora do monorepo.
+
+## O que o pacote cobre {/* #what-the-package-covers */}
+
+`@toposync/plugin-api` cobre apenas integrações frontend:
+
+- o objeto `ToposyncHost` passado para `activate(host)`;
+- métodos de registro de extensões, como painéis de configuração, tipos de elementos, ferramentas do editor, views de renderização, temas e painéis de operadores de pipeline;
+- tipos compartilhados de UI para elementos de composição, notificações, renderização 2D e 3D, i18n e componentes fornecidos pelo host;
+- helpers de URL para Home Assistant ingress, proxies reversos e instalações fora da raiz.
+
+Ele não registra a extensão Python, não serve arquivos, não adiciona rotas backend e não declara compatibilidade de runtime. Essas responsabilidades pertencem ao wheel da extensão e ao manifesto.
+
+```text
+Wheel Python da extensão
+    -> extension.json declara o frontend remote
+    -> backend expõe /api/extensions
+    -> host frontend carrega remoteEntry.js
+    -> remote expõe activate(host)
+    -> extensão usa tipos de @toposync/plugin-api
+```
+
+## Instalação {/* #installation */}
+
+Instale o pacote com as mesmas peer dependencies usadas pelo host frontend do Toposync:
+
+```bash
+npm install @toposync/plugin-api react react-dom three
+```
+
+Para projetos TypeScript que renderizam UI React:
+
+```bash
+npm install -D typescript @types/react @types/react-dom @types/three
+```
+
+Por enquanto, mire a mesma linha minor do host que você testou. Se a extensão foi testada com um host usando `@toposync/plugin-api` `0.3.x`, declare uma faixa compatível como:
+
+```json
+{
+  "peerDependencies": {
+    "@toposync/plugin-api": "^0.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.167.0"
+  }
+}
+```
+
+## Contrato de ativação {/* #activation-contract */}
+
+O frontend remote deve expor o módulo definido em `extension.json`, normalmente `./activate`. Esse módulo deve exportar uma função `activate(host)`.
+
+```ts
+import type { ToposyncHost } from "@toposync/plugin-api";
+
+export function activate(host: ToposyncHost): void {
+  host.i18n.registerTranslations({
+    en: {
+      "ext.demo.settings.name": "Demo",
+    },
+    "pt-BR": {
+      "ext.demo.settings.name": "Demonstração",
+    },
+  });
+
+  host.registerSettingsPanel({
+    id: "com.example.demo.settings",
+    name: { key: "ext.demo.settings.name", fallback: "Demo" },
+    render: ({ i18n }) => <div>{i18n.t("ext.demo.settings.name", undefined, "Demo")}</div>,
+  });
+}
+```
+
+`activate(host)` pode retornar `void` ou `Promise<void>`, mas deve ser determinística e idempotente do ponto de vista da extensão. O Toposync pode recarregar código frontend durante o desenvolvimento, e ids duplicados substituem registros anteriores na maioria dos registros do host.
+
+Use ids estáveis. Prefira ids em estilo reverse-DNS ou prefixados pela extensão:
+
+```text
+com.example.demo.settings
+com.example.demo.camera_overlay
+com.example.demo.pipeline_panel
+```
+
+## Regras de importação {/* #import-rules */}
+
+A maioria dos exports são tipos. Prefira `import type` para evitar que o remote empacote código runtime desnecessário:
+
+```ts
+import type { SettingsPanel, ToposyncHost } from "@toposync/plugin-api";
+```
+
+Use imports de valor apenas para helpers de runtime:
+
+```ts
+import { resolveToposyncUrl } from "@toposync/plugin-api";
+```
+
+Não importe de caminhos internos do frontend do Toposync, como `frontend/src/...`. Esses caminhos são detalhes privados de implementação e podem mudar sem garantia de compatibilidade da plugin API.
+
+## Objeto host {/* #host-object */}
+
+O objeto `ToposyncHost` é a entrada da extensão no host frontend:
+
+```ts
+export type ToposyncHost = {
+  registerElementType: (elementType: ElementType) => void;
+  registerNotificationRenderer: (renderer: NotificationRenderer) => void;
+  registerEditorTool: (tool: EditorTool) => void;
+  registerFileDropHandler: (handler: FileDropHandler) => void;
+  registerSettingsPanel: (panel: SettingsPanel) => void;
+  registerPipelineOperatorPanel: (panel: PipelineOperatorPanel) => void;
+  registerRenderView: (view: RenderViewDefinition) => void;
+  registerTheme: (theme: ThemeDefinition) => void;
+  api: HostApi;
+  i18n: HostI18n;
+  ui: HostUi;
+};
+```
+
+Os métodos de registro atualizam registros mantidos pelo host. Um registro posterior com o mesmo id normalmente substitui o anterior. Isso ajuda no reload durante desenvolvimento, mas extensões em produção ainda devem evitar colisões de id.
+
+## Internacionalização {/* #internationalization */}
+
+Registre traduções da extensão durante a ativação:
+
+```ts
+host.i18n.registerTranslations({
+  en: {
+    "ext.demo.title": "Demo",
+  },
+  "pt-BR": {
+    "ext.demo.title": "Demonstração",
+  },
+});
+```
+
+Use `LocalizedString` para nomes visíveis pelo host:
+
+```ts
+name: {
+  key: "ext.demo.title",
+  fallback: "Demo",
+}
+```
+
+Dentro de componentes React, use o objeto i18n passado pelo host:
+
+```tsx
+function DemoPanel({ i18n }: { i18n: ToposyncHost["i18n"] }) {
+  const { t } = i18n.useI18n();
+  return <h2>{t("ext.demo.title", undefined, "Demo")}</h2>;
+}
+```
+
+Os locales atuais são `en` e `pt-BR`.
+
+## Regras de URL e base path {/* #url-and-base-path-rules */}
+
+Toda URL do Toposync visível no navegador precisa preservar o base path público. Isso importa para Home Assistant ingress, proxies reversos e deployments em que o Toposync não está montado em `/`.
+
+Use `resolveToposyncUrl()` para paths absolutos internos:
+
+```ts
+import { resolveToposyncUrl } from "@toposync/plugin-api";
+
+const response = await fetch(resolveToposyncUrl("/api/demo/items"));
+const imageUrl = resolveToposyncUrl(`/files/${encodeURIComponent(directory)}/${encodeURIComponent(file)}`);
+```
+
+Para navegação ou geração de rotas:
+
+```ts
+const debugUrl = resolveToposyncUrl(`/streams/debug?${params.toString()}`);
+```
+
+Evite paths crus começando com barra em código visível no navegador:
+
+```ts
+// Evite isto em extensões.
+fetch("/api/demo/items");
+window.location.href = "/settings";
+```
+
+`getToposyncBasePath()` retorna o base path público atual. A maioria das extensões deve usar `resolveToposyncUrl()` em vez de concatenar o base path manualmente.
+
+## Painéis de configuração {/* #settings-panels */}
+
+Painéis de configuração aparecem na UI de configurações do Toposync.
+
+```tsx
+import type { SettingsPanel } from "@toposync/plugin-api";
+
+export function createDemoSettingsPanel(): SettingsPanel {
+  return {
+    id: "com.example.demo.settings",
+    name: { key: "ext.demo.settings.name", fallback: "Demo" },
+    description: { key: "ext.demo.settings.description", fallback: "Demo settings" },
+    icon: "puzzle-piece",
+    render: ({ i18n, api, settings, updateSettings }) => {
+      return (
+        <button
+          type="button"
+          onClick={() => updateSettings({ enabled: !settings.enabled })}
+        >
+          {i18n.t("ext.demo.toggle", undefined, "Toggle")}
+        </button>
+      );
+    },
+  };
+}
+```
+
+Use `settings` e `updateSettings` para estado do painel gerenciado pelo host. Use `host.api` ou rotas backend próprias da extensão para dados de domínio persistidos.
+
+## Tipos de elementos {/* #element-types */}
+
+Tipos de elementos definem objetos customizados que podem aparecer em composições.
+
+```ts
+import type { ElementType } from "@toposync/plugin-api";
+
+export const demoElementType: ElementType = {
+  type: "com.example.demo.marker",
+  name: { key: "ext.demo.marker.name", fallback: "Demo marker" },
+  placeable: true,
+  defaultProps: {
+    label: "Marker",
+  },
+  render2D: ({ ctx, element, viewport }) => {
+    const p = viewport.worldToScreen({ x: element.position.x, z: element.position.z });
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+    ctx.fill();
+  },
+};
+```
+
+Tipos de elementos podem fornecer:
+
+- renderização 2D em canvas;
+- objetos 3D com `three`;
+- renderização vetorial no mapa principal;
+- marcadores e efeitos;
+- hit testing e comportamento de translação;
+- modais de ação e edição.
+
+Para renderização 3D, retorne um `Element3DInstance` com método `dispose()` quando o elemento alocar recursos ThreeJS.
+
+## Ferramentas do editor e file drops {/* #editor-tools-and-file-drops */}
+
+Ferramentas do editor adicionam modos customizados de interação ao editor de composição.
+
+```ts
+import type { EditorTool } from "@toposync/plugin-api";
+
+export const demoTool: EditorTool = {
+  id: "com.example.demo.place_marker",
+  name: { key: "ext.demo.tool.name", fallback: "Place marker" },
+  icon: "location-dot",
+  group: {
+    id: "demo",
+    name: { key: "ext.demo.tool.group", fallback: "Demo" },
+    order: 50,
+  },
+  order: 10,
+  createSession: (ctx) => ({
+    shouldCapturePointer: (event) => event.kind === "down",
+    onPointerEvent: (event) => {
+      if (event.kind !== "down") return;
+      ctx.createElement("com.example.demo.marker", {
+        name: "Marker",
+        position: { x: event.world.x, y: 0, z: event.world.z },
+      });
+    },
+  }),
+};
+```
+
+File drop handlers permitem que extensões lidem com arquivos arrastados no editor. Retorne `true` quando o arquivo foi tratado para impedir que o host continue tentando outros handlers.
+
+## Painéis de operadores de pipeline {/* #pipeline-operator-panels */}
+
+Painéis de operadores de pipeline customizam a UI de configuração para operadores backend.
+
+```tsx
+import type { PipelineOperatorPanel } from "@toposync/plugin-api";
+
+export const demoOperatorPanel: PipelineOperatorPanel = {
+  id: "com.example.demo.operator_panel",
+  operatorId: "demo.analyze_frame",
+  render: ({ config, updateConfig, showAdvanced }) => (
+    <label>
+      Threshold
+      <input
+        type="number"
+        value={Number(config.threshold ?? 0.5)}
+        onChange={(event) => updateConfig({ threshold: Number(event.target.value) })}
+      />
+      {showAdvanced ? <span>Advanced options are enabled.</span> : null}
+    </label>
+  ),
+};
+```
+
+O `operatorId` precisa corresponder a um operador registrado pela extensão backend. Veja [Pipelines](./pipelines.mdx) para o modelo de execução.
+
+## Renderizadores de notificações {/* #notification-renderers */}
+
+Renderizadores de notificações customizam como notificações da extensão aparecem na UI e, opcionalmente, em overlays 2D ou 3D.
+
+```tsx
+import type { NotificationRenderer } from "@toposync/plugin-api";
+
+export const demoNotificationRenderer: NotificationRenderer = {
+  id: "com.example.demo.notification",
+  type: "demo.event",
+  render: (notification) => (
+    <div>
+      <strong>{notification.title}</strong>
+      {notification.description ? <p>{notification.description}</p> : null}
+    </div>
+  ),
+};
+```
+
+Se você criar overlays, libere recursos em `dispose()` e solicite renderização do host com `ctx.requestRender?.()` depois de mudanças visuais assíncronas.
+
+## Render views e UI do host {/* #render-views-and-host-ui */}
+
+Render views adicionam formas alternativas de visualizar uma composição.
+
+```tsx
+import type { RenderViewDefinition } from "@toposync/plugin-api";
+
+export const demoRenderView: RenderViewDefinition = {
+  id: "com.example.demo.render_view",
+  name: { key: "ext.demo.view.name", fallback: "Demo view" },
+  icon: "diagram-project",
+  order: 50,
+  render: ({ compositionName, elements }) => (
+    <section>
+      <h2>{compositionName}</h2>
+      <p>{elements.length} elements</p>
+    </section>
+  ),
+};
+```
+
+O host também expõe primitivas reutilizáveis de UI em `host.ui`:
+
+- `Viewport2DReplica` renderiza um viewport 2D de composição gerenciado pelo host dentro da UI da extensão;
+- `LiveViewPlayer` renderiza live view de câmera quando o host tem suporte de playback disponível.
+
+`LiveViewPlayer` é opcional. Sempre trate o caso em que ele não existe.
+
+## Temas {/* #themes */}
+
+Temas podem contribuir variáveis CSS e CSS opcional:
+
+```ts
+import type { ThemeDefinition } from "@toposync/plugin-api";
+
+export const demoTheme: ThemeDefinition = {
+  id: "com.example.demo.theme",
+  name: { key: "ext.demo.theme.name", fallback: "Demo theme" },
+  vars: {
+    "--surface-primary": "#0e1512",
+    "--accent-primary": "#62d78b",
+  },
+};
+```
+
+Mantenha CSS de tema escopado e conservador. Evite resets globais ou seletores que reescrevam telas não relacionadas do host.
+
+## Host API {/* #host-api */}
+
+`host.api` expõe hoje uma superfície frontend pequena e segura:
+
+```ts
+type HostApi = {
+  emitEvent: (eventName: string, payload: unknown, context?: Record<string, unknown>) => Promise<EmitEventResponse>;
+  getDevice: (deviceId: string) => Promise<{ device_id: string; state: boolean }>;
+};
+```
+
+Para dados específicos da extensão, exponha suas próprias rotas backend na extensão Python e chame essas rotas com `resolveToposyncUrl()`.
+
+## Expectativas de Module Federation {/* #module-federation-expectations */}
+
+O remote deve:
+
+- criar um `remoteEntry.js` compatível com navegador;
+- expor o módulo declarado em `extension.json`, normalmente `./activate`;
+- colocar `remoteEntry.js` e todos os chunks emitidos dentro do diretório `static/` do pacote Python;
+- usar uma estratégia de public path que carregue chunks ao lado de `remoteEntry.js`;
+- compartilhar dependências de host como singletons.
+
+Exemplo com webpack:
+
+```js
+new container.ModuleFederationPlugin({
+  name: "demo",
+  filename: "remoteEntry.js",
+  exposes: {
+    "./activate": "./src/activate.tsx",
+  },
+  shared: {
+    "@toposync/plugin-api": {
+      singleton: true,
+      requiredVersion: "^0.3.0",
+    },
+    react: {
+      singleton: true,
+      requiredVersion: false,
+    },
+    "react-dom": {
+      singleton: true,
+      requiredVersion: false,
+    },
+    three: {
+      singleton: true,
+      requiredVersion: false,
+    },
+  },
+});
+```
+
+A receita exata para bundlers externos ainda está sendo endurecida. Extensões first-party usam helpers do monorepo, mas pacotes de terceiros devem depender apenas do pacote público e do contrato documentado de Module Federation.
+
+## Compatibilidade e versionamento {/* #compatibility-and-versioning */}
+
+Use três camadas de compatibilidade:
+
+- `peerDependencies` no pacote frontend, para o gerenciador de pacotes avisar sobre versões incompatíveis de `@toposync/plugin-api`, React e ThreeJS;
+- `requires_core_version` em `extension.json`, para o backend pular extensões incompatíveis antes de carregá-las;
+- testes de distribuição que instalem o wheel gerado em um ambiente Toposync limpo fora do monorepo.
+
+Evite promessas amplas de compatibilidade. Uma extensão de terceiros deve documentar as versões do host Toposync que foram realmente testadas.
+
+## Regras de estabilidade para autores de extensão {/* #stability-rules-for-extension-authors */}
+
+Siga estas regras para extensões públicas:
+
+- importe apenas de `@toposync/plugin-api`, não de caminhos privados do código-fonte do Toposync;
+- envolva URLs absolutas internas com `resolveToposyncUrl()`;
+- mantenha ids estáveis e globalmente únicos;
+- mantenha estado React dentro dos componentes, não em estado global de módulo salvo quando isso for intencional;
+- libere recursos ThreeJS, event listeners, timers e subscriptions;
+- tolere recursos opcionais do host, como `host.ui.LiveViewPlayer`;
+- não assuma que helpers first-party do monorepo existem em repositórios externos;
+- teste o wheel gerado depois de `pip install`, não apenas no checkout do código-fonte.
+
+## O que ainda precisa ser validado {/* #what-still-needs-validation */}
+
+Antes de o Toposync poder chamar extensões frontend de terceiros de totalmente suportadas, ainda precisamos validar:
+
+- um repositório template externo usando `@toposync/plugin-api` pelo npm;
+- builds remote com webpack e Vite fora do monorepo;
+- instalações limpas de wheels com chunks remotos, CSS, imagens e source maps;
+- comportamento de upgrade entre versões minor do Toposync;
+- diagnósticos melhores quando carregamento ou ativação de remotes falham;
+- orientação de segurança mais clara para rotas backend, credenciais e carregamento de assets frontend.
